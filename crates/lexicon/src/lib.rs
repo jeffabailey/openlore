@@ -16,6 +16,28 @@
 
 use serde::{Deserialize, Serialize};
 
+// =============================================================================
+// Embedded Lexicon JSON resources (step 01-02)
+// =============================================================================
+//
+// The two `org.openlore.*` Lexicon schemas are authored verbatim per
+// `docs/feature/openlore-foundation/design/data-models.md` and embedded at
+// compile time. Validation logic (step 02-01) consumes these constants.
+
+/// The `org.openlore.claim` Lexicon JSON schema (embedded at compile time).
+pub const CLAIM_LEXICON_JSON: &str =
+    include_str!("../../../lexicons/org/openlore/claim.json");
+
+/// The `org.openlore.philosophy` Lexicon JSON schema (embedded at compile time).
+pub const PHILOSOPHY_LEXICON_JSON: &str =
+    include_str!("../../../lexicons/org/openlore/philosophy.json");
+
+/// NSID for the `org.openlore.claim` Lexicon.
+pub const CLAIM_NSID: &str = "org.openlore.claim";
+
+/// NSID for the `org.openlore.philosophy` Lexicon.
+pub const PHILOSOPHY_NSID: &str = "org.openlore.philosophy";
+
 #[derive(Debug, thiserror::Error)]
 pub enum LexiconError {
     #[error("JSON value does not match the {nsid} schema: {message}")]

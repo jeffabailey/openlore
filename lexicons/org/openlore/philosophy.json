@@ -1,0 +1,21 @@
+{
+  "lexicon": 1,
+  "id": "org.openlore.philosophy",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "description": "A philosophy concept; used as the `object` of a claim. Slice-01 ships ~10 well-known seeds; slice-04 expands.",
+      "record": {
+        "type": "object",
+        "required": ["name", "description"],
+        "properties": {
+          "name":         { "type": "string", "description": "Short identifier, e.g. memory-safety." },
+          "description":  { "type": "string", "description": "One-paragraph definition." },
+          "aliases":      { "type": "array", "items": { "type": "string" }, "description": "Other names for the same concept." },
+          "seeAlso":      { "type": "array", "items": { "type": "string", "format": "uri" } }
+        }
+      }
+    }
+  }
+}

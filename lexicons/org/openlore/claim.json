@@ -1,0 +1,45 @@
+{
+  "lexicon": 1,
+  "id": "org.openlore.claim",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "description": "A signed philosophical claim about a subject (project, person, artifact).",
+      "record": {
+        "type": "object",
+        "required": ["subject", "predicate", "object", "confidence", "author", "composedAt"],
+        "properties": {
+          "subject":     { "type": "string", "description": "URI of the thing being claimed about. Common schemes: github:owner/repo, at://did:.../..." },
+          "predicate":   { "type": "string", "description": "The relation, e.g. embodiesPhilosophy, refutesPhilosophy, alignsWith." },
+          "object":      { "type": "string", "description": "URI of the philosophy or counterparty, e.g. org.openlore.philosophy.memory-safety." },
+          "evidence":    { "type": "array", "items": { "type": "string", "format": "uri" }, "description": "Zero or more evidence URIs supporting the claim." },
+          "confidence":  { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Numeric only; display buckets are NEVER persisted (WD-10 / OD-2)." },
+          "author":      { "type": "string", "description": "Author DID + key fragment, e.g. did:plc:jeff#org.openlore.application." },
+          "composedAt":  { "type": "string", "format": "datetime", "description": "RFC3339 UTC timestamp captured at compose-time (NOT sign-time)." },
+          "references":  {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "cid"],
+              "properties": {
+                "type": { "type": "string", "enum": ["retracts", "corrects", "counters", "supersedes"] },
+                "cid":  { "type": "string", "description": "Target claim's CID; MUST NOT be self-reference." }
+              }
+            },
+            "description": "Zero or more typed references to other claims. See ADR-008."
+          },
+          "signature":   {
+            "type": "object",
+            "required": ["kid", "alg", "sig"],
+            "properties": {
+              "kid": { "type": "string", "description": "DID key fragment, e.g. did:plc:jeff#org.openlore.application." },
+              "alg": { "type": "string", "enum": ["EdDSA"], "description": "Signature algorithm; Ed25519 only for slice-01." },
+              "sig": { "type": "string", "description": "Base64url-encoded signature over the unsigned-claim CID (per ADR-006)." }
+            }
+          }
+        }
+      }
+    }
+  }
+}
