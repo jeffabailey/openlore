@@ -7,7 +7,8 @@
 //! semantics). The Lexicon shape is what peers in slice-03 will
 //! deserialize against — any drift breaks federation.
 //!
-//! RED-baseline scaffold (step 01-01): public items panic.
+//! Step 02-01: `claim::validate_claim_json` is now real (LC-2 GREEN).
+//! Other validators remain RED scaffolds; later steps turn them GREEN.
 //
 // SCAFFOLD: true
 
@@ -38,66 +39,17 @@ pub const CLAIM_NSID: &str = "org.openlore.claim";
 /// NSID for the `org.openlore.philosophy` Lexicon.
 pub const PHILOSOPHY_NSID: &str = "org.openlore.philosophy";
 
-#[derive(Debug, thiserror::Error)]
-pub enum LexiconError {
-    #[error("JSON value does not match the {nsid} schema: {message}")]
-    SchemaMismatch { nsid: String, message: String },
-    #[error("required field `{field}` missing")]
-    MissingField { field: String },
-    #[error("field `{field}` outside valid range: {message}")]
-    OutOfRange { field: String, message: String },
-    #[error("serde round-trip not byte-equal (loadable but not stable)")]
-    SerdeRoundTripFailed,
-}
-
 // =============================================================================
-// org.openlore.claim
+// org.openlore.claim — real implementation in `claim.rs` (step 02-01)
 // =============================================================================
 
-pub mod claim {
-    use super::*;
+pub mod claim;
 
-    pub const NSID: &str = "org.openlore.claim";
-
-    /// Serde-modeled mirror of the `org.openlore.claim` Lexicon record.
-    /// Field names track the Lexicon JSON keys verbatim.
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    pub struct Claim {
-        pub subject: String,
-        pub predicate: String,
-        pub object: String,
-        pub evidence: Vec<String>,
-        pub confidence: f64,
-        #[serde(rename = "authorDid")]
-        pub author_did: String,
-        #[serde(rename = "composedAt")]
-        pub composed_at: String,
-        #[serde(default)]
-        pub references: Vec<ClaimReference>,
-        #[serde(default)]
-        pub signature: Option<SignatureBlock>,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    pub struct ClaimReference {
-        #[serde(rename = "type")]
-        pub ref_type: String,
-        pub cid: String,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    pub struct SignatureBlock {
-        #[serde(rename = "signedCid")]
-        pub signed_cid: String,
-        #[serde(rename = "signatureBytes")]
-        pub signature_bytes: String, // base64
-        #[serde(rename = "verificationMethod")]
-        pub verification_method: String,
-    }
-}
+/// Re-export of the claim validator for ergonomic call sites.
+pub use claim::{validate_claim_json, Claim, ClaimReference, LexiconError, SignatureBlock};
 
 // =============================================================================
-// org.openlore.philosophy
+// org.openlore.philosophy — RED scaffold (later step turns this GREEN)
 // =============================================================================
 
 pub mod philosophy {
@@ -114,17 +66,8 @@ pub mod philosophy {
     }
 }
 
-// =============================================================================
-// Validators
-// =============================================================================
-
-/// Validate a JSON value against `org.openlore.claim`. Returns the
-/// parsed `Claim` or a `LexiconError` naming the violation.
-pub fn validate_claim_json(_value: &serde_json::Value) -> Result<claim::Claim, LexiconError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
-
 /// Validate a JSON value against `org.openlore.philosophy`.
+/// RED scaffold — a later step in slice-01 turns this GREEN.
 pub fn validate_philosophy_json(
     _value: &serde_json::Value,
 ) -> Result<philosophy::Philosophy, LexiconError> {

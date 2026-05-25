@@ -49,10 +49,56 @@ fn lexicon_roundtrip_compose_sign_serialize_deserialize_yields_equal_value() {
 /// against the `org.openlore.claim` Lexicon schema. (ADR-005 + US-005
 /// "Lexicon loadable" AC.)
 ///
+/// Step 02-01 note: `claim_domain::canonicalize` + `sign` are still RED
+/// scaffolds, so this scenario hand-rolls a Lexicon-shaped JSON value
+/// matching the US-001 Example 1 fixture (jeff / rust / memory-safety)
+/// and exercises `lexicon::validate_claim_json` directly. The later
+/// step 03-02 (sign pipeline) will rewire this scenario to compose via
+/// `claim_domain` once that crate is GREEN — the assertion stays the
+/// same: a well-formed signed claim MUST validate against the Lexicon.
+///
 /// @lexicon @US-005 @infra @in-memory
 #[test]
 fn lexicon_validates_signed_claim_against_org_openlore_claim_schema() {
-    todo!("DELIVER: load lexicons/org/openlore/claim.json; compose a fixture claim via claim_domain; serialize to JSON; call lexicon::validate_claim_json(); assert Ok")
+    // Confirm the embedded Lexicon JSON loads (US-005 AC: "Lexicon loadable").
+    let lexicon_schema: serde_json::Value =
+        serde_json::from_str(lexicon::CLAIM_LEXICON_JSON)
+            .expect("embedded org.openlore.claim Lexicon JSON must parse");
+    assert_eq!(
+        lexicon_schema["id"].as_str(),
+        Some(lexicon::CLAIM_NSID),
+        "embedded Lexicon NSID must match the public CLAIM_NSID constant"
+    );
+
+    // Compose a Lexicon-shaped signed-claim JSON value (US-001 Example 1).
+    let signed_claim_json = serde_json::json!({
+        "subject": "github:rust-lang/rust",
+        "predicate": "embodiesPhilosophy",
+        "object": "org.openlore.philosophy.memory-safety",
+        "evidence": ["https://github.com/rust-lang/rust"],
+        "confidence": 0.85,
+        "author": "did:plc:test-jeff#org.openlore.application",
+        "composedAt": "2026-05-25T12:00:00Z",
+        "references": [],
+        "signature": {
+            "kid": "did:plc:test-jeff#org.openlore.application",
+            "alg": "EdDSA",
+            "sig": "Zm9vYmFy"
+        }
+    });
+
+    let claim = lexicon::validate_claim_json(&signed_claim_json)
+        .expect("a well-formed signed claim MUST validate against the Lexicon");
+
+    // Spot-check the parsed shape — federation contract: field names
+    // round-trip verbatim per the Lexicon JSON keys.
+    assert_eq!(claim.subject, "github:rust-lang/rust");
+    assert_eq!(claim.confidence, 0.85);
+    assert_eq!(claim.composed_at, "2026-05-25T12:00:00Z");
+    assert!(
+        claim.signature.is_some(),
+        "signed claim must carry a signature block"
+    );
 }
 
 // =============================================================================
