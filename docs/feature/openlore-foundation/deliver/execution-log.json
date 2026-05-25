@@ -15,6 +15,48 @@
       "s": "EXECUTED",
       "d": "PASS \u2014 all 10 crates compile; openlore binary built; 29/29 acceptance tests classify as RED (panic) not BROKEN (compile error); DD-2 gate satisfied",
       "t": "2026-05-25T23:08:30Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS - commit 8c8f602 created with 26 files",
+      "t": "2026-05-25T23:10:16Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-25T23:14:09Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-25T23:14:10Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-25T23:14:14Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-25T23:14:17Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-25T23:14:18Z"
     }
   ]
 }
