@@ -1,5 +1,20 @@
 {
   "schema_version": "3.0",
   "feature_id": "openlore-foundation",
-  "events": []
+  "events": [
+    {
+      "sid": "01-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS \u2014 workspace bootstrap; 29 acceptance tests panic with 'not yet implemented' (DD-2 gate PASS); cargo build --workspace --tests exit 0",
+      "t": "2026-05-25T23:08:05Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS \u2014 all 10 crates compile; openlore binary built; 29/29 acceptance tests classify as RED (panic) not BROKEN (compile error); DD-2 gate satisfied",
+      "t": "2026-05-25T23:08:30Z"
+    }
+  ]
 }

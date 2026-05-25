@@ -1,0 +1,22 @@
+[package]
+name = "adapter-duckdb"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore StoragePort adapter: embedded DuckDB + claims/<cid>.json files."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell. Real duckdb dep added in step 02-XX; for now just enough
+# to compile against the ports trait.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }

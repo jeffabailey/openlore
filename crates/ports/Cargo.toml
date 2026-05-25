@@ -1,0 +1,24 @@
+[package]
+name = "ports"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore port traits: StoragePort, IdentityPort, PdsPort, ClockPort + ProbeOutcome ADT. Pure-shaped trait definitions only."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE-SHAPED traits. `async-trait` permitted ONLY because PdsPort is
+# inherently network-async (per component-boundaries.md + ADR-004).
+# Forbidden: tokio runtime, reqwest, duckdb, keyring, atrium-*, std::fs/net.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+async-trait = "0.1"
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }

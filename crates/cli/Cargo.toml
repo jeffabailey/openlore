@@ -1,0 +1,56 @@
+[package]
+name = "cli"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore CLI: composition root + verb dispatch + two-prompt UX (ADR-003)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "openlore"
+path = "src/main.rs"
+
+# DRIVER / composition root. Only crate allowed to depend on adapter-*.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+adapter-duckdb = { path = "../adapter-duckdb" }
+adapter-atproto-did = { path = "../adapter-atproto-did" }
+adapter-atproto-pds = { path = "../adapter-atproto-pds" }
+adapter-system-clock = { path = "../adapter-system-clock" }
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+# Acceptance tests live at the workspace root (`tests/acceptance/*.rs`)
+# per DISTILL's authored scaffolds, but the openlore binary they drive
+# is THIS crate's [[bin]] — so the cli package owns the test targets
+# and assert_cmd::Command::cargo_bin("openlore") resolves correctly.
+[dev-dependencies]
+openlore-test-support = { path = "../test-support" }
+assert_cmd = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[[test]]
+name = "walking_skeleton"
+path = "../../tests/acceptance/walking_skeleton.rs"
+harness = true
+
+[[test]]
+name = "lexicon_conformance"
+path = "../../tests/acceptance/lexicon_conformance.rs"
+harness = true
+
+[[test]]
+name = "federation_roundtrip"
+path = "../../tests/acceptance/federation_roundtrip.rs"
+harness = true

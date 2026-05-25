@@ -1,0 +1,18 @@
+[package]
+name = "xtask"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore architecture-verification tasks: `cargo xtask check-arch | check-probes`."
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+# Architecture-verification only; intentionally NOT depending on workspace
+# crates so it can run before they compile. Heavy deps (cargo_metadata,
+# walkdir, syn) get added in step 06-XX.
+[dependencies]

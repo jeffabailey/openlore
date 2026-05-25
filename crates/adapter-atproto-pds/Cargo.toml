@@ -1,0 +1,19 @@
+[package]
+name = "adapter-atproto-pds"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore PdsPort adapter: atrium-api XRPC over rustls. Async per ADR-004."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell. Real atrium-api dep added in step 04-XX.
+[dependencies]
+ports = { path = "../ports" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+thiserror = { workspace = true }

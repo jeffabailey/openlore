@@ -1,0 +1,16 @@
+[package]
+name = "adapter-system-clock"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore ClockPort adapter: std::time / chrono::Utc::now. Degenerate adapter."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ports = { path = "../ports" }
+chrono = { workspace = true }

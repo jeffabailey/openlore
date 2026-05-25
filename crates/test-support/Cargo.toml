@@ -1,0 +1,23 @@
+[package]
+name = "openlore-test-support"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore shared test doubles (FakePds, FakeIdentity, TestEnv, fixture builders) per DISTILL DD-6."
+
+[lib]
+path = "src/lib.rs"
+
+# Test-support: pure-shaped test doubles + fixtures. May depend on
+# ports + pure core (it implements the port traits).
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }

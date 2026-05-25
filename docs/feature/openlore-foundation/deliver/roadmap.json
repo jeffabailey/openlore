@@ -1,0 +1,961 @@
+{
+  "roadmap": {
+    "project_id": "openlore-foundation",
+    "created_at": "2026-05-25",
+    "total_steps": 44,
+    "feature": "openlore-foundation (slice-01 walking skeleton)",
+    "wave": "DELIVER",
+    "architect": "Morgan (nw-solution-architect)",
+    "paradigm": "functional-rust (ADR-007 \u2014 pure core + effect shell)",
+    "style": "Hexagonal + Modular Monolith (ADR-009)",
+    "inherits": "WD-1..WD-13 (DISCUSS) + D-1..D-12 (DESIGN) + DD-1..DD-13 (DISTILL) + ADR-001..ADR-012",
+    "default_agent": "nw-software-crafter",
+    "scenario_coverage": {
+      "total_distill_scenarios": 29,
+      "covered_in_roadmap": 29,
+      "walking_skeleton": 17,
+      "lexicon_conformance": 8,
+      "federation_roundtrip": 4
+    },
+    "implementation_scope": {
+      "production_crates": 8,
+      "test_support_crates": 1,
+      "xtask_crates": 1,
+      "estimated_production_files": 55,
+      "decomposition_ratio_target": 0.8,
+      "decomposition_ratio_calculation": "44 steps / ~55 unique production files = 0.8 (well under 2.5 ceiling)",
+      "language": "rust",
+      "framework": "cargo workspace + cargo nextest + proptest",
+      "paradigm": "functional-rust (pure core + effect shell)"
+    },
+    "external_integrations_contract_tested": [
+      {
+        "service": "ATProto PDS",
+        "protocol": "XRPC over HTTPS",
+        "tool": "Pact (consumer-driven)",
+        "owner": "platform-architect (DEVOPS)",
+        "test_location": "tests/contract/pds/",
+        "note": "Out of DELIVER scope; landed by DEVOPS per devops/ci-cd-pipeline.md \u00a74.5. DELIVER uses FakePds (wiremock or recorded fixtures) for acceptance scenarios."
+      }
+    ],
+    "validation": {
+      "status": "approved",
+      "gate": "automated quality gate (6 checks) + des-verify-integrity --roadmap-only (exit 0) + nw-acceptance-designer-reviewer (29/29 scenarios covered, 0 orphans, 1:1 mapping)",
+      "approved_at": "2026-05-25",
+      "approved_by": "orchestrator + nw-acceptance-designer-reviewer (agent abee25ccacc7686c8)"
+    },
+    "notes": [
+      "Step 01-01 is the ZeroR / workspace-bootstrap step per DD-2: it scaffolds every crate as todo!() so cargo build --tests succeeds and the 29 acceptance scenarios classify RED (not BROKEN).",
+      "Phase 02-03 establishes the pure-core surface that all WS scenarios depend on. The single @property test (LC-3) lives at 02-04 per DD-12.",
+      "State-delta bootstrap (DD-3) lands inside step 04-05 (DuckDB adapter), the first state-mutating adapter scenario.",
+      "Steps 05-01 through 05-17 each target a single WS scenario (one scenario = one step = one TDD cycle per nw-roadmap principle).",
+      "Phase 06 finishes with CI + supply-chain bootstrap (06-07, 06-08) so the enforcement story is in place at the end of DELIVER rather than as a separate follow-on feature.",
+      "Mutation testing (cargo-mutants \u226595% kill rate on claim-domain) is wired in 06-08 via the nightly workflow per devops/ci-cd-pipeline.md \u00a76; it is advisory at PR time and blocking at release tag.",
+      "External integration annotation: ATProto PDS via Pact is owned by DEVOPS (tests/contract/pds/) per architecture-design.md \u00a76.5. DELIVER uses FakePds; the real-contract suite lands as a DEVOPS deliverable outside this roadmap."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Workspace bootstrap & RED-baseline gate",
+      "description": "Scaffold the entire Cargo workspace as todo!() stubs so cargo build --tests succeeds and every DISTILL scenario classifies as RED (not BROKEN). Per DD-2 the pre-DELIVER fail-for-right-reason gate runs here.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "Scaffold Cargo workspace with all 10 crates",
+          "criteria": [
+            "cargo build --workspace --tests succeeds with zero compile errors",
+            "Every acceptance test compiles and classifies as RED (panics at todo!()), not BROKEN",
+            "Every crate from component-boundaries.md is a workspace member with empty stub modules",
+            "Pre-DELIVER fail-for-right-reason gate (DD-2) passes via cargo test --no-run"
+          ],
+          "files_to_modify": [
+            "Cargo.toml",
+            "rust-toolchain.toml",
+            "crates/claim-domain/Cargo.toml",
+            "crates/claim-domain/src/lib.rs",
+            "crates/lexicon/Cargo.toml",
+            "crates/lexicon/src/lib.rs",
+            "crates/ports/Cargo.toml",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-duckdb/Cargo.toml",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-atproto-did/Cargo.toml",
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/adapter-atproto-pds/Cargo.toml",
+            "crates/adapter-atproto-pds/src/lib.rs",
+            "crates/adapter-system-clock/Cargo.toml",
+            "crates/adapter-system-clock/src/lib.rs",
+            "crates/cli/Cargo.toml",
+            "crates/cli/src/main.rs",
+            "crates/cli/src/lib.rs",
+            "crates/test-support/Cargo.toml",
+            "crates/test-support/src/lib.rs",
+            "xtask/Cargo.toml",
+            "xtask/src/main.rs"
+          ],
+          "implementation_notes": "Bootstrap step (ZeroR). Every public item in every crate is a stub: pub fn|struct|trait declarations with body panic!(\"Not yet implemented -- RED scaffold\"). Wire tests/acceptance/support/mod.rs to re-export from crates/test-support so support::* resolves. cli binary at crates/cli/src/main.rs is reachable via assert_cmd::Command::cargo_bin(\"openlore\"). NO production logic in this step; if cargo build --tests fails, the step is incomplete. Verify by running cargo nextest run --tests 2>&1 | grep -c 'Not yet implemented' equals 29.",
+          "deps": [],
+          "id": "01-01"
+        },
+        {
+          "name": "Author org.openlore.* Lexicon JSON schemas",
+          "criteria": [
+            "lexicons/org/openlore/claim.json and philosophy.json present matching data-models.md shape",
+            "JSON parses as valid Lexicon and includes the confidence min/max and references enum constraints",
+            "Workspace builds with the Lexicon files embedded as include_str! resources"
+          ],
+          "files_to_modify": [
+            "lexicons/org/openlore/claim.json",
+            "lexicons/org/openlore/philosophy.json",
+            "crates/lexicon/src/lib.rs"
+          ],
+          "implementation_notes": "Materialize the two Lexicon JSON files per data-models.md \u00a7Lexicon: org.openlore.claim and \u00a7Lexicon: org.openlore.philosophy. Field order is display-only (CID is canonical CBOR). The lexicon crate exposes them via include_str! constants so the validate function in the next phase has bytes to load. No validation logic yet \u2014 that lands in 02-01.",
+          "deps": [
+            "01-01"
+          ],
+          "id": "01-02"
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Pure core \u2014 lexicon contracts",
+      "description": "Drive the lexicon crate's conformance scenarios (layer-2 acceptance per Mandate 9). All steps run against pure functions in-memory; zero I/O, zero CLI subprocess.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "Lexicon validates signed claim against org.openlore.claim schema",
+          "criteria": [
+            "A well-formed signed claim JSON validates Ok against lexicon::claim",
+            "A claim missing a required field returns a Lexicon validation error naming the field",
+            "LC-2 passes when run via cargo nextest"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_validates_signed_claim_against_org_openlore_claim_schema",
+          "files_to_modify": [
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/claim.rs"
+          ],
+          "implementation_notes": "Implement validate_claim_json against the include_str!'d Lexicon JSON. Treat the Lexicon spec as the source of truth; the serde-derived model is a convenience layer over the validated Value. Property: every required field's absence produces a typed LexiconError carrying the field name.",
+          "deps": [
+            "01-02"
+          ],
+          "id": "02-01"
+        },
+        {
+          "name": "Lexicon rejects out-of-range confidence at the wire boundary",
+          "criteria": [
+            "Confidence 1.4 in JSON is rejected with an error naming 'confidence' and the range [0.0, 1.0]",
+            "Confidence -0.1 is rejected with the same shape",
+            "Confidence 0.0 and 1.0 (boundaries) are accepted",
+            "LC-5 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_rejects_out_of_range_confidence_at_wire_boundary",
+          "files_to_modify": [
+            "crates/lexicon/src/claim.rs"
+          ],
+          "implementation_notes": "The Lexicon schema already carries minimum/maximum on confidence; the validator must honor them and produce an error message containing the field name and the numeric bounds. Defense-in-depth on top of the CLI's pre-sign check (WS-4 lands in Phase 5).",
+          "deps": [
+            "02-01"
+          ],
+          "id": "02-02"
+        },
+        {
+          "name": "Canonical CBOR encoding and CID computation",
+          "criteria": [
+            "canonicalize(claim) emits RFC 8949 \u00a74.2.1 canonical CBOR (sorted map keys, shortest-form ints)",
+            "compute_cid(bytes) returns a CIDv1 dag-cbor sha2-256 base32-lower string",
+            "Two invocations on equal inputs produce byte-equal CBOR and equal CIDs"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/canonicalize.rs",
+            "crates/claim-domain/src/cid.rs",
+            "crates/claim-domain/src/lib.rs"
+          ],
+          "implementation_notes": "Pure functions only; inputs in, outputs out, no I/O. Use ciborium for CBOR per technology-stack.md and the cid + multihash crates per ADR-006. This step builds the load-bearing pure pipeline that LC-3 and LC-4 verify next.",
+          "deps": [
+            "02-01"
+          ],
+          "id": "02-03"
+        },
+        {
+          "name": "CID is byte-stable across re-canonicalizations (proptest)",
+          "criteria": [
+            "Property holds for 256 randomly generated valid claims: canonicalize twice yields byte-equal CBOR",
+            "Property holds: compute_cid produces equal CIDs across re-runs",
+            "proptest.toml pins the seed for CI determinism",
+            "LC-3 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_cid_is_byte_stable_across_n_re_canonicalizations",
+          "files_to_modify": [
+            "proptest.toml",
+            "crates/claim-domain/src/proptest_strategies.rs",
+            "crates/claim-domain/Cargo.toml"
+          ],
+          "implementation_notes": "The one @property test in slice-01 (per DD-12). Write an arb_unsigned_claim strategy producing diverse (subject, predicate, object, evidence, confidence, author, composed_at, references) values within the Lexicon constraints. Pin the proptest seed in proptest.toml so failures reproduce. PROPTEST_CASES default 256; nightly bumps to 4096 per devops/ci-cd-pipeline.md \u00a73.7.",
+          "deps": [
+            "02-03"
+          ],
+          "id": "02-04"
+        },
+        {
+          "name": "CID stability against gold-fixture suite",
+          "criteria": [
+            "Each tests/fixtures/gold_cids/claim_NNN.json recomputes to its frozen claim_NNN.cid",
+            "A drift in the CBOR encoder fires the test loudly",
+            "At least 5 gold fixtures cover diverse field shapes (unicode, references, empty evidence, max confidence, min confidence)",
+            "LC-4 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_cid_is_byte_stable_for_fixture_suite_of_known_claims",
+          "files_to_modify": [
+            "tests/fixtures/gold_cids/",
+            "tests/acceptance/lexicon_conformance.rs"
+          ],
+          "implementation_notes": "Catalogue fixtures that cover the canonicalization edge cases from data-models.md and exercise them as a frozen suite. Per ADR-006 Earned Trust property test 2. Fixtures are committed and signed by their CIDs; touching the encoder breaks them before a bad version ships.",
+          "deps": [
+            "02-03"
+          ],
+          "id": "02-05"
+        },
+        {
+          "name": "Lexicon roundtrip: compose-sign-serialize-deserialize equality",
+          "criteria": [
+            "An UnsignedClaim composed from fixture_jeff_rust_memory_safety serializes and deserializes back to an equal value",
+            "The signature block survives the roundtrip unchanged",
+            "LC-1 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_roundtrip_compose_sign_serialize_deserialize_yields_equal_value",
+          "files_to_modify": [
+            "crates/test-support/src/fixtures.rs",
+            "crates/lexicon/src/serde_impls.rs"
+          ],
+          "implementation_notes": "Implements fixture_jeff_rust_memory_safety in test-support and the serde models in lexicon. The signature block is signed by FakeIdentity::jeff; the actual signing primitive is exercised in phase 3 (claim-domain). KPI-4 invariant: zero silent normalization across the serde boundary.",
+          "deps": [
+            "02-03",
+            "02-01"
+          ],
+          "id": "02-06"
+        },
+        {
+          "name": "Persisted payload never contains a bucket label string",
+          "criteria": [
+            "Serialized JSON of a claim at confidence 0.10, 0.50, 0.80, 0.95 contains no occurrence of 'speculative', 'weighted', 'well-evidenced', or 'triangulated'",
+            "The numeric confidence value appears as a JSON number, not a string",
+            "LC-8 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_persisted_payload_never_contains_bucket_label_string",
+          "files_to_modify": [
+            "crates/lexicon/src/serde_impls.rs"
+          ],
+          "implementation_notes": "CI-failable invariant from WD-10 / D-12. The bucket-label mapping lives in claim-domain::confidence_bucket and is invoked only by render code paths; it must never touch the serde path. Verifies serializer never leaks display vocabulary into wire format.",
+          "deps": [
+            "02-06"
+          ],
+          "id": "02-07"
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Pure core \u2014 claim-domain primitives",
+      "description": "Build the signing, verification, and reference-rules pure functions. Drive cycle and self-reference detection. These are layer-2 lexicon-conformance scenarios that depend on the pure-core APIs.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "Pure signing and verification primitives",
+          "criteria": [
+            "sign(unsigned_cid, key) produces a SignatureBlock containing kid, alg=EdDSA, sig=base64url",
+            "verify(signed, pubkey) returns Ok for a valid signature and Err for a tampered one",
+            "Signing is deterministic for a given (unsigned_cid, key) pair"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/sign.rs",
+            "crates/claim-domain/src/verify.rs"
+          ],
+          "implementation_notes": "Pure functions; the key is an INPUT not state. The adapter (phase 4) loads the key from the keychain and passes it. Uses ed25519-dalek per technology-stack.md. No async, no I/O. Unit tests at the inner TDD loop establish the trust foundation for WS-6 (signature verifies) and WS-8 (PDS records verify).",
+          "deps": [
+            "02-03"
+          ],
+          "id": "03-01"
+        },
+        {
+          "name": "Confidence bucket helper (display-only)",
+          "criteria": [
+            "confidence_bucket(0.10) returns Speculative",
+            "confidence_bucket(0.55) returns Weighted",
+            "confidence_bucket(0.86) returns WellEvidenced",
+            "confidence_bucket(0.95) returns Triangulated",
+            "Function lives in render-only module path; serde never imports it"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/confidence.rs"
+          ],
+          "implementation_notes": "Display helper per WD-10. Bucket thresholds from feature-delta WD-10. Architecture rule (enforced via cargo xtask check-arch in phase 6): the lexicon crate must NOT depend on this function. The thin separation enforces the never-persisted invariant.",
+          "deps": [
+            "02-03"
+          ],
+          "id": "03-02"
+        },
+        {
+          "name": "Reject self-reference in references array",
+          "criteria": [
+            "reference_rules_validate(claim, None) returns Err(SelfReference) when references[].cid equals the claim's own unsigned CID",
+            "Validation runs at sign time, before signature is computed",
+            "LC-6 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_rejects_self_reference_in_references_array",
+          "files_to_modify": [
+            "crates/claim-domain/src/references.rs"
+          ],
+          "implementation_notes": "ADR-008 Behavioral rule 4 + Earned Trust 2. Chicken-and-egg: compute unsigned CID once, check references against it, reject before signing. Pure function; the optional ClaimLookup parameter is None for self-reference (no storage needed).",
+          "deps": [
+            "03-01"
+          ],
+          "id": "03-03"
+        },
+        {
+          "name": "Reject two-hop reference cycle",
+          "criteria": [
+            "When claim B (in lookup) references claim A's would-be CID, signing claim A which references B returns Err(CycleDetected)",
+            "Trait ClaimLookup is implementable by storage adapters and by in-memory test doubles",
+            "LC-7 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_conformance.rs",
+          "scenario_name": "lexicon_rejects_two_hop_reference_cycle",
+          "files_to_modify": [
+            "crates/claim-domain/src/references.rs",
+            "crates/ports/src/lib.rs"
+          ],
+          "implementation_notes": "ADR-008 Earned Trust 3. Cross-claim cycle check requires a ClaimLookup trait declared in ports and used optionally by reference_rules_validate. The DuckDB adapter (phase 4) will implement ClaimLookup; this step ships an in-memory implementation for the test.",
+          "deps": [
+            "03-03"
+          ],
+          "id": "03-04"
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Adapters and test doubles",
+      "description": "Implement all four effect adapters plus the test-support doubles (FakePds, FakeIdentity). Each adapter ships with a non-stub probe() per ADR-009. State-delta bootstrap (DD-3) lands on the first state-mutating adapter (DuckDB).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "Define Port traits and ProbeOutcome ADT",
+          "criteria": [
+            "ports crate declares StoragePort, IdentityPort, PdsPort, ClockPort with probe() required",
+            "ProbeOutcome ADT carries Ok and Refused{reason, detail, structured} variants",
+            "ProbeRefusalReason enum is extensible and serde-serializable",
+            "Workspace compiles with adapters depending on ports"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/probe.rs"
+          ],
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/ports public surface. ProbeOutcome serializes to the structured JSON shape that tracing emits as health.startup.refused. The async trait for PdsPort uses async-trait crate; the synchronous traits do not. This is the contract surface the rest of phase 4 implements.",
+          "deps": [
+            "03-01"
+          ],
+          "id": "04-01"
+        },
+        {
+          "name": "System clock adapter with degenerate probe",
+          "criteria": [
+            "ClockPort.now_utc() returns current RFC3339-serializable UTC instant",
+            "probe() returns ProbeOutcome::Ok unconditionally",
+            "Adapter is documented as degenerate per ADR-009"
+          ],
+          "files_to_modify": [
+            "crates/adapter-system-clock/src/lib.rs"
+          ],
+          "implementation_notes": "The simplest adapter \u2014 proves the port shape end-to-end before the harder adapters. probe() is non-stub (returns Ok with an empty Refused variant unreachable) to satisfy the structural check.",
+          "deps": [
+            "04-01"
+          ],
+          "id": "04-02"
+        },
+        {
+          "name": "FakeIdentity and FakeClock test doubles in test-support",
+          "criteria": [
+            "FakeIdentity::jeff() yields did:plc:test-jeff with a deterministic Ed25519 key",
+            "FakeIdentity::maria() yields a second known identity for multi-author scenarios",
+            "FakeIdentity implements IdentityPort including sign/verify",
+            "author_did() strips the #fragment from the full DID"
+          ],
+          "files_to_modify": [
+            "crates/test-support/src/identity.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "implementation_notes": "Per DD-6: identity treatment = fake double with known test DID. Deterministic keypair lets WS-6 and FR-2 assert signature verification against a fixed public key. tests/acceptance/support/mod.rs re-exports from test-support so existing skeleton imports resolve.",
+          "deps": [
+            "04-02"
+          ],
+          "id": "04-03"
+        },
+        {
+          "name": "ATProto DID identity adapter with probe",
+          "criteria": [
+            "AtProtoDidAdapter loads the per-app key from OS keychain via keyring crate",
+            "sign() and verify() match the pure claim-domain primitives byte-for-byte",
+            "probe() refuses startup when DID document doesn't list the OpenLore verification method",
+            "probe() refuses startup when WSL2 fallback key file perms differ from 0600"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/adapter-atproto-did/src/probe.rs"
+          ],
+          "implementation_notes": "Per ADR-002 probe responsibilities: DID document resolves, sentinel sign+verify, keychain accessibility, WSL2 fallback key file perms. The DID-doc update at openlore init registers the per-app key as a separate verification method per WD-12. Probe is non-stub per ADR-009 D-10 (structural enforcement).",
+          "deps": [
+            "04-03"
+          ],
+          "id": "04-04"
+        },
+        {
+          "name": "DuckDB storage adapter with schema migration and state-delta bootstrap",
+          "criteria": [
+            "DuckDbStorageAdapter creates schema_version, claims, claim_evidence, claim_references tables idempotently on first run",
+            "write_signed_claim persists the row and the <cid>.json artifact atomically (tmp+fsync+rename)",
+            "read_signed_claim and query_by_subject return the persisted values byte-for-byte",
+            "probe() refuses startup on schema version mismatch, failed sentinel roundtrip, or fsync no-op on the storage medium",
+            "tests/common/state_delta.rs is bootstrapped per DD-3 (the first state-mutating adapter)"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/schema.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "tests/common/state_delta.rs"
+          ],
+          "implementation_notes": "Per ADR-001 probe: schema version, sentinel roundtrip, fsync honored on the real medium (detects tmpfs/overlayfs/WSL2-DrvFs lies). Per data-models.md the JSON file and DB row are written in a single transaction-equivalent. State-delta lazy bootstrap lands here (DD-3) since DuckDB is the first observable state mutation surface. Implements ClaimLookup so phase 5 cycle checks across the local store work.",
+          "deps": [
+            "04-01",
+            "03-04"
+          ],
+          "id": "04-05"
+        },
+        {
+          "name": "ATProto PDS adapter and FakePds test double",
+          "criteria": [
+            "AtProtoPdsAdapter implements PdsPort over atrium-api XRPC calls",
+            "create_record uses claim CID as rkey; 409/conflict treated as success returning existing at-uri",
+            "probe() refuses startup on TLS handshake failure, describeServer DID mismatch, or rkey-collision idempotency violation",
+            "FakePds in test-support records create_record calls in memory, replays get/list deterministically, and supports simulate_unreachable()"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-pds/src/lib.rs",
+            "crates/adapter-atproto-pds/src/probe.rs",
+            "crates/test-support/src/fake_pds.rs"
+          ],
+          "implementation_notes": "Per ADR-004 + architecture-design.md \u00a76.2 probe: TLS, describeServer DID match, rkey-collision idempotency (write sentinel twice, assert no overwrite). FakePds uses wiremock per DD-6 (crafter may pick recorded-fixture replay instead). Both real and fake honor the same PdsPort contract so the CLI is unaware in test vs prod.",
+          "deps": [
+            "04-04"
+          ],
+          "id": "04-06"
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "CLI driver \u2014 verbs and observable contracts",
+      "description": "Wire the composition root and implement each CLI verb to satisfy walking-skeleton scenarios. Every step targets one or two closely-related WS scenarios. The two-prompt observable contract (ADR-003) is the load-bearing UX shape.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "openlore init bootstraps identity and DuckDB and is idempotent",
+          "criteria": [
+            "First init creates identity.toml, the DuckDB file with schema, and prints 'OpenLore initialized for did:plc:test-jeff'",
+            "Re-running init prints 'already initialized for did:plc:test-jeff' and exits 0",
+            "The probe gauntlet runs at startup and refuses on any probe failure",
+            "WS-1 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_init_creates_identity_duckdb_and_is_idempotent",
+          "files_to_modify": [
+            "crates/cli/src/main.rs",
+            "crates/cli/src/verbs/init.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "implementation_notes": "Composition root (main): load config, wire adapters, run probe gauntlet, dispatch. Init verb resolves DID, derives per-app key, registers verification method, creates DuckDB schema (idempotent). TestEnv::initialized() in test-support invokes this verb so all downstream scenarios start initialized.",
+          "deps": [
+            "04-05",
+            "04-06"
+          ],
+          "id": "05-01"
+        },
+        {
+          "name": "Claim commands fail loudly when not initialized",
+          "criteria": [
+            "Running 'openlore claim add' on a fresh environment exits non-zero",
+            "stderr names the required 'openlore init' command",
+            "WS-2 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_claim_commands_fail_loudly_when_not_initialized",
+          "files_to_modify": [
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "implementation_notes": "Per ADR-009 D-9 wire-then-probe-then-use: the probe gauntlet detects the missing init state (identity.toml absent) and refuses with a structured health.startup.refused event whose user-rendered hint names 'openlore init'. This is the probe-refusal exit-2 path being exercised end-to-end.",
+          "deps": [
+            "05-01"
+          ],
+          "id": "05-02"
+        },
+        {
+          "name": "Compose preview contains 'not as truth' and gates on confirmation",
+          "criteria": [
+            "'openlore claim add' without stdin input prints the compose preview to stdout",
+            "Preview contains the literal text 'not as truth' (WD-6)",
+            "No file is written under ~/.local/share/openlore/claims/ before confirmation",
+            "No PDS call is made before confirmation",
+            "WS-3 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_compose_preview_contains_not_as_truth_and_waits_for_confirmation",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/cli/src/io.rs"
+          ],
+          "implementation_notes": "Load-bearing UX scenario. Per ADR-003 two-prompt contract: render preview, wait for Enter at sign prompt. The literal text 'not as truth' is content-frozen by AC. The local-first invariant (KPI-5) demands zero side effects before user confirmation.",
+          "deps": [
+            "05-01"
+          ],
+          "id": "05-03"
+        },
+        {
+          "name": "Compose rejects confidence outside [0.0, 1.0] pre-sign",
+          "criteria": [
+            "'--confidence 1.4' exits non-zero with stderr naming '--confidence' and the range",
+            "No local file is written",
+            "No PDS call is made",
+            "WS-4 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_compose_rejects_confidence_outside_unit_interval",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs"
+          ],
+          "implementation_notes": "Pre-sign validation in the CLI verb (NOT relying solely on the Lexicon boundary). Error message contains the flag name and the bounds. Defense-in-depth on top of LC-5.",
+          "deps": [
+            "05-03"
+          ],
+          "id": "05-04"
+        },
+        {
+          "name": "Bucket label is display-only; payload stores numeric",
+          "criteria": [
+            "Preview for confidence 0.55 contains '0.55 (weighted)'",
+            "After signing, the on-disk JSON contains numeric 0.55 and no bucket-label string",
+            "WS-5 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_compose_preview_shows_bucket_label_but_signed_payload_has_only_numeric",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "implementation_notes": "Render layer invokes claim_domain::confidence_bucket for display. Persistence path (writing the signed file via the storage port) never sees the bucket label. WD-10 / D-12 invariant exercised end-to-end through the CLI subprocess.",
+          "deps": [
+            "05-04",
+            "03-02"
+          ],
+          "id": "05-05"
+        },
+        {
+          "name": "Sign writes atomic local file with no network call",
+          "criteria": [
+            "Output contains 'Computing claim CID' and 'Written to local store'",
+            "<cid>.json appears under env.claims_dir() and its signature verifies against FakeIdentity::jeff's pubkey",
+            "No PDS call is made (assert_no_pds_call_was_made)",
+            "WS-6 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_sign_writes_atomic_local_file_with_no_network_call",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs"
+          ],
+          "implementation_notes": "Local-first beat of the journey (KPI-5). Verb pipeline: render preview, wait for Enter, call claim_domain::canonicalize -> compute_cid -> sign, call StoragePort::write_signed_claim, render publish prompt. Atomic file write is the StoragePort adapter's responsibility (landed in 04-05).",
+          "deps": [
+            "05-05"
+          ],
+          "id": "05-06"
+        },
+        {
+          "name": "Re-canonicalization produces identical CIDs across runs",
+          "criteria": [
+            "Two independent 'openlore claim add' runs with identical flags produce identical CIDs",
+            "Composed_at is pinned via OPENLORE_TEST_NOW env var (or equivalent) for determinism",
+            "WS-7 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_re_canonicalization_produces_identical_cids",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/adapter-system-clock/src/lib.rs"
+          ],
+          "implementation_notes": "Subprocess-level verification of the LC-3 property (which proved it at unit level). The clock adapter honors OPENLORE_TEST_NOW for test-only determinism without leaking into prod behavior. KPI-4 round-trip identity exercised through the CLI.",
+          "deps": [
+            "05-06"
+          ],
+          "id": "05-07"
+        },
+        {
+          "name": "Publish prints at-uri and retract hint",
+          "criteria": [
+            "After 'Y' at the publish prompt, stdout contains 'at-uri: at://did:plc:test-jeff/org.openlore.claim/'",
+            "stdout contains the literal 'openlore claim retract' as a retract-hint (WD-6)",
+            "FakePds contains the record at the printed at-uri",
+            "WS-8 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_publish_prints_at_uri_and_retract_hint_after_signing",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_publish.rs",
+            "crates/cli/src/verbs/claim_add.rs"
+          ],
+          "implementation_notes": "Publish verb invoked from claim_add's Y branch (single publish code path per ADR-003). PDS rkey = CID (idempotency contract from FR-2). Retract hint in success message is content-frozen UX per WD-6.",
+          "deps": [
+            "05-06"
+          ],
+          "id": "05-08"
+        },
+        {
+          "name": "Publish is idempotent on re-run with same CID",
+          "criteria": [
+            "Standalone 'openlore claim publish <cid>' on an already-published claim exits 0",
+            "Output indicates 'already published'",
+            "FakePds still has exactly one record for that at-uri (no duplicate)",
+            "WS-9 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_publish.rs"
+          ],
+          "implementation_notes": "Per US-003 Example 3 + ADR-003 verb publish. The PdsPort adapter treats 409/conflict as success returning the existing at-uri; the verb surfaces 'already published' rather than an error.",
+          "deps": [
+            "05-08"
+          ],
+          "id": "05-09"
+        },
+        {
+          "name": "PDS unreachable leaves local claim intact and retry is actionable",
+          "criteria": [
+            "When pds.simulate_unreachable() is set, 'Y' at publish exits non-zero",
+            "stderr contains 'PDS' and 'retry with `openlore claim publish'",
+            "The local <cid>.json file persists intact",
+            "After pds.restore(), 'openlore claim publish <cid>' succeeds",
+            "WS-10 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionable",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_publish.rs",
+            "crates/cli/src/errors.rs"
+          ],
+          "implementation_notes": "Per US-003 Example 2 + KPI-5 local-first invariant. Local persistence is unconditional; network failure surfaces with an actionable retry hint naming the standalone publish verb. The retry path is what makes the local-first promise honest.",
+          "deps": [
+            "05-09"
+          ],
+          "id": "05-10"
+        },
+        {
+          "name": "Graph query returns just-published claim byte-for-byte",
+          "criteria": [
+            "'openlore graph query --subject <subject>' after a publish prints fields matching the fixture",
+            "Every field (subject, predicate, object, evidence, confidence, author, composed_at) matches the compose-time value byte-for-byte",
+            "WS-11 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_graph_query_returns_just_published_claim_byte_for_byte",
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "implementation_notes": "KPI-4 the load-bearing one: zero silent normalization across compose->sign->store->query. Read path uses the same lexicon serde model as write; any normalization detected here is a bug not a feature.",
+          "deps": [
+            "05-08"
+          ],
+          "id": "05-11"
+        },
+        {
+          "name": "Graph query defaults local-only with footer announcement",
+          "criteria": [
+            "Query output contains 'Showing local claims only'",
+            "Footer mentions '--federated' and 'slice-03'",
+            "WS-12 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_graph_query_default_is_local_only_and_footer_announces_it",
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "implementation_notes": "Per US-004 AC #2 + WD-13. The footer signals that federation is slice-03 territory; the framing is content-frozen UX.",
+          "deps": [
+            "05-11"
+          ],
+          "id": "05-12"
+        },
+        {
+          "name": "Graph query empty result is explained not silent",
+          "criteria": [
+            "Query for a subject with no claims prints 'No local claims about <subject>'",
+            "Output mentions '--federated' as a future affordance",
+            "Exit code is 0 (empty is not an error)",
+            "WS-13 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_graph_query_empty_result_is_explained_not_silent",
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "implementation_notes": "Per US-004 AC #3. Silent empty output is hostile; the message names the subject and points at the federation escape hatch.",
+          "deps": [
+            "05-12"
+          ],
+          "id": "05-13"
+        },
+        {
+          "name": "Retract publishes new counter-claim referencing original",
+          "criteria": [
+            "'openlore claim retract <cid>' publishes a NEW claim",
+            "The new claim's CID differs from the original",
+            "The new claim's references field contains {type: retracts, cid: <original_cid>}",
+            "WS-14 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_retract_publishes_new_counter_claim_referencing_original",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_retract.rs"
+          ],
+          "implementation_notes": "Per ADR-008 \u00a7Behavioral rule 1. The retract verb constructs an UnsignedClaim with references=[{type: retracts, cid: original}], then calls into the standalone publish code path (single publish code path per ADR-003).",
+          "deps": [
+            "05-10"
+          ],
+          "id": "05-14"
+        },
+        {
+          "name": "Retract preserves original in both local and remote stores",
+          "criteria": [
+            "After retract, the original <cid>.json file still exists locally",
+            "FakePds still returns the original record at its at-uri",
+            "graph query lists BOTH claims with 'retracted by author' annotation on the original",
+            "WS-15 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores",
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "implementation_notes": "Per ADR-008 \u00a7Behavioral rules 1, 2, 3 + WD-11 no-hard-delete. Render layer joins claim_references during query and annotates retracted claims. The 'retracted by author' string is content-frozen UX.",
+          "deps": [
+            "05-14"
+          ],
+          "id": "05-15"
+        },
+        {
+          "name": "Corrective workflow: retract typo and publish corrected",
+          "criteria": [
+            "Sequence: publish typo'd, retract typo, publish corrected, graph query",
+            "Query output lists original, retraction, AND corrected claim",
+            "Original is annotated 'retracted by author'",
+            "WS-16 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old",
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "implementation_notes": "Anxiety-path scenario from gherkin-scenarios-expanded.md, resolved per DD-9 as a two-step workflow using locked verbs (claim retract + claim add with corrected evidence). No new verbs needed; this exercises the composition of existing ones.",
+          "deps": [
+            "05-15"
+          ],
+          "id": "05-16"
+        },
+        {
+          "name": "Calibration anxiety: cancel and re-run with lower confidence",
+          "criteria": [
+            "First invocation with confidence 0.9 + EOF stdin shows '0.90 (well-evidenced)' and 'not as truth'",
+            "No file written and no PDS call after the canceled exchange",
+            "Second invocation with confidence 0.55 + Enter + 'n' signs and persists",
+            "claims_dir() contains exactly one file (the 0.55 one) and no bucket label string in it",
+            "WS-17 passes"
+          ],
+          "test_file": "tests/acceptance/walking_skeleton.rs",
+          "scenario_name": "walking_skeleton_calibration_anxiety_user_cancels_and_re_runs_with_lower_confidence",
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs"
+          ],
+          "implementation_notes": "Anxiety-path scenario; DD-9 binds the --edit flow to cancel + re-run. EOF on stdin at the confirm prompt exits cleanly with zero side effects (the preview already printed is fine; nothing persisted). WD-10 invariant re-asserted on the persisted file.",
+          "deps": [
+            "05-16"
+          ],
+          "id": "05-17"
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "name": "Federation round-trip and CI bootstrap",
+      "description": "Exercise the full publish-then-query loop across multiple claims (FR-1..FR-4), then land CI workflow YAML, deny.toml, xtask checks, and the pre-commit probe-check hook so the architecture's enforceability is end-to-end.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "name": "Federation round-trip across three predicates",
+          "criteria": [
+            "Three claims with distinct subjects/predicates/objects publish successfully",
+            "Each subject queried returns its claim with the expected CID",
+            "Each CID is reachable in FakePds at the expected at-uri",
+            "FR-1 passes"
+          ],
+          "test_file": "tests/acceptance/federation_roundtrip.rs",
+          "scenario_name": "federation_roundtrip_publish_three_claims_different_predicates_all_round_trip_with_cids_intact",
+          "files_to_modify": [
+            "crates/test-support/src/fixtures.rs",
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "implementation_notes": "Most thorough cross-cutting test in slice-01: exercises every adapter integrated. fixture_three_claims_different_predicates returns Rust+memory-safety, Linux+unix-philosophy, Mastodon+federation-first (or equivalent diverse triplet). Validates the slice's reason to exist.",
+          "deps": [
+            "05-11"
+          ],
+          "id": "06-01"
+        },
+        {
+          "name": "PDS record rkey equals claim CID",
+          "criteria": [
+            "After publish, FakePds has exactly one record",
+            "record.rkey equals the parsed CID",
+            "record.collection equals 'org.openlore.claim'",
+            "FR-2 passes"
+          ],
+          "test_file": "tests/acceptance/federation_roundtrip.rs",
+          "scenario_name": "federation_roundtrip_pds_record_rkey_equals_claim_cid",
+          "files_to_modify": [
+            "crates/adapter-atproto-pds/src/lib.rs"
+          ],
+          "implementation_notes": "Federation contract: rkey = CID enables the idempotency story (WS-9) AND makes at_uri reconstructible from author_did + CID (FR-3). This step locks the invariant in via an explicit subprocess assertion.",
+          "deps": [
+            "06-01"
+          ],
+          "id": "06-02"
+        },
+        {
+          "name": "at_uri is reconstructible from author_did and claim CID",
+          "criteria": [
+            "Printed at-uri equals 'at://{author_did}/org.openlore.claim/{cid}'",
+            "DuckDB row's at_uri column equals the same value",
+            "FR-3 passes"
+          ],
+          "test_file": "tests/acceptance/federation_roundtrip.rs",
+          "scenario_name": "federation_roundtrip_at_uri_is_reconstructible_from_author_did_and_claim_cid",
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/lib.rs"
+          ],
+          "implementation_notes": "Per shared-artifacts-registry rule 3. The reconstructibility is a pure function; the stored value is a cache that must equal the recomputation. Detecting drift here is a guardrail against silent at-uri corruption.",
+          "deps": [
+            "06-02"
+          ],
+          "id": "06-03"
+        },
+        {
+          "name": "Graph query output matches compose preview field-for-field",
+          "criteria": [
+            "Every field shown in compose preview appears with the same value in query output",
+            "Timestamp byte-for-byte identical (no normalization)",
+            "Evidence URLs byte-for-byte identical",
+            "Confidence numeric byte-for-byte identical",
+            "FR-4 passes"
+          ],
+          "test_file": "tests/acceptance/federation_roundtrip.rs",
+          "scenario_name": "federation_roundtrip_graph_query_output_matches_compose_preview_field_for_field",
+          "files_to_modify": [
+            "crates/cli/src/render.rs"
+          ],
+          "implementation_notes": "KPI-4 the load-bearing one. Per data-models.md \u00a7Validation rules row 4. Helper assert_graph_query_output_matches_fixture does the structured comparison; on mismatch, prints both outputs side by side for debuggability.",
+          "deps": [
+            "06-03"
+          ],
+          "id": "06-04"
+        },
+        {
+          "name": "xtask check-arch enforces dependency-graph rules",
+          "criteria": [
+            "'cargo xtask check-arch' exits 0 on the current workspace",
+            "Test fixture introducing a forbidden dep (e.g. tokio in claim-domain) causes the check to fail with a clear error",
+            "Architecture invariants from component-boundaries.md are enforced"
+          ],
+          "files_to_modify": [
+            "xtask/src/check_arch.rs",
+            "xtask/src/main.rs"
+          ],
+          "implementation_notes": "Per ADR-009 D-11. Parses cargo metadata, asserts claim-domain + lexicon have no transitive deps on tokio/reqwest/duckdb/keyring; no adapter-* depends on another; only cli depends on adapter-*. Runs as first CI gate per devops/ci-cd-pipeline.md \u00a73.4.",
+          "deps": [
+            "06-04"
+          ],
+          "id": "06-05"
+        },
+        {
+          "name": "xtask check-probes and pre-commit hook enforce probe contract",
+          "criteria": [
+            "'cargo xtask check-probes' uses syn to walk every impl <Port> for <Adapter> block",
+            "Stub probe() bodies (Ok(_), todo!(), unimplemented!(), comment-only) are rejected",
+            "scripts/check-probes.sh runs as pre-commit hook invoking check-probes",
+            "All four adapters' probes pass the check"
+          ],
+          "files_to_modify": [
+            "xtask/src/check_probes.rs",
+            "scripts/check-probes.sh",
+            ".githooks/pre-commit"
+          ],
+          "implementation_notes": "Per ADR-009 D-10 layer (b) structural check + D-11 enforcement. syn-based AST walker rejects single-expression Ok(_), todo!(), unimplemented!(), and bodies containing only TODO comments. Self-applies: there is also a test that verifies adapters actually implement non-stub probes (Earned Trust \u00a7self-application).",
+          "deps": [
+            "06-05"
+          ],
+          "id": "06-06"
+        },
+        {
+          "name": "Supply-chain policy via cargo-deny",
+          "criteria": [
+            "deny.toml present at repo root with the license whitelist (MIT, Apache-2.0, BSD-3-Clause, Unicode-DFS-2016, ISC, Zlib)",
+            "bans on openssl, openssl-sys, serde_cbor, actix-web, axum",
+            "'cargo deny check' exits 0 on the current dependency graph",
+            "Advisories check against rustsec database is enabled"
+          ],
+          "files_to_modify": [
+            "deny.toml"
+          ],
+          "implementation_notes": "Per devops/ci-cd-pipeline.md \u00a711. Bans enforce the tech-stack rejections (openssl per ADR-004 rustls choice; serde_cbor per ciborium choice). License whitelist enforces ADR-009 OSS policy.",
+          "deps": [
+            "06-06"
+          ],
+          "id": "06-07"
+        },
+        {
+          "name": "GitHub Actions ci.yml with commit and acceptance gates",
+          "criteria": [
+            ".github/workflows/ci.yml runs on pull_request and push to main",
+            "Commit stage runs fmt, clippy -D warnings, cargo-deny, xtask check-arch, xtask check-probes, nextest run --workspace",
+            "Acceptance stage runs nextest run --test acceptance (conditional on dir presence) plus KPI-4 and KPI-5 guardrail jobs",
+            "Wall-clock target ~5 min commit, ~10 min acceptance per devops/ci-cd-pipeline.md"
+          ],
+          "files_to_modify": [
+            ".github/workflows/ci.yml",
+            ".github/workflows/nightly.yml"
+          ],
+          "implementation_notes": "Per devops/ci-cd-pipeline.md \u00a71-\u00a74. Commit-stage jobs run in parallel where independent; acceptance stage gates after commit passes. Mutation testing lives in nightly.yml (advisory) per \u00a76; release.yml is OUT OF SCOPE for slice-01 and lands when the first vX.Y.Z tag is cut.",
+          "deps": [
+            "06-07"
+          ],
+          "id": "06-08"
+        }
+      ]
+    }
+  ]
+}

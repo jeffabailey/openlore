@@ -1,0 +1,18 @@
+[package]
+name = "adapter-atproto-did"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore IdentityPort adapter: ATProto DID resolution + OS keychain-backed Ed25519 key."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell. Real ring + keyring deps added in step 03-XX.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+thiserror = { workspace = true }

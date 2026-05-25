@@ -1,0 +1,55 @@
+# OpenLore — workspace manifest
+#
+# Hexagonal + Modular Monolith (ADR-009): one workspace, many crates.
+# Pure core (claim-domain, lexicon, ports) is paranoid about I/O deps;
+# the effect shell (adapter-*) wraps real systems; cli is the single
+# composition root.
+#
+# RED-baseline scaffold (step 01-01): every crate exposes panic-stubs;
+# DELIVER fills bodies one scenario at a time. See
+# docs/feature/openlore-foundation/design/component-boundaries.md.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/claim-domain",
+    "crates/lexicon",
+    "crates/ports",
+    "crates/adapter-duckdb",
+    "crates/adapter-atproto-did",
+    "crates/adapter-atproto-pds",
+    "crates/adapter-system-clock",
+    "crates/cli",
+    "crates/test-support",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jeffbailey/openlore"
+authors = ["OpenLore contributors"]
+
+# Shared dependencies pinned at the workspace root. Crates opt-in via
+# `dep = { workspace = true }`. Adapter-specific heavies (duckdb,
+# atrium-api, ring, keyring) get pinned later in their own steps to
+# avoid pulling them into the pure-core compile graph prematurely.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "io-util", "time"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+cid = "0.11"
+multihash = "0.19"
+tempfile = "3"
+assert_cmd = "2"
+proptest = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

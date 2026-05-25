@@ -1,0 +1,6 @@
+# Pin the Rust toolchain per ADR-004 (tokio + rustls require a recent
+# stable). MSRV is restated in Cargo.toml [workspace.package.rust-version].
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

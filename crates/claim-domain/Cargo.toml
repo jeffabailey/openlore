@@ -1,0 +1,22 @@
+[package]
+name = "claim-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure claim domain: ADTs + canonicalize/compute_cid/sign/verify/reference rules. NO I/O."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE: serde + cid + multihash + chrono + thiserror only.
+# Forbidden: tokio, reqwest, duckdb, keyring, atrium-*, std::fs/net/process/env.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+cid = { workspace = true }
+multihash = { workspace = true }
