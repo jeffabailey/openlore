@@ -1,0 +1,47 @@
+schema_version: 1
+
+persona:
+  id: P-002
+  name: Researcher / Tech Lead (Consumer)
+  short_name: Researcher
+  archetype: read-mostly
+  priority: P1
+  primary: false
+
+  one_liner: >
+    A researcher or tech lead who wants to consume the OpenLore graph to inform
+    decisions, but is unlikely to author claims in the first 6 months.
+
+  characteristics:
+    role: Researcher, tech lead, or staff engineer choosing tools for a team.
+    context: Reads other people's signed claims; rarely publishes their own.
+    workflow: Mix of CLI + web; comfortable subscribing to feeds.
+    values:
+      - Evidence-backed > popularity-based recommendations.
+      - Attribution preserved when citing other developers' reasoning.
+
+  current_workarounds:
+    - Following respected people on Mastodon/GitHub.
+    - Reading curated awesome-lists with no provenance.
+    - Asking trusted peers in private DMs.
+
+  pains_today:
+    - "I cannot easily weight someone's opinion by their actual track record."
+    - "Aggregator sites collapse provenance."
+
+  triggers_for_openlore_use:
+    - Choosing a library or framework for a team.
+    - Writing an architecture decision record that needs grounded references.
+
+  primary_jobs: [J-002, J-003, J-004]
+  walking_skeleton_jobs: []   # consumer persona; not in walking skeleton
+
+  emotional_arc_starting_state: >
+    Pragmatic. Will not adopt unless the read experience is faster than
+    "skim five blog posts + a HN thread."
+
+  ux_guardrails:
+    - Query must produce useful output even when the local graph is sparse.
+    - Attribution always visible; no "merged consensus" framing.
+    - Friction to author a claim must be visible but not punishing — make it
+      easy to graduate from reader to author when ready.

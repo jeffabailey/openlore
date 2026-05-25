@@ -1,0 +1,245 @@
+schema_version: 1
+
+journey:
+  name: author-and-publish-claim
+  goal: >
+    Capture a philosophical observation about a project as a signed, evidence-anchored
+    claim, persist it locally, publish it via ATProto, and read it back through the
+    local graph — without ever feeling like the system is asking the user to assert truth.
+  persona: P-001  # Senior Engineer Solo Builder
+  job_id: J-001
+  feature_id: openlore-foundation
+  slice_id: slice-01-claim-skeleton
+
+  emotional_arc:
+    start: Skeptical-curious — "Show me this won't read as a truth-assertion."
+    middle: Focused-engaged — composing the claim, reviewing what will be signed.
+    end: Quietly-confident — "That's exactly my reasoning; I own it; I can retract it."
+    arc_pattern: confidence-building-with-explicit-trust-buffer
+
+steps:
+
+  - id: 1
+    name: Compose claim intent
+    command: openlore claim add --subject github:rust-lang/rust --predicate embodiesPhilosophy --object org.openlore.philosophy.memory-safety --evidence https://www.rust-lang.org/ --confidence 0.86
+
+    tui_mockup: |
+      $ openlore claim add \
+          --subject   github:rust-lang/rust \
+          --predicate embodiesPhilosophy \
+          --object    org.openlore.philosophy.memory-safety \
+          --evidence  https://www.rust-lang.org/ \
+          --confidence 0.86
+
+      Composing claim (not yet signed, not yet published)
+      ----------------------------------------------------
+        subject     : github:rust-lang/rust
+        predicate   : embodiesPhilosophy
+        object      : org.openlore.philosophy.memory-safety
+        evidence    : https://www.rust-lang.org/
+        confidence  : 0.86  (well-evidenced)
+        author      : ${author_did}
+        timestamp   : ${composed_at}
+
+      This is YOUR reasoning. It will be signed and published as a claim,
+      not as truth. Others can counter-claim or weight it independently.
+
+      Press Enter to sign, Ctrl-C to cancel, or rerun with --edit for a diff editor.
+
+    shared_artifacts:
+      - name: author_did
+        source: ~/.config/openlore/identity.toml (resolved from ATProto session)
+        displayed_as: ${author_did}
+        consumers: ["claim record", "signed payload", "PDS publication", "graph query output"]
+      - name: composed_at
+        source: system clock (UTC, RFC3339)
+        displayed_as: ${composed_at}
+        consumers: ["claim record", "graph query output"]
+
+    emotional_state:
+      entry: Skeptical-curious
+      exit: Focused — "I see exactly what will be signed."
+
+    integration_checkpoint: |
+      The composed record matches the Lexicon shape for org.openlore.claim.
+      Author DID resolves to a valid ATProto identity.
+      No silent normalization; if the subject URI does not match Lexicon rules,
+      the user is asked to confirm before signing.
+
+    failure_modes:
+      - Subject URI does not match any known scheme; system asks to confirm rather than reject.
+      - Evidence URL unreachable; system warns but allows (offline-first).
+      - Confidence outside [0.0, 1.0]; system rejects with usage hint.
+
+    gherkin: |
+      Scenario: Author composes a claim with explicit framing
+        Given Jeff has authenticated as did:plc:jeff-test
+        When Jeff runs `openlore claim add` with subject, predicate, object, evidence, confidence
+        Then the CLI prints the composed record with the literal text "not as truth"
+        And the record is not yet written to local storage
+        And the record is not yet published to a PDS
+
+
+  - id: 2
+    name: Sign and persist locally
+    command: <Enter> on the confirmation prompt
+
+    tui_mockup: |
+      Signing with ${author_did} ... ok
+      Computing claim CID         ... bafy...n4ka
+
+      Written to local store:
+        path : ~/.local/share/openlore/claims/bafy...n4ka.json
+        cid  : bafy...n4ka
+        size : 412 bytes
+
+      Publish to your PDS now? [Y/n]
+
+    shared_artifacts:
+      - name: claim_cid
+        source: computed (content-addressed hash of the canonical signed claim)
+        displayed_as: bafy...n4ka
+        consumers: ["local store filename", "PDS record rkey", "graph node id", "retract reference"]
+      - name: local_claim_store
+        source: ~/.local/share/openlore/claims/  (XDG-compliant)
+        displayed_as: file path in output
+        consumers: ["graph query", "publish step", "retract step"]
+
+    emotional_state:
+      entry: Focused
+      exit: Reassured — "It's mine, locally, before anything goes federated."
+
+    integration_checkpoint: |
+      Signing succeeded; signature verifies against author_did's public key.
+      CID is stable across re-runs of canonicalization.
+      File written atomically; no half-written record on disk.
+
+    failure_modes:
+      - Signing key inaccessible (locked keychain); system prompts to unlock.
+      - Disk full; system reports cleanly, leaves no partial file.
+      - Canonicalization fails (malformed evidence URL); system rejects pre-sign.
+
+    gherkin: |
+      Scenario: Claim is signed and persisted locally before any publication
+        Given Jeff has composed a valid claim
+        When Jeff confirms the sign step
+        Then a file appears at ~/.local/share/openlore/claims/<cid>.json
+        And the signature verifies against did:plc:jeff-test
+        And no network call to a PDS has been made yet
+
+
+  - id: 3
+    name: Publish to ATProto PDS
+    command: <Y> on the publish prompt (or `openlore claim publish <cid>` later)
+
+    tui_mockup: |
+      Publishing to ${pds_endpoint} ...
+        record collection : org.openlore.claim
+        record rkey       : bafy...n4ka
+        ... ok (HTTP 200, 124ms)
+
+      Published.
+        at-uri : at://${author_did}/org.openlore.claim/bafy...n4ka
+        local  : ~/.local/share/openlore/claims/bafy...n4ka.json
+
+      Tip: `openlore claim retract bafy...n4ka` to issue a retraction claim.
+
+    shared_artifacts:
+      - name: pds_endpoint
+        source: ATProto session resolved from identity.toml
+        displayed_as: ${pds_endpoint}
+        consumers: ["publish step", "federated read step (later slices)"]
+      - name: at_uri
+        source: derived from author_did + collection + claim_cid
+        displayed_as: at://${author_did}/org.openlore.claim/${claim_cid}
+        consumers: ["claim record", "graph query output", "retract step"]
+
+    emotional_state:
+      entry: Reassured
+      exit: Quietly-confident — "Federated, but retraction is one command away."
+
+    integration_checkpoint: |
+      PDS write succeeded and rkey matches the local CID.
+      Local store is updated with publication metadata (at-uri, published_at).
+      If PDS write fails, local claim remains valid; user can retry without re-signing.
+
+    failure_modes:
+      - PDS unreachable; system queues for retry, leaves local claim intact.
+      - PDS rejects (e.g. unknown collection); system shows the raw error and a hint.
+      - Network mid-write timeout; system retries idempotently using claim_cid as rkey.
+
+    gherkin: |
+      Scenario: Claim is published to the author's PDS
+        Given Jeff has a signed claim with cid bafy...n4ka
+        When Jeff confirms publication
+        Then the PDS contains a record at at://did:plc:jeff-test/org.openlore.claim/bafy...n4ka
+        And the local store records the publication timestamp
+        And the user is told how to retract
+
+
+  - id: 4
+    name: Read it back through the graph
+    command: openlore graph query --subject github:rust-lang/rust
+
+    tui_mockup: |
+      $ openlore graph query --subject github:rust-lang/rust
+
+      Claims about github:rust-lang/rust (1 found, local store)
+      ---------------------------------------------------------
+        ${author_did}
+          embodiesPhilosophy  org.openlore.philosophy.memory-safety
+          confidence          0.86  (well-evidenced)
+          evidence            https://www.rust-lang.org/
+          at-uri              at://${author_did}/org.openlore.claim/bafy...n4ka
+          composed_at         ${composed_at}
+
+      Showing local claims only. Use `--federated` to include subscribed authors
+      (subscriptions land in slice-03-federated-read).
+
+    shared_artifacts:
+      - name: author_did
+        source: same as step 1
+        displayed_as: ${author_did}
+        consumers: ["claim record", "graph query output"]
+      - name: claim_cid
+        source: same as step 2
+        displayed_as: bafy...n4ka
+        consumers: ["graph node id", "at-uri suffix"]
+
+    emotional_state:
+      entry: Quietly-confident
+      exit: Validated — "That's my reasoning, attributed, queryable, mine."
+
+    integration_checkpoint: |
+      Query result for the just-published claim shows EXACTLY the same field values
+      that were shown at compose-time. No silent normalization, no field loss.
+
+    failure_modes:
+      - Local store schema drift between write and read; system reports incompatible version.
+      - Query returns zero results despite a known local claim; system suggests `--debug`.
+
+    gherkin: |
+      Scenario: Author reads back their own claim through the graph query
+        Given Jeff has published claim bafy...n4ka about github:rust-lang/rust
+        When Jeff runs `openlore graph query --subject github:rust-lang/rust`
+        Then the output lists exactly that claim
+        And every field shown matches the field values at compose-time
+        And the output explicitly notes that only local claims are shown
+
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: author_did
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "Author DID drift between compose, sign, publish, and query. Likely cause: identity rotated mid-flow."
+    - artifact: claim_cid
+      must_match_across: [2, 3, 4]
+      failure_message: "Claim CID differs between local store, PDS rkey, and graph query. Canonicalization is non-deterministic."
+    - artifact: at_uri
+      must_match_across: [3, 4]
+      failure_message: "Published at-uri does not match query output. Likely cause: PDS rkey differs from claim_cid."
+
+changelog:
+  - date: "2026-05-25"
+    feature: openlore-foundation
+    change: Initial journey for the walking-skeleton J-001 path.

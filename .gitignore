@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local config + state
+.env
+.env.local
+/data/
+/.openlore/
+
+# nWave / DES state (project-local)
+/.nwave/des/deliver-session.json
+/.nwave/des/des-task-active

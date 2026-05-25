@@ -1,0 +1,268 @@
+schema_version: 1
+# OpenLore Jobs-To-Be-Done registry.
+# Every user story across every feature references one of these `id`s via `job_id`.
+# A story may instead set `job_id: infrastructure-only` IF it also carries
+# `infrastructure_rationale` and the slice still contains >=1 non-infra story.
+
+jobs:
+
+  - id: J-001
+    name: Author a signed philosophical claim
+    primary: true
+    walking_skeleton: true
+    job_story: >
+      When I learn a project embodies a philosophy I care about,
+      I want to record it as a signed evidence-backed claim,
+      so I can publish my reasoning without forcing it on others.
+
+    functional:
+      - Capture (subject, predicate, object, evidence, confidence) in a structured record.
+      - Sign it with the author's DID so provenance is portable and verifiable.
+      - Persist locally first; publishing to ATProto is a separate, deferrable step.
+
+    emotional:
+      - Relief: "I am claiming, not asserting truth."
+      - Confidence: the record I sign is exactly what others will read.
+      - Lowered stakes: I can revise, retract, or counter-claim later.
+
+    social:
+      - Be a thoughtful citizen of a federated knowledge graph.
+      - Avoid the centralized-wiki failure mode where edits feel like a fight.
+      - Establish a public reasoning trail others can engage with.
+
+    four_forces:
+      push: >
+        Today philosophical claims about projects live in blog posts, README rants,
+        and Twitter threads. They are unstructured, unsigned, and undiscoverable.
+      pull: >
+        A signed, evidence-anchored, locally-owned claim that others can federate,
+        weight, or disagree with — without me having to argue them down first.
+      anxiety: >
+        "Am I being asked to assert this is TRUE? What if I'm wrong? What if
+        someone with more authority disagrees and brigades my claim?"
+        Mitigation: claims are framed as the author's reasoning, carry an explicit
+        confidence value, and are counter-claimable rather than overwrite-able.
+      habit: >
+        Engineers already write blog posts and README opinions. The new behavior
+        (structured signed claim) must feel at most as heavy as `git commit -m`.
+
+    opportunity_score:
+      importance: 9     # core feature: without this nothing else works
+      satisfaction: 2   # no existing tool does this well
+      score: 16         # importance + max(importance - satisfaction, 0) = 9 + 7
+      verdict: underserved-primary
+
+    success_signals:
+      - A claim written in <2 minutes once the user knows the predicate vocabulary.
+      - User can read back their own claim and recognize it as their reasoning.
+      - User feels safe publishing because retraction/counter-claim is first-class.
+
+    related_jobs: [J-002, J-003, J-004]
+
+
+  - id: J-002
+    name: Explore the philosophy graph to inform a decision
+    primary: false
+    job_story: >
+      When I'm choosing a tech stack or evaluating a community,
+      I want to see what philosophies a project embodies and who else holds those
+      philosophies, so I can pick projects aligned with how I want to build.
+
+    functional:
+      - Query the local graph by subject (project), object (philosophy), or contributor.
+      - Traverse contributor<->project<->philosophy edges.
+      - See weights/confidence so I can distinguish well-supported claims from speculation.
+
+    emotional:
+      - Curiosity satisfied without sinking hours into hand-research.
+      - Confidence to defend the decision: "I picked Rust because X, Y, Z philosophies
+        align with how my team works, and here are the people who back that up."
+
+    social:
+      - Make tech choices defensible to teammates with shared vocabulary.
+      - Surface alignment with named individuals one already respects.
+
+    four_forces:
+      push: >
+        Stack-choice today is vibes + Hacker News threads. Hard to articulate WHY
+        a community feels right.
+      pull: >
+        A query that returns "projects sharing philosophy X, and the contributors
+        who span them" with a defensible weight per edge.
+      anxiety: >
+        "What if the graph is sparse, biased toward popular projects, or full of
+        speculative claims and I make a bad call?" Mitigation: confidence and
+        evidence are first-class; sparse subgraphs render as sparse, not as confident.
+      habit: >
+        Engineers already run `gh search` and skim READMEs. Graph query must
+        feel like a natural extension, not a separate cognitive surface.
+
+    opportunity_score:
+      importance: 8
+      satisfaction: 2
+      score: 14
+      verdict: underserved-secondary
+
+    success_signals:
+      - User can run one query and surface a non-obvious connection.
+      - User refers to a query result when justifying a stack choice within 30 days.
+
+    related_jobs: [J-001, J-003, J-004]
+
+
+  - id: J-003
+    name: Read another developer's federated claims with weighting
+    primary: false
+    job_story: >
+      When I read another developer's published claims,
+      I want to weigh them by their evidence and signing identity,
+      so I can synthesize a view without inheriting their conclusions.
+
+    functional:
+      - Subscribe to or pull claims from another DID via ATProto.
+      - Merge them into a local view with explicit author attribution preserved.
+      - Apply user-configurable weights (trust score by author, evidence threshold).
+
+    emotional:
+      - "I can engage with their reasoning without endorsing it."
+      - Sovereignty: my local view is mine; their claims do not overwrite anything.
+
+    social:
+      - Cite a peer's claim with attribution intact.
+      - Engage in disagreement without flame-war: post a counter-claim.
+
+    four_forces:
+      push: >
+        Aggregator sites (HN, Reddit, awesome-lists) collapse provenance and tone.
+        I cannot tell whose reasoning I'm inheriting.
+      pull: >
+        A federated read where each claim carries its author, evidence, and confidence,
+        and I control how to weight them.
+      anxiety: >
+        "What if I accidentally absorb a bad-actor's claims into my reasoning?"
+        Mitigation: claims are never silently merged; they enter a separate
+        attribution layer that I explicitly weight.
+      habit: >
+        Devs already follow people on GitHub, Mastodon, blogs. Following a DID's
+        claim stream must feel comparable.
+
+    opportunity_score:
+      importance: 7
+      satisfaction: 1
+      score: 13
+      verdict: underserved-secondary
+
+    success_signals:
+      - User pulls another DID's claims and can answer "who said what, with what
+        evidence" in <30 seconds.
+      - User posts a counter-claim within first month of using federated read.
+
+    related_jobs: [J-001, J-002]
+
+
+  - id: J-004
+    name: Evaluate a contributor's body of work through a philosophy lens
+    primary: false
+    job_story: >
+      When I'm evaluating a person's body of work for hiring, collaboration, or
+      learning, I want to see which philosophies their contributions support,
+      so I can find collaborators who think like me.
+
+    functional:
+      - Resolve a contributor (GitHub handle, DID) to their contribution graph.
+      - For each philosophy edge, show triangulating evidence across projects.
+      - Surface adherence weighting (multi-project triangulation increases weight).
+
+    emotional:
+      - "I'm not stalking; I'm reading their published reasoning trail."
+      - Lowers the social cost of cold-outreach because the alignment is visible.
+
+    social:
+      - Find collaborators whose values are visible, not just inferred.
+      - Reduce mis-hires/mis-collabs grounded in stack-skill alone.
+
+    four_forces:
+      push: >
+        LinkedIn/GitHub show what someone built; they hide how/why they think.
+      pull: >
+        A view that synthesizes contributions across projects into a philosophy
+        adherence profile, with the underlying claims auditable.
+      anxiety: >
+        "Will this become a surveillance tool / blacklist mechanism?" Mitigation:
+        only public signed claims are aggregated; the contributor is the subject
+        of a claim, not a controller of it; counter-claim and retraction first-class.
+      habit: >
+        Engineers already scroll someone's GitHub profile. Profile-as-philosophy
+        view must layer onto that habit, not replace it.
+
+    opportunity_score:
+      importance: 6
+      satisfaction: 1
+      score: 11
+      verdict: underserved-tertiary
+
+    success_signals:
+      - User identifies a non-obvious collaborator candidate via the lens within 60 days.
+      - Lens output is shareable as a link to a query, not just a static dump.
+
+    related_jobs: [J-001, J-002, J-003]
+
+
+# ---------------------------------------------------------------------------
+# Red cards — all resolved 2026-05-25. Retained here for decision provenance.
+# Binding form lives in docs/feature/openlore-foundation/feature-delta.md
+# under "Locked Decisions" (WD-9..WD-13).
+# ---------------------------------------------------------------------------
+red_cards:
+  - id: RC-01
+    question: >
+      Confidence semantics: numeric [0.0, 1.0] with display-only buckets
+      (speculative <0.3, weighted 0.3-0.7, well-evidenced 0.7-0.9, triangulated >0.9)?
+      Or pure numeric? Or buckets-only?
+    proposed_default: numeric [0.0, 1.0] + display-only buckets
+    resolved:
+      date: "2026-05-25"
+      verdict: >
+        Numeric [0.0, 1.0] is the only persisted form on the signed claim.
+        Buckets are display-only: speculative <0.3, weighted 0.3-0.7,
+        well-evidenced 0.7-0.9, triangulated >0.9. Buckets MUST NEVER appear
+        in the signed payload, the local store, or the PDS record.
+      authority: feature-delta.md WD-10 (locks OD-2)
+    impacts: [J-001, J-002, J-003, J-004]
+
+  - id: RC-02
+    question: >
+      Retraction model: hard-delete (claim gone from PDS), soft-retract (claim still
+      readable but marked retracted), or counter-claim-only (no retractions, just
+      newer claims override)?
+    proposed_default: soft-retract + counter-claim-only — never hard-delete
+    resolved:
+      date: "2026-05-25"
+      verdict: >
+        Retraction is a counter-claim that references the original CID.
+        Soft-retract only; the PDS-published record persists. Hard-delete is
+        explicitly forbidden, even with --force.
+      authority: feature-delta.md WD-11 (locks OD-3)
+    impacts: [J-001, J-003]
+
+  - id: RC-03
+    question: >
+      Does the user's signing identity = their existing ATProto DID (e.g. their
+      bsky.social handle), or does OpenLore mint a separate did:plc for claims?
+    proposed_default: reuse existing ATProto DID; separate key derivation per app.
+    resolved:
+      date: "2026-05-25"
+      verdict: >
+        Reuse the user's existing ATProto DID with a per-application derived key
+        so OpenLore claims can be revoked independently of the user's main ATProto
+        identity. No fresh DID is minted.
+      authority: feature-delta.md WD-12 (locks OD-4)
+    impacts: [J-001, J-003]
+
+changelog:
+  - date: "2026-05-25"
+    feature: openlore-foundation
+    change: Initial bootstrap; 4 jobs derived from brief + JTBD analysis.
+  - date: "2026-05-25"
+    feature: openlore-foundation
+    change: RC-01, RC-02, RC-03 resolved by user; verdicts inlined. Binding form in feature-delta.md WD-10..WD-12.

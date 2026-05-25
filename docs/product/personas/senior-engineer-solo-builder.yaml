@@ -1,0 +1,56 @@
+schema_version: 1
+
+persona:
+  id: P-001
+  name: Senior Engineer Solo Builder
+  short_name: Senior Engineer
+  archetype: Jeff-class
+  priority: P0
+  primary: true
+
+  one_liner: >
+    A senior engineer building solo who treats philosophical alignment as a
+    first-class engineering concern and wants tools that respect "claims, not truth."
+
+  characteristics:
+    role: Senior engineer (10+ years), often a tech lead in past lives.
+    context: Building alone; choosing every tool deliberately; no committee.
+    workflow: Lives in a terminal; comfortable with git, signed commits, CLIs, DIDs.
+    values:
+      - Local-first; data sovereignty is non-negotiable.
+      - Philosophical rigor over tribal allegiance.
+      - Reasoning trails over assertions of authority.
+      - Federated > centralized for knowledge graphs.
+
+  current_workarounds:
+    - Long-form blog posts no one can structurally query.
+    - GitHub stars as a crude "philosophy proxy" (which they hate).
+    - Hand-curated personal awesome-lists in markdown.
+    - Mental graph of "which contributors I trust on which topics."
+
+  pains_today:
+    - "I cannot point at WHY I trust a project's philosophy in a queryable way."
+    - "My reasoning evaporates the moment I close the laptop."
+    - "I have opinions I will not publish because they look like assertions of truth."
+    - "I cannot easily see which contributors span the projects whose philosophies I share."
+
+  triggers_for_openlore_use:
+    - Evaluating a new dependency or framework for a side project.
+    - Reading a contributor's blog post and wanting to anchor it as a claim.
+    - Disagreeing with a popular take and wanting to publish a counter-claim
+      without picking a fight on social media.
+
+  primary_jobs: [J-001, J-002, J-003, J-004]
+  walking_skeleton_jobs: [J-001]
+
+  emotional_arc_starting_state: >
+    Skeptical of yet-another-tool. Anxious that the framing will collapse into
+    "truth assertion" if not handled carefully. Curious whether local-first +
+    ATProto can really compose.
+
+  ux_guardrails:
+    - CLI-first; the UI is a deferrable layer.
+    - One command per atomic action: `openlore claim add ...`, `openlore graph query ...`.
+    - Output must be greppable text by default; `--json` opt-in.
+    - Never silently mutate; surface every write with a checksum/CID.
+    - Confidence display must NEVER read as "the system thinks this is true."
