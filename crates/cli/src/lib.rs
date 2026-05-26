@@ -85,7 +85,10 @@ pub enum GraphCommand {
 /// 1. Resolve XDG paths.
 /// 2. Construct Wiring (instantiates every adapter).
 /// 3. Walk the probe gauntlet; refuse with health.startup.refused on any refusal.
-/// 4. Dispatch the verb.
+/// 4. For non-`init` verbs, check the bootstrap-state arm: identity.toml
+///    must exist. Missing identity.toml means the user has not run
+///    `openlore init` yet; refuse with a hint pointing at that command.
+/// 5. Dispatch the verb.
 pub fn dispatch(cli: Cli) -> i32 {
     // Step 1: paths.
     let paths = match OpenLorePaths::from_env() {
@@ -111,7 +114,17 @@ pub fn dispatch(cli: Cli) -> i32 {
         return 2;
     }
 
-    // Step 4: dispatch.
+    // Step 4: bootstrap-state arm. The `init` verb IS the bootstrap;
+    // every other verb requires it to have run successfully at least
+    // once (identity.toml present at the resolved config path).
+    if requires_initialized_state(&cli.command) {
+        if let Err(refusal) = wiring.check_initialized_state() {
+            emit_health_startup_refused(&refusal);
+            return 2;
+        }
+    }
+
+    // Step 5: dispatch.
     match cli.command {
         Command::Init {
             handle,
@@ -145,6 +158,17 @@ pub fn dispatch(cli: Cli) -> i32 {
             panic!("Not yet implemented -- RED scaffold");
         }
     }
+}
+
+/// Predicate: does this verb require `openlore init` to have run first?
+///
+/// `Init` itself is the bootstrap verb and MUST be permitted on a fresh
+/// environment (otherwise the system is unreachable). Every other verb
+/// in the ADR-003 contract — `claim add`, `claim publish`, `claim
+/// retract`, `graph query` — operates on initialized identity + storage
+/// state and is therefore gated on the bootstrap-state arm.
+fn requires_initialized_state(cmd: &Command) -> bool {
+    !matches!(cmd, Command::Init { .. })
 }
 
 /// Emit a `health.startup.refused` event to stderr in the structured

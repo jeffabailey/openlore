@@ -113,6 +113,43 @@ impl Wiring {
         check_probe("clock", self.clock.probe())?;
         Ok(())
     }
+
+    /// Extra startup arm beyond the per-adapter probes: refuse to serve
+    /// any verb except `init` until `identity.toml` exists at the
+    /// resolved config path. This is the bootstrap-state contract from
+    /// WS-2: a fresh environment with no identity.toml is "not yet
+    /// initialized", and the user-facing remediation is `openlore init`.
+    ///
+    /// The refusal renders a structured hint that surfaces in the
+    /// `health.startup.refused` event payload so observability layers
+    /// can route on it; the human-readable stderr line names the exact
+    /// command to run.
+    pub fn check_initialized_state(&self) -> Result<(), ProbeRefusal> {
+        let identity_path = self.paths.identity_toml();
+        if identity_path.exists() {
+            return Ok(());
+        }
+        let detail = format!(
+            "OpenLore is not initialized (no identity.toml at {}). \
+             Run `openlore init` first.",
+            identity_path.display()
+        );
+        let structured = serde_json::json!({
+            "missing_file": identity_path.display().to_string(),
+            "hint": "Run `openlore init` first.",
+            "remediation_command": "openlore init",
+        });
+        Err(ProbeRefusal {
+            adapter: "identity",
+            // Closest semantic match in the existing enum — the identity
+            // adapter cannot answer queries until bootstrap completes.
+            // The detail + structured payload carry the precise
+            // remediation hint the user needs.
+            reason: ports::ProbeRefusalReason::IdentityKeychainUnreachable,
+            detail,
+            structured,
+        })
+    }
 }
 
 /// A refusal carried up from the probe gauntlet. Holds the adapter name

@@ -68,7 +68,29 @@ fn walking_skeleton_init_creates_identity_duckdb_and_is_idempotent() {
 /// @walking_skeleton @driving_port @US-005 @J-001 @error
 #[test]
 fn walking_skeleton_claim_commands_fail_loudly_when_not_initialized() {
-    todo!("DELIVER: TestEnv::fresh; run `openlore claim add` with the full Jeff/Rust flag set; assert exit nonzero and stderr names `openlore init`")
+    // Given a fresh environment with no identity.toml (no init has run)
+    let env = TestEnv::fresh();
+
+    // When Jeff runs `openlore claim add` before `openlore init`
+    let outcome = run_openlore(
+        &env,
+        &[
+            "claim", "add",
+            "--subject", "github:rust-lang/rust",
+            "--predicate", "embodiesPhilosophy",
+            "--object", "org.openlore.philosophy.memory-safety",
+            "--evidence", "https://www.rust-lang.org/",
+            "--confidence", "0.86",
+        ],
+    );
+
+    // Then it exits non-zero and stderr names `openlore init`
+    assert_exit_nonzero_and_stderr_contains(&outcome, "openlore init");
+
+    // Step 05-02: WS-2 activated — the assertions above are the
+    // contract; the trailing scaffold todo!() that DISTILL placed has
+    // been removed now that the probe gauntlet refuses claim verbs
+    // before any verb body runs.
 }
 
 // =============================================================================
