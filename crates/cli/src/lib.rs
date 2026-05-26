@@ -15,6 +15,7 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod io;
 pub mod paths;
 pub mod verbs;
 pub mod wiring;
@@ -145,9 +146,31 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        Command::Claim(ClaimCommand::Add { .. }) => {
-            panic!("Not yet implemented -- RED scaffold");
-        }
+        Command::Claim(ClaimCommand::Add {
+            subject,
+            predicate,
+            object,
+            evidence,
+            confidence,
+        }) => match verbs::claim_add::run(
+            &wiring,
+            &verbs::claim_add::ClaimAddArgs {
+                subject,
+                predicate,
+                object,
+                evidence,
+                confidence,
+            },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore claim add: {err:#}");
+                1
+            }
+        },
         Command::Claim(ClaimCommand::Publish { .. }) => {
             panic!("Not yet implemented -- RED scaffold");
         }

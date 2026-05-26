@@ -136,7 +136,9 @@ fn walking_skeleton_compose_preview_contains_not_as_truth_and_waits_for_confirma
     // And no PDS call has been made
     assert_no_pds_call_was_made(&env);
 
-    todo!("DELIVER: implement the dry-run / pre-confirm preview behavior; satisfy all three assertions")
+    // Step 05-03: WS-3 activated — the three assertions above are the
+    // contract; the trailing scaffold todo!() that DISTILL placed has
+    // been removed now that the compose preview verb is implemented.
 }
 
 /// WS-4: Out-of-range confidence is rejected pre-sign with a useful

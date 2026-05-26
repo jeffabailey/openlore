@@ -6,6 +6,8 @@
 //!
 //! Slice-01 verbs:
 //! - `init`: bootstrap identity + DuckDB; idempotent.
-//! - (later) `claim_add`, `claim_publish`, `claim_retract`, `graph_query`.
+//! - `claim_add`: compose preview + first half of the two-prompt flow.
+//! - (later) `claim_publish`, `claim_retract`, `graph_query`.
 
+pub mod claim_add;
 pub mod init;

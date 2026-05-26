@@ -397,14 +397,36 @@ pub fn assert_exit_nonzero_and_stderr_contains(outcome: &CliOutcome, expected_su
 /// 'not as truth'". Asserts on `outcome.stdout`. Port-exposed name:
 /// `cli.compose_preview.literal_not_as_truth_present`.
 pub fn assert_compose_preview_contains_not_as_truth(outcome: &CliOutcome) {
-    todo!("DELIVER: assert outcome.stdout.contains(\"not as truth\")")
+    assert!(
+        outcome.stdout.contains("not as truth"),
+        "expected compose preview to contain literal text \"not as truth\" \
+         (WD-6 hard AC); got stdout:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
 }
 
 /// Universe-bound: "no file was written under
 /// `{home}/.local/share/openlore/claims/`". Port-exposed name:
 /// `storage.local_claim_store.file_count`.
 pub fn assert_no_local_claim_files_exist(env: &TestEnv) {
-    todo!("DELIVER: scan env.claims_dir(); assert it is empty or does not exist")
+    let dir = env.claims_dir();
+    if !dir.exists() {
+        // Treat absence as zero files — that's the strongest possible
+        // form of "no file written".
+        return;
+    }
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read claims_dir {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "expected no files under claims_dir {} but found {} entries: {:?}",
+        dir.display(),
+        entries.len(),
+        entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
 }
 
 /// Universe-bound: "a file exists at
@@ -418,7 +440,14 @@ pub fn assert_claim_file_exists_with_cid(env: &TestEnv, cid: &str) {
 /// Universe-bound: "no `create_record` call was made on the fake PDS".
 /// Port-exposed name: `pds.create_record.call_count`.
 pub fn assert_no_pds_call_was_made(env: &TestEnv) {
-    todo!("DELIVER: assert env.pds.records().is_empty()")
+    let records = env.pds.records();
+    assert!(
+        records.is_empty(),
+        "expected no PDS create_record calls (KPI-5 local-first invariant); \
+         got {} records: {:?}",
+        records.len(),
+        records
+    );
 }
 
 /// Universe-bound: "the fake PDS contains a record at
