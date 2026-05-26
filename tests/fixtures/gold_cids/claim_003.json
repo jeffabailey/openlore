@@ -1,0 +1,19 @@
+{
+  "subject": "github:openlore/openlore",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.federation-first",
+  "evidence": ["https://github.com/openlore/openlore/blob/main/docs/manifesto.md"],
+  "confidence": 0.72,
+  "author_did": "did:plc:jeff#org.openlore.application",
+  "composed_at": "2026-05-26T14:15:00Z",
+  "references": [
+    {
+      "ref_type": "Retracts",
+      "cid": "bafyreigold003retracts0000000000000000000000000000000aaaa"
+    },
+    {
+      "ref_type": "Corrects",
+      "cid": "bafyreigold003corrects0000000000000000000000000000000bbbb"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "subject": "github:rust-lang/rust",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.memory-safety",
+  "evidence": ["https://www.rust-lang.org/"],
+  "confidence": 0.86,
+  "author_did": "did:plc:jeff#org.openlore.application",
+  "composed_at": "2026-05-25T12:00:00Z",
+  "references": []
+}

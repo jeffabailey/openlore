@@ -1,0 +1,15 @@
+{
+  "subject": "github:haskell/ghc",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.functional-purity",
+  "evidence": [
+    "https://www.haskell.org/",
+    "https://wiki.haskell.org/Why_Haskell_matters",
+    "https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/historyOfHaskell.pdf",
+    "https://www.youtube.com/watch?v=fSqE-HSh_NU"
+  ],
+  "confidence": 0.99,
+  "author_did": "did:plc:jeff#org.openlore.application",
+  "composed_at": "2026-12-31T23:59:59Z",
+  "references": []
+}

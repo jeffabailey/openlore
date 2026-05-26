@@ -1,0 +1,10 @@
+{
+  "subject": "github:torvalds/linux",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.unix-philosophy",
+  "evidence": [],
+  "confidence": 0.0,
+  "author_did": "did:plc:test-anon#org.openlore.application",
+  "composed_at": "2024-01-01T00:00:00Z",
+  "references": []
+}

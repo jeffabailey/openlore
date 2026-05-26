@@ -157,21 +157,126 @@ fn lexicon_cid_is_byte_stable_across_n_re_canonicalizations() {
 /// Catches cross-version drift in the CBOR encoder. (ADR-006 §Earned
 /// Trust property test 2 — gold fixtures.)
 ///
+/// ## Fixture layout
+///
+/// `tests/fixtures/gold_cids/claim_NNN.json` — an `UnsignedClaim` JSON
+/// body (serde-default shape; field-for-field).
+/// `tests/fixtures/gold_cids/claim_NNN.cid` — the frozen base32-lower
+/// CID string, one line, no trailing newline.
+///
+/// ## Diversity coverage (the 5 gold fixtures)
+///
+/// 1. `claim_001` — basic happy-path (jeff / rust / memory-safety,
+///    matches data-models.md §"On-disk artifact format" example).
+/// 2. `claim_002` — unicode in subject (Japanese mastodon handle) and
+///    object (Japanese philosophy name) plus emoji in evidence URL.
+/// 3. `claim_003` — `references` array with 2 entries (retracts +
+///    corrects), exercising the inner-map canonicalization.
+/// 4. `claim_004` — empty `evidence`, confidence at the inclusive
+///    lower bound (0.0).
+/// 5. `claim_005` — confidence near the upper bound (0.99) AND a
+///    4-URL evidence array (longest-array branch).
+///
+/// ## CID drift detection
+///
+/// When this test fires, the assertion message NAMES the failing
+/// fixture so a CBOR-encoder drift is immediately attributable. See
+/// ADR-006 §Earned Trust point 2.
+///
 /// @lexicon @US-002 @J-001 @real-io @in-memory
 #[test]
 fn lexicon_cid_is_byte_stable_for_fixture_suite_of_known_claims() {
-    // DELIVER will land a directory like:
-    //   tests/fixtures/gold_cids/
-    //     claim_001.json  (the claim body)
-    //     claim_001.cid   (the expected CID string, frozen)
-    //     claim_002.json
-    //     claim_002.cid
-    //     ...
-    //
-    // This test iterates the directory, recomputes each CID, asserts equality.
-    // On a Rust dependency bump that drifts the CBOR encoder, this test
-    // fires loud and clear at CI time before the bad version ships.
-    todo!("DELIVER: load tests/fixtures/gold_cids/; for each claim_NNN.json, compute the CID via the production pipeline; assert byte-equality with claim_NNN.cid")
+    use claim_domain::{canonicalize, compute_cid, UnsignedClaim};
+    use std::fs;
+    use std::path::PathBuf;
+
+    // Fixtures live OUTSIDE tests/acceptance/ so they're test-data, not
+    // test code. Path is resolved relative to the workspace root, which
+    // is where `cargo test` runs.
+    let fixtures_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..") // crates/
+        .join("..") // workspace root
+        .join("tests")
+        .join("fixtures")
+        .join("gold_cids");
+    assert!(
+        fixtures_dir.is_dir(),
+        "gold-fixture directory MUST exist at {}",
+        fixtures_dir.display()
+    );
+
+    // Diversity contract: at least 5 fixtures covering distinct shapes.
+    let fixture_ids = ["001", "002", "003", "004", "005"];
+    assert!(
+        fixture_ids.len() >= 5,
+        "LC-4 requires >= 5 gold fixtures for diversity coverage; have {}",
+        fixture_ids.len()
+    );
+
+    for id in fixture_ids {
+        let json_path = fixtures_dir.join(format!("claim_{id}.json"));
+        let cid_path = fixtures_dir.join(format!("claim_{id}.cid"));
+
+        let json_bytes = fs::read(&json_path)
+            .unwrap_or_else(|e| panic!("gold fixture {} missing: {}", json_path.display(), e));
+        let claim: UnsignedClaim = serde_json::from_slice(&json_bytes)
+            .unwrap_or_else(|e| panic!("gold fixture {} not valid UnsignedClaim JSON: {}", json_path.display(), e));
+
+        let canonical = canonicalize(&claim).unwrap_or_else(|e| {
+            panic!("canonicalize MUST succeed on gold fixture {}: {:?}", json_path.display(), e)
+        });
+        let computed_cid = compute_cid(&canonical);
+
+        let expected_cid_raw = fs::read_to_string(&cid_path)
+            .unwrap_or_else(|e| panic!("frozen CID file {} missing: {}", cid_path.display(), e));
+        let expected_cid = expected_cid_raw.trim();
+
+        assert_eq!(
+            computed_cid.0.as_str(),
+            expected_cid,
+            "CID drift detected for gold fixture claim_{id}: \
+             canonicalize+compute_cid yielded `{}` but frozen `.cid` file says `{}`. \
+             Either the CBOR encoder drifted (federation-breaking — see ADR-006 §Earned \
+             Trust point 2) or the fixture/CID pair needs regenerating after an \
+             intentional spec change.",
+            computed_cid.0,
+            expected_cid,
+        );
+    }
+}
+
+/// Snapshot-bootstrap helper for LC-4. Computes the gold CIDs for every
+/// `claim_NNN.json` fixture and prints them. Run once after authoring or
+/// intentionally-changing a fixture; capture the printed lines and write
+/// each to the corresponding `claim_NNN.cid` file. NOT part of the
+/// regular suite — `#[ignore]` keeps it out of CI.
+///
+/// Invocation:
+///   cargo test -p cli --test lexicon_conformance \
+///     lc4_recompute_gold_cids -- --ignored --nocapture
+#[test]
+#[ignore]
+fn lc4_recompute_gold_cids() {
+    use claim_domain::{canonicalize, compute_cid, UnsignedClaim};
+    use std::fs;
+    use std::path::PathBuf;
+
+    let fixtures_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("gold_cids");
+
+    let fixture_ids = ["001", "002", "003", "004", "005"];
+    for id in fixture_ids {
+        let json_path = fixtures_dir.join(format!("claim_{id}.json"));
+        let json_bytes = fs::read(&json_path).expect("fixture JSON readable");
+        let claim: UnsignedClaim = serde_json::from_slice(&json_bytes).expect("JSON parses");
+        let canonical = canonicalize(&claim).expect("canonicalize succeeds");
+        let cid = compute_cid(&canonical);
+        println!("claim_{id}.cid={}", cid.0);
+    }
 }
 
 // =============================================================================

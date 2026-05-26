@@ -1,0 +1,10 @@
+{
+  "subject": "mastodon:@朱雀@example.jp",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.データ志向",
+  "evidence": ["https://example.jp/posts/🌸-cherry-blossom-spec"],
+  "confidence": 0.55,
+  "author_did": "did:plc:maria#org.openlore.application",
+  "composed_at": "2026-06-01T09:30:00Z",
+  "references": []
+}
