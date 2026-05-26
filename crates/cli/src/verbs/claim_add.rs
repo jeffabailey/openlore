@@ -1,10 +1,13 @@
 //! `claim add` — first half of the two-prompt CLI verb (ADR-003).
 //!
-//! Slice-01 contract (WS-3 in `tests/acceptance/walking_skeleton.rs`):
+//! Slice-01 contract (WS-3 + WS-4 in `tests/acceptance/walking_skeleton.rs`):
 //!
 //! 1. Validate `--confidence` is in `[0.0, 1.0]` — out-of-range is a
-//!    pre-sign hard error (step 05-04 / WS-4 will tighten this; step
-//!    05-03 only needs to NOT panic on the happy-path value `0.86`).
+//!    pre-sign hard error. WS-4 (step 05-04) pins the user-facing error
+//!    text: stderr names the `--confidence` flag AND the range
+//!    `[0.0, 1.0]` AND the offending value. NO local file is written
+//!    and NO PDS call is made before this check runs (defense-in-depth
+//!    on top of LC-5's Lexicon-boundary check).
 //! 2. Construct an `UnsignedClaim` value from the flags + the
 //!    `ClockPort::now_utc()` for `composed_at`.
 //! 3. Render the compose preview to stdout. The preview MUST contain
@@ -74,9 +77,15 @@ pub struct ComposedClaim {
 /// the two-prompt flow so the WS-3 invariants (no local file, no PDS
 /// call before user confirms) hold by construction.
 pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
-    // Step 1: pre-sign confidence-range validation (step 05-04 will
-    // surface the structured stderr error shape; step 05-03 only needs
-    // to not panic on the happy path so we return a generic error here).
+    // Step 1: pre-sign confidence-range validation (WS-4 / step 05-04).
+    // This runs BEFORE any side effects: no compose preview is rendered,
+    // no signing happens, no PDS call is made, no local file is written.
+    // The error message names the `--confidence` flag AND the range
+    // `[0.0, 1.0]` AND the offending value — these three substrings are
+    // load-bearing for WS-4's stderr-contains assertions. This is
+    // defense-in-depth on top of LC-5's Lexicon-boundary check; the CLI
+    // refuses the value here so users see a friendly error long before
+    // the canonical-CBOR layer would reject it anyway.
     if !(0.0..=1.0).contains(&args.confidence) {
         return Err(anyhow!(
             "--confidence must be in [0.0, 1.0]; got {}",

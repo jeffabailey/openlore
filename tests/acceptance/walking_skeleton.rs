@@ -172,7 +172,10 @@ fn walking_skeleton_compose_rejects_confidence_outside_unit_interval() {
     // And no network call has been made
     assert_no_pds_call_was_made(&env);
 
-    todo!("DELIVER: implement pre-sign confidence validation; surface the named flag and range")
+    // Step 05-04: WS-4 activated — the assertions above are the
+    // contract; the trailing scaffold todo!() that DISTILL placed has
+    // been removed now that pre-sign confidence validation rejects
+    // out-of-range values with a stderr error naming the flag + range.
 }
 
 /// WS-5: Confidence bucket label is display-only. The compose preview
