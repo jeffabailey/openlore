@@ -39,3 +39,13 @@ multihash = { workspace = true }
 ciborium = "0.2"
 sha2 = "0.10"
 proptest = { workspace = true }
+# Ed25519 primitive for sign/verify (step 03-01). Pinned crate-locally
+# (not at the workspace root) so adapters that don't need Ed25519
+# don't compile it. `default-features = false` keeps OS-randomness out
+# of the pure core — Ed25519 signing is deterministic per RFC 8032,
+# so no RNG is required; verify also never needs randomness.
+ed25519-dalek = { version = "2", default-features = false }
+# base64url-no-pad encoding of signature bytes per ADR-006
+# §base64url-no-padding. `default-features = false` excludes the
+# `std` feature; `alloc` is sufficient for `engine::Engine::encode`.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }

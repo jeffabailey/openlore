@@ -19,13 +19,18 @@
 use serde::{Deserialize, Serialize};
 
 // -----------------------------------------------------------------------------
-// Submodules (step 02-03: canonical CBOR + CID computation)
+// Submodules (step 02-03: canonical CBOR + CID computation;
+//             step 03-01: Ed25519 sign + verify primitives)
 // -----------------------------------------------------------------------------
 mod canonicalize;
 mod cid;
+mod sign;
+mod verify;
 
 pub use canonicalize::canonicalize;
 pub use cid::compute_cid;
+pub use sign::sign;
+pub use verify::verify;
 
 // Step 02-04: proptest strategies for the one @property scenario in
 // slice-01 (LC-3). `pub` so test-support and acceptance tests can
@@ -176,15 +181,11 @@ pub struct SigningKey(pub Vec<u8>);
 #[derive(Debug, Clone)]
 pub struct VerifyingKey(pub Vec<u8>);
 
-/// Sign the unsigned-CID with the given key, returning the signature block.
-pub fn sign(_unsigned_cid: &Cid, _key: &SigningKey) -> Result<SignatureBlock, ClaimError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
-
-/// Verify a signed claim against the given verification key.
-pub fn verify(_signed: &SignedClaim, _public_key: &VerifyingKey) -> Result<(), ClaimError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
+// `sign` and `verify` were promoted to dedicated submodules
+// (`mod sign`, `mod verify`) at step 03-01. The `pub use` re-exports
+// above preserve `claim_domain::sign` / `claim_domain::verify` import
+// paths for the rest of the workspace (`ports::SigningPort`, adapter
+// composition, acceptance tests).
 
 /// Enforce the reference-rules invariants (self-reference + two-hop cycles).
 /// `lookup` allows reaching into the local store for cycle detection; pass
