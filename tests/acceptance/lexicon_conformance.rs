@@ -447,20 +447,88 @@ fn lexicon_rejects_two_hop_reference_cycle() {
 /// (WD-10 / D-12 — CI-failable invariant per data-models.md
 /// §Confidence buckets are NOT persisted.)
 ///
+/// Implementation strategy (step 02-07):
+///   * Build one Lexicon-wire `lexicon::Claim` per bucket-boundary
+///     confidence (`0.10` / `0.50` / `0.80` / `0.95`).
+///   * Serialize via `lexicon::claim_to_canonical_json` (federation
+///     wire path established in step 02-06) — this is the load-bearing
+///     "persisted payload" surface for cross-peer reads.
+///   * Confirm `confidence` round-trips as a JSON number, NOT a string —
+///     a stringified number would let the renderer slip a label
+///     in via Display somewhere downstream.
+///   * Case-insensitive substring search for each of the four bucket
+///     labels against the entire serialized payload. None must appear.
+///
+/// Render-layer bucket selection lives in
+/// `claim_domain::confidence_bucket`; this test enforces the boundary
+/// that the wire/serde layer cannot leak it (WD-10 / D-12).
+///
 /// @lexicon @US-001 @US-002 @J-001 @in-memory
 #[test]
 fn lexicon_persisted_payload_never_contains_bucket_label_string() {
-    // Compose a claim for each of the 4 buckets, serialize to canonical
-    // JSON, and grep for the bucket labels. None must appear.
-    let bucket_test_confidences = [0.1_f64, 0.5, 0.8, 0.95]; // speculative, weighted, well-evidenced, triangulated
+    use lexicon::{Claim, ClaimReference, SignatureBlock};
+
+    // The four bucket-boundary confidences from data-models.md (one in
+    // the speculative band, one weighted, one well-evidenced, one
+    // triangulated). Choosing values comfortably inside each band makes
+    // an accidental boundary-edge bug irrelevant to this invariant.
+    let bucket_test_confidences = [0.10_f64, 0.50, 0.80, 0.95];
+
+    // The four forbidden display labels (WD-10 / D-12). NONE may appear
+    // in the persisted federation payload at any confidence.
     let bucket_labels = ["speculative", "weighted", "well-evidenced", "triangulated"];
 
-    for _conf in bucket_test_confidences {
-        // Build claim with this confidence
-        // Serialize via lexicon::claim
-        // For each bucket_label, assert !serialized.contains(label)
-    }
+    let build_wire_claim = |confidence: f64| -> Claim {
+        Claim {
+            subject: "github:rust-lang/rust".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.memory-safety".to_string(),
+            evidence: vec!["https://www.rust-lang.org/".to_string()],
+            confidence,
+            author: "did:plc:jeff#org.openlore.application".to_string(),
+            composed_at: "2026-05-25T12:00:00Z".to_string(),
+            references: Vec::<ClaimReference>::new(),
+            signature: Some(SignatureBlock {
+                kid: "did:plc:jeff#org.openlore.application".to_string(),
+                alg: "EdDSA".to_string(),
+                sig: "Zm9vYmFy".to_string(),
+            }),
+        }
+    };
 
-    let _ = bucket_labels; // silence unused warning until DELIVER fills in
-    todo!("DELIVER: iterate the 4 confidences, serialize each signed claim to JSON, assert none of the 4 bucket-label strings appears anywhere in the serialized payload")
+    for conf in bucket_test_confidences {
+        let claim = build_wire_claim(conf);
+        let serialized_value = lexicon::claim_to_canonical_json(&claim);
+        let serialized_text =
+            serde_json::to_string(&serialized_value).expect("Value re-serializes to text");
+
+        // Criterion 2: `confidence` is a JSON number, not a string.
+        // A stringified number would be a smell that some Display impl
+        // (e.g., a bucket label getter) had snuck in upstream.
+        let confidence_field = serialized_value
+            .get("confidence")
+            .unwrap_or_else(|| panic!("serialized payload missing `confidence` field for conf={conf}: {serialized_text}"));
+        assert!(
+            confidence_field.is_number(),
+            "confidence MUST serialize as a JSON number (WD-10): got {confidence_field:?} \
+             for conf={conf}. A stringified value would risk a bucket label leaking \
+             through a Display impl."
+        );
+        assert!(
+            !confidence_field.is_string(),
+            "confidence MUST NOT serialize as a JSON string: got {confidence_field:?} \
+             for conf={conf}"
+        );
+
+        // Criterion 1: case-insensitive search for each forbidden label.
+        let serialized_lower = serialized_text.to_lowercase();
+        for label in bucket_labels {
+            assert!(
+                !serialized_lower.contains(label),
+                "persisted payload at confidence={conf} contains forbidden bucket label \
+                 `{label}` (WD-10 / D-12 violation — display buckets must NEVER be \
+                 persisted in the signed federation payload). Payload: {serialized_text}"
+            );
+        }
+    }
 }
