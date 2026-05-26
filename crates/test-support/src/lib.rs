@@ -27,11 +27,54 @@ pub mod fixtures;
 pub use fixtures::*;
 
 use async_trait::async_trait;
-use claim_domain::{Cid, Did, SignatureBlock, SignedClaim};
+use claim_domain::{Cid, ClaimLookup, Did, SignatureBlock, SignedClaim};
 use ports::{
     AtUri, ClockPort, IdentityError, IdentityPort, PdsError, PdsPort, ProbeOutcome, StorageError,
     StoragePort,
 };
+
+// -----------------------------------------------------------------------------
+// FakeClaimLookup — in-memory `ClaimLookup` double for pure-core tests
+// -----------------------------------------------------------------------------
+//
+// Used by acceptance scenarios that exercise the cycle-detection arm of
+// `reference_rules_validate` (LC-7 in slice-01). Implements the
+// `claim_domain::ClaimLookup` trait synchronously over an in-memory map
+// keyed by the signed claim's body CID. No I/O, no async — keeps the
+// pure core's invariants intact.
+
+/// In-memory `ClaimLookup` double: maps body CID → SignedClaim.
+///
+/// Tests insert claims via `insert(cid, signed)`; the lookup returns
+/// `Some(signed)` when a query CID matches an inserted key, `None`
+/// otherwise. The implementation is purely functional from the
+/// trait's perspective (no mutation occurs once the lookup is built).
+#[derive(Debug, Default, Clone)]
+pub struct FakeClaimLookup {
+    by_cid: std::collections::HashMap<Cid, SignedClaim>,
+}
+
+impl FakeClaimLookup {
+    /// Create an empty lookup. Use `insert` to populate.
+    pub fn new() -> Self {
+        Self {
+            by_cid: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Insert a signed claim under the supplied CID. The CID is the
+    /// key tests query against — typically the body CID of the claim
+    /// the author would resolve through the lookup.
+    pub fn insert(&mut self, cid: Cid, signed: SignedClaim) {
+        self.by_cid.insert(cid, signed);
+    }
+}
+
+impl ClaimLookup for FakeClaimLookup {
+    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
+        self.by_cid.get(cid).cloned()
+    }
+}
 
 // -----------------------------------------------------------------------------
 // FakePds — in-memory PdsPort double

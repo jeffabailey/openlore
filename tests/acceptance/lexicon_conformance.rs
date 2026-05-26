@@ -483,10 +483,89 @@ fn lexicon_rejects_self_reference_in_references_array() {
 /// store) references claim A, the sign step MUST reject claim A with
 /// `CycleDetected`. (ADR-008 §Earned Trust 3.)
 ///
+/// The cycle apex is identified by **body CID** (the same stable
+/// identity used by the self-reference arm at LC-6 / step 03-03): a
+/// claim's body CID is the CID of its canonical CBOR with `references`
+/// cleared, so it is invariant under attaching reference annotations.
+/// Two-hop closure A→B→A means A's references include B's body CID
+/// AND B's stored unsigned form has a reference back to A's body CID.
+///
 /// @lexicon @US-003 @J-001 @real-io @in-memory
 #[test]
 fn lexicon_rejects_two_hop_reference_cycle() {
-    todo!("DELIVER: build a tiny in-memory ClaimLookup implementing the claim_domain trait; seed it with claim B (which references claim A's would-be CID); attempt to sign claim A which references claim B's CID; assert Err(ClaimError::CycleDetected); requires reference_rules_validate(claim, Some(lookup))")
+    use claim_domain::{
+        canonicalize, compute_cid, reference_rules_validate, ClaimError, ClaimReference,
+        ReferenceType, SignatureBlock, SignedClaim,
+    };
+    use openlore_test_support::{fixture_jeff_rust_memory_safety, FakeClaimLookup};
+
+    // 1. Define the body of claim A (the claim we'll attempt to
+    //    sign). Start from the canonical Jeff-on-Rust fixture; its
+    //    references begin empty.
+    let a_body = fixture_jeff_rust_memory_safety();
+    assert!(
+        a_body.references.is_empty(),
+        "A's body must start empty (pre-cycle baseline)"
+    );
+
+    // 2. Compute A's body CID — A's stable identity that B will close
+    //    its cycle back onto.
+    let a_body_bytes = canonicalize(&a_body).expect("canonicalize A body");
+    let a_body_cid = compute_cid(&a_body_bytes);
+
+    // 3. Build claim B's body. Use a deliberately different
+    //    subject/object so B is not the same claim as A — only the
+    //    cycle topology matters here.
+    let mut b_body = fixture_jeff_rust_memory_safety();
+    b_body.subject = "github:openlore/openlore".to_string();
+    b_body.object = "org.openlore.philosophy.federation".to_string();
+    let b_body_bytes = canonicalize(&b_body).expect("canonicalize B body");
+    let b_body_cid = compute_cid(&b_body_bytes);
+
+    // 4. Attach the back-reference: B now references A's body CID.
+    //    This is the second hop of the cycle (A → B → A) that the
+    //    validator must detect.
+    let mut b_with_back_ref = b_body.clone();
+    b_with_back_ref.references.push(ClaimReference {
+        ref_type: ReferenceType::Counters,
+        cid: a_body_cid.clone(),
+    });
+
+    // 5. Wrap B in a SignedClaim with a deterministic placeholder
+    //    signature block; cycle detection runs on the unsigned shape,
+    //    so the signature contents are irrelevant here (matches the
+    //    LC-1 / fixture pattern).
+    let signed_b = SignedClaim {
+        unsigned: b_with_back_ref,
+        signature: SignatureBlock {
+            signed_cid: b_body_cid.clone(),
+            signature_bytes: vec![0u8; 64],
+            verification_method: "did:plc:jeff#org.openlore.application".to_string(),
+        },
+    };
+
+    // 6. Seed the in-memory lookup: signed B is reachable at B's body
+    //    CID — the CID A's outgoing reference targets.
+    let mut lookup = FakeClaimLookup::new();
+    lookup.insert(b_body_cid.clone(), signed_b);
+
+    // 7. Build claim A's outgoing reference: A → B (by B's body CID).
+    let mut a_with_outgoing_ref = a_body;
+    a_with_outgoing_ref.references.push(ClaimReference {
+        ref_type: ReferenceType::Counters,
+        cid: b_body_cid,
+    });
+
+    // 8. Validate A. With the lookup supplied, the two-hop arm MUST
+    //    fire and report `CycleDetected` at A's body CID. The check
+    //    runs at sign time, before any signature bytes are produced
+    //    (ADR-008 Earned Trust 3).
+    let result = reference_rules_validate(&a_with_outgoing_ref, Some(&lookup));
+    assert!(
+        matches!(&result, Err(ClaimError::CycleDetected { cid }) if cid == &a_body_cid),
+        "expected Err(CycleDetected {{ cid: a_body_cid }}), got {:?}",
+        result
+    );
 }
 
 // =============================================================================
