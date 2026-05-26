@@ -46,7 +46,11 @@ pub enum LexiconError {
     #[error("field `{field}` has invalid type: expected {expected}")]
     InvalidType { field: String, expected: String },
 
-    /// `confidence` is outside the Lexicon-defined range `[0.0, 1.0]`.
+    /// `confidence` is outside the Lexicon-defined range `[0.0, 1.0]`
+    /// (inclusive bounds, per JSON-Schema `minimum`/`maximum`).
+    /// Step 02-02 wires this variant up to LC-5; the error display names
+    /// both the field name and the valid range literally so peer-side
+    /// diagnostics can pattern-match without parsing serde strings.
     #[error("confidence {value} is outside [0.0, 1.0]")]
     OutOfRangeConfidence { value: f64 },
 
@@ -305,5 +309,60 @@ mod tests {
         let claim = validate_claim_json(&value)
             .expect("unsigned-but-otherwise-valid claim must validate");
         assert!(claim.signature.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 02-02: confidence range — defense-in-depth at the wire boundary.
+    //
+    // The Lexicon JSON declares `confidence: { type: "number", minimum: 0.0,
+    // maximum: 1.0 }`. Per JSON-Schema convention `minimum`/`maximum` are
+    // INCLUSIVE; ATProto inherits this. Boundary values (0.0 / 1.0) MUST
+    // validate; anything strictly outside MUST reject. These unit tests
+    // pin the contract; LC-5 is the acceptance-level counterpart.
+    // -------------------------------------------------------------------------
+
+    fn claim_with_confidence(confidence: f64) -> serde_json::Value {
+        let mut value = well_formed_claim_value();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("confidence".to_string(), json!(confidence));
+        value
+    }
+
+    #[test]
+    fn rejects_confidence_above_max_with_named_field_and_range() {
+        let value = claim_with_confidence(1.4);
+        let err = validate_claim_json(&value).expect_err("confidence=1.4 must reject");
+        assert_eq!(err, LexiconError::OutOfRangeConfidence { value: 1.4 });
+        let msg = err.to_string();
+        assert!(msg.contains("confidence"), "msg must name field: {msg}");
+        assert!(msg.contains("[0.0, 1.0]"), "msg must name range: {msg}");
+    }
+
+    #[test]
+    fn rejects_confidence_below_min_with_named_field_and_range() {
+        let value = claim_with_confidence(-0.1);
+        let err = validate_claim_json(&value).expect_err("confidence=-0.1 must reject");
+        assert_eq!(err, LexiconError::OutOfRangeConfidence { value: -0.1 });
+        let msg = err.to_string();
+        assert!(msg.contains("confidence"), "msg must name field: {msg}");
+        assert!(msg.contains("[0.0, 1.0]"), "msg must name range: {msg}");
+    }
+
+    #[test]
+    fn accepts_confidence_at_inclusive_lower_bound() {
+        let value = claim_with_confidence(0.0);
+        let claim =
+            validate_claim_json(&value).expect("confidence=0.0 must validate (inclusive)");
+        assert_eq!(claim.confidence, 0.0);
+    }
+
+    #[test]
+    fn accepts_confidence_at_inclusive_upper_bound() {
+        let value = claim_with_confidence(1.0);
+        let claim =
+            validate_claim_json(&value).expect("confidence=1.0 must validate (inclusive)");
+        assert_eq!(claim.confidence, 1.0);
     }
 }

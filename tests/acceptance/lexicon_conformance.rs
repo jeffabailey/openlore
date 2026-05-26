@@ -174,10 +174,60 @@ fn lexicon_cid_is_byte_stable_for_fixture_suite_of_known_claims() {
 /// what the CLI's pre-sign validator does. (data-models.md confidence
 /// min/max; defense-in-depth on top of WS-4.)
 ///
+/// Per ATProto/JSON-Schema convention, `minimum`/`maximum` are
+/// inclusive — boundary values 0.0 and 1.0 MUST validate.
+///
 /// @lexicon @US-001 @J-001 @in-memory
 #[test]
 fn lexicon_rejects_out_of_range_confidence_at_wire_boundary() {
-    todo!("DELIVER: construct a serde_json::Value with confidence=1.4; pass to lexicon::validate_claim_json; assert Err(_); assert the error names the confidence field and the valid range")
+    // Build a Lexicon-shaped claim with the confidence value parameterized.
+    let claim_with_confidence = |confidence: f64| -> serde_json::Value {
+        serde_json::json!({
+            "subject": "github:rust-lang/rust",
+            "predicate": "embodiesPhilosophy",
+            "object": "org.openlore.philosophy.memory-safety",
+            "evidence": ["https://github.com/rust-lang/rust"],
+            "confidence": confidence,
+            "author": "did:plc:test-jeff#org.openlore.application",
+            "composedAt": "2026-05-25T12:00:00Z",
+            "references": [],
+        })
+    };
+
+    // Criterion 1: confidence = 1.4 (above max) rejected; error names
+    // BOTH the field "confidence" AND the range "[0.0, 1.0]".
+    let above_err = lexicon::validate_claim_json(&claim_with_confidence(1.4))
+        .expect_err("confidence=1.4 MUST be rejected (above max)");
+    let above_msg = above_err.to_string();
+    assert!(
+        above_msg.contains("confidence"),
+        "error MUST name the `confidence` field; got: {above_msg}"
+    );
+    assert!(
+        above_msg.contains("[0.0, 1.0]"),
+        "error MUST name the valid range `[0.0, 1.0]`; got: {above_msg}"
+    );
+
+    // Criterion 2: confidence = -0.1 (below min) rejected; same shape.
+    let below_err = lexicon::validate_claim_json(&claim_with_confidence(-0.1))
+        .expect_err("confidence=-0.1 MUST be rejected (below min)");
+    let below_msg = below_err.to_string();
+    assert!(
+        below_msg.contains("confidence"),
+        "error MUST name the `confidence` field; got: {below_msg}"
+    );
+    assert!(
+        below_msg.contains("[0.0, 1.0]"),
+        "error MUST name the valid range `[0.0, 1.0]`; got: {below_msg}"
+    );
+
+    // Criterion 3: boundary values 0.0 and 1.0 ACCEPTED (inclusive bounds).
+    let at_zero = lexicon::validate_claim_json(&claim_with_confidence(0.0))
+        .expect("confidence=0.0 MUST validate (inclusive lower bound)");
+    assert_eq!(at_zero.confidence, 0.0);
+    let at_one = lexicon::validate_claim_json(&claim_with_confidence(1.0))
+        .expect("confidence=1.0 MUST validate (inclusive upper bound)");
+    assert_eq!(at_one.confidence, 1.0);
 }
 
 // =============================================================================
