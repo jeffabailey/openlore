@@ -27,6 +27,13 @@ mod cid;
 pub use canonicalize::canonicalize;
 pub use cid::compute_cid;
 
+// Step 02-04: proptest strategies for the one @property scenario in
+// slice-01 (LC-3). `pub` so test-support and acceptance tests can
+// reach `arb_unsigned_claim` directly. proptest is a regular dep of
+// this crate (see Cargo.toml comment); a later cleanup may
+// feature-gate it.
+pub mod proptest_strategies;
+
 // -----------------------------------------------------------------------------
 // Domain wrappers (per nw-fp-domain-modeling §2 — never use primitives directly)
 // -----------------------------------------------------------------------------

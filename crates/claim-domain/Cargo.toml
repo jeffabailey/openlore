@@ -19,6 +19,16 @@ path = "src/lib.rs"
 # root) because step 02-03's boundary restricts edits to this crate.
 # A later workspace-cleanup step can hoist them if other pure crates
 # pick up the same deps.
+#
+# `proptest` is pinned crate-locally for the `proptest_strategies`
+# module (step 02-04 / DD-12). It is the canonical Rust PBT crate per
+# the nw-distill polyglot matrix; LC-3 is the only @property scenario
+# in slice-01. Strategy lives in claim-domain so that consumers
+# (test-support, acceptance tests) reach it via the pure-core import
+# path. A future cleanup step may feature-gate this once we want to
+# trim release-build deps further; for the slice-01 RED baseline a
+# regular dep is the simplest viable shape and keeps `cargo test`
+# wiring trivial for downstream crates.
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,3 +38,4 @@ cid = { workspace = true }
 multihash = { workspace = true }
 ciborium = "0.2"
 sha2 = "0.10"
+proptest = { workspace = true }

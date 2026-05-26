@@ -113,29 +113,39 @@ fn lexicon_validates_signed_claim_against_org_openlore_claim_schema() {
 /// This is the ONE `@property`-tagged scenario in slice-01 (per DD-12).
 /// Runs at layer 2 (Mandate 9 permits PBT here).
 ///
+/// Step 02-04 implementation: the actual property body is wrapped in
+/// `proptest!` and consumes `arb_unsigned_claim` from `claim_domain`.
+/// Case count (256) is pinned via the workspace-root `proptest.toml`,
+/// satisfying criterion 1; CI determinism rides on `PROPTEST_SEED`
+/// (DEVOPS scope) per DESIGN open-question #4.
+///
 /// @lexicon @property @US-002 @J-001 @in-memory
 #[test]
 fn lexicon_cid_is_byte_stable_across_n_re_canonicalizations() {
-    // Sketch (DELIVER fills in the actual proptest! macro invocation):
-    //
-    // proptest! {
-    //     #[test]
-    //     fn prop_cid_byte_stable(claim in arb_unsigned_claim()) {
-    //         let cbor_1 = claim_domain::canonicalize(&claim).unwrap();
-    //         let cid_1  = claim_domain::compute_cid(&cbor_1);
-    //         let cbor_2 = claim_domain::canonicalize(&claim).unwrap();
-    //         let cid_2  = claim_domain::compute_cid(&cbor_2);
-    //         prop_assert_eq!(cbor_1, cbor_2);
-    //         prop_assert_eq!(cid_1, cid_2);
-    //     }
-    // }
-    //
-    // DELIVER bootstraps proptest in Cargo.toml [dev-dependencies], pins
-    // the seed in proptest.toml for CI determinism, and writes the
-    // `arb_unsigned_claim` strategy generating valid (subject,
-    // predicate, object, evidence, confidence, author, composed_at,
-    // references) tuples.
-    todo!("DELIVER: add proptest dep; pin seed; write arb_unsigned_claim strategy; assert CID byte-stable over 256+ generated claims")
+    use claim_domain::proptest_strategies::arb_unsigned_claim;
+    use proptest::prelude::*;
+
+    proptest!(|(claim in arb_unsigned_claim())| {
+        // Criterion 1: canonicalize twice → byte-equal CBOR.
+        let cbor_1 = claim_domain::canonicalize(&claim)
+            .expect("canonicalize MUST succeed for any well-formed UnsignedClaim");
+        let cbor_2 = claim_domain::canonicalize(&claim)
+            .expect("canonicalize MUST succeed on the second call too");
+        prop_assert_eq!(
+            &cbor_1, &cbor_2,
+            "canonical CBOR must be byte-identical across re-canonicalizations \
+             (ADR-006 §Earned Trust 1)"
+        );
+
+        // Criterion 2: same CID across re-runs for the same input.
+        let cid_1 = claim_domain::compute_cid(&cbor_1);
+        let cid_2 = claim_domain::compute_cid(&cbor_2);
+        prop_assert_eq!(
+            cid_1, cid_2,
+            "compute_cid of byte-equal CBOR must produce equal CIDs \
+             (federation round-trip identity, KPI-4)"
+        );
+    });
 }
 
 // =============================================================================

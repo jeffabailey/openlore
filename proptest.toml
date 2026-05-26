@@ -1,0 +1,52 @@
+# proptest configuration — workspace-wide defaults (step 02-04 / DD-12).
+#
+# LC-3 is the one @property-tagged scenario in slice-01 (ADR-006
+# §Earned Trust 1: CID byte-stability across N re-canonicalizations).
+# This file declares the canonical case count + failure-persistence
+# policy for the project; CI is the enforcer (see "How proptest reads
+# this file" below).
+#
+# ## How proptest reads this file
+#
+# proptest 1.x does NOT auto-load `proptest.toml` from disk — its
+# configuration is taken from environment variables (`PROPTEST_CASES`,
+# `PROPTEST_SEED`, `PROPTEST_VERBOSE`, `PROPTEST_MAX_SHRINK_ITERS`,
+# `PROPTEST_FAILURE_PERSISTENCE_FILE`, …) or from `Config::with_*`
+# calls in code. The default `cases` count is 256, which matches the
+# value below — so on a developer machine running `cargo test` with no
+# env, the 256-case property naturally holds without extra wiring.
+#
+# This file IS the declarative source of truth for what CI must export
+# before `cargo test`. The DevOps wave (step 04-XX or equivalent) reads
+# this file and emits the env vars; a CI `make test-pinned` recipe is
+# the natural shape. The file's presence also documents intent to any
+# future contributor: "this project pins proptest config here, not
+# scattered across crate-local `Config::with_*` calls."
+#
+# Seed reproducibility note: PROPTEST_SEED is intentionally NOT pinned
+# here. The DevOps step sets it in the CI workflow YAML for
+# determinism; locally, developers reproduce a counter-example by
+# exporting the seed printed in the failure report.
+#
+# See https://docs.rs/proptest/latest/proptest/test_runner/struct.Config.html
+
+# Number of input cases generated per property. 256 satisfies LC-3
+# criterion 1 ("Property holds for ≥256 randomly generated valid
+# claims"). Maps to PROPTEST_CASES=256.
+cases = 256
+
+# Persist counter-examples under tests/.proptest-failures so CI can
+# replay them. The file is auto-created on first failure. Maps to
+# PROPTEST_FAILURE_PERSISTENCE_FILE=tests/.proptest-failures.
+failure_persistence = { file = "tests/.proptest-failures" }
+
+# Forking (spawn each test case in a subprocess) is OFF: our
+# canonicalize/compute_cid pipeline is pure, total, and panic-free
+# by construction, so forking only adds overhead. Maps to PROPTEST_FORK=false.
+fork = false
+
+# Timeout per case in milliseconds. 0 disables it; canonicalize is
+# microseconds, so no per-case ceiling is needed and we keep the test
+# self-explanatory (no spurious timeout failures on a slow CI runner).
+# Maps to PROPTEST_TIMEOUT=0.
+timeout = 0
