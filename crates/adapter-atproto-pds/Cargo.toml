@@ -11,9 +11,40 @@ description = "OpenLore PdsPort adapter: atrium-api XRPC over rustls. Async per 
 [lib]
 path = "src/lib.rs"
 
-# EFFECT shell. Real atrium-api dep added in step 04-XX.
+# EFFECT shell.
+#
+# Step 04-06: pragmatic SLICE-01 wiring.
+#
+# - `reqwest` (rustls + webpki-roots): the HTTPS client. ADR-004
+#   mandates rustls (not native-tls) for system-trust-store-agnostic
+#   posture. `webpki-roots` ships the Mozilla CA bundle so the binary
+#   does not depend on a system CA store. `json` feature gives us
+#   `.json::<T>()` for parsing XRPC responses; `gzip`/`brotli` are
+#   intentionally omitted — XRPC payloads are small.
+#
+# - `tokio`: required by `async-trait` impl + by `reqwest` (which
+#   exposes only an async API). Workspace-level `tokio` already
+#   includes `macros`/`rt`/`io-util`/`time`; the adapter only needs
+#   `rt` and (for the probe shim in phase 05) `rt-multi-thread`. We
+#   inherit the workspace feature set.
+#
+# - `atrium-api` is INTENTIONALLY DEFERRED to phase 05 WS-9 wiring.
+#   The component-boundaries doc and ADR-004 both allow `atrium-api`
+#   here; this adapter does not yet exercise it because slice-01's
+#   XRPC surface (createRecord/getRecord/listRecords/describeServer)
+#   is small enough that the transitive cost of atrium-api (ipld
+#   codecs, dag-cbor, async-stream) outweighs the typed-client
+#   benefit. The PdsPort trait remains the seam; switching the body
+#   to atrium-api is a non-breaking internal change. See the
+#   architecture-design §6.2 and the step 04-06 commit message for
+#   the conflict-management rationale.
 [dependencies]
 ports = { path = "../ports" }
 async-trait = "0.1"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

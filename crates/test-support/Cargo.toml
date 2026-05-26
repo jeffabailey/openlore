@@ -27,6 +27,13 @@ tempfile = { workspace = true }
 # double; seeded keys are deterministic per RFC 8032.
 ed25519-dalek = { version = "2", default-features = false }
 
+# Step 04-06: tokio for the FakePds module's async-trait impl + unit
+# tests. The fake's read/write methods are `async fn` because the
+# `PdsPort` contract is async (per ADR-004). `rt` for a single-thread
+# runtime, `macros` for `#[tokio::test]`.
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 # Step 04-05: the universe-bound state-delta module (DD-3 bootstrap)
 # lives at `tests/common/state_delta.rs` so future acceptance tests
 # can pull it in via `#[path]`. We wire it as a self-test target here

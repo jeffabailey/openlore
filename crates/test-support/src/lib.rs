@@ -33,11 +33,16 @@ pub use fixtures::*;
 pub mod identity;
 pub use identity::FakeIdentity;
 
-use async_trait::async_trait;
+// Step 04-06: deterministic PdsPort test double. Lives in its own module
+// so the Arc/Mutex shared-state plumbing stays scoped; re-exported flat
+// so tests can write `openlore_test_support::FakePds::new()` directly.
+// Replaces the previous inline panic-scaffold (RED-baseline step 01-01)
+// with the real implementation per DD-6.
+pub mod fake_pds;
+pub use fake_pds::{FakePds, FakePdsRecord};
+
 use claim_domain::{Cid, ClaimLookup, SignedClaim};
-use ports::{
-    AtUri, ClockPort, PdsError, PdsPort, ProbeOutcome, StorageError, StoragePort,
-};
+use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};
 
 // -----------------------------------------------------------------------------
 // FakeClaimLookup — in-memory `ClaimLookup` double for pure-core tests
@@ -83,84 +88,9 @@ impl ClaimLookup for FakeClaimLookup {
 }
 
 // -----------------------------------------------------------------------------
-// FakePds — in-memory PdsPort double
+// FakePds — implementation lives in `src/fake_pds.rs` (step 04-06). It
+// is re-exported flat above as `FakePds` + `FakePdsRecord`.
 // -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct FakePdsRecord {
-    pub collection: String,
-    pub rkey: String,
-    pub body: serde_json::Value,
-    pub author_did: String,
-    pub at_uri: String,
-}
-
-pub struct FakePds {
-    records: std::sync::Mutex<Vec<FakePdsRecord>>,
-    unreachable: std::sync::Mutex<bool>,
-}
-
-impl FakePds {
-    pub fn new() -> Self {
-        Self {
-            records: std::sync::Mutex::new(Vec::new()),
-            unreachable: std::sync::Mutex::new(false),
-        }
-    }
-
-    pub fn records(&self) -> Vec<FakePdsRecord> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    pub fn record_at(&self, _at_uri: &str) -> Option<FakePdsRecord> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    pub fn simulate_unreachable(&self) {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    pub fn restore(&self) {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-}
-
-impl Default for FakePds {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl PdsPort for FakePds {
-    fn probe(&self) -> ProbeOutcome {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    async fn create_record(
-        &self,
-        _collection: &str,
-        _rkey: &str,
-        _body: serde_json::Value,
-    ) -> Result<AtUri, PdsError> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    async fn get_record(
-        &self,
-        _collection: &str,
-        _rkey: &str,
-    ) -> Result<Option<serde_json::Value>, PdsError> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    async fn list_records(
-        &self,
-        _collection: &str,
-    ) -> Result<Vec<serde_json::Value>, PdsError> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-}
 
 // -----------------------------------------------------------------------------
 // FakeIdentity — deterministic IdentityPort double
