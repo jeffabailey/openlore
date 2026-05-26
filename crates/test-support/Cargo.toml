@@ -26,3 +26,12 @@ tempfile = { workspace = true }
 # `default-features = false` keeps OS-randomness out of the test
 # double; seeded keys are deterministic per RFC 8032.
 ed25519-dalek = { version = "2", default-features = false }
+
+# Step 04-05: the universe-bound state-delta module (DD-3 bootstrap)
+# lives at `tests/common/state_delta.rs` so future acceptance tests
+# can pull it in via `#[path]`. We wire it as a self-test target here
+# so its skeleton's own sanity tests run on every CI build and
+# compile-time correctness is verified.
+[[test]]
+name = "state_delta_bootstrap"
+path = "../../tests/common/state_delta.rs"

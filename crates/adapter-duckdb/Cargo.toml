@@ -11,8 +11,9 @@ description = "OpenLore StoragePort adapter: embedded DuckDB + claims/<cid>.json
 [lib]
 path = "src/lib.rs"
 
-# EFFECT shell. Real duckdb dep added in step 02-XX; for now just enough
-# to compile against the ports trait.
+# EFFECT shell. Step 04-05 wires real duckdb. The duckdb crate bundles
+# its C library via the `bundled` feature so we don't depend on a
+# system-installed DuckDB (CI reproducibility).
 [dependencies]
 ports = { path = "../ports" }
 claim-domain = { path = "../claim-domain" }
@@ -20,3 +21,7 @@ lexicon = { path = "../lexicon" }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
+duckdb = { version = "1.3", features = ["bundled", "chrono"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
