@@ -24,31 +24,13 @@ use serde::{Deserialize, Serialize};
 // -----------------------------------------------------------------------------
 // Earned-trust probe contract (every adapter exposes one)
 // -----------------------------------------------------------------------------
+//
+// `ProbeOutcome` + `ProbeRefusalReason` live in the dedicated `probe`
+// submodule so the JSON contract (consumed by the tracing layer's
+// `health.startup.refused` event) lives next to its tests.
 
-/// What a `probe()` call answers: "are you safe to start serving traffic?"
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ProbeOutcome {
-    Ok,
-    Refused {
-        reason: ProbeRefusalReason,
-        detail: String,
-        structured: serde_json::Value,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProbeRefusalReason {
-    StorageFsyncUnreliable,
-    StorageSchemaMismatch,
-    IdentityKeyPermsUnsafe,
-    IdentityKeychainUnreachable,
-    IdentityDidDocumentMismatch,
-    PdsTlsHandshakeFailed,
-    PdsDidMismatch,
-    PdsIdempotencyViolation,
-    LexiconInvalid,
-    LexiconSerdeRoundTripFailed,
-}
+mod probe;
+pub use probe::{ProbeOutcome, ProbeRefusalReason};
 
 // -----------------------------------------------------------------------------
 // Driven ports — adapters implement these
