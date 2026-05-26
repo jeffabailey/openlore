@@ -1,6 +1,6 @@
-//! `claim add` — first half of the two-prompt CLI verb (ADR-003).
+//! `claim add` — the two-prompt CLI verb (ADR-003).
 //!
-//! Slice-01 contract (WS-3 + WS-4 in `tests/acceptance/walking_skeleton.rs`):
+//! Slice-01 contract (WS-3..WS-5 in `tests/acceptance/walking_skeleton.rs`):
 //!
 //! 1. Validate `--confidence` is in `[0.0, 1.0]` — out-of-range is a
 //!    pre-sign hard error. WS-4 (step 05-04) pins the user-facing error
@@ -17,19 +17,26 @@
 //!    - In scripted mode (`--no-tty` / piped stdin) an empty stdin =
 //!      EOF on first read = clean cancel; the binary exits 0 with the
 //!      preview shown but no side effect.
-//!    - A line with a single Enter (= empty string) confirms the sign
-//!      — step 05-06 implements signing; for slice-01 step 05-03 we
-//!      simply exit cleanly after the prompt is consumed.
+//!    - A line with a single Enter (= empty string) confirms the sign.
+//! 6. (Step 05-05) On confirmation: canonicalize the UnsignedClaim,
+//!    compute its CID, sign via `IdentityPort`, and persist via
+//!    `StoragePort::write_signed_claim` (DB row + atomic `<cid>.json`
+//!    file under claims_dir). Then print "Computing claim CID …" +
+//!    "Written to local store: <path>" so downstream WS scenarios can
+//!    locate the file. Step 05-08 wires the second prompt + publish.
 //!
 //! LOCAL-FIRST INVARIANT (KPI-5): NO storage write and NO PDS call
-//! happen before the user confirms. WS-3 verifies both — there is no
-//! claims_dir/ file after this verb exits with empty stdin, and the
-//! fake PDS records list is empty.
+//! happen before the user confirms. WS-3 verifies the no-write half;
+//! WS-5 verifies the on-disk file exists after Enter AND contains NO
+//! bucket-label string (WD-10 / D-12).
 
 use std::io::Write;
 
-use anyhow::{anyhow, Result};
-use claim_domain::{confidence_bucket, ConfidenceBucket};
+use anyhow::{anyhow, Context, Result};
+use claim_domain::{
+    canonicalize, compute_cid, confidence_bucket, ClaimReference, ConfidenceBucket,
+    Did, SignedClaim, UnsignedClaim,
+};
 
 use crate::io::{prompt_line, read_one_line};
 use crate::wiring::Wiring;
@@ -138,17 +145,87 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         });
     }
 
-    // The user pressed Enter. Step 05-06 will reach in here to sign +
-    // persist; step 05-03 stops at this point with a clean exit so the
-    // local-first invariant remains intact.
+    // The user pressed Enter. Step 05-05: canonicalize + compute_cid +
+    // sign + write_signed_claim. The on-disk JSON is the authoritative
+    // artifact; the DuckDB row is the queryable index (data-models.md).
     //
-    // We deliberately do NOT consume an additional line here — that's
-    // the publish prompt, which step 05-08 wires.
+    // WD-10 / D-12 invariant: bucket labels live ONLY in the preview
+    // render path above (via `confidence_bucket()`). The persistence
+    // path goes through `canonicalize` (Lexicon keys + numeric
+    // confidence) and serde-JSON serialization of `SignedClaim` —
+    // neither imports `confidence_bucket`, so no bucket-label string
+    // can leak into the persisted artifact. WS-5 verifies this
+    // end-to-end at the subprocess + filesystem boundary.
+    let unsigned = build_unsigned_claim(&composed)?;
+    let canonical_bytes = canonicalize(&unsigned)
+        .map_err(|e| anyhow!("canonicalizing claim: {e}"))?;
+    let unsigned_cid = compute_cid(&canonical_bytes);
+
+    writeln!(std::io::stdout(), "Computing claim CID {}", unsigned_cid.0)?;
+
+    let signature = wiring
+        .identity
+        .sign(&unsigned_cid)
+        .map_err(|e| anyhow!("signing claim: {e}"))?;
+
+    let signed = SignedClaim {
+        unsigned,
+        signature,
+    };
+
+    wiring
+        .storage
+        .write_signed_claim(&signed)
+        .with_context(|| {
+            format!("persisting signed claim {} to local store", signed.signature.signed_cid.0)
+        })?;
+
+    let artifact_path = wiring
+        .paths
+        .claims_dir()
+        .join(format!("{}.json", signed.signature.signed_cid.0));
+    writeln!(
+        std::io::stdout(),
+        "Written to local store: {}",
+        artifact_path.display()
+    )?;
+
+    // Consume any trailing input (e.g. "n" for the publish prompt that
+    // step 05-08 wires) so the subprocess exits cleanly when the test
+    // harness pipes "\nn\n" on stdin. We do NOT yet act on it.
     let _ = read_one_line(&mut stdin).ok();
 
     Ok(ClaimAddOutcome {
         exit_code: 0,
         stdout: String::new(),
+    })
+}
+
+/// Lift a `ComposedClaim` (CLI-flag shape) into a `claim_domain::UnsignedClaim`
+/// (canonical-CBOR-ready shape). Pure transformation — no I/O.
+///
+/// Confidence routing: the CLI accepts an `f64` and the range check at
+/// the top of `run` has already rejected anything outside `[0.0, 1.0]`.
+/// We construct `claim_domain::Confidence` via serde because its inner
+/// `f64` field is crate-private to `claim_domain` and the smart
+/// constructor `Confidence::try_new` is still a RED-scaffold panic at
+/// this slice (the wrapper exists for type-safety, not value validation
+/// at this slice — phase 03 hardens that). Mirrors the same trick used
+/// in `test-support::fixtures::confidence`.
+fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
+    let confidence: claim_domain::Confidence =
+        serde_json::from_value(serde_json::json!(composed.confidence))
+            .map_err(|e| anyhow!("encoding confidence {}: {e}", composed.confidence))?;
+
+    Ok(UnsignedClaim {
+        subject: composed.subject.clone(),
+        predicate: composed.predicate.clone(),
+        object: composed.object.clone(),
+        evidence: composed.evidence.clone(),
+        confidence,
+        author_did: Did(composed.author_did.clone()),
+        composed_at: composed.composed_at.clone(),
+        references: Vec::<ClaimReference>::new(),
     })
 }
 

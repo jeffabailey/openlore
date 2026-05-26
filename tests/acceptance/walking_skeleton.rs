@@ -204,11 +204,45 @@ fn walking_skeleton_compose_preview_shows_bucket_label_but_signed_payload_has_on
     // The preview shows the bucket label
     assert_exit_zero_and_stdout_contains(&outcome, "0.55 (weighted)");
 
-    // The signed file does NOT contain any bucket label string
-    // (we need the CID to address the file; DELIVER's helper will
-    // discover it by listing claims_dir() — there should be exactly
-    // one file after this scenario)
-    todo!("DELIVER: list env.claims_dir(); assert one file; assert_persisted_payload_has_no_bucket_label(&env, cid)")
+    // After signing, the on-disk JSON file under claims_dir/<cid>.json
+    // contains numeric 0.55 AND zero occurrences of speculative /
+    // weighted / well-evidenced / triangulated (WD-10 / D-12).
+    let claims_dir = env.claims_dir();
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&claims_dir)
+        .unwrap_or_else(|e| panic!("read claims_dir {}: {e}", claims_dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one signed claim file under {}; found {:?}",
+        claims_dir.display(),
+        entries
+    );
+
+    let signed_path = &entries[0];
+    let signed_bytes = std::fs::read(signed_path)
+        .unwrap_or_else(|e| panic!("read signed file {}: {e}", signed_path.display()));
+    let signed_text = String::from_utf8_lossy(&signed_bytes);
+
+    // Numeric value present.
+    assert!(
+        signed_text.contains("0.55"),
+        "expected on-disk JSON to contain numeric 0.55; got:\n{}",
+        signed_text
+    );
+
+    // None of the four bucket-label strings appear (WD-10 / D-12).
+    for forbidden in ["speculative", "weighted", "well-evidenced", "triangulated"] {
+        assert!(
+            !signed_text.contains(forbidden),
+            "expected on-disk JSON to NOT contain bucket label {:?} (WD-10 / D-12); got:\n{}",
+            forbidden,
+            signed_text
+        );
+    }
 }
 
 // =============================================================================
