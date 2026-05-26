@@ -24,11 +24,13 @@ use serde::{Deserialize, Serialize};
 // -----------------------------------------------------------------------------
 mod canonicalize;
 mod cid;
+mod confidence;
 mod sign;
 mod verify;
 
 pub use canonicalize::canonicalize;
 pub use cid::compute_cid;
+pub use confidence::confidence_bucket;
 pub use sign::sign;
 pub use verify::verify;
 
@@ -197,7 +199,10 @@ pub fn reference_rules_validate(
     panic!("Not yet implemented -- RED scaffold");
 }
 
-/// Display-only bucket selection (WD-10 / D-12). NEVER serialized.
-pub fn confidence_bucket(_numeric: f64) -> ConfidenceBucket {
-    panic!("Not yet implemented -- RED scaffold");
-}
+// `confidence_bucket` was promoted to a dedicated submodule
+// (`mod confidence`) at step 03-02. The `pub use` re-export above
+// preserves `claim_domain::confidence_bucket` as the import path for
+// the cli render layer (WS-3 / WS-5 in phase 05). Keeping the function
+// in its own module enforces WD-10: the lexicon crate MUST NOT depend
+// on `confidence_bucket` (architectural rule checked by
+// `cargo xtask check-arch` in phase 06).
