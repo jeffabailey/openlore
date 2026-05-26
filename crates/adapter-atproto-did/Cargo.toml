@@ -11,8 +11,30 @@ description = "OpenLore IdentityPort adapter: ATProto DID resolution + OS keycha
 [lib]
 path = "src/lib.rs"
 
-# EFFECT shell. Real ring + keyring deps added in step 03-XX.
+# EFFECT shell.
+#
+# - `keyring` (step 04-04): OS-keychain access for the per-app Ed25519
+#   private-key seed. ADR-012 lists `keyring` on the allowed third-party
+#   list. Pinned crate-locally (not workspace) because no other crate
+#   needs an OS keychain in slice-01.
+#
+# - `ed25519-dalek` (step 04-04): needed at the adapter layer to
+#   reconstruct a `SigningKey` from raw bytes loaded out of the
+#   keychain, before delegating to the pure `claim_domain::sign` and
+#   `claim_domain::verify` primitives for the actual signing math.
+#   `default-features = false` keeps OS-randomness off the compile path
+#   (Ed25519 is deterministic per RFC 8032).
+#
+# - `serde_json` (step 04-04): the `probe()` refusal payload is a
+#   `serde_json::Value` per the `ProbeOutcome::Refused.structured`
+#   contract in `crates/ports/src/probe.rs`.
 [dependencies]
 ports = { path = "../ports" }
 claim-domain = { path = "../claim-domain" }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
+keyring = "3"
+ed25519-dalek = { version = "2", default-features = false }
+
+[dev-dependencies]
+tempfile = { workspace = true }
