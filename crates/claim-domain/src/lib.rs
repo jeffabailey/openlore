@@ -25,12 +25,14 @@ use serde::{Deserialize, Serialize};
 mod canonicalize;
 mod cid;
 mod confidence;
+mod references;
 mod sign;
 mod verify;
 
 pub use canonicalize::canonicalize;
 pub use cid::compute_cid;
 pub use confidence::confidence_bucket;
+pub use references::reference_rules_validate;
 pub use sign::sign;
 pub use verify::verify;
 
@@ -189,15 +191,12 @@ pub struct VerifyingKey(pub Vec<u8>);
 // paths for the rest of the workspace (`ports::SigningPort`, adapter
 // composition, acceptance tests).
 
-/// Enforce the reference-rules invariants (self-reference + two-hop cycles).
-/// `lookup` allows reaching into the local store for cycle detection; pass
-/// `None` for pure unit tests of self-reference only.
-pub fn reference_rules_validate(
-    _claim: &UnsignedClaim,
-    _lookup: Option<&dyn ClaimLookup>,
-) -> Result<(), ClaimError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
+// `reference_rules_validate` was promoted to a dedicated submodule
+// (`mod references`) at step 03-03. The `pub use` re-export above
+// preserves `claim_domain::reference_rules_validate` as the import
+// path for the sign pipeline and acceptance tests. Step 03-04
+// extends this module with two-hop cycle detection via the
+// `ClaimLookup` trait.
 
 // `confidence_bucket` was promoted to a dedicated submodule
 // (`mod confidence`) at step 03-02. The `pub use` re-export above

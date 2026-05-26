@@ -420,7 +420,59 @@ fn lexicon_rejects_out_of_range_confidence_at_wire_boundary() {
 /// @lexicon @US-003 @J-001 @in-memory
 #[test]
 fn lexicon_rejects_self_reference_in_references_array() {
-    todo!("DELIVER: construct an UnsignedClaim whose references array contains [{{type: retracts, cid: <its_own_unsigned_cid>}}]; call claim_domain::reference_rules_validate(claim, None); assert Err(ClaimError::SelfReference)")
+    use claim_domain::{
+        canonicalize, compute_cid, reference_rules_validate, ClaimError, ClaimReference,
+        ReferenceType,
+    };
+    use openlore_test_support::fixture_jeff_rust_memory_safety;
+
+    // The chicken-and-egg note in the doc-comment above resolves like
+    // this: a claim's full canonical-CBOR CID depends on its
+    // `references` array, so "this reference equals my own CID" is a
+    // hash-collision-class statement unless we define "my own CID"
+    // against a stable body identity. The validator therefore checks
+    // each reference against the BODY CID — the CID of the canonical
+    // CBOR with `references` cleared to `[]`. That is the claim's
+    // stable identity regardless of how many retraction / correction
+    // annotations the author later attaches.
+    //
+    // The attack scenario this rule defends against: an author tries
+    // to publish a claim that retracts / corrects / counters /
+    // supersedes the claim they would have published WITHOUT this
+    // annotation. The body CID captures that "without this annotation"
+    // identity.
+
+    // 1. Start from the body: the canonical Jeff-on-Rust unsigned
+    //    claim with `references = []`.
+    let body = fixture_jeff_rust_memory_safety();
+    assert!(
+        body.references.is_empty(),
+        "fixture must start with no references (pre-attack baseline)"
+    );
+
+    // 2. Compute the stable body CID.
+    let body_bytes = canonicalize(&body).expect("canonicalize body must succeed");
+    let body_cid = compute_cid(&body_bytes);
+
+    // 3. Build the attacker's claim: body + one reference whose CID
+    //    is the body CID. This is the literal self-reference shape:
+    //    "I retract the claim I would have published without this
+    //    retraction annotation".
+    let mut attack = body;
+    attack.references.push(ClaimReference {
+        ref_type: ReferenceType::Retracts,
+        cid: body_cid,
+    });
+
+    // 4. Validate. Sign-time check (ADR-008 Behavioral rule 4 +
+    //    Earned Trust 2) MUST reject this BEFORE any signature would
+    //    be computed.
+    let result = reference_rules_validate(&attack, None);
+    assert!(
+        matches!(result, Err(ClaimError::SelfReference)),
+        "self-reference must yield Err(SelfReference) at sign time; got {:?}",
+        result
+    );
 }
 
 // =============================================================================
