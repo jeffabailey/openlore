@@ -19,6 +19,15 @@
 use serde::{Deserialize, Serialize};
 
 // -----------------------------------------------------------------------------
+// Submodules (step 02-03: canonical CBOR + CID computation)
+// -----------------------------------------------------------------------------
+mod canonicalize;
+mod cid;
+
+pub use canonicalize::canonicalize;
+pub use cid::compute_cid;
+
+// -----------------------------------------------------------------------------
 // Domain wrappers (per nw-fp-domain-modeling §2 — never use primitives directly)
 // -----------------------------------------------------------------------------
 
@@ -143,16 +152,12 @@ pub trait ClaimLookup {
 // -----------------------------------------------------------------------------
 // Pure pipeline functions
 // -----------------------------------------------------------------------------
-
-/// RFC 8949 canonical CBOR. Stable across runs / platforms.
-pub fn canonicalize(_claim: &UnsignedClaim) -> Result<Vec<u8>, ClaimError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
-
-/// CIDv1 dag-cbor sha2-256 base32-lower over the canonical bytes (ADR-006).
-pub fn compute_cid(_canonical_bytes: &[u8]) -> Cid {
-    panic!("Not yet implemented -- RED scaffold");
-}
+//
+// `canonicalize` and `compute_cid` were promoted to dedicated submodules
+// (`mod canonicalize`, `mod cid`) at step 02-03; their `pub use`
+// re-exports above preserve the `claim_domain::canonicalize` /
+// `claim_domain::compute_cid` import paths the rest of the workspace
+// uses.
 
 /// Newtype over the raw signing key bytes. The adapter holds the real key
 /// material; this wrapper is what `sign` consumes so the pure core stays

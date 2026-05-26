@@ -11,8 +11,14 @@ description = "OpenLore pure claim domain: ADTs + canonicalize/compute_cid/sign/
 [lib]
 path = "src/lib.rs"
 
-# PURE: serde + cid + multihash + chrono + thiserror only.
+# PURE: serde + serde_json + ciborium + cid + multihash + sha2 + chrono +
+# thiserror only.
 # Forbidden: tokio, reqwest, duckdb, keyring, atrium-*, std::fs/net/process/env.
+#
+# `ciborium` + `sha2` are pinned crate-locally (not at the workspace
+# root) because step 02-03's boundary restricts edits to this crate.
+# A later workspace-cleanup step can hoist them if other pure crates
+# pick up the same deps.
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -20,3 +26,5 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 cid = { workspace = true }
 multihash = { workspace = true }
+ciborium = "0.2"
+sha2 = "0.10"
