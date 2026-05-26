@@ -26,11 +26,17 @@
 pub mod fixtures;
 pub use fixtures::*;
 
+// Step 04-03: deterministic IdentityPort test double. Lives in its own
+// module so the Ed25519 dependency and seeded-keypair logic stay
+// scoped; re-exported flat so tests can write
+// `openlore_test_support::FakeIdentity::jeff()` directly.
+pub mod identity;
+pub use identity::FakeIdentity;
+
 use async_trait::async_trait;
-use claim_domain::{Cid, ClaimLookup, Did, SignatureBlock, SignedClaim};
+use claim_domain::{Cid, ClaimLookup, SignedClaim};
 use ports::{
-    AtUri, ClockPort, IdentityError, IdentityPort, PdsError, PdsPort, ProbeOutcome, StorageError,
-    StoragePort,
+    AtUri, ClockPort, PdsError, PdsPort, ProbeOutcome, StorageError, StoragePort,
 };
 
 // -----------------------------------------------------------------------------
@@ -159,40 +165,9 @@ impl PdsPort for FakePds {
 // -----------------------------------------------------------------------------
 // FakeIdentity — deterministic IdentityPort double
 // -----------------------------------------------------------------------------
-
-pub struct FakeIdentity {
-    did: Did,
-}
-
-impl FakeIdentity {
-    /// Canonical did:plc:test-jeff identity used across slice-01 tests.
-    pub fn jeff() -> Self {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    /// Secondary did:plc:test-maria identity (US-002 Ex 3, US-003 Ex 2, WS-10).
-    pub fn maria() -> Self {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-}
-
-impl IdentityPort for FakeIdentity {
-    fn probe(&self) -> ProbeOutcome {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    fn author_did(&self) -> &Did {
-        &self.did
-    }
-
-    fn sign(&self, _unsigned_cid: &Cid) -> Result<SignatureBlock, IdentityError> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-
-    fn verify(&self, _signed: &SignedClaim) -> Result<(), IdentityError> {
-        panic!("Not yet implemented -- RED scaffold");
-    }
-}
+//
+// Implementation lives in `src/identity.rs` (step 04-03). It is
+// re-exported flat above as `FakeIdentity`.
 
 // -----------------------------------------------------------------------------
 // FrozenClock — deterministic ClockPort double for tests

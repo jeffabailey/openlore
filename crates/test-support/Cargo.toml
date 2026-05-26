@@ -21,3 +21,8 @@ async-trait = "0.1"
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tempfile = { workspace = true }
+# Ed25519 primitive for FakeIdentity's deterministic keypair (step
+# 04-03). Pinned crate-locally to match `claim-domain`'s usage —
+# `default-features = false` keeps OS-randomness out of the test
+# double; seeded keys are deterministic per RFC 8032.
+ed25519-dalek = { version = "2", default-features = false }
