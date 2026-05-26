@@ -48,6 +48,12 @@ pub mod claim;
 /// Re-export of the claim validator for ergonomic call sites.
 pub use claim::{validate_claim_json, Claim, ClaimReference, LexiconError, SignatureBlock};
 
+// Step 02-06: explicit serde helpers + Eq-friendly confidence wrapper
+// for the lexicon wire shape. Consolidates the federation-contract
+// roundtrip path that LC-1 exercises.
+pub mod serde_impls;
+pub use serde_impls::{claim_from_json, claim_to_canonical_json, ConfidenceField};
+
 // =============================================================================
 // org.openlore.philosophy — RED scaffold (later step turns this GREEN)
 // =============================================================================

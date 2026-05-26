@@ -20,6 +20,12 @@
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
+// Step 02-06: canonical claim fixtures used by LC-1 and downstream
+// acceptance scenarios. Re-exported flat so tests can write
+// `openlore_test_support::fixture_jeff_rust_memory_safety()` directly.
+pub mod fixtures;
+pub use fixtures::*;
+
 use async_trait::async_trait;
 use claim_domain::{Cid, Did, SignatureBlock, SignedClaim};
 use ports::{
