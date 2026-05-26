@@ -6,14 +6,21 @@
 //!
 //! The `openlore` binary at `src/main.rs` delegates here.
 //!
-//! RED-baseline scaffold (step 01-01): every verb panics.
-//
-// SCAFFOLD: true
+//! Slice-01 status: `init` is implemented (step 05-01). All other verbs
+//! still panic in the RED scaffold; subsequent phase-05 steps fill them
+//! in one acceptance scenario at a time.
 
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
 use clap::{Parser, Subcommand};
+
+pub mod paths;
+pub mod verbs;
+pub mod wiring;
+
+use paths::OpenLorePaths;
+use wiring::Wiring;
 
 /// Top-level CLI surface (ADR-003 locked verb contract).
 #[derive(Debug, Parser)]
@@ -70,13 +77,61 @@ pub enum GraphCommand {
     },
 }
 
-/// Run the dispatched command. Every arm panics in the RED scaffold;
-/// DELIVER fills them in one scenario at a time.
+/// Dispatch a parsed command. Returns the exit code the caller should
+/// hand back to the OS. Slice-01 wires the `init` verb; other arms
+/// panic in the RED scaffold per the outside-in plan.
+///
+/// The wire-probe-use sequence per ADR-009 D-9:
+/// 1. Resolve XDG paths.
+/// 2. Construct Wiring (instantiates every adapter).
+/// 3. Walk the probe gauntlet; refuse with health.startup.refused on any refusal.
+/// 4. Dispatch the verb.
 pub fn dispatch(cli: Cli) -> i32 {
-    match cli.command {
-        Command::Init { .. } => {
-            panic!("Not yet implemented -- RED scaffold");
+    // Step 1: paths.
+    let paths = match OpenLorePaths::from_env() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("openlore: failed to resolve XDG paths: {err:#}");
+            return 2;
         }
+    };
+
+    // Step 2: wiring.
+    let wiring = match Wiring::production(paths) {
+        Ok(w) => w,
+        Err(err) => {
+            eprintln!("openlore: failed to construct adapter wiring: {err:#}");
+            return 2;
+        }
+    };
+
+    // Step 3: probe gauntlet.
+    if let Err(refusal) = wiring.probe_gauntlet() {
+        emit_health_startup_refused(&refusal);
+        return 2;
+    }
+
+    // Step 4: dispatch.
+    match cli.command {
+        Command::Init {
+            handle,
+            app_password,
+        } => match verbs::init::run(
+            &wiring,
+            &verbs::init::InitArgs {
+                handle,
+                app_password,
+            },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore init: {err:#}");
+                1
+            }
+        },
         Command::Claim(ClaimCommand::Add { .. }) => {
             panic!("Not yet implemented -- RED scaffold");
         }
@@ -90,4 +145,28 @@ pub fn dispatch(cli: Cli) -> i32 {
             panic!("Not yet implemented -- RED scaffold");
         }
     }
+}
+
+/// Emit a `health.startup.refused` event to stderr in the structured
+/// shape DevOps consumes. The pure data (`reason`, `detail`, `structured`)
+/// comes straight from the refusing adapter's `ProbeOutcome::Refused`
+/// payload — no enrichment, no rewording.
+///
+/// For slice-01 the event format is a single JSON-line on stderr plus a
+/// human-readable line. The tracing-subscriber integration lands in
+/// step 05-17 (observability). The shape of the JSON line is the
+/// contract; the human-readable line is convenience.
+fn emit_health_startup_refused(refusal: &wiring::ProbeRefusal) {
+    let event = serde_json::json!({
+        "event": "health.startup.refused",
+        "adapter": refusal.adapter,
+        "reason": format!("{:?}", refusal.reason),
+        "detail": refusal.detail,
+        "structured": refusal.structured,
+    });
+    eprintln!("{event}");
+    eprintln!(
+        "openlore: refusing to start — {} adapter: {}",
+        refusal.adapter, refusal.detail
+    );
 }

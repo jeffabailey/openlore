@@ -27,7 +27,11 @@ adapter-system-clock = { path = "../adapter-system-clock" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
 
 # Acceptance tests live at the workspace root (`tests/acceptance/*.rs`)
 # per DISTILL's authored scaffolds, but the openlore binary they drive

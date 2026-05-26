@@ -4,9 +4,10 @@
 //! `tokio::runtime::Builder::new_current_thread` per ADR-004 (low
 //! concurrency CLI; no need for multi-thread runtime).
 //!
-//! RED-baseline scaffold (step 01-01).
-//
-// SCAFFOLD: true
+//! The async runtime is constructed once and entered for the duration
+//! of dispatch so PdsPort async calls have a runtime context to
+//! execute on. Slice-01 init verb does not touch the runtime; later
+//! verbs (claim publish, claim retract) do.
 
 #![forbid(unsafe_code)]
 
@@ -15,14 +16,13 @@ use cli::{dispatch, Cli};
 
 fn main() -> std::process::ExitCode {
     let parsed = Cli::parse();
-    // Build a single-threaded tokio runtime so PdsPort async calls have a
-    // home. The runtime is unused in the RED scaffold (every dispatch
-    // arm panics first); DELIVER wires it through when adapters land.
-    let _runtime = tokio::runtime::Builder::new_current_thread()
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to construct tokio current-thread runtime");
 
-    let code = dispatch(parsed);
+    let code = runtime.block_on(async { dispatch(parsed) });
+
     std::process::ExitCode::from(u8::try_from(code & 0xFF).unwrap_or(1))
 }

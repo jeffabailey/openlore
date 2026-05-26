@@ -1,39 +1,37 @@
 //! Shared acceptance-test support.
 //!
-//! All helpers in this module are RED-ready scaffolds; bodies panic via
-//! `todo!()` / `unimplemented!()`. DELIVER (functional-software-crafter)
-//! fills them in alongside production code per the standard outside-in
-//! TDD cycle.
-//!
-//! See `docs/feature/openlore-foundation/distill/acceptance-tests.md`
-//! and `docs/feature/openlore-foundation/distill/wave-decisions.md` for
-//! the design context.
+//! Step 05-01: TestEnv + run_openlore + WS-1's universe-bound
+//! assertion helpers are now implemented. Other helpers (compose-preview,
+//! signature-verification, graph-query parsers) remain as `todo!()`
+//! scaffolds for subsequent phase-05 steps.
 //!
 //! Functional-paradigm note (ADR-007): helpers are free functions over
 //! immutable values; no test-class hierarchy. Setup returns a `TestEnv`
-//! VALUE; assertions are stand-alone functions; doubles are plain
-//! `pub struct` records that the helpers thread through. Composition,
-//! not inheritance.
-//
-// SCAFFOLD: true
-//
-// External dependencies the production code is EXPECTED to expose
-// (DELIVER will scaffold these crates per
-// docs/feature/openlore-foundation/design/component-boundaries.md):
-//
-//   * the `openlore` binary at `crates/cli/src/main.rs`, discoverable via
-//     `assert_cmd::Command::cargo_bin("openlore")`
-//   * a `test-support` crate (or `tests/common/` module) — TBD by DELIVER
-//
-// At DISTILL handoff time `cargo test` will FAIL TO COMPILE because none
-// of these exist yet. This is the intended RED-baseline state; DELIVER
-// closes the gap by scaffolding Cargo.toml + the 8 crates from
-// component-boundaries.md, after which every `#[test]` panics at
-// `todo!()` → tests classify as RED, not BROKEN.
+//! VALUE; assertions are stand-alone functions; doubles are imported
+//! from the shared `openlore-test-support` crate. Composition, not
+//! inheritance.
+//!
+//! ## Subprocess seam (DD-2 + DD-5)
+//!
+//! WS scenarios spawn the real `openlore` binary via
+//! `assert_cmd::Command::cargo_bin("openlore")`. The binary respects
+//! three env-var seams for test isolation:
+//!
+//! - `OPENLORE_HOME` — tempdir root; XDG paths resolve under here.
+//! - `OPENLORE_DID` — slice-01 stub for did:plc resolution (real PLC
+//!   lookup is slice-03).
+//! - `OPENLORE_KEY_SEED_HEX` — Ed25519 seed; matches FakeIdentity::jeff
+//!   when set to 64 zeros so signatures cross-verify against the
+//!   in-process pure-core verify.
 
-#![allow(dead_code)] // scaffolds; usage lands in DELIVER
+#![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
+use ports::IdentityPort;
+use tempfile::TempDir;
 
 /// A sealed test environment.
 ///
@@ -44,6 +42,8 @@ use std::path::PathBuf;
 /// One `TestEnv` per scenario. Multiple `TestEnv`s within one test
 /// process do NOT share state (parallel-safe).
 pub struct TestEnv {
+    /// Owning handle to the tempdir; dropped when TestEnv is dropped.
+    _tempdir: TempDir,
     /// Temporary HOME for this scenario. Auto-removed when the
     /// `TestEnv` is dropped.
     pub home: PathBuf,
@@ -61,44 +61,65 @@ impl TestEnv {
     /// subprocess helpers; the binary will write to `{home}/.config`
     /// and `{home}/.local/share`.
     pub fn fresh() -> Self {
-        todo!("DELIVER: create a tempdir, return a TestEnv pointing at it")
+        let tempdir = TempDir::new().expect("create tempdir for TestEnv");
+        let home = tempdir.path().to_path_buf();
+        Self {
+            _tempdir: tempdir,
+            home,
+            pds: FakePds::start(),
+            identity: FakeIdentity::jeff(),
+        }
     }
 
     /// Convenience: a TestEnv that has already had `openlore init` run
     /// successfully. Most claim scenarios start here.
+    ///
+    /// Step 05-01 wires this for WS-1 only; subsequent claim scenarios
+    /// will exercise it through the subprocess too.
     pub fn initialized() -> Self {
-        todo!("DELIVER: build fresh() then invoke `openlore init` with the test identity")
+        let env = Self::fresh();
+        let outcome = run_openlore(
+            &env,
+            &["init", "--handle", "jeff.test", "--app-password", "fake-app-password"],
+        );
+        if outcome.status != 0 {
+            panic!(
+                "TestEnv::initialized: openlore init failed (exit {}). \
+                 stdout: {} stderr: {}",
+                outcome.status, outcome.stdout, outcome.stderr
+            );
+        }
+        env
     }
 
     /// Path to the local claims directory: `{home}/.local/share/openlore/claims/`.
     pub fn claims_dir(&self) -> PathBuf {
-        todo!("DELIVER: join home and the XDG-relative claims path")
+        self.home.join(".local").join("share").join("openlore").join("claims")
     }
 
     /// Path to the local DuckDB file: `{home}/.local/share/openlore/openlore.duckdb`.
     pub fn duckdb_path(&self) -> PathBuf {
-        todo!("DELIVER: join home and the XDG-relative DuckDB path")
+        self.home
+            .join(".local")
+            .join("share")
+            .join("openlore")
+            .join("openlore.duckdb")
     }
 
     /// Path to the identity config: `{home}/.config/openlore/identity.toml`.
     pub fn identity_toml_path(&self) -> PathBuf {
-        todo!("DELIVER: join home and the XDG-relative identity path")
+        self.home.join(".config").join("openlore").join("identity.toml")
     }
 }
 
 /// A test double for `adapter-atproto-pds`.
 ///
-/// Records `create_record` calls in memory; replays `get_record` and
-/// `list_records` deterministically. The OpenLore binary is configured
-/// (via an env var or config flag DELIVER picks) to point at this
-/// in-process double instead of a real PDS.
-///
-/// Implementation technique (in-process HTTP stub via `wiremock` OR
-/// recorded XRPC fixture replay) is DELIVER's call per DD-6.
+/// Step 05-01 binds this to `openlore_test_support::FakePds`. The real
+/// adapter's behavior is mirrored; subsequent steps that need
+/// `simulate_unreachable()` get it for free through the underlying
+/// shared implementation.
 pub struct FakePds {
-    /// In-memory record store keyed by `(collection, rkey)`.
-    /// Slice-01 only writes `org.openlore.claim`.
-    records: Vec<FakePdsRecord>,
+    inner: SharedFakePds,
 }
 
 /// One record as seen by the fake PDS.
@@ -113,60 +134,95 @@ pub struct FakePdsRecord {
 }
 
 impl FakePds {
-    /// Start the fake PDS. If the implementation is an HTTP stub, this
-    /// binds to a free localhost port; the binary reaches it via the
-    /// `OPENLORE_PDS_ENDPOINT` env var (or similar — DELIVER's call).
+    /// Start the fake PDS. Slice-01 init verb does not contact a PDS;
+    /// subsequent claim-publish scenarios will exercise this through
+    /// the subprocess by binding `OPENLORE_PDS_ENDPOINT` to an
+    /// in-process HTTP stub. For now the struct just owns the shared
+    /// implementation so `simulate_unreachable()` and friends compile.
     pub fn start() -> Self {
-        todo!("DELIVER: stand up wiremock or initialize the recorded-fixture replay engine")
+        Self {
+            inner: SharedFakePds::for_did("did:plc:test-jeff"),
+        }
     }
 
     /// All records the fake has accepted so far.
-    pub fn records(&self) -> &[FakePdsRecord] {
-        todo!("DELIVER: return the in-memory record vec")
+    pub fn records(&self) -> Vec<FakePdsRecord> {
+        self.inner
+            .records()
+            .into_iter()
+            .map(|r| FakePdsRecord {
+                collection: r.collection,
+                rkey: r.rkey,
+                body: r.body.to_string(),
+                author_did: r.author_did,
+                at_uri: r.at_uri,
+            })
+            .collect()
     }
 
     /// Find one record by its at-uri.
-    pub fn record_at(&self, at_uri: &str) -> Option<&FakePdsRecord> {
-        todo!("DELIVER: linear-scan the records vec")
+    pub fn record_at(&self, at_uri: &str) -> Option<FakePdsRecord> {
+        self.inner.record_at(at_uri).map(|r| FakePdsRecord {
+            collection: r.collection,
+            rkey: r.rkey,
+            body: r.body.to_string(),
+            author_did: r.author_did,
+            at_uri: r.at_uri,
+        })
     }
 
     /// Inject an "unreachable" failure mode: subsequent `create_record`
     /// calls return a network-error shape that the production adapter
     /// classifies as `PdsError::Unreachable`. Used by WS-10.
     pub fn simulate_unreachable(&mut self) {
-        todo!("DELIVER: flip an internal flag the stub honors")
+        self.inner.simulate_unreachable();
     }
 
     /// Restore normal operation after `simulate_unreachable`.
     pub fn restore(&mut self) {
-        todo!("DELIVER: flip the flag back")
+        self.inner.restore();
     }
 }
 
 /// A test double for `adapter-atproto-did`.
 ///
 /// Holds a known test DID (`did:plc:test-jeff`) and a deterministic
-/// Ed25519 keypair. The OpenLore binary uses this in place of the real
-/// keychain-backed identity adapter.
+/// Ed25519 keypair. The OpenLore binary uses the same seed (via
+/// `OPENLORE_KEY_SEED_HEX`) so signatures cross-verify against the
+/// shared `openlore_test_support::FakeIdentity` keypair byte-for-byte.
 pub struct FakeIdentity {
-    pub did: String, // e.g. "did:plc:test-jeff#org.openlore.application"
+    inner: SharedFakeIdentity,
+    /// 32-byte Ed25519 seed encoded as 64-char lowercase hex. Passed to
+    /// the binary via `OPENLORE_KEY_SEED_HEX` so the in-binary adapter
+    /// derives the same keypair the test double uses.
+    pub seed_hex: String,
 }
 
 impl FakeIdentity {
     /// Construct the canonical fake identity used across slice-01 tests.
+    ///
+    /// Seed: 32 zero bytes (matches `openlore_test_support::FakeIdentity::jeff`).
     pub fn jeff() -> Self {
-        todo!("DELIVER: hardcode did:plc:test-jeff + deterministic Ed25519 key")
+        Self {
+            inner: SharedFakeIdentity::jeff(),
+            seed_hex: "0".repeat(64),
+        }
     }
 
     /// A second known identity used by anxiety-scenario tests that
     /// involve Maria (US-002 Example 3, US-003 Example 2, WS-10).
     pub fn maria() -> Self {
-        todo!("DELIVER: hardcode did:plc:test-maria + a different deterministic key")
+        // Maria's seed is 32 bytes of 0x01 per the shared FakeIdentity.
+        let seed_hex: String = std::iter::repeat("01").take(32).collect();
+        Self {
+            inner: SharedFakeIdentity::maria(),
+            seed_hex,
+        }
     }
 
     /// The raw author DID (without the key fragment).
     pub fn author_did(&self) -> &str {
-        todo!("DELIVER: strip the #fragment from self.did")
+        &self.inner.author_did().0
     }
 }
 
@@ -231,13 +287,15 @@ pub struct CliOutcome {
     pub stderr: String,
 }
 
-/// Run `openlore <args>` with `HOME` set to `env.home`, the PDS endpoint
-/// pointed at `env.pds`, and the identity pointed at `env.identity`.
+/// Run `openlore <args>` with `OPENLORE_HOME` set to `env.home`, plus
+/// the slice-01 stub env vars (`OPENLORE_DID`, `OPENLORE_KEY_SEED_HEX`)
+/// that drive the in-binary IdentityPort adapter against the same
+/// keypair `env.identity` advertises.
 ///
 /// Provides no stdin; for scenarios that need to send `<Enter>` / `<Y>`
 /// at the chained prompts use `run_openlore_with_stdin`.
 pub fn run_openlore(env: &TestEnv, args: &[&str]) -> CliOutcome {
-    todo!("DELIVER: spawn the binary via assert_cmd, set env vars per env.home/pds/identity, capture output")
+    run_openlore_with_stdin(env, args, "")
 }
 
 /// Run `openlore <args>` feeding `stdin_lines` (newline-joined) on
@@ -248,7 +306,45 @@ pub fn run_openlore_with_stdin(
     args: &[&str],
     stdin_lines: &str,
 ) -> CliOutcome {
-    todo!("DELIVER: as run_openlore, but pipe stdin_lines into the child process")
+    use std::io::Write;
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        // PATH is required for libc / dynamic linker resolution on
+        // some hosts; pass through the parent's PATH so `cargo bin`
+        // can launch.
+        .env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_default(),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {:?}: {e}", bin));
+
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    // Close stdin so the child observes EOF if it's waiting on a prompt.
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 /// Convenience: run with the scripting-mode `--no-tty` flag and the
@@ -261,23 +357,40 @@ pub fn run_openlore_no_tty(env: &TestEnv, args: &[&str]) -> CliOutcome {
 // -----------------------------------------------------------------------------
 // Assertion helpers — universe-bound observable checks
 // -----------------------------------------------------------------------------
-//
-// Per Mandate 8 (universe-bound state-delta) these helpers are the Rust
-// idiomatic mirror of `assert_state_delta(before, after, universe,
-// expected)`. They wrap one observable port-exposed name each. DELIVER
-// will (per DD-3) migrate the cross-cutting ones to the formal
-// `tests/common/state_delta.rs` API once the port is bootstrapped.
 
 /// Assert that the CLI invocation exited with status 0 and the given
 /// substring appears in stdout. Failure prints the full stdout/stderr
 /// for debuggability.
 pub fn assert_exit_zero_and_stdout_contains(outcome: &CliOutcome, expected_substring: &str) {
-    todo!("DELIVER: assert outcome.status == 0 and outcome.stdout.contains(expected_substring); on failure print both streams")
+    assert_eq!(
+        outcome.status,
+        0,
+        "expected exit 0; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status,
+        outcome.stdout,
+        outcome.stderr
+    );
+    assert!(
+        outcome.stdout.contains(expected_substring),
+        "expected stdout to contain {:?} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        expected_substring,
+        outcome.stdout,
+        outcome.stderr
+    );
 }
 
 /// Assert non-zero exit AND the stderr contains the given substring.
 pub fn assert_exit_nonzero_and_stderr_contains(outcome: &CliOutcome, expected_substring: &str) {
-    todo!("DELIVER: assert outcome.status != 0 and outcome.stderr.contains(expected_substring)")
+    assert_ne!(
+        outcome.status, 0,
+        "expected non-zero exit; got 0 \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains(expected_substring),
+        "expected stderr to contain {:?} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        expected_substring, outcome.stdout, outcome.stderr
+    );
 }
 
 /// Universe-bound: "the compose preview contains the literal text

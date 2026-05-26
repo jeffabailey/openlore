@@ -56,7 +56,9 @@ fn walking_skeleton_init_creates_identity_duckdb_and_is_idempotent() {
     // Then it exits with an "already initialized" message
     assert_exit_zero_and_stdout_contains(&second, "already initialized for did:plc:test-jeff");
 
-    todo!("DELIVER: implement TestEnv::fresh, run_openlore, the assert_* helpers, then `openlore init` itself")
+    // Step 05-01: WS-1 activated — the assertions above are the
+    // contract; the trailing scaffold todo!() that DISTILL placed has
+    // been removed now that the init verb is implemented.
 }
 
 /// WS-2: Claim commands gated on init. Running `openlore claim add`
