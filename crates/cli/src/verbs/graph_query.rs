@@ -27,15 +27,43 @@
 //!
 //! - Local-only: queries `StoragePort` (DuckDB), NOT the PDS / federated
 //!   peers. The `--federated` flag is the slice-03 surface (US-004 AC #2);
-//!   WS-12 (step 05-12) adds the "Showing local claims only" footer.
+//!   WS-12 (step 05-12) wraps the rendered claims with a header ("Showing
+//!   local claims only") and a footer mentioning `--federated` and
+//!   `slice-03` so the local-only default is announced unconditionally.
 //! - Empty-result explainer (US-004 AC #3) is WS-13's contract (step
 //!   05-12 in the wave; this verb returns an empty stdout for empty
 //!   queries in slice-01 and the explainer text wraps around it later).
+//!
+//! ## Header + footer (US-004 AC #2 + WD-13)
+//!
+//! - Header: `Showing local claims only` — printed before the per-claim
+//!   blocks. Content-frozen by US-004 AC #2 (the exact phrasing is part
+//!   of the user-visible contract; do NOT paraphrase).
+//! - Footer: announces that federated querying is a future affordance
+//!   landing in slice-03 (per WD-13), and names the `--federated` flag
+//!   that will activate it. Both `--federated` and `slice-03` appear
+//!   literally in the footer so operators searching with `grep` find
+//!   the right pointer.
+//!
+//! Both are unconditional in slice-01 because the `--federated` flag
+//! is not yet wired (federation is slice-03 territory per WD-13). They
+//! frame every successful query result; the empty-result branch (WS-13)
+//! produces its own explainer instead.
 
 use anyhow::{Context, Result};
 
 use crate::render::render_graph_query_result;
 use crate::wiring::Wiring;
+
+/// Header line printed before the per-claim render. US-004 AC #2 content-
+/// frozen; do NOT paraphrase — the exact string is the contract.
+const LOCAL_ONLY_HEADER: &str = "Showing local claims only.";
+
+/// Footer announcing that federation lands in slice-03 (per WD-13). The
+/// `--federated` flag name and the `slice-03` token both appear verbatim
+/// so operators grepping for either find this pointer.
+const FEDERATION_FOOTER: &str =
+    "(Federated peers are not queried in slice-01; pass --federated in slice-03 to widen the search.)";
 
 /// Argument struct for the `graph query` verb (mirrors the clap subcommand).
 #[derive(Debug, Clone)]
@@ -66,7 +94,23 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
         .query_by_subject(&args.subject)
         .with_context(|| format!("querying claims by subject {}", args.subject))?;
 
-    let stdout = render_graph_query_result(&claims);
+    let rendered = render_graph_query_result(&claims);
+
+    // Header + footer are unconditional in slice-01 (US-004 AC #2 +
+    // WD-13). They frame the per-claim block so even a single-claim
+    // result announces "local-only is the default" and points at the
+    // slice-03 `--federated` affordance.
+    let mut stdout = String::new();
+    stdout.push_str(LOCAL_ONLY_HEADER);
+    stdout.push('\n');
+    stdout.push('\n');
+    stdout.push_str(&rendered);
+    if !rendered.ends_with('\n') {
+        stdout.push('\n');
+    }
+    stdout.push('\n');
+    stdout.push_str(FEDERATION_FOOTER);
+    stdout.push('\n');
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

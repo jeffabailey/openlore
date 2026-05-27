@@ -781,8 +781,6 @@ fn walking_skeleton_graph_query_default_is_local_only_and_footer_announces_it() 
     assert_exit_zero_and_stdout_contains(&outcome, "Showing local claims only");
     assert_exit_zero_and_stdout_contains(&outcome, "--federated");
     assert_exit_zero_and_stdout_contains(&outcome, "slice-03");
-
-    todo!("DELIVER: implement the footer string per US-004 AC #2")
 }
 
 /// WS-13: Empty result is explained, not silent. (US-004 AC #3.)
