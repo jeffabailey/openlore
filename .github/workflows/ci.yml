@@ -1,0 +1,102 @@
+# CI — commit + acceptance stages per devops/ci-cd-pipeline.md §3-§4.
+#
+# Commit stage (parallel jobs): fmt | clippy | cargo-deny | xtask check-arch |
+# xtask check-probes. Acceptance stage (test job) gates on commit-stage success
+# and runs the full nextest workspace suite (unit + acceptance + integration
+# tests share the same `cargo test` runner per Rust convention).
+#
+# Wall-clock targets: ~5 min commit, ~10 min acceptance (ci-cd-pipeline.md §3.8).
+# Cache via Swatinem/rust-cache@v2 keyed on Cargo.lock (§8).
+#
+# Known flake workaround: adapter-system-clock tests race on the OPENLORE_TEST_NOW
+# env var when run in parallel; --test-threads=1 serializes them. Revisit if/when
+# the env-var injection is refactored to a per-test fixture.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs of the same workflow on the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny check
+        run: cargo deny check
+
+  check-arch:
+    name: check-arch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo xtask check-arch
+        run: cargo run -p xtask -- check-arch
+
+  check-probes:
+    name: check-probes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo xtask check-probes
+        run: cargo run -p xtask -- check-probes
+
+  test:
+    name: test (acceptance stage)
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, deny, check-arch, check-probes]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: cargo nextest run --workspace
+        # --test-threads=1 works around the OPENLORE_TEST_NOW env-var race in
+        # adapter-system-clock tests. See file header comment.
+        run: cargo nextest run --workspace --test-threads=1

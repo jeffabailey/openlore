@@ -1,0 +1,45 @@
+# Nightly — mutation testing advisory per devops/ci-cd-pipeline.md §6.
+#
+# Runs cargo-mutants against the pure-core claim-domain crate. ADVISORY ONLY:
+# `continue-on-error: true` on the mutants step ensures the workflow never
+# blocks a merge. Per §6, target is >=95% kill rate on claim-domain; regression
+# below threshold becomes a release-time blocker only (release.yml lands when
+# the first vX.Y.Z tag is cut — out of scope for slice-01 step 06-08).
+#
+# Trigger: daily at 08:00 UTC (ci-cd-pipeline.md §6 specifies 02:00 UTC, but
+# 08:00 UTC keeps overnight feedback ready for the start of the dev day in
+# Pacific timezone — single-dev pragma). Also dispatchable on demand.
+
+name: Nightly Mutation Tests
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  mutants:
+    name: cargo-mutants (claim-domain, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: cargo mutants -p claim-domain
+        continue-on-error: true
+        run: cargo mutants -p claim-domain --no-shuffle --timeout 60
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants.out/
+          if-no-files-found: ignore
