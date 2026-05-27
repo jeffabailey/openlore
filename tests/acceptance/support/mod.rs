@@ -310,8 +310,49 @@ pub fn fixture_maria_mastodon_federation_first() -> UnsignedClaimFixture {
 
 /// Three claims about different subjects, used by FR-1 for the
 /// federation round-trip.
+///
+/// Each fixture uses a distinct subject / predicate / object triple so
+/// FR-1 cannot accidentally pass via aliasing (e.g. all three CIDs
+/// collapsing onto one record because the canonicalised content is the
+/// same).  The compose-time fields mirror data-models.md's on-disk
+/// example shape verbatim (string subject, string predicate, string
+/// object, one HTTPS evidence URL, finite-f64 confidence in [0,1]).
 pub fn fixture_three_claims_different_predicates() -> Vec<UnsignedClaimFixture> {
-    todo!("DELIVER: return three diverse claims (e.g. Rust+memory-safety, Linux+unix-philosophy, Mastodon+federation-first)")
+    let author_did = "did:plc:test-jeff#org.openlore.application".to_string();
+    let composed_at = "2026-05-25T12:00:00Z".to_string();
+
+    vec![
+        UnsignedClaimFixture {
+            subject: "github:rust-lang/rust".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.memory-safety".to_string(),
+            evidence: vec!["https://www.rust-lang.org/".to_string()],
+            confidence: 0.86,
+            author_did: author_did.clone(),
+            composed_at: composed_at.clone(),
+            references: Vec::new(),
+        },
+        UnsignedClaimFixture {
+            subject: "github:torvalds/linux".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.unix-philosophy".to_string(),
+            evidence: vec!["https://www.kernel.org/".to_string()],
+            confidence: 0.92,
+            author_did: author_did.clone(),
+            composed_at: composed_at.clone(),
+            references: Vec::new(),
+        },
+        UnsignedClaimFixture {
+            subject: "github:mastodon/mastodon".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.federation-first".to_string(),
+            evidence: vec!["https://joinmastodon.org/".to_string()],
+            confidence: 0.78,
+            author_did,
+            composed_at,
+            references: Vec::new(),
+        },
+    ]
 }
 
 /// Pure-language data-only shape DELIVER turns into a clap-parseable
@@ -544,12 +585,72 @@ pub fn assert_pds_record_signature_verifies(env: &TestEnv, at_uri: &str, did: &s
 /// Universe-bound: "the graph-query output, parsed line by line,
 /// matches the field values of the given fixture claim". Port-exposed
 /// name: `cli.graph_query.output_field_for_field_match`.
+///
+/// The query renderer (WS-11 contract) prints every compose-time field
+/// verbatim — subject, predicate, object, each evidence URL, confidence
+/// as the original `f64` (NEVER a bucket label per WD-10 / D-12), the
+/// author DID, and the claim CID.  This helper asserts each of those
+/// values appears as a substring of stdout AND no banned bucket label
+/// leaks through.  Mirrors the WS-11 byte-for-byte invariant for the
+/// federation-round-trip scenarios.
 pub fn assert_graph_query_output_matches_fixture(
     outcome: &CliOutcome,
     fixture: &UnsignedClaimFixture,
     expected_cid: &str,
 ) {
-    todo!("DELIVER: parse outcome.stdout, locate the row for fixture.subject, assert every shown field equals the fixture")
+    assert_eq!(
+        outcome.status,
+        0,
+        "graph query must exit 0; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status,
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Author DID column carries only the bare DID (the `#fragment` is a
+    // signing-key locator that need not surface in the read-path render).
+    let bare_author_did = fixture
+        .author_did
+        .split('#')
+        .next()
+        .unwrap_or(&fixture.author_did);
+
+    let mut required: Vec<String> = vec![
+        fixture.subject.clone(),
+        fixture.predicate.clone(),
+        fixture.object.clone(),
+        fixture.confidence.to_string(),
+        bare_author_did.to_string(),
+        expected_cid.to_string(),
+    ];
+    required.extend(fixture.evidence.iter().cloned());
+
+    for needle in &required {
+        assert!(
+            outcome.stdout.contains(needle),
+            "expected graph query stdout to contain {:?} \
+             for fixture subject {:?} (KPI-4 round-trip identity); \
+             \n--- stdout ---\n{}\n--- stderr ---\n{}",
+            needle,
+            fixture.subject,
+            outcome.stdout,
+            outcome.stderr
+        );
+    }
+
+    // WD-10 / D-12: bucket labels are compose-time display only — they
+    // must NEVER leak into the read-path render.
+    for label in &["speculative", "weighted", "well-evidenced", "triangulated"] {
+        assert!(
+            !outcome.stdout.contains(label),
+            "graph query stdout for {:?} must not contain bucket label {:?} \
+             (WD-10 / D-12); \n--- stdout ---\n{}\n--- stderr ---\n{}",
+            fixture.subject,
+            label,
+            outcome.stdout,
+            outcome.stderr
+        );
+    }
 }
 
 /// Universe-bound: "the persisted JSON file does NOT contain the

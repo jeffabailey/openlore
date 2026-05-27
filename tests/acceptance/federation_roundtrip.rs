@@ -51,7 +51,7 @@ fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip
     let mut published_cids: Vec<(String, String)> = Vec::new(); // (subject, cid)
 
     for fixture in &fixtures {
-        let _outcome = run_openlore_with_stdin(
+        let outcome = run_openlore_with_stdin(
             &env,
             &[
                 "claim", "add",
@@ -63,9 +63,27 @@ fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip
             ],
             "\nY\n",
         );
-        let cid = "bafy..."; // todo!("parse from outcome.stdout")
-        published_cids.push((fixture.subject.clone(), cid.to_string()));
+        assert_eq!(
+            outcome.status, 0,
+            "claim add must succeed for fixture subject {:?}; got status {} \
+             \n--- stdout ---\n{}\n--- stderr ---\n{}",
+            fixture.subject, outcome.status, outcome.stdout, outcome.stderr,
+        );
+        let cid = parse_cid_from_stdout(&outcome.stdout);
+        published_cids.push((fixture.subject.clone(), cid));
     }
+
+    // CID-distinctness sanity check: three distinct compose-time inputs
+    // MUST produce three distinct CIDs (the round-trip identity has no
+    // meaning if two claims alias).
+    let unique_cids: std::collections::HashSet<&String> =
+        published_cids.iter().map(|(_, cid)| cid).collect();
+    assert_eq!(
+        unique_cids.len(),
+        3,
+        "expected three distinct CIDs from three distinct claims; got {:?}",
+        published_cids,
+    );
 
     // Each subject queried independently returns its claim with the
     // expected CID, and all fields match the compose-time fixture.
@@ -76,13 +94,35 @@ fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip
 
     // Cross-check: each CID appears in the fake PDS with the correct
     // at-uri.
-    for (subject, cid) in &published_cids {
+    for (_subject, cid) in &published_cids {
         let expected_at_uri = format!("at://did:plc:test-jeff/org.openlore.claim/{}", cid);
         assert_pds_contains_record_at(&env, &expected_at_uri);
-        let _ = subject; // already used above
     }
+}
 
-    todo!("DELIVER: implement the loop wiring (parse CID from each stdout); all assertions should pass once production code is in place")
+// -----------------------------------------------------------------------------
+// Local helpers
+// -----------------------------------------------------------------------------
+
+/// Parse the CID out of `Computing claim CID <cid>` in stdout. Mirrors
+/// the WS helper of the same name — the marker text is the load-bearing
+/// contract `claim_add.rs` prints right before persistence.
+fn parse_cid_from_stdout(stdout: &str) -> String {
+    let marker = "Computing claim CID ";
+    let idx = stdout.find(marker).unwrap_or_else(|| {
+        panic!("could not locate 'Computing claim CID <cid>' marker in stdout:\n{stdout}")
+    });
+    let tail = &stdout[idx + marker.len()..];
+    let cid = tail
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    assert!(
+        !cid.is_empty(),
+        "found marker but no CID followed it in stdout:\n{stdout}"
+    );
+    cid
 }
 
 // =============================================================================
