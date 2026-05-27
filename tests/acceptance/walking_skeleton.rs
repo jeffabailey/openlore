@@ -939,13 +939,17 @@ fn walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores
 #[test]
 fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
     let env = TestEnv::initialized();
+    let subject = "github:rust-lang/rust";
 
-    // Publish typo'd
-    let _typo_outcome = run_openlore_with_stdin(
+    // Step 1 — Publish typo'd claim (wrong evidence URL). Use the
+    // chained sign+publish flow (single publish code path, ADR-003)
+    // and capture the typo CID from the `Computing claim CID <cid>`
+    // marker so we can address it in the retract step.
+    let typo_outcome = run_openlore_with_stdin(
         &env,
         &[
             "claim", "add",
-            "--subject", "github:rust-lang/rust",
+            "--subject", subject,
             "--predicate", "embodiesPhilosophy",
             "--object", "org.openlore.philosophy.memory-safety",
             "--evidence", "https://www.rustt-lang.org/", // typo
@@ -953,17 +957,42 @@ fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
         ],
         "\nY\n",
     );
-    let typo_cid = "bafy_TYPO...";
+    assert_eq!(
+        typo_outcome.status, 0,
+        "typo'd publish must succeed before retraction; got {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        typo_outcome.status, typo_outcome.stdout, typo_outcome.stderr,
+    );
+    let typo_cid = parse_cid_from_stdout(&typo_outcome.stdout);
 
-    // Retract the typo
-    let _retract = run_openlore(&env, &["claim", "retract", typo_cid]);
+    // Step 2 — Retract the typo'd claim via the locked retract verb
+    // (DD-9: corrective workflow composes existing verbs; no new verb).
+    // The retract publishes an additive counter-claim whose
+    // `references[]` points at `typo_cid` with ReferenceType::Retracts
+    // (WS-14). Capture its CID so the query assertion can pin all
+    // three records in the universe.
+    let retract_outcome = run_openlore(&env, &["claim", "retract", &typo_cid]);
+    assert_eq!(
+        retract_outcome.status, 0,
+        "retract of typo must succeed; got {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        retract_outcome.status, retract_outcome.stdout, retract_outcome.stderr,
+    );
+    let retract_cid = parse_cid_from_stdout(&retract_outcome.stdout);
+    assert!(
+        retract_cid != typo_cid,
+        "retraction must have its own CID distinct from the typo it retracts; got typo={typo_cid} retract={retract_cid}",
+    );
 
-    // Publish corrected
-    let _corrected_outcome = run_openlore_with_stdin(
+    // Step 3 — Publish the corrected claim (fixed evidence URL). Same
+    // subject/predicate/object as the typo'd claim; only the evidence
+    // URL differs. The corrected CID must differ from BOTH the typo
+    // and the retraction because the CBOR pre-image differs.
+    let corrected_outcome = run_openlore_with_stdin(
         &env,
         &[
             "claim", "add",
-            "--subject", "github:rust-lang/rust",
+            "--subject", subject,
             "--predicate", "embodiesPhilosophy",
             "--object", "org.openlore.philosophy.memory-safety",
             "--evidence", "https://www.rust-lang.org/", // fixed
@@ -971,10 +1000,31 @@ fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
         ],
         "\nY\n",
     );
+    assert_eq!(
+        corrected_outcome.status, 0,
+        "corrected publish must succeed; got {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        corrected_outcome.status, corrected_outcome.stdout, corrected_outcome.stderr,
+    );
+    let corrected_cid = parse_cid_from_stdout(&corrected_outcome.stdout);
+    assert!(
+        corrected_cid != typo_cid && corrected_cid != retract_cid,
+        "corrected claim must have its own CID distinct from typo + retract; \
+         got typo={typo_cid} retract={retract_cid} corrected={corrected_cid}",
+    );
 
-    // Both claims + the retraction should appear in graph query;
-    // typo'd one annotated as retracted
-    todo!("DELIVER: implement the three-step corrective workflow; verify graph query lists original, retraction, and corrected claim; original annotated 'retracted by author'")
+    // Step 4 — Query the subject. The graph-query verb (WS-11..WS-15)
+    // walks the local store and renders one block per claim with the
+    // WS-15 annotation pass folded in: any claim whose CID is the
+    // target of a `Retracts` back-reference is tagged
+    // `retracted by author` (WD-11, content-frozen UX). All three
+    // records must appear because retract is purely additive
+    // (WD-11 no-hard-delete; ADR-008 Behavioral rules 1, 2).
+    let query_outcome = run_openlore(&env, &["graph", "query", "--subject", subject]);
+    assert_exit_zero_and_stdout_contains(&query_outcome, &typo_cid);
+    assert_exit_zero_and_stdout_contains(&query_outcome, &retract_cid);
+    assert_exit_zero_and_stdout_contains(&query_outcome, &corrected_cid);
+    assert_exit_zero_and_stdout_contains(&query_outcome, "retracted by author");
 }
 
 /// WS-17: Calibration anxiety: user reconsiders confidence after
