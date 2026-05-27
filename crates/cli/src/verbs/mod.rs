@@ -11,4 +11,5 @@
 
 pub mod claim_add;
 pub mod claim_publish;
+pub mod graph_query;
 pub mod init;

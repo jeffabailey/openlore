@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 pub mod errors;
 pub mod io;
 pub mod paths;
+pub mod render;
 pub mod verbs;
 pub mod wiring;
 
@@ -193,8 +194,20 @@ pub fn dispatch(cli: Cli) -> i32 {
         Command::Claim(ClaimCommand::Retract { .. }) => {
             panic!("Not yet implemented -- RED scaffold");
         }
-        Command::Graph(GraphCommand::Query { .. }) => {
-            panic!("Not yet implemented -- RED scaffold");
+        Command::Graph(GraphCommand::Query { subject }) => {
+            match verbs::graph_query::run(
+                &wiring,
+                &verbs::graph_query::GraphQueryArgs { subject },
+            ) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore graph query: {err:#}");
+                    1
+                }
+            }
         }
     }
 }

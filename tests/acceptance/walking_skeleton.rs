@@ -690,28 +690,68 @@ fn walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionab
 #[test]
 fn walking_skeleton_graph_query_returns_just_published_claim_byte_for_byte() {
     let env = TestEnv::initialized();
-    let fixture = fixture_jeff_rust_memory_safety();
 
-    // Publish via chained flow
-    let _publish_outcome = run_openlore_with_stdin(
+    // Step 05-11: the support-level `fixture_jeff_rust_memory_safety()`
+    // builder is still a DELIVER scaffold (US-001 Example 1 fixture has
+    // not been promoted to support yet — it's authored inline here to
+    // keep step 05-11's blast radius to the cli crate + this scenario).
+    // The values mirror US-001 Example 1 / data-models.md verbatim so
+    // the byte-for-byte invariant has something concrete to assert on.
+    let subject = "github:rust-lang/rust";
+    let predicate = "embodiesPhilosophy";
+    let object = "org.openlore.philosophy.memory-safety";
+    let evidence_url = "https://www.rust-lang.org/";
+    let confidence_str = "0.86";
+
+    // Publish via chained flow.
+    let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
             "claim", "add",
-            "--subject", &fixture.subject,
-            "--predicate", &fixture.predicate,
-            "--object", &fixture.object,
-            "--evidence", &fixture.evidence[0],
-            "--confidence", &fixture.confidence.to_string(),
+            "--subject", subject,
+            "--predicate", predicate,
+            "--object", object,
+            "--evidence", evidence_url,
+            "--confidence", confidence_str,
         ],
         "\nY\n",
     );
+    assert_eq!(
+        publish_outcome.status, 0,
+        "publish via chained flow must succeed; got status {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        publish_outcome.status, publish_outcome.stdout, publish_outcome.stderr,
+    );
 
-    // Query
-    let query_outcome = run_openlore(&env, &["graph", "query", "--subject", &fixture.subject]);
+    // Parse the CID from the publish stdout so we can pin the
+    // round-trip identity assertion below.
+    let cid = parse_cid_from_stdout(&publish_outcome.stdout);
 
-    assert_exit_zero_and_stdout_contains(&query_outcome, &fixture.subject);
-    // Every field shown matches the fixture
-    todo!("DELIVER: parse CID from publish stdout; call assert_graph_query_output_matches_fixture(&query_outcome, &fixture, &cid)")
+    // Query.
+    let query_outcome = run_openlore(&env, &["graph", "query", "--subject", subject]);
+
+    // Hard AC: every compose-time field appears byte-for-byte in stdout.
+    // KPI-4 zero-normalization invariant: confidence renders as the
+    // original `f64` (`0.86`), NEVER as a bucket label.
+    assert_exit_zero_and_stdout_contains(&query_outcome, subject);
+    assert_exit_zero_and_stdout_contains(&query_outcome, predicate);
+    assert_exit_zero_and_stdout_contains(&query_outcome, object);
+    assert_exit_zero_and_stdout_contains(&query_outcome, evidence_url);
+    assert_exit_zero_and_stdout_contains(&query_outcome, confidence_str);
+    assert_exit_zero_and_stdout_contains(&query_outcome, "did:plc:test-jeff");
+    assert_exit_zero_and_stdout_contains(&query_outcome, &cid);
+
+    // KPI-4 / WD-10: bucket labels are compose-time-only display. They
+    // must NEVER leak into the read path's output.
+    for label in &["speculative", "weighted", "well-evidenced", "triangulated"] {
+        assert!(
+            !query_outcome.stdout.contains(label),
+            "graph query stdout must not contain bucket label '{label}' (WD-10 / D-12); \
+             got stdout:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            query_outcome.stdout,
+            query_outcome.stderr,
+        );
+    }
 }
 
 /// WS-12: Local-only is the default and is announced in the footer.
