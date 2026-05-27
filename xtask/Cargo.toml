@@ -13,15 +13,21 @@ name = "xtask"
 path = "src/main.rs"
 
 # Architecture-verification only; intentionally NOT depending on workspace
-# crates so it can run before they compile. Heavy deps (walkdir, syn) get
-# added in step 06-XX when check-probes lands.
+# crates so it can run before they compile.
 #
 # Step 06-05: `cargo_metadata` reads the workspace dep graph for
 # check-arch. `anyhow` keeps the binary's error-rendering ergonomic.
+# Step 06-06: `syn` AST-parses adapter source to detect stub `probe()`
+# bodies; `walkdir` enumerates `crates/adapter-*/src/**/*.rs`. Both are
+# pure-Rust, no transitive I/O — safe to add to xtask's tight dep graph.
 [dependencies]
 cargo_metadata = "0.23"
 anyhow = { workspace = true }
+syn = { version = "2", features = ["full", "visit", "extra-traits", "parsing"] }
+walkdir = "2"
 
 [dev-dependencies]
 # step 06-05 inner-TDD: hand-constructed in-memory dep graphs feed the
-# pure `check_workspace` function. No external test deps needed.
+# pure `check_workspace` function.
+# step 06-06 inner-TDD: in-memory Rust source snippets feed the pure
+# `classify_probe_body` function. No external test deps needed.

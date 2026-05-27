@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — runs OpenLore's local pre-commit gauntlet.
+#
+# Currently delegates to `scripts/check-probes.sh`, the ADR-009 D-10
+# layer-(b) structural check that asserts every `impl <Port> for
+# <Adapter>` block exposes a non-stub `probe()` body. Future checks
+# (rustfmt, clippy gates, lexicon-vs-rust drift) get chained here.
+#
+# Setup (manual, one-shot per clone):
+#
+#     git config core.hooksPath .githooks
+#
+# We do NOT auto-install the hook — `core.hooksPath` is per-repo
+# developer choice. CI runs the same `scripts/check-probes.sh` as a
+# required job, so the invariant holds even if a contributor opts out
+# locally.
+#
+# Exits with the wrapper's exit code on failure so `git commit` aborts.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/check-probes.sh"

@@ -9,12 +9,13 @@
 //!   adapter-*). Implemented in [`check_arch`]; step 06-05.
 //! - `cargo xtask check-probes` — AST-walks every `impl <Port> for
 //!   <Adapter>` block and asserts a non-stub `probe()` body. Companion
-//!   to the pre-commit hook `scripts/check-probes.sh`. Lands in a
-//!   later step (06-XX).
+//!   to the pre-commit hook `scripts/check-probes.sh`. Implemented in
+//!   [`check_probes`]; step 06-06.
 
 #![forbid(unsafe_code)]
 
 mod check_arch;
+mod check_probes;
 
 use std::process::ExitCode;
 
@@ -30,11 +31,13 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        "check-probes" => {
-            // SCAFFOLD: still stubbed; lands in a later step.
-            eprintln!("xtask check-probes: not yet implemented");
-            ExitCode::from(2)
-        }
+        "check-probes" => match check_probes::run() {
+            Ok(code) => ExitCode::from(code),
+            Err(e) => {
+                eprintln!("xtask check-probes: {e:#}");
+                ExitCode::from(2)
+            }
+        },
         other => {
             eprintln!(
                 "xtask: unknown subcommand `{other}`; expected one of: check-arch, check-probes"
