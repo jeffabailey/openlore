@@ -34,7 +34,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use claim_domain::{
-    canonicalize, compute_cid, confidence_bucket, ClaimReference, ConfidenceBucket,
+    canonicalize, compute_cid, ClaimReference, ConfidenceBucket,
     Did, SignedClaim, UnsignedClaim,
 };
 
@@ -283,7 +283,7 @@ fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
 /// display-only per WD-10 — it never gets persisted into the signed
 /// claim CBOR (that invariant is enforced in step 05-05 / WS-5).
 pub fn render_compose_preview(claim: &ComposedClaim) -> String {
-    let bucket_label = bucket_to_label(confidence_bucket(claim.confidence));
+    let bucket_label = bucket_to_label(display_bucket(claim.confidence));
     let evidence_line = if claim.evidence.is_empty() {
         "(none)".to_string()
     } else {
@@ -315,6 +315,36 @@ fn bucket_to_label(bucket: ConfidenceBucket) -> &'static str {
         ConfidenceBucket::Weighted => "weighted",
         ConfidenceBucket::WellEvidenced => "well-evidenced",
         ConfidenceBucket::Triangulated => "triangulated",
+    }
+}
+
+/// CLI-local display bucket function. Mirrors `claim_domain::confidence_bucket`
+/// but with one boundary tweak driven by the anxiety-path Gherkin spec
+/// (Anxiety scenario 3 in `gherkin-scenarios-expanded.md`): the value
+/// `0.9` displays as `well-evidenced`, NOT `triangulated`. The Gherkin
+/// scenario literally says: "I'm about to commit to confidence 0.9
+/// (well-evidenced)" — that pins the display semantics at this boundary.
+///
+/// We keep the domain `confidence_bucket` untouched because its lower-
+/// boundary-closed convention is referenced by other call sites and
+/// pinned by its own unit tests. The CLI's display layer owns its own
+/// boundary semantics — this is the right place per WD-10 ("bucket
+/// labels exist only in the CLI render layer; never persisted").
+///
+/// Thresholds applied here (display semantics):
+/// - `[0.0, 0.3)` → Speculative
+/// - `[0.3, 0.7)` → Weighted
+/// - `[0.7, 0.9]` → WellEvidenced  (CLOSED on both sides — 0.9 included)
+/// - `(0.9, 1.0]` → Triangulated
+fn display_bucket(numeric: f64) -> ConfidenceBucket {
+    if numeric < 0.3 {
+        ConfidenceBucket::Speculative
+    } else if numeric < 0.7 {
+        ConfidenceBucket::Weighted
+    } else if numeric <= 0.9 {
+        ConfidenceBucket::WellEvidenced
+    } else {
+        ConfidenceBucket::Triangulated
     }
 }
 

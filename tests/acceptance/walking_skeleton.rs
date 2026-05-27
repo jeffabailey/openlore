@@ -1077,6 +1077,44 @@ fn walking_skeleton_calibration_anxiety_user_cancels_and_re_runs_with_lower_conf
 
     assert_exit_zero_and_stdout_contains(&second, "0.55 (weighted)");
 
-    // Exactly one signed file now exists (the 0.55 one)
-    todo!("DELIVER: assert claims_dir() contains exactly one file; assert_persisted_payload_has_no_bucket_label on it")
+    // Exactly one signed file now exists (the 0.55 one).
+    //
+    // Universe-bound assertion: `storage.local_claim_store.file_count`
+    // must equal 1 — the first invocation canceled (EOF on stdin) so
+    // wrote nothing; the second confirmed sign + declined publish so
+    // wrote exactly the one signed-claim JSON artefact.
+    let claims_dir = env.claims_dir();
+    let entries: Vec<_> = std::fs::read_dir(&claims_dir)
+        .unwrap_or_else(|e| panic!("read claims_dir {}: {e}", claims_dir.display()))
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one file in claims_dir {} (the 0.55 one); got {} entries: {:?}",
+        claims_dir.display(),
+        entries.len(),
+        entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+
+    // Universe-bound assertion: `storage.local_claim_store.no_bucket_label_string`.
+    // WD-10 / D-12 invariant — the persisted JSON must NOT contain ANY
+    // of the four bucket-label strings. The numeric `0.55` lives in the
+    // payload, the bucket name `weighted` does NOT.
+    let file_path = entries[0].path();
+    let payload = std::fs::read_to_string(&file_path)
+        .unwrap_or_else(|e| panic!("read persisted claim {}: {e}", file_path.display()));
+    for label in ["speculative", "weighted", "well-evidenced", "triangulated"] {
+        assert!(
+            !payload.contains(label),
+            "WD-10 / D-12 invariant violated: persisted claim {} contains \
+             bucket-label string {:?}; payload:\n{}",
+            file_path.display(),
+            label,
+            payload
+        );
+    }
+
+    // And no PDS call was made (the user declined publish with `n`).
+    assert_no_pds_call_was_made(&env);
 }
