@@ -15,6 +15,7 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod errors;
 pub mod io;
 pub mod paths;
 pub mod verbs;
@@ -180,7 +181,12 @@ pub fn dispatch(cli: Cli) -> i32 {
                 outcome.exit_code
             }
             Err(err) => {
-                eprintln!("openlore claim publish: {err:#}");
+                // Typed `PublishError` routes PDS failures through the
+                // WS-10 retry-hint renderer; other failure classes fall
+                // back to anyhow's chained-cause format. The renderer
+                // produces a newline-terminated string so we use
+                // `eprint!` (not `eprintln!`) here.
+                eprint!("{}", verbs::claim_publish::render_publish_error(&err));
                 1
             }
         },

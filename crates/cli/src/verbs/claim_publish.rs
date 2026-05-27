@@ -35,8 +35,67 @@
 
 use anyhow::{anyhow, Context, Result};
 use claim_domain::{Cid, SignedClaim};
+use ports::PdsError;
 
+use crate::errors::render_pds_error;
 use crate::wiring::Wiring;
+
+/// Typed failure modes for `publish_signed_claim`. Carrying the
+/// underlying `PdsError` (rather than collapsing into `anyhow::Error`)
+/// preserves the WS-10 universe slot `cli.stderr.pds_unreachable_retry_hint`
+/// — the stderr renderer in `crate::errors` needs the original variant +
+/// the CID to produce the actionable retry verb. Other failure classes
+/// (serialization, local persistence) collapse into `anyhow::Error`
+/// because their remediation is not the "retry publish" verb — they
+/// indicate a deeper bug or filesystem problem.
+#[derive(Debug)]
+pub enum PublishError {
+    /// The PDS adapter refused the publish. The carried `PdsError`
+    /// classifies the network/TLS/rejection root cause; the renderer in
+    /// `crate::errors::render_pds_error` shapes the user-facing line
+    /// AND the actionable retry hint with the CID baked in. Per US-003
+    /// + KPI-5 the local `<cid>.json` artefact remains intact whenever
+    /// this variant is returned — the verb does NOT roll back the
+    /// preceding local write on a publish-side failure.
+    PdsFailed { source: PdsError, cid: Cid },
+    /// Anything else (serializing the SignedClaim body, recording
+    /// publication metadata, etc.) that prevented publish from
+    /// completing. Surfaced via anyhow because the remediation differs
+    /// per-error and is not the WS-10 "retry publish" hint.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PublishError::PdsFailed { source, cid } => {
+                write!(f, "PDS publish failed for {}: {source}", cid.0)
+            }
+            PublishError::Other(err) => write!(f, "{err:#}"),
+        }
+    }
+}
+
+impl std::error::Error for PublishError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PublishError::PdsFailed { source, .. } => Some(source),
+            PublishError::Other(_) => None,
+        }
+    }
+}
+
+/// Render a `PublishError` into the stderr block both call sites
+/// (standalone verb dispatcher + chained Y branch in claim_add) emit.
+/// Pds failures route through the typed renderer in `crate::errors` so
+/// the WS-10 retry hint shape stays consistent; other errors fall back
+/// to anyhow's chained-cause format.
+pub fn render_publish_error(err: &PublishError) -> String {
+    match err {
+        PublishError::PdsFailed { source, cid } => render_pds_error(source, cid),
+        PublishError::Other(other) => format!("openlore claim publish: {other:#}\n"),
+    }
+}
 
 /// Argument struct for the `claim publish` verb.
 #[derive(Debug, Clone)]
@@ -65,20 +124,21 @@ pub struct PublishOutcome {
 
 /// Run the `claim publish` verb. Looks up the signed claim, posts it to
 /// the PDS, records publication metadata locally, and renders the
-/// success block to stdout. Returns non-zero exit code on hard errors
-/// (lookup miss, PDS unreachable, persistence failure) per the
-/// composition root's `i32` contract.
-pub fn run(wiring: &Wiring, args: &ClaimPublishArgs) -> Result<ClaimPublishOutcome> {
+/// success block to stdout. Returns a typed `PublishError` on failure so
+/// the dispatcher can route PDS-unreachable failures (WS-10) through
+/// the actionable-retry-hint renderer in `crate::errors`.
+pub fn run(wiring: &Wiring, args: &ClaimPublishArgs) -> std::result::Result<ClaimPublishOutcome, PublishError> {
     let cid = Cid(args.cid.clone());
     let signed = wiring
         .storage
         .read_signed_claim(&cid)
-        .with_context(|| format!("looking up signed claim for cid {}", args.cid))?
+        .with_context(|| format!("looking up signed claim for cid {}", args.cid))
+        .map_err(PublishError::Other)?
         .ok_or_else(|| {
-            anyhow!(
+            PublishError::Other(anyhow!(
                 "no signed claim with cid {} in local storage. Run `openlore claim add` first.",
                 args.cid
-            )
+            ))
         })?;
 
     let outcome = publish_signed_claim(wiring, &signed)?;
@@ -95,18 +155,26 @@ pub fn run(wiring: &Wiring, args: &ClaimPublishArgs) -> Result<ClaimPublishOutco
 /// standalone verb and the `claim add` Y branch funnel through here.
 ///
 /// On success returns a [`PublishOutcome`] carrying the at-uri the
-/// renderer pins. On failure surfaces an `anyhow::Error` carrying a
-/// retry hint that names the standalone `claim publish` verb — the
-/// composition root prints this verbatim to stderr per WS-10.
-pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) -> Result<PublishOutcome> {
-    let cid_str = signed.signature.signed_cid.0.clone();
+/// renderer pins. On PDS failure returns
+/// `PublishError::PdsFailed { source, cid }` so the caller can route
+/// it through `crate::errors::render_pds_error` for the WS-10 retry
+/// hint. Other failure modes (body serialization, persistence) map to
+/// `PublishError::Other` because their remediation is not "retry
+/// publish" — the user can't make progress by re-running the verb.
+pub fn publish_signed_claim(
+    wiring: &Wiring,
+    signed: &SignedClaim,
+) -> std::result::Result<PublishOutcome, PublishError> {
+    let cid = signed.signature.signed_cid.clone();
+    let cid_str = cid.0.clone();
 
     // The over-the-wire body is the SignedClaim itself serialized as
     // JSON. The PDS doesn't care about the canonical-CBOR encoding —
     // that is the local artifact contract. ATProto records are JSON
     // shaped per the `org.openlore.claim` Lexicon.
     let body = serde_json::to_value(signed)
-        .with_context(|| format!("serializing SignedClaim {cid_str} for PDS body"))?;
+        .with_context(|| format!("serializing SignedClaim {cid_str} for PDS body"))
+        .map_err(PublishError::Other)?;
 
     let collection = "org.openlore.claim";
 
@@ -114,13 +182,15 @@ pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) -> Result<Pub
     // We use `current_thread` because publish is sequential and we
     // want to keep the binary's runtime footprint minimal.
     let runtime = build_tokio_runtime();
+    // Preserve the typed `PdsError` so the dispatcher can render the
+    // WS-10 actionable-retry-hint via `crate::errors::render_pds_error`.
+    // Collapsing into `anyhow::Error` here would erase the variant the
+    // renderer needs (and the cid binding it pairs with).
     let create_outcome = runtime
         .block_on(wiring.pds.create_record(collection, &cid_str, body))
-        .with_context(|| {
-            format!(
-                "publishing claim {cid_str} to PDS. \
-                 Retry with `openlore claim publish {cid_str}` once the PDS is reachable."
-            )
+        .map_err(|source| PublishError::PdsFailed {
+            source,
+            cid: cid.clone(),
         })?;
 
     // Step 05-09: branch the rendered success message on the port's
@@ -142,7 +212,8 @@ pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) -> Result<Pub
                 "recording publication metadata for {cid_str} at {}",
                 create_outcome.at_uri.0
             )
-        })?;
+        })
+        .map_err(PublishError::Other)?;
 
     Ok(PublishOutcome {
         cid: cid_str,

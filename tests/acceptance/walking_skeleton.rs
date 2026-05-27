@@ -647,8 +647,35 @@ fn walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionab
     assert_exit_nonzero_and_stderr_contains(&outcome, "PDS");
     assert_exit_nonzero_and_stderr_contains(&outcome, "retry with `openlore claim publish");
 
-    // The local signed file is intact
-    todo!("DELIVER: parse the CID from the (still-printed) sign-success stdout; assert_claim_file_exists_with_cid; restore env.pds; re-run `openlore claim publish <cid>`; assert it now succeeds")
+    // The local signed file persists intact (KPI-5 local-first invariant).
+    // The sign + write_signed_claim path runs BEFORE the publish call
+    // (WS-6 pinned this); when publish fails, the verb does NOT roll
+    // back the local write. We parse the CID from the still-printed
+    // sign-success stdout (the verb prints `Computing claim CID <cid>`
+    // and `Written to local store: <path>` before attempting publish).
+    let cid = parse_cid_from_stdout(&outcome.stdout);
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    assert!(
+        artifact_path.exists(),
+        "expected signed-claim file at {} after PDS-unreachable publish failure \
+         (KPI-5 local-first invariant); file missing.\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        artifact_path.display(),
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Restore the PDS and re-run the standalone `claim publish <cid>`.
+    // It MUST succeed and produce an at-uri of the same shape as if it
+    // had succeeded the first time (FR-3 at-uri reconstructibility).
+    env.pds.restore();
+    let retry = run_openlore(&env, &["claim", "publish", &cid]);
+    assert_exit_zero_and_stdout_contains(
+        &retry,
+        &format!("at-uri: at://did:plc:test-jeff/org.openlore.claim/{cid}"),
+    );
+    // And the fake PDS now contains a record at that at-uri.
+    let expected_at_uri = format!("at://did:plc:test-jeff/org.openlore.claim/{cid}");
+    assert_pds_contains_record_at(&env, &expected_at_uri);
 }
 
 // =============================================================================

@@ -227,12 +227,14 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
             }
             Err(err) => {
                 // WS-10 (sad path): the local artifact is already on
-                // disk. Surface the PDS error to stderr with a hint
-                // pointing at the retry verb so the user can run
-                // `openlore claim publish <cid>` later. Return a
-                // non-zero exit code so scripts can detect the
-                // partial-success state.
-                eprintln!("openlore claim add: publish failed: {err:#}");
+                // disk (KPI-5 local-first invariant — the sign + write
+                // path ran BEFORE this publish call and is NOT rolled
+                // back). Route the typed `PublishError` through the
+                // shared renderer so the chained Y branch and the
+                // standalone verb emit identical, copy-pasteable retry
+                // guidance. Return a non-zero exit code so scripts can
+                // detect the partial-success state.
+                eprint!("{}", crate::verbs::claim_publish::render_publish_error(&err));
                 return Ok(ClaimAddOutcome {
                     exit_code: 1,
                     stdout: String::new(),
