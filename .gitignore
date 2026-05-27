@@ -26,3 +26,9 @@ Thumbs.db
 # nWave / DES state (project-local)
 /.nwave/des/deliver-session.json
 /.nwave/des/des-task-active
+
+# cargo-mutants output (Phase 5 artifact)
+mutants.out/
+
+# DES progress tracker (updated by hooks; safe to ignore)
+docs/feature/*/deliver/.develop-progress.json
