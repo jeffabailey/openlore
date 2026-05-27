@@ -41,6 +41,25 @@ pub use identity::FakeIdentity;
 pub mod fake_pds;
 pub use fake_pds::{FakePds, FakePdsHttpHandle, FakePdsRecord};
 
+// Slice-03 step 06-01 (DD-FED-2 + DD-FED-3): read-only test double for a
+// PEER's PDS. Distinct from `FakePds` because the peer PDS is HONESTLY a
+// different actor — slice-03 pulls from peer PDSes UNAUTHENTICATED and
+// NEVER writes to them. Adversarial constructors (tampered signature,
+// CID mismatch, self-attribution per WD-40, cross-attribution per WD-41)
+// drive the KPI-FED-6 + WD-30 anti-merging acceptance gates.
+pub mod fake_peer_pds;
+pub use fake_peer_pds::{FakePeerPds, FakePeerPdsHttpHandle, FakePeerRecord};
+
+// Slice-03 step 06-02: canonical peer-claim fixtures. Symmetric with
+// `fixtures.rs`; one free function per well-known fixture used across
+// US-FED-002..005 acceptance scenarios.
+pub mod fixtures_peer;
+pub use fixtures_peer::{
+    fixture_adversarial_peer_cid_mismatch, fixture_adversarial_peer_cross_attribution,
+    fixture_adversarial_peer_self_attribution, fixture_adversarial_peer_tampered_signature,
+    fixture_other_developer_three_claims,
+};
+
 use claim_domain::{Cid, ClaimLookup, SignedClaim};
 use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};
 

@@ -34,7 +34,8 @@ persona:
     - Writing an architecture decision record that needs grounded references.
 
   primary_jobs: [J-002, J-003, J-004]
-  walking_skeleton_jobs: []   # consumer persona; not in walking skeleton
+  walking_skeleton_jobs: []                            # not in slice-01 walking skeleton
+  walking_skeleton_jobs_for_slice_03: [J-003]          # IS the walking skeleton for slice-03
 
   emotional_arc_starting_state: >
     Pragmatic. Will not adopt unless the read experience is faster than
@@ -45,3 +46,45 @@ persona:
     - Attribution always visible; no "merged consensus" framing.
     - Friction to author a claim must be visible but not punishing — make it
       easy to graduate from reader to author when ready.
+    - Subscription is reversible without residue (slice-03 J-003c).
+    - Counter-claim authoring (slice-03 J-003b) must feel as light as the
+      `git commit -m` of disagreement; no modal "are you sure you want to
+      disagree?" friction.
+
+  # -------------------------------------------------------------------------
+  # Federation-reader hat (slice-03 / openlore-federated-read)
+  # Added 2026-05-27 by Luna during DISCUSS for openlore-federated-read.
+  # -------------------------------------------------------------------------
+  hats:
+    - id: federation-reader
+      activated_in_slice: slice-03 / openlore-federated-read
+      one_liner: >
+        P-002 wearing the federation-reader hat is consuming OTHER developers'
+        signed claims to inform a decision, and occasionally publishing a
+        counter-claim when they disagree strongly enough to stake a position.
+
+      typical_session:
+        - "Heard a respected developer (did:plc:rachel-test) has interesting takes on Rust ecosystem"
+        - "Run `openlore peer add did:plc:rachel-test`"
+        - "Run `openlore peer pull` to ingest their claims"
+        - "Run `openlore graph query --subject github:rust-lang/cargo --federated`"
+        - "See Rachel's claims alongside mine, with explicit attribution per claim"
+        - "Disagree with one of Rachel's claims; run `openlore claim counter <cid> --reason ...`"
+        - "Optional: weeks later, decide Rachel's claim stream isn't worth following; run `openlore peer remove did:plc:rachel-test --purge`"
+
+      load_bearing_anxieties:
+        - "If I subscribe to a bad-actor, do they pollute my view permanently?"
+        - "If I post a counter-claim against someone with more followers, am I starting a brigade war?"
+        - "If I unsubscribe, is the data truly gone from my disk?"
+
+      load_bearing_signals_of_success:
+        - "Federated query shows BOTH my claims and the peer's, each with author DID and confidence, never as a single merged consensus row."
+        - "Counter-claim publishes via the same `claim add` pipeline I already know."
+        - "`peer remove --purge` followed by `graph query --federated` returns my claims only — peer claims gone."
+
+      ux_guardrails_specific_to_federation:
+        - Author DID is the FIRST field shown for every peer claim (not the last).
+        - The `graph query --federated` output groups by author, NOT by subject, NOT by an aggregate score.
+        - `peer add` is acknowledged with a clear message naming the DID added and the timestamp of next pull.
+        - `peer remove` defaults to soft (removes subscription but keeps claims cached) — `--purge` is explicit and irreversible. (Both behaviors discoverable from `peer remove --help`.)
+        - Counter-claim CLI is `openlore claim counter <peer_cid> --reason ...`; the underlying record uses the existing `references[]` mechanism from ADR-008 with `type: counters`.

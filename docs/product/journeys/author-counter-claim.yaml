@@ -1,0 +1,331 @@
+schema_version: 1
+
+journey:
+  name: author-counter-claim
+  goal: >
+    Encounter a peer's claim the user disagrees with, author a counter-claim
+    that references it via the existing reference-rules mechanism (per ADR-008,
+    WD-11), publish it, and have both claims remain visible side-by-side under
+    their respective author DIDs — disagreement as a public structured artifact
+    rather than a thread.
+  persona: P-002                    # researcher-tech-lead (federation-reader hat)
+  secondary_persona: P-001          # author-engineers also exercise this flow
+  job_id: J-003
+  sub_jobs_addressed: [J-003b]      # counter-claim authoring as first-class disagreement
+  related_jobs: [J-001]             # counter-claim flow reuses J-001 compose-sign-publish pipeline
+  feature_id: openlore-federated-read
+  slice_id: slice-03-federated-read
+
+  emotional_arc:
+    start: Irritated — "Rachel's claim about cargo's dependency-pinning philosophy is wrong; I want to push back without it being a reply-guy moment."
+    middle: Considered — "OK, I have to put my reasoning in writing AND sign it. That focuses me."
+    end: Publicly-staked — "My disagreement is now a permanent attributable artifact next to her claim. We disagree in public, on the record."
+    arc_pattern: irritation-to-considered-public-stake
+
+  preconditions:
+    - User has subscribed to and pulled claims from at least one peer (journey: subscribe-and-read-federated).
+    - User has run `openlore graph query --subject <subject> --federated` and identified a specific peer claim CID to counter.
+
+  steps:
+
+    - id: 1
+      name: Identify the target claim
+      command: openlore graph query --subject github:rust-lang/cargo --federated
+
+      tui_mockup: |
+        $ openlore graph query --subject github:rust-lang/cargo --federated
+
+        ...
+        Author: did:plc:rachel-test (subscribed peer)
+          - embodiesPhilosophy  org.openlore.philosophy.dependency-pinning
+            confidence  0.91  (triangulated)
+            evidence    https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
+            cid         bafy...n4ka                       <-- counter-claim target
+            composed_at 2026-05-22T09:18:44Z
+
+        Tip: `openlore claim counter bafy...n4ka --reason ...` to publish a counter-claim.
+
+      shared_artifacts:
+        - name: target_cid
+          source: peer_claims (populated by `openlore peer pull`)
+          displayed_as: bafy...n4ka
+          consumers: ["counter-claim references[] field", "counter-claim CLI argument", "graph query --federated output"]
+        - name: target_author_did
+          source: peer_claims attribution
+          displayed_as: did:plc:rachel-test
+          consumers: ["counter-claim audit trail", "graph query output annotation"]
+
+      emotional_state:
+        entry: Irritated
+        exit: Targeted — "I know exactly which claim CID I'm countering."
+
+      integration_checkpoint: |
+        The target claim CID exists in peer_claims at query time.
+        The target claim's author DID is displayed adjacent to the CID so the
+        user knows who they are countering.
+        The tip line explicitly names the `claim counter` sub-verb with the CID.
+
+      failure_modes:
+        - User attempts to counter their own claim CID; system rejects with "you cannot counter your own claim; use `claim retract` instead."
+        - Target CID is not present in any local store (typo or stale); system reports "no claim found with CID <X>" and exits non-zero.
+
+      gherkin: |
+        Scenario: Federated query surfaces a counter-claim CTA per peer claim
+          Given Maria has pulled Rachel's claim with CID bafy...n4ka
+          When Maria runs `openlore graph query --subject github:rust-lang/cargo --federated`
+          Then each peer claim row displays the claim CID
+          And the output footer includes a copy-pastable `openlore claim counter <cid>` template
+
+
+    - id: 2
+      name: Compose the counter-claim
+      command: openlore claim counter bafy...n4ka --reason "Cargo's dependency pinning is opt-in, not philosophical; pinning is a tool, not a value." --subject github:rust-lang/cargo --predicate embodiesPhilosophy --object org.openlore.philosophy.dependency-pinning --evidence https://github.com/rust-lang/cargo/blob/master/CONTRIBUTING.md --confidence 0.72
+
+      tui_mockup: |
+        $ openlore claim counter bafy...n4ka \
+            --reason   "Cargo's dependency pinning is opt-in, not philosophical; pinning is a tool, not a value." \
+            --subject  github:rust-lang/cargo \
+            --predicate embodiesPhilosophy \
+            --object   org.openlore.philosophy.dependency-pinning \
+            --evidence https://github.com/rust-lang/cargo/blob/master/CONTRIBUTING.md \
+            --confidence 0.72
+
+        Composing counter-claim (not yet signed, not yet published)
+        -----------------------------------------------------------
+          counters    : bafy...n4ka  (by did:plc:rachel-test)
+          subject     : github:rust-lang/cargo
+          predicate   : embodiesPhilosophy
+          object      : org.openlore.philosophy.dependency-pinning
+          evidence    : https://github.com/rust-lang/cargo/blob/master/CONTRIBUTING.md
+          confidence  : 0.72  (weighted)
+          reason      : Cargo's dependency pinning is opt-in, not philosophical;
+                        pinning is a tool, not a value.
+          author      : did:plc:maria-test
+          composed_at : ${composed_at}
+          references  : [{ cid: bafy...n4ka, type: counters }]
+
+        This is YOUR reasoning. It will be signed and published as a claim,
+        not as truth. The peer's original claim REMAINS visible; counter-claims
+        coexist, never overwrite.
+
+        Press Enter to sign, Ctrl-C to cancel.
+
+      shared_artifacts:
+        - name: target_cid
+          source: same as step 1
+          displayed_as: bafy...n4ka (in references[].cid)
+          consumers: ["counter-claim signed payload", "graph query output linking back"]
+        - name: counter_claim_reason
+          source: --reason CLI argument
+          displayed_as: in compose preview AND in signed claim payload
+          consumers: ["compose preview", "signed claim", "graph query output detail"]
+        - name: counter_claim_cid
+          source: computed at sign-time (next step)
+          displayed_as: bafy...new
+          consumers: ["sign step", "publish step", "graph query"]
+
+      emotional_state:
+        entry: Targeted
+        exit: Considered — "I had to put my reasoning in --reason. That made me sharper."
+
+      integration_checkpoint: |
+        The compose preview MUST contain the literal text "not as truth" (same load-bearing invariant as US-001).
+        The preview MUST show the target CID AND the target author's DID so the user is reminded who they are countering.
+        The preview MUST show "counter-claims coexist, never overwrite" framing.
+        The `--reason` argument is REQUIRED (no silent counter-claims with empty reason).
+        The references[] field MUST contain exactly one entry with type "counters" pointing at target_cid.
+        Reference-rules-validate MUST pass: no self-reference (would be a `claim retract`, not counter), no cycle.
+
+      failure_modes:
+        - --reason missing or empty; system rejects pre-compose with "counter-claims require --reason; explain your disagreement."
+        - --reason exceeds 1000 chars; system rejects with size limit and a hint to publish a separate evidentiary claim.
+        - Target CID does not exist locally; system rejects with "cannot counter unknown claim CID."
+        - User attempts to counter a claim they have ALREADY countered; system warns "you have already countered this claim (your counter CID: bafy...prev). Continue and add a second counter? [y/N]" — multiple counter-claims are allowed but require confirmation.
+
+      gherkin: |
+        Scenario: Compose preview of a counter-claim shows target attribution and "not as truth" framing
+          Given Maria has Rachel's claim bafy...n4ka in her peer_claims store
+          When Maria runs `openlore claim counter bafy...n4ka --reason "..." --subject ... --predicate ... --object ... --evidence ... --confidence 0.72`
+          Then the compose preview lists "counters: bafy...n4ka (by did:plc:rachel-test)"
+          And the preview contains the literal text "not as truth"
+          And the preview contains the literal text "counter-claims coexist, never overwrite"
+          And the preview shows the --reason text verbatim
+          And the preview lists the references[] field with one entry of type "counters" pointing at bafy...n4ka
+          And no file has been written
+          And no network call has been made
+
+        Scenario: Counter-claim requires --reason
+          Given Maria has Rachel's claim bafy...n4ka in her peer_claims store
+          When Maria runs `openlore claim counter bafy...n4ka` without --reason
+          Then the CLI exits non-zero with "counter-claims require --reason; explain your disagreement."
+          And no file has been written
+          And no network call has been made
+
+
+    - id: 3
+      name: Sign and publish the counter-claim
+      command: <Enter> on the compose prompt, then Y on the publish prompt
+
+      tui_mockup: |
+        Signing with did:plc:maria-test ... ok
+        Computing claim CID            ... bafy...new
+
+        Written to local store:
+          path : ~/.local/share/openlore/claims/bafy...new.json
+          cid  : bafy...new
+          size : 587 bytes
+          type : counter-claim (counters bafy...n4ka)
+
+        Publish to your PDS now? [Y/n] y
+
+        Publishing to https://pds.example.com ...
+          record collection : org.openlore.claim
+          record rkey       : bafy...new
+          ... ok (HTTP 200, 138ms)
+
+        Published.
+          at-uri : at://did:plc:maria-test/org.openlore.claim/bafy...new
+
+        Your counter-claim is now public. Rachel's original claim
+        (bafy...n4ka) remains visible on her PDS and in federated queries;
+        nothing has been overwritten.
+
+        Tip: `openlore claim retract bafy...new` if you change your mind.
+
+      shared_artifacts:
+        - name: counter_claim_cid
+          source: claim-domain::compute_cid (pure)
+          displayed_as: bafy...new
+          consumers: ["local store filename", "PDS record rkey", "subsequent graph query rows", "retract reference"]
+        - name: at_uri
+          source: derived from author_did + collection + counter_claim_cid
+          displayed_as: at://did:plc:maria-test/org.openlore.claim/bafy...new
+          consumers: ["publish confirmation", "graph query output"]
+
+      emotional_state:
+        entry: Considered
+        exit: Publicly-staked — "It's out there with my DID; we disagree on the record."
+
+      integration_checkpoint: |
+        The counter-claim flows through the SAME sign+publish pipeline as a regular claim (no separate publish code path — ADR-003 single-publish-path invariant).
+        The published counter-claim's references[] field preserves the target CID byte-for-byte.
+        Both author_claims (which now includes the counter-claim) and peer_claims (which still has the original) reflect the relationship in queries.
+        The publish success message reminds the user that the peer's claim REMAINS visible (anti-overwrite framing).
+
+      failure_modes:
+        - PDS unreachable at publish; local counter-claim is intact; user told to retry; behavior matches US-003 from slice-01.
+        - PDS rejects the record (e.g., schema mismatch); raw error surfaced; local store preserves the counter-claim.
+        - Signing key inaccessible; system prompts to unlock; no partial-state.
+
+      gherkin: |
+        Scenario: Counter-claim signs and publishes via the same pipeline as a regular claim
+          Given Maria has composed a counter-claim against bafy...n4ka
+          When Maria confirms sign and publish
+          Then the counter-claim is signed with Maria's DID
+          And the counter-claim's CID is computed deterministically
+          And the counter-claim is persisted to ~/.local/share/openlore/claims/<cid>.json
+          And the counter-claim is published to Maria's PDS via the SAME path as a regular claim
+          And the publish confirmation reminds Maria that Rachel's original claim remains visible
+
+        Scenario: Published counter-claim appears next to the target claim in federated query
+          Given Maria has published counter-claim bafy...new countering Rachel's bafy...n4ka
+          When Maria runs `openlore graph query --subject github:rust-lang/cargo --federated`
+          Then the output displays Rachel's bafy...n4ka under "did:plc:rachel-test (subscribed peer)"
+          And the output displays Maria's bafy...new under "did:plc:maria-test (you)"
+          And Maria's counter-claim row is annotated "counters bafy...n4ka by did:plc:rachel-test"
+          And neither claim is hidden, down-weighted, or merged
+
+
+    - id: 4
+      name: Observe the counter-relationship in subsequent queries
+      command: openlore graph query --subject github:rust-lang/cargo --federated
+
+      tui_mockup: |
+        $ openlore graph query --subject github:rust-lang/cargo --federated
+
+        Claims about github:rust-lang/cargo (4 found across 2 authors)
+        ===============================================================
+
+        Author: did:plc:maria-test (you)
+          - embodiesPhilosophy  org.openlore.philosophy.reproducible-builds
+            confidence  0.78  (well-evidenced)
+            evidence    https://doc.rust-lang.org/cargo/reference/build-cache.html
+            cid         bafy...m9pq
+            composed_at 2026-05-26T14:02:11Z
+
+          - embodiesPhilosophy  org.openlore.philosophy.dependency-pinning
+            confidence  0.72  (weighted)
+            evidence    https://github.com/rust-lang/cargo/blob/master/CONTRIBUTING.md
+            counters    bafy...n4ka by did:plc:rachel-test
+            reason      Cargo's dependency pinning is opt-in, not philosophical;
+                        pinning is a tool, not a value.
+            cid         bafy...new
+            composed_at 2026-05-27T10:14:32Z
+
+        Author: did:plc:rachel-test (subscribed peer)
+          - embodiesPhilosophy  org.openlore.philosophy.dependency-pinning
+            confidence  0.91  (triangulated)
+            evidence    https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
+            countered-by bafy...new by did:plc:maria-test
+            cid         bafy...n4ka
+            composed_at 2026-05-22T09:18:44Z
+
+          - embodiesPhilosophy  org.openlore.philosophy.reproducible-builds
+            confidence  0.65  (weighted)
+            evidence    https://github.com/rust-lang/cargo/issues/5359
+            cid         bafy...x7ts
+            composed_at 2026-05-20T11:33:02Z
+
+        4 claims displayed; 1 counter-relationship; 0 merged.
+
+      shared_artifacts:
+        - name: counter_relationship
+          source: derived from claim-domain::reference_rules_validate over the joined query
+          displayed_as: "counters X by Y" on counter-claim row AND "countered-by X by Y" on target row
+          consumers: ["graph query output annotations"]
+
+      emotional_state:
+        entry: Publicly-staked
+        exit: Validated — "Both claims are visible, the disagreement is structured, and the system did not pick a winner."
+
+      integration_checkpoint: |
+        Counter-relationship annotation is BIDIRECTIONAL: the counter-claim row shows "counters X" AND the target row shows "countered-by X".
+        Neither claim is hidden or down-weighted; both rows are equal-weight rendered.
+        The summary line at the bottom MUST state the count of counter-relationships explicitly.
+
+      failure_modes:
+        - Counter-claim references a CID no longer present locally (peer was purged after counter-published); annotation degrades gracefully to "counters bafy...n4ka (peer not subscribed)".
+        - Counter-claim's signature does not verify on re-read (corruption); row marked "[signature invalid]" and exit non-zero.
+
+      gherkin: |
+        Scenario: Counter-relationship is annotated bidirectionally in federated query output
+          Given Maria has published counter-claim bafy...new countering Rachel's bafy...n4ka
+          When Maria runs `openlore graph query --subject github:rust-lang/cargo --federated`
+          Then Maria's bafy...new row shows "counters bafy...n4ka by did:plc:rachel-test"
+          And Rachel's bafy...n4ka row shows "countered-by bafy...new by did:plc:maria-test"
+          And the summary line states "1 counter-relationship; 0 merged"
+
+
+  integration_validation:
+    shared_artifact_consistency:
+      - artifact: target_cid
+        must_match_across: [1, 2, 3, 4]
+        failure_message: >
+          Target CID drift between query display, counter-claim references[],
+          PDS publish, and subsequent query annotation. Likely cause: CID
+          normalization differs between display rendering and storage.
+      - artifact: counter_claim_cid
+        must_match_across: [3, 4]
+        failure_message: >
+          Counter-claim's local CID differs from its published rkey or its
+          query-time annotation. Canonicalization is non-deterministic.
+
+  cross_journey_consistency:
+    - Reference-rule type `counters` is the SAME enum value used by `claim retract` per ADR-008 (single ReferenceType enum, two value variants: Retracts, Counters).
+    - The compose preview's "not as truth" literal text is the SAME load-bearing string from US-001 in openlore-foundation — same wording, same position.
+    - The single publish path (ADR-003 invariant from openlore-foundation) is preserved: counter-claim publish reuses the same VerbClaimPublish internals.
+
+changelog:
+  - date: "2026-05-27"
+    feature: openlore-federated-read
+    change: Initial journey for the slice-03 counter-claim authoring path (J-003b).

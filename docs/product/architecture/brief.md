@@ -41,13 +41,34 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 
 **Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.**
 
-Future slices extend this inventory (planned):
+Future slices extend this inventory (planned / in-progress):
 
 - slice-02 (github-scraper): adds `adapter-github` + `scraper-domain`.
-- slice-03 (federated-read): adds `federation` (port + adapter) + `reader-cli`.
+- **slice-03 (openlore-federated-read): EXTENSION ONLY — no new crates.**
+  Adds `PeerStoragePort` (in `ports`) implemented by `adapter-duckdb`;
+  extends `PdsPort` with peer-read methods and `IdentityPort` with
+  `resolve_peer`; adds 4 DuckDB tables (`peer_subscriptions`,
+  `peer_claims`, `peer_claim_references`, `peer_claim_evidence`); adds
+  optional `reason` field on `org.openlore.claim` Lexicon. See
+  ADR-013..ADR-016 + `docs/feature/openlore-federated-read/design/`.
 - slice-04 (scoring-graph): may swap or augment `adapter-duckdb` with a graph
   store; revisits ADR-001 / WD-8.
 - slice-05 (appview-search): adds an indexer service (separate binary).
+
+## CLI surface (cumulative)
+
+| Verb | Shipped in | Spec'd by |
+|---|---|---|
+| `openlore init` | slice-01 | ADR-003 |
+| `openlore claim add` | slice-01 | ADR-003 |
+| `openlore claim publish` | slice-01 | ADR-003 |
+| `openlore claim retract` | slice-01 | ADR-003 + ADR-008 |
+| `openlore graph query` | slice-01 | ADR-003 |
+| **`openlore peer add`** | slice-03 | **ADR-013** |
+| **`openlore peer pull`** | slice-03 | **ADR-013 + ADR-016** |
+| **`openlore peer remove`** (`[--purge]`) | slice-03 | **ADR-013 + ADR-014** |
+| **`openlore claim counter`** | slice-03 | **ADR-013 + ADR-015** |
+| **`openlore graph query --federated`** (flag, not verb) | slice-03 | **ADR-013 + ADR-014** |
 
 ## C4 reference
 
@@ -98,9 +119,12 @@ build-fail.
 
 ## Pointers
 
-- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-012-*.md`
+- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-016-*.md`
+  (ADR-013..016 proposed by openlore-federated-read DESIGN on 2026-05-27)
 - Slice-01 evolution: `docs/evolution/openlore-foundation-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
+- **Slice-03 (in-progress) architecture design**:
+  `docs/feature/openlore-federated-read/design/architecture-design.md`
 - KPI contracts: `docs/product/kpi-contracts.yaml`
 - Jobs (JTBD): `docs/product/jobs.yaml`
 - CI policy: `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`

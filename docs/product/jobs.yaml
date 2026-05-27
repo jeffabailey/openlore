@@ -112,7 +112,8 @@ jobs:
 
   - id: J-003
     name: Read another developer's federated claims with weighting
-    primary: false
+    primary: false                  # secondary to J-001 at the umbrella level
+    walking_skeleton_for: openlore-federated-read   # but PRIMARY for slice-03
     job_story: >
       When I read another developer's published claims,
       I want to weigh them by their evidence and signing identity,
@@ -122,10 +123,12 @@ jobs:
       - Subscribe to or pull claims from another DID via ATProto.
       - Merge them into a local view with explicit author attribution preserved.
       - Apply user-configurable weights (trust score by author, evidence threshold).
+      - Unsubscribe cleanly with no lingering data.
 
     emotional:
       - "I can engage with their reasoning without endorsing it."
       - Sovereignty: my local view is mine; their claims do not overwrite anything.
+      - Reversibility: I subscribed; I can leave without trace.
 
     social:
       - Cite a peer's claim with attribution intact.
@@ -134,30 +137,77 @@ jobs:
     four_forces:
       push: >
         Aggregator sites (HN, Reddit, awesome-lists) collapse provenance and tone.
-        I cannot tell whose reasoning I'm inheriting.
+        I cannot tell whose reasoning I'm inheriting. When someone I respect
+        publishes a take, I cannot easily disagree publicly without it feeling
+        like a fight.
       pull: >
         A federated read where each claim carries its author, evidence, and confidence,
-        and I control how to weight them.
+        and I control how to weight them. Disagreement becomes a counter-claim
+        that stands on its own — not a reply-guy thread.
       anxiety: >
-        "What if I accidentally absorb a bad-actor's claims into my reasoning?"
-        Mitigation: claims are never silently merged; they enter a separate
-        attribution layer that I explicitly weight.
+        Multiple distinct anxieties drive J-003:
+        (a) "What if I accidentally absorb a bad-actor's claims into my reasoning?"
+            Mitigation: claims are never silently merged; they enter a separate
+            attribution layer that I explicitly weight.
+        (b) "What if I subscribe to a DID I later regret subscribing to — is
+            subscription a one-way commitment?"
+            Mitigation: `openlore peer remove` is first-class and purges peer
+            claims on request.
+        (c) "What if I publish a counter-claim and the peer's followers brigade
+            me?" — same as J-001 anxiety; mitigated by claim-not-truth framing
+            and soft-retract semantics.
       habit: >
         Devs already follow people on GitHub, Mastodon, blogs. Following a DID's
-        claim stream must feel comparable.
+        claim stream must feel comparable. Reading claims by subject must feel
+        like running `gh search` — not opening a separate cognitive surface.
 
     opportunity_score:
-      importance: 7
+      importance: 8                  # raised from 7: federation contract is load-bearing
       satisfaction: 1
-      score: 13
-      verdict: underserved-secondary
+      score: 15                      # 8 + max(8-1, 0) = 15
+      verdict: underserved-primary-for-slice
 
     success_signals:
       - User pulls another DID's claims and can answer "who said what, with what
         evidence" in <30 seconds.
       - User posts a counter-claim within first month of using federated read.
+      - User unsubscribes from a peer at least once and reports zero lingering
+        data in their local store (sovereignty signal).
+      - When a peer publishes a counter-claim against the user's claim, the user
+        learns of it within their next `peer pull` AND knows how to engage or
+        move on (no surprise-brigade aftermath).
 
     related_jobs: [J-001, J-002]
+
+    # Sub-jobs surfaced during slice-03 DISCUSS — each is an aspect of J-003,
+    # NOT a separate primary job, but each merits an Elevator Pitch in the
+    # corresponding user story.
+    sub_jobs:
+      - id: J-003a
+        name: Attribute every peer claim without merging
+        story: >
+          When I read a peer's claim, I want to instantly see WHO is making the
+          claim and weigh their authority myself, so I never confuse one
+          developer's opinion with a community consensus.
+        load_bearing: true
+        rationale: >
+          This is the anti-merging principle. Violating it collapses the entire
+          OpenLore trust model into yet another aggregator. Every UI surface
+          MUST show author DID; no "consensus view" anywhere, ever.
+
+      - id: J-003b
+        name: Counter-claim authoring as first-class disagreement
+        story: >
+          When a peer publishes a claim I disagree with, I want to publish a
+          counter-claim that stands on its own — not a reply on their record —
+          so disagreement is a public structured artifact rather than a thread.
+
+      - id: J-003c
+        name: Subscription is revocable without residue
+        story: >
+          When I subscribe to a DID I later regret subscribing to, I want to
+          unsubscribe cleanly with no lingering data, so subscription isn't a
+          one-way commitment.
 
 
   - id: J-004
@@ -266,3 +316,12 @@ changelog:
   - date: "2026-05-25"
     feature: openlore-foundation
     change: RC-01, RC-02, RC-03 resolved by user; verdicts inlined. Binding form in feature-delta.md WD-10..WD-12.
+  - date: "2026-05-27"
+    feature: openlore-federated-read
+    change: >
+      J-003 deepened for slice-03 DISCUSS — opportunity score raised 13->15 with
+      promotion to underserved-primary-for-slice; four-forces expanded (3 distinct
+      anxieties surfaced: bad-actor absorption, subscription regret, brigade
+      reprisal); sub-jobs J-003a (anti-merging), J-003b (counter-claim
+      first-class), J-003c (revocability) added. J-003 retains primary=false at
+      umbrella scope but is the walking-skeleton job for openlore-federated-read.

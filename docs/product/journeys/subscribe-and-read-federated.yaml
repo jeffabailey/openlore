@@ -1,0 +1,350 @@
+schema_version: 1
+
+journey:
+  name: subscribe-and-read-federated
+  goal: >
+    Discover another developer's DID, subscribe to their claim stream, pull
+    their claims into a separate local layer, and read them back through the
+    graph query — with full per-claim attribution preserved at every step and
+    no silent merging into a "consensus view."
+  persona: P-002                    # researcher-tech-lead wearing the federation-reader hat
+  secondary_persona: P-001          # author-engineers wearing the reader hat too
+  job_id: J-003
+  sub_jobs_addressed: [J-003a, J-003c]
+  feature_id: openlore-federated-read
+  slice_id: slice-03-federated-read
+
+  emotional_arc:
+    start: Curious-but-cautious — "I want to read Rachel's takes but not absorb them silently."
+    middle: Trust-building — "OK, the system kept attribution intact when it ingested her claims."
+    end: Sovereign-confident — "I can see both views side-by-side; my view is still mine."
+    arc_pattern: discovery-with-explicit-sovereignty-buffer
+
+  steps:
+
+    - id: 1
+      name: Discover and add a peer
+      command: openlore peer add did:plc:rachel-test
+
+      tui_mockup: |
+        $ openlore peer add did:plc:rachel-test
+
+        Resolving DID did:plc:rachel-test ... ok
+          handle           : rachel.example.com
+          PDS              : https://pds.example.com
+          claim collection : org.openlore.claim  (lexicon ok)
+
+        Adding peer to subscription list ... ok
+          subscribed_at    : ${subscribed_at}
+          next pull        : on-demand (`openlore peer pull`)
+          local layer      : peer_claims (separate from your own claims)
+
+        Tip: peer claims will appear in `openlore graph query --federated <subject>`.
+             To unsubscribe later: `openlore peer remove did:plc:rachel-test`.
+
+      shared_artifacts:
+        - name: peer_did
+          source: argument to `openlore peer add` (validated against ATProto DID resolution)
+          displayed_as: did:plc:rachel-test
+          consumers: ["subscription record", "peer_claims attribution", "graph query --federated output", "peer remove"]
+        - name: subscribed_at
+          source: ClockPort.now_utc() at peer-add time
+          displayed_as: ${subscribed_at}
+          consumers: ["subscription record", "peer remove diagnostics"]
+        - name: peer_pds_endpoint
+          source: resolved from peer DID document
+          displayed_as: https://pds.example.com
+          consumers: ["peer pull", "peer claim fetch URLs"]
+
+      emotional_state:
+        entry: Curious-but-cautious
+        exit: Acknowledged — "The system knows who I'm following and made it explicit."
+
+      integration_checkpoint: |
+        Peer DID resolves to a valid ATProto identity.
+        Peer's PDS exposes the org.openlore.claim collection (no claim collection => warn, allow subscription anyway).
+        Subscription is recorded in a SEPARATE table from author's own claims.
+        The same DID added twice is idempotent — no duplicate subscription, no error.
+
+      failure_modes:
+        - Peer DID does not resolve; system reports the resolution error, does NOT add the subscription, exits non-zero.
+        - Peer's PDS reachable but has no org.openlore.claim collection; system warns "peer has not published claims yet" and asks to confirm subscription.
+        - Network unavailable; system reports cannot validate peer; subscription is NOT recorded (offline-first does NOT mean speculative-subscribe).
+        - User attempts to add their own DID as a peer; system rejects with "you are already your own author."
+
+      gherkin: |
+        Scenario: Researcher subscribes to a peer's claim stream
+          Given Maria has authenticated as did:plc:maria-test
+          And the peer did:plc:rachel-test resolves to handle rachel.example.com
+          When Maria runs `openlore peer add did:plc:rachel-test`
+          Then the CLI prints a subscription confirmation naming the peer DID and handle
+          And a subscription record is persisted in the peer-subscriptions store
+          And no peer claims have been pulled yet
+          And the CLI displays the next-pull hint and the unsubscribe command
+
+        Scenario: Subscribing to an already-subscribed peer is idempotent
+          Given Maria has already subscribed to did:plc:rachel-test
+          When Maria runs `openlore peer add did:plc:rachel-test` a second time
+          Then the CLI prints "already subscribed since ${subscribed_at}"
+          And the subscription record is unchanged
+          And exit code is 0
+
+
+    - id: 2
+      name: Pull peer claims
+      command: openlore peer pull
+
+      tui_mockup: |
+        $ openlore peer pull
+
+        Pulling claims from 2 subscribed peers...
+
+          did:plc:rachel-test (rachel.example.com)
+            fetched   : 7 records
+            new       : 5 (2 already in peer_claims, skipped)
+            verified  : 5/5 signatures valid against rachel's DID document
+            stored    : peer_claims (attribution preserved per record)
+
+          did:plc:tobias-test (tobias.example.com)
+            fetched   : 3 records
+            new       : 3
+            verified  : 3/3 signatures valid
+            stored    : peer_claims
+
+        Pulled 8 new peer claims in 1.4s.
+        None merged with your own claims; query with --federated to see them.
+
+      shared_artifacts:
+        - name: peer_claim_cid
+          source: each peer claim's content-addressed CID (re-computed locally on ingest, MUST match peer's published CID)
+          displayed_as: bafy...
+          consumers: ["peer_claims store key", "graph query --federated output", "counter-claim reference target"]
+        - name: peer_signature_verification
+          source: claim-domain::verify against peer's DID-document public key
+          displayed_as: "verified" or "rejected"
+          consumers: ["peer pull report", "stored peer claim metadata"]
+
+      emotional_state:
+        entry: Acknowledged
+        exit: Trust-building — "I can see the peer's signatures verified; nothing leaked into MY claims."
+
+      integration_checkpoint: |
+        Every peer claim's CID is recomputed locally and MUST match the peer's published CID; mismatch => reject.
+        Every peer claim's signature MUST verify against the peer's DID-document key at fetch time; failure => reject this claim, continue with others.
+        Peer claims are written to a SEPARATE store/table from author's own claims; cross-table writes are forbidden.
+        Pull is idempotent: re-running pulls only new records (de-duplicated by claim_cid).
+
+      failure_modes:
+        - A peer's PDS is unreachable; that peer's pull is skipped, other peers proceed, exit code is non-zero overall.
+        - A peer claim's signature does not verify; that claim is rejected (not stored), reported in the pull summary, other claims proceed.
+        - A peer claim's recomputed CID does not match the peer's CID; that claim is rejected (canonicalization mismatch — possible adversarial input).
+        - Disk full during write; transaction rolls back; partial pulls leave no orphaned data.
+        - Peer's claim schema version is newer than our Lexicon; that claim is rejected with "schema version unknown — upgrade openlore."
+
+      gherkin: |
+        Scenario: Pulling claims from a subscribed peer
+          Given Maria has subscribed to did:plc:rachel-test
+          And Rachel's PDS contains 5 claims
+          When Maria runs `openlore peer pull`
+          Then the CLI fetches all 5 records from Rachel's PDS
+          And each record's signature is verified against Rachel's DID document
+          And each record's CID is recomputed locally and matches Rachel's published CID
+          And all 5 records are stored in the peer_claims layer attributed to Rachel
+          And none of Maria's own claims in the author_claims layer are modified
+          And the pull summary reports "5 new, 0 rejected"
+
+        Scenario: Peer claim with invalid signature is rejected
+          Given Maria has subscribed to did:plc:rachel-test
+          And one of Rachel's published records has been tampered (signature does not verify)
+          When Maria runs `openlore peer pull`
+          Then the tampered record is rejected
+          And the pull summary reports "4 stored, 1 rejected (signature invalid)"
+          And the 4 valid records are stored normally
+          And exit code is non-zero to flag the rejection
+
+
+    - id: 3
+      name: Read federated graph
+      command: openlore graph query --subject github:rust-lang/cargo --federated
+
+      tui_mockup: |
+        $ openlore graph query --subject github:rust-lang/cargo --federated
+
+        Claims about github:rust-lang/cargo (3 found across 2 authors)
+        ===============================================================
+
+        Author: did:plc:maria-test (you)
+          - embodiesPhilosophy  org.openlore.philosophy.reproducible-builds
+            confidence  0.78  (well-evidenced)
+            evidence    https://doc.rust-lang.org/cargo/reference/build-cache.html
+            cid         bafy...m9pq
+            composed_at 2026-05-26T14:02:11Z
+
+        Author: did:plc:rachel-test (subscribed peer)
+          - embodiesPhilosophy  org.openlore.philosophy.dependency-pinning
+            confidence  0.91  (triangulated)
+            evidence    https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
+            cid         bafy...n4ka
+            composed_at 2026-05-22T09:18:44Z
+
+          - embodiesPhilosophy  org.openlore.philosophy.reproducible-builds
+            confidence  0.65  (weighted)
+            evidence    https://github.com/rust-lang/cargo/issues/5359
+            cid         bafy...x7ts
+            composed_at 2026-05-20T11:33:02Z
+
+        Showing your claims + claims from 1 subscribed peer with claims on this subject.
+        Each claim is attributed to its author DID. No claims are merged.
+
+        Tip: `openlore claim counter bafy...x7ts --reason ...` to publish a counter-claim.
+
+      shared_artifacts:
+        - name: peer_did
+          source: same as step 1
+          displayed_as: did:plc:rachel-test
+          consumers: ["per-claim attribution row in query output"]
+        - name: claim_cid
+          source: same as step 2 (peer claims) or author's own store (own claims)
+          displayed_as: bafy...
+          consumers: ["counter-claim reference target", "retract reference (own only)"]
+        - name: subject_uri
+          source: query argument
+          displayed_as: github:rust-lang/cargo
+          consumers: ["query input", "result grouping key"]
+
+      emotional_state:
+        entry: Trust-building
+        exit: Sovereign-confident — "I see who said what, with what confidence. I make the call."
+
+      integration_checkpoint: |
+        Query output groups by author DID, NOT by subject and NOT by an aggregate score.
+        Author's own claims and peer claims are visually distinct (e.g., "(you)" vs "(subscribed peer)" annotation).
+        Confidence is shown numerically AND with the display-only bucket label (per WD-10).
+        Every claim row carries its CID so it can be counter-claimed without a separate lookup.
+        --federated is OPT-IN: without the flag, graph query returns only the author's own claims (preserves slice-01 behavior).
+
+      failure_modes:
+        - --federated requested but no peers subscribed; output explains and shows author-only claims with hint to `openlore peer add`.
+        - Peer's claims for the subject not yet pulled (subscribed but `peer pull` never run); output flags "1 subscribed peer with no claims pulled yet — run `openlore peer pull`."
+        - Local store query error (DuckDB corruption); output reports cleanly and exits non-zero.
+
+      gherkin: |
+        Scenario: Federated query shows attribution-preserved peer claims
+          Given Maria has published 1 claim about github:rust-lang/cargo
+          And Maria has pulled 2 claims about github:rust-lang/cargo from Rachel
+          When Maria runs `openlore graph query --subject github:rust-lang/cargo --federated`
+          Then the output displays 3 claims grouped by author
+          And Maria's claim appears under "did:plc:maria-test (you)"
+          And Rachel's 2 claims appear under "did:plc:rachel-test (subscribed peer)"
+          And no claim is shown as a "merged" or "consensus" entry
+          And every claim row displays the author DID, the confidence value, and the CID
+
+        Scenario: Author-only query is unchanged from slice-01
+          Given Maria has subscribed to and pulled claims from Rachel
+          When Maria runs `openlore graph query --subject github:rust-lang/cargo` (without --federated)
+          Then the output shows ONLY Maria's claims
+          And the output footer mentions "use --federated to include 1 subscribed peer"
+
+
+    - id: 4
+      name: Unsubscribe (optional, end-of-journey)
+      command: openlore peer remove did:plc:rachel-test --purge
+
+      tui_mockup: |
+        $ openlore peer remove did:plc:rachel-test --purge
+
+        Removing peer did:plc:rachel-test ...
+          subscribed_at  : ${subscribed_at}
+          peer_claims    : 5 records cached
+          --purge active : will delete cached records
+
+        This is irreversible. Re-running `openlore peer add did:plc:rachel-test`
+        and `openlore peer pull` will re-fetch them.
+
+        Proceed? [y/N]: y
+
+        Removed subscription.
+        Purged 5 cached peer claims attributed to did:plc:rachel-test.
+        Your own claims (in author_claims) are unaffected.
+
+      shared_artifacts:
+        - name: peer_did
+          source: same as step 1
+          displayed_as: did:plc:rachel-test
+          consumers: ["subscription removal", "peer_claims purge filter"]
+        - name: purge_flag
+          source: --purge CLI flag
+          displayed_as: boolean
+          consumers: ["soft-remove vs hard-purge decision"]
+
+      emotional_state:
+        entry: Sovereign-confident
+        exit: Reversed-cleanly — "I left without trace; my own data is intact."
+
+      integration_checkpoint: |
+        Without --purge: subscription removed, peer claims remain in peer_claims (cached, unattributed to a subscription).
+        With --purge: subscription removed AND peer claims for that peer deleted from peer_claims; author_claims untouched.
+        Confirmation prompt is REQUIRED with --purge (no `--yes` skip in slice-03; defer to slice-04).
+        After purge, `openlore graph query --subject ... --federated` shows zero peer claims from that peer.
+
+      failure_modes:
+        - User attempts to remove a peer never subscribed to; system reports "not subscribed; nothing to remove" and exits 0.
+        - --purge requested but disk error during delete; transaction rolls back; subscription remains; user is told to retry.
+        - User has author_claims that COUNTER one of this peer's claims (via `claim counter`); these counter-claims are NOT deleted (they are the user's own claims).
+
+      gherkin: |
+        Scenario: Soft unsubscribe leaves cached peer claims intact
+          Given Maria has subscribed to did:plc:rachel-test
+          And Maria has pulled 5 of Rachel's claims
+          When Maria runs `openlore peer remove did:plc:rachel-test` (without --purge)
+          Then the subscription is removed
+          And Rachel's 5 claims remain in the peer_claims store
+          And `openlore graph query --subject ... --federated` no longer pulls fresh claims from Rachel
+          And the existing cached claims still appear in federated queries with an "(unsubscribed cache)" annotation
+
+        Scenario: Hard purge removes peer claims and asks for confirmation
+          Given Maria has subscribed to did:plc:rachel-test
+          And Maria has pulled 5 of Rachel's claims
+          When Maria runs `openlore peer remove did:plc:rachel-test --purge`
+          Then the CLI shows the cached-record count and asks "Proceed? [y/N]"
+          And on confirmation, the subscription is removed
+          And all 5 cached peer claims attributed to Rachel are deleted from peer_claims
+          And Maria's own claims (author_claims) are unaffected
+          And subsequent `openlore graph query --subject ... --federated` returns zero peer claims from Rachel
+
+
+  integration_validation:
+    shared_artifact_consistency:
+      - artifact: peer_did
+        must_match_across: [1, 2, 3, 4]
+        failure_message: >
+          Peer DID drift between subscribe, pull, query, and remove. Likely cause:
+          DID normalization differs across CLI argument parser and storage layer.
+      - artifact: claim_cid
+        must_match_across: [2, 3]
+        failure_message: >
+          Peer claim CID differs between pull-time recomputation and query-time
+          retrieval. Canonicalization is non-deterministic across the federation
+          boundary — the OpenLore federation thesis is broken.
+      - artifact: peer_pds_endpoint
+        must_match_across: [1, 2]
+        failure_message: >
+          Peer PDS endpoint differs between subscribe-time DID resolution and
+          pull-time fetch. Either the DID document changed (peer rotated PDS) or
+          the resolution is non-deterministic.
+
+  anti_merging_guarantee:
+    description: >
+      The single most load-bearing invariant of this journey. Every UI surface that
+      lists claims MUST display per-author attribution. NO surface, anywhere, may
+      render multiple authors' claims as a single "consensus" row, even when those
+      authors agree on subject + predicate + object.
+    enforced_at:
+      - step 3 (graph query --federated): output groups by author DID
+      - claim-domain layer: separate author_claims and peer_claims stores; no JOIN that collapses author
+      - acceptance suite: `federation_attribution_preserved` test asserts every output row has a distinct author DID
+
+changelog:
+  - date: "2026-05-27"
+    feature: openlore-federated-read
+    change: Initial journey for the slice-03 walking-skeleton J-003 subscribe-and-read path.
