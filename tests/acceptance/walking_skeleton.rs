@@ -276,9 +276,72 @@ fn walking_skeleton_sign_writes_atomic_local_file_with_no_network_call() {
     assert_exit_zero_and_stdout_contains(&outcome, "Written to local store");
 
     // A file appears under ~/.local/share/openlore/claims/<cid>.json
-    // AND the file's signature verifies against the test DID
-    // (DELIVER's helper extracts the CID from stdout and asserts file presence)
-    todo!("DELIVER: parse the CID out of stdout; assert_claim_file_exists_with_cid; verify the signature against FakeIdentity::jeff's pubkey; assert_no_pds_call_was_made")
+    // AND the file's signature verifies against the test DID. Parse the
+    // CID inline from the `Computing claim CID <cid>` stdout line —
+    // claim_add.rs (step 05-05) prints the line verbatim before writing
+    // the artifact, so it's the load-bearing handle for both file
+    // location AND signature verification.
+    // The `Computing claim CID <cid>` text is printed right after the
+    // sign prompt (which ends without a newline), so the CID may be on
+    // the SAME stdout line as the prompt — we substring-search rather
+    // than strip_prefix to be robust to that join.
+    let marker = "Computing claim CID ";
+    let cid = outcome
+        .stdout
+        .find(marker)
+        .map(|idx| {
+            let tail = &outcome.stdout[idx + marker.len()..];
+            tail.split_whitespace()
+                .next()
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "could not locate 'Computing claim CID <cid>' marker in stdout:\n{}",
+                outcome.stdout
+            )
+        });
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected signed-claim file at {}; got {e}\n--- stdout ---\n{}",
+            artifact_path.display(),
+            outcome.stdout
+        )
+    });
+    let signed: claim_domain::SignedClaim =
+        serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "could not deserialize signed claim at {}: {e}\n--- file ---\n{}",
+                artifact_path.display(),
+                String::from_utf8_lossy(&json_bytes)
+            )
+        });
+
+    // Signature verifies against FakeIdentity::jeff's verifying key.
+    // The local `support::FakeIdentity` wraps the shared
+    // `openlore_test_support::FakeIdentity`; both derive their keypair
+    // from a 32-zero-byte seed, so a fresh shared instance owns the
+    // same verifying key the in-binary signer used. Verification goes
+    // through the IdentityPort contract (which delegates to the pure
+    // `claim_domain::verify` primitive) so this stays port-to-port.
+    let shared_jeff = openlore_test_support::FakeIdentity::jeff();
+    let verify_result = ports::IdentityPort::verify(&shared_jeff, &signed);
+    assert!(
+        verify_result.is_ok(),
+        "expected signature for cid {} to verify against FakeIdentity::jeff's pubkey; got {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        cid,
+        verify_result,
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // KPI-5 local-first invariant: NO PDS call was made during the
+    // sign-only path (Enter then 'n' to decline publish).
+    assert_no_pds_call_was_made(&env);
 }
 
 /// WS-7: Re-canonicalization produces identical CIDs. (US-002 Example
