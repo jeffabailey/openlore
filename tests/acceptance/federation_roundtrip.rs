@@ -216,21 +216,60 @@ fn federation_roundtrip_at_uri_is_reconstructible_from_author_did_and_claim_cid(
         ],
         "\nY\n",
     );
+    assert_eq!(
+        outcome.status, 0,
+        "claim add must succeed for FR-3 fixture; got status {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status, outcome.stdout, outcome.stderr,
+    );
 
     // Parse the CID and the printed at-uri from stdout (US-003 Example
     // 1 mockup: "at-uri: at://did:plc:test-jeff/org.openlore.claim/bafy...")
-    let cid = "bafy...";
-    let printed_at_uri = "at://did:plc:test-jeff/org.openlore.claim/...";
-    let expected_at_uri = format!("at://did:plc:test-jeff/org.openlore.claim/{}", cid);
+    let cid = parse_cid_from_stdout(&outcome.stdout);
+    let printed_at_uri = parse_at_uri_from_stdout(&outcome.stdout);
 
-    // Reconstructibility check: the printed value equals the derived value
-    assert_eq!(printed_at_uri, expected_at_uri, "printed at-uri must equal derived at-uri");
+    // Reconstructibility derivation (shared-artifacts-registry rule 3):
+    // at_uri == "at://{author_did}/org.openlore.claim/{cid}". The bare
+    // author DID (no `#fragment`) is the canonical PDS authority component.
+    let bare_author_did = fixture
+        .author_did
+        .split('#')
+        .next()
+        .unwrap_or(&fixture.author_did);
+    let expected_at_uri = format!("at://{}/org.openlore.claim/{}", bare_author_did, cid);
 
-    // Same value persisted in the DuckDB row
-    assert_duckdb_publication_metadata_for_cid(&env, cid, &expected_at_uri);
+    // Reconstructibility check #1: the printed value equals the derived value
+    assert_eq!(
+        printed_at_uri, expected_at_uri,
+        "FR-3 contract violated: printed at-uri ({:?}) must equal \
+         derived at-uri ({:?}); silent at-uri normalization in the print path",
+        printed_at_uri, expected_at_uri,
+    );
 
-    let _ = outcome; // silence unused warning until DELIVER wires it
-    todo!("DELIVER: parse CID + at-uri from outcome.stdout; satisfy both assertions")
+    // Reconstructibility check #2: same value persisted in the DuckDB row
+    assert_duckdb_publication_metadata_for_cid(&env, &cid, &expected_at_uri);
+}
+
+/// Parse the at-uri out of `at-uri: <at://...>` in stdout. Mirrors
+/// `parse_cid_from_stdout` — the marker text is the load-bearing
+/// contract `claim_publish::render_publish_success` prints on the
+/// success block.
+fn parse_at_uri_from_stdout(stdout: &str) -> String {
+    let marker = "at-uri: ";
+    let idx = stdout.find(marker).unwrap_or_else(|| {
+        panic!("could not locate 'at-uri: <at://...>' marker in stdout:\n{stdout}")
+    });
+    let tail = &stdout[idx + marker.len()..];
+    let at_uri = tail
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    assert!(
+        !at_uri.is_empty(),
+        "found at-uri marker but no value followed it in stdout:\n{stdout}"
+    );
+    at_uri
 }
 
 // =============================================================================
