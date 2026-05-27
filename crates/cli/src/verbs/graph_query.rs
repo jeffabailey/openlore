@@ -57,7 +57,9 @@
 
 use anyhow::{Context, Result};
 
-use crate::render::render_graph_query_result;
+use crate::render::{
+    is_retracted_by, render_annotated_graph_query_result, AnnotatedClaim,
+};
 use crate::wiring::Wiring;
 
 /// Header line printed before the per-claim render. US-004 AC #2 content-
@@ -119,7 +121,15 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
         // slice-03 `--federated` pointer is still visible.
         stdout.push_str(&format!("No local claims about {}.\n", args.subject));
     } else {
-        let rendered = render_graph_query_result(&claims);
+        // WS-15 / ADR-008 Behavioral rule 3 + WD-11: for each claim,
+        // probe `query_referencing` to discover any back-pointers from
+        // other local claims. A `ReferenceType::Retracts` back-pointer
+        // means the original was soft-retracted; the renderer annotates
+        // it `retracted by author` (content-frozen UX per WD-11). The
+        // original artefact is NEVER mutated — annotation is a pure
+        // render-time projection over immutable history.
+        let annotated = annotate_claims(wiring, &claims)?;
+        let rendered = render_annotated_graph_query_result(&annotated);
         stdout.push_str(&rendered);
         if !rendered.ends_with('\n') {
             stdout.push('\n');
@@ -134,4 +144,35 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
         exit_code: 0,
         stdout,
     })
+}
+
+/// Compute the per-claim `is_retracted` annotation by probing the
+/// storage port's back-reference index. Pure-ish: the storage I/O is at
+/// the boundary; the projection rule (`is_retracted_by`) lives in the
+/// renderer module as a free function so it stays unit-testable without
+/// a wiring.
+///
+/// Errors surface as `anyhow::Error` via `with_context` so the
+/// dispatcher's `eprintln!` carries the failing CID — same pattern
+/// `query_by_subject` uses above.
+fn annotate_claims(
+    wiring: &Wiring,
+    claims: &[claim_domain::SignedClaim],
+) -> Result<Vec<AnnotatedClaim>> {
+    let mut annotated = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let target_cid = &claim.signature.signed_cid;
+        let referencing = wiring
+            .storage
+            .query_referencing(target_cid)
+            .with_context(|| {
+                format!("looking up back-references for cid {}", target_cid.0)
+            })?;
+        let is_retracted = is_retracted_by(target_cid, &referencing);
+        annotated.push(AnnotatedClaim {
+            claim: claim.clone(),
+            is_retracted,
+        });
+    }
+    Ok(annotated)
 }

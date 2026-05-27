@@ -853,17 +853,76 @@ fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
 /// WS-15: Retraction preserves the original record in BOTH the local
 /// store AND the fake PDS. No hard-delete. The query lists BOTH claims
 /// and annotates the original as "retracted by author". (ADR-008
-/// §Behavioral rules 1, 2, 3.)
+/// §Behavioral rules 1, 2, 3 + WD-11 no-hard-delete.)
 ///
 /// @walking_skeleton @driving_port @US-003 @J-001 @real-io
 #[test]
 fn walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores() {
     let env = TestEnv::initialized();
-    let original_cid = "bafy_ORIGINAL...";
-    let _retract_cid = "bafy_RETRACT...";
+    let subject = "github:rust-lang/rust";
 
-    // Publish + retract (compose helper that DELIVER will write)
-    todo!("DELIVER: publish original, then retract; assert original .json file still exists; assert env.pds.record_at(at://.../original_cid) still returns Some; run graph query; assert output lists BOTH claims with 'retracted by author' annotation on the original")
+    // Step 1: Publish original via chained Y flow (single publish code
+    // path, ADR-003). Parse the original CID + at-uri so we can later
+    // assert both the local <cid>.json file and the FakePds record at
+    // that at-uri are still present after the retract.
+    let publish_outcome = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim", "add",
+            "--subject", subject,
+            "--predicate", "embodiesPhilosophy",
+            "--object", "org.openlore.philosophy.memory-safety",
+            "--evidence", "https://www.rust-lang.org/",
+            "--confidence", "0.86",
+        ],
+        "\nY\n",
+    );
+    assert_eq!(
+        publish_outcome.status, 0,
+        "publish of original must succeed before retraction; got {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        publish_outcome.status, publish_outcome.stdout, publish_outcome.stderr,
+    );
+    let original_cid = parse_cid_from_stdout(&publish_outcome.stdout);
+    let original_at_uri = parse_at_uri_from_stdout(&publish_outcome.stdout);
+
+    // Step 2: Retract. The retract verb publishes a NEW counter-claim
+    // referencing the original (WS-14 contract); it MUST NOT delete the
+    // original artefact locally or call delete on the PDS (WD-11
+    // no-hard-delete).
+    let retract_outcome = run_openlore(&env, &["claim", "retract", &original_cid]);
+    assert_eq!(
+        retract_outcome.status, 0,
+        "retract must succeed; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        retract_outcome.status, retract_outcome.stdout, retract_outcome.stderr,
+    );
+    let retract_cid = parse_cid_from_stdout(&retract_outcome.stdout);
+
+    // Step 3a: ADR-008 Behavioral rule 1 (local preservation). The
+    // original on-disk artefact MUST still exist post-retract; the
+    // retract verb is purely additive.
+    let original_artifact = env.claims_dir().join(format!("{original_cid}.json"));
+    assert!(
+        original_artifact.exists(),
+        "WD-11 violated: original claim file at {} disappeared after retract \
+         (retract must be additive, not destructive)",
+        original_artifact.display(),
+    );
+
+    // Step 3b: ADR-008 Behavioral rule 2 (remote preservation). The
+    // FakePds MUST still return the original record at its at-uri after
+    // the retract. The retract verb only PUBLISHES a new counter-claim;
+    // it does not call delete on the PDS.
+    assert_pds_contains_record_at(&env, &original_at_uri);
+
+    // Step 4: ADR-008 Behavioral rule 3 (render annotation). Run
+    // `graph query` and assert the output lists BOTH claims AND
+    // annotates the original with "retracted by author" (content-frozen
+    // UX per WD-11).
+    let query_outcome = run_openlore(&env, &["graph", "query", "--subject", subject]);
+    assert_exit_zero_and_stdout_contains(&query_outcome, &original_cid);
+    assert_exit_zero_and_stdout_contains(&query_outcome, &retract_cid);
+    assert_exit_zero_and_stdout_contains(&query_outcome, "retracted by author");
 }
 
 // =============================================================================

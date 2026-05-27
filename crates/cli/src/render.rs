@@ -42,26 +42,91 @@
 //!
 //! When multiple claims match, blocks are separated by a blank line so
 //! awk/grep/cut-style downstream tooling can split on `\n\n`.
+//!
+//! ## WS-15: retraction annotation (ADR-008 Behavioral rule 3 + WD-11)
+//!
+//! Per WD-11 "no hard-delete", a retracted claim is preserved verbatim
+//! in both the local store and the PDS. The retraction is published as
+//! a NEW counter-claim referencing the original. To make the retract
+//! VISIBLE without mutating immutable history, the render layer
+//! annotates the original claim with the literal string
+//! `retracted by author` on its own line at the end of the block.
+//!
+//! The annotation is content-frozen UX (WD-11) — do NOT paraphrase. The
+//! annotation list is computed by the verb via
+//! `StoragePort::query_referencing` and passed alongside each claim so
+//! the renderer stays pure (no I/O, no storage access).
 
-use claim_domain::SignedClaim;
+use claim_domain::{Cid, SignedClaim};
+
+/// One claim plus the set of CIDs that reference it back-pointer-style.
+/// Built by the verb (graph_query) from
+/// `StoragePort::query_referencing(claim.signature.signed_cid)` and
+/// passed to the renderer so the render layer stays pure.
+///
+/// The renderer only inspects the boolean `is_retracted` projection —
+/// the full reference list lives in the verb in case future slices need
+/// finer-grained annotations (e.g. "corrected by ...", "superseded
+/// by ..."). Carrying the bool keeps the render-time decision a
+/// constant-time check.
+#[derive(Debug, Clone)]
+pub struct AnnotatedClaim {
+    pub claim: SignedClaim,
+    /// `true` if any other local claim back-references this CID with
+    /// `ReferenceType::Retracts`. Drives the `retracted by author`
+    /// annotation per ADR-008 Behavioral rule 3.
+    pub is_retracted: bool,
+}
 
 /// Render a slice of `SignedClaim` values into the graph-query stdout
 /// block. Pure function — no I/O, no clock access.
 ///
-/// On empty input, returns the explainer line for the given subject so
-/// the caller never produces an unexplained silent output (US-004 AC #3
-/// is covered in step 05-12; here we just return an empty string and let
-/// the verb decide). The verb path branches on `Vec::is_empty` before
-/// calling this renderer.
+/// Back-compat entry point for callers that don't carry annotation
+/// data. Equivalent to passing all claims with `is_retracted = false`.
+/// Production callers use [`render_annotated_graph_query_result`] so
+/// the WS-15 annotation appears.
 pub fn render_graph_query_result(claims: &[SignedClaim]) -> String {
+    let annotated: Vec<AnnotatedClaim> = claims
+        .iter()
+        .cloned()
+        .map(|claim| AnnotatedClaim {
+            claim,
+            is_retracted: false,
+        })
+        .collect();
+    render_annotated_graph_query_result(&annotated)
+}
+
+/// Render a slice of `AnnotatedClaim` values into the graph-query
+/// stdout block. Pure function — no I/O, no clock access. The
+/// annotation decision is precomputed by the verb (see
+/// [`AnnotatedClaim::is_retracted`]).
+pub fn render_annotated_graph_query_result(annotated: &[AnnotatedClaim]) -> String {
     let mut out = String::new();
-    for (idx, claim) in claims.iter().enumerate() {
+    for (idx, ann) in annotated.iter().enumerate() {
         if idx > 0 {
             out.push('\n');
         }
-        out.push_str(&render_one_claim(claim));
+        out.push_str(&render_one_claim(&ann.claim));
+        if ann.is_retracted {
+            // Content-frozen per WD-11 — exact string is the contract.
+            out.push_str("retracted by author\n");
+        }
     }
     out
+}
+
+/// Compute the `is_retracted` flag for one CID given the back-reference
+/// list `StoragePort::query_referencing` returns. Pure helper kept here
+/// (next to the renderer that consumes it) so the projection rule lives
+/// in one place; the verb wires storage I/O around it.
+pub fn is_retracted_by(
+    _target: &Cid,
+    referencing: &[(Cid, claim_domain::ReferenceType)],
+) -> bool {
+    referencing
+        .iter()
+        .any(|(_, ref_type)| matches!(ref_type, claim_domain::ReferenceType::Retracts))
 }
 
 /// Render one `SignedClaim` as a labeled block. The label widths are
