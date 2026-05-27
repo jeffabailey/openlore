@@ -18,27 +18,46 @@
 //! The acceptance tests use scripted mode (subprocess + piped stdin)
 //! for determinism. Production users run interactively.
 
-use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read, Write};
 
 /// One blocking read of a single line of input. Returns:
 /// - `Ok(Some(line))` if a line was read (trailing `\n` stripped).
 /// - `Ok(None)` if EOF was hit before any character (user canceled
 ///   without confirming).
 /// - `Err(_)` if the underlying read failed (broken pipe, etc.).
+///
+/// Reads byte-by-byte from the underlying `Read` rather than wrapping
+/// it in a fresh `BufReader` per call. This matters when the same
+/// stdin is consumed across MULTIPLE prompts (the two-prompt flow
+/// from ADR-003): a `BufReader` would over-read into its internal
+/// 8KB buffer on the first call and drop bytes that belong to the
+/// second prompt. Unbuffered byte reads keep the reader cursor in
+/// lockstep with the wire so the publish prompt sees the "y/n" line
+/// the test piped right after the sign prompt's `\n`.
 pub fn read_one_line<R: Read>(reader: &mut R) -> std::io::Result<Option<String>> {
-    let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
-    let n = buf_reader.read_line(&mut line)?;
-    if n == 0 {
-        // EOF before any character — caller treats as cancel.
-        return Ok(None);
+    let mut byte = [0u8; 1];
+    loop {
+        let n = reader.read(&mut byte)?;
+        if n == 0 {
+            // EOF. If we already accumulated input, return it (the
+            // line ended with EOF instead of `\n`). If nothing was
+            // read, this is the "user canceled" signal.
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(line));
+        }
+        let b = byte[0];
+        if b == b'\n' {
+            // End of line — strip a trailing `\r` if present (CRLF).
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            return Ok(Some(line));
+        }
+        line.push(b as char);
     }
-    // Strip trailing newline (and a possible \r\n on platforms that
-    // produce CRLF; tests run on Unix so this is mostly defensive).
-    while line.ends_with('\n') || line.ends_with('\r') {
-        line.pop();
-    }
-    Ok(Some(line))
 }
 
 /// Print `prompt` to `writer`, flush, then read one line. The line is

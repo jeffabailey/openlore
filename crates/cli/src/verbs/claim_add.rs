@@ -38,7 +38,7 @@ use claim_domain::{
     Did, SignedClaim, UnsignedClaim,
 };
 
-use crate::io::{prompt_line, read_one_line};
+use crate::io::prompt_line;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim add` verb (mirrors the clap subcommand).
@@ -190,10 +190,56 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         artifact_path.display()
     )?;
 
-    // Consume any trailing input (e.g. "n" for the publish prompt that
-    // step 05-08 wires) so the subprocess exits cleanly when the test
-    // harness pipes "\nn\n" on stdin. We do NOT yet act on it.
-    let _ = read_one_line(&mut stdin).ok();
+    // Step 05-08: second prompt — publish to PDS? (ADR-003).
+    //
+    // The two-prompt contract has two distinct decision points:
+    //   1) Enter at the sign prompt = persist locally
+    //   2) Y/y at the publish prompt = federate to the PDS
+    // Anything else at the publish prompt (n/N/Enter/EOF) is a clean
+    // decline — the local artifact stays put, no PDS call is made,
+    // exit 0. This is the KPI-5 local-first beat: nothing leaves the
+    // machine without explicit user opt-in for THIS claim.
+    let publish_prompt = "\nPublish to your PDS now? (y/N): ";
+    let publish_answer =
+        prompt_line(&mut stdout, &mut stdin, publish_prompt)?;
+    let confirmed_publish = matches!(
+        publish_answer.as_deref().map(str::trim),
+        Some("y") | Some("Y") | Some("yes") | Some("YES")
+    );
+
+    if confirmed_publish {
+        // Drop the lock before invoking the publish helper so its own
+        // stdout writes (the success block) are not double-locked by
+        // the dispatcher's later `print!(outcome.stdout)` path.
+        drop(stdout);
+        drop(stdin);
+
+        // ADR-003 "single publish code path": funnel through
+        // `claim_publish::publish_signed_claim` so the standalone
+        // verb and the chained Y branch share one implementation.
+        // The success-block rendering is the same WD-6 contract in
+        // both invocation paths.
+        match crate::verbs::claim_publish::publish_signed_claim(wiring, &signed) {
+            Ok(publish_outcome) => {
+                let rendered =
+                    crate::verbs::claim_publish::render_publish_success(&publish_outcome);
+                print!("{}", rendered);
+            }
+            Err(err) => {
+                // WS-10 (sad path): the local artifact is already on
+                // disk. Surface the PDS error to stderr with a hint
+                // pointing at the retry verb so the user can run
+                // `openlore claim publish <cid>` later. Return a
+                // non-zero exit code so scripts can detect the
+                // partial-success state.
+                eprintln!("openlore claim add: publish failed: {err:#}");
+                return Ok(ClaimAddOutcome {
+                    exit_code: 1,
+                    stdout: String::new(),
+                });
+            }
+        }
+    }
 
     Ok(ClaimAddOutcome {
         exit_code: 0,

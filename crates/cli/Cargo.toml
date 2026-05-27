@@ -43,6 +43,12 @@ assert_cmd = { workspace = true }
 tempfile = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
+# Step 05-08: acceptance tests for WS-8+ query DuckDB publication
+# metadata directly (no StoragePort surface for it yet — that lands
+# with graph-query later in phase 05). Dev-only — production cli code
+# goes through StoragePort.
+duckdb = { version = "1.3", features = ["bundled", "chrono"] }
+chrono = { workspace = true }
 
 [[test]]
 name = "walking_skeleton"

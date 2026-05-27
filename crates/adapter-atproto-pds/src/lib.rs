@@ -158,6 +158,21 @@ fn normalize_endpoint(s: impl Into<String>) -> String {
     s
 }
 
+/// Classify a reqwest network error into a `PdsError` variant. TLS
+/// handshake failures are surfaced distinctly so the composition root
+/// can render the WD-6-friendly remediation hint; everything else is
+/// lifted into `Unreachable` so WS-10's preserve-local-on-publish-fail
+/// path triggers uniformly.
+fn classify_network_error(err: reqwest::Error) -> PdsError {
+    let msg = err.to_string();
+    let lower = msg.to_lowercase();
+    if lower.contains("tls") || lower.contains("certificate") || lower.contains("handshake") {
+        PdsError::TlsHandshakeFailed { message: msg }
+    } else {
+        PdsError::Unreachable { message: msg }
+    }
+}
+
 #[async_trait]
 impl PdsPort for AtProtoPdsAdapter {
     /// Walk the three probe arms (architecture-design §6.2). The first
@@ -221,7 +236,7 @@ impl PdsPort for AtProtoPdsAdapter {
         &self,
         collection: &str,
         rkey: &str,
-        _body: serde_json::Value,
+        body: serde_json::Value,
     ) -> Result<AtUri, PdsError> {
         if self.endpoint.is_empty() {
             return Err(PdsError::Unreachable {
@@ -229,16 +244,81 @@ impl PdsPort for AtProtoPdsAdapter {
                     .to_string(),
             });
         }
-        // Slice-01 stub: real reqwest XRPC POST wires in phase 05's
-        // WS-9. For now the contract is "return the synthesized AT URI
-        // shape the FakePds also returns" — this lets the composition
-        // root be wired against the real adapter for endpoint validation
-        // without depending on a reachable PDS during cargo test.
+
+        // Step 05-08: real reqwest XRPC POST. The body shape follows
+        // ATProto's `com.atproto.repo.createRecord` lexicon:
+        // `{repo, collection, rkey, record}`. We pass `repo` =
+        // the configured author DID (the test seam uses the same DID
+        // the FakePds is bound to so AT URIs round-trip).
         //
-        // Acceptance tests use FakePds; the real adapter's happy path is
-        // exercised by the contract-test layer (pact replay against
-        // bsky.social) in CI per architecture-design §6.5.
-        Ok(AtUri(self.synth_at_uri(collection, rkey)))
+        // Idempotency: a 409 conflict (or `RecordAlreadyExists` body)
+        // is lifted into a fresh `Ok(AtUri)` carrying the synthesized
+        // at-uri — slice-01 architecture §6.2 mandates treating rkey
+        // collision as idempotent success. WS-9 pins this contract.
+        // Other 4xx/5xx surface as `PdsError::RecordRejected`. Network
+        // failures (DNS, refused connection, dropped socket) surface as
+        // `PdsError::Unreachable` — the WS-10 path.
+        let url = format!("{}/xrpc/com.atproto.repo.createRecord", self.endpoint);
+        let repo = self.author_did.as_deref().unwrap_or("did:plc:unknown");
+        let request_body = serde_json::json!({
+            "repo": repo,
+            "collection": collection,
+            "rkey": rkey,
+            "record": body,
+        });
+
+        // Connect timeout caps how long we wait for a TCP handshake
+        // before classifying the host as Unreachable. The cli composition
+        // root surfaces this as the WS-10 "preserve local claim, retry
+        // later" message — the user should not see the binary appear to
+        // hang for minutes when a PDS is misconfigured. 10s is generous
+        // enough for slow CI runners but tight enough that WS scenarios
+        // testing unreachable hosts complete within their own time
+        // budgets.
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|err| PdsError::Unreachable {
+                message: format!("build reqwest client: {err}"),
+            })?;
+
+        let response = client
+            .post(&url)
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|err| classify_network_error(err))?;
+
+        let status = response.status();
+        if status.is_success() {
+            // Body shape: `{uri: "at://...", cid: "..."}`. We honor the
+            // PDS's at-uri verbatim (some PDSes synthesize it slightly
+            // differently than our naive `at://<did>/<col>/<rkey>` —
+            // e.g. wrapping in a percent-encoding for non-ASCII rkeys
+            // OpenLore doesn't generate but the contract permits).
+            let parsed: serde_json::Value =
+                response.json().await.map_err(|err| PdsError::RecordRejected {
+                    message: format!("decode createRecord response: {err}"),
+                })?;
+            let uri = parsed
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| self.synth_at_uri(collection, rkey));
+            Ok(AtUri(uri))
+        } else if status == reqwest::StatusCode::CONFLICT {
+            // 409 conflict — idempotent success path. Synthesize the
+            // at-uri from our own DID + collection + rkey because the
+            // 409 body shape varies across PDS implementations.
+            Ok(AtUri(self.synth_at_uri(collection, rkey)))
+        } else {
+            let body_text = response.text().await.unwrap_or_default();
+            Err(PdsError::RecordRejected {
+                message: format!(
+                    "PDS returned status {status} on createRecord {collection}/{rkey}: {body_text}"
+                ),
+            })
+        }
     }
 
     /// Read a record from `com.atproto.repo.getRecord`. Slice-01 stub
@@ -354,21 +434,43 @@ mod tests {
         assert!(matches!(adapter.probe(), ProbeOutcome::Ok));
     }
 
-    /// create_record on the stub returns the synthesized AT URI shape
-    /// matching FakePds. Pins the adapter↔fake byte-compatibility
-    /// contract for the cli composition root's smoke wiring.
+    /// Step 05-08: the previous stub `create_record_returns_synthesized_at_uri_on_stub_path`
+    /// pinned a slice-01 placeholder behavior — the adapter synthesized
+    /// the AT URI without making any HTTP call. That stub is gone now
+    /// that this method does a real `reqwest` POST to
+    /// `com.atproto.repo.createRecord`. The happy path is exercised
+    /// end-to-end through the acceptance suite's FakePds HTTP server
+    /// (`tests/acceptance/walking_skeleton.rs::walking_skeleton_publish_*`)
+    /// where the cli subprocess actually talks to the in-process fake.
+    ///
+    /// What we CAN pin at the unit level without a real PDS reachable
+    /// is the network-error classification arm: a host that refuses
+    /// the TCP connect resolves into `PdsError::Unreachable`, NOT a
+    /// panic, so the US-003 "preserve local claim on publish failure"
+    /// path triggers uniformly.
     #[tokio::test]
-    async fn create_record_returns_synthesized_at_uri_on_stub_path() {
-        let adapter =
-            AtProtoPdsAdapter::with_did("https://pds.example", "did:plc:host", "did:plc:test-jeff");
-        let body = serde_json::json!({"subject": "x"});
-        let at_uri = adapter
-            .create_record(OPENLORE_CLAIM_COLLECTION, "bafy_001", body)
-            .await
-            .expect("create succeeds");
-        assert_eq!(
-            at_uri.0,
-            "at://did:plc:test-jeff/org.openlore.claim/bafy_001"
+    async fn create_record_returns_unreachable_against_refused_local_port() {
+        // Bind a TcpListener to an OS-assigned localhost port, then
+        // drop it immediately. The kernel reclaims the port but the
+        // brief race window is wide enough — and any subsequent connect
+        // to that port without a listener will be refused fast. This
+        // gives us "Unreachable" classification without depending on a
+        // multi-second network timeout.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
+        let adapter = AtProtoPdsAdapter::with_did(
+            format!("http://127.0.0.1:{port}"),
+            "did:plc:host",
+            "did:plc:test-jeff",
+        );
+        let result = adapter
+            .create_record(OPENLORE_CLAIM_COLLECTION, "bafy_001", serde_json::json!({}))
+            .await;
+        assert!(
+            matches!(result, Err(PdsError::Unreachable { .. })),
+            "expected Unreachable against refused local port, got {result:?}"
         );
     }
 

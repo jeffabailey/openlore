@@ -430,6 +430,7 @@ fn run_openlore_claim_add_with_pinned_now(
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_DID", env.identity.author_did())
         .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
         .env("OPENLORE_TEST_NOW", pinned_now_rfc3339)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
@@ -505,8 +506,46 @@ fn walking_skeleton_publish_prints_at_uri_and_retract_hint_after_signing() {
     assert_exit_zero_and_stdout_contains(&outcome, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
     assert_exit_zero_and_stdout_contains(&outcome, "openlore claim retract");
 
-    // The fake PDS contains the record at the expected at-uri
-    todo!("DELIVER: parse the at-uri from stdout; assert_pds_contains_record_at; assert_duckdb_publication_metadata_for_cid")
+    // Parse the at-uri from stdout. claim_publish.rs prints the line
+    // `  at-uri: <at-uri>\n` verbatim — split on the marker and take
+    // the first whitespace-delimited token after.
+    let at_uri = parse_at_uri_from_stdout(&outcome.stdout);
+
+    // Universe-bound: the fake PDS contains a record at this at-uri.
+    assert_pds_contains_record_at(&env, &at_uri);
+
+    // The retract hint pins the CID at the end of the printed
+    // `openlore claim retract <cid>` line; reuse the CID parser from
+    // WS-6/WS-7 to extract it for the DuckDB assertion below.
+    let cid = parse_cid_from_stdout(&outcome.stdout);
+
+    // Universe-bound: the DuckDB row for this CID has published_at
+    // populated AND its at_uri matches what we just printed. Pins the
+    // local-publication-metadata contract from data-models.md so
+    // downstream graph-query / retract verbs can resolve "this claim
+    // was federated to <here> at <when>" from the local index.
+    assert_duckdb_publication_metadata_for_cid(&env, &cid, &at_uri);
+}
+
+/// Local helper: parse the at-uri from the publish-success block in
+/// stdout. The renderer prints `  at-uri: at://...` verbatim; we slice
+/// to that marker and take the first whitespace-delimited token after.
+fn parse_at_uri_from_stdout(stdout: &str) -> String {
+    let marker = "at-uri: ";
+    let idx = stdout.find(marker).unwrap_or_else(|| {
+        panic!("could not locate 'at-uri:' marker in stdout:\n{stdout}")
+    });
+    let tail = &stdout[idx + marker.len()..];
+    let at_uri = tail
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    assert!(
+        !at_uri.is_empty(),
+        "found at-uri marker but no value followed it in stdout:\n{stdout}"
+    );
+    at_uri
 }
 
 /// WS-9: Republishing a CID is idempotent (no duplicate, no error).

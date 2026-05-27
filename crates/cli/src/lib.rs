@@ -171,9 +171,19 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        Command::Claim(ClaimCommand::Publish { .. }) => {
-            panic!("Not yet implemented -- RED scaffold");
-        }
+        Command::Claim(ClaimCommand::Publish { cid }) => match verbs::claim_publish::run(
+            &wiring,
+            &verbs::claim_publish::ClaimPublishArgs { cid },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore claim publish: {err:#}");
+                1
+            }
+        },
         Command::Claim(ClaimCommand::Retract { .. }) => {
             panic!("Not yet implemented -- RED scaffold");
         }

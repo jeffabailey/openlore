@@ -39,7 +39,7 @@ pub use identity::FakeIdentity;
 // Replaces the previous inline panic-scaffold (RED-baseline step 01-01)
 // with the real implementation per DD-6.
 pub mod fake_pds;
-pub use fake_pds::{FakePds, FakePdsRecord};
+pub use fake_pds::{FakePds, FakePdsHttpHandle, FakePdsRecord};
 
 use claim_domain::{Cid, ClaimLookup, SignedClaim};
 use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};

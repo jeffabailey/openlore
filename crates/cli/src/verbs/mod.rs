@@ -10,4 +10,5 @@
 //! - (later) `claim_publish`, `claim_retract`, `graph_query`.
 
 pub mod claim_add;
+pub mod claim_publish;
 pub mod init;

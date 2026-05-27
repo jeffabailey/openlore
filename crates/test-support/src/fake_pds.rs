@@ -170,6 +170,271 @@ impl FakePds {
     fn is_unreachable(&self) -> bool {
         self.state.unreachable.load(Ordering::SeqCst)
     }
+
+    /// Spin up an in-process HTTP XRPC server bound to `127.0.0.1` on an
+    /// OS-assigned port. Returns a [`FakePdsHttpHandle`] carrying the
+    /// base URL (e.g. `http://127.0.0.1:54321`) and an owning handle to
+    /// the background task driving the server.
+    ///
+    /// The server reuses THIS fake's record state via `Arc`, so writes
+    /// arriving on the HTTP surface (from a child subprocess running the
+    /// real `openlore` binary against `OPENLORE_PDS_ENDPOINT=<url>`) are
+    /// visible to in-process assertions via [`FakePds::records`],
+    /// [`FakePds::record_at`], and [`FakePds::record_count`]. One source
+    /// of truth for records across the in-process port trait surface
+    /// and the subprocess HTTP surface (step 05-08 Approach B).
+    ///
+    /// Endpoints served (slice-01 subset):
+    /// - `POST /xrpc/com.atproto.repo.createRecord`
+    ///     body: `{collection, rkey, record, repo}`
+    ///     response: 200 + `{uri: "at://<did>/<collection>/<rkey>"}`
+    ///     409 on rkey collision (idempotent — record body preserved)
+    /// - `GET /xrpc/com.atproto.repo.getRecord?collection=&rkey=`
+    ///     response: 200 + `{value: <record body>}` or 404 if absent.
+    ///
+    /// `simulate_unreachable()` causes the HTTP server to close the
+    /// connection without sending any bytes; reqwest classifies this as
+    /// a network error which the `AtProtoPdsAdapter` lifts into
+    /// `PdsError::Unreachable` — covers WS-10 transparently.
+    ///
+    /// The returned handle aborts the server task when dropped, so
+    /// per-test isolation is automatic (each `TestEnv` owns its own
+    /// handle and lets RAII clean up the port).
+    pub async fn serve_http(&self) -> FakePdsHttpHandle {
+        use hyper::server::conn::http1;
+        use hyper_util::rt::TokioIo;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("FakePds::serve_http: bind 127.0.0.1:0");
+        let local_addr = listener
+            .local_addr()
+            .expect("FakePds::serve_http: local_addr");
+        let base_url = format!("http://{local_addr}");
+
+        let fake = self.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(io) => io,
+                    Err(_) => return, // listener died — task shuts down
+                };
+
+                // If the fake is currently in unreachable mode, drop the
+                // connection immediately. reqwest sees this as a network
+                // error which `AtProtoPdsAdapter` lifts into
+                // `PdsError::Unreachable`.
+                if fake.is_unreachable() {
+                    drop(stream);
+                    continue;
+                }
+
+                let fake_for_conn = fake.clone();
+                tokio::spawn(async move {
+                    let io = TokioIo::new(stream);
+                    let svc = hyper::service::service_fn(move |req| {
+                        let fake = fake_for_conn.clone();
+                        async move { http_route(fake, req).await }
+                    });
+                    let _ = http1::Builder::new().serve_connection(io, svc).await;
+                });
+            }
+        });
+
+        FakePdsHttpHandle {
+            base_url,
+            _task: AbortOnDrop(handle),
+        }
+    }
+}
+
+/// Hyper request type alias (concrete bodies imported on demand inside
+/// the route fn to keep the public surface narrow).
+type HttpRequest = hyper::Request<hyper::body::Incoming>;
+type HttpResponse = hyper::Response<http_body_util::Full<bytes::Bytes>>;
+
+/// XRPC route handler. Dispatches the small subset of methods slice-01
+/// exercises (`createRecord`, `getRecord`, `describeServer`). Anything
+/// else returns 404 to surface unwired calls during DELIVER.
+async fn http_route(
+    fake: FakePds,
+    req: HttpRequest,
+) -> Result<HttpResponse, std::convert::Infallible> {
+    use http_body_util::BodyExt;
+
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+
+    match (method.as_str(), path.as_str()) {
+        ("POST", "/xrpc/com.atproto.repo.createRecord") => {
+            // Body shape (ATProto createRecord): {repo, collection, rkey, record}.
+            // We honor `collection` + `rkey` + `record` and synthesize the AT URI
+            // from the fake's configured author DID so the response shape matches
+            // what a real PDS returns for OpenLore's idempotent-on-rkey path.
+            let body_bytes = match req.collect().await {
+                Ok(c) => c.to_bytes(),
+                Err(_) => return Ok(json_response(500, serde_json::json!({"error": "BodyRead"}))),
+            };
+            let payload: Value = match serde_json::from_slice(&body_bytes) {
+                Ok(v) => v,
+                Err(_) => {
+                    return Ok(json_response(
+                        400,
+                        serde_json::json!({"error": "InvalidRequest", "message": "body not JSON"}),
+                    ))
+                }
+            };
+            let collection = payload
+                .get("collection")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let rkey = payload.get("rkey").and_then(|v| v.as_str()).unwrap_or("");
+            let record = payload
+                .get("record")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if collection.is_empty() || rkey.is_empty() {
+                return Ok(json_response(
+                    400,
+                    serde_json::json!({
+                        "error": "InvalidRequest",
+                        "message": "collection and rkey required",
+                    }),
+                ));
+            }
+            match fake.create_record(collection, rkey, record).await {
+                Ok(at_uri) => Ok(json_response(
+                    200,
+                    serde_json::json!({"uri": at_uri.0, "cid": rkey}),
+                )),
+                Err(_) => Ok(json_response(
+                    503,
+                    serde_json::json!({"error": "Unavailable"}),
+                )),
+            }
+        }
+        ("GET", "/xrpc/com.atproto.repo.getRecord") => {
+            let query = req.uri().query().unwrap_or("");
+            let (collection, rkey) = parse_collection_and_rkey_from_query(query);
+            match fake.get_record(&collection, &rkey).await {
+                Ok(Some(body)) => Ok(json_response(200, serde_json::json!({"value": body}))),
+                Ok(None) => Ok(json_response(
+                    404,
+                    serde_json::json!({"error": "RecordNotFound"}),
+                )),
+                Err(_) => Ok(json_response(
+                    503,
+                    serde_json::json!({"error": "Unavailable"}),
+                )),
+            }
+        }
+        ("GET", "/xrpc/com.atproto.server.describeServer") => Ok(json_response(
+            200,
+            serde_json::json!({
+                "did": fake.author_did,
+                "availableUserDomains": [],
+            }),
+        )),
+        _ => Ok(http_text_response(
+            404,
+            format!("FakePds: no route for {} {}", method, path),
+        )),
+    }
+}
+
+fn parse_collection_and_rkey_from_query(q: &str) -> (String, String) {
+    let mut collection = String::new();
+    let mut rkey = String::new();
+    for pair in q.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let key = kv.next().unwrap_or("");
+        let value = kv.next().unwrap_or("");
+        match key {
+            "collection" => collection = url_decode(value),
+            "rkey" => rkey = url_decode(value),
+            _ => {}
+        }
+    }
+    (collection, rkey)
+}
+
+fn url_decode(s: &str) -> String {
+    // Minimal percent-decoder — sufficient for collection/rkey which use
+    // only ASCII identifiers and base32 CIDs. Avoids pulling in the
+    // `urlencoding` crate.
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%' && i + 2 < bytes.len() {
+            let hi = from_hex(bytes[i + 1]);
+            let lo = from_hex(bytes[i + 2]);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        if b == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(b);
+        }
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn json_response(status: u16, body: Value) -> HttpResponse {
+    let bytes = bytes::Bytes::from(body.to_string());
+    hyper::Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(http_body_util::Full::new(bytes))
+        .expect("build JSON response")
+}
+
+fn http_text_response(status: u16, body: String) -> HttpResponse {
+    let bytes = bytes::Bytes::from(body);
+    hyper::Response::builder()
+        .status(status)
+        .header("content-type", "text/plain")
+        .body(http_body_util::Full::new(bytes))
+        .expect("build text response")
+}
+
+/// Owning handle to a running [`FakePds::serve_http`] task.
+///
+/// Holds the listening URL plus an [`AbortOnDrop`] guard so dropping the
+/// handle stops the background server and frees the OS port — important
+/// for `TestEnv` isolation under `cargo test`'s default thread pool.
+#[derive(Debug)]
+pub struct FakePdsHttpHandle {
+    pub base_url: String,
+    _task: AbortOnDrop<()>,
+}
+
+/// Aborts the wrapped tokio task on drop. Used by [`FakePdsHttpHandle`]
+/// so a `TestEnv` going out of scope reliably tears down its in-process
+/// HTTP server.
+#[derive(Debug)]
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl Default for FakePds {

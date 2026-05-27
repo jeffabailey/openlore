@@ -31,8 +31,22 @@ ed25519-dalek = { version = "2", default-features = false }
 # tests. The fake's read/write methods are `async fn` because the
 # `PdsPort` contract is async (per ADR-004). `rt` for a single-thread
 # runtime, `macros` for `#[tokio::test]`.
+#
+# Step 05-08: hyper + http-body-util let `FakePds::serve_http()` expose
+# the same in-memory record store over an HTTP XRPC surface so the
+# `openlore` subprocess (which speaks real reqwest XRPC via
+# `adapter-atproto-pds`) can talk to the test double without leaving
+# the test process. The HTTP server reuses the `FakePds` state via
+# `Arc` — one source of truth for records across the in-process port
+# trait surface and the subprocess HTTP surface.
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
+hyper = { version = "1", features = ["server", "http1"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio"] }
+bytes = "1"
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
 
 # Step 04-05: the universe-bound state-delta module (DD-3 bootstrap)
 # lives at `tests/common/state_delta.rs` so future acceptance tests

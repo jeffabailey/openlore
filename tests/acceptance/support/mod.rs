@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
+use openlore_test_support::fake_pds::FakePdsHttpHandle;
 use ports::IdentityPort;
 use tempfile::TempDir;
 
@@ -118,8 +119,27 @@ impl TestEnv {
 /// adapter's behavior is mirrored; subsequent steps that need
 /// `simulate_unreachable()` get it for free through the underlying
 /// shared implementation.
+///
+/// Step 05-08 (Approach B per crafter design): owns a multi-threaded
+/// tokio runtime + an in-process HTTP XRPC server bound to a random
+/// `127.0.0.1` port. The server reuses `inner`'s record state via
+/// `Arc`, so writes arriving from the `openlore` subprocess over
+/// `OPENLORE_PDS_ENDPOINT=<url>` are visible to in-process assertions
+/// via `records()` / `record_at()` / `record_count()` — one source of
+/// truth across both surfaces. Dropping `FakePds` drops the runtime
+/// which aborts the server task — RAII per-scenario isolation.
 pub struct FakePds {
     inner: SharedFakePds,
+    /// Live HTTP server handle. Dropped (and the server task aborted)
+    /// when `TestEnv` is dropped — RAII isolation per scenario.
+    http_handle: FakePdsHttpHandle,
+    /// Owning handle to the multi-threaded tokio runtime backing the
+    /// HTTP server. Held for the lifetime of `FakePds` so spawned tasks
+    /// continue to make progress between `run_openlore_*` calls.
+    /// `ManuallyDrop` + the explicit `Drop` impl below let us release
+    /// the runtime on a background thread so we never block the test
+    /// thread on shutdown.
+    runtime: std::mem::ManuallyDrop<tokio::runtime::Runtime>,
 }
 
 /// One record as seen by the fake PDS.
@@ -134,15 +154,42 @@ pub struct FakePdsRecord {
 }
 
 impl FakePds {
-    /// Start the fake PDS. Slice-01 init verb does not contact a PDS;
-    /// subsequent claim-publish scenarios will exercise this through
-    /// the subprocess by binding `OPENLORE_PDS_ENDPOINT` to an
-    /// in-process HTTP stub. For now the struct just owns the shared
-    /// implementation so `simulate_unreachable()` and friends compile.
+    /// Start the fake PDS and spin up its in-process HTTP XRPC server.
+    ///
+    /// The HTTP server binds to `127.0.0.1` on an OS-assigned port. The
+    /// URL is exposed via [`FakePds::endpoint_url`] so the test harness
+    /// can wire it into the subprocess as `OPENLORE_PDS_ENDPOINT`. The
+    /// server's backing record store is the same `Arc`-shared state the
+    /// in-process port methods read — assertions on `records()` /
+    /// `record_at()` observe the union of in-process writes AND HTTP
+    /// writes from the spawned `openlore` binary.
     pub fn start() -> Self {
+        // A dedicated multi-threaded runtime per FakePds so the HTTP
+        // server can accept connections concurrently with whatever the
+        // test thread is doing (spawning `openlore` subprocesses,
+        // reading their stdout, etc).
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_io()
+            .enable_time()
+            .thread_name("fake-pds-rt")
+            .build()
+            .expect("FakePds::start: build tokio multi_thread runtime");
+        let inner = SharedFakePds::for_did("did:plc:test-jeff");
+        let http_handle = runtime.block_on(inner.serve_http());
+
         Self {
-            inner: SharedFakePds::for_did("did:plc:test-jeff"),
+            inner,
+            http_handle,
+            runtime: std::mem::ManuallyDrop::new(runtime),
         }
+    }
+
+    /// Base URL of the in-process HTTP XRPC server (e.g.
+    /// `http://127.0.0.1:54321`). Pass this to the `openlore` subprocess
+    /// via `OPENLORE_PDS_ENDPOINT` so it talks to the fake.
+    pub fn endpoint_url(&self) -> &str {
+        &self.http_handle.base_url
     }
 
     /// All records the fake has accepted so far.
@@ -181,6 +228,21 @@ impl FakePds {
     /// Restore normal operation after `simulate_unreachable`.
     pub fn restore(&mut self) {
         self.inner.restore();
+    }
+}
+
+impl Drop for FakePds {
+    fn drop(&mut self) {
+        // SAFETY: ManuallyDrop::take is sound because we only call it
+        // here in the Drop impl and never again. Moving the runtime
+        // onto a background thread lets the test thread proceed even
+        // if a runtime worker is still parking on an accept() call.
+        // Without this, tokio's blocking shutdown would deadlock on
+        // the listening socket on some platforms (notably macOS).
+        let rt = unsafe { std::mem::ManuallyDrop::take(&mut self.runtime) };
+        let _ = std::thread::Builder::new()
+            .name("fake-pds-shutdown".to_string())
+            .spawn(move || drop(rt));
     }
 }
 
@@ -315,6 +377,11 @@ pub fn run_openlore_with_stdin(
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_DID", env.identity.author_did())
         .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        // Step 05-08: point the in-binary `AtProtoPdsAdapter` at the
+        // in-process FakePds HTTP server so the subprocess can publish
+        // claims without leaving the test process. The fake's URL is
+        // dynamic (random port) so it must be threaded explicitly.
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
         // PATH is required for libc / dynamic linker resolution on
         // some hosts; pass through the parent's PATH so `cargo bin`
         // can launch.
@@ -454,7 +521,17 @@ pub fn assert_no_pds_call_was_made(env: &TestEnv) {
 /// `at://{author_did}/org.openlore.claim/<cid>`". Port-exposed name:
 /// `pds.records.contains_at_uri`.
 pub fn assert_pds_contains_record_at(env: &TestEnv, at_uri: &str) {
-    todo!("DELIVER: assert env.pds.record_at(at_uri).is_some()")
+    let found = env.pds.record_at(at_uri);
+    assert!(
+        found.is_some(),
+        "expected fake PDS to contain a record at {at_uri}; \
+         actually present at-uris: {:?}",
+        env.pds
+            .records()
+            .into_iter()
+            .map(|r| r.at_uri)
+            .collect::<Vec<_>>()
+    );
 }
 
 /// Universe-bound: "the published record's signature verifies against
@@ -487,8 +564,47 @@ pub fn assert_persisted_payload_has_no_bucket_label(env: &TestEnv, cid: &str) {
 /// non-null AND its `at_uri` equals
 /// `at://{author_did}/org.openlore.claim/<cid>`". Port-exposed name:
 /// `storage.duckdb.publication_metadata_consistent`.
+///
+/// Opens a raw `duckdb::Connection` for the assertion (rather than going
+/// through `DuckDbStorageAdapter`) because slice-01's StoragePort does
+/// not expose a `read_publication_metadata` arm — that surface arrives
+/// with the graph-query verb later in phase 05. Test-support code is
+/// the only place a raw-SQL query is acceptable; production code MUST
+/// go through StoragePort.
 pub fn assert_duckdb_publication_metadata_for_cid(env: &TestEnv, cid: &str, expected_at_uri: &str) {
-    todo!("DELIVER: open the DuckDB at env.duckdb_path(); query claims where cid=?; assert published_at IS NOT NULL and at_uri = expected_at_uri")
+    let db_path = env.duckdb_path();
+    assert!(
+        db_path.exists(),
+        "expected DuckDB to exist at {} after publish; file missing",
+        db_path.display()
+    );
+
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for publication-metadata assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>)> = conn
+        .query_row(
+            "SELECT published_at, at_uri FROM claims WHERE cid = ?",
+            duckdb::params![cid],
+            |r| Ok((r.get::<_, Option<_>>(0)?, r.get::<_, Option<_>>(1)?)),
+        )
+        .ok();
+
+    let (published_at, at_uri) =
+        row.unwrap_or_else(|| panic!("no claim row in DuckDB for cid {cid}"));
+    assert!(
+        published_at.is_some(),
+        "expected published_at to be non-null for cid {cid} after publish; got NULL"
+    );
+    assert_eq!(
+        at_uri.as_deref(),
+        Some(expected_at_uri),
+        "expected at_uri column to equal {expected_at_uri} for cid {cid}; got {at_uri:?}"
+    );
 }
 
 /// Universe-bound: "the retraction's `references` field includes
