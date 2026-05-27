@@ -794,8 +794,6 @@ fn walking_skeleton_graph_query_empty_result_is_explained_not_silent() {
 
     assert_exit_zero_and_stdout_contains(&outcome, "No local claims about github:nonexistent/repo");
     assert_exit_zero_and_stdout_contains(&outcome, "--federated");
-
-    todo!("DELIVER: implement the empty-result message per US-004 AC #3")
 }
 
 // =============================================================================

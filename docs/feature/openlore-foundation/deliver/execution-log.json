@@ -1115,6 +1115,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-27T01:55:39Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:56:07Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:57:35Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:58:07Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: WS-13 covers empty-render path",
+      "t": "2026-05-27T01:58:12Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:59:50Z"
     }
   ]
 }

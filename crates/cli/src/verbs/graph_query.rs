@@ -31,8 +31,10 @@
 //!   local claims only") and a footer mentioning `--federated` and
 //!   `slice-03` so the local-only default is announced unconditionally.
 //! - Empty-result explainer (US-004 AC #3) is WS-13's contract (step
-//!   05-12 in the wave; this verb returns an empty stdout for empty
-//!   queries in slice-01 and the explainer text wraps around it later).
+//!   05-13): when `query_by_subject` returns an empty `Vec`, the verb
+//!   emits `No local claims about <subject>.` between the local-only
+//!   header and the federation footer, with exit 0. Silence would be
+//!   hostile — see the `run` doc for the rationale.
 //!
 //! ## Header + footer (US-004 AC #2 + WD-13)
 //!
@@ -47,8 +49,11 @@
 //!
 //! Both are unconditional in slice-01 because the `--federated` flag
 //! is not yet wired (federation is slice-03 territory per WD-13). They
-//! frame every successful query result; the empty-result branch (WS-13)
-//! produces its own explainer instead.
+//! frame every query result — populated or empty — so the contract
+//! ("local-only is the default; federation lands in slice-03") is
+//! announced regardless of whether the lookup found anything. The
+//! empty-result branch (WS-13) inserts its explainer between the header
+//! and footer instead of the per-claim block.
 
 use anyhow::{Context, Result};
 
@@ -88,26 +93,39 @@ pub struct GraphQueryOutcome {
 /// failure renderer for graph-query because the local DuckDB is part of
 /// the bootstrap state (probed at startup) — a query failure here is a
 /// deeper integrity problem, not a user-fixable retry case.
+///
+/// Empty-result branch (WS-13 / US-004 AC #3): when the local store has
+/// no claims for the subject, emit an explainer line naming the subject
+/// instead of an empty per-claim block. Silence here would be hostile —
+/// operators couldn't tell "no claims" from "the verb crashed". We keep
+/// the federation footer so the user also sees the slice-03 affordance
+/// (a future `--federated` pass might find the subject upstream). Exit
+/// code stays 0: empty is a normal not-found result, not an error.
 pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
     let claims = wiring
         .storage
         .query_by_subject(&args.subject)
         .with_context(|| format!("querying claims by subject {}", args.subject))?;
 
-    let rendered = render_graph_query_result(&claims);
-
-    // Header + footer are unconditional in slice-01 (US-004 AC #2 +
-    // WD-13). They frame the per-claim block so even a single-claim
-    // result announces "local-only is the default" and points at the
-    // slice-03 `--federated` affordance.
     let mut stdout = String::new();
     stdout.push_str(LOCAL_ONLY_HEADER);
     stdout.push('\n');
     stdout.push('\n');
-    stdout.push_str(&rendered);
-    if !rendered.ends_with('\n') {
-        stdout.push('\n');
+
+    if claims.is_empty() {
+        // WS-13 / US-004 AC #3: name the subject so the message is
+        // self-explanatory (an operator scanning logs sees WHICH lookup
+        // came back empty). The federation footer follows so the
+        // slice-03 `--federated` pointer is still visible.
+        stdout.push_str(&format!("No local claims about {}.\n", args.subject));
+    } else {
+        let rendered = render_graph_query_result(&claims);
+        stdout.push_str(&rendered);
+        if !rendered.ends_with('\n') {
+            stdout.push('\n');
+        }
     }
+
     stdout.push('\n');
     stdout.push_str(FEDERATION_FOOTER);
     stdout.push('\n');
