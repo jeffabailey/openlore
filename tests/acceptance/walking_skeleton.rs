@@ -348,13 +348,22 @@ fn walking_skeleton_sign_writes_atomic_local_file_with_no_network_call() {
 /// 2; risk #2 from feature-delta.md "canonical CID determinism";
 /// KPI-4.)
 ///
+/// Two independent `openlore claim add` runs with identical flags AND
+/// the same pinned `OPENLORE_TEST_NOW` MUST produce identical CIDs.
+/// `composed_at` is the only otherwise-divergent input (every other
+/// field comes from flags) so pinning the clock pins the whole
+/// canonical-CBOR pre-image, which pins the CID by ADR-006.
+///
+/// This is the subprocess-level verification of LC-3's in-memory CID
+/// determinism property: the byte-stability invariant holds across
+/// process boundaries, not just inside one process.
+///
 /// @walking_skeleton @driving_port @US-002 @J-001 @real-io
 #[test]
 fn walking_skeleton_re_canonicalization_produces_identical_cids() {
     let env_first = TestEnv::initialized();
     let env_second = TestEnv::initialized();
 
-    // First run
     let first_args = [
         "claim", "add",
         "--subject", "github:rust-lang/rust",
@@ -362,14 +371,110 @@ fn walking_skeleton_re_canonicalization_produces_identical_cids() {
         "--object", "org.openlore.philosophy.memory-safety",
         "--evidence", "https://www.rust-lang.org/",
         "--confidence", "0.86",
-        // DELIVER pins composed_at via env var or flag for determinism
-        // (e.g. OPENLORE_TEST_NOW=2026-05-25T12:00:00Z)
     ];
-    let outcome_first = run_openlore_with_stdin(&env_first, &first_args, "\nn\n");
-    let outcome_second = run_openlore_with_stdin(&env_second, &first_args, "\nn\n");
 
-    // Both runs produce the same CID
-    todo!("DELIVER: parse the CID from each outcome's stdout; assert byte-equality")
+    // Step 05-07 pins composed_at via OPENLORE_TEST_NOW so both runs
+    // canonicalize identical pre-images. The SystemClockAdapter honors
+    // this env var as a test-only seam (production behavior unchanged).
+    let pinned_now = "2026-05-26T12:00:00Z";
+
+    let outcome_first = run_openlore_claim_add_with_pinned_now(
+        &env_first,
+        &first_args,
+        "\nn\n",
+        pinned_now,
+    );
+    let outcome_second = run_openlore_claim_add_with_pinned_now(
+        &env_second,
+        &first_args,
+        "\nn\n",
+        pinned_now,
+    );
+
+    // Parse the CID from each outcome's stdout. WS-6 pinned the parsing
+    // shape (`Computing claim CID <cid>` marker); reuse it here.
+    let cid_first = parse_cid_from_stdout(&outcome_first.stdout);
+    let cid_second = parse_cid_from_stdout(&outcome_second.stdout);
+
+    // Both runs must yield byte-equal CIDs (KPI-4 / ADR-006 / LC-3 at
+    // the subprocess boundary).
+    assert_eq!(
+        cid_first, cid_second,
+        "WS-7: two independent runs with identical inputs and pinned \
+         OPENLORE_TEST_NOW={pinned_now} must produce identical CIDs.\n\
+         first  = {cid_first}\nsecond = {cid_second}\n\
+         --- stdout (first) ---\n{}\n--- stdout (second) ---\n{}",
+        outcome_first.stdout, outcome_second.stdout,
+    );
+}
+
+/// Local helper: spawn the `openlore` binary with the same env shape
+/// `run_openlore_with_stdin` uses, plus `OPENLORE_TEST_NOW` so the
+/// in-binary `SystemClockAdapter` returns a pinned timestamp. Inlined
+/// in this file (rather than added to `support`) because WS-7 is the
+/// only scenario in this slice that needs clock pinning at the
+/// subprocess level.
+fn run_openlore_claim_add_with_pinned_now(
+    env: &TestEnv,
+    args: &[&str],
+    stdin_lines: &str,
+    pinned_now_rfc3339: &str,
+) -> support::CliOutcome {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_TEST_NOW", pinned_now_rfc3339)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {:?}: {e}", bin));
+
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    support::CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// Local helper: parse the CID out of `Computing claim CID <cid>` in
+/// stdout. Mirrors WS-6's inline parsing — the marker text is the
+/// load-bearing contract `claim_add.rs` prints right before persistence.
+fn parse_cid_from_stdout(stdout: &str) -> String {
+    let marker = "Computing claim CID ";
+    let idx = stdout.find(marker).unwrap_or_else(|| {
+        panic!("could not locate 'Computing claim CID <cid>' marker in stdout:\n{stdout}")
+    });
+    let tail = &stdout[idx + marker.len()..];
+    let cid = tail
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    assert!(
+        !cid.is_empty(),
+        "found marker but no CID followed it in stdout:\n{stdout}"
+    );
+    cid
 }
 
 // =============================================================================
