@@ -1,0 +1,16 @@
+# Cargo aliases for OpenLore workspace.
+#
+# `cargo xtask <subcommand>` resolves to running the `xtask` binary
+# from `xtask/`. This is the standard xtask-pattern wiring (see
+# matklad/cargo-xtask) and is what `cargo xtask check-arch` /
+# `cargo xtask check-probes` invocations rely on across the repo,
+# docs, and CI (devops/ci-cd-pipeline.md §3.4).
+#
+# Without this alias, contributors and CI would need the verbose
+# `cargo run -p xtask -- <subcommand>` form. The alias keeps the
+# component-boundaries.md §Cross-component-invariants table accurate
+# ("Enforced by `cargo xtask check-arch`").
+#
+# Step 06-05 (xtask check-arch implementation).
+[alias]
+xtask = "run --package xtask --quiet --"

@@ -13,6 +13,15 @@ name = "xtask"
 path = "src/main.rs"
 
 # Architecture-verification only; intentionally NOT depending on workspace
-# crates so it can run before they compile. Heavy deps (cargo_metadata,
-# walkdir, syn) get added in step 06-XX.
+# crates so it can run before they compile. Heavy deps (walkdir, syn) get
+# added in step 06-XX when check-probes lands.
+#
+# Step 06-05: `cargo_metadata` reads the workspace dep graph for
+# check-arch. `anyhow` keeps the binary's error-rendering ergonomic.
 [dependencies]
+cargo_metadata = "0.23"
+anyhow = { workspace = true }
+
+[dev-dependencies]
+# step 06-05 inner-TDD: hand-constructed in-memory dep graphs feed the
+# pure `check_workspace` function. No external test deps needed.
