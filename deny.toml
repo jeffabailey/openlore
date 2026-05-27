@@ -1,0 +1,93 @@
+# OpenLore — cargo-deny supply-chain policy
+#
+# Enforces ADR-012 (supply-chain hardening) + devops/ci-cd-pipeline.md §11.
+# Ran on every CI build via `cargo deny check`.
+#
+# Sections:
+#   [graph]      — which targets/features cargo-deny scans
+#   [licenses]   — SPDX whitelist; anything not listed is rejected
+#   [bans]       — explicitly forbidden crates (security/quality reasons)
+#   [advisories] — RustSec database integration
+#   [sources]    — restrict registries we pull from
+#
+# To add a license: confirm it appears in the actual dep tree (run
+# `cargo deny check licenses` to see what cargo-deny is complaining about),
+# verify the license is acceptable per ADR-012, then add it here.
+#
+# To unban a crate: requires ADR amendment. Don't unban silently.
+
+[graph]
+# Scan the dep graph for all targets we ship to. Adapter crates target
+# x86_64 + aarch64 on linux/macos; CLI is the same.
+all-features = false
+no-default-features = false
+
+[licenses]
+# Whitelist (SPDX identifiers). Per ADR-012: permissive only.
+# Copyleft (GPL/LGPL/AGPL) is rejected by absence.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "Unicode-3.0",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "0BSD",
+    # CDLA-Permissive-2.0: webpki-roots ships Mozilla CA bundle under this
+    # data-license. Permissive per spec (no copyleft, no restrictions on
+    # downstream redistribution). Acceptable per ADR-012.
+    "CDLA-Permissive-2.0",
+]
+# Confidence threshold for SPDX license detection (0.0–1.0).
+# 0.8 = high confidence; bump up if false positives surface.
+confidence-threshold = 0.8
+
+[bans]
+# Reject duplicate versions only at warning level — Rust dep graphs
+# routinely have transitive version skew that's not actionable.
+multiple-versions = "warn"
+# Wildcards: warn only. The real risk is wildcard versions on crates.io
+# deps (no upper bound = supply-chain attack vector). Workspace internal
+# crates use path = "../foo" which cargo-deny also reports as wildcard,
+# but those are the standard workspace convention. allow-wildcard-paths
+# does NOT apply because our internal crates lack `publish = false`
+# (treated as public). Rather than touch Cargo.tomls (out-of-scope for
+# this step per boundary rules), we downgrade wildcards to a warning.
+# All crates.io deps in workspace.dependencies have explicit version
+# pins, so no actual wildcard exposure to upstream.
+wildcards = "warn"
+allow-wildcard-paths = true
+
+# Explicit bans — see ADR-012 + ADR-004 (rustls > openssl) for rationale.
+deny = [
+    # openssl/openssl-sys: ADR-004 mandates rustls-only TLS. C-FFI crypto is
+    # banned for build hygiene (no cross-compile pain, no system OpenSSL drift).
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    # serde_cbor: unmaintained (last release 2021); superseded by ciborium
+    # which is what claim-domain uses for canonical CBOR.
+    { name = "serde_cbor" },
+    # actix-web, axum: HTTP server frameworks. OpenLore is a CLI + adapter
+    # set; we never run an HTTP server in-process. Banning prevents drift.
+    { name = "actix-web" },
+    { name = "axum" },
+]
+
+[advisories]
+# Pull advisories from the canonical RustSec DB.
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# Yanked crates: warn (yanks are routine; CVEs aren't).
+yanked = "warn"
+# Unmaintained crates: scan all (cargo-deny v0.19 schema: enum, not severity).
+# Severity is reported as "warn" by default for unmaintained advisories.
+unmaintained = "all"
+
+[sources]
+# Restrict to crates.io. Git deps require explicit allowlist if added later.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

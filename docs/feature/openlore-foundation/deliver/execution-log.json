@@ -1465,6 +1465,76 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-27T12:40:31Z"
+    },
+    {
+      "sid": "06-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:41:07Z"
+    },
+    {
+      "sid": "06-06",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:43:41Z"
+    },
+    {
+      "sid": "06-06",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: structural-check infrastructure; no user-visible AT",
+      "t": "2026-05-27T12:43:49Z"
+    },
+    {
+      "sid": "06-06",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:46:49Z"
+    },
+    {
+      "sid": "06-06",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:50:00Z"
+    },
+    {
+      "sid": "06-06",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:50:47Z"
+    },
+    {
+      "sid": "06-07",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:53:13Z"
+    },
+    {
+      "sid": "06-07",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: supply-chain policy infrastructure; no user-visible AT",
+      "t": "2026-05-27T12:53:15Z"
+    },
+    {
+      "sid": "06-07",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: cargo deny IS the test; declarative config has no behavior to unit-test",
+      "t": "2026-05-27T12:53:16Z"
+    },
+    {
+      "sid": "06-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T12:59:31Z"
     }
   ]
 }
