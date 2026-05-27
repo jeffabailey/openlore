@@ -298,8 +298,23 @@ impl FakeIdentity {
 
 /// The canonical Jeff-on-Rust claim from US-001 Example 1 and the
 /// journey YAML.
+///
+/// Shape mirrors the three-claims fixture's first entry (same
+/// subject/predicate/object/evidence/confidence) so the
+/// `subject=github:rust-lang/rust` canonical CID is reproducible
+/// across single-claim and multi-claim scenarios. Author DID matches
+/// `FakeIdentity::jeff()` so subprocess signing cross-verifies.
 pub fn fixture_jeff_rust_memory_safety() -> UnsignedClaimFixture {
-    todo!("DELIVER: build the UnsignedClaimFixture matching US-001 Example 1")
+    UnsignedClaimFixture {
+        subject: "github:rust-lang/rust".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.memory-safety".to_string(),
+        evidence: vec!["https://www.rust-lang.org/".to_string()],
+        confidence: 0.86,
+        author_did: "did:plc:test-jeff#org.openlore.application".to_string(),
+        composed_at: "2026-05-25T12:00:00Z".to_string(),
+        references: Vec::new(),
+    }
 }
 
 /// The Maria-on-Mastodon claim from US-001 Example 2 (confidence

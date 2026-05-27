@@ -140,7 +140,7 @@ fn federation_roundtrip_pds_record_rkey_equals_claim_cid() {
     let env = TestEnv::initialized();
     let fixture = fixture_jeff_rust_memory_safety();
 
-    let _outcome = run_openlore_with_stdin(
+    let outcome = run_openlore_with_stdin(
         &env,
         &[
             "claim", "add",
@@ -152,10 +152,40 @@ fn federation_roundtrip_pds_record_rkey_equals_claim_cid() {
         ],
         "\nY\n",
     );
-    let cid = "bafy..."; // todo!("parse from outcome.stdout")
+    assert_eq!(
+        outcome.status, 0,
+        "claim add must succeed for FR-2 fixture; got status {} \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status, outcome.stdout, outcome.stderr,
+    );
 
-    // The fake PDS contains exactly one record; its rkey == cid.
-    todo!("DELIVER: assert env.pds.records().len() == 1; assert env.pds.records()[0].rkey == cid; assert env.pds.records()[0].collection == \"org.openlore.claim\"")
+    let cid = parse_cid_from_stdout(&outcome.stdout);
+
+    // The fake PDS contains exactly one record; its rkey == cid and
+    // its collection == "org.openlore.claim". This is the federation
+    // contract that powers idempotency (WS-9) and at-uri
+    // reconstructibility (FR-3).
+    let records = env.pds.records();
+    assert_eq!(
+        records.len(),
+        1,
+        "expected exactly one PDS record after one publish; got {}: {:?}",
+        records.len(),
+        records,
+    );
+    let record = &records[0];
+    assert_eq!(
+        record.rkey, cid,
+        "FR-2 contract violated: PDS record rkey ({:?}) must equal parsed claim CID ({:?}); \
+         full record: {:?}",
+        record.rkey, cid, record,
+    );
+    assert_eq!(
+        record.collection, "org.openlore.claim",
+        "FR-2 contract violated: PDS record collection ({:?}) must equal \"org.openlore.claim\"; \
+         full record: {:?}",
+        record.collection, record,
+    );
 }
 
 // =============================================================================
