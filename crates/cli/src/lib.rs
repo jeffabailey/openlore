@@ -191,9 +191,19 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        Command::Claim(ClaimCommand::Retract { .. }) => {
-            panic!("Not yet implemented -- RED scaffold");
-        }
+        Command::Claim(ClaimCommand::Retract { cid }) => match verbs::claim_retract::run(
+            &wiring,
+            &verbs::claim_retract::ClaimRetractArgs { cid },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore claim retract: {err:#}");
+                1
+            }
+        },
         Command::Graph(GraphCommand::Query { subject }) => {
             match verbs::graph_query::run(
                 &wiring,

@@ -809,8 +809,10 @@ fn walking_skeleton_graph_query_empty_result_is_explained_not_silent() {
 fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
     let env = TestEnv::initialized();
 
-    // Publish original
-    let _publish_outcome = run_openlore_with_stdin(
+    // Publish original — chained Y branch funnels through the single
+    // publish code path (ADR-003), so we can parse the CID out of the
+    // same `Computing claim CID <cid>` marker WS-6/WS-7 pinned.
+    let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
             "claim", "add",
@@ -822,21 +824,30 @@ fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
         ],
         "\nY\n",
     );
-    let original_cid = "bafy..."; // todo!("parse from _publish_outcome.stdout")
+    assert_eq!(
+        publish_outcome.status, 0,
+        "publish of original must succeed before retraction; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        publish_outcome.status, publish_outcome.stdout, publish_outcome.stderr,
+    );
+    let original_cid = parse_cid_from_stdout(&publish_outcome.stdout);
 
-    // Retract
-    let retract_outcome = run_openlore(&env, &["claim", "retract", original_cid]);
+    // Retract — step 05-14 wires the standalone verb.
+    let retract_outcome = run_openlore(&env, &["claim", "retract", &original_cid]);
 
     assert_exit_zero_and_stdout_contains(&retract_outcome, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
 
-    // The new claim's CID is different
-    let retract_cid = "bafyDIFFERENT..."; // todo!("parse new CID from retract_outcome.stdout")
-    assert!(retract_cid != original_cid, "retraction must have its own CID");
+    // The new claim's CID is different — the `references[]` change
+    // perturbs the canonical CBOR pre-image, which perturbs the CID per
+    // ADR-006. Reuse the same `Computing claim CID <cid>` parser the
+    // sign path emits.
+    let retract_cid = parse_cid_from_stdout(&retract_outcome.stdout);
+    assert!(
+        retract_cid != original_cid,
+        "retraction must have its own CID; got original={original_cid} retract={retract_cid}",
+    );
 
     // The new claim's references field points at the original
-    assert_claim_references_retract(&env, retract_cid, original_cid);
-
-    todo!("DELIVER: implement `claim retract`; ensure retraction is a fresh signed claim with references[{{type=retracts, cid=original_cid}}]")
+    assert_claim_references_retract(&env, &retract_cid, &original_cid);
 }
 
 /// WS-15: Retraction preserves the original record in BOTH the local

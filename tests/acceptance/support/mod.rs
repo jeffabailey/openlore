@@ -610,6 +610,40 @@ pub fn assert_duckdb_publication_metadata_for_cid(env: &TestEnv, cid: &str, expe
 /// Universe-bound: "the retraction's `references` field includes
 /// `{type: \"retracts\", cid: <original_cid>}`". Port-exposed name:
 /// `claim.references.contains_retracts_target`.
+///
+/// Reads the on-disk `<retract_cid>.json` artefact under the test
+/// env's claims_dir, deserialises into the canonical
+/// `claim_domain::SignedClaim`, and asserts the `references[]` array
+/// contains at least one entry with `ref_type == Retracts` AND
+/// `cid == original_cid`. Reading through the domain type (rather
+/// than ad-hoc JSON-poking) pins the contract to whatever serde shape
+/// `SignedClaim` actually serializes — refactoring stays GREEN.
 pub fn assert_claim_references_retract(env: &TestEnv, retract_cid: &str, original_cid: &str) {
-    todo!("DELIVER: read claims_dir/<retract_cid>.json, parse references array, assert one entry has type=retracts and cid=original_cid")
+    let artifact_path = env.claims_dir().join(format!("{retract_cid}.json"));
+    let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected retraction claim file at {}; got {e}",
+            artifact_path.display()
+        )
+    });
+    let signed: claim_domain::SignedClaim =
+        serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "could not deserialize retraction claim at {}: {e}\n--- file ---\n{}",
+                artifact_path.display(),
+                String::from_utf8_lossy(&json_bytes)
+            )
+        });
+
+    let has_retracts_pointer = signed.unsigned.references.iter().any(|r| {
+        matches!(r.ref_type, claim_domain::ReferenceType::Retracts)
+            && r.cid.0 == original_cid
+    });
+    assert!(
+        has_retracts_pointer,
+        "expected retraction claim at {} to contain references[] entry with \
+         {{type=Retracts, cid={original_cid}}}; actual references={:?}",
+        artifact_path.display(),
+        signed.unsigned.references,
+    );
 }

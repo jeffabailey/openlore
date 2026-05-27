@@ -1150,6 +1150,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-27T01:59:50Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T02:00:07Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T02:31:48Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T02:31:54Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: WS-14 covers retract verb end-to-end",
+      "t": "2026-05-27T02:32:04Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T02:34:13Z"
     }
   ]
 }
