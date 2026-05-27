@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use ports::{AtUri, PdsError, PdsPort, ProbeOutcome};
+use ports::{AtUri, CreateRecordOutcome, PdsError, PdsPort, ProbeOutcome};
 use serde_json::Value;
 
 /// One record as observed by the fake PDS.
@@ -304,9 +304,23 @@ async fn http_route(
                 ));
             }
             match fake.create_record(collection, rkey, record).await {
-                Ok(at_uri) => Ok(json_response(
+                Ok(outcome) if outcome.was_idempotent => {
+                    // rkey collision → HTTP 409 so the real adapter's
+                    // 409-conflict arm fires (architecture §6.2 + WS-9).
+                    // Body shape mirrors a typical PDS rejection — the
+                    // adapter ignores the body on 409 and synthesizes
+                    // the at-uri itself.
+                    Ok(json_response(
+                        409,
+                        serde_json::json!({
+                            "error": "RecordAlreadyExists",
+                            "message": format!("record exists at {}/{}/{}", "<repo>", collection, rkey),
+                        }),
+                    ))
+                }
+                Ok(outcome) => Ok(json_response(
                     200,
-                    serde_json::json!({"uri": at_uri.0, "cid": rkey}),
+                    serde_json::json!({"uri": outcome.at_uri.0, "cid": rkey}),
                 )),
                 Err(_) => Ok(json_response(
                     503,
@@ -467,7 +481,7 @@ impl PdsPort for FakePds {
         collection: &str,
         rkey: &str,
         body: Value,
-    ) -> Result<AtUri, PdsError> {
+    ) -> Result<CreateRecordOutcome, PdsError> {
         if self.is_unreachable() {
             return Err(PdsError::Unreachable {
                 message: format!(
@@ -480,9 +494,10 @@ impl PdsPort for FakePds {
         let mut records = self.state.records.lock().expect("fake pds mutex poisoned");
 
         // Idempotency: if a record with this (collection, rkey) already
-        // exists, return the existing AT URI without modifying state.
-        // The real adapter exhibits the same shape on 409/conflict per
-        // architecture §6.2.
+        // exists, return the existing AT URI without modifying state and
+        // flag `was_idempotent = true`. The real adapter exhibits the
+        // same shape on 409/conflict per architecture §6.2 — the
+        // cli renders "already published" off this bit.
         let already_present = records
             .iter()
             .any(|r| r.collection == collection && r.rkey == rkey);
@@ -496,7 +511,10 @@ impl PdsPort for FakePds {
             });
         }
 
-        Ok(AtUri(at_uri))
+        Ok(CreateRecordOutcome {
+            at_uri: AtUri(at_uri),
+            was_idempotent: already_present,
+        })
     }
 
     /// Look up a record by `(collection, rkey)`. Returns the JSON body
@@ -569,14 +587,18 @@ mod tests {
             "object": "org.openlore.philosophy.memory-safety",
         });
 
-        let at_uri = fake
+        let outcome = fake
             .create_record(COLLECTION, "bafy_test_cid_001", body.clone())
             .await
             .expect("create succeeds");
 
         assert_eq!(
-            at_uri.0, "at://did:plc:test-jeff/org.openlore.claim/bafy_test_cid_001",
+            outcome.at_uri.0, "at://did:plc:test-jeff/org.openlore.claim/bafy_test_cid_001",
             "AT URI must follow at://<did>/<collection>/<rkey> shape"
+        );
+        assert!(
+            !outcome.was_idempotent,
+            "fresh insert must not be flagged as idempotent"
         );
 
         let fetched = fake
@@ -600,18 +622,26 @@ mod tests {
         let body_v1 = json!({"version": 1});
         let body_v2 = json!({"version": 2}); // would-be overwrite, must be ignored
 
-        let uri_first = fake
+        let first = fake
             .create_record(COLLECTION, "bafy_collision_rkey", body_v1.clone())
             .await
             .expect("first insert");
-        let uri_second = fake
+        let second = fake
             .create_record(COLLECTION, "bafy_collision_rkey", body_v2)
             .await
             .expect("second insert (collision)");
 
         assert_eq!(
-            uri_first, uri_second,
+            first.at_uri, second.at_uri,
             "rkey collision must return the same AT URI both times"
+        );
+        assert!(
+            !first.was_idempotent,
+            "first insert must not be flagged as idempotent"
+        );
+        assert!(
+            second.was_idempotent,
+            "second insert on same rkey MUST be flagged as idempotent (WS-9)"
         );
         assert_eq!(
             fake.record_count(),

@@ -556,7 +556,9 @@ fn parse_at_uri_from_stdout(stdout: &str) -> String {
 fn walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid() {
     let env = TestEnv::initialized();
 
-    // First publish via chained flow
+    // First publish via chained flow. Step 05-08 wired this; the
+    // chained-Y branch funnels through the same `publish_signed_claim`
+    // helper the standalone verb uses.
     let first = run_openlore_with_stdin(
         &env,
         &[
@@ -569,15 +571,55 @@ fn walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid() {
         ],
         "\nY\n",
     );
-    // Extract CID from first.stdout — DELIVER provides a helper.
-    let _cid = "bafy..."; // todo!("parse CID from first.stdout")
+    assert_exit_zero_and_stdout_contains(&first, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
+    let cid = parse_cid_from_stdout(&first.stdout);
+    let at_uri_first = parse_at_uri_from_stdout(&first.stdout);
 
-    // Second invocation via the standalone verb
-    let second = run_openlore(&env, &["claim", "publish", "bafy..."]);
+    // Snapshot the PDS record-count for this at-uri after the first
+    // publish so we can verify the second invocation didn't insert a
+    // duplicate (architecture §6.2: 409 conflict = idempotent success).
+    let records_after_first: Vec<_> = env
+        .pds
+        .records()
+        .into_iter()
+        .filter(|r| r.at_uri == at_uri_first)
+        .collect();
+    assert_eq!(
+        records_after_first.len(),
+        1,
+        "expected exactly one PDS record for {at_uri_first} after first publish; got {}: {:?}",
+        records_after_first.len(),
+        records_after_first
+    );
+
+    // Second invocation via the standalone verb on the same CID. This
+    // is the WS-9 contract — `openlore claim publish <cid>` on an
+    // already-published claim exits 0 with an "already published"
+    // hint instead of acting like a fresh publish.
+    let second = run_openlore(&env, &["claim", "publish", &cid]);
 
     assert_exit_zero_and_stdout_contains(&second, "already published");
-    // And the fake PDS still has exactly one record for that at-uri
-    todo!("DELIVER: assert env.pds.records().len() == 1 for the cid; second outcome exit 0; message includes 'already present'")
+    // The at-uri line is still printed so the user can see WHERE the
+    // claim lives.
+    assert_exit_zero_and_stdout_contains(&second, &format!("at-uri: {at_uri_first}"));
+
+    // And the fake PDS still has exactly ONE record for that at-uri —
+    // no duplicate insertion. This is the load-bearing observable: the
+    // PDS-side ledger remains single-entry across re-publishes.
+    let records_after_second: Vec<_> = env
+        .pds
+        .records()
+        .into_iter()
+        .filter(|r| r.at_uri == at_uri_first)
+        .collect();
+    assert_eq!(
+        records_after_second.len(),
+        1,
+        "expected exactly one PDS record for {at_uri_first} after idempotent re-publish; \
+         got {}: {:?}",
+        records_after_second.len(),
+        records_after_second
+    );
 }
 
 /// WS-10: PDS unreachable leaves the local claim intact and retry-able.

@@ -940,6 +940,76 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-27T00:51:11Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T00:51:31Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T00:55:21Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T00:55:28Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: WS-8 covers publish path end-to-end",
+      "t": "2026-05-27T00:55:35Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:10:38Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:11:36Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:15:23Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:16:05Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: WS-9 covers idempotent path end-to-end",
+      "t": "2026-05-27T01:16:08Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-27T01:19:49Z"
     }
   ]
 }

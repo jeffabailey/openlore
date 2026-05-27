@@ -80,6 +80,29 @@ pub enum PdsError {
     IdempotencyViolation { message: String },
 }
 
+/// Result of one successful `create_record` call.
+///
+/// `at_uri` is the canonical AT URI of the record (whether freshly
+/// inserted or pre-existing). `was_idempotent` distinguishes:
+///
+/// - `false` — this invocation actually inserted the record (HTTP 2xx
+///   from `com.atproto.repo.createRecord`).
+/// - `true`  — the rkey already existed on the PDS; the adapter
+///   classified the 409/`RecordAlreadyExists` response as success per
+///   architecture §6.2 (WS-9 idempotent-republish contract).
+///
+/// The `claim publish` verb branches its rendered success message on
+/// this bit so users re-publishing a CID see "already published"
+/// instead of the fresh-publish wording. Keeping idempotency as a
+/// caller-observable bit (rather than a sentinel error) preserves
+/// railway-oriented composition: the success arm carries everything the
+/// caller needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateRecordOutcome {
+    pub at_uri: AtUri,
+    pub was_idempotent: bool,
+}
+
 #[async_trait]
 pub trait PdsPort: Send + Sync {
     fn probe(&self) -> ProbeOutcome;
@@ -88,7 +111,7 @@ pub trait PdsPort: Send + Sync {
         collection: &str,
         rkey: &str,
         body: serde_json::Value,
-    ) -> Result<AtUri, PdsError>;
+    ) -> Result<CreateRecordOutcome, PdsError>;
     async fn get_record(
         &self,
         collection: &str,

@@ -114,7 +114,7 @@ pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) -> Result<Pub
     // We use `current_thread` because publish is sequential and we
     // want to keep the binary's runtime footprint minimal.
     let runtime = build_tokio_runtime();
-    let at_uri = runtime
+    let create_outcome = runtime
         .block_on(wiring.pds.create_record(collection, &cid_str, body))
         .with_context(|| {
             format!(
@@ -123,22 +123,31 @@ pub fn publish_signed_claim(wiring: &Wiring, signed: &SignedClaim) -> Result<Pub
             )
         })?;
 
+    // Step 05-09: branch the rendered success message on the port's
+    // `was_idempotent` bit. The PdsPort lifts the 409/RecordAlreadyExists
+    // path into a normal success carrying `was_idempotent = true`
+    // (architecture §6.2). `record_publication` is itself an UPDATE so
+    // re-recording the same (cid, at_uri, published_at) is safe and
+    // keeps the local index consistent across re-publishes.
     let published_at = wiring.clock.now_utc();
     wiring
         .storage
-        .record_publication(&signed.signature.signed_cid, &at_uri.0, published_at)
+        .record_publication(
+            &signed.signature.signed_cid,
+            &create_outcome.at_uri.0,
+            published_at,
+        )
         .with_context(|| {
-            format!("recording publication metadata for {cid_str} at {}", at_uri.0)
+            format!(
+                "recording publication metadata for {cid_str} at {}",
+                create_outcome.at_uri.0
+            )
         })?;
 
     Ok(PublishOutcome {
         cid: cid_str,
-        at_uri: at_uri.0,
-        // Slice-01: the PdsPort doesn't expose "was-idempotent" — both
-        // first-publish and 409-retry return the same Ok(AtUri). WS-9
-        // covers the idempotent-retry path; until that step lands the
-        // standalone verb always renders the fresh-publish message.
-        already_present: false,
+        at_uri: create_outcome.at_uri.0,
+        already_present: create_outcome.was_idempotent,
     })
 }
 

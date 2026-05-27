@@ -67,7 +67,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{AtUri, PdsError, PdsPort, ProbeOutcome, ProbeRefusalReason};
+use ports::{AtUri, CreateRecordOutcome, PdsError, PdsPort, ProbeOutcome, ProbeRefusalReason};
 
 pub mod probe;
 
@@ -237,7 +237,7 @@ impl PdsPort for AtProtoPdsAdapter {
         collection: &str,
         rkey: &str,
         body: serde_json::Value,
-    ) -> Result<AtUri, PdsError> {
+    ) -> Result<CreateRecordOutcome, PdsError> {
         if self.endpoint.is_empty() {
             return Err(PdsError::Unreachable {
                 message: "PDS endpoint URL is empty; configure pds_endpoint at openlore init"
@@ -305,12 +305,20 @@ impl PdsPort for AtProtoPdsAdapter {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| self.synth_at_uri(collection, rkey));
-            Ok(AtUri(uri))
+            Ok(CreateRecordOutcome {
+                at_uri: AtUri(uri),
+                was_idempotent: false,
+            })
         } else if status == reqwest::StatusCode::CONFLICT {
             // 409 conflict — idempotent success path. Synthesize the
             // at-uri from our own DID + collection + rkey because the
-            // 409 body shape varies across PDS implementations.
-            Ok(AtUri(self.synth_at_uri(collection, rkey)))
+            // 409 body shape varies across PDS implementations. The
+            // `was_idempotent` bit lets the cli render "already
+            // published" instead of acting like a fresh insert (WS-9).
+            Ok(CreateRecordOutcome {
+                at_uri: AtUri(self.synth_at_uri(collection, rkey)),
+                was_idempotent: true,
+            })
         } else {
             let body_text = response.text().await.unwrap_or_default();
             Err(PdsError::RecordRejected {
