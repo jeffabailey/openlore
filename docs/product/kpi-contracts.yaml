@@ -1,0 +1,94 @@
+# OpenLore KPI Contracts (cross-feature SSOT)
+#
+# Bootstrapped at finalize of `openlore-foundation` (slice-01 walking skeleton)
+# on 2026-05-27. This file is the cross-feature single source of truth for
+# outcome KPIs going forward; subsequent features extend or refine entries here.
+# Per-feature KPI rationale lives in
+# `docs/feature/{feature-id}/discuss/outcome-kpis.md` during active waves.
+#
+# Schema (per entry):
+#   id:                     stable KPI identifier (e.g. KPI-1)
+#   name:                   short human label
+#   type:                   leading | guardrail | north-star
+#   feature_origin:         the feature that introduced this KPI
+#   persona:                target persona id from docs/product/personas/
+#   target:                 measurable target (with units)
+#   measurement_method:     how it's measured (test, telemetry, survey)
+#   baseline_at_ga:         baseline value at General Availability (or status note)
+#   notes:                  caveats, deferrals, links
+
+schema_version: 1
+last_updated: 2026-05-27
+
+kpis:
+  - id: KPI-1
+    name: "Time-to-publish first claim (e2e wall-clock)"
+    type: leading
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: "<= 2 minutes from compose_start_at to publish_success_at"
+    measurement_method: "local opt-in telemetry (XDG state dir); timestamps on compose/publish events; never auto-exfiltrated"
+    baseline_at_ga: "to be measured in dogfood week 1 (slice-01 ships local telemetry events; no aggregation infrastructure)"
+    notes: "Telemetry hook ships in slice-01 cli via tracing spans; aggregation across users requires opt-in telemetry endpoint deferred per ADR-010."
+
+  - id: KPI-2
+    name: "Non-abandon rate of started compose sessions"
+    type: leading
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: ">= 80% of started compose sessions reach publish (vs explicit cancel or abort)"
+    measurement_method: "local opt-in telemetry: counter of compose_started vs publish_success vs cancel_at vs abort_at"
+    baseline_at_ga: "to be measured in dogfood week 1"
+    notes: "Counter increments ship in slice-01; cohort aggregation requires opt-in telemetry endpoint deferred per ADR-010."
+
+  - id: KPI-3
+    name: "Felt-framing (\"this felt like my reasoning, not a truth assertion\")"
+    type: leading
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: ">= 4/5 average on a 5-point post-publish survey (opt-in, one-shot, first 50 publishes)"
+    measurement_method: "one-time post-publish CLI prompt; dismissible; opt-in"
+    baseline_at_ga: "instrumentation ships in slice-01 (cli +stats verb deferred to follow-up); cohort aggregation requires opt-in telemetry endpoint deferred per ADR-010"
+    notes: "Survey delivery hook is implemented in cli; the +stats verb that surfaces aggregate results is a follow-up. PO owns survey copy."
+
+  - id: KPI-4
+    name: "Zero silent normalization (compose-preview == query-output)"
+    type: guardrail
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: "100% field-for-field match between compose preview and post-publish graph query (zero tolerance)"
+    measurement_method: "integration test on every release (tests/walking_skeleton.rs::WS-12 + tests/federation_roundtrip.rs) + telemetry counter `field_mismatch_detected` (target: 0)"
+    baseline_at_ga: "verified by AT (FR-4 in tests/federation_roundtrip.rs and WS-12 in tests/walking_skeleton.rs both GREEN as of slice-01 ship)"
+    notes: "Guardrail — any release that lowers this is blocked regardless of how well leading indicators move."
+
+  - id: KPI-5
+    name: "Local-first invariant (compose + sign succeed offline)"
+    type: guardrail
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: "100% success of compose-and-sign with network disabled; publish must fail cleanly with retry-actionable error"
+    measurement_method: "integration test on every release (tests/walking_skeleton.rs::WS-10 runs with network namespace disabled)"
+    baseline_at_ga: "verified by AT (WS-10 GREEN as of slice-01 ship; the Phase 3.5 demo for US-003 also organically exercises this path by failing publish against an unreachable placeholder PDS while keeping the local file intact)"
+    notes: "Guardrail — any release that lowers this is blocked. WSL2 keychain fallback path is documented (ADR-002) but not exercised in macOS dev-box CI."
+
+  - id: KPI-6
+    name: "Day-30 north star: \"would NOT have published this as a blog post\""
+    type: north-star
+    feature_origin: openlore-foundation
+    persona: P-001
+    target: ">= 60% of P-001 cohort reports at day-30 that >= 3 of their last N claims would NOT have been published as a blog post"
+    measurement_method: "opt-in day-30 survey delivered via CLI prompt; scheduled relative to first publish"
+    baseline_at_ga: "instrumentation ships in slice-01 (day-30 prompt scheduler hook lands in cli); cohort aggregation requires opt-in telemetry endpoint deferred per ADR-010"
+    notes: "This is the actual product hypothesis; every other KPI is a leading indicator of this one. PO owns survey copy and day-30 prompt timing. Cohort analysis requires either an opt-in telemetry endpoint or manual aggregation from dogfood users."
+
+# Guardrail policy:
+#   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
+#   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
+#   matrix and how mutation-test kill-rate + guardrail KPIs gate version tags.
+#
+# Pointers:
+#   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
+#   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
+#   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
+#   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml
+#   - Architecture brief: docs/product/architecture/brief.md
