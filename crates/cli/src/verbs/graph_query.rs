@@ -319,6 +319,20 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
         }
     }
 
+    // GQE-16 (US-GRAPH-005 happy; Gate 1 + Gate 2): the `--object <philosophy>
+    // --weighted --explain <subject>` branch — the per-claim weight audit. Feeds
+    // the SAME attributed scoring feed into the PURE `scoring::score` core, then
+    // renders the verbose per-claim breakdown for the named subject (each
+    // contribution's author DID + cid + base confidence + applied bonuses + a
+    // running sum that equals the pairing's adherence weight, reproduce-by-hand).
+    // `--explain` for a subject absent from the result set is a usage error
+    // (non-zero exit) per architecture-design §5.2 invariant 5 (GQE-18).
+    if args.weighted && !args.traverse {
+        if let (Some(object), Some(subject)) = (args.object.as_deref(), args.explain.as_deref()) {
+            return run_explain_object(wiring, object, subject);
+        }
+    }
+
     if !args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_object_dimension(wiring, object);
@@ -445,6 +459,62 @@ fn run_weighted_object(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcom
     let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
 
     let stdout = crate::render::render_weighted_view(object, &view);
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// GQE-16 (US-GRAPH-005 happy; Gate 1 + Gate 2): the `--object <philosophy>
+/// --weighted --explain <subject>` branch — the per-claim weight audit. The
+/// verbose sibling of [`run_weighted_object`]: same thin port-call → PURE score,
+/// then render the detailed per-claim breakdown for the NAMED subject.
+///
+/// The flow:
+///   1. Read the attributed scoring feed via
+///      `StoragePort::query_attributed_for_scoring(ByObject)` — the SAME
+///      per-claim `UNION ALL` feed the `--weighted` view consumes (anti-merging,
+///      no SQL aggregation; I-GRAPH-2 / WD-73).
+///   2. Aggregate in PURE Rust: `scoring::score(&feed, &ScoringConfig::DEFAULT)`.
+///      The weight is the SUM of the per-claim `Contribution::subtotal` values,
+///      so it decomposes exactly (Gate 2 reproduce-by-hand).
+///   3. Find the ranked pairing whose subject == the `--explain` argument and
+///      render its per-claim breakdown (`render::render_weighted_explain`): each
+///      contribution's author DID + cid + base confidence + applied bonus lines +
+///      a running sum that equals the displayed adherence weight. Gate 1: every
+///      contribution is shown under its author — no faceless aggregate.
+///
+/// `--explain <subject>` for a subject ABSENT from the result set is a USAGE
+/// ERROR (non-zero exit) — distinct from an empty dimension query which exits 0
+/// (architecture-design §5.2 invariant 5; GQE-18). The error names the absent
+/// subject so the operator knows which lookup missed.
+///
+/// Explorer flags imply federated scope (WD-87) — the feed already spans own +
+/// peers. Weights are DERIVED + DISPLAY-ONLY: computed at query time, NEVER
+/// persisted/signed/published (WD-72).
+fn run_explain_object(wiring: &Wiring, object: &str, subject: &str) -> Result<GraphQueryOutcome> {
+    let filter = ports::ScoringFilter::ByObject {
+        object: object.to_string(),
+    };
+    let feed = wiring
+        .storage
+        .query_attributed_for_scoring(&filter)
+        .with_context(|| format!("reading the scoring feed for object {object}"))?;
+
+    // The aggregation happens HERE, in the pure core — never in SQL.
+    let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+
+    // GQE-18 (architecture-design §5.2 invariant 5): `--explain` for a subject
+    // absent from the result set is a USAGE ERROR (non-zero exit), distinct from
+    // an empty dimension query's exit 0. Surface it as an `anyhow::Error` so the
+    // dispatcher's `eprintln!` carries the absent-subject message and the process
+    // exits non-zero.
+    let Some(pairing) = view.ranked.iter().find(|p| p.subject == subject) else {
+        anyhow::bail!("Subject {subject} is not in this result set.");
+    };
+
+    let stdout = crate::render::render_weighted_explain(object, pairing);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

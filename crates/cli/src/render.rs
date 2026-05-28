@@ -1410,6 +1410,146 @@ this philosophy on >=2 distinct subjects\n",
     out
 }
 
+// -----------------------------------------------------------------------------
+// Slice-04 (ADR-020) — `graph query --weighted --explain <subject>` renderer
+// -----------------------------------------------------------------------------
+
+/// Content-frozen closing line for the `--explain` breakdown (WD-71 / Gate 2;
+/// GQE-16 reproduce-by-hand). States that the running sum of the visible
+/// per-claim subtotals EQUALS the displayed adherence weight, so a user can
+/// reproduce the aggregate by hand. The `{running}` / `{weight}` placeholders are
+/// filled with the SAME pairing weight (they are equal by construction —
+/// `weight == sum(contributions.subtotal)`). Pure helper.
+const EXPLAIN_RUNNING_SUM_EQUALS_WEIGHT: &str =
+    "Running sum {running} = displayed adherence weight {weight} (reproduce-by-hand; Gate 2).";
+
+/// Render the `graph query --weighted --explain <subject>` breakdown for ONE
+/// matched pairing: the verbose sibling of [`render_weighted_view`]. Enumerates
+/// EACH contributing claim (author DID + cid + base confidence + every applied
+/// bonus on its own line + a per-claim subtotal + a running sum), and closes with
+/// the line stating the running sum EQUALS the displayed adherence weight. Pure
+/// function — no I/O, no storage access.
+///
+/// ## Gate 1 — aggregate preserves attribution (anti-merging, I-GRAPH-2 / WD-73)
+///
+/// Every contribution is shown under its OWN author DID + cid. No contributing
+/// claim is collapsed into a faceless consensus row — the decomposition the
+/// `WeightedPairing` carries (non-empty by construction) is rendered verbatim.
+///
+/// ## Gate 2 — weight == formula (reproduce-by-hand, WD-71 / KPI-GRAPH-3)
+///
+/// The running sum is accumulated over the SAME `Contribution::subtotal` values
+/// the pure `scoring::score` core summed to produce `pairing.weight`. The closing
+/// line states `running sum == weight`; they are equal by construction
+/// (`weight == sum(contributions.subtotal)`), so the audit reproduces the
+/// displayed weight exactly.
+///
+/// The applied-bonus lines surface each multiplier/addend that shaped a claim's
+/// subtotal: the author-distinct multiplier share (`x1.0` for the first author,
+/// raised per additional distinct author) and the `+0.5 cross-project
+/// triangulation` addend (only when this author asserts the object on >= 2
+/// distinct subjects — attributed to the author who earned it, GQE-19).
+pub fn render_weighted_explain(object: &str, pairing: &scoring::WeightedPairing) -> String {
+    let mut out = String::new();
+    let heading = format!(
+        "Explain: {subject}  (object {object})",
+        subject = pairing.subject
+    );
+    out.push_str(&heading);
+    out.push('\n');
+    out.push_str(&"=".repeat(heading.len()));
+    out.push_str("\n\n");
+
+    out.push_str(&format!(
+        "Adherence weight {weight} reproduced from each contributing claim:\n\n",
+        weight = render_weight_value(pairing.weight),
+    ));
+
+    // WD-74 (Gate 3) sparse-honesty: a thin (single-claim single-author no-span)
+    // pairing repeats the [SPARSE] honesty line so the per-claim audit never reads
+    // as a settled verdict (GQE-17 extends this).
+    out.push_str(&render_sparse_honesty_block(pairing));
+    if matches!(pairing.bucket, scoring::WeightBucket::Sparse) {
+        out.push('\n');
+    }
+
+    // Accumulate the running sum over the SAME subtotals the pure core summed to
+    // the displayed weight (Gate 2 reproduce-by-hand).
+    let mut running = 0.0_f64;
+    for contribution in pairing.contributions() {
+        running += contribution.subtotal;
+        out.push_str(&render_explain_contribution(contribution, running));
+    }
+
+    out.push('\n');
+    let running_line = EXPLAIN_RUNNING_SUM_EQUALS_WEIGHT
+        .replace("{running}", &render_weight_value(running))
+        .replace("{weight}", &render_weight_value(pairing.weight));
+    out.push_str(&running_line);
+    out.push('\n');
+    out
+}
+
+/// Render a DERIVED weight value (the aggregate weight, a per-claim subtotal, or
+/// the running sum) at two decimal places — the SAME `{:.2}` presentation
+/// [`render_weighted_pairing`] uses for the `--weighted` view, so the
+/// `--explain` running sum reads as the displayed weight (`1.05`, not the raw
+/// `1.0500000000000002` an f64 sum can carry). DISPLAY-ONLY: these are computed
+/// at query time, never persisted. The compose-time `base` confidence is NOT
+/// rendered through this — it stays verbatim via [`render_candidate_confidence`]
+/// (KPI-4 zero-normalization). Pure helper.
+fn render_weight_value(value: f64) -> String {
+    format!("{value:.2}")
+}
+
+/// Render ONE contribution block for the `--explain` breakdown: the author DID,
+/// the claim cid, the base confidence, each applied bonus on its OWN line, the
+/// per-claim subtotal, and the running sum after this claim. Pure helper.
+///
+/// The author-distinct multiplier share is ALWAYS shown (it is `x1.0` for the
+/// first author — making the no-bonus case explicit rather than silent); the
+/// `+0.5 cross-project triangulation` addend is shown ONLY when it applied,
+/// attributed to this contribution's author (GQE-19). The subtotal is the value
+/// the pure core computed — `base x author-distinct-share + triangulation`.
+fn render_explain_contribution(contribution: &scoring::Contribution, running: f64) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "  Contribution: {author}\n",
+        author = contribution.author_did.0,
+    ));
+    out.push_str(&format!(
+        "    cid:        {cid}\n",
+        cid = contribution.cid.0
+    ));
+    out.push_str(&format!(
+        "    confidence: {base} (base)\n",
+        base = render_candidate_confidence(contribution.base),
+    ));
+    // Author-distinct multiplier share: x1.0 for the first author; raised by
+    // +0.25 per additional distinct author on the SAME (subject, object).
+    out.push_str(&format!(
+        "    author-distinct bonus: x{share}\n",
+        share = render_candidate_confidence(contribution.author_distinct_bonus),
+    ));
+    // Cross-project triangulation: surfaced ONLY when it applied (attributed to
+    // the author who earned it — they assert this object on >= 2 subjects; GQE-19).
+    if contribution.cross_project_triangulation_bonus > 0.0 {
+        out.push_str(&format!(
+            "    +{bonus} cross-project triangulation\n",
+            bonus = render_candidate_confidence(contribution.cross_project_triangulation_bonus),
+        ));
+    }
+    out.push_str(&format!(
+        "    subtotal:   {subtotal}\n",
+        subtotal = render_weight_value(contribution.subtotal),
+    ));
+    out.push_str(&format!(
+        "    running sum: {running}\n",
+        running = render_weight_value(running),
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1419,6 +1559,152 @@ mod tests {
     fn confidence(value: f64) -> Confidence {
         serde_json::from_value(serde_json::json!(value))
             .expect("test confidence value is well-formed")
+    }
+
+    /// Build one `scoring::Contribution` for the `--explain` renderer unit
+    /// tests. Mirrors the shape `scoring::score` emits: a base confidence, the
+    /// author-distinct multiplier share, an optional triangulation addend, and
+    /// the subtotal `base * share + triangulation`.
+    fn contribution(
+        author_did: &str,
+        cid: &str,
+        base: f64,
+        author_distinct_bonus: f64,
+        triangulation: f64,
+    ) -> scoring::Contribution {
+        scoring::Contribution {
+            author_did: Did(author_did.to_string()),
+            cid: Cid(cid.to_string()),
+            base,
+            author_distinct_bonus,
+            cross_project_triangulation_bonus: triangulation,
+            subtotal: base * author_distinct_bonus + triangulation,
+        }
+    }
+
+    /// GQE-16 unit (Gate 1 + Gate 2): `render_weighted_explain` enumerates EACH
+    /// contributing claim under its OWN author DID + cid + base confidence +
+    /// applied bonus, and the running sum accumulated over the per-claim
+    /// subtotals EQUALS the displayed adherence weight (reproduce-by-hand). The
+    /// deno worked example: Tobias 0.55 (x1.0) + Maria 0.40 (x1.25) -> subtotals
+    /// 0.55 + 0.50 = 1.05 == weight.
+    #[test]
+    fn render_weighted_explain_running_sum_equals_displayed_weight_per_author() {
+        let contributions = vec![
+            contribution("did:plc:tobias-test", "bafytobiasd3no", 0.55, 1.0, 0.0),
+            contribution("did:plc:maria-test", "bafymariamz01", 0.40, 1.25, 0.0),
+        ];
+        // weight == sum of subtotals (the invariant the pure core upholds).
+        let weight: f64 = contributions.iter().map(|c| c.subtotal).sum();
+        let pairing = scoring::WeightedPairing::new(
+            "github:denoland/deno".to_string(),
+            "org.openlore.philosophy.dependency-pinning".to_string(),
+            weight,
+            scoring::WeightBucket::Moderate,
+            2,
+            2,
+            0.55,
+            1,
+            contributions,
+        )
+        .expect("non-empty contributions");
+
+        let rendered =
+            render_weighted_explain("org.openlore.philosophy.dependency-pinning", &pairing);
+
+        // Gate 1: EACH contributing claim is enumerated under its OWN author DID
+        // + cid + base confidence (no faceless aggregate row).
+        assert!(
+            rendered.contains("Contribution: did:plc:tobias-test"),
+            "expected Tobias's contribution headed by his DID;\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Contribution: did:plc:maria-test"),
+            "expected Maria's contribution headed by her DID;\n{rendered}"
+        );
+        assert!(
+            rendered.contains("cid:        bafytobiasd3no")
+                && rendered.contains("cid:        bafymariamz01"),
+            "expected each contribution to name its own claim cid;\n{rendered}"
+        );
+        assert!(
+            rendered.contains("confidence: 0.55 (base)")
+                && rendered.contains("confidence: 0.4 (base)"),
+            "expected each contribution to show its base confidence verbatim;\n{rendered}"
+        );
+
+        // Gate 2: each applied bonus is on its own line. Maria's second-author
+        // multiplier share (x1.25) is the +0.25 per-add'l-author bonus.
+        assert!(
+            rendered.contains("author-distinct bonus: x1") // Tobias x1.0 -> "x1"
+                && rendered.contains("author-distinct bonus: x1.25"),
+            "expected the author-distinct multiplier share shown per claim;\n{rendered}"
+        );
+
+        // Gate 2: the per-claim subtotals are visible (0.55, 0.50).
+        assert!(
+            rendered.contains("subtotal:   0.55") && rendered.contains("subtotal:   0.50"),
+            "expected each per-claim subtotal (0.55, 0.50) to be shown;\n{rendered}"
+        );
+
+        // Gate 2: the running sum EQUALS the displayed adherence weight (1.05).
+        assert!(
+            rendered.contains("Running sum 1.05 = displayed adherence weight 1.05"),
+            "expected the running sum (0.55 + 0.50 = 1.05) to equal the displayed weight \
+             (reproduce-by-hand);\n{rendered}"
+        );
+
+        // No claim is merged into a faceless aggregate.
+        for label in ["merged", "consensus", "aggregate"] {
+            assert!(
+                !rendered.to_lowercase().contains(label),
+                "the --explain breakdown must contain NO {label:?} row;\n{rendered}"
+            );
+        }
+    }
+
+    /// GQE-19 unit (Gate 1): the cross-project triangulation addend is rendered
+    /// on its OWN line attributed to the contribution's author (the one who
+    /// asserts the object on >= 2 subjects), and folded into the running sum.
+    #[test]
+    fn render_weighted_explain_attributes_triangulation_bonus_on_its_own_line() {
+        let contributions = vec![contribution(
+            "did:plc:rachel-test",
+            "bafyrachelcargo",
+            0.91,
+            1.0,
+            0.5,
+        )];
+        let weight: f64 = contributions.iter().map(|c| c.subtotal).sum();
+        let pairing = scoring::WeightedPairing::new(
+            "github:rust-lang/cargo".to_string(),
+            "org.openlore.philosophy.dependency-pinning".to_string(),
+            weight,
+            scoring::WeightBucket::Strong,
+            1,
+            1,
+            0.91,
+            2,
+            contributions,
+        )
+        .expect("non-empty contributions");
+
+        let rendered =
+            render_weighted_explain("org.openlore.philosophy.dependency-pinning", &pairing);
+
+        assert!(
+            rendered.contains("Contribution: did:plc:rachel-test"),
+            "expected the contribution attributed to Rachel;\n{rendered}"
+        );
+        assert!(
+            rendered.contains("+0.5 cross-project triangulation"),
+            "expected the +0.5 cross-project triangulation addend on its own line;\n{rendered}"
+        );
+        // 0.91 * 1.0 + 0.5 = 1.41 == weight (reproduce-by-hand).
+        assert!(
+            rendered.contains("Running sum 1.41 = displayed adherence weight 1.41"),
+            "expected the running sum (0.91 + 0.5 = 1.41) to equal the displayed weight;\n{rendered}"
+        );
     }
 
     /// Build a `FederatedRow` for a given author DID + cid + relationship +

@@ -1706,14 +1706,106 @@ fn graph_query_explain_reproduces_weight_from_per_claim_arithmetic() {
 
     // The breakdown enumerates each contributing claim with author DID + cid +
     // confidence; each applied bonus is shown; the running sum equals the
-    // displayed weight; no claim is merged. DELIVER materializes
-    // `assert_explain_sums_to_weight` + `assert_weight_decomposes_to_per_author`.
-    todo!(
-        "DELIVER (slice-04): assert `--explain github:denoland/deno` enumerates Tobias's + Maria's \
-         contributing claims (author DID + cid + confidence + applied bonus each), the running sum \
-         equals the displayed weight (reproduce-by-hand), and no claim is merged into a faceless \
-         aggregate (US-GRAPH-005 Example 1; Gate 1 + Gate 2);\n--- graph ---\n{graph:?}"
-    )
+    // displayed weight; no claim is merged.
+    //
+    // Universe (port-exposed observable surface of the `--explain` breakdown, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.contributions_per_author — Tobias + Maria each headed by
+    //                                               their OWN DID (Gate 1)
+    //   cli.graph_query.per_claim_inputs_shown    — author DID + cid + base
+    //                                               confidence + applied bonus
+    //   cli.graph_query.running_sum_equals_weight — 0.55 + 0.50 = 1.05 == weight
+    //                                               (Gate 2 reproduce-by-hand)
+    //   cli.graph_query.no_faceless_aggregate     — no merged/consensus row
+    //
+    // The deno worked example (data-models.md §"The scoring formula"; constants
+    // author_distinct_bonus 0.25, cross_project_triangulation_bonus 0.50):
+    //   Tobias  0.55 (first author, x1.0, no triangulation) -> subtotal 0.55
+    //   Maria   0.40 (second author, x1.25)                 -> subtotal 0.50
+    //   running sum 0.55 + 0.50 = 1.05 == displayed adherence weight 1.05
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: the deno pairing has exactly Tobias 0.55 + Maria 0.40.
+    let deno_authors: std::collections::HashSet<&str> = graph
+        .seeded
+        .iter()
+        .filter(|c| c.subject == "github:denoland/deno")
+        .map(|c| c.author_did.as_str())
+        .collect();
+    assert_eq!(
+        deno_authors.len(),
+        2,
+        "fixture precondition: the deno pairing has 2 distinct authors; got {deno_authors:?}"
+    );
+
+    // 1. Gate 1 — EACH contributing claim is enumerated under its OWN author DID:
+    //    Tobias and Maria each head a contribution block (no faceless aggregate).
+    assert!(
+        stdout.contains("Contribution: did:plc:tobias-test"),
+        "cli.graph_query.contributions_per_author: expected Tobias's contribution headed by \
+         his DID;\n--- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+    assert!(
+        stdout.contains("Contribution: did:plc:maria-test"),
+        "cli.graph_query.contributions_per_author: expected Maria's contribution headed by \
+         her DID;\n--- stdout ---\n{stdout}"
+    );
+
+    // 2. Each contribution names its own claim cid (every contribution maps to ONE
+    //    signed claim — each row independently attributable; Gate 5 analog). The
+    //    cids are seeded dynamically, so assert the cid-bearing line count: exactly
+    //    2 contributing claims (one per deno author), none merged or dropped.
+    let contribution_cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        contribution_cid_rows, 2,
+        "cli.graph_query.per_claim_inputs_shown: expected exactly 2 cid-bearing contribution rows \
+         (Tobias + Maria, none merged); got {contribution_cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. Each contribution shows its base confidence VERBATIM (Gate 6 — no
+    //    bucket-rounding). 0.40 renders as the minimal decimal `0.4`.
+    assert!(
+        stdout.contains("confidence: 0.55 (base)") && stdout.contains("confidence: 0.4 (base)"),
+        "cli.graph_query.per_claim_inputs_shown: expected each contribution to show its base \
+         confidence verbatim (Tobias 0.55, Maria 0.4);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. Gate 2 — each applied bonus is shown on its own line. Maria's
+    //    second-author multiplier share (x1.25) is the +0.25 per-add'l-author
+    //    bonus; Tobias (first author) carries x1.0.
+    assert!(
+        stdout.contains("author-distinct bonus: x1.25"),
+        "cli.graph_query.per_claim_inputs_shown: expected Maria's second-author multiplier \
+         share (x1.25 — the +0.25 bonus) on its own line;\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. Gate 2 — the running sum EQUALS the displayed adherence weight: the
+    //    per-claim subtotals (0.55 + 0.50) sum to 1.05, reproduced by hand.
+    assert!(
+        stdout.contains("subtotal:   0.55") && stdout.contains("subtotal:   0.50"),
+        "cli.graph_query.per_claim_inputs_shown: expected the per-claim subtotals (0.55, 0.50) \
+         to be shown;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Running sum 1.05 = displayed adherence weight 1.05"),
+        "cli.graph_query.running_sum_equals_weight: expected the running sum (0.55 + 0.50 = 1.05) \
+         to EQUAL the displayed adherence weight 1.05 (reproduce-by-hand; Gate 2);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 6. Gate 1 — no contributing claim is merged into a faceless aggregate: both
+    //    authors stay individually nameable, and no merged/consensus/aggregate row
+    //    appears.
+    for label in ["merged", "consensus", "aggregate"] {
+        assert!(
+            !stdout.to_lowercase().contains(label),
+            "cli.graph_query.no_faceless_aggregate (Gate 1): the --explain breakdown must contain \
+             NO {label:?} row — each contributing claim stays attributed;\n--- stdout ---\n{stdout}"
+        );
+    }
 }
 
 /// GQE-17 (US-GRAPH-005 edge; Gate 3): Tobias runs `--object actor-model
