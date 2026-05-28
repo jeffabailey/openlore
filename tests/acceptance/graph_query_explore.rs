@@ -1460,12 +1460,61 @@ fn graph_query_weighted_outputs_are_never_persisted_and_recompute_at_query_time(
         second.stdout, second.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert no weight/bucket string is persisted in any table or artifact \
-         after the weighted query, AND the re-run after adding a contributing claim yields a \
-         DIFFERENT weight for the affected pairing (US-GRAPH-003 Example 5; Gate 4 \
-         weight_and_bucket_never_persisted; release-gate);\n--- graph ---\n{graph:?}"
-    )
+    // Gate 4 (still nothing persisted, even after the recompute): the second
+    // weighted query — over the now-larger store — also persists no
+    // weight/bucket. The display-only aggregate never leaks into storage no
+    // matter how many times it is computed.
+    assert_weight_not_persisted(&env);
+
+    // QUERY-TIME-COMPUTE PROOF (US-GRAPH-003 Example 5): the AFFECTED pairing
+    // (github:denoland/deno — the third author landed on deno) shows a
+    // DIFFERENT adherence weight on the re-run. A persisted/cached weight would
+    // be unchanged; a recomputed weight reflects the new contributing claim.
+    //
+    // Universe (port-exposed observable surface of the recompute proof):
+    //   cli.graph_query.weighted.displayed_weight[github:denoland/deno] — the
+    //   ranked-view weight for the affected pairing, BEFORE vs AFTER the pull.
+    // The renderer prints `<subject>   weight <X.XX>   [<bucket>]`
+    // (render.rs `render_weighted_pairing`); extract the deno weight from each
+    // stdout and assert it changed.
+    let affected = "github:denoland/deno";
+    let weight_before = extract_displayed_weight(&first.stdout, affected).unwrap_or_else(|| {
+        panic!(
+            "expected the FIRST weighted view to display a weight for {affected};\n\
+             --- stdout ---\n{}",
+            first.stdout
+        )
+    });
+    let weight_after = extract_displayed_weight(&second.stdout, affected).unwrap_or_else(|| {
+        panic!(
+            "expected the SECOND weighted view (after pull) to display a weight for {affected};\n\
+             --- stdout ---\n{}",
+            second.stdout
+        )
+    });
+    assert_ne!(
+        weight_before, weight_after,
+        "cli.graph_query.weighted.displayed_weight[{affected}]: expected the affected pairing's \
+         adherence weight to CHANGE after a third contributing claim arrived ({weight_before} → \
+         {weight_after}) — proving the weight is RECOMPUTED at query time, not \
+         persisted/cached (US-GRAPH-003 Example 5; Gate 4 release-gate);\n\
+         --- first ---\n{}\n--- second ---\n{}\n--- graph ---\n{graph:?}",
+        first.stdout, second.stdout
+    );
+}
+
+/// Extract the displayed adherence weight for `subject` from a `--weighted`
+/// ranked view. The renderer prints one pairing per line as
+/// `  <rank>. <subject>   weight <X.XX>   [<bucket>]`
+/// (crates/cli/src/render.rs `render_weighted_pairing`). Returns the parsed
+/// `f64` weight for the first line naming `subject`, or `None` if absent.
+fn extract_displayed_weight(stdout: &str, subject: &str) -> Option<f64> {
+    stdout
+        .lines()
+        .find(|line| line.contains(subject) && line.contains("weight "))
+        .and_then(|line| line.split("weight ").nth(1))
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|token| token.parse::<f64>().ok())
 }
 
 /// GQE-15 (US-GRAPH-003 / I-GRAPH-7): a weighted query succeeds with the

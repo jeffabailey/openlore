@@ -2744,6 +2744,12 @@ pub struct SeededGraph {
     /// canonical fixture shape, recorded so assertions can pin per-author rows
     /// without re-deriving the recipe.
     pub seeded: Vec<SeededClaim>,
+    /// The Ed25519 pubkey hex of each subscribed peer, in the SAME order as
+    /// `_peers`. Retained so [`SeededGraph::add_peer_claim`] can re-wire the
+    /// verify seam for EVERY already-subscribed peer on the post-add `peer
+    /// pull` (the verb pulls all active subscriptions; an un-seamed peer would
+    /// fail resolution and fail the pull).
+    peer_pubkeys: Vec<String>,
 }
 
 impl std::fmt::Debug for SeededGraph {
@@ -2774,14 +2780,76 @@ impl SeededGraph {
     ///
     /// SCAFFOLD: true (slice-04).
     pub fn add_peer_claim(&mut self, env: &TestEnv, claim: AddedPeerClaim) {
-        // SCAFFOLD: true (slice-04)
-        let _ = (env, claim);
-        todo!(
-            "DELIVER (slice-04): subscribe + pull the additional contributing peer claim via the \
-             real peer add + peer pull verbs so the local store gains a row and the weight \
-             recomputes (GQE-14 query-time-compute proof)"
-        )
+        let recipe = claim.recipe();
+
+        // Materialize the additional peer's verifiable wire record (REAL
+        // Ed25519 + CID recompute — the production pull pipeline verifies it),
+        // start its PeerPds, subscribe via `peer add`, then pull it. This grows
+        // the real store by a genuine contributing row, so the next weighted
+        // query recomputes a DIFFERENT weight for the affected pairing.
+        let (records, pubkey_hex) = build_verifiable_peer_records_for_triples(
+            recipe.peer_did,
+            recipe.seed,
+            &[(recipe.subject, recipe.object, recipe.confidence)],
+        );
+        let pds = PeerPds::for_peer(recipe.peer_did, records);
+
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", recipe.peer_did],
+            recipe.peer_did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "SeededGraph::add_peer_claim: peer add for {} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            recipe.peer_did, added.stdout, added.stderr
+        );
+
+        // The `peer pull` verb pulls EVERY active subscription, so the verify
+        // seams for ALL already-subscribed peers must be re-wired alongside the
+        // new one — otherwise the original peers fail DID resolution and the
+        // pull exits non-zero. Their `PeerPds` doubles are still alive in
+        // `_peers` (this handle owns them); pair each with its retained pubkey.
+        self._peers.push(pds);
+        self.peer_pubkeys.push(pubkey_hex);
+        let seams: Vec<PeerSeam<'_>> = self
+            ._peers
+            .iter()
+            .zip(self.peer_pubkeys.iter())
+            .map(|(peer, pubkey)| PeerSeam {
+                peer_did: peer.peer_did(),
+                peer_endpoint: peer.endpoint_url(),
+                peer_pubkey_hex: pubkey,
+            })
+            .collect();
+        let pulled = run_openlore_pull_multi(env, &["peer", "pull"], &seams);
+        assert_eq!(
+            pulled.status, 0,
+            "SeededGraph::add_peer_claim: peer pull must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            pulled.stdout, pulled.stderr
+        );
+
+        // Record the new contributing claim's attribution shape.
+        self.seeded.push(SeededClaim {
+            author_did: recipe.peer_did.to_string(),
+            subject: recipe.subject.to_string(),
+            object: recipe.object.to_string(),
+            confidence: recipe.confidence,
+        });
     }
+}
+
+/// The concrete (peer, subject, object, confidence) seeding recipe for one
+/// [`AddedPeerClaim`] variant.
+struct AddedPeerClaimRecipe {
+    peer_did: &'static str,
+    seed: [u8; 32],
+    subject: &'static str,
+    object: &'static str,
+    confidence: f64,
 }
 
 /// One additional peer claim to inject mid-scenario via
@@ -2799,6 +2867,25 @@ pub enum AddedPeerClaim {
 impl AddedPeerClaim {
     pub fn deno_third_author() -> Self {
         Self::DenoThirdAuthor
+    }
+
+    /// The concrete seeding recipe for this variant.
+    fn recipe(&self) -> AddedPeerClaimRecipe {
+        match self {
+            // A THIRD author (distinct DID + seed, not colliding with the
+            // worked-example peers rachel[7]/tobias[9]/maria[11]) asserts
+            // dependency-pinning on github:denoland/deno. After the pull, deno
+            // gains a third contributing claim by a third distinct author — so
+            // its adherence weight recomputes to a DIFFERENT value (GQE-14
+            // query-time-compute proof).
+            Self::DenoThirdAuthor => AddedPeerClaimRecipe {
+                peer_did: "did:plc:priya-test",
+                seed: [13u8; 32],
+                subject: "github:denoland/deno",
+                object: "org.openlore.philosophy.dependency-pinning",
+                confidence: 0.66,
+            },
+        }
     }
 }
 
@@ -3297,6 +3384,7 @@ fn seed_own_plus_peer_graph(
     SeededGraph {
         _peers: peer_graph._peers,
         seeded,
+        peer_pubkeys: peer_graph.peer_pubkeys,
     }
 }
 
@@ -3366,6 +3454,7 @@ fn seed_peer_authored_graph(env: &TestEnv, peers: &[SeedPeer<'_>]) -> SeededGrap
     SeededGraph {
         _peers: held_peers,
         seeded,
+        peer_pubkeys: pubkeys,
     }
 }
 
@@ -3499,13 +3588,173 @@ pub fn run_openlore_network_disabled(env: &TestEnv, args: &[&str]) -> CliOutcome
 /// (raw `duckdb::Connection` is acceptable in test-support; production never
 /// has a persist path for these by design, WD-89).
 pub fn assert_weight_not_persisted(env: &TestEnv) {
-    // SCAFFOLD: true (slice-04)
-    let _ = env;
-    todo!(
-        "DELIVER (slice-04): scan every DuckDB table + every on-disk claim artifact for a persisted \
-         adherence_weight / weight_bucket (STRONG|MODERATE|SPARSE) substring and assert NONE exists \
-         — weights are display-only, computed at query time (Gate 4; WD-72/WD-89)"
-    )
+    // The forbidden weight/bucket vocabulary (WD-72/WD-89): the aggregate
+    // weight column name and the slice-04 weight-bucket labels. These are a
+    // DISPLAY-ONLY aggregate recomputed at query time — none may appear in any
+    // persisted position (a table name, a column name, a stored cell, or an
+    // on-disk artifact). Matched case-INSENSITIVELY so a `STRONG`/`Strong`/
+    // `strong` leak in any casing is still caught.
+    const FORBIDDEN: &[&str] = &["adherence_weight", "weight_bucket", "strong", "moderate", "sparse"];
+
+    // -- 1. DuckDB scan: enumerate EVERY table dynamically (robust to schema
+    // drift), then scan each table's COLUMN NAMES and every ROW's serialized
+    // cell text for a forbidden token. Test-support is the only place a raw
+    // `duckdb::Connection` + raw SQL is acceptable (production reads go through
+    // StoragePort). --
+    let db_path = env.duckdb_path();
+    assert!(
+        db_path.exists(),
+        "storage.duckdb.no_weight_or_bucket_column: expected DuckDB to exist at {} after a \
+         weighted query; file missing",
+        db_path.display()
+    );
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for the weight-not-persisted scan: {err}",
+            db_path.display()
+        )
+    });
+
+    let tables: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'")
+            .expect("prepare information_schema.tables query");
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .expect("query main-schema table names");
+        rows.map(|r| r.expect("read table name")).collect()
+    };
+    assert!(
+        !tables.is_empty(),
+        "storage.duckdb.no_weight_or_bucket_column: the main schema reported ZERO tables — the \
+         scan would be vacuous (expected at least the claims/peer_claims index tables)"
+    );
+
+    for table in &tables {
+        // A table itself must never be NAMED for a weight/bucket.
+        assert_forbidden_token_absent(
+            table,
+            FORBIDDEN,
+            &format!("storage.duckdb.no_weight_or_bucket_column: a DuckDB table is named {table:?}"),
+        );
+
+        // Cast EVERY column of EVERY row to text and concatenate, so the scan
+        // covers both column NAMES (information_schema) and stored cell VALUES
+        // without hard-coding any column list.
+        let columns: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT column_name FROM information_schema.columns \
+                     WHERE table_schema = 'main' AND table_name = ?",
+                )
+                .expect("prepare information_schema.columns query");
+            let rows = stmt
+                .query_map(duckdb::params![table], |r| r.get::<_, String>(0))
+                .expect("query column names");
+            rows.map(|r| r.expect("read column name")).collect()
+        };
+        for column in &columns {
+            assert_forbidden_token_absent(
+                column,
+                FORBIDDEN,
+                &format!(
+                    "storage.duckdb.no_weight_or_bucket_column: table {table:?} has a column \
+                     named {column:?}"
+                ),
+            );
+        }
+
+        // Concatenate every column cast to VARCHAR for each row; scan the text.
+        let cast_list = columns
+            .iter()
+            .map(|c| format!("COALESCE(CAST(\"{c}\" AS VARCHAR), '')"))
+            .collect::<Vec<_>>()
+            .join(" || ' ' || ");
+        if cast_list.is_empty() {
+            continue;
+        }
+        let sql = format!("SELECT {cast_list} FROM \"{table}\"");
+        let mut stmt = conn
+            .prepare(&sql)
+            .unwrap_or_else(|err| panic!("prepare row scan for table {table}: {err}"));
+        let cells = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap_or_else(|err| panic!("scan rows for table {table}: {err}"));
+        for cell in cells {
+            let text = cell.unwrap_or_else(|err| panic!("read row text for table {table}: {err}"));
+            assert_forbidden_token_absent(
+                &text,
+                FORBIDDEN,
+                &format!(
+                    "storage.duckdb.no_weight_or_bucket_column: a stored row in table {table:?} \
+                     contains a persisted weight/bucket token"
+                ),
+            );
+        }
+    }
+
+    // -- 2. On-disk artifact scan: every `<cid>.json` under the own-claims dir
+    // AND every peer-claims partition. The on-disk artifacts are the
+    // authoritative claim store; none may carry a persisted weight/bucket. --
+    for artifact in collect_claim_artifacts(env) {
+        let contents = std::fs::read_to_string(&artifact).unwrap_or_else(|err| {
+            panic!("read claim artifact {} for weight scan: {err}", artifact.display())
+        });
+        assert_forbidden_token_absent(
+            &contents,
+            FORBIDDEN,
+            &format!(
+                "storage.local_claim_store.no_weight_or_bucket_string: on-disk artifact {} \
+                 contains a persisted weight/bucket token",
+                artifact.display()
+            ),
+        );
+    }
+}
+
+/// Assert NONE of the case-insensitive `forbidden` tokens appears in `haystack`.
+/// `context` names the port-exposed slot being scanned for a precise failure.
+fn assert_forbidden_token_absent(haystack: &str, forbidden: &[&str], context: &str) {
+    let lowered = haystack.to_ascii_lowercase();
+    for token in forbidden {
+        assert!(
+            !lowered.contains(&token.to_ascii_lowercase()),
+            "{context}: found forbidden weight/bucket token {token:?} (Gate 4 \
+             weight_and_bucket_never_persisted — weights are display-only, recomputed at query \
+             time; WD-72/WD-89);\n--- scanned text ---\n{haystack}"
+        );
+    }
+}
+
+/// Recursively collect every `*.json` claim artifact under the local
+/// share dir (`{home}/.local/share/openlore`), covering the own-claims dir
+/// (`claims/`) AND every peer-claims partition (`peer_claims/<encoded_did>/`).
+/// Used by [`assert_weight_not_persisted`] for the on-disk half of the scan.
+fn collect_claim_artifacts(env: &TestEnv) -> Vec<PathBuf> {
+    let share_root = env
+        .home
+        .join(".local")
+        .join("share")
+        .join("openlore");
+    let mut out = Vec::new();
+    collect_json_files(&share_root, &mut out);
+    out
+}
+
+/// Depth-first walk of `dir`, appending every `*.json` file path to `acc`.
+/// Absent directories are treated as empty (the strongest "no artifact" form).
+fn collect_json_files(dir: &std::path::Path, acc: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_json_files(&path, acc);
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            acc.push(path);
+        }
+    }
 }
 
 /// Universe-bound (Gate 1 `scoring_aggregate_preserves_attribution`): assert
