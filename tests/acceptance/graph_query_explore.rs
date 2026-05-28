@@ -881,11 +881,76 @@ fn graph_query_by_contributor_soft_removed_peer_labels_unsubscribed_cache() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert a soft-removed peer's cached claims list annotated \
-         '(unsubscribed cache)' (not '(subscribed peer)'), every row carries Tobias's DID, and \
-         exit 0 (US-GRAPH-002 Example 4; slice-03 relationship-label reuse);\n--- graph ---\n{graph:?}"
-    )
+    // A soft-removed peer's RETAINED cached claims still surface on the
+    // `--contributor` trail, but the `removed_at IS NOT NULL` subscription state
+    // re-classifies him from `SubscribedPeer` to `UnsubscribedCache`: the trail
+    // header reads "(unsubscribed cache)", never "(subscribed peer)". Every row
+    // is still attributed to Tobias's DID (no claim shown without its author;
+    // anti-merging WD-73). (US-GRAPH-002 Example 4; slice-03 relationship reuse.)
+    //
+    // Universe (port-exposed observable surface of the soft-removed
+    // `--contributor` trail view): cli.graph_query.contributor_did_present
+    // (Tobias's DID heads the trail), cli.graph_query.relationship_annotation
+    // (the header carries "(unsubscribed cache)", NOT "(subscribed peer)"),
+    // cli.graph_query.cid_rows (one per retained cached claim — soft-remove drops
+    // none), cli.graph_query.honest_trail_footer (the content-frozen J-002
+    // framing). Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The trail is headed by Tobias's DID annotated "(unsubscribed cache)" —
+    //    the soft-remove relationship state (removed_at IS NOT NULL →
+    //    AuthorRelationship::UnsubscribedCache), reusing the slice-03 label.
+    assert!(
+        stdout.contains(&format!("author_did: {tobias_did} (unsubscribed cache)")),
+        "expected the soft-removed peer's trail header annotated '(unsubscribed cache)' \
+         (the removed_at-IS-NOT-NULL relationship; US-GRAPH-002 Example 4);\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. The soft-removed cache is NEVER mislabeled as an active subscription:
+    //    "(subscribed peer)" must NOT appear — the subscription is gone, only the
+    //    cache survives (WD-25 soft-remove retains cache but drops subscription).
+    assert!(
+        !stdout.contains("(subscribed peer)"),
+        "the soft-removed peer's cached claims must NOT carry the '(subscribed peer)' annotation — \
+         his subscription was removed (removed_at IS NOT NULL); the cache is '(unsubscribed cache)';\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. Every retained cached claim is listed under Tobias's DID — soft-remove
+    //    RETAINS the cache, so each seeded claim appears with its object (anti-
+    //    merging WD-73; none dropped).
+    for claim in &graph.seeded {
+        assert!(
+            stdout.contains(&format!("object:     {}", claim.object)),
+            "expected the soft-removed trail to list retained cached object {} for one of \
+             Tobias's claims;\n--- stdout ---\n{stdout}",
+            claim.object
+        );
+    }
+
+    // 4. Exactly one cid-bearing row per retained cached claim — soft-remove
+    //    drops NONE (the cache is intact, only the subscription is gone).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows,
+        graph.seeded.len(),
+        "expected exactly {} cid-bearing rows (one per RETAINED cached claim; soft-remove drops \
+         none); got {cid_rows};\n--- stdout ---\n{stdout}",
+        graph.seeded.len()
+    );
+
+    // 5. The honest-trail footer still frames a soft-removed peer's cached trail
+    //    verbatim: it is one developer's reasoning trail, not a community
+    //    consensus (J-002 content-frozen) — the cache stays honestly attributed.
+    assert!(
+        stdout.contains("one developer's reasoning trail, not a community consensus"),
+        "expected the footer to carry the content-frozen honest-trail framing on the \
+         soft-removed (unsubscribed-cache) trail;\n--- stdout ---\n{stdout}"
+    );
 }
 
 // =============================================================================

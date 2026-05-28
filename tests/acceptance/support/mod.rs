@@ -2959,8 +2959,51 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 &[],
             )
         }
+        FederatedGraphFixture::TobiasThenSoftRemoved => {
+            // US-GRAPH-002 Example 4 (GQE-9): Tobias is subscribed + pulled (his
+            // cached claims land in `peer_claims`), THEN soft-removed via the real
+            // `peer remove` verb WITHOUT `--purge` (WD-25): his subscription row's
+            // `removed_at` is set but his cache survives. A `--contributor
+            // <tobias>` query must therefore list his RETAINED cached claims
+            // annotated "(unsubscribed cache)" (the `removed_at IS NOT NULL` →
+            // `AuthorRelationship::UnsubscribedCache` classification), NOT
+            // "(subscribed peer)". The peer-authored seeder runs the real add +
+            // pull; the soft-remove is appended here so the seeded shape is the
+            // exact unsubscribed-cache relationship state.
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let repro = "org.openlore.philosophy.reproducible-builds";
+            let tobias_did = "did:plc:tobias-test";
+            let graph = seed_peer_authored_graph(
+                env,
+                &[SeedPeer {
+                    peer_did: tobias_did,
+                    seed: [9u8; 32],
+                    triples: &[
+                        ("github:denoland/deno", dep, 0.55),
+                        ("github:denoland/deno", repro, 0.71),
+                    ],
+                }],
+            );
+
+            // Soft-remove Tobias via the real `peer remove` verb (no `--purge`):
+            // sets `removed_at`, retains the cached `peer_claims` rows (WD-25).
+            let removed = run_openlore(env, &["peer", "remove", tobias_did]);
+            assert_eq!(
+                removed.status, 0,
+                "seed TobiasThenSoftRemoved: `peer remove {tobias_did}` (soft, no --purge) must \
+                 succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                removed.stdout, removed.stderr
+            );
+            // Pin the soft-remove storage contract so the fixture is the genuine
+            // unsubscribed-cache state, not merely "the verb exited 0": the
+            // subscription row is soft-removed AND every cached claim is retained.
+            assert_subscription_soft_removed_for(env, tobias_did);
+            assert_peer_claims_row_count_for(env, tobias_did, graph.seeded.len());
+
+            graph
+        }
         // The remaining variants materialize per-scenario in later slice-04
-        // steps (GQE-8..27 stay RED until then).
+        // steps (GQE-10..27 stay RED until then).
         other => {
             let _ = env;
             todo!(
