@@ -642,9 +642,88 @@ fn scoring_cross_project_triangulation_counts_as_breadth_lifts_out_of_sparse() {
     // (not just `weight` magnitude). DELIVER picks the exact [STRONG]-vs-
     // [MODERATE] threshold for cargo within WD-86's tunable constants; DISTILL
     // asserts only the NOT-Sparse half (the load-bearing SCORE-1 contract).
-    todo!(
-        "DELIVER (slice-04): score a cross-project-triangulated single-claim cargo pairing \
-         (Rachel spans cargo+nixpkgs) AND a no-span single-claim tokio pairing; assert cargo \
-         is NOT Sparse while tokio IS Sparse (Q-DELIVER-SCORE-1 / WD-90 bucket rule)"
-    )
+    const RACHEL: &str = "did:plc:rachel";
+
+    fn claim(author: &str, subject: &str, object: &str, confidence: f64) -> AttributedClaim {
+        AttributedClaim {
+            author_did: Did(author.to_string()),
+            cid: Cid(format!("bafy-{author}-{subject}-{object}")),
+            subject: subject.to_string(),
+            predicate: "adheres-to".to_string(),
+            object: object.to_string(),
+            confidence,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::You,
+        }
+    }
+
+    // Fixture (data-models.md §"Worked example — triangulation, cargo"):
+    //   - cargo / dependency-pinning: 1 claim by Rachel (conf 0.91)
+    //   - Rachel ALSO asserts dependency-pinning on nixpkgs (a 2nd distinct
+    //     subject) => cross-project triangulation (same author, >=2 distinct
+    //     subjects, same object) => cross_project_span lifts cargo out of Sparse.
+    //   - tokio / actor-model: 1 claim by 1 author, NO span => Sparse (SC-3 leg).
+    //
+    // The nixpkgs claim is what makes Rachel triangulate; it need not (and does
+    // not) change the cargo decomposition's per-author subtotals — it only flags
+    // (Rachel, dependency-pinning) as triangulated, which the bucket reads as
+    // breadth. The tokio claim is by a DIFFERENT author on a DIFFERENT object
+    // with no second subject, so it never triangulates (the no-span control).
+    let claims = vec![
+        claim(RACHEL, "cargo", "dependency-pinning", 0.91),
+        claim(RACHEL, "nixpkgs", "dependency-pinning", 0.80),
+        claim("did:plc:tobias", "tokio", "actor-model", 0.99),
+    ];
+
+    let view = scoring::score(&claims, &ScoringConfig::DEFAULT);
+
+    let cargo = view
+        .ranked
+        .iter()
+        .find(|p| p.subject == "cargo" && p.object == "dependency-pinning")
+        .expect("the cargo / dependency-pinning pairing must be ranked");
+    let tokio = view
+        .ranked
+        .iter()
+        .find(|p| p.subject == "tokio" && p.object == "actor-model")
+        .expect("the tokio / actor-model pairing must be ranked");
+
+    // The load-bearing SCORE-1 contract (WD-90): cross-project triangulation by
+    // the SAME author counts toward evidence breadth, so the single-claim cargo
+    // pairing — Rachel spans cargo+nixpkgs — is NOT Sparse, even though it has
+    // only ONE claim by ONE author. Breadth (the span), not raw confidence,
+    // lifts it out of Sparse.
+    assert_ne!(
+        cargo.bucket,
+        scoring::WeightBucket::Sparse,
+        "a single-claim pairing whose author triangulates across >=2 subjects \
+         (Rachel: cargo+nixpkgs) must NOT bucket Sparse — cross-project span is evidence \
+         breadth (Q-DELIVER-SCORE-1 / WD-90); got bucket {:?} (weight {}, span {})",
+        cargo.bucket,
+        cargo.weight,
+        cargo.cross_project_span
+    );
+
+    // The cross_project_span is the breadth input the bucket reads (not weight
+    // magnitude): Rachel reaches a 2nd subject for dependency-pinning, so the
+    // span clears the >1 breadth guard.
+    assert!(
+        cargo.cross_project_span >= 2,
+        "Rachel spans cargo+nixpkgs for dependency-pinning, so the cargo pairing's \
+         cross_project_span must be >=2 (the breadth that lifts it out of Sparse); got {}",
+        cargo.cross_project_span
+    );
+
+    // The contrast leg (SC-3 in example form): a single claim by a single author
+    // with NO cross-project span STAYS Sparse regardless of its high confidence
+    // (0.99). Breadth — not confidence — is what lifts a pairing out of Sparse.
+    assert_eq!(
+        tokio.bucket,
+        scoring::WeightBucket::Sparse,
+        "a single-author single-claim pairing with NO cross-project span must STAY Sparse \
+         at any confidence (here 0.99) — only breadth lifts a pairing out of Sparse \
+         (WD-90; the no-span control); got bucket {:?} (span {})",
+        tokio.bucket,
+        tokio.cross_project_span
+    );
 }
