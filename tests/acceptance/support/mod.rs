@@ -3059,6 +3059,50 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 &[],
             )
         }
+        FederatedGraphFixture::DenseFanOutBeyondDepthTwo => {
+            // US-GRAPH-004 Example 3 (GQE-22 / WD-76 bounded): a DENSE graph
+            // where Rachel's claims fan out beyond depth 2 so the default
+            // depth-2 bound MUST omit deeper edges. The recursive walk hops
+            // within a shared subject (`eb.subject = w.subject`), so a project
+            // carrying many distinct claims lets the walk reach depth 3+. Seed
+            // FOUR distinct authors (Rachel + three co-claimants) asserting
+            // dependency-pinning on the SAME shared project
+            // (github:rust-lang/cargo): four distinct authors -> four distinct
+            // CIDs on one subject, so a `--contributor did:plc:rachel-test
+            // --traverse` walk anchored on Rachel's edge (depth 1) steps to the
+            // co-claimants (depth 2) and again (depth 3) — the depth-2 default
+            // bound cuts the depth-3 edges and reports them as omitted (WD-76).
+            // All PEER claims (the local user makes none here), each with REAL
+            // Ed25519 crypto + CID recompute so every edge maps to a real signed
+            // claim (Gate 5).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let cargo = "github:rust-lang/cargo";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[(cargo, dep, 0.91)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[(cargo, dep, 0.80)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:maria-test",
+                        seed: [11u8; 32],
+                        triples: &[(cargo, dep, 0.70)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:aanya-test",
+                        seed: [13u8; 32],
+                        triples: &[(cargo, dep, 0.60)],
+                    },
+                ],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
         // steps (GQE-10..27 stay RED until then).
         other => {

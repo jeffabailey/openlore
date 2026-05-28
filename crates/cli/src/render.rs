@@ -764,8 +764,33 @@ const TRAVERSAL_NO_EDGES_TEMPLATE: &str = "No connecting edges found at depth {d
 /// no-edges-found message when the seed is isolated and frames the
 /// omitted-edge report.
 pub fn render_traversal_tree(object: &str, result: &TraversalResult, max_depth: u8) -> String {
+    render_traversal_from_seed(&format!("philosophy: {object}"), result, max_depth)
+}
+
+/// Render the `graph query --contributor <did> --traverse` result (GQE-22 /
+/// US-GRAPH-004 Example 3): the SAME bounded, cycle-safe tree as
+/// [`render_traversal_tree`], but seeded at a contributor rather than a
+/// philosophy. The walk anchors on the contributor's own claims (depth 1) and
+/// fans across the projects those claims share with other contributors; the
+/// header names the seed contributor. The WD-76 omitted-edge report
+/// ("Showing depth N; M edge(s) omitted. Use `--depth N+1` to go deeper.") and
+/// the content-frozen Gate-5 notice render identically. Pure function.
+pub fn render_traversal_contributor_tree(
+    contributor: &str,
+    result: &TraversalResult,
+    max_depth: u8,
+) -> String {
+    render_traversal_from_seed(&format!("contributor: {contributor}"), result, max_depth)
+}
+
+/// Shared traversal-tree renderer core, parameterized by the seed `header` line
+/// (a philosophy seed renders `philosophy: <object>`, a contributor seed
+/// `contributor: <did>`). The tree body, the WD-76 omitted-edge report, the
+/// KPI-GRAPH-1 "Connections found" callout, and the content-frozen Gate-5
+/// honesty notice are identical regardless of seed. Pure helper.
+fn render_traversal_from_seed(header: &str, result: &TraversalResult, max_depth: u8) -> String {
     let mut out = String::new();
-    out.push_str(&format!("philosophy: {object}\n\n"));
+    out.push_str(&format!("{header}\n\n"));
 
     if result.edges.is_empty() {
         // Honest empty (GQE-21): name the depth searched; fabricate no

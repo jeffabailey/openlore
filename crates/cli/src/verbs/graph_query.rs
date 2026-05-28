@@ -300,6 +300,11 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
         if let Some(object) = args.object.as_deref() {
             return run_traverse_object(wiring, object, args.depth);
         }
+        // GQE-22 (US-GRAPH-004 Example 3): `--contributor <did> --traverse`
+        // seeds the bounded walk at the contributor rather than a philosophy.
+        if let Some(contributor) = args.contributor.as_deref() {
+            return run_traverse_contributor(wiring, contributor, args.depth);
+        }
     }
 
     if !args.weighted && !args.traverse && args.explain.is_none() {
@@ -419,6 +424,43 @@ fn run_traverse_object(wiring: &Wiring, object: &str, depth: u8) -> Result<Graph
         .with_context(|| format!("traversing the graph from philosophy {object}"))?;
 
     let stdout = crate::render::render_traversal_tree(object, &result, bound.max_depth);
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// GQE-22 (US-GRAPH-004 Example 3 / WD-76 bounded): the `--contributor <did>
+/// --traverse` branch — the SAME bounded, cycle-safe walk as
+/// [`run_traverse_object`], but seeded at the contributor node. Calls
+/// `StoragePort::traverse_graph(start, bound)` with a
+/// [`ports::GraphNode::Contributor`] seed (the recursive CTE anchors on the
+/// contributor's claims, then fans within the projects they share with other
+/// contributors). The walk is depth-bounded to `depth` (default 2, WD-76) and
+/// the adapter reports the omitted-edge count for edges beyond the bound; the
+/// renderer surfaces "Showing depth N; M edge(s) omitted. Use `--depth N+1` to
+/// go deeper." (`render::render_traversal_contributor_tree`).
+///
+/// The verb stays a thin port-call + pure render: one port call, then a pure
+/// projection. Explorer flags imply federated scope (WD-87) — the recursive CTE
+/// already spans own + peers.
+fn run_traverse_contributor(
+    wiring: &Wiring,
+    contributor: &str,
+    depth: u8,
+) -> Result<GraphQueryOutcome> {
+    let start = ports::GraphNode::Contributor {
+        author_did: claim_domain::Did(contributor.to_string()),
+    };
+    let bound = ports::TraversalBound { max_depth: depth };
+    let result = wiring
+        .storage
+        .traverse_graph(&start, &bound)
+        .with_context(|| format!("traversing the graph from contributor {contributor}"))?;
+
+    let stdout =
+        crate::render::render_traversal_contributor_tree(contributor, &result, bound.max_depth);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

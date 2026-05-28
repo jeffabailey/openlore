@@ -1633,13 +1633,75 @@ fn graph_query_traverse_is_bounded_to_default_depth_two_and_reports_omitted_edge
     );
 
     // The traversal is bounded to depth 2 by default and reports the omitted
-    // count + how to go deeper. DELIVER materializes the bounded-depth assertion
-    // (universe: cli.graph_query.max_depth_shown, cli.graph_query.omitted_edge_count_reported).
-    todo!(
-        "DELIVER (slice-04): assert the dense traversal is bounded to depth 2 by default, reports \
-         how many edges were omitted and how to go deeper with --depth, and returns responsively \
-         (US-GRAPH-004 Example 3; WD-76/WD-91 bounded);\n--- graph ---\n{graph:?}"
-    )
+    // count + how to go deeper (WD-76). The dense fixture fans Rachel's claims
+    // beyond depth 2 (four distinct authors on one shared project), so the
+    // default depth-2 bound MUST cut deeper edges and report them honestly.
+    //
+    // Universe (port-exposed observable surface of the bounded `--contributor
+    // --traverse` view): cli.graph_query.max_depth_shown (the report names the
+    // default depth 2), cli.graph_query.omitted_edge_count_reported (a positive
+    // count of edges omitted beyond the bound, NOT zero — the bound is honest),
+    // cli.graph_query.deeper_hint_present (the report names `--depth 3` as the
+    // way to go deeper). Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. Bounded to the WD-76 default depth 2 and reports a NON-ZERO omitted
+    //    count + how to widen. The report is content-frozen
+    //    ("Showing depth 2; N edge(s) omitted. Use `--depth 3` to go deeper.");
+    //    the omitted count is parsed from the rendered line and must be > 0 (the
+    //    dense graph genuinely has edges beyond depth 2 — an honest bound, not a
+    //    fabricated "0 omitted").
+    let report_line = stdout
+        .lines()
+        .find(|line| line.contains("Showing depth 2;") && line.contains("edge(s) omitted."))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a bounded-depth report naming the default depth 2 + an omitted-edge \
+                 count for the dense fan-out traversal (WD-76);\n--- stdout ---\n{stdout}\n\
+                 --- graph ---\n{graph:?}"
+            )
+        });
+
+    // The omitted-edge count is the integer between "Showing depth 2; " and
+    // " edge(s) omitted." — parse it and assert it is strictly positive (the
+    // dense graph fans out beyond depth 2, so the default bound MUST omit edges).
+    let omitted_count: u32 = report_line
+        .split("Showing depth 2; ")
+        .nth(1)
+        .and_then(|rest| rest.split(" edge(s) omitted.").next())
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "expected the bounded-depth report to carry a parseable omitted-edge count;\n\
+                 --- report line ---\n{report_line}\n--- stdout ---\n{stdout}"
+            )
+        });
+    assert!(
+        omitted_count > 0,
+        "cli.graph_query.omitted_edge_count_reported: the dense fan-out traversal must omit a \
+         POSITIVE number of edges beyond the default depth-2 bound (honest bound, not a \
+         fabricated 0); got omitted_count={omitted_count};\n--- stdout ---\n{stdout}"
+    );
+
+    // 2. The report names the way to go deeper: `--depth 3` raises the bound by
+    //    one past the default depth 2 (WD-76 — the operator can opt into more).
+    assert!(
+        report_line.contains("Use `--depth 3` to go deeper."),
+        "cli.graph_query.deeper_hint_present: the bounded-depth report must name `--depth 3` as \
+         the way to widen the default depth-2 bound;\n--- report line ---\n{report_line}\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. The bound is HONEST about its depth: NO edge is reported beyond depth 2.
+    //    The report never claims a deeper depth was shown (the only depth named
+    //    in a "Showing depth N" line is the default 2 — the bound was respected).
+    for deeper in ["Showing depth 3;", "Showing depth 4;", "Showing depth 5;"] {
+        assert!(
+            !stdout.contains(deeper),
+            "the default-bounded traversal must NOT report a depth deeper than 2 ({deeper}) — the \
+             WD-76 default bound caps the walk at depth 2;\n--- stdout ---\n{stdout}"
+        );
+    }
 }
 
 /// GQE-23 (US-GRAPH-004 edge; WD-76): Aanya re-runs the dense traversal with
