@@ -157,12 +157,50 @@ fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing()
 /// @us-scr-001 @real-io @driving_port @j-004a @happy
 #[test]
 fn scrape_github_prints_public_data_banner_before_any_harvest() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-2. Assert the banner substring index < the harvest-line \
-         substring index in stdout (ordering), AND the banner names BOTH 'only public data' \
-         and 'nothing is published'."
-    )
+    // GIVEN an initialized env + a public repo serving public signals.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the banner names BOTH the "only public data" affordance AND the
+    // "nothing is published" affordance — the two halves of the WD-51
+    // reassurance contract (skeptical -> reassured emotional arc).
+    let only_public_idx = outcome
+        .stdout
+        .find("PUBLIC GitHub data is read")
+        .expect("the banner must state that ONLY public GitHub data is read");
+    assert!(
+        outcome.stdout.contains("Nothing published"),
+        "the banner must also reassure that nothing is published; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the banner precedes the first harvest line (ordering, not just
+    // presence — the user is reassured BEFORE any network beat begins).
+    let harvest_idx = outcome
+        .stdout
+        .find("Harvesting public signals")
+        .expect("the harvest line must be present in stdout");
+    assert!(
+        only_public_idx < harvest_idx,
+        "the public-data-only banner must precede the harvest line; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
 }
 
 /// SG-3 (US-SCR-001 Ex 2; WD-64): a USER/contributor target resolves to a
