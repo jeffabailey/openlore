@@ -62,14 +62,97 @@
 /// @property @us-scr-002 @j-004b @i-scr-4 @kpi-scr-3
 #[test]
 fn scraper_domain_every_candidate_names_at_least_one_source_signal_property() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-1 @property. Drive proptest over \
-         scraper_domain::proptest_strategies::arb_signal_set() x the embedded SSOT mapping; \
-         assert EVERY produced CandidateClaim.source_signals is NON-EMPTY (auditability \
-         invariant; the property is non-vacuous because the generator yields at-least-one \
-         mapping-matching signal in the positive arm)."
-    )
+    use ports::{Signal, SignalKind};
+    use proptest::prelude::*;
+    use proptest::test_runner::TestRunner;
+    use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+
+    // Layer-2 @property (Mandate 9; DD-SCR): pure-core direct invocation, NO
+    // CLI subprocess. The driving port IS the pure `derive_candidates`
+    // signature; we drive it over an arbitrary signal set x the embedded SSOT
+    // mapping and assert the auditability invariant from data-models.md
+    // (I-SCR-4 / KPI-SCR-3):
+    //
+    //     forall (signals, mapping):
+    //         derive_candidates(signals, mapping).all(|c| !c.source_signals().is_empty())
+    //
+    // The negative is LOAD-BEARING: a candidate with zero source signals is
+    // unauditable (the user cannot trace the proposal to a public signal) and
+    // must not exist. The guarantee comes from routing all construction through
+    // `CandidateClaim::try_new` (step 01-02); this layer-2 property PINS that
+    // contract at the derivation boundary so a future refactor of
+    // `derive_candidates` that bypasses the smart constructor fails LOUDLY.
+    const SUBJECT: &str = "github:rust-lang/cargo";
+
+    // Any one of the five bounded SignalKind variants the SSOT mapping uses.
+    fn arb_signal_kind() -> impl Strategy<Value = SignalKind> {
+        prop_oneof![
+            Just(SignalKind::DependencyManifestPinned),
+            Just(SignalKind::DocsPresentAndSubstantial),
+            Just(SignalKind::TestRatioOrCiMatrix),
+            Just(SignalKind::SemverAndChangelog),
+            Just(SignalKind::MemorySafetyLanguage),
+        ]
+    }
+
+    // A single Signal with an arbitrary kind, printable value, and a
+    // GitHub-shaped public URL.
+    fn arb_signal() -> impl Strategy<Value = Signal> {
+        (
+            arb_signal_kind(),
+            "[ -~]{0,64}",
+            "https://github\\.com/[a-z0-9-]{1,16}/[a-z0-9-]{1,16}",
+        )
+            .prop_map(|(kind, value, source_url)| Signal {
+                kind,
+                value,
+                source_url,
+            })
+    }
+
+    // Non-vacuous signal set: a guaranteed mapping-matching head signal so at
+    // least one candidate is derived on every case, plus an arbitrary tail
+    // (0..6 further signals) to explore collapse + drop shapes. Without the
+    // forced head the property could pass vacuously on the empty-candidate
+    // case; the head makes "every candidate names a signal" a real assertion.
+    fn arb_signal_set() -> impl Strategy<Value = Vec<Signal>> {
+        (
+            arb_signal(),
+            proptest::collection::vec(arb_signal(), 0..6),
+        )
+            .prop_map(|(head, mut tail)| {
+                tail.insert(0, head);
+                tail
+            })
+    }
+
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");
+
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arb_signal_set(), |signals| {
+            let candidates = derive_candidates(SUBJECT, &signals, &mapping);
+            // Non-vacuity guard: the forced mapping-matching head signal means
+            // at least one candidate is always produced, so this property
+            // actually exercises the per-candidate assertion below.
+            prop_assert!(
+                !candidates.is_empty(),
+                "generator forces >=1 mapping-matching signal, so >=1 candidate is expected \
+                 (else the auditability property is vacuous)"
+            );
+            for candidate in &candidates {
+                prop_assert!(
+                    !candidate.source_signals().is_empty(),
+                    "every derived CandidateClaim must name >=1 source signal (I-SCR-4): \
+                     an untraceable proposal is unauditable and must not exist"
+                );
+            }
+            Ok(())
+        })
+        .expect(
+            "auditability invariant (I-SCR-4): every derived candidate must name >=1 source \
+             signal for all generated signal sets",
+        );
 }
 
 // =============================================================================
