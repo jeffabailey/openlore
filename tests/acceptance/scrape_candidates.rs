@@ -329,12 +329,57 @@ fn scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one() {
 /// @us-scr-002 @real-io @driving_port @j-004b @kpi-scr-3 @edge
 #[test]
 fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_unsigned() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SC-5. WHEN scrape github <repo> with a dependency-pinning \
-         candidate; THEN that candidate's source-signal line names 'Cargo.lock committed' \
-         (the user can audit the derivation) AND, with no --sign, \
-         assert_no_claim_persisted(&env) — a reviewed-and-rejected proposal is never \
-         asserted."
-    )
+    // GIVEN an initialized env + a public repo serving the five canonical cargo
+    // signals — candidate [1] is the dependency-pinning proposal derived from the
+    // "Cargo.lock committed" signal (the one a user might disagree with).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo and reviews the proposal — crucially she
+    // does NOT run `--sign` (she disagrees with / is unconvinced by candidate [1]
+    // and simply does not select it). The scrape is a pure read.
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the disagreed-with candidate [1] is AUDITABLE: its `from signal :` line
+    // names the exact source signal ("Cargo.lock committed") so the user can see
+    // WHY it was proposed and judge it for herself (US-SCR-002 Ex 3 / KPI-SCR-3).
+    // A proposal you cannot trace to a signal cannot be reviewed-and-rejected on
+    // the merits — naming the signal is what makes the human-gate meaningful.
+    let stdout = &outcome.stdout;
+    let start = stdout.find("[1]").unwrap_or_else(|| {
+        panic!("expected a numbered candidate [1] in the candidate list; \n--- stdout ---\n{stdout}")
+    });
+    let rest = &stdout[start..];
+    let block_end = rest[1..].find("[2]").map(|i| i + 1).unwrap_or(rest.len());
+    let block = &rest[..block_end];
+    let names_signal = block
+        .lines()
+        .filter(|line| line.contains("from signal :"))
+        .any(|line| line.contains("Cargo.lock committed"));
+    assert!(
+        names_signal,
+        "the disagreed-with candidate [1] must name its source signal on a \
+         `from signal :` line containing \"Cargo.lock committed\" so the user can \
+         audit the derivation and choose to reject it (US-SCR-002 Ex 3 / KPI-SCR-3); \
+         \n--- candidate [1] block ---\n{block}\n--- full stdout ---\n{stdout}"
+    );
+
+    // AND because she did not `--sign`, the reviewed-and-rejected proposal persists
+    // NOTHING: zero claim rows, zero PDS records, zero local claim artifacts. This
+    // is the load-bearing human-gate proof (WD-49) — a proposal is never
+    // auto-asserted; the human-in-the-loop is real.
+    assert_no_claim_persisted(&env);
 }
