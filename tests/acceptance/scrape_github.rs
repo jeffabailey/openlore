@@ -707,10 +707,84 @@ fn scrape_github_without_sign_makes_zero_pds_writes() {
 /// @us-scr-001 @real-io @driving_port @j-004 @kpi-scr-2 @edge
 #[test]
 fn scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-9. WHEN scrape github rust-lang/cargo runs TWICE; THEN both \
-         exit 0 with the same candidate count, and assert_no_claim_persisted(&env) holds \
-         after both runs (a scrape never mutates state)."
-    )
+    // GIVEN an initialized env + a public repo serving 5 public signals. The
+    // SAME server (idempotent target) backs every invocation — a pure read of
+    // an unchanged target must yield an unchanged candidate list.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // count_candidates :: the rendered candidate count is the observable
+    // proxy for "the same candidate list" — every `[n]` line is one candidate.
+    // (Port-exposed observable: stdout numbered list, not an internal field.)
+    let count_candidates = |stdout: &str| -> usize {
+        (1..)
+            .take_while(|index| stdout.contains(&format!("[{index}]")))
+            .count()
+    };
+
+    // WHEN Maria scrapes the SAME public target REPEATEDLY (no --sign). Three
+    // runs make the "no accumulation across repeated runs" contract
+    // load-bearing — a leak would compound run-over-run, not just appear once.
+    let runs: Vec<CliOutcome> = (0..3)
+        .map(|_| {
+            run_openlore_scrape(
+                &env,
+                &["scrape", "github", "rust-lang/cargo"],
+                github.base_url(),
+            )
+        })
+        .collect();
+
+    // THEN every run exits 0 and renders a non-empty candidate list (so the
+    // pure-read invariant below is non-vacuous — each run actually proposed).
+    for (attempt, outcome) in runs.iter().enumerate() {
+        assert_eq!(
+            outcome.status,
+            0,
+            "repeated scrape run #{} must exit 0; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+            attempt + 1,
+            outcome.stdout,
+            outcome.stderr
+        );
+        assert!(
+            outcome.stdout.contains("[1]"),
+            "repeated scrape run #{} must render candidates (so pure-read is non-vacuous); \
+             \n--- stdout ---\n{}",
+            attempt + 1,
+            outcome.stdout
+        );
+    }
+
+    // AND every run renders the SAME candidate count — a pure read of an
+    // unchanged target is deterministic: same input -> same output, no drift,
+    // no accumulation in the rendered list run-over-run.
+    let first_count = count_candidates(&runs[0].stdout);
+    assert_eq!(
+        first_count, 5,
+        "the first run must render the 5 candidates of the unchanged target; \
+         \n--- stdout ---\n{}",
+        runs[0].stdout
+    );
+    for (attempt, outcome) in runs.iter().enumerate() {
+        let count = count_candidates(&outcome.stdout);
+        assert_eq!(
+            count, first_count,
+            "every repeated scrape run must render the SAME candidate count ({} expected); \
+             run #{} rendered {}; a pure read must not drift or accumulate; \
+             \n--- stdout ---\n{}",
+            first_count,
+            attempt + 1,
+            count,
+            outcome.stdout
+        );
+    }
+
+    // AND after ALL runs the human-gate STILL holds at the storage layer: zero
+    // `claims` rows, zero PDS writes, zero claim artifact files. Nothing
+    // accumulated across the repeated reads — a scrape is never a mutation no
+    // matter how many times it runs (scraper_never_persists_unsigned, KPI-SCR-2).
+    assert_no_claim_persisted(&env);
 }
