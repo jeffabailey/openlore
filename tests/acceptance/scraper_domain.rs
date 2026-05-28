@@ -394,13 +394,75 @@ fn scraper_domain_derive_candidates_is_deterministic_property() {
 /// @us-scr-002 @j-004b @i-scr-4
 #[test]
 fn scraper_domain_multiple_signals_for_one_predicate_collapse_into_one_candidate() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-4. GIVEN three Signals whose kinds all map to \
-         org.openlore.philosophy.documentation-first; WHEN derive_candidates(signals, \
-         mapping); THEN result.len() == 1 AND result[0].source_signals.len() == 3 (collapse, \
-         not three near-duplicates)."
-    )
+    use ports::{Signal, SignalKind};
+    use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+
+    // Layer-2 example (Mandate 9; DD-SCR): pure-core direct invocation, NO CLI
+    // subprocess. The driving port IS the pure `derive_candidates` signature.
+    // Example-pinned (not a property) per the file header: the collapse rule is
+    // documented by a single representative fixture — three distinct
+    // documentation-first signals (docs/ dir present, long README, high
+    // doc-comment density) ALL map to the ONE predicate
+    // org.openlore.philosophy.documentation-first (the only SignalKind reaching
+    // that predicate is DocsPresentAndSubstantial). They MUST collapse into a
+    // SINGLE candidate that names all three contributing signals — not three
+    // near-duplicate candidates (US-SCR-002 Example 4 / I-SCR-4).
+    const SUBJECT: &str = "github:rust-lang/cargo";
+
+    let docs_dir = Signal {
+        kind: SignalKind::DocsPresentAndSubstantial,
+        value: "docs/ directory present".to_string(),
+        source_url: "https://github.com/rust-lang/cargo/tree/master/src/doc".to_string(),
+    };
+    let long_readme = Signal {
+        kind: SignalKind::DocsPresentAndSubstantial,
+        value: "README > 200 lines".to_string(),
+        source_url: "https://github.com/rust-lang/cargo/blob/master/README.md".to_string(),
+    };
+    let doc_comment_density = Signal {
+        kind: SignalKind::DocsPresentAndSubstantial,
+        value: "doc-comment density high".to_string(),
+        source_url: "https://github.com/rust-lang/cargo/blob/master/src/cargo/lib.rs".to_string(),
+    };
+
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");
+
+    let candidates = derive_candidates(
+        SUBJECT,
+        &[
+            docs_dir.clone(),
+            long_readme.clone(),
+            doc_comment_density.clone(),
+        ],
+        &mapping,
+    );
+
+    assert_eq!(
+        candidates.len(),
+        1,
+        "three signals for ONE predicate must collapse into ONE candidate, not three \
+         near-duplicates (US-SCR-002 Ex 4)"
+    );
+    let candidate = &candidates[0];
+    assert_eq!(
+        candidate.object, "org.openlore.philosophy.documentation-first",
+        "the collapsed candidate's object is the shared philosophy predicate"
+    );
+    assert_eq!(
+        candidate.source_signals().len(),
+        3,
+        "the collapsed candidate must name ALL three contributing signals \
+         (auditability; I-SCR-4)"
+    );
+    assert_eq!(
+        candidate.evidence,
+        vec![
+            docs_dir.source_url.clone(),
+            long_readme.source_url.clone(),
+            doc_comment_density.source_url.clone(),
+        ],
+        "evidence aggregates each contributing signal's source_url, in first-appearance order"
+    );
 }
 
 /// SD-5 (US-SCR-002 Ex 2): a signal set with ZERO mapping-matching entries
