@@ -1,0 +1,262 @@
+schema_version: 1
+
+# Structured journey schema for openlore-scoring-graph (slice-04).
+# Companion to docs/feature/openlore-scoring-graph/discuss/journey-explore-the-graph-visual.md
+# Gherkin is embedded per step (no standalone .feature file per the DISCUSS convention).
+
+journey:
+  name: "Explore the philosophy graph to inform a decision (weighted, traversal-aware)"
+  goal: >
+    Query the LOCAL federated philosophy graph by subject / object / contributor,
+    traverse contributor<->project<->philosophy edges, and see transparent
+    adherence weights so well-supported claims are distinguishable from
+    speculation — to make a tech/community decision that is defensible to a team.
+  persona: "P-002 Researcher / Tech Lead (graph-explorer hat); P-001 wears the same hat for stack choice"
+  job_id: J-002
+
+  scope_notes: >
+    READ/VIEW ONLY. This journey creates, signs, and publishes NOTHING. It reads
+    the claims already on disk: own (slice-01), peer (slice-03 peer_claims), and
+    scraper-signed (slice-02, which are just normal author claims). No new network
+    surface. Weights are DERIVED + DISPLAY-ONLY (WD-72) and inherit the WD-10
+    display-only-bucket rule.
+
+  emotional_arc:
+    start: "Curious-but-skeptical (heard the community values X but cannot say why; anxious about sparse/biased data)"
+    middle: "Orienting (query by dimension) -> Connecting (traverse surfaces the non-obvious link, the aha)"
+    end: "Defensible-confident (can justify the choice with attributed, transparently-weighted evidence)"
+
+steps:
+  - id: 1
+    name: "Query by subject (project)"
+    command: "openlore graph query --subject github:rust-lang/cargo"
+
+    tui_mockup: |
+      +-- Step 1: query by subject -----------------------------------------+
+      | Claims about ${subject} (3 found across 2 authors)                   |
+      | Author: ${author_did} (you)                                         |
+      |   - embodiesPhilosophy  ${object}  confidence ${confidence} (bucket) |
+      |     cid ${claim_cid}                                                 |
+      | Author: did:plc:rachel-test (subscribed peer)                       |
+      |   - ... confidence ${confidence} (bucket)  cid ${claim_cid}          |
+      | Each claim is attributed to its author DID. No claims are merged.    |
+      +---------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "subject"
+        source: "claims.subject / peer_claims.subject (slice-01/03 DuckDB)"
+        displayed_as: "${subject}"
+        consumers: ["step 1 query arg", "step 3 traversal node", "step 4 weight key"]
+      - name: "author_did"
+        source: "claims.author_did / peer_claims.author_did (derived from signed payload `author`)"
+        displayed_as: "${author_did}"
+        consumers: ["every row header", "step 4 weight breakdown"]
+      - name: "confidence"
+        source: "claims.confidence / peer_claims.confidence (numeric DOUBLE, WD-10)"
+        displayed_as: "${confidence} (display-only bucket)"
+        consumers: ["step 1 row", "step 4 formula input"]
+
+    emotional_state:
+      entry: "Curious"
+      exit: "Orienting"
+
+    integration_checkpoint: |
+      Reuses the slice-01/03 graph-query read path UNCHANGED. No new write.
+      The federated view (own + peer + scraper-signed) is the explorer default;
+      DESIGN owns whether --federated stays explicit for the explorer verbs.
+
+    failure_modes:
+      - "Subject has zero claims -> 'No claims found ...' hint to author or pull; exit 0"
+      - "Subject URI malformed -> validation error before query"
+
+    gherkin: |
+      Scenario: Reading all claims about a project, attribution preserved
+        Given Maria has 1 own claim and 2 pulled peer claims about github:rust-lang/cargo
+        When Maria runs `openlore graph query --subject github:rust-lang/cargo`
+        Then the output lists 3 claims grouped by author DID
+        And no row represents a multi-author aggregate
+        And the footer states "No claims are merged."
+
+  - id: 2
+    name: "Query by object (philosophy) and by contributor"
+    command: "openlore graph query --object org.openlore.philosophy.dependency-pinning  |  openlore graph query --contributor did:plc:rachel-test"
+
+    tui_mockup: |
+      +-- Step 2: query by object (philosophy) -----------------------------+
+      | Projects embodying ${object}                                        |
+      | (4 claims across 3 subjects, 3 distinct authors)                    |
+      | Subject: ${subject}                                                 |
+      |   ${author_did} (subscribed peer)  confidence ${confidence} (bucket)|
+      | Grouped by subject; every claim retains its author DID. No merge.   |
+      +---------------------------------------------------------------------+
+      +-- Step 2b: query by contributor ------------------------------------+
+      | Claims authored by ${author_did} (5 claims across 4 subjects)       |
+      | ${subject}  embodiesPhilosophy  ${object}  ${confidence} (bucket)   |
+      | All claims authored by ONE DID. One developer's reasoning trail,    |
+      | not a community consensus.                                          |
+      +---------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "object"
+        source: "claims.object / peer_claims.object (philosophy URI)"
+        displayed_as: "${object}"
+        consumers: ["step 2 --object query", "step 3 traversal root", "step 4 weight key"]
+
+    emotional_state:
+      entry: "Orienting"
+      exit: "Orienting (deeper)"
+
+    integration_checkpoint: |
+      New query dimensions --object and --contributor extend the existing
+      query path (DESIGN owns whether new flags on `graph query` or sub-verbs).
+      Both read the SAME stores; both preserve per-author attribution.
+
+    failure_modes:
+      - "--object philosophy URI unknown -> 'No claims found for object ...; did you mean ...?'; exit 0"
+      - "--contributor DID not in local graph -> hint to peer add/pull; exit 0"
+
+    gherkin: |
+      Scenario: Querying a philosophy surfaces every project that embodies it, by author
+        Given the local graph has 4 claims asserting org.openlore.philosophy.dependency-pinning across 3 projects by 3 authors
+        When Maria runs `openlore graph query --object org.openlore.philosophy.dependency-pinning`
+        Then the output groups claims by subject (project)
+        And every claim shows its author DID and numeric confidence with a display-only bucket
+        And no project row collapses multiple authors into a single entry
+
+      Scenario: Querying a contributor surfaces their full reasoning trail honestly
+        Given did:plc:rachel-test has authored 5 claims across 4 subjects in the local graph
+        When Maria runs `openlore graph query --contributor did:plc:rachel-test`
+        Then all 5 claims are listed under did:plc:rachel-test
+        And the footer states this is one developer's reasoning trail, not a community consensus
+
+  - id: 3
+    name: "Traverse edges (contributor <-> project <-> philosophy)"
+    command: "openlore graph query --object org.openlore.philosophy.dependency-pinning --traverse"
+
+    tui_mockup: |
+      +-- Step 3: traverse edges -------------------------------------------+
+      | Traversal from philosophy: ${object} (depth 2)                      |
+      |  ${object}                                                          |
+      |   +- ${subject}                                                     |
+      |   |    +- ${author_did} (subscribed peer)  ${confidence} (bucket)   |
+      |   +- ${subject_2}                                                   |
+      |        +- ${author_did} (you)              ${confidence} (bucket)   |
+      | Connections found:                                                  |
+      |   * ${author_did} spans 2 of these projects -> triangulating peer   |
+      | Each edge is one signed claim by one author. Traversal does not     |
+      | invent edges. No claims are merged.                                 |
+      +---------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "claim_cid"
+        source: "claims.cid / peer_claims.cid (each edge = exactly one signed claim)"
+        displayed_as: "${claim_cid}"
+        consumers: ["step 3 edge identity", "step 4 --explain breakdown"]
+
+    emotional_state:
+      entry: "Orienting"
+      exit: "Connecting (the aha)"
+
+    integration_checkpoint: |
+      Traversal walks ONLY existing claims (contributor<->project<->philosophy).
+      Every displayed edge MUST map to exactly one signed claim_cid. Bounded
+      default depth (2) to avoid fan-out explosion. DESIGN owns the storage
+      shape (recursive query over DuckDB vs graph store, WD-8 revisit) — the
+      product contract is "no invented edges, attribution preserved."
+
+    failure_modes:
+      - "Fan-out explosion at high depth -> bounded default depth 2; 'N edges omitted; use --depth K'"
+      - "Single node, no edges -> render the node with 'no connecting edges at depth 2'; never fabricate"
+
+    gherkin: |
+      Scenario: Traversal surfaces a non-obvious cross-project contributor connection
+        Given did:plc:rachel-test asserts dependency-pinning on both cargo and nixpkgs in the local graph
+        When Maria runs `openlore graph query --object org.openlore.philosophy.dependency-pinning --traverse`
+        Then the output shows a tree from the philosophy to its projects to their claim authors
+        And a "Connections found" callout names did:plc:rachel-test as spanning 2 projects
+        And every displayed edge corresponds to exactly one signed claim
+        And the output states "Traversal does not invent edges."
+
+  - id: 4
+    name: "Weighted / scored view"
+    command: "openlore graph query --object org.openlore.philosophy.dependency-pinning --traverse --weighted  [ --explain <subject> ]"
+
+    tui_mockup: |
+      +-- Step 4: weighted / scored view -----------------------------------+
+      | Weighted view: ${object}                                            |
+      | Projects ranked by adherence weight (transparent formula below):    |
+      |   1. ${subject}  weight ${adherence_weight}  [${weight_bucket}]     |
+      |        claims: N  authors: M  max-confidence ${confidence} (bucket) |
+      |        also-claimed-by: ${author_did} spans ...                     |
+      | How weight is computed (auditable, no ML):                          |
+      |   weight = sum( confidence x author_bonus x triangulation_bonus )   |
+      |   buckets [STRONG]/[MODERATE]/[SPARSE] are DISPLAY-ONLY.            |
+      | (!) SPARSE rows show "based on 1 claim by 1 author" honesty line.   |
+      | Weights are a display-only aggregate VIEW; never stored/signed.     |
+      +---------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "adherence_weight"
+        source: "DERIVED at query time by the pure `scoring` core from contributing claims; NEVER persisted (WD-72)"
+        displayed_as: "${adherence_weight}"
+        consumers: ["step 4 ranking", "step 4 --explain arithmetic"]
+      - name: "weight_bucket"
+        source: "DERIVED display-only label ([STRONG]/[MODERATE]/[SPARSE]); inherits WD-10 display-only rule; NEVER persisted"
+        displayed_as: "[${weight_bucket}]"
+        consumers: ["step 4 ranking annotation"]
+
+    emotional_state:
+      entry: "Connecting"
+      exit: "Defensible-confident"
+
+    integration_checkpoint: |
+      Scoring is a PURE function over already-attributed claims. The weighted
+      view ALWAYS decomposes (`--explain`) to per-claim, per-author rows
+      (anti-merging in aggregates). Weights + buckets are display-only and
+      computed at query time; re-running after a pull may change them.
+
+    failure_modes:
+      - "Single-claim philosophy -> [SPARSE] with 'based on 1 claim by 1 author' honesty line; never manufactures confidence"
+      - "--explain for a subject not in the result -> 'Subject ... not in this result set'; exit non-zero"
+      - "Conflicting claims (same subject+object) -> both contribute per confidence; both authors shown; nothing dropped"
+
+    gherkin: |
+      Scenario: Weighted view ranks projects with a transparent, auditable formula
+        Given the dependency-pinning subgraph has cargo (1 claim, conf 0.91), nixpkgs (1 claim, conf 0.88), deno (2 claims, 2 authors)
+        When Maria runs `openlore graph query --object org.openlore.philosophy.dependency-pinning --weighted`
+        Then projects are ranked by adherence weight
+        And each weight is displayed with its inputs (claim count, distinct author count, max confidence)
+        And the output prints the formula (confidence x author bonus x triangulation bonus) with "no ML"
+        And `--explain github:denoland/deno` reproduces the per-claim arithmetic
+
+      Scenario: A sparse subgraph renders honestly as sparse
+        Given org.openlore.philosophy.actor-model has exactly 1 claim by 1 author on 1 project
+        When Maria runs `openlore graph query --object org.openlore.philosophy.actor-model --weighted`
+        Then the single project is labeled [SPARSE]
+        And the output states it is based on 1 claim by 1 author
+        And the output advises treating it as a lead, not a defensible conclusion
+        And no confidence is manufactured from the thin evidence
+
+      Scenario: A weighted aggregate never loses per-author attribution
+        Given a weighted view ranks deno using claims from did:plc:tobias-test and did:plc:maria-test
+        When Maria runs `--explain github:denoland/deno`
+        Then the breakdown enumerates each contributing claim with its author DID and CID
+        And no contributing claim is merged into a faceless aggregate
+        And the weight equals the documented formula applied to exactly those claims
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "author_did"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "Attribution loss in a scoring/traversal output is a fatal anti-merging failure (extends slice-03 I-FED-1)."
+    - artifact: "confidence"
+      must_match_across: [1, 4]
+      failure_message: "The numeric confidence shown at query time MUST be the numeric value used as a scoring input; no silent rounding."
+    - artifact: "adherence_weight"
+      must_match_across: [4]
+      failure_message: "A weight must equal the documented formula applied to the displayed claims; an opaque or unreproducible weight violates scoring transparency."
+
+changelog:
+  - date: "2026-05-28"
+    feature: "openlore-scoring-graph"
+    change: "Initial journey for slice-04 explore-the-graph (query-by-dimension, traverse, weighted/scored, sparse-honesty, anti-merging-in-aggregates)."

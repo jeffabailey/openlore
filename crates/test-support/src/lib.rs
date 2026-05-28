@@ -89,6 +89,27 @@ pub use fixtures_github::{
     fixture_torvalds_user_aggregate_signals,
 };
 
+// Slice-04 step 07-01 (DD-GRAPH): canonical scoring + traversal fixtures.
+// Symmetric with `fixtures_peer.rs` / `fixtures_github.rs`; one free function
+// per well-known GRAPH SHAPE used across US-GRAPH-001..005 acceptance
+// scenarios. Each fixture describes which authors assert which philosophy on
+// which projects at which confidence; the
+// `tests/acceptance/support/mod.rs::seed_federated_graph` orchestrator turns a
+// fixture into REAL DuckDB rows via the slice-03 `claim add` / `peer add` /
+// `peer pull` seam (NO new external fake — scoring/traversal is local
+// read-only analysis over the real store). The worked-arithmetic targets back
+// the Gate 2 (weight_equals_formula) + Gate 3 (sparse_renders_sparse) +
+// SCORE-1 (cross-project-triangulation-counts-as-breadth) acceptance assertions.
+pub mod fixtures_scoring;
+pub use fixtures_scoring::{
+    scoring_fixture_conflicting_confidences_one_project, scoring_fixture_cyclic_two_claim_graph,
+    scoring_fixture_dense_fan_out_beyond_depth_two,
+    scoring_fixture_dependency_pinning_worked_example, scoring_fixture_rachel_spans_two_projects,
+    scoring_fixture_reproducible_builds_multi_author, scoring_fixture_single_sparse_claim,
+    ScoringClaimSpec, ScoringRelationship, EXPECTED_AUTHOR_DISTINCT_BONUS,
+    EXPECTED_CROSS_PROJECT_TRIANGULATION_BONUS,
+};
+
 use claim_domain::{Cid, ClaimLookup, SignedClaim};
 use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};
 

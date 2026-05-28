@@ -63,6 +63,7 @@ jobs:
   - id: J-002
     name: Explore the philosophy graph to inform a decision
     primary: false
+    walking_skeleton_for: openlore-scoring-graph   # PRIMARY for slice-04
     job_story: >
       When I'm choosing a tech stack or evaluating a community,
       I want to see what philosophies a project embodies and who else holds those
@@ -100,14 +101,68 @@ jobs:
     opportunity_score:
       importance: 8
       satisfaction: 2
-      score: 14
-      verdict: underserved-secondary
+      score: 14                      # underserved-secondary at umbrella scope; promoted to
+                                     # underserved-primary-for-slice for slice-04 (scoring-graph)
+      verdict: underserved-primary-for-slice   # primary for slice-04 (openlore-scoring-graph)
 
     success_signals:
       - User can run one query and surface a non-obvious connection.
       - User refers to a query result when justifying a stack choice within 30 days.
+      - User can reproduce a displayed adherence weight by hand from the formula
+        and the --explain per-claim arithmetic (scoring-transparency signal, slice-04).
+      - A sparse subgraph is recognized AS sparse and treated as a lead, not a
+        conclusion (no false confidence from thin evidence, slice-04).
 
     related_jobs: [J-001, J-003, J-004]
+
+    # Sub-jobs surfaced during slice-04 (scoring-graph) DISCUSS — each is an
+    # aspect of J-002, NOT a separate primary job, but each merits an Elevator
+    # Pitch in the corresponding user story.
+    sub_jobs:
+      - id: J-002a
+        name: Query the graph by dimension (subject / object / contributor)
+        story: >
+          When I'm orienting a decision, I want to query the local graph by
+          project, by philosophy, or by contributor — and see who claims what
+          with explicit attribution — so I can start from whichever dimension
+          matches how I'm thinking, not just from projects I already know.
+        load_bearing: true
+        rationale: >
+          The object (philosophy) and contributor dimensions are the new orienting
+          surfaces; the subject dimension is inherited from slice-01. Every
+          dimension preserves per-author attribution — a list is never collapsed
+          into a faceless aggregate (anti-merging carried from slice-03 I-FED-1).
+
+      - id: J-002b
+        name: Traverse contributor<->project<->philosophy edges
+        story: >
+          When I want to find the non-obvious connection — who spans the projects
+          I'm evaluating — I want to traverse the graph's edges, where each edge
+          is one signed claim, so I can surface an alignment I could never get
+          from `gh search` plus skimming READMEs.
+        load_bearing: true
+        rationale: >
+          Traversal is the headline J-002 success signal ("surface a non-obvious
+          connection in one query"). Every edge MUST map to exactly one signed
+          claim; traversal invents no edges. Bounded depth prevents fan-out
+          explosion.
+
+      - id: J-002c
+        name: See transparent, auditable adherence weighting
+        story: >
+          When I weigh projects on a philosophy, I want a SMALL transparent
+          weight (count x confidence x multi-project/author triangulation, no ML)
+          that I can reproduce by hand and that renders thin evidence honestly as
+          sparse, so I can distinguish well-supported claims from speculation
+          without fearing a bad call on biased or sparse data.
+        load_bearing: true
+        rationale: >
+          Directly mitigates the J-002 anxiety. Weights are DERIVED +
+          DISPLAY-ONLY (never persisted/signed/published — extends WD-10's
+          display-only-bucket discipline). The formula is displayed and
+          --explain reproduces the per-claim arithmetic. NO ML (would make the
+          score unauditable). A score is an AGGREGATE VIEW, never a merge that
+          loses per-author attribution.
 
 
   - id: J-003
@@ -407,3 +462,19 @@ changelog:
       candidates default to 0.25 speculative confidence). J-004 retains
       primary=false at umbrella scope but is the walking-skeleton job for
       openlore-github-scraper.
+  - date: "2026-05-28"
+    feature: openlore-scoring-graph
+    change: >
+      J-002 deepened for slice-04 DISCUSS — promoted to
+      underserved-primary-for-slice and marked walking_skeleton_for:
+      openlore-scoring-graph (opportunity score 14 unchanged; verdict raised
+      from underserved-secondary). Sub-jobs J-002a (query-by-dimension:
+      subject/object/contributor), J-002b (traverse contributor<->project<->
+      philosophy edges, no invented edges), J-002c (transparent auditable
+      adherence weighting, no ML) added. Two slice-04 success signals added
+      (weight reproducible by hand via --explain; sparse recognized as sparse).
+      Scoring is READ/VIEW only over existing signed claims; weights are
+      DERIVED + DISPLAY-ONLY (never persisted, extending WD-10); a score is an
+      AGGREGATE VIEW that never loses per-author attribution (extends slice-03
+      I-FED-1). J-002 retains primary=false at umbrella scope but is the
+      walking-skeleton job for openlore-scoring-graph.

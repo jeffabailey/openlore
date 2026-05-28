@@ -36,6 +36,7 @@ persona:
   primary_jobs: [J-002, J-003, J-004]
   walking_skeleton_jobs: []                            # not in slice-01 walking skeleton
   walking_skeleton_jobs_for_slice_03: [J-003]          # IS the walking skeleton for slice-03
+  walking_skeleton_jobs_for_slice_04: [J-002]          # IS the walking skeleton for slice-04 (scoring-graph)
 
   emotional_arc_starting_state: >
     Pragmatic. Will not adopt unless the read experience is faster than
@@ -128,3 +129,43 @@ persona:
         - `scrape github` without `--sign` writes zero claims and makes zero PDS writes (the human-gate is observable).
         - The signal->predicate mapping is small and auditable (SSOT in jobs.yaml); no ML inference that would make candidates unauditable.
         - The optional GITHUB_TOKEN is never logged, never written to a claim, never published.
+
+    # -------------------------------------------------------------------------
+    # Graph-explorer hat (slice-04 / openlore-scoring-graph)
+    # Added 2026-05-28 by Luna during DISCUSS for openlore-scoring-graph.
+    # -------------------------------------------------------------------------
+    - id: graph-explorer
+      activated_in_slice: slice-04 / openlore-scoring-graph
+      one_liner: >
+        P-002 wearing the graph-explorer hat is querying the LOCAL federated
+        graph (own + pulled peers + scraper-signed claims) by subject, object,
+        and contributor, traversing its edges, and reading transparent adherence
+        weights to make a tech/community decision defensible to a team — without
+        being misled by sparse or speculative data.
+
+      typical_session:
+        - "Must justify a stack choice to the team by Friday; cares about dependency-pinning as a philosophy"
+        - "Run `openlore graph query --object org.openlore.philosophy.dependency-pinning` to see which projects embody it, by author"
+        - "Run `openlore graph query --contributor did:plc:rachel-test` to read one peer's whole reasoning trail"
+        - "Run `... --object dependency-pinning --traverse` and spot a peer who spans 2 of the candidate projects (the 'aha')"
+        - "Run `... --weighted` to rank candidates by a transparent adherence weight; a single-claim philosophy is labeled [SPARSE]"
+        - "Run `... --weighted --explain github:denoland/deno` to reproduce one project's weight by hand for the team write-up"
+
+      load_bearing_anxieties:
+        - "What if the graph is sparse, biased toward popular projects, or full of speculative claims and I make a bad call?"
+        - "What if the score is an opaque number I cannot defend to a skeptical teammate?"
+        - "What if a weighted view silently merges authors into a faceless consensus, like the aggregators I distrust?"
+
+      load_bearing_signals_of_success:
+        - "I surface a non-obvious cross-project contributor connection in a single query."
+        - "Every weight is shown with its inputs and formula, and `--explain` lets me reproduce it by hand — no ML black box."
+        - "A thin subgraph is labeled [SPARSE] with 'based on 1 claim by 1 author', so I treat it as a lead, not a conclusion."
+        - "Every weighted/traversed result decomposes to per-author, per-cid claims — never a merged consensus row."
+
+      ux_guardrails_specific_to_scoring:
+        - Scoring is READ/VIEW only; no command in this hat creates, signs, or publishes a claim, and none requires the network.
+        - Every adherence weight is displayed WITH its inputs and the formula; the formula is small, closed-form, and explicitly states "no ML".
+        - Weights and weight buckets ([STRONG]/[MODERATE]/[SPARSE]) are DERIVED + DISPLAY-ONLY; never persisted, signed, or published (extends WD-10).
+        - A sparse subgraph renders honestly as [SPARSE] with a "based on N claims by M authors" line; confidence is never manufactured from thin evidence.
+        - Every weighted/traversed aggregate retains per-author attribution and decomposes via `--explain`; no "consensus weight" is shown without the contributing authors visible.
+        - Traversal walks existing claims only; every edge maps to exactly one signed claim and is bounded by depth (default 2) to prevent fan-out explosion.

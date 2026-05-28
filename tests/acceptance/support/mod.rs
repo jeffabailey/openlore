@@ -2615,3 +2615,324 @@ pub fn assert_token_value_absent(outcome: &CliOutcome, token: &str) {
         outcome.stderr
     );
 }
+
+// =============================================================================
+// Slice-04 — graph-seeding + scoring/traversal assertion helpers (step 07-01)
+// =============================================================================
+//
+// SCAFFOLD: true (slice-04)
+//
+// Slice-04 is a READ slice over the LOCAL federated graph: own claims
+// (slice-01 `claims`), peer claims (slice-03 `peer_claims`), and scraper-signed
+// claims (slice-02, normal author claims). Scoring + traversal are local
+// read-only analysis over the REAL DuckDB store — so slice-04 needs NO new
+// external fake. The graph is SEEDED into the real store by REUSING the
+// slice-03 seam: own claims via the real `claim add` verb, peer claims via the
+// real `peer add` + `peer pull` verbs against the slice-03 `PeerPds` double
+// (`build_verifiable_peer_records` / `build_verifiable_peer_records_with_objects`).
+//
+// Per DD-GRAPH-10 (symmetric with slice-03 DD-FED-10): the load-bearing
+// assertion helpers carry a `todo!()` body with a precise contract docstring;
+// the SIGNATURES are correct NOW so every slice-04 test file compiles and
+// reaches its own `todo!()` (RED, not BROKEN). DELIVER materializes the bodies
+// per scenario; the universe entries each helper names MUST be port-exposed
+// (rendered-output substrings, DuckDB row counts, on-disk artifact scans) —
+// NEVER internal scoring/StoragePort struct fields (Mandate 8).
+
+/// A named federated-graph fixture: the precondition shape a slice-04 scenario
+/// seeds into the REAL DuckDB before exercising the explorer verbs. Each
+/// variant maps to a worked example in user-stories.md / data-models.md.
+///
+/// SCAFFOLD: true (slice-04) — DELIVER fills each variant's concrete seeding
+/// recipe (which own claims via `claim add`, which peers via `peer add` +
+/// `peer pull` with `build_verifiable_peer_records*`).
+#[derive(Debug, Clone)]
+pub enum FederatedGraphFixture {
+    /// US-GRAPH-001 Example 1: 4 dependency-pinning claims across 3 projects by
+    /// 3 authors (Rachel/cargo 0.91, Tobias/deno 0.55, Maria/deno 0.40,
+    /// Rachel/nixpkgs 0.88).
+    DependencyPinningThreeAuthors,
+    /// US-GRAPH-001 Example 3: github:denoland/deno with the SAME (subject,
+    /// object) by the local user (0.40) AND a pulled peer (Tobias 0.55) — the
+    /// identical-content zero-merge fixture.
+    DenoIdenticalContentTwoAuthors,
+    /// One own claim + one pulled peer claim about github:rust-lang/cargo — the
+    /// bare-`--subject` default-off regression fixture (WD-87).
+    CargoOwnPlusOnePeer,
+    /// US-GRAPH-002 Example 1: did:plc:rachel-test authors 5 claims across 4
+    /// subjects (cargo x2, nixpkgs, tokio, serde).
+    RachelFiveClaimsFourSubjects,
+    /// Three of the LOCAL user's own claims, no peers (self-review fixture).
+    OwnClaimsOnlyThree,
+    /// Tobias subscribed + pulled, THEN soft-removed (slice-03 `peer remove`
+    /// without `--purge`) so his cache survives as unsubscribed-cache.
+    TobiasThenSoftRemoved,
+    /// US-GRAPH-003 Example 1 / data-models worked examples: cargo (Rachel 0.91,
+    /// spans nixpkgs too), nixpkgs (Rachel 0.88), deno (Tobias 0.55 + Maria
+    /// 0.40) — the canonical weighted/explain fixture.
+    DependencyPinningWeightedWorkedExample,
+    /// US-GRAPH-003 Example 2 / SC-3 leg: a single dependency-pinning—free
+    /// actor-model claim (tokio, 1 author, conf 0.50, no span) — the sparse
+    /// fixture.
+    ActorModelSingleSparseClaim,
+    /// US-GRAPH-003 Example 3: deno with reproducible-builds claims from 2
+    /// distinct authors (Aanya 0.40 + Tobias 0.55) + a single-author comparator.
+    ReproducibleBuildsMultiAuthor,
+    /// US-GRAPH-003 Example 4: one project with two sharply-disagreeing
+    /// confidences (0.85 and 0.20) by two authors.
+    ConflictingConfidencesOneProject,
+    /// US-GRAPH-004 Example 1: Rachel asserts dependency-pinning on BOTH cargo
+    /// and nixpkgs — the cross-project span the traversal must surface.
+    DependencyPinningRachelSpansTwoProjects,
+    /// US-GRAPH-004 Example 3: a dense graph where one contributor's claims fan
+    /// out beyond depth 2 (many philosophies + co-claimants).
+    DenseFanOutBeyondDepthTwo,
+}
+
+impl FederatedGraphFixture {
+    pub fn dependency_pinning_three_authors() -> Self {
+        Self::DependencyPinningThreeAuthors
+    }
+    pub fn deno_identical_content_two_authors() -> Self {
+        Self::DenoIdenticalContentTwoAuthors
+    }
+    pub fn cargo_own_plus_one_peer() -> Self {
+        Self::CargoOwnPlusOnePeer
+    }
+    pub fn rachel_five_claims_four_subjects() -> Self {
+        Self::RachelFiveClaimsFourSubjects
+    }
+    pub fn own_claims_only_three() -> Self {
+        Self::OwnClaimsOnlyThree
+    }
+    pub fn tobias_then_soft_removed() -> Self {
+        Self::TobiasThenSoftRemoved
+    }
+    pub fn dependency_pinning_weighted_worked_example() -> Self {
+        Self::DependencyPinningWeightedWorkedExample
+    }
+    pub fn actor_model_single_sparse_claim() -> Self {
+        Self::ActorModelSingleSparseClaim
+    }
+    pub fn reproducible_builds_multi_author() -> Self {
+        Self::ReproducibleBuildsMultiAuthor
+    }
+    pub fn conflicting_confidences_one_project() -> Self {
+        Self::ConflictingConfidencesOneProject
+    }
+    pub fn dependency_pinning_rachel_spans_two_projects() -> Self {
+        Self::DependencyPinningRachelSpansTwoProjects
+    }
+    pub fn dense_fan_out_beyond_depth_two() -> Self {
+        Self::DenseFanOutBeyondDepthTwo
+    }
+}
+
+/// A live handle to a seeded federated graph: owns the `PeerPds` doubles (so
+/// their HTTP servers stay alive for the duration of the scenario) and records
+/// the seeded authors/subjects/cids so assertions can pin per-author rows.
+/// Returned by [`seed_federated_graph`]; held by the test for the scenario's
+/// lifetime (dropping it tears down the peer servers — RAII per scenario).
+///
+/// SCAFFOLD: true (slice-04) — DELIVER fills the fields it needs (the held
+/// `PeerPds` handles, the seeded cid map). `Debug` so a failing assertion can
+/// print the seeded shape.
+#[derive(Debug)]
+pub struct SeededGraph {
+    _scaffold: (),
+}
+
+impl SeededGraph {
+    /// Pull an ADDITIONAL peer claim mid-scenario (used by GQE-14 to prove the
+    /// weight recomputes at query time after new claims arrive). Subscribes +
+    /// pulls the extra claim via the real `peer add` + `peer pull` verbs, so
+    /// the store genuinely gains a contributing row.
+    ///
+    /// SCAFFOLD: true (slice-04).
+    pub fn add_peer_claim(&mut self, env: &TestEnv, claim: AddedPeerClaim) {
+        // SCAFFOLD: true (slice-04)
+        let _ = (env, claim);
+        todo!(
+            "DELIVER (slice-04): subscribe + pull the additional contributing peer claim via the \
+             real peer add + peer pull verbs so the local store gains a row and the weight \
+             recomputes (GQE-14 query-time-compute proof)"
+        )
+    }
+}
+
+/// One additional peer claim to inject mid-scenario via
+/// [`SeededGraph::add_peer_claim`].
+///
+/// SCAFFOLD: true (slice-04) — DELIVER fills the concrete (peer, subject,
+/// object, confidence) recipe per variant.
+#[derive(Debug, Clone)]
+pub enum AddedPeerClaim {
+    /// A THIRD author's dependency-pinning claim on github:denoland/deno, so
+    /// deno's weight changes on the re-run (GQE-14).
+    DenoThirdAuthor,
+}
+
+impl AddedPeerClaim {
+    pub fn deno_third_author() -> Self {
+        Self::DenoThirdAuthor
+    }
+}
+
+/// Seed a named federated-graph fixture into the REAL DuckDB store by reusing
+/// the slice-03 seam: own claims via the real `claim add` verb, peer claims via
+/// the real `peer add` + `peer pull` verbs against `PeerPds` doubles built with
+/// `build_verifiable_peer_records*`. NO new external fake — scoring/traversal
+/// is local read-only analysis over the seeded real store.
+///
+/// Returns a [`SeededGraph`] that OWNS the peer-PDS doubles (keep it alive for
+/// the scenario) and records the seeded authors/subjects/cids for assertions.
+///
+/// SCAFFOLD: true (slice-04) — DELIVER materializes each
+/// [`FederatedGraphFixture`] variant's seeding recipe in step 07-* (the first
+/// slice-04 step that wires the scoring crate + extended StoragePort + cli
+/// flags). The seeder is the single place the slice-04 graph fixtures live, so
+/// the per-scenario preconditions stay declarative (a fixture name, not 40
+/// lines of subscribe/pull plumbing per test).
+pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> SeededGraph {
+    // SCAFFOLD: true (slice-04)
+    let _ = (env, fixture);
+    todo!(
+        "DELIVER (slice-04): seed the named federated-graph fixture into the REAL DuckDB — own \
+         claims via `claim add`, peer claims via `peer add` + `peer pull` against PeerPds doubles \
+         (build_verifiable_peer_records*) — and return a SeededGraph owning the peer handles + the \
+         seeded cid map (no new external fake; scoring/traversal reads the real store)"
+    )
+}
+
+/// Run `openlore <args>` with the network disabled (no PDS/peer endpoint
+/// reachable), so a read-only LOCAL explorer command must still succeed.
+/// Proves the local-first guardrail (I-GRAPH-7 / WD-79 / WD-92; extends
+/// slice-01 KPI-5 / I-9): scoring/traversal/dimension reads touch only the
+/// local store and open no socket.
+///
+/// SCAFFOLD: true (slice-04) — DELIVER picks the network-disable seam (clear
+/// the PDS/peer endpoint env vars + assert via a no-network probe that no
+/// outbound connection was attempted), symmetric with the slice-01
+/// network-disabled WS scenario.
+pub fn run_openlore_network_disabled(env: &TestEnv, args: &[&str]) -> CliOutcome {
+    // SCAFFOLD: true (slice-04)
+    let _ = (env, args);
+    todo!(
+        "DELIVER (slice-04): run `openlore <args>` with NO reachable PDS/peer endpoint (network \
+         disabled) and confirm the read-only explorer command succeeds without attempting any \
+         outbound connection (I-GRAPH-7 local-first)"
+    )
+}
+
+/// Universe-bound (Gate 4 `weight_and_bucket_never_persisted`): assert that
+/// after a weighted query NO `adherence_weight` and NO `weight_bucket` label
+/// appears in any DuckDB table, any on-disk `<cid>.json` artifact, or any
+/// record. Scans every table + every artifact for the forbidden substrings
+/// (`adherence_weight`, and the bucket labels `STRONG` / `MODERATE` / `SPARSE`
+/// in a persisted position), extending the slice-01/03 confidence-bucket
+/// no-persist scan. Port-exposed names:
+/// `storage.duckdb.no_weight_or_bucket_column`,
+/// `storage.local_claim_store.no_weight_or_bucket_string`.
+///
+/// SCAFFOLD: true (slice-04) — DELIVER materializes the table + artifact scan
+/// (raw `duckdb::Connection` is acceptable in test-support; production never
+/// has a persist path for these by design, WD-89).
+pub fn assert_weight_not_persisted(env: &TestEnv) {
+    // SCAFFOLD: true (slice-04)
+    let _ = env;
+    todo!(
+        "DELIVER (slice-04): scan every DuckDB table + every on-disk claim artifact for a persisted \
+         adherence_weight / weight_bucket (STRONG|MODERATE|SPARSE) substring and assert NONE exists \
+         — weights are display-only, computed at query time (Gate 4; WD-72/WD-89)"
+    )
+}
+
+/// Universe-bound (Gate 1 `scoring_aggregate_preserves_attribution`): assert
+/// the `--weighted --explain <subject>` breakdown for `subject` decomposes the
+/// aggregate into EXACTLY the expected per-author per-cid contributions —
+/// every contributing claim enumerated with its author DID + cid, no claim
+/// merged into a faceless aggregate. `expected` pairs each contributing
+/// (author_did, claim_cid) the breakdown MUST name. Port-exposed names:
+/// `cli.graph_query.explain.contributions[subject]` (author+cid tuples).
+///
+/// SCAFFOLD: true (slice-04) — the anti-merging-in-aggregates behavioral gate
+/// (extends slice-03 `assert_no_merged_rows_in_federated_output` to the
+/// weighted aggregate surface).
+pub fn assert_weight_decomposes_to_per_author(
+    outcome: &CliOutcome,
+    subject: &str,
+    expected: &[(&str, &str)],
+) {
+    // SCAFFOLD: true (slice-04)
+    let _ = (outcome, subject, expected);
+    todo!(
+        "DELIVER (slice-04): parse the --explain breakdown for `subject` into its (author_did, cid) \
+         contribution tuples and assert it names EXACTLY the expected contributing claims — every \
+         claim attributed, none merged into a faceless aggregate (Gate 1 \
+         scoring_aggregate_preserves_attribution; WD-73/I-GRAPH-2)"
+    )
+}
+
+/// Universe-bound (Gate 3 `sparse_renders_sparse`): assert the weighted output
+/// renders `subject` with the `[SPARSE]` bucket AND the "based on N claims by M
+/// authors" honesty line AND the lead-not-conclusion advice, and that NO
+/// confidence was manufactured from the thin evidence. Port-exposed names:
+/// `cli.graph_query.bucket[subject]`,
+/// `cli.graph_query.sparse_honesty_line_present`.
+///
+/// SCAFFOLD: true (slice-04) — the load-bearing sparse-honesty gate (KPI-GRAPH-4).
+pub fn assert_sparse_rendered_as_sparse(
+    outcome: &CliOutcome,
+    subject: &str,
+    claim_count: usize,
+    author_count: usize,
+) {
+    // SCAFFOLD: true (slice-04)
+    let _ = (outcome, subject, claim_count, author_count);
+    todo!(
+        "DELIVER (slice-04): assert `subject` renders [SPARSE] with the verbatim 'based on \
+         {{claim_count}} claim(s) by {{author_count}} author(s)' honesty line + lead-not-conclusion \
+         advice, and NO confidence is manufactured from the thin evidence (Gate 3 \
+         sparse_renders_sparse; WD-74/WD-90; KPI-GRAPH-4)"
+    )
+}
+
+/// Universe-bound (Gate 2 `weight_equals_formula`): assert the
+/// `--weighted --explain <subject>` running sum reproduces the displayed
+/// adherence weight by hand — the breakdown's per-claim subtotals sum (within
+/// f64 EPS) to the weight shown for `subject` in the ranked view. Port-exposed
+/// names: `cli.graph_query.explain.running_sum[subject]`,
+/// `cli.graph_query.weighted.displayed_weight[subject]`.
+///
+/// SCAFFOLD: true (slice-04) — the scoring-transparency reproduce-by-hand gate
+/// (KPI-GRAPH-3); the layer-3 rendering counterpart of `scoring_core.rs` SC-1.
+pub fn assert_explain_sums_to_weight(outcome: &CliOutcome, subject: &str) {
+    // SCAFFOLD: true (slice-04)
+    let _ = (outcome, subject);
+    todo!(
+        "DELIVER (slice-04): parse the --explain per-claim subtotals + the displayed weight for \
+         `subject` from stdout and assert the running sum equals the displayed weight within f64 \
+         EPS — the weight is reproducible by hand (Gate 2 weight_equals_formula; KPI-GRAPH-3)"
+    )
+}
+
+/// Universe-bound (Gate 5 `traversal_invents_no_edges`): assert EVERY edge in a
+/// `--traverse` output maps to a backing signed claim — for each displayed edge
+/// cid, a `graph query --subject <project>` lookup resolves it to an existing
+/// claim, and every edge carries the author DID of its backing claim. No
+/// displayed edge lacks a backing signed claim (no fabrication/interpolation).
+/// Port-exposed names: `cli.graph_query.traverse.edge_cids`,
+/// `cli.graph_query.traverse.edge_cid_resolvable[cid]`.
+///
+/// SCAFFOLD: true (slice-04) — the auditability gate (WD-76/WD-91); the
+/// traversal counterpart of the federated anti-merging assertion.
+pub fn assert_every_edge_has_backing_claim(env: &TestEnv, traversal: &CliOutcome) {
+    // SCAFFOLD: true (slice-04)
+    let _ = (env, traversal);
+    todo!(
+        "DELIVER (slice-04): parse the traversal edge cids from stdout; for each, run `graph query \
+         --subject <project>` and assert the cid resolves to an existing signed claim, and the edge \
+         carries that claim's author DID — no edge is fabricated (Gate 5 traversal_invents_no_edges; \
+         WD-76/WD-91)"
+    )
+}
