@@ -340,7 +340,58 @@ fn assert_zero_subscriptions_for(env: &TestEnv, peer_did: &str) {
 /// @us-fed-005 @real-io @driving_port @j-003 @j-003c @happy
 #[test]
 fn peer_subscribe_remove_soft_keeps_cached_peer_claims() {
-    todo!("DELIVER (slice-03): wire VerbPeerRemove default branch → PeerStoragePort.soft_remove; assert peer_subscriptions.removed_at IS NOT NULL AND peer_claims row count unchanged; assert subsequent graph query --federated annotates rows '(unsubscribed cache)'")
+    let env = TestEnv::initialized();
+
+    // Precondition 1: an ACTIVE subscription to the peer (via the real
+    // `peer add` verb, so the row is written through the production
+    // PeerStoragePort exactly as a user would create it).
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_one_active_subscription_for(&env, peer_did);
+
+    // Precondition 2: cached peer_claims rows for this peer. `peer pull`
+    // (the production path that populates peer_claims) lands in Phase 04,
+    // so the test seeds the cache directly via the test-support raw-SQL
+    // helper (test-support is the only place raw SQL is acceptable; the
+    // soft-remove contract under test is "retain WHATEVER is cached",
+    // independent of how it got there).
+    let cached_count = 3;
+    seed_cached_peer_claims(&env, peer_did, cached_count);
+    assert_one_active_subscription_for(&env, peer_did); // seeding peer_claims must not touch subscriptions
+    let _ = added;
+
+    // Action: soft-remove (no --purge).
+    let outcome = run_openlore(&env, &["peer", "remove", peer_did]);
+
+    // Observable #1 — the CLI confirms the soft-remove and the retained
+    // cache count (US-FED-005 Example 1: "Removed subscription. N cached
+    // peer claims retained (use --purge to delete them).").
+    assert_exit_zero_and_stdout_contains(&outcome, "Removed subscription");
+    assert!(
+        outcome
+            .stdout
+            .contains(&format!("{cached_count} cached peer claims retained")),
+        "expected the soft-remove output to report {cached_count} retained \
+         cached peer claims;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Observable #2 — the storage-level soft-remove contract (WD-25 /
+    // component-boundaries §adapter-duckdb soft-remove isolation probe #5):
+    //   (a) the subscription row's `removed_at` is now SET (soft-removed,
+    //       no longer active), and
+    //   (b) the `peer_claims` row count for the peer is UNCHANGED.
+    // (The "(unsubscribed cache)" federated-query annotation is FQ-territory
+    // in Phase 05; PS-5 pins the observable-now storage state.)
+    assert_subscription_soft_removed_for(&env, peer_did);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
 }
 
 /// PS-6: `openlore peer remove <did> --purge` shows the cached-record

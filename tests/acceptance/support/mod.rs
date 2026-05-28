@@ -1045,6 +1045,111 @@ pub fn assert_no_merged_rows_in_federated_output(outcome: &CliOutcome) {
     }
 }
 
+/// Seed `count` cached `peer_claims` rows attributed to `peer_did` directly
+/// in DuckDB. Used as a PS-5 precondition: the production path that
+/// populates `peer_claims` is `peer pull` (Phase 04), so until it lands the
+/// soft-remove scenario seeds the cache via raw SQL. Test-support is the
+/// only place raw SQL is acceptable (production goes through
+/// `PeerStoragePort`). The rows satisfy the migration-v3 CHECK constraints
+/// (`author_did <> ''`, `cid <> ''`, `confidence` in [0,1]).
+pub fn seed_cached_peer_claims(env: &TestEnv, peer_did: &str, count: usize) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} to seed peer_claims: {err}",
+            db_path.display()
+        )
+    });
+    for i in 0..count {
+        let cid = format!("bafyseed{peer_did}{i}").replace(':', "_");
+        conn.execute(
+            "INSERT INTO peer_claims \
+                (cid, author_did, subject, predicate, object, confidence, \
+                 composed_at, fetched_at, fetched_from_pds, signed_record_path) \
+             VALUES (?, ?, ?, ?, ?, ?, now(), now(), ?, ?)",
+            duckdb::params![
+                cid,
+                peer_did,
+                format!("subject-{i}"),
+                "endorses",
+                format!("object-{i}"),
+                0.8_f64,
+                "https://peer.example/pds",
+                format!("peer_claims/{}/{cid}.json", did_to_fs_segment(peer_did)),
+            ],
+        )
+        .unwrap_or_else(|err| panic!("seed peer_claims row {i} for {peer_did}: {err}"));
+    }
+}
+
+/// Universe-bound: "the `peer_subscriptions` row for `peer_did` is
+/// soft-removed — `removed_at IS NOT NULL`". Port-exposed name:
+/// `peer_storage.subscriptions.removed_at_set[did]`. The defining
+/// observable of soft-remove (WD-25). Sibling of
+/// `assert_one_active_subscription_for`.
+pub fn assert_subscription_soft_removed_for(env: &TestEnv, peer_did: &str) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for soft-remove assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let (total, removed): (i64, i64) = conn
+        .query_row(
+            "SELECT \
+                count(*), \
+                count(*) FILTER (WHERE removed_at IS NOT NULL) \
+             FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or_else(|err| panic!("query peer_subscriptions for {peer_did}: {err}"));
+
+    assert_eq!(
+        total, 1,
+        "expected the subscription row for {peer_did} to still EXIST after \
+         soft-remove (soft-remove does NOT delete the row); got {total} rows"
+    );
+    assert_eq!(
+        removed, 1,
+        "expected the subscription row for {peer_did} to be soft-removed \
+         (removed_at IS NOT NULL) after `peer remove`; got {removed} \
+         soft-removed rows"
+    );
+}
+
+/// Universe-bound: "the `peer_claims` store holds exactly `count` rows
+/// attributed to `peer_did`". Port-exposed name:
+/// `peer_storage.claims.row_count[did]`. PS-5 uses it to assert soft-remove
+/// RETAINS every cached peer claim (count unchanged). Test-support is the
+/// only place raw SQL is acceptable; production goes through
+/// `PeerStoragePort`.
+pub fn assert_peer_claims_row_count_for(env: &TestEnv, peer_did: &str, count: usize) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for peer_claims count assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_claims WHERE author_did = ?",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_claims for {peer_did}: {err}"));
+
+    assert_eq!(
+        total as usize, count,
+        "expected exactly {count} peer_claims rows for {peer_did}; got {total} \
+         (soft-remove must RETAIN cached peer claims — WD-25)"
+    );
+}
+
 /// Universe-bound: "the on-disk partition `peer_claims/<encoded_did>/` does
 /// NOT exist (hard-purge removed it)". Port-exposed name:
 /// `storage.peer_claims_fs.dir_exists_for[did] == false`.

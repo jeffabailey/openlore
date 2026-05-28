@@ -28,7 +28,8 @@
 //! SCAFFOLD: true (slice-03) — the verb body is a `todo!()` stub; the
 //! autoconfirm guard itself is LIVE so step 01-06's xtask can verify it.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use ports::SoftRemoveOutcome;
 
 use crate::wiring::Wiring;
 
@@ -57,12 +58,46 @@ pub struct PeerRemoveOutcome {
 /// (soft branch → soft_remove; --purge branch → confirm-or-[`autoconfirm_purge`]
 /// → hard_purge; --no-tty refuses the --purge branch) in a later slice-03
 /// phase.
-pub fn run(_wiring: &Wiring, _args: &PeerRemoveArgs) -> Result<PeerRemoveOutcome> {
-    // SCAFFOLD: true (slice-03)
-    todo!(
-        "VerbPeerRemove — soft branch → PeerStoragePort::soft_remove; \
-         --purge branch → TtyIO confirm OR autoconfirm_purge() → hard_purge; \
-         --no-tty refuses --purge (WD-36). Driven by PS-5..PS-8 scenarios."
+pub fn run(wiring: &Wiring, args: &PeerRemoveArgs) -> Result<PeerRemoveOutcome> {
+    let peer_did = claim_domain::Did(args.did.clone());
+
+    if args.purge {
+        // SCAFFOLD: true (slice-03) — the --purge branch (TtyIO confirm OR
+        // autoconfirm_purge() → hard_purge; --no-tty refusal per WD-36) is
+        // driven by PS-6 / PS-7 / PS-8 in a later slice-03 phase.
+        todo!(
+            "VerbPeerRemove --purge branch → TtyIO confirm OR autoconfirm_purge() \
+             → hard_purge; --no-tty refuses --purge (WD-36). Driven by PS-6..PS-8."
+        );
+    }
+
+    // Soft-remove (default): drop the subscription (set `removed_at`) but
+    // RETAIN every cached peer_claims row (WD-25). The cli renders the
+    // retained-cache count off the outcome.
+    let outcome = wiring
+        .peer_storage
+        .soft_remove(&peer_did)
+        .map_err(|err| anyhow!("could not remove subscription for {}: {err}", peer_did.0))?;
+
+    Ok(PeerRemoveOutcome {
+        exit_code: 0,
+        stdout: render_soft_remove(&peer_did.0, outcome),
+    })
+}
+
+/// Pure render for the soft-remove outcome.
+///
+/// - `was_subscribed = false` → idempotent no-op (US-FED-005 Example 4).
+/// - `was_subscribed = true`  → "Removed subscription. N cached peer claims
+///   retained (use --purge to delete them)." (Example 1).
+fn render_soft_remove(peer_did: &str, outcome: SoftRemoveOutcome) -> String {
+    if !outcome.was_subscribed {
+        return format!("Not subscribed to {peer_did}; nothing to remove.\n");
+    }
+    format!(
+        "Removed subscription. {} cached peer claims retained \
+         (use --purge to delete them).\n",
+        outcome.cached_claim_count
     )
 }
 

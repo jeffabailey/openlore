@@ -15,8 +15,9 @@ use chrono::{TimeZone, Utc};
 use claim_domain::{
     Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
 };
-use ports::{ProbeOutcome, StoragePort};
+use ports::{PeerStoragePort, PeerSubscription, ProbeOutcome, StoragePort};
 use tempfile::TempDir;
+use url::Url;
 
 /// Build a `Confidence` value bypassing the still-RED smart constructor
 /// (the wrapper's private inner field forbids direct tuple
@@ -259,5 +260,157 @@ fn record_publication_updates_at_uri_and_published_at_only() {
     assert_eq!(
         before, after,
         "SignedClaim payload must be unchanged by record_publication"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// PeerStoragePort — soft-remove isolation (component-boundaries §adapter-duckdb
+// probe #5 / WD-25 / ADR-014). Port-to-port at the PeerStoragePort boundary.
+// -----------------------------------------------------------------------------
+
+/// A peer adapter over a fresh tempdir. Returns `(peer, _author, tmp)` —
+/// the caller MUST keep `tmp` AND `_author` alive: the peer adapter SHARES
+/// the author adapter's single DuckDB connection (Q-DELIVER-3 single-writer
+/// constraint), so seeding + assertions all flow through ONE connection.
+fn fresh_peer_adapter() -> (
+    adapter_duckdb::DuckDbPeerStorageAdapter,
+    DuckDbStorageAdapter,
+    TempDir,
+) {
+    let tmp = TempDir::new().expect("create tempdir");
+    let db_path = tmp.path().join("openlore.duckdb");
+    let author = DuckDbStorageAdapter::open(&db_path).expect("open adapter on tempdir");
+    let peer = author.peer_adapter();
+    (peer, author, tmp)
+}
+
+/// A deterministic peer-authored `SignedClaim` for a given peer DID +
+/// distinct ordinal (so each seeded CID is unique).
+fn peer_signed_claim(peer_did: &str, i: usize) -> SignedClaim {
+    SignedClaim {
+        unsigned: UnsignedClaim {
+            subject: format!("subject-{i}"),
+            predicate: "endorses".to_string(),
+            object: format!("object-{i}"),
+            evidence: vec!["https://peer.example/proof".to_string()],
+            confidence: confidence(0.8),
+            author_did: Did(peer_did.to_string()),
+            composed_at: "2026-05-25T12:00:00Z".to_string(),
+            references: vec![],
+            reason: None,
+        },
+        signature: SignatureBlock {
+            signed_cid: Cid(format!("bafyseedpeer{i}")),
+            signature_bytes: vec![0x01, 0x02, 0x03, 0x04],
+            verification_method: format!("{peer_did}#org.openlore.application"),
+        },
+    }
+}
+
+/// Seed `count` cached `peer_claims` rows attributed to `peer_did`
+/// THROUGH the port (`write_peer_claim`) so they share the adapter's
+/// connection. (`peer pull` is the production population path, Phase 04;
+/// here we drive the same storage seam directly.)
+fn seed_peer_claims(peer: &adapter_duckdb::DuckDbPeerStorageAdapter, peer_did: &Did, count: usize) {
+    let pds = Url::parse("https://peer.example/pds").unwrap();
+    let fetched_at = Utc.with_ymd_and_hms(2026, 5, 27, 10, 0, 0).unwrap();
+    for i in 0..count {
+        let claim = peer_signed_claim(&peer_did.0, i);
+        let outcome = peer
+            .write_peer_claim(peer_did, &claim, &pds, fetched_at)
+            .unwrap_or_else(|err| panic!("seed peer_claim {i}: {err}"));
+        assert!(outcome.written, "fresh peer_claim {i} must be written");
+    }
+}
+
+/// Property (soft-remove isolation, probe #5): given 1 subscription + N
+/// cached peer_claims rows, `soft_remove` sets the subscription's
+/// `removed_at` (it leaves `list_active_subscriptions` yet `lookup_subscription`
+/// still finds it with `removed_at` SET) and RETAINS all N peer_claims rows.
+/// The returned `SoftRemoveOutcome` reports `was_subscribed = true` and the
+/// retained `cached_claim_count = N`.
+#[test]
+fn soft_remove_sets_removed_at_and_retains_all_peer_claims() {
+    let (peer, _author, _tmp) = fresh_peer_adapter();
+    let peer_did = Did("did:plc:rachel-test".to_string());
+    let cached = 3usize;
+
+    // Seed: 1 ACTIVE subscription + N cached peer_claims — both through
+    // the SAME shared connection (port-to-port).
+    let subscribed_at = Utc.with_ymd_and_hms(2026, 5, 27, 10, 14, 32).unwrap();
+    peer.add_subscription(PeerSubscription {
+        peer_did: peer_did.clone(),
+        peer_handle: "rachel.test".to_string(),
+        peer_pds_endpoint: Url::parse("https://peer.example/pds").unwrap(),
+        subscribed_at,
+        removed_at: None,
+    })
+    .expect("seed active subscription");
+    seed_peer_claims(&peer, &peer_did, cached);
+
+    // Precondition sanity: exactly one ACTIVE subscription before remove.
+    assert_eq!(
+        peer.list_active_subscriptions().unwrap().len(),
+        1,
+        "precondition: exactly one ACTIVE subscription before soft-remove"
+    );
+
+    // Action: soft-remove.
+    let outcome = peer.soft_remove(&peer_did).expect("soft_remove succeeds");
+
+    // Outcome surface (port-exposed return): subscribed + retained count.
+    // `cached_claim_count` IS the port-observable "peer_claims unchanged".
+    assert!(
+        outcome.was_subscribed,
+        "soft_remove of a known subscription must report was_subscribed=true"
+    );
+    assert_eq!(
+        outcome.cached_claim_count, cached as u32,
+        "soft_remove must report the RETAINED cached-claim count (probe #5; WD-25)"
+    );
+
+    // State: the row is soft-removed — gone from active listing but still
+    // present via lookup with `removed_at` SET (soft-remove does NOT delete).
+    assert_eq!(
+        peer.list_active_subscriptions().unwrap().len(),
+        0,
+        "soft-removed subscription must drop out of the active listing"
+    );
+    let looked_up = peer
+        .lookup_subscription(&peer_did)
+        .unwrap()
+        .expect("soft-remove must NOT delete the subscription row");
+    assert!(
+        looked_up.removed_at.is_some(),
+        "soft_remove must SET removed_at on the subscription row (WD-25)"
+    );
+
+    // Re-running soft_remove still reports the SAME retained cache count —
+    // the peer_claims rows survived the first soft-remove (idempotent
+    // isolation; the count would drop to 0 if the rows had been deleted).
+    let again = peer.soft_remove(&peer_did).expect("idempotent soft_remove");
+    assert_eq!(
+        again.cached_claim_count, cached as u32,
+        "cached peer_claims must persist across repeated soft-removes (WD-25)"
+    );
+}
+
+/// Property (idempotent / never-subscribed): `soft_remove` of a DID with no
+/// subscription row is a no-op that reports `was_subscribed = false` and
+/// `cached_claim_count = 0` (US-FED-005 Example 4 storage contract).
+#[test]
+fn soft_remove_of_unknown_did_is_noop() {
+    let (peer, _author, _tmp) = fresh_peer_adapter();
+    let stranger = Did("did:plc:stranger-test".to_string());
+
+    let outcome = peer.soft_remove(&stranger).expect("soft_remove succeeds");
+
+    assert!(
+        !outcome.was_subscribed,
+        "soft_remove of an unknown DID must report was_subscribed=false"
+    );
+    assert_eq!(
+        outcome.cached_claim_count, 0,
+        "an unknown DID has zero cached peer claims"
     );
 }
