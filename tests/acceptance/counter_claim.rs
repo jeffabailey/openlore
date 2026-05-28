@@ -822,5 +822,121 @@ fn second_peer_claim_cid(peer_did: &str, peer_seed: [u8; 32]) -> String {
 /// @us-fed-004 @real-io @driving_port @j-003b @wd-44
 #[test]
 fn counter_claim_publish_does_not_auto_notify_target_peer_pds() {
-    todo!("DELIVER (slice-03): construct TestEnv with FakePeerPds AND FakePds (user's own). Pull Rachel's records into peer_claims; counter one of them; assert (a) FakePds (user's own PDS) received exactly one create_record call for the counter-claim, (b) FakePeerPds received ZERO writes (only the listRecords / getRecord reads from the prior pull), (c) no notification XRPC method was called against the peer's endpoint")
+    let env = TestEnv::initialized();
+
+    // GIVEN: Rachel (a peer) publishes three honest, REAL-signed claims; the
+    // user subscribes and pulls them into `peer_claims`. The pull makes
+    // read-only calls (resolveDid / listRecords / getRecord) against the
+    // peer's PDS — those are the ONLY peer-PDS calls the whole scenario is
+    // allowed to make. The counter PUBLISH step below must add ZERO further
+    // peer-PDS traffic.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(records.len(), 3, "Rachel publishes exactly three claims");
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(added.status, 0, "peer add precondition must succeed");
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(pulled.status, 0, "peer pull precondition must succeed");
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    // The target we counter is the first of Rachel's three peer claims.
+    let target_cid = first_peer_claim_cid(peer_did, rachel_seed);
+
+    // Universe BEFORE the counter PUBLISH (WD-44 observable surface):
+    //   - the peer PDS hosts exactly Rachel's three claims (the read-only
+    //     fixture set — peer PDSes expose NO write surface, so a write
+    //     attempt would 405; there is no `createRecord` / notify endpoint at
+    //     all). We snapshot the hosted set so the post-publish assertion can
+    //     prove it is byte-for-byte UNCHANGED — no counter-claim ever lands
+    //     in the peer's repo;
+    //   - the user's OWN PDS has accepted zero records.
+    let peer_records_before = peer.records();
+    assert_eq!(
+        peer_records_before.len(),
+        3,
+        "the peer PDS hosts exactly Rachel's three read-only claims before the counter"
+    );
+    assert_no_pds_call_was_made(&env);
+
+    // WHEN: the user publishes a counter-claim against Rachel's claim
+    // (Enter to sign, Y to publish). The publish funnels through the SINGLE
+    // publish code path (I-FED-5) which targets the user's OWN PDS only.
+    let outcome = run_openlore_with_peer_resolver_stdin(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &target_cid,
+            "--reason",
+            "The cited benchmark was retracted upstream.",
+        ],
+        peer_did,
+        peer.endpoint_url(),
+        "\nY\n",
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "claim counter must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN (a — own-PDS publish happened): the user's OWN PDS now holds
+    // EXACTLY ONE record — the counter-claim — published under the user's
+    // OWN author DID at-uri (NEVER the peer's DID). This is the user's
+    // normal own-PDS publish, and it is the ONLY write the whole flow makes.
+    let counter_cid = parse_counter_claim_cid(&outcome.stdout);
+    let counter_at_uri = format!(
+        "at://{}/org.openlore.claim/{counter_cid}",
+        env.identity.author_did()
+    );
+    assert_pds_contains_record_at(&env, &counter_at_uri);
+    assert_eq!(
+        env.pds.records().len(),
+        1,
+        "the user's OWN PDS must hold EXACTLY ONE record (the counter-claim) — \
+         the one normal own-PDS publish;\n actual: {:?}",
+        env.pds.records()
+    );
+
+    // THEN (b — NO auto-notification to the target peer, WD-44): publishing
+    // the counter made ZERO writes against the peer's PDS. Slice-03 ships NO
+    // notification mechanism in either direction; the peer's repo is
+    // observably UNTOUCHED — its hosted record set is byte-for-byte identical
+    // to the pre-publish snapshot (still exactly Rachel's three claims; no
+    // counter-claim notification record was pushed into the peer's repo). The
+    // peer PDS exposes no write/notify endpoint at all (any write 405s), so
+    // this absence is enforced structurally, not by convention. The peer
+    // learns of the counter ONLY if they later pull from the user.
+    assert_eq!(
+        peer.records(),
+        peer_records_before,
+        "WD-44: publishing a counter-claim must make ZERO writes against the \
+         target peer's PDS — the peer's hosted record set must be UNCHANGED \
+         (no notification record pushed in either direction);\n before: {:?}\n after: {:?}",
+        peer_records_before,
+        peer.records()
+    );
+    assert!(
+        env.pds
+            .records()
+            .iter()
+            .all(|r| r.author_did == env.identity.author_did()),
+        "WD-44: the only published record is the user's OWN counter-claim — \
+         nothing was published under the peer's DID {peer_did};\n actual: {:?}",
+        env.pds.records()
+    );
 }
