@@ -59,7 +59,7 @@
 
 use adapter_github::AuthReport;
 use claim_domain::{Cid, SignedClaim};
-use ports::{AuthorRelationship, CandidateClaim, FederatedRow, SourceTable};
+use ports::{AttributedClaim, AuthorRelationship, CandidateClaim, FederatedRow, SourceTable};
 
 // -----------------------------------------------------------------------------
 // Slice-02 (github scraper) — public-data banner + candidate-list renderer
@@ -392,6 +392,131 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
         out.push_str(&render_counter_relationship_summary(counters.len()));
     }
     out
+}
+
+// -----------------------------------------------------------------------------
+// Slice-04 (ADR-020) — `graph query --object <philosophy>` dimension renderer
+// -----------------------------------------------------------------------------
+
+/// Slice-04 content-frozen no-merge guarantee for the `--object` dimension
+/// view (US-GRAPH-001 / KPI-GRAPH-2; component-boundaries.md §"Render contract
+/// (cli)"). Reuses the slice-03 ADR-013 phrasing so the anti-merging promise
+/// reads identically across the federated subject view and the object view.
+/// Do NOT paraphrase — the exact string is the user-visible contract.
+pub const OBJECT_QUERY_NO_MERGE_FOOTER: &str =
+    "Each claim is attributed to its author DID. No claims are merged.";
+
+/// Render the `graph query --object <philosophy>` dimension result: the
+/// attributed per-claim rows GROUPED BY SUBJECT (project), each row carrying
+/// its `author_did` + numeric confidence + display-only bucket + cid. Pure
+/// function — no I/O, no storage access.
+///
+/// ## Anti-merging contract (I-GRAPH-2 / WD-73; US-GRAPH-001)
+///
+/// Each [`AttributedClaim`] carries its `author_did` at the type level
+/// (non-`Option`). This renderer surfaces that attribution per row and NEVER
+/// collapses two authors' claims about the same `(subject, object)` into one
+/// aggregate:
+///
+/// - Rows are grouped under a per-subject header (first-seen subject order).
+/// - Every claim row prints `author_did` (annotated with its relationship —
+///   `(you)` / `(subscribed peer)` / `(unsubscribed cache)`), the numeric
+///   `confidence`, its DISPLAY-ONLY bucket label, and the `cid` — so an
+///   operator can attribute any single row to exactly one author.
+/// - Two claims with identical `(subject, object)` by DIFFERENT authors render
+///   as TWO rows (never merged).
+/// - The footer states the distinct-SUBJECT count AND the distinct-AUTHOR
+///   count AND the content-frozen [`OBJECT_QUERY_NO_MERGE_FOOTER`].
+pub fn render_object_query_grouped_by_subject(object: &str, claims: &[AttributedClaim]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Claims embodying {object} (grouped by subject):\n\n"
+    ));
+
+    if claims.is_empty() {
+        out.push_str(&format!("No claims found for object {object}.\n"));
+        return out;
+    }
+
+    for (subject, subject_claims) in &group_by_subject(claims) {
+        out.push_str(&format!("subject: {subject}\n"));
+        for claim in subject_claims {
+            out.push_str(&render_one_attributed_claim(claim));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&render_object_query_footer(
+        distinct_subject_count(claims),
+        distinct_author_count(claims),
+    ));
+    out
+}
+
+/// Group attributed claims by subject, preserving first-seen subject order
+/// (stable, hash-randomization-free output). Returns one entry per distinct
+/// subject carrying its claims. Pure helper.
+fn group_by_subject<'a>(claims: &'a [AttributedClaim]) -> Vec<(String, Vec<&'a AttributedClaim>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: Vec<(String, Vec<&'a AttributedClaim>)> = Vec::new();
+    for claim in claims {
+        match order.iter().position(|s| s == &claim.subject) {
+            Some(pos) => grouped[pos].1.push(claim),
+            None => {
+                order.push(claim.subject.clone());
+                grouped.push((claim.subject.clone(), vec![claim]));
+            }
+        }
+    }
+    grouped
+}
+
+/// Render one attributed claim row under its subject group: the author DID
+/// (with its relationship annotation), the numeric confidence + display-only
+/// bucket, and the cid. Every value is independently attributable (anti-merging
+/// behavioral layer). Pure helper.
+fn render_one_attributed_claim(claim: &AttributedClaim) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "  author_did: {} {}\n",
+        claim.author_did.0,
+        relationship_annotation(claim.relationship)
+    ));
+    out.push_str(&format!(
+        "    confidence: {} ({})\n",
+        render_candidate_confidence(claim.confidence),
+        confidence_bucket_label(claim.confidence)
+    ));
+    out.push_str(&format!("    cid:        {}\n", claim.cid.0));
+    out
+}
+
+/// The count of distinct subjects in an attributed result set. Pure helper.
+fn distinct_subject_count(claims: &[AttributedClaim]) -> usize {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for claim in claims {
+        seen.insert(claim.subject.as_str());
+    }
+    seen.len()
+}
+
+/// The count of distinct (bare) author DIDs in an attributed result set. Pure
+/// helper.
+fn distinct_author_count(claims: &[AttributedClaim]) -> usize {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for claim in claims {
+        seen.insert(claim.author_did.0.as_str());
+    }
+    seen.len()
+}
+
+/// Render the `--object` dimension footer: the distinct-subject count AND the
+/// distinct-author count AND the content-frozen no-merge guarantee
+/// (US-GRAPH-001). Pure helper.
+fn render_object_query_footer(subject_count: usize, author_count: usize) -> String {
+    format!(
+        "{subject_count} subject(s), {author_count} author(s). {OBJECT_QUERY_NO_MERGE_FOOTER}\n"
+    )
 }
 
 /// One bidirectional counter relationship discovered in the federated row

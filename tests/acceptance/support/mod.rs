@@ -2734,12 +2734,36 @@ impl FederatedGraphFixture {
 /// Returned by [`seed_federated_graph`]; held by the test for the scenario's
 /// lifetime (dropping it tears down the peer servers — RAII per scenario).
 ///
-/// SCAFFOLD: true (slice-04) — DELIVER fills the fields it needs (the held
-/// `PeerPds` handles, the seeded cid map). `Debug` so a failing assertion can
-/// print the seeded shape.
-#[derive(Debug)]
+/// `Debug` so a failing assertion can print the seeded shape.
 pub struct SeededGraph {
-    _scaffold: (),
+    /// The peer-PDS doubles, kept alive so their in-process HTTP servers keep
+    /// answering for the scenario's lifetime (dropping tears them down). Held
+    /// by DID for diagnostics; the `PeerPds` itself is not `Debug`.
+    _peers: Vec<PeerPds>,
+    /// The seeded (author_did, subject, object, confidence) tuples — the
+    /// canonical fixture shape, recorded so assertions can pin per-author rows
+    /// without re-deriving the recipe.
+    pub seeded: Vec<SeededClaim>,
+}
+
+impl std::fmt::Debug for SeededGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SeededGraph")
+            .field("peer_count", &self._peers.len())
+            .field("seeded", &self.seeded)
+            .finish()
+    }
+}
+
+/// One seeded claim's canonical attribution shape (recorded by the seeder for
+/// per-author-row assertions). The bare author DID, subject, object, and the
+/// numeric confidence that the dimension view must surface verbatim.
+#[derive(Debug, Clone)]
+pub struct SeededClaim {
+    pub author_did: String,
+    pub subject: String,
+    pub object: String,
+    pub confidence: f64,
 }
 
 impl SeededGraph {
@@ -2794,14 +2818,195 @@ impl AddedPeerClaim {
 /// the per-scenario preconditions stay declarative (a fixture name, not 40
 /// lines of subscribe/pull plumbing per test).
 pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> SeededGraph {
-    // SCAFFOLD: true (slice-04)
-    let _ = (env, fixture);
-    todo!(
-        "DELIVER (slice-04): seed the named federated-graph fixture into the REAL DuckDB — own \
-         claims via `claim add`, peer claims via `peer add` + `peer pull` against PeerPds doubles \
-         (build_verifiable_peer_records*) — and return a SeededGraph owning the peer handles + the \
-         seeded cid map (no new external fake; scoring/traversal reads the real store)"
-    )
+    match fixture {
+        FederatedGraphFixture::DependencyPinningThreeAuthors => {
+            // US-GRAPH-001 Example 1: 4 dependency-pinning claims across 3
+            // projects by 3 distinct authors — all PEER claims (the local user
+            // makes no claim here). Each author is a separate subscribed peer;
+            // their claims are materialized with REAL Ed25519 crypto + CID
+            // recompute so the production pull pipeline verifies them.
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[
+                            ("github:rust-lang/cargo", dep, 0.91),
+                            ("github:NixOS/nixpkgs", dep, 0.88),
+                        ],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[("github:denoland/deno", dep, 0.55)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:maria-test",
+                        seed: [11u8; 32],
+                        triples: &[("github:denoland/deno", dep, 0.40)],
+                    },
+                ],
+            )
+        }
+        // The remaining variants materialize per-scenario in later slice-04
+        // steps (GQE-2..27 stay RED until then).
+        other => {
+            let _ = env;
+            todo!(
+                "DELIVER (slice-04, later step): seed the {other:?} federated-graph fixture \
+                 (own claims via `claim add`, peer claims via `peer add` + `peer pull`)"
+            )
+        }
+    }
+}
+
+/// One peer's seed recipe: its DID, Ed25519 seed, and the
+/// `(subject, object, confidence)` triples it authors.
+struct SeedPeer<'a> {
+    peer_did: &'a str,
+    seed: [u8; 32],
+    triples: &'a [(&'a str, &'a str, f64)],
+}
+
+/// Seed a federated graph whose claims are ALL authored by subscribed peers
+/// (no local-user own claim). For each peer: build verifiable wire records,
+/// start a `PeerPds`, subscribe via the real `peer add` verb, then pull every
+/// subscribed peer in ONE `peer pull` so the per-claim rows land in the real
+/// `peer_claims` table (each attributed to its author — anti-merging held).
+/// Returns a [`SeededGraph`] owning the live `PeerPds` doubles.
+fn seed_peer_authored_graph(env: &TestEnv, peers: &[SeedPeer<'_>]) -> SeededGraph {
+    let mut held_peers: Vec<PeerPds> = Vec::new();
+    let mut pubkeys: Vec<String> = Vec::new();
+    let mut seeded: Vec<SeededClaim> = Vec::new();
+
+    // Build records + start each peer's PDS, recording the canonical seeded
+    // attribution shape for later per-author-row assertions.
+    for peer in peers {
+        let (records, pubkey_hex) =
+            build_verifiable_peer_records_for_triples(peer.peer_did, peer.seed, peer.triples);
+        for (subject, object, confidence) in peer.triples {
+            seeded.push(SeededClaim {
+                author_did: peer.peer_did.to_string(),
+                subject: (*subject).to_string(),
+                object: (*object).to_string(),
+                confidence: *confidence,
+            });
+        }
+        let pds = PeerPds::for_peer(peer.peer_did, records);
+
+        // Subscribe via the real `peer add` verb (resolver wired for THIS peer).
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", peer.peer_did],
+            peer.peer_did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_federated_graph: peer add for {} must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            peer.peer_did, added.stdout, added.stderr
+        );
+
+        held_peers.push(pds);
+        pubkeys.push(pubkey_hex);
+    }
+
+    // Pull every subscribed peer in ONE invocation (resolver + pubkey seams
+    // wired for all peers at once). The production pull pipeline verifies each
+    // record + recomputes its CID, then stores it attributed to its author.
+    let seams: Vec<PeerSeam<'_>> = peers
+        .iter()
+        .zip(held_peers.iter())
+        .zip(pubkeys.iter())
+        .map(|((peer, pds), pubkey)| PeerSeam {
+            peer_did: peer.peer_did,
+            peer_endpoint: pds.endpoint_url(),
+            peer_pubkey_hex: pubkey,
+        })
+        .collect();
+    let pulled = run_openlore_pull_multi(env, &["peer", "pull"], &seams);
+    assert_eq!(
+        pulled.status, 0,
+        "seed_federated_graph: peer pull must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    SeededGraph {
+        _peers: held_peers,
+        seeded,
+    }
+}
+
+/// Build a verifiable peer record set over caller-supplied
+/// `(subject, object, confidence)` triples. The flexible sibling of
+/// [`build_verifiable_peer_records`] (which hardcodes Rachel's cargo triples)
+/// and [`build_verifiable_peer_records_with_objects`] (which hardcodes the
+/// subject). The slice-04 graph fixtures need full control of subject + object
+/// + confidence per claim (cross-project spans, multi-author pairings), so this
+/// materializes the same REAL Ed25519 crypto + CID-recompute the pull pipeline
+/// verifies, over an arbitrary triple list.
+///
+/// Returns `(records, peer_pubkey_hex)` exactly like
+/// [`build_verifiable_peer_records`]. Test-support is the only place this
+/// construction is acceptable; the production populate path is `peer pull`.
+pub fn build_verifiable_peer_records_for_triples(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    triples: &[(&str, &str, f64)],
+) -> (Vec<FakePeerRecord>, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    let records = triples
+        .iter()
+        .map(|(subject, object, confidence)| {
+            let confidence_wrapper: claim_domain::Confidence =
+                serde_json::from_value(serde_json::json!(confidence))
+                    .expect("confidence value is well-formed");
+            let unsigned = claim_domain::UnsignedClaim {
+                subject: (*subject).to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: (*object).to_string(),
+                evidence: vec![format!("https://example.test/{subject}")],
+                confidence: confidence_wrapper,
+                author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+
+            let canonical = canonicalize(&unsigned).expect("canonicalize triple claim");
+            let cid = compute_cid(&canonical);
+            let signature = sign(&cid, &signing_key).expect("sign triple claim");
+            let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+            let body = serde_json::json!({
+                "subject": subject,
+                "predicate": "embodiesPhilosophy",
+                "object": object,
+                "evidence": [format!("https://example.test/{subject}")],
+                "confidence": confidence,
+                "author": format!("{peer_did}#org.openlore.application"),
+                "composedAt": "2026-05-22T09:18:44Z",
+                "references": [],
+                "signature": {
+                    "kid": format!("{peer_did}#org.openlore.application"),
+                    "alg": "EdDSA",
+                    "sig": sig_b64,
+                }
+            });
+            FakePeerRecord::claim(cid.0, body)
+        })
+        .collect();
+
+    (records, pubkey_hex)
 }
 
 /// Run `openlore <args>` with the network disabled (no PDS/peer endpoint

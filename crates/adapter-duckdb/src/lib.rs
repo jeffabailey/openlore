@@ -624,10 +624,7 @@ impl StoragePort for DuckDbStorageAdapter {
         graph_query::query_by_object(&self.conn, object)
     }
 
-    fn query_by_contributor(
-        &self,
-        author_did: &Did,
-    ) -> Result<Vec<AttributedClaim>, StorageError> {
+    fn query_by_contributor(&self, author_did: &Did) -> Result<Vec<AttributedClaim>, StorageError> {
         graph_query::query_by_contributor(&self.conn, author_did)
     }
 
@@ -657,7 +654,7 @@ impl StoragePort for DuckDbStorageAdapter {
 /// locator; the federated read normalizes to the bare form so own + peer
 /// rows attribute under one author header (matches the peer adapter's
 /// `bare_did`).
-fn bare_did(did: &str) -> String {
+pub(crate) fn bare_did(did: &str) -> String {
     did.split('#').next().unwrap_or(did).to_string()
 }
 

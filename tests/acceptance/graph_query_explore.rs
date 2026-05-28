@@ -74,7 +74,10 @@ fn graph_query_by_object_groups_by_subject_with_per_author_attribution() {
     // `peer pull`). The seeder owns the canonical 4-claim / 3-project /
     // 3-author fixture from US-GRAPH-001 Example 1; it returns the live handles
     // (peer endpoints + pubkeys) so the assertion can pin per-author rows. --
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_three_authors());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_three_authors(),
+    );
 
     // -- Action: the object-dimension read through the driving port. Explorer
     // verbs imply federated scope (WD-87) — own + peers without an explicit
@@ -94,15 +97,95 @@ fn graph_query_by_object_groups_by_subject_with_per_author_attribution() {
     // 4. Footer states distinct-subject (3) + distinct-author (3) counts + the
     //    no-merge guarantee verbatim.
     //
-    // DELIVER materializes `assert_object_query_grouped_by_subject` which pins
-    // the universe (port-exposed): cli.graph_query.distinct_subjects_in_output,
-    // cli.graph_query.distinct_authors_in_output, cli.graph_query.rows_collapsed.
-    todo!(
-        "DELIVER (slice-04): assert `graph query --object` groups by subject, every row carries \
-         author_did + numeric confidence + display bucket + cid, deno's two-author claims render \
-         as TWO rows (no merge), and the footer states 3 subjects + 3 authors + the no-merge \
-         guarantee (US-GRAPH-001 happy; Gate 1 dimension baseline);\n--- graph ---\n{graph:?}"
-    )
+    // Universe (port-exposed observable surface of the `--object` dimension
+    // view): cli.graph_query.distinct_subjects_in_output (3),
+    // cli.graph_query.distinct_authors_in_output (3),
+    // cli.graph_query.rows_collapsed (0 — deno's two authors render as TWO
+    // rows). Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. Grouped BY SUBJECT: each of the 3 seeded subjects heads a group.
+    let subjects = [
+        "github:rust-lang/cargo",
+        "github:NixOS/nixpkgs",
+        "github:denoland/deno",
+    ];
+    let distinct_subjects_in_output = subjects
+        .iter()
+        .filter(|s| stdout.contains(&format!("subject: {s}")))
+        .count();
+    assert_eq!(
+        distinct_subjects_in_output, 3,
+        "cli.graph_query.distinct_subjects_in_output: expected all 3 subjects to head a group; \
+         got {distinct_subjects_in_output};\n--- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. Every claim row carries its author DID + numeric confidence + a
+    //    display-only bucket + cid (per-author attribution, anti-merging).
+    let authors = [
+        "did:plc:rachel-test",
+        "did:plc:tobias-test",
+        "did:plc:maria-test",
+    ];
+    let distinct_authors_in_output = authors
+        .iter()
+        .filter(|did| stdout.contains(&format!("author_did: {did}")))
+        .count();
+    assert_eq!(
+        distinct_authors_in_output, 3,
+        "cli.graph_query.distinct_authors_in_output: expected all 3 author DIDs to appear on \
+         per-claim rows; got {distinct_authors_in_output};\n--- stdout ---\n{stdout}"
+    );
+    // Each seeded confidence appears verbatim as the numeric value (Gate 6 —
+    // no bucket-rounding) followed by its display-only bucket label.
+    for (confidence, bucket) in [
+        ("0.91", "triangulated"),
+        ("0.88", "well-evidenced"),
+        ("0.55", "weighted"),
+        // 0.4 sits at the [0.4, 0.7) display bucket boundary -> "weighted"
+        // (the `< 0.4` speculative band is exclusive of 0.4).
+        ("0.4", "weighted"),
+    ] {
+        assert!(
+            stdout.contains(&format!("confidence: {confidence} ({bucket})")),
+            "expected a per-claim row showing numeric confidence {confidence} with its \
+             display-only bucket ({bucket});\n--- stdout ---\n{stdout}"
+        );
+    }
+    // Every seeded claim's cid is present (each row independently attributable).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 4,
+        "expected exactly 4 cid-bearing rows (one per seeded claim, none merged); \
+         got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. deno has TWO claims by TWO authors (Tobias 0.55 + Maria 0.40); they
+    //    render as TWO rows — NO multi-author aggregate (rows_collapsed == 0).
+    for label in ["merged", "consensus", "aggregate"] {
+        // The no-merge FOOTER legitimately contains "merged"; strip it first.
+        let scanned = stdout.replace("No claims are merged.", "");
+        assert!(
+            !scanned.to_lowercase().contains(label),
+            "anti-merging (KPI-GRAPH-2): the --object output must contain NO {label:?} row; \
+             \n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 4. Footer states distinct-subject (3) + distinct-author (3) counts + the
+    //    content-frozen no-merge guarantee verbatim.
+    assert!(
+        stdout.contains("3 subject(s), 3 author(s)."),
+        "expected the footer to state 3 subjects + 3 authors;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "expected the footer to carry the content-frozen no-merge guarantee verbatim; \
+         \n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-2 (US-GRAPH-001 edge; KPI-GRAPH-2): Aanya has her OWN claim that
@@ -121,7 +204,10 @@ fn graph_query_by_object_identical_content_different_authors_renders_two_rows() 
     // Seed the identical-content pair on github:denoland/deno: the local user's
     // own claim (0.40) + a pulled peer claim from Tobias (0.55), same (subject,
     // object). The precise zero-merge fixture (US-GRAPH-001 Example 3).
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::deno_identical_content_two_authors());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::deno_identical_content_two_authors(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object]);
     assert_eq!(
@@ -188,12 +274,20 @@ fn graph_query_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_z
 
     // Seed the CORRECT philosophy so the near-match suggestion has a real
     // neighbour to propose ("did you mean org.openlore.philosophy.dependency-pinning?").
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_three_authors());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_three_authors(),
+    );
 
     // The user queries a MISSPELLED object URI (no claims match).
     let outcome = run_openlore(
         &env,
-        &["graph", "query", "--object", "org.openlore.philosophy.dependancy-pinning"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.dependancy-pinning",
+        ],
     );
 
     // Empty result is NOT an error: exit 0 (a valid not-yet-found state).
@@ -221,7 +315,10 @@ fn graph_query_by_object_succeeds_with_network_disabled() {
     let env = TestEnv::initialized();
     let object = "org.openlore.philosophy.dependency-pinning";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_three_authors());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_three_authors(),
+    );
 
     // Run the object query with the per-process network-disabled seam engaged
     // (no PDS/peer endpoint reachable). A read-only local explorer must still
@@ -261,7 +358,10 @@ fn graph_query_by_contributor_lists_full_reasoning_trail_with_honest_framing() {
     // Seed Rachel's 5-claim / 4-subject trail into the local graph (peer claims
     // pulled into peer_claims). The seeder hosts exactly the US-GRAPH-002
     // Example 1 fixture (cargo x2, nixpkgs, tokio, serde).
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::rachel_five_claims_four_subjects());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::rachel_five_claims_four_subjects(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--contributor", rachel_did]);
     assert_eq!(
@@ -399,7 +499,10 @@ fn graph_query_weighted_ranks_projects_with_transparent_no_ml_formula() {
     // Seed the canonical weighted fixture from US-GRAPH-003 Example 1 /
     // data-models.md worked examples: cargo (Rachel 0.91, spans nixpkgs too),
     // nixpkgs (Rachel 0.88), deno (Tobias 0.55 + Maria 0.40).
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(
@@ -439,7 +542,10 @@ fn graph_query_weighted_single_claim_single_author_renders_sparse_with_honesty_l
 
     // Seed a single-claim single-author no-span subgraph (tokio, 1 claim, conf
     // 0.50). The precise sparse fixture (US-GRAPH-003 Example 2 / SC-3 leg).
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::actor_model_single_sparse_claim());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::actor_model_single_sparse_claim(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(
@@ -478,7 +584,10 @@ fn graph_query_weighted_multi_author_support_raises_triangulation_weight() {
     // Seed deno with 2 distinct authors (Aanya 0.40 + Tobias 0.55) on
     // reproducible-builds, plus a single-author comparator project with similar
     // max confidence so the triangulation lift is observable in the ranking.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::reproducible_builds_multi_author());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::reproducible_builds_multi_author(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(
@@ -509,7 +618,10 @@ fn graph_query_weighted_conflicting_claims_both_contribute_nothing_dropped() {
 
     // Seed a sharply-disagreeing pair on one project (author A 0.85, author B
     // 0.20). Both must contribute per their confidence; nothing dropped.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::conflicting_confidences_one_project());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::conflicting_confidences_one_project(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(
@@ -542,7 +654,10 @@ fn graph_query_weighted_outputs_are_never_persisted_and_recompute_at_query_time(
     // Seed an initial subgraph, run a weighted query, then pull an ADDITIONAL
     // peer claim and re-run — the seeder returns a handle that can add a claim
     // mid-scenario so the weight observably changes (proving query-time compute).
-    let mut graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let mut graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let first = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(
@@ -584,7 +699,10 @@ fn graph_query_weighted_succeeds_with_network_disabled() {
     let env = TestEnv::initialized();
     let object = "org.openlore.philosophy.dependency-pinning";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome =
         run_openlore_network_disabled(&env, &["graph", "query", "--object", object, "--weighted"]);
@@ -622,11 +740,22 @@ fn graph_query_explain_reproduces_weight_from_per_claim_arithmetic() {
 
     // Seed the worked-example deno pairing (Tobias 0.55 + Maria 0.40) whose
     // arithmetic the --explain output must reproduce by hand to 1.05.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome = run_openlore(
         &env,
-        &["graph", "query", "--object", object, "--weighted", "--explain", "github:denoland/deno"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            object,
+            "--weighted",
+            "--explain",
+            "github:denoland/deno",
+        ],
     );
     assert_eq!(
         outcome.status, 0,
@@ -658,11 +787,22 @@ fn graph_query_explain_on_sparse_subject_repeats_the_honesty_line() {
     let env = TestEnv::initialized();
     let object = "org.openlore.philosophy.actor-model";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::actor_model_single_sparse_claim());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::actor_model_single_sparse_claim(),
+    );
 
     let outcome = run_openlore(
         &env,
-        &["graph", "query", "--object", object, "--weighted", "--explain", "github:tokio-rs/tokio"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            object,
+            "--weighted",
+            "--explain",
+            "github:tokio-rs/tokio",
+        ],
     );
     assert_eq!(
         outcome.status, 0,
@@ -691,11 +831,22 @@ fn graph_query_explain_for_subject_absent_from_result_set_is_a_usage_error() {
 
     // Seed the dependency-pinning subgraph WITHOUT any github:foo/bar claim, so
     // the explained subject is genuinely absent from the result set.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome = run_openlore(
         &env,
-        &["graph", "query", "--object", object, "--weighted", "--explain", "github:foo/bar"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            object,
+            "--weighted",
+            "--explain",
+            "github:foo/bar",
+        ],
     );
 
     // --explain for an absent subject is a USAGE ERROR: non-zero exit (distinct
@@ -730,11 +881,22 @@ fn graph_query_explain_attributes_triangulation_bonus_to_the_contributor_who_ear
     // Seed the worked-example graph where Rachel asserts dependency-pinning on
     // BOTH cargo and nixpkgs (the cross-project span that earns the +0.5
     // triangulation bonus on cargo). data-models.md §"Worked example (cargo)".
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome = run_openlore(
         &env,
-        &["graph", "query", "--object", object, "--weighted", "--explain", "github:rust-lang/cargo"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            object,
+            "--weighted",
+            "--explain",
+            "github:rust-lang/cargo",
+        ],
     );
     assert_eq!(
         outcome.status, 0,
@@ -772,7 +934,10 @@ fn graph_query_traverse_surfaces_a_non_obvious_cross_project_contributor_connect
     // Seed the cross-project span: Rachel asserts dependency-pinning on BOTH
     // cargo and nixpkgs (the connection the traversal must surface). The seeder
     // hosts the US-GRAPH-004 Example 1 fixture.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--traverse"]);
     assert_eq!(
@@ -806,7 +971,10 @@ fn graph_query_traverse_single_node_no_edges_renders_without_fabrication() {
     let object = "org.openlore.philosophy.actor-model";
 
     // Seed a single isolated claim (tokio, 1 author, no cross-project span).
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::actor_model_single_sparse_claim());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::actor_model_single_sparse_claim(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--traverse"]);
     assert_eq!(
@@ -836,9 +1004,15 @@ fn graph_query_traverse_is_bounded_to_default_depth_two_and_reports_omitted_edge
 
     // Seed a DENSE graph where Rachel's claims fan out beyond depth 2 (many
     // philosophies + co-claimants), so the default bound omits edges.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dense_fan_out_beyond_depth_two());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dense_fan_out_beyond_depth_two(),
+    );
 
-    let outcome = run_openlore(&env, &["graph", "query", "--contributor", rachel_did, "--traverse"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--contributor", rachel_did, "--traverse"],
+    );
     assert_eq!(
         outcome.status, 0,
         "graph query --contributor --traverse (dense) must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -866,11 +1040,17 @@ fn graph_query_traverse_depth_override_reveals_previously_omitted_real_edges() {
     let env = TestEnv::initialized();
     let rachel_did = "did:plc:rachel-test";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dense_fan_out_beyond_depth_two());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dense_fan_out_beyond_depth_two(),
+    );
 
     // Depth 2 (default) omits some edges; depth 3 reveals them. Both are real
     // signed claims (Gate 5).
-    let depth_two = run_openlore(&env, &["graph", "query", "--contributor", rachel_did, "--traverse"]);
+    let depth_two = run_openlore(
+        &env,
+        &["graph", "query", "--contributor", rachel_did, "--traverse"],
+    );
     assert_eq!(
         depth_two.status, 0,
         "default-depth traversal must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -878,7 +1058,15 @@ fn graph_query_traverse_depth_override_reveals_previously_omitted_real_edges() {
     );
     let depth_three = run_openlore(
         &env,
-        &["graph", "query", "--contributor", rachel_did, "--traverse", "--depth", "3"],
+        &[
+            "graph",
+            "query",
+            "--contributor",
+            rachel_did,
+            "--traverse",
+            "--depth",
+            "3",
+        ],
     );
     assert_eq!(
         depth_three.status, 0,
@@ -905,7 +1093,10 @@ fn graph_query_traverse_every_edge_maps_to_a_verifiable_signed_claim() {
     let env = TestEnv::initialized();
     let object = "org.openlore.philosophy.dependency-pinning";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects(),
+    );
 
     let traversal = run_openlore(&env, &["graph", "query", "--object", object, "--traverse"]);
     assert_eq!(
@@ -936,7 +1127,10 @@ fn graph_query_traverse_succeeds_with_network_disabled() {
     let env = TestEnv::initialized();
     let object = "org.openlore.philosophy.dependency-pinning";
 
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_rachel_spans_two_projects(),
+    );
 
     let outcome =
         run_openlore_network_disabled(&env, &["graph", "query", "--object", object, "--traverse"]);
@@ -973,7 +1167,10 @@ fn graph_query_scoring_uses_the_same_numeric_confidence_shown_in_per_claim_rows(
 
     // Seed a claim with a non-round confidence (e.g. 0.91) so a silent rounding
     // to a bucket-midpoint would be detectable in the explained arithmetic.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     // The dimension view shows the raw numeric confidence per row...
     let dimension = run_openlore(&env, &["graph", "query", "--object", object]);
@@ -985,7 +1182,15 @@ fn graph_query_scoring_uses_the_same_numeric_confidence_shown_in_per_claim_rows(
     // ...and the --explain arithmetic must consume that SAME numeric value.
     let explained = run_openlore(
         &env,
-        &["graph", "query", "--object", object, "--weighted", "--explain", "github:rust-lang/cargo"],
+        &[
+            "graph",
+            "query",
+            "--object",
+            object,
+            "--weighted",
+            "--explain",
+            "github:rust-lang/cargo",
+        ],
     );
     assert_eq!(
         explained.status, 0,
@@ -1022,7 +1227,10 @@ fn graph_query_weighted_end_to_end_wires_scoring_feed_without_persisting_outputs
     // the @infrastructure proof that the extended StoragePort scoring-feed
     // (query_attributed_for_scoring) -> pure scoring core -> WeightedRenderer
     // path is wired through the production composition root.
-    let graph = seed_federated_graph(&env, FederatedGraphFixture::dependency_pinning_weighted_worked_example());
+    let graph = seed_federated_graph(
+        &env,
+        FederatedGraphFixture::dependency_pinning_weighted_worked_example(),
+    );
 
     let outcome = run_openlore(&env, &["graph", "query", "--object", object, "--weighted"]);
     assert_eq!(

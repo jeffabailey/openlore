@@ -269,9 +269,8 @@ fn run_federated(wiring: &Wiring, subject: &str) -> Result<GraphQueryOutcome> {
 /// GREEN implementation (Release 1: GQE-1/10/26; Release 2: GQE-6/20; Release 3:
 /// GQE-16) lands the read path one acceptance scenario at a time.
 fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
-    // SCAFFOLD: true (slice-04)
-    //
-    // The dispatch tree (DELIVER materializes per scenario):
+    // The dispatch tree (DELIVER materializes one branch per acceptance
+    // scenario):
     //   - --weighted [--explain S]  -> score the attributed feed (pure
     //     `scoring::score`) and render WeightedView (+ Contribution list for
     //     --explain); --explain for a subject absent from the result set is a
@@ -284,6 +283,17 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     // The dimension feed is read through the extended StoragePort:
     //   query_by_object / query_by_contributor / query_attributed_for_scoring
     //   (federated UNION ALL, explicit author_did projection — anti-merging).
+
+    // GQE-1 (US-GRAPH-001): the plain `--object` dimension listing grouped by
+    // subject. Only this branch is GREEN at step 03-01; the --weighted /
+    // --traverse / --explain / --contributor branches stay RED (todo!()) so
+    // GQE-2..27 fail for the right reason.
+    if !args.weighted && !args.traverse && args.explain.is_none() {
+        if let Some(object) = args.object.as_deref() {
+            return run_object_dimension(wiring, object);
+        }
+    }
+
     let _ = (wiring, args);
     todo!(
         "DELIVER (slice-04): dispatch the explorer surface — for --weighted/--explain feed the \
@@ -293,6 +303,30 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
          listing. Explorer flags imply federated scope (WD-87/OD-GRAPH-4); every rendered row \
          carries its author_did (anti-merging, WD-73). (ADR-020; GQE-1..27)"
     )
+}
+
+/// GQE-1 (US-GRAPH-001 happy): the `--object <philosophy>` dimension read. Calls
+/// the extended `StoragePort::query_by_object` (own + peer stores via a SAFE
+/// `UNION ALL` projecting `author_did` — anti-merging) and renders the
+/// attributed per-claim rows GROUPED BY SUBJECT with the distinct-subject +
+/// distinct-author footer + the no-merge guarantee. Explorer flags imply
+/// federated scope (WD-87) — the read already spans own + peers, so there is no
+/// `--federated` branch here.
+///
+/// The verb stays a thin port-call + pure render: the read is one port call;
+/// the grouping + footer are a pure projection (`render_object_query_grouped_by_subject`).
+fn run_object_dimension(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcome> {
+    let claims = wiring
+        .storage
+        .query_by_object(object)
+        .with_context(|| format!("querying claims by object {object}"))?;
+
+    let stdout = crate::render::render_object_query_grouped_by_subject(object, &claims);
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
 }
 
 /// Emit the first-federated-query orientation block exactly once per install
