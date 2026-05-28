@@ -648,7 +648,12 @@ mod tests {
             .expect("build request");
         let resp = sender.send_request(req).await.expect("send");
         let status = resp.status().as_u16();
-        let body = resp.into_body().collect().await.expect("collect").to_bytes();
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
         let json: serde_json::Value =
             serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         (status, json)
@@ -675,7 +680,10 @@ mod tests {
         .await;
 
         assert_eq!(status, 200, "listRecords must return 200");
-        let records = body.get("records").and_then(|r| r.as_array()).expect("records array");
+        let records = body
+            .get("records")
+            .and_then(|r| r.as_array())
+            .expect("records array");
         assert_eq!(records.len(), 2, "all fixture records must be served");
         assert_eq!(
             records[0]["value"]["subject"], "github:rust-lang/cargo",
@@ -796,7 +804,10 @@ mod tests {
         let mismatch = FakePeerPds::with_cid_mismatch("did:plc:rachel-test", honest);
         assert_eq!(mismatch.record_count(), 2);
         assert!(
-            mismatch.records().iter().any(|r| r.rkey == ADVERSARIAL_RKEY),
+            mismatch
+                .records()
+                .iter()
+                .any(|r| r.rkey == ADVERSARIAL_RKEY),
             "cid-mismatch posture appends the offending record at ADVERSARIAL_RKEY"
         );
     }
@@ -829,10 +840,17 @@ mod tests {
                 Err(_) => Err::<(), ()>(()),
                 Ok(s) => {
                     let io = TokioIo::new(s);
-                    match hyper::client::conn::http1::handshake::<_, http_body_util::Empty<bytes::Bytes>>(io).await {
+                    match hyper::client::conn::http1::handshake::<
+                        _,
+                        http_body_util::Empty<bytes::Bytes>,
+                    >(io)
+                    .await
+                    {
                         Err(_) => Err(()),
                         Ok((mut sender, conn)) => {
-                            tokio::spawn(async move { let _ = conn.await; });
+                            tokio::spawn(async move {
+                                let _ = conn.await;
+                            });
                             let req = hyper::Request::builder()
                                 .uri(&uri)
                                 .header(hyper::header::HOST, uri.authority().unwrap().as_str())

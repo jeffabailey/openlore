@@ -308,9 +308,12 @@ impl PdsPort for AtProtoPdsAdapter {
             // e.g. wrapping in a percent-encoding for non-ASCII rkeys
             // OpenLore doesn't generate but the contract permits).
             let parsed: serde_json::Value =
-                response.json().await.map_err(|err| PdsError::RecordRejected {
-                    message: format!("decode createRecord response: {err}"),
-                })?;
+                response
+                    .json()
+                    .await
+                    .map_err(|err| PdsError::RecordRejected {
+                        message: format!("decode createRecord response: {err}"),
+                    })?;
             let uri = parsed
                 .get("uri")
                 .and_then(|v| v.as_str())

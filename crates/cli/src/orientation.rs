@@ -181,8 +181,8 @@ fn write_atomic(path: &Path, doc: &IdentityTomlWithFederation) -> Result<()> {
     let text = toml::to_string_pretty(doc).with_context(|| "serialize identity.toml")?;
     let tmp = path.with_extension("toml.tmp");
     {
-        let mut f = fs::File::create(&tmp)
-            .with_context(|| format!("create temp {}", tmp.display()))?;
+        let mut f =
+            fs::File::create(&tmp).with_context(|| format!("create temp {}", tmp.display()))?;
         f.write_all(text.as_bytes())
             .with_context(|| format!("write temp {}", tmp.display()))?;
         f.sync_all()
@@ -301,8 +301,14 @@ mod tests {
 
         // The slice-01 sections survive the rewrite (no data loss).
         let text = fs::read_to_string(&path).expect("read back");
-        assert!(text.contains("handle = \"jeff.test\""), "handle preserved:\n{text}");
-        assert!(text.contains("did = \"did:plc:test-jeff\""), "did preserved:\n{text}");
+        assert!(
+            text.contains("handle = \"jeff.test\""),
+            "handle preserved:\n{text}"
+        );
+        assert!(
+            text.contains("did = \"did:plc:test-jeff\""),
+            "did preserved:\n{text}"
+        );
         assert!(
             text.contains("first_pull_completed_at = \"2026-05-27T10:14:32Z\""),
             "federation key written:\n{text}"

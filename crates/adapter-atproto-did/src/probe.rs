@@ -81,10 +81,7 @@ pub fn check_did_document_lists_verification_method(
     verification_methods: &[String],
     expected_fragment: &str,
 ) -> ArmOutcome {
-    if verification_methods
-        .iter()
-        .any(|m| m == expected_fragment)
-    {
+    if verification_methods.iter().any(|m| m == expected_fragment) {
         return ArmOutcome::Ok;
     }
     ArmOutcome::Refused(ProbeRefusal {

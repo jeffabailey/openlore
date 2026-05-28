@@ -43,10 +43,15 @@ use support::*;
 ///
 /// @federation @walking_skeleton @driving_port @US-003 @US-004 @J-001 @real-io
 #[test]
-fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip_with_cids_intact() {
+fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip_with_cids_intact()
+{
     let env = TestEnv::initialized();
     let fixtures = fixture_three_claims_different_predicates();
-    assert_eq!(fixtures.len(), 3, "fixture must produce exactly three claims");
+    assert_eq!(
+        fixtures.len(),
+        3,
+        "fixture must produce exactly three claims"
+    );
 
     let mut published_cids: Vec<(String, String)> = Vec::new(); // (subject, cid)
 
@@ -54,12 +59,18 @@ fn federation_roundtrip_publish_three_claims_different_predicates_all_round_trip
         let outcome = run_openlore_with_stdin(
             &env,
             &[
-                "claim", "add",
-                "--subject", &fixture.subject,
-                "--predicate", &fixture.predicate,
-                "--object", &fixture.object,
-                "--evidence", &fixture.evidence[0],
-                "--confidence", &fixture.confidence.to_string(),
+                "claim",
+                "add",
+                "--subject",
+                &fixture.subject,
+                "--predicate",
+                &fixture.predicate,
+                "--object",
+                &fixture.object,
+                "--evidence",
+                &fixture.evidence[0],
+                "--confidence",
+                &fixture.confidence.to_string(),
             ],
             "\nY\n",
         );
@@ -143,12 +154,18 @@ fn federation_roundtrip_pds_record_rkey_equals_claim_cid() {
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", &fixture.subject,
-            "--predicate", &fixture.predicate,
-            "--object", &fixture.object,
-            "--evidence", &fixture.evidence[0],
-            "--confidence", &fixture.confidence.to_string(),
+            "claim",
+            "add",
+            "--subject",
+            &fixture.subject,
+            "--predicate",
+            &fixture.predicate,
+            "--object",
+            &fixture.object,
+            "--evidence",
+            &fixture.evidence[0],
+            "--confidence",
+            &fixture.confidence.to_string(),
         ],
         "\nY\n",
     );
@@ -207,12 +224,18 @@ fn federation_roundtrip_at_uri_is_reconstructible_from_author_did_and_claim_cid(
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", &fixture.subject,
-            "--predicate", &fixture.predicate,
-            "--object", &fixture.object,
-            "--evidence", &fixture.evidence[0],
-            "--confidence", &fixture.confidence.to_string(),
+            "claim",
+            "add",
+            "--subject",
+            &fixture.subject,
+            "--predicate",
+            &fixture.predicate,
+            "--object",
+            &fixture.object,
+            "--evidence",
+            &fixture.evidence[0],
+            "--confidence",
+            &fixture.confidence.to_string(),
         ],
         "\nY\n",
     );
@@ -299,12 +322,18 @@ fn federation_roundtrip_graph_query_output_matches_compose_preview_field_for_fie
     let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", &fixture.subject,
-            "--predicate", &fixture.predicate,
-            "--object", &fixture.object,
-            "--evidence", &fixture.evidence[0],
-            "--confidence", &fixture.confidence.to_string(),
+            "claim",
+            "add",
+            "--subject",
+            &fixture.subject,
+            "--predicate",
+            &fixture.predicate,
+            "--object",
+            &fixture.object,
+            "--evidence",
+            &fixture.evidence[0],
+            "--confidence",
+            &fixture.confidence.to_string(),
         ],
         "\nY\n",
     );
@@ -343,10 +372,7 @@ fn federation_roundtrip_graph_query_output_matches_compose_preview_field_for_fie
     // emits for each shared field at compose time must equal what the
     // graph-query renderer emits, byte-for-byte. Any divergence is a
     // silent normalization bug (KPI-4 zero-normalization invariant).
-    assert_compose_and_query_fields_match_byte_for_byte(
-        &publish_outcome,
-        &query_outcome,
-    );
+    assert_compose_and_query_fields_match_byte_for_byte(&publish_outcome, &query_outcome);
 }
 
 // -----------------------------------------------------------------------------
@@ -490,9 +516,7 @@ fn extract_query_block_fields(stdout: &str) -> std::collections::BTreeMap<String
 /// output) is stripped via `trim_start`. The label is everything before
 /// the FIRST `:` (so `subject` and `at-uri` both work). The value is
 /// everything after the first `:`, trimmed on both sides.
-fn parse_labeled_field_block(
-    block: &str,
-) -> std::collections::BTreeMap<String, String> {
+fn parse_labeled_field_block(block: &str) -> std::collections::BTreeMap<String, String> {
     let mut fields = std::collections::BTreeMap::new();
     for raw_line in block.lines() {
         let line = raw_line.trim_start();
@@ -523,8 +547,5 @@ fn parse_labeled_field_block(
 /// separated token. KPI-4 demands the numeric byte-for-byte; the
 /// bucket-label annotation is display only (WD-10 / D-12).
 fn extract_confidence_numeric(value: &str) -> &str {
-    value
-        .split_whitespace()
-        .next()
-        .unwrap_or(value)
+    value.split_whitespace().next().unwrap_or(value)
 }

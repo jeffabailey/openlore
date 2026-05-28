@@ -92,9 +92,8 @@ pub fn run(wiring: &Wiring, args: &ClaimRetractArgs) -> Result<ClaimRetractOutco
     // certain about the act of retraction. Fresh composedAt from the
     // clock port so the retraction gets its own canonical-CBOR
     // pre-image distinct from the original.
-    let confidence: claim_domain::Confidence =
-        serde_json::from_value(serde_json::json!(1.0))
-            .map_err(|e| anyhow!("encoding confidence 1.0 for retraction: {e}"))?;
+    let confidence: claim_domain::Confidence = serde_json::from_value(serde_json::json!(1.0))
+        .map_err(|e| anyhow!("encoding confidence 1.0 for retraction: {e}"))?;
 
     let unsigned = UnsignedClaim {
         subject: original.unsigned.subject.clone(),
@@ -168,11 +167,9 @@ pub fn run(wiring: &Wiring, args: &ClaimRetractArgs) -> Result<ClaimRetractOutco
     // renderer the standalone `claim publish` + chained Y branch use,
     // so the at-uri + retract-hint substrings WS-14 asserts on are
     // produced by exactly the same code that produces them in WS-8.
-    let publish_outcome =
-        crate::verbs::claim_publish::publish_signed_claim(wiring, &signed)
-            .map_err(|e| anyhow!("{}", e))?;
-    let rendered =
-        crate::verbs::claim_publish::render_publish_success(&publish_outcome);
+    let publish_outcome = crate::verbs::claim_publish::publish_signed_claim(wiring, &signed)
+        .map_err(|e| anyhow!("{}", e))?;
+    let rendered = crate::verbs::claim_publish::render_publish_success(&publish_outcome);
     print!("{}", rendered);
 
     Ok(ClaimRetractOutcome {

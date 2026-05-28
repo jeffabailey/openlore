@@ -184,8 +184,8 @@ mod tests {
     //! PeerSubscription it is `{peer_did, removed_at, is_active()}`.
 
     use super::*;
-    use claim_domain::{Cid, SignatureBlock};
     use claim_domain::proptest_strategies::arb_unsigned_claim;
+    use claim_domain::{Cid, SignatureBlock};
     use proptest::prelude::*;
 
     /// Strategy: arbitrary DID strings shaped like real DIDs. Body
@@ -219,8 +219,7 @@ mod tests {
                 signature: SignatureBlock {
                     signed_cid: Cid(cid_str),
                     signature_bytes: sig_str.into_bytes(),
-                    verification_method: "did:plc:author-test#org.openlore.application"
-                        .to_string(),
+                    verification_method: "did:plc:author-test#org.openlore.application".to_string(),
                 },
             })
     }

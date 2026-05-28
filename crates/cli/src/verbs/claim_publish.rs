@@ -127,7 +127,10 @@ pub struct PublishOutcome {
 /// success block to stdout. Returns a typed `PublishError` on failure so
 /// the dispatcher can route PDS-unreachable failures (WS-10) through
 /// the actionable-retry-hint renderer in `crate::errors`.
-pub fn run(wiring: &Wiring, args: &ClaimPublishArgs) -> std::result::Result<ClaimPublishOutcome, PublishError> {
+pub fn run(
+    wiring: &Wiring,
+    args: &ClaimPublishArgs,
+) -> std::result::Result<ClaimPublishOutcome, PublishError> {
     let cid = Cid(args.cid.clone());
     let signed = wiring
         .storage
@@ -233,10 +236,7 @@ pub fn publish_signed_claim(
 pub fn render_publish_success(outcome: &PublishOutcome) -> String {
     let mut out = String::new();
     if outcome.already_present {
-        out.push_str(&format!(
-            "Claim {} already published.\n",
-            outcome.cid
-        ));
+        out.push_str(&format!("Claim {} already published.\n", outcome.cid));
     } else {
         out.push_str(&format!("Published claim {}.\n", outcome.cid));
     }

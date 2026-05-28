@@ -78,11 +78,10 @@ pub fn verify(signed: &SignedClaim, pubkey: &VerifyingKey) -> Result<(), ClaimEr
         })?;
 
     // 3. Build dalek primitives.
-    let verifying_key = DalekVerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| {
-        ClaimError::SignatureFailed {
+    let verifying_key =
+        DalekVerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| ClaimError::SignatureFailed {
             message: format!("malformed Ed25519 public key: {e}"),
-        }
-    })?;
+        })?;
     let signature = Signature::from_bytes(&sig_bytes);
 
     // 4. Recompute the unsigned-CID. If the unsigned portion has been
@@ -108,9 +107,7 @@ mod tests {
     use ed25519_dalek::SigningKey as DalekSigningKey;
 
     use super::*;
-    use crate::{
-        sign, ClaimReference, Confidence, Did, SignedClaim, SigningKey, UnsignedClaim,
-    };
+    use crate::{sign, ClaimReference, Confidence, Did, SignedClaim, SigningKey, UnsignedClaim};
 
     /// Build a fresh dalek (signing, verifying) keypair from
     /// deterministic seed bytes. Returns the domain newtypes ready to

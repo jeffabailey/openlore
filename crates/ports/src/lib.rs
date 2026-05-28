@@ -53,8 +53,8 @@ pub use federated_row::{
     SourceTable, VerificationMethod,
 };
 pub use peer_storage::{
-    AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort,
-    SoftRemoveOutcome, WritePeerClaimOutcome,
+    AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, SoftRemoveOutcome,
+    WritePeerClaimOutcome,
 };
 
 // -----------------------------------------------------------------------------
@@ -84,8 +84,12 @@ pub trait StoragePort {
         &self,
         target_cid: &Cid,
     ) -> Result<Vec<(Cid, ReferenceType)>, StorageError>;
-    fn record_publication(&self, cid: &Cid, at_uri: &str, published_at: DateTime<Utc>)
-        -> Result<(), StorageError>;
+    fn record_publication(
+        &self,
+        cid: &Cid,
+        at_uri: &str,
+        published_at: DateTime<Utc>,
+    ) -> Result<(), StorageError>;
 
     // -------- slice-03 (federated read) --------
     /// Federated subject query: returns every row across BOTH the
@@ -96,10 +100,7 @@ pub trait StoragePort {
     /// SQL `UNION ALL` with explicit `author_did` projection — NOT a
     /// `JOIN` that could elide the column. `xtask check-arch`
     /// enforces this structurally.
-    fn query_federated_by_subject(
-        &self,
-        subject: &str,
-    ) -> Result<Vec<FederatedRow>, StorageError>;
+    fn query_federated_by_subject(&self, subject: &str) -> Result<Vec<FederatedRow>, StorageError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

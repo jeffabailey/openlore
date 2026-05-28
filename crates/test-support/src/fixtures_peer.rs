@@ -221,12 +221,17 @@ mod tests {
             );
         }
 
-        let objects: std::collections::HashSet<_> =
-            records.iter().map(|r| r.body["object"].to_string()).collect();
-        assert_eq!(objects.len(), 3, "objects must be distinct (no CID aliasing)");
+        let objects: std::collections::HashSet<_> = records
+            .iter()
+            .map(|r| r.body["object"].to_string())
+            .collect();
+        assert_eq!(
+            objects.len(),
+            3,
+            "objects must be distinct (no CID aliasing)"
+        );
 
-        let rkeys: std::collections::HashSet<_> =
-            records.iter().map(|r| r.rkey.clone()).collect();
+        let rkeys: std::collections::HashSet<_> = records.iter().map(|r| r.rkey.clone()).collect();
         assert_eq!(rkeys.len(), 3, "rkeys must be distinct");
     }
 

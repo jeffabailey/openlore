@@ -34,8 +34,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use claim_domain::{
-    canonicalize, compute_cid, ClaimReference, ConfidenceBucket,
-    Did, SignedClaim, UnsignedClaim,
+    canonicalize, compute_cid, ClaimReference, ConfidenceBucket, Did, SignedClaim, UnsignedClaim,
 };
 
 use crate::io::prompt_line;
@@ -133,8 +132,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     let sign_prompt = "\nPress Enter to sign locally (or Ctrl-C to cancel): ";
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
-    let confirmation =
-        prompt_line(&mut stdout, &mut stdin, sign_prompt)?;
+    let confirmation = prompt_line(&mut stdout, &mut stdin, sign_prompt)?;
 
     if confirmation.is_none() {
         // EOF before any input — user canceled. Exit cleanly; no side
@@ -157,8 +155,8 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     // can leak into the persisted artifact. WS-5 verifies this
     // end-to-end at the subprocess + filesystem boundary.
     let unsigned = build_unsigned_claim(&composed)?;
-    let canonical_bytes = canonicalize(&unsigned)
-        .map_err(|e| anyhow!("canonicalizing claim: {e}"))?;
+    let canonical_bytes =
+        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing claim: {e}"))?;
     let unsigned_cid = compute_cid(&canonical_bytes);
 
     writeln!(std::io::stdout(), "Computing claim CID {}", unsigned_cid.0)?;
@@ -177,7 +175,10 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         .storage
         .write_signed_claim(&signed)
         .with_context(|| {
-            format!("persisting signed claim {} to local store", signed.signature.signed_cid.0)
+            format!(
+                "persisting signed claim {} to local store",
+                signed.signature.signed_cid.0
+            )
         })?;
 
     let artifact_path = wiring
@@ -200,8 +201,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
     // exit 0. This is the KPI-5 local-first beat: nothing leaves the
     // machine without explicit user opt-in for THIS claim.
     let publish_prompt = "\nPublish to your PDS now? (y/N): ";
-    let publish_answer =
-        prompt_line(&mut stdout, &mut stdin, publish_prompt)?;
+    let publish_answer = prompt_line(&mut stdout, &mut stdin, publish_prompt)?;
     let confirmed_publish = matches!(
         publish_answer.as_deref().map(str::trim),
         Some("y") | Some("Y") | Some("yes") | Some("YES")
@@ -234,7 +234,10 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
                 // standalone verb emit identical, copy-pasteable retry
                 // guidance. Return a non-zero exit code so scripts can
                 // detect the partial-success state.
-                eprint!("{}", crate::verbs::claim_publish::render_publish_error(&err));
+                eprint!(
+                    "{}",
+                    crate::verbs::claim_publish::render_publish_error(&err)
+                );
                 return Ok(ClaimAddOutcome {
                     exit_code: 1,
                     stdout: String::new(),

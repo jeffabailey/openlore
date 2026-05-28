@@ -197,7 +197,16 @@ pub fn arb_unsigned_claim() -> impl Strategy<Value = UnsignedClaim> {
         vec(arb_claim_reference(), 0..=3),
     )
         .prop_map(
-            |(subject, predicate, object, evidence, confidence_value, author_did, composed_at, references)| {
+            |(
+                subject,
+                predicate,
+                object,
+                evidence,
+                confidence_value,
+                author_did,
+                composed_at,
+                references,
+            )| {
                 UnsignedClaim {
                     subject,
                     predicate,

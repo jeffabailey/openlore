@@ -91,8 +91,8 @@ fn lexicon_counter_claim_slice_01_era_claim_loads_without_reason_field() {
     // the re-emitted JSON is byte-equal to a slice-01 claim modulo the
     // `reason` key being omitted — this is what preserves CID stability
     // across the slice-01 -> slice-03 upgrade (I-FED-7).
-    let reserialized = serde_json::to_value(&claim)
-        .expect("a `reason: None` Claim must re-serialize");
+    let reserialized =
+        serde_json::to_value(&claim).expect("a `reason: None` Claim must re-serialize");
     assert!(
         !reserialized
             .as_object()

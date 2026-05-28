@@ -152,8 +152,7 @@ const REQUIRED_FIELDS: &[&str] = &[
 const REQUIRED_REFERENCE_FIELDS: &[&str] = &["type", "cid"];
 
 /// Allowed `references[].type` values per ADR-008.
-const ALLOWED_REFERENCE_TYPES: &[&str] =
-    &["retracts", "corrects", "counters", "supersedes"];
+const ALLOWED_REFERENCE_TYPES: &[&str] = &["retracts", "corrects", "counters", "supersedes"];
 
 // =============================================================================
 // Validator
@@ -165,12 +164,10 @@ const ALLOWED_REFERENCE_TYPES: &[&str] =
 /// the violating field. Per-field gates run BEFORE serde deserialization
 /// so errors carry the field name rather than an opaque serde string.
 pub fn validate_claim_json(value: &serde_json::Value) -> Result<Claim, LexiconError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| LexiconError::InvalidType {
-            field: "(root)".to_string(),
-            expected: "object".to_string(),
-        })?;
+    let object = value.as_object().ok_or_else(|| LexiconError::InvalidType {
+        field: "(root)".to_string(),
+        expected: "object".to_string(),
+    })?;
 
     // Gate 1: required-field presence.
     for field in REQUIRED_FIELDS {
@@ -202,12 +199,10 @@ pub fn validate_claim_json(value: &serde_json::Value) -> Result<Claim, LexiconEr
             expected: "array".to_string(),
         })?;
         for (index, entry) in array.iter().enumerate() {
-            let entry_obj = entry
-                .as_object()
-                .ok_or_else(|| LexiconError::InvalidType {
-                    field: format!("references[{index}]"),
-                    expected: "object".to_string(),
-                })?;
+            let entry_obj = entry.as_object().ok_or_else(|| LexiconError::InvalidType {
+                field: format!("references[{index}]"),
+                expected: "object".to_string(),
+            })?;
             for field in REQUIRED_REFERENCE_FIELDS {
                 if !entry_obj.contains_key(*field) {
                     return Err(LexiconError::MissingField {
@@ -316,10 +311,7 @@ mod tests {
     #[test]
     fn rejects_missing_subject_with_named_field_error() {
         let mut value = well_formed_claim_value();
-        value
-            .as_object_mut()
-            .expect("object")
-            .remove("subject");
+        value.as_object_mut().expect("object").remove("subject");
         let err = validate_claim_json(&value).expect_err("missing subject must reject");
         assert_eq!(
             err,
@@ -332,10 +324,7 @@ mod tests {
     #[test]
     fn rejects_missing_composed_at_with_camelcase_field_name() {
         let mut value = well_formed_claim_value();
-        value
-            .as_object_mut()
-            .expect("object")
-            .remove("composedAt");
+        value.as_object_mut().expect("object").remove("composedAt");
         let err = validate_claim_json(&value).expect_err("missing composedAt must reject");
         assert_eq!(
             err,
@@ -356,12 +345,9 @@ mod tests {
     fn validates_claim_with_no_signature() {
         // signature is OPTIONAL per the Lexicon JSON (not in `required`).
         let mut value = well_formed_claim_value();
-        value
-            .as_object_mut()
-            .expect("object")
-            .remove("signature");
-        let claim = validate_claim_json(&value)
-            .expect("unsigned-but-otherwise-valid claim must validate");
+        value.as_object_mut().expect("object").remove("signature");
+        let claim =
+            validate_claim_json(&value).expect("unsigned-but-otherwise-valid claim must validate");
         assert!(claim.signature.is_none());
     }
 
@@ -407,16 +393,14 @@ mod tests {
     #[test]
     fn accepts_confidence_at_inclusive_lower_bound() {
         let value = claim_with_confidence(0.0);
-        let claim =
-            validate_claim_json(&value).expect("confidence=0.0 must validate (inclusive)");
+        let claim = validate_claim_json(&value).expect("confidence=0.0 must validate (inclusive)");
         assert_eq!(claim.confidence, 0.0);
     }
 
     #[test]
     fn accepts_confidence_at_inclusive_upper_bound() {
         let value = claim_with_confidence(1.0);
-        let claim =
-            validate_claim_json(&value).expect("confidence=1.0 must validate (inclusive)");
+        let claim = validate_claim_json(&value).expect("confidence=1.0 must validate (inclusive)");
         assert_eq!(claim.confidence, 1.0);
     }
 
@@ -465,8 +449,7 @@ mod tests {
     fn rejects_reason_one_over_inclusive_upper_bound() {
         // length 1001 > maxLength 1000 -> reject.
         let value = claim_with_reason(json!("a".repeat(1001)));
-        let err =
-            validate_claim_json(&value).expect_err("reason length 1001 must reject");
+        let err = validate_claim_json(&value).expect_err("reason length 1001 must reject");
         assert_eq!(err, LexiconError::ReasonLengthOutOfRange { length: 1001 });
     }
 
@@ -474,8 +457,7 @@ mod tests {
     fn accepts_reason_at_inclusive_lower_bound() {
         // length 1 == minLength -> accept (inclusive).
         let value = claim_with_reason(json!("x"));
-        let claim =
-            validate_claim_json(&value).expect("reason length 1 must validate (inclusive)");
+        let claim = validate_claim_json(&value).expect("reason length 1 must validate (inclusive)");
         assert_eq!(claim.reason.as_deref(), Some("x"));
     }
 
@@ -498,11 +480,18 @@ mod tests {
         // Lexicon codepoint semantics and break valid multi-byte reasons.
         let one_thousand_accented = "é".repeat(1000);
         assert_eq!(one_thousand_accented.chars().count(), 1000);
-        assert_eq!(one_thousand_accented.len(), 2000, "precondition: 2 bytes/char");
+        assert_eq!(
+            one_thousand_accented.len(),
+            2000,
+            "precondition: 2 bytes/char"
+        );
         let value = claim_with_reason(json!(one_thousand_accented));
         let claim = validate_claim_json(&value)
             .expect("a 1000-CHAR (2000-byte) reason must validate: length is measured in chars");
-        assert_eq!(claim.reason.as_deref().map(|s| s.chars().count()), Some(1000));
+        assert_eq!(
+            claim.reason.as_deref().map(|s| s.chars().count()),
+            Some(1000)
+        );
 
         // And one char over the limit (1001 chars / 2002 bytes) rejects
         // with the CHAR count, not the byte count.
@@ -521,8 +510,7 @@ mod tests {
         // The gate must NOT fire when `reason` is absent — slice-01
         // forward-compat (reason -> None) is preserved.
         let value = well_formed_claim_value(); // no `reason` key
-        let claim =
-            validate_claim_json(&value).expect("an absent reason must validate (-> None)");
+        let claim = validate_claim_json(&value).expect("an absent reason must validate (-> None)");
         assert_eq!(claim.reason, None);
     }
 }

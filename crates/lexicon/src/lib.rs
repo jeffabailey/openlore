@@ -26,8 +26,7 @@ use serde::{Deserialize, Serialize};
 // compile time. Validation logic (step 02-01) consumes these constants.
 
 /// The `org.openlore.claim` Lexicon JSON schema (embedded at compile time).
-pub const CLAIM_LEXICON_JSON: &str =
-    include_str!("../../../lexicons/org/openlore/claim.json");
+pub const CLAIM_LEXICON_JSON: &str = include_str!("../../../lexicons/org/openlore/claim.json");
 
 /// The `org.openlore.philosophy` Lexicon JSON schema (embedded at compile time).
 pub const PHILOSOPHY_LEXICON_JSON: &str =

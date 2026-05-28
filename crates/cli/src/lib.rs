@@ -28,7 +28,11 @@ use wiring::Wiring;
 
 /// Top-level CLI surface (ADR-003 locked verb contract).
 #[derive(Debug, Parser)]
-#[command(name = "openlore", version, about = "OpenLore — sign and publish philosophical claims")]
+#[command(
+    name = "openlore",
+    version,
+    about = "OpenLore — sign and publish philosophical claims"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -425,7 +429,11 @@ mod clap_dispatch_tests {
     #[test]
     fn claim_counter_routes_with_cid_and_reason() {
         let cmd = parse(&[
-            "claim", "counter", "bafytargetcid", "--reason", "I disagree because X",
+            "claim",
+            "counter",
+            "bafytargetcid",
+            "--reason",
+            "I disagree because X",
         ]);
         match cmd {
             Command::Claim(ClaimCommand::Counter { cid, reason }) => {
@@ -463,7 +471,11 @@ mod clap_dispatch_tests {
     #[test]
     fn graph_query_with_federated_flag_sets_federated_true() {
         let cmd = parse(&[
-            "graph", "query", "--subject", "github:rust-lang/cargo", "--federated",
+            "graph",
+            "query",
+            "--subject",
+            "github:rust-lang/cargo",
+            "--federated",
         ]);
         match cmd {
             Command::Graph(GraphCommand::Query { subject, federated }) => {

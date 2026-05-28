@@ -98,10 +98,7 @@ impl IdentityPort for FakeIdentity {
     /// Sign by delegating to the pure `claim_domain::sign` primitive.
     /// `IdentityError::SignatureFailed` wraps any error from the pure
     /// core so the port contract stays clean.
-    fn sign(
-        &self,
-        unsigned_cid: &Cid,
-    ) -> Result<claim_domain::SignatureBlock, IdentityError> {
+    fn sign(&self, unsigned_cid: &Cid) -> Result<claim_domain::SignatureBlock, IdentityError> {
         claim_domain::sign(unsigned_cid, &self.signing_key).map_err(|e| {
             IdentityError::SignatureFailed {
                 message: format!("{e}"),
@@ -126,7 +123,9 @@ impl IdentityPort for FakeIdentity {
     /// `PeerInfo` for known fixture peers like `did:plc:rachel-test`).
     fn resolve_peer(&self, _peer_did: &Did) -> Result<PeerInfo, IdentityError> {
         // SCAFFOLD: true (slice-03)
-        todo!("FakeIdentity::resolve_peer — fixture peer resolution lands with PS-* / PP-* scenarios")
+        todo!(
+            "FakeIdentity::resolve_peer — fixture peer resolution lands with PS-* / PP-* scenarios"
+        )
     }
 }
 

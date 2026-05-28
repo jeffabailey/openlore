@@ -120,10 +120,7 @@ pub fn render_annotated_graph_query_result(annotated: &[AnnotatedClaim]) -> Stri
 /// list `StoragePort::query_referencing` returns. Pure helper kept here
 /// (next to the renderer that consumes it) so the projection rule lives
 /// in one place; the verb wires storage I/O around it.
-pub fn is_retracted_by(
-    _target: &Cid,
-    referencing: &[(Cid, claim_domain::ReferenceType)],
-) -> bool {
+pub fn is_retracted_by(_target: &Cid, referencing: &[(Cid, claim_domain::ReferenceType)]) -> bool {
     referencing
         .iter()
         .any(|(_, ref_type)| matches!(ref_type, claim_domain::ReferenceType::Retracts))
@@ -138,7 +135,10 @@ fn render_one_claim(claim: &SignedClaim) -> String {
     out.push_str(&format!("subject:     {}\n", claim.unsigned.subject));
     out.push_str(&format!("predicate:   {}\n", claim.unsigned.predicate));
     out.push_str(&format!("object:      {}\n", claim.unsigned.object));
-    out.push_str(&format!("evidence:    {}\n", render_evidence(&claim.unsigned.evidence)));
+    out.push_str(&format!(
+        "evidence:    {}\n",
+        render_evidence(&claim.unsigned.evidence)
+    ));
     out.push_str(&format!(
         "confidence:  {}\n",
         render_confidence(&claim.unsigned.confidence)

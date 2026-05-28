@@ -135,9 +135,15 @@ mod tests {
         let obj = value.as_object().expect("top-level object");
         // Federation contract: the wire key is `composedAt`, not `composed_at`.
         assert!(obj.contains_key("composedAt"), "must emit `composedAt`");
-        assert!(!obj.contains_key("composed_at"), "must NOT emit `composed_at`");
+        assert!(
+            !obj.contains_key("composed_at"),
+            "must NOT emit `composed_at`"
+        );
         // Author key is `author`, signature block uses `kid`/`alg`/`sig`.
-        assert_eq!(obj["author"].as_str(), Some("did:plc:jeff#org.openlore.application"));
+        assert_eq!(
+            obj["author"].as_str(),
+            Some("did:plc:jeff#org.openlore.application")
+        );
         let sig = obj["signature"].as_object().expect("signature object");
         assert!(sig.contains_key("kid") && sig.contains_key("alg") && sig.contains_key("sig"));
     }
@@ -168,8 +174,7 @@ mod tests {
         let original = ConfidenceField(0.86);
         let json_value = serde_json::to_value(original).expect("serialize");
         assert_eq!(json_value, json!(0.86), "must serialize as a bare number");
-        let recovered: ConfidenceField =
-            serde_json::from_value(json_value).expect("deserialize");
+        let recovered: ConfidenceField = serde_json::from_value(json_value).expect("deserialize");
         assert_eq!(original, recovered);
     }
 }

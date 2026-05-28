@@ -98,10 +98,13 @@ mod tests {
         let outcome = ProbeOutcome::Ok;
         let value = serde_json::to_value(&outcome).expect("serialize ok");
 
-        assert_eq!(value, json!("Ok"), "Ok variant must serialize to JSON string \"Ok\"");
+        assert_eq!(
+            value,
+            json!("Ok"),
+            "Ok variant must serialize to JSON string \"Ok\""
+        );
 
-        let parsed: ProbeOutcome =
-            serde_json::from_value(value).expect("deserialize ok");
+        let parsed: ProbeOutcome = serde_json::from_value(value).expect("deserialize ok");
         assert!(
             matches!(parsed, ProbeOutcome::Ok),
             "roundtripped value must equal ProbeOutcome::Ok"
@@ -135,8 +138,7 @@ mod tests {
             "Refused must serialize as externally-tagged object with reason/detail/structured fields"
         );
 
-        let parsed: ProbeOutcome =
-            serde_json::from_value(value).expect("deserialize refused");
+        let parsed: ProbeOutcome = serde_json::from_value(value).expect("deserialize refused");
         match parsed {
             ProbeOutcome::Refused {
                 reason,
@@ -145,7 +147,10 @@ mod tests {
             } => {
                 assert_eq!(reason, ProbeRefusalReason::StorageFsyncUnreliable);
                 assert_eq!(detail, "tmpfs detected; fsync would silently no-op");
-                assert_eq!(structured, json!({"medium": "tmpfs", "path": "/dev/shm/openlore"}));
+                assert_eq!(
+                    structured,
+                    json!({"medium": "tmpfs", "path": "/dev/shm/openlore"})
+                );
             }
             ProbeOutcome::Ok => panic!("roundtripped value must be Refused"),
         }

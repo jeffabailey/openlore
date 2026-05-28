@@ -96,19 +96,21 @@ pub fn probe() -> Result<(), ProbeError> {
 /// it MUST be a `string` with `minLength: 1`, `maxLength: 1000`, and it
 /// MUST NOT appear in the record's `required[]` array (ADR-015 / WD-32).
 fn check_reason_field_declaration() -> Result<(), ProbeError> {
-    let schema: serde_json::Value = serde_json::from_str(CLAIM_LEXICON_JSON)
-        .map_err(|err| ProbeError::LexiconJsonUnparseable {
+    let schema: serde_json::Value = serde_json::from_str(CLAIM_LEXICON_JSON).map_err(|err| {
+        ProbeError::LexiconJsonUnparseable {
             message: err.to_string(),
-        })?;
+        }
+    })?;
 
     let record = &schema["defs"]["main"]["record"];
 
     // Sub-check (a): `reason` is declared in `properties`.
-    let reason = record["properties"]
-        .get("reason")
-        .ok_or_else(|| ProbeError::ReasonFieldDeclaration {
-            detail: "`reason` missing from defs.main.record.properties".to_string(),
-        })?;
+    let reason =
+        record["properties"]
+            .get("reason")
+            .ok_or_else(|| ProbeError::ReasonFieldDeclaration {
+                detail: "`reason` missing from defs.main.record.properties".to_string(),
+            })?;
 
     // Sub-check (b): type is "string".
     if reason["type"].as_str() != Some("string") {
@@ -185,10 +187,12 @@ fn check_reason_none_omits_key() -> Result<(), ProbeError> {
         sentinel: "reason=None".to_string(),
         detail: err.to_string(),
     })?;
-    let obj = value.as_object().ok_or_else(|| ProbeError::SerdeRoundTrip {
-        sentinel: "reason=None".to_string(),
-        detail: "serialized claim is not a JSON object".to_string(),
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| ProbeError::SerdeRoundTrip {
+            sentinel: "reason=None".to_string(),
+            detail: "serialized claim is not a JSON object".to_string(),
+        })?;
     if obj.contains_key("reason") {
         return Err(ProbeError::ReasonKeyLeaked);
     }
@@ -254,9 +258,10 @@ fn check_slice_01_claim_is_byte_stable() -> Result<(), ProbeError> {
     // slice-01 input (no `reason` key added, no field dropped). Compared
     // as canonical JSON text so the assertion is on bytes, not Value
     // identity.
-    let expected = serde_json::to_string(&slice_01_json).map_err(|err| ProbeError::CidStability {
-        detail: format!("reference slice-01 JSON failed to serialize: {err}"),
-    })?;
+    let expected =
+        serde_json::to_string(&slice_01_json).map_err(|err| ProbeError::CidStability {
+            detail: format!("reference slice-01 JSON failed to serialize: {err}"),
+        })?;
     let actual = serde_json::to_string(&reserialized).map_err(|err| ProbeError::CidStability {
         detail: format!("slice-03 re-serialization failed to stringify: {err}"),
     })?;
@@ -330,7 +335,9 @@ mod tests {
         assert_eq!(reason["type"].as_str(), Some("string"));
         assert_eq!(reason["minLength"].as_u64(), Some(1));
         assert_eq!(reason["maxLength"].as_u64(), Some(1000));
-        let required = record["required"].as_array().expect("required[] is an array");
+        let required = record["required"]
+            .as_array()
+            .expect("required[] is an array");
         assert!(
             !required.iter().any(|v| v.as_str() == Some("reason")),
             "`reason` MUST NOT be in required[] (ADR-005 forward-compat)"

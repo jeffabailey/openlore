@@ -79,8 +79,7 @@ impl Wiring {
         let peer_storage: Box<dyn PeerStoragePort> = Box::new(storage.peer_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
-        let pds_endpoint =
-            std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
+        let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
         let pds: Box<dyn PdsPort> = if pds_endpoint.is_empty() {
             // Slice-01 init verb does NOT call the PDS. We still wire a
             // PdsPort adapter so the probe gauntlet has uniform shape;
@@ -93,7 +92,9 @@ impl Wiring {
             // claim-publish time. The probe arm for the empty endpoint
             // is therefore skipped in slice-01 by binding a no-network
             // adapter when the endpoint is empty.
-            Box::new(AtProtoPdsAdapter::for_endpoint("https://placeholder.invalid"))
+            Box::new(AtProtoPdsAdapter::for_endpoint(
+                "https://placeholder.invalid",
+            ))
         } else {
             Box::new(AtProtoPdsAdapter::with_did(
                 pds_endpoint,
@@ -216,8 +217,8 @@ fn build_identity(did: &str) -> Result<AtProtoDidAdapter> {
     ];
 
     if let Ok(hex) = std::env::var("OPENLORE_KEY_SEED_HEX") {
-        let seed = decode_hex_seed(&hex)
-            .with_context(|| "decoding OPENLORE_KEY_SEED_HEX env var")?;
+        let seed =
+            decode_hex_seed(&hex).with_context(|| "decoding OPENLORE_KEY_SEED_HEX env var")?;
         AtProtoDidAdapter::new_with_did_document(did, seed, did_document_methods)
             .map_err(|e| anyhow!("constructing IdentityPort from seed: {e}"))
     } else {
@@ -255,4 +256,3 @@ fn hex_nibble(b: u8) -> Result<u8> {
         _ => Err(anyhow!("invalid hex character: {:?}", b as char)),
     }
 }
-

@@ -111,10 +111,9 @@ pub fn run(wiring: &Wiring, args: &InitArgs) -> Result<InitOutcome> {
 /// Read + parse the identity TOML. Errors carry context for the
 /// dispatcher's tracing event.
 fn read_identity_toml(path: &Path) -> Result<IdentityToml> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let parsed: IdentityToml = toml::from_str(&text)
-        .with_context(|| format!("parse TOML at {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let parsed: IdentityToml =
+        toml::from_str(&text).with_context(|| format!("parse TOML at {}", path.display()))?;
     Ok(parsed)
 }
 
@@ -129,12 +128,11 @@ fn write_identity_toml(path: &Path, toml_doc: &IdentityToml) -> Result<()> {
             .with_context(|| format!("create config dir {}", parent.display()))?;
     }
 
-    let text = toml::to_string_pretty(toml_doc)
-        .with_context(|| "serialize identity.toml")?;
+    let text = toml::to_string_pretty(toml_doc).with_context(|| "serialize identity.toml")?;
     let tmp = path.with_extension("toml.tmp");
     {
-        let mut f = fs::File::create(&tmp)
-            .with_context(|| format!("create temp {}", tmp.display()))?;
+        let mut f =
+            fs::File::create(&tmp).with_context(|| format!("create temp {}", tmp.display()))?;
         f.write_all(text.as_bytes())
             .with_context(|| format!("write temp {}", tmp.display()))?;
         f.sync_all()

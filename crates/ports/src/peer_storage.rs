@@ -65,10 +65,7 @@ pub enum PeerStorageError {
         "cross-attribution rejected: record author {actual:?} does not match \
          subscribed peer {expected:?}"
     )]
-    CrossAttribution {
-        expected: Did,
-        actual: Did,
-    },
+    CrossAttribution { expected: Did, actual: Did },
 
     /// Defensive: should never fire if probe + check-arch pass. If it
     /// does, a regression has bypassed the layered anti-merging defenses

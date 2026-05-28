@@ -57,9 +57,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::render::{
-    is_retracted_by, render_annotated_graph_query_result, AnnotatedClaim,
-};
+use crate::render::{is_retracted_by, render_annotated_graph_query_result, AnnotatedClaim};
 use crate::wiring::Wiring;
 
 /// Header line printed before the per-claim render. US-004 AC #2 content-
@@ -190,9 +188,7 @@ fn annotate_claims(
         let referencing = wiring
             .storage
             .query_referencing(target_cid)
-            .with_context(|| {
-                format!("looking up back-references for cid {}", target_cid.0)
-            })?;
+            .with_context(|| format!("looking up back-references for cid {}", target_cid.0))?;
         let is_retracted = is_retracted_by(target_cid, &referencing);
         annotated.push(AnnotatedClaim {
             claim: claim.clone(),

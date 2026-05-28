@@ -406,8 +406,7 @@ mod tests {
 
         // Arm A — missing reason (target is a stranger so only the reason
         // rule can fire).
-        let stranger_lookup =
-            FakeLookup::with(&target, signed_of(unsigned_by(&someone_else())));
+        let stranger_lookup = FakeLookup::with(&target, signed_of(unsigned_by(&someone_else())));
         let no_reason = counter_claim(&target, None);
         assert!(
             matches!(

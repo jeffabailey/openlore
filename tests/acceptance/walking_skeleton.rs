@@ -42,7 +42,16 @@ fn walking_skeleton_init_creates_identity_duckdb_and_is_idempotent() {
     let env = TestEnv::fresh();
 
     // When Jeff runs `openlore init`
-    let first = run_openlore(&env, &["init", "--handle", "jeff.test", "--app-password", "fake-app-password"]);
+    let first = run_openlore(
+        &env,
+        &[
+            "init",
+            "--handle",
+            "jeff.test",
+            "--app-password",
+            "fake-app-password",
+        ],
+    );
 
     // Then the identity config exists and names the test DID
     assert_exit_zero_and_stdout_contains(&first, "OpenLore initialized for did:plc:test-jeff");
@@ -51,7 +60,16 @@ fn walking_skeleton_init_creates_identity_duckdb_and_is_idempotent() {
     // (assertion helpers wrap the universe-bound observable checks)
 
     // When Jeff runs `openlore init` again
-    let second = run_openlore(&env, &["init", "--handle", "jeff.test", "--app-password", "fake-app-password"]);
+    let second = run_openlore(
+        &env,
+        &[
+            "init",
+            "--handle",
+            "jeff.test",
+            "--app-password",
+            "fake-app-password",
+        ],
+    );
 
     // Then it exits with an "already initialized" message
     assert_exit_zero_and_stdout_contains(&second, "already initialized for did:plc:test-jeff");
@@ -75,12 +93,18 @@ fn walking_skeleton_claim_commands_fail_loudly_when_not_initialized() {
     let outcome = run_openlore(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
     );
 
@@ -113,12 +137,18 @@ fn walking_skeleton_compose_preview_contains_not_as_truth_and_waits_for_confirma
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         // No stdin input — the binary should print the preview and
         // wait. DELIVER may instead implement a `--dry-run` mode that
@@ -152,12 +182,18 @@ fn walking_skeleton_compose_rejects_confidence_outside_unit_interval() {
     let outcome = run_openlore(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "1.4", // out of range
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "1.4", // out of range
         ],
     );
 
@@ -191,12 +227,18 @@ fn walking_skeleton_compose_preview_shows_bucket_label_but_signed_payload_has_on
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:mastodon/mastodon",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.federation-first",
-            "--evidence", "https://joinmastodon.org/",
-            "--confidence", "0.55",
+            "claim",
+            "add",
+            "--subject",
+            "github:mastodon/mastodon",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.federation-first",
+            "--evidence",
+            "https://joinmastodon.org/",
+            "--confidence",
+            "0.55",
         ],
         "\nn\n", // <Enter> at sign prompt, "n" at publish prompt
     );
@@ -261,12 +303,18 @@ fn walking_skeleton_sign_writes_atomic_local_file_with_no_network_call() {
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nn\n", // <Enter> sign, "n" decline publish
     );
@@ -365,12 +413,18 @@ fn walking_skeleton_re_canonicalization_produces_identical_cids() {
     let env_second = TestEnv::initialized();
 
     let first_args = [
-        "claim", "add",
-        "--subject", "github:rust-lang/rust",
-        "--predicate", "embodiesPhilosophy",
-        "--object", "org.openlore.philosophy.memory-safety",
-        "--evidence", "https://www.rust-lang.org/",
-        "--confidence", "0.86",
+        "claim",
+        "add",
+        "--subject",
+        "github:rust-lang/rust",
+        "--predicate",
+        "embodiesPhilosophy",
+        "--object",
+        "org.openlore.philosophy.memory-safety",
+        "--evidence",
+        "https://www.rust-lang.org/",
+        "--confidence",
+        "0.86",
     ];
 
     // Step 05-07 pins composed_at via OPENLORE_TEST_NOW so both runs
@@ -378,18 +432,10 @@ fn walking_skeleton_re_canonicalization_produces_identical_cids() {
     // this env var as a test-only seam (production behavior unchanged).
     let pinned_now = "2026-05-26T12:00:00Z";
 
-    let outcome_first = run_openlore_claim_add_with_pinned_now(
-        &env_first,
-        &first_args,
-        "\nn\n",
-        pinned_now,
-    );
-    let outcome_second = run_openlore_claim_add_with_pinned_now(
-        &env_second,
-        &first_args,
-        "\nn\n",
-        pinned_now,
-    );
+    let outcome_first =
+        run_openlore_claim_add_with_pinned_now(&env_first, &first_args, "\nn\n", pinned_now);
+    let outcome_second =
+        run_openlore_claim_add_with_pinned_now(&env_second, &first_args, "\nn\n", pinned_now);
 
     // Parse the CID from each outcome's stdout. WS-6 pinned the parsing
     // shape (`Computing claim CID <cid>` marker); reuse it here.
@@ -493,17 +539,26 @@ fn walking_skeleton_publish_prints_at_uri_and_retract_hint_after_signing() {
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nY\n", // <Enter> sign, "Y" publish
     );
 
-    assert_exit_zero_and_stdout_contains(&outcome, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
+    assert_exit_zero_and_stdout_contains(
+        &outcome,
+        "at-uri: at://did:plc:test-jeff/org.openlore.claim/",
+    );
     assert_exit_zero_and_stdout_contains(&outcome, "openlore claim retract");
 
     // Parse the at-uri from stdout. claim_publish.rs prints the line
@@ -532,9 +587,9 @@ fn walking_skeleton_publish_prints_at_uri_and_retract_hint_after_signing() {
 /// to that marker and take the first whitespace-delimited token after.
 fn parse_at_uri_from_stdout(stdout: &str) -> String {
     let marker = "at-uri: ";
-    let idx = stdout.find(marker).unwrap_or_else(|| {
-        panic!("could not locate 'at-uri:' marker in stdout:\n{stdout}")
-    });
+    let idx = stdout
+        .find(marker)
+        .unwrap_or_else(|| panic!("could not locate 'at-uri:' marker in stdout:\n{stdout}"));
     let tail = &stdout[idx + marker.len()..];
     let at_uri = tail
         .split_whitespace()
@@ -562,16 +617,25 @@ fn walking_skeleton_publish_is_idempotent_on_re_run_with_same_cid() {
     let first = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
-    assert_exit_zero_and_stdout_contains(&first, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
+    assert_exit_zero_and_stdout_contains(
+        &first,
+        "at-uri: at://did:plc:test-jeff/org.openlore.claim/",
+    );
     let cid = parse_cid_from_stdout(&first.stdout);
     let at_uri_first = parse_at_uri_from_stdout(&first.stdout);
 
@@ -634,12 +698,18 @@ fn walking_skeleton_pds_unreachable_leaves_local_claim_intact_and_retry_actionab
     let outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
@@ -707,12 +777,18 @@ fn walking_skeleton_graph_query_returns_just_published_claim_byte_for_byte() {
     let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", subject,
-            "--predicate", predicate,
-            "--object", object,
-            "--evidence", evidence_url,
-            "--confidence", confidence_str,
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            predicate,
+            "--object",
+            object,
+            "--evidence",
+            evidence_url,
+            "--confidence",
+            confidence_str,
         ],
         "\nY\n",
     );
@@ -766,17 +842,26 @@ fn walking_skeleton_graph_query_default_is_local_only_and_footer_announces_it() 
     let _ = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nn\n",
     );
 
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", "github:rust-lang/rust"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", "github:rust-lang/rust"],
+    );
 
     assert_exit_zero_and_stdout_contains(&outcome, "Showing local claims only");
     assert_exit_zero_and_stdout_contains(&outcome, "--federated");
@@ -790,7 +875,10 @@ fn walking_skeleton_graph_query_default_is_local_only_and_footer_announces_it() 
 fn walking_skeleton_graph_query_empty_result_is_explained_not_silent() {
     let env = TestEnv::initialized();
 
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", "github:nonexistent/repo"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", "github:nonexistent/repo"],
+    );
 
     assert_exit_zero_and_stdout_contains(&outcome, "No local claims about github:nonexistent/repo");
     assert_exit_zero_and_stdout_contains(&outcome, "--federated");
@@ -815,12 +903,18 @@ fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
     let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
@@ -834,7 +928,10 @@ fn walking_skeleton_retract_publishes_new_counter_claim_referencing_original() {
     // Retract — step 05-14 wires the standalone verb.
     let retract_outcome = run_openlore(&env, &["claim", "retract", &original_cid]);
 
-    assert_exit_zero_and_stdout_contains(&retract_outcome, "at-uri: at://did:plc:test-jeff/org.openlore.claim/");
+    assert_exit_zero_and_stdout_contains(
+        &retract_outcome,
+        "at-uri: at://did:plc:test-jeff/org.openlore.claim/",
+    );
 
     // The new claim's CID is different — the `references[]` change
     // perturbs the canonical CBOR pre-image, which perturbs the CID per
@@ -868,12 +965,18 @@ fn walking_skeleton_retract_preserves_original_record_in_local_and_remote_stores
     let publish_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", subject,
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
@@ -948,12 +1051,18 @@ fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
     let typo_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", subject,
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rustt-lang.org/", // typo
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rustt-lang.org/", // typo
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
@@ -991,12 +1100,18 @@ fn walking_skeleton_corrective_workflow_publishes_new_claim_and_retracts_old() {
     let corrected_outcome = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", subject,
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/", // fixed
-            "--confidence", "0.86",
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/", // fixed
+            "--confidence",
+            "0.86",
         ],
         "\nY\n",
     );
@@ -1043,12 +1158,18 @@ fn walking_skeleton_calibration_anxiety_user_cancels_and_re_runs_with_lower_conf
     let first = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.9",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.9",
         ],
         "", // empty stdin = cancel at the prompt (EOF)
     );
@@ -1065,12 +1186,18 @@ fn walking_skeleton_calibration_anxiety_user_cancels_and_re_runs_with_lower_conf
     let second = run_openlore_with_stdin(
         &env,
         &[
-            "claim", "add",
-            "--subject", "github:rust-lang/rust",
-            "--predicate", "embodiesPhilosophy",
-            "--object", "org.openlore.philosophy.memory-safety",
-            "--evidence", "https://www.rust-lang.org/",
-            "--confidence", "0.55",
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.55",
         ],
         "\nn\n",
     );

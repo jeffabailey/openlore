@@ -14,8 +14,7 @@
 //!     which is signature-content-agnostic.
 
 use claim_domain::{
-    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim,
-    UnsignedClaim,
+    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
 };
 
 // -----------------------------------------------------------------------------
@@ -68,9 +67,7 @@ pub fn fixture_jeff_rust_memory_safety_signed() -> SignedClaim {
     SignedClaim {
         unsigned,
         signature: SignatureBlock {
-            signed_cid: Cid(
-                "bafyreigh2akiscaildc7tge3pp7tezt5ihtdmf6wzgnrjexampletest".to_string(),
-            ),
+            signed_cid: Cid("bafyreigh2akiscaildc7tge3pp7tezt5ihtdmf6wzgnrjexampletest".to_string()),
             // Deterministic 64-byte filler pattern; would be a real Ed25519
             // signature in production. Roundtrip equality does not depend
             // on signature validity, only on byte-stability.

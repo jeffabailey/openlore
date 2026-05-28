@@ -119,9 +119,8 @@ fn lexicon_roundtrip_compose_sign_serialize_deserialize_yields_equal_value() {
 #[test]
 fn lexicon_validates_signed_claim_against_org_openlore_claim_schema() {
     // Confirm the embedded Lexicon JSON loads (US-005 AC: "Lexicon loadable").
-    let lexicon_schema: serde_json::Value =
-        serde_json::from_str(lexicon::CLAIM_LEXICON_JSON)
-            .expect("embedded org.openlore.claim Lexicon JSON must parse");
+    let lexicon_schema: serde_json::Value = serde_json::from_str(lexicon::CLAIM_LEXICON_JSON)
+        .expect("embedded org.openlore.claim Lexicon JSON must parse");
     assert_eq!(
         lexicon_schema["id"].as_str(),
         Some(lexicon::CLAIM_NSID),
@@ -277,11 +276,20 @@ fn lexicon_cid_is_byte_stable_for_fixture_suite_of_known_claims() {
 
         let json_bytes = fs::read(&json_path)
             .unwrap_or_else(|e| panic!("gold fixture {} missing: {}", json_path.display(), e));
-        let claim: UnsignedClaim = serde_json::from_slice(&json_bytes)
-            .unwrap_or_else(|e| panic!("gold fixture {} not valid UnsignedClaim JSON: {}", json_path.display(), e));
+        let claim: UnsignedClaim = serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "gold fixture {} not valid UnsignedClaim JSON: {}",
+                json_path.display(),
+                e
+            )
+        });
 
         let canonical = canonicalize(&claim).unwrap_or_else(|e| {
-            panic!("canonicalize MUST succeed on gold fixture {}: {:?}", json_path.display(), e)
+            panic!(
+                "canonicalize MUST succeed on gold fixture {}: {:?}",
+                json_path.display(),
+                e
+            )
         });
         let computed_cid = compute_cid(&canonical);
 
@@ -640,9 +648,11 @@ fn lexicon_persisted_payload_never_contains_bucket_label_string() {
         // Criterion 2: `confidence` is a JSON number, not a string.
         // A stringified number would be a smell that some Display impl
         // (e.g., a bucket label getter) had snuck in upstream.
-        let confidence_field = serialized_value
-            .get("confidence")
-            .unwrap_or_else(|| panic!("serialized payload missing `confidence` field for conf={conf}: {serialized_text}"));
+        let confidence_field = serialized_value.get("confidence").unwrap_or_else(|| {
+            panic!(
+                "serialized payload missing `confidence` field for conf={conf}: {serialized_text}"
+            )
+        });
         assert!(
             confidence_field.is_number(),
             "confidence MUST serialize as a JSON number (WD-10): got {confidence_field:?} \
