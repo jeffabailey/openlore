@@ -19,6 +19,7 @@ members = [
     "crates/adapter-duckdb",
     "crates/adapter-atproto-did",
     "crates/adapter-atproto-pds",
+    "crates/adapter-github",
     "crates/adapter-system-clock",
     "crates/cli",
     "crates/test-support",

@@ -1,0 +1,42 @@
+[package]
+name = "adapter-github"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore GithubPort adapter: public GitHub REST/GraphQL over the workspace reqwest (rustls). Optional GITHUB_TOKEN PAT. ADR-019."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (ADR-019 §6 + component-boundaries.md §crates/adapter-github).
+#
+# Step 01-03: BOOTSTRAP scaffold. The GithubPort impl methods are bodied
+# `todo!()` (// SCAFFOLD: true (slice-02)); the live HTTP harvest lands
+# per-scenario in Phase 03/04. The probe() skeleton already exercises the
+# public-only / private-refusal / token-no-leak intent shape (ADR-019 §6),
+# with the live network arms filling in around the pinned arm contracts.
+#
+# - `reqwest` (rustls-tls-webpki-roots + json): the SAME workspace HTTPS
+#   client `adapter-atproto-pds` pins (ADR-019 §2 — ZERO new transport dep,
+#   ZERO new cargo-deny surface). NO octocrab (ADR-019 §2, technology-stack.md).
+#   The client skeleton lives in `client.rs`; live requests wire in Phase 03/04.
+#
+# - `tokio`: required by the `#[async_trait]` GithubPort impl + by `reqwest`
+#   (async-only API). Inherits the workspace feature set.
+#
+# - holds NO `StoragePort`/`IdentityPort`/`PdsPort` reference — by construction
+#   it CANNOT sign or publish (the human-gate, WD-49 / I-SCR-1). It depends on
+#   `ports` ONLY for the GithubPort trait + value types it implements over.
+[dependencies]
+ports = { path = "../ports" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
