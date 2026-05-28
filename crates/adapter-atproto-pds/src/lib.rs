@@ -67,9 +67,20 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{AtUri, CreateRecordOutcome, PdsError, PdsPort, ProbeOutcome, ProbeRefusalReason};
+use ports::claim_domain::Did;
+use ports::{
+    AtUri, CreateRecordOutcome, PdsError, PdsPort, PeerRecordPage, ProbeOutcome,
+    ProbeRefusalReason, SignedRecord,
+};
+use url::Url;
 
 pub mod probe;
+
+// Slice-03 (federated read): peer-PDS read pipeline backing
+// `PdsPort::list_peer_records` + `PdsPort::get_peer_record`. Bodied as
+// `todo!()` at step 01-03; live implementation lands per the PP-*
+// scenarios in Phase 04.
+mod peer_read;
 
 /// The collection used by OpenLore claim records. Pinned by ADR-005
 /// (Lexicon definition `org.openlore.claim`).
@@ -355,6 +366,44 @@ impl PdsPort for AtProtoPdsAdapter {
         }
         Ok(Vec::new())
     }
+
+    /// Page through a peer's `org.openlore.claim` records (slice-03).
+    /// Delegates to the `peer_read` module. The `peer_pds_endpoint` is
+    /// taken fresh per ADR-016 (re-resolved at every pull; never cached
+    /// on the adapter).
+    ///
+    /// SCAFFOLD: true (slice-03)
+    ///
+    /// Bodied via `peer_read::list_peer_records_xrpc`, which is `todo!()`
+    /// at step 01-03; the live `listRecords` cursor walk lands per the
+    /// PP-* scenarios in Phase 04.
+    async fn list_peer_records(
+        &self,
+        peer_did: &Did,
+        peer_pds_endpoint: &Url,
+        cursor: Option<String>,
+    ) -> Result<PeerRecordPage, PdsError> {
+        // SCAFFOLD: true (slice-03)
+        peer_read::list_peer_records_xrpc(peer_did, peer_pds_endpoint, cursor).await
+    }
+
+    /// Fetch one peer record by `rkey` (slice-03). Delegates to the
+    /// `peer_read` module. Endpoint taken fresh per ADR-016.
+    ///
+    /// SCAFFOLD: true (slice-03)
+    ///
+    /// Bodied via `peer_read::get_peer_record_xrpc`, which is `todo!()`
+    /// at step 01-03; the live single-record `getRecord` lands per the
+    /// PP-* scenarios in Phase 04.
+    async fn get_peer_record(
+        &self,
+        peer_did: &Did,
+        peer_pds_endpoint: &Url,
+        rkey: &str,
+    ) -> Result<SignedRecord, PdsError> {
+        // SCAFFOLD: true (slice-03)
+        peer_read::get_peer_record_xrpc(peer_did, peer_pds_endpoint, rkey).await
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -495,5 +544,36 @@ mod tests {
             matches!(result, Err(PdsError::Unreachable { .. })),
             "expected Unreachable on empty endpoint, got {result:?}"
         );
+    }
+
+    /// Step 01-03 scaffold pin: `list_peer_records` exists on the
+    /// `PdsPort` surface and routes to the `peer_read` scaffold, which is
+    /// `todo!()` until the PP-* scenarios fill it in (Phase 04). Driving
+    /// it through the port MUST panic at the scaffold (not return a
+    /// silently-empty page), proving the method is present and routed
+    /// without yet asserting business behavior. Replaced by behavioral
+    /// assertions when the live body lands.
+    #[tokio::test]
+    #[should_panic(expected = "list_peer_records_xrpc")]
+    async fn list_peer_records_is_scaffolded_and_routed() {
+        let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
+        let peer = Did("did:plc:test-peer".to_string());
+        let endpoint = Url::parse("https://peer-pds.example").expect("url parses");
+        // Drives through the PdsPort method; reaches the `todo!()`.
+        let _ = adapter.list_peer_records(&peer, &endpoint, None).await;
+    }
+
+    /// Step 01-03 scaffold pin: `get_peer_record` exists on the `PdsPort`
+    /// surface and routes to the `peer_read` scaffold (`todo!()` until
+    /// Phase 04). Same scaffold-presence rationale as
+    /// `list_peer_records_is_scaffolded_and_routed`.
+    #[tokio::test]
+    #[should_panic(expected = "get_peer_record_xrpc")]
+    async fn get_peer_record_is_scaffolded_and_routed() {
+        let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
+        let peer = Did("did:plc:test-peer".to_string());
+        let endpoint = Url::parse("https://peer-pds.example").expect("url parses");
+        // Drives through the PdsPort method; reaches the `todo!()`.
+        let _ = adapter.get_peer_record(&peer, &endpoint, "rkey-001").await;
     }
 }

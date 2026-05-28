@@ -67,9 +67,14 @@
 
 use claim_domain::{Cid, Did, SignatureBlock, SignedClaim, SigningKey, VerifyingKey};
 use ed25519_dalek::{SigningKey as DalekSigningKey, VerifyingKey as DalekVerifyingKey};
-use ports::{IdentityError, IdentityPort, ProbeOutcome};
+use ports::{IdentityError, IdentityPort, PeerInfo, ProbeOutcome};
 
 pub mod probe;
+
+// Slice-03 (federated read): peer DID-document resolution backing
+// `IdentityPort::resolve_peer`. Bodied as `todo!()` at step 01-03; live
+// implementation lands per the PP-* scenarios in Phase 04.
+mod peer_resolve;
 
 /// The fragment identifying the OpenLore verification method on the
 /// user's DID document. Pinned by ADR-002 §Earned Trust step 1.
@@ -307,6 +312,21 @@ impl IdentityPort for AtProtoDidAdapter {
     fn verify(&self, signed: &SignedClaim) -> Result<(), IdentityError> {
         claim_domain::verify(signed, &self.verifying_key)
             .map_err(|_| IdentityError::VerificationFailed)
+    }
+
+    /// Resolve a peer's DID document into a `PeerInfo` for `peer add` /
+    /// `peer pull` (slice-03). Delegates to the `peer_resolve` module,
+    /// which reuses the slice-01 PLC client per WD-29 and re-resolves
+    /// fresh per ADR-016 (no caching on the adapter).
+    ///
+    /// SCAFFOLD: true (slice-03)
+    ///
+    /// Bodied via `peer_resolve::resolve_peer_did`, which is `todo!()` at
+    /// step 01-03; the live PLC / `did:web` resolution lands per the PP-*
+    /// scenarios in Phase 04.
+    fn resolve_peer(&self, peer_did: &Did) -> Result<PeerInfo, IdentityError> {
+        // SCAFFOLD: true (slice-03)
+        peer_resolve::resolve_peer_did(peer_did)
     }
 }
 
@@ -659,5 +679,27 @@ mod tests {
             well_known_methods(),
         );
         assert!(matches!(result, Err(IdentityError::SignatureFailed { .. })));
+    }
+
+    /// Step 01-03 scaffold pin: `resolve_peer` exists on the
+    /// `IdentityPort` surface and is wired to the `peer_resolve` scaffold,
+    /// which is `todo!()` until the PP-* scenarios fill it in (Phase 04).
+    /// Driving it through the port MUST panic at the scaffold (not return
+    /// a silently-empty `PeerInfo`), proving the method is present and
+    /// routed without yet asserting any business behavior. This test is
+    /// replaced by behavioral assertions when the live body lands.
+    #[test]
+    #[should_panic(expected = "resolve_peer_did")]
+    fn resolve_peer_is_scaffolded_and_routed() {
+        let adapter = AtProtoDidAdapter::new_with_did_document(
+            "did:plc:test-jeff",
+            test_seed(),
+            well_known_methods(),
+        )
+        .expect("adapter constructs");
+
+        let peer = Did("did:plc:test-peer".to_string());
+        // Drives through the IdentityPort method; reaches the `todo!()`.
+        let _ = adapter.resolve_peer(&peer);
     }
 }

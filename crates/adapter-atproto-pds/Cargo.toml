@@ -45,6 +45,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+# slice-03 (federated read): the PdsPort peer-read methods take
+# `peer_pds_endpoint: &url::Url` (re-resolved fresh per ADR-016). `ports`
+# uses `url::Url` in those signatures but does not re-export it, so the
+# adapter needs `url` as a direct dependency to name the type when
+# implementing the trait.
+url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
