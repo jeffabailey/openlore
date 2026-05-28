@@ -45,6 +45,13 @@ adapter-system-clock = { path = "../adapter-system-clock" }
 # Phase 03/05; the dep is wired now so the verb module can name it).
 adapter-github = { path = "../adapter-github" }
 scraper-domain = { path = "../scraper-domain" }
+# Slice-04 (scoring + graph; ADR-022). The composition root is the only crate
+# allowed to depend on `adapter-*` + the pure cores. `scoring` is the PURE
+# adherence-weight core the `graph query --weighted`/`--explain` explorer path
+# feeds attributed claims into (the live `scoring::score` call lands per
+# acceptance scenario in Phase 02/05; the dep is wired now so the explorer
+# handler module can name it and the wiring can construct the scoring config).
+scoring = { path = "../scoring" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = { workspace = true }
@@ -184,4 +191,27 @@ harness = true
 [[test]]
 name = "scraper_domain"
 path = "../../tests/acceptance/scraper_domain.rs"
+harness = true
+
+# Slice-04 subprocess acceptance (graph query explorer flags — US-GRAPH-001..006;
+# ADR-020). Drives the real `openlore` binary via `assert_cmd` over a REAL
+# DuckDB seeded with own + peer claims (slice-03 `claim add` / `peer add` /
+# `peer pull` seam — no new external fake). Step 01-04 registers the target +
+# lands the 6 explorer flags (todo!() handler bodies) so the 27 GQE scenarios
+# classify RED (panic at `todo!()`); GQE-1..27 stay RED until DELIVER's
+# per-scenario phases.
+[[test]]
+name = "graph_query_explore"
+path = "../../tests/acceptance/graph_query_explore.rs"
+harness = true
+
+# Slice-04 layer-2 acceptance (pure `scoring` core transparency + anti-merging
+# properties — US-GRAPH-003/005/006). Exercises the PURE core DIRECTLY (no CLI
+# subprocess), so it lives under the cli package's test targets purely for
+# workspace co-location (symmetric with `scraper_domain` / `lexicon_counter_claim`).
+# `@property` proptest scenarios (SC-1..SC-4) plus example-pinned (SC-5..SC-6).
+# Step 01-04 registers + RED gate; the 6 SC scenarios stay RED (`todo!()`).
+[[test]]
+name = "scoring_core"
+path = "../../tests/acceptance/scoring_core.rs"
 harness = true

@@ -110,8 +110,11 @@ pub use fixtures_scoring::{
     EXPECTED_CROSS_PROJECT_TRIANGULATION_BONUS,
 };
 
-use claim_domain::{Cid, ClaimLookup, SignedClaim};
-use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};
+use claim_domain::{Cid, ClaimLookup, Did, SignedClaim};
+use ports::{
+    AttributedClaim, ClockPort, GraphNode, ProbeOutcome, ScoringFilter, StorageError, StoragePort,
+    TraversalBound, TraversalResult,
+};
 
 // -----------------------------------------------------------------------------
 // FakeClaimLookup — in-memory `ClaimLookup` double for pure-core tests
@@ -256,5 +259,41 @@ impl StoragePort for InMemoryStorage {
     ) -> Result<Vec<ports::FederatedRow>, StorageError> {
         // SCAFFOLD: true (slice-03)
         panic!("Not yet implemented -- RED scaffold (slice-03 query_federated_by_subject)");
+    }
+
+    // -------- slice-04 (scoring + graph) read methods --------
+    //
+    // SCAFFOLD: true (slice-04) — the layer-2 `scoring_core.rs` acceptance file
+    // invokes the pure `scoring::score` directly (no StoragePort), so this
+    // in-memory double only needs the method shapes to satisfy the extended
+    // trait. The subprocess `graph_query_explore.rs` scenarios drive the REAL
+    // `DuckDbStorageAdapter` (over a seeded DuckDB), never this double, so the
+    // bodies stay RED scaffolds. They materialize only if a future layer-2
+    // acceptance scenario seeds an in-memory feed.
+
+    fn query_by_object(&self, _object: &str) -> Result<Vec<AttributedClaim>, StorageError> {
+        panic!("Not yet implemented -- RED scaffold (slice-04 query_by_object)");
+    }
+
+    fn query_by_contributor(
+        &self,
+        _author_did: &Did,
+    ) -> Result<Vec<AttributedClaim>, StorageError> {
+        panic!("Not yet implemented -- RED scaffold (slice-04 query_by_contributor)");
+    }
+
+    fn query_attributed_for_scoring(
+        &self,
+        _filter: &ScoringFilter,
+    ) -> Result<Vec<AttributedClaim>, StorageError> {
+        panic!("Not yet implemented -- RED scaffold (slice-04 query_attributed_for_scoring)");
+    }
+
+    fn traverse_graph(
+        &self,
+        _start: &GraphNode,
+        _bound: &TraversalBound,
+    ) -> Result<TraversalResult, StorageError> {
+        panic!("Not yet implemented -- RED scaffold (slice-04 traverse_graph)");
     }
 }

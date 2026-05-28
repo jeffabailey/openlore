@@ -83,14 +83,42 @@ const FIRST_FEDERATED_QUERY_ORIENTATION: &str = "First federated query complete.
 /// Argument struct for the `graph query` verb (mirrors the clap subcommand).
 #[derive(Debug, Clone)]
 pub struct GraphQueryArgs {
-    /// The subject URI to filter by. Exact match (no fuzzy / prefix).
-    pub subject: String,
+    /// The subject URI to filter by (slice-01/03 dimension). Exact match (no
+    /// fuzzy / prefix). Optional in slice-04 because `--object`/`--contributor`
+    /// are alternative dimensions (ADR-020).
+    pub subject: Option<String>,
     /// `--federated` (slice-03): widen the query to subscribed peers via
     /// `StoragePort::query_federated_by_subject`. Defaults to false
-    /// (local-only — the slice-01 behavior). The live federated branch is
-    /// driven by the FQ-* acceptance scenarios in a later slice-03 phase;
-    /// step 01-04 only routes the flag.
+    /// (local-only — the slice-01 behavior). The slice-04 explorer flags IMPLY
+    /// federated scope (WD-87 / OD-GRAPH-4).
     pub federated: bool,
+    /// `--object <philosophy>` (slice-04 / ADR-020): the object-dimension read.
+    pub object: Option<String>,
+    /// `--contributor <did>` (slice-04 / ADR-020): the contributor-dimension read.
+    pub contributor: Option<String>,
+    /// `--traverse` (slice-04 / ADR-020): bounded graph traversal. OPT-IN.
+    pub traverse: bool,
+    /// `--depth <N>` (slice-04 / ADR-020 / WD-76): traversal depth bound,
+    /// default 2.
+    pub depth: u8,
+    /// `--weighted` / `--score` (slice-04 / ADR-020): the transparent
+    /// display-only weight ranking. OPT-IN.
+    pub weighted: bool,
+    /// `--explain <subject>` (slice-04 / ADR-020): per-claim weight audit. OPT-IN.
+    pub explain: Option<String>,
+}
+
+impl GraphQueryArgs {
+    /// True iff ANY slice-04 explorer flag is present. The explorer flags imply
+    /// federated scope (WD-87 / OD-GRAPH-4); the bare `--subject`/`--federated`
+    /// surface (no explorer flag) routes to the slice-01/03 behavior unchanged.
+    fn uses_explorer_surface(&self) -> bool {
+        self.object.is_some()
+            || self.contributor.is_some()
+            || self.traverse
+            || self.weighted
+            || self.explain.is_some()
+    }
 }
 
 /// Outcome of one `graph query` invocation. The exit code + stdout chunk
@@ -118,14 +146,33 @@ pub struct GraphQueryOutcome {
 /// (a future `--federated` pass might find the subject upstream). Exit
 /// code stays 0: empty is a normal not-found result, not an error.
 pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
+    // Slice-04 (ADR-020): the explorer surface (any of --object / --contributor
+    // / --traverse / --weighted / --explain) routes to the explorer handler,
+    // which implies federated scope (WD-87 / OD-GRAPH-4). The bare
+    // --subject / --federated surface below is the slice-01/03 behavior,
+    // byte-identical (architecture-design §5.2 invariant 2).
+    if args.uses_explorer_surface() {
+        return run_explorer(wiring, args);
+    }
+
+    // Slice-01/03 path: requires the --subject dimension. (clap allows omitting
+    // it now that --object/--contributor are alternatives; a bare `graph query`
+    // with no dimension is a usage error.)
+    let subject = args.subject.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "graph query requires a dimension: pass --subject <uri>, --object <philosophy>, \
+             or --contributor <did>"
+        )
+    })?;
+
     if args.federated {
-        return run_federated(wiring, args);
+        return run_federated(wiring, subject);
     }
 
     let claims = wiring
         .storage
-        .query_by_subject(&args.subject)
-        .with_context(|| format!("querying claims by subject {}", args.subject))?;
+        .query_by_subject(subject)
+        .with_context(|| format!("querying claims by subject {subject}"))?;
 
     let mut stdout = String::new();
     stdout.push_str(LOCAL_ONLY_HEADER);
@@ -137,7 +184,7 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
         // self-explanatory (an operator scanning logs sees WHICH lookup
         // came back empty). The federation footer follows so the
         // slice-03 `--federated` pointer is still visible.
-        stdout.push_str(&format!("No local claims about {}.\n", args.subject));
+        stdout.push_str(&format!("No local claims about {subject}.\n"));
     } else {
         // WS-15 / ADR-008 Behavioral rule 3 + WD-11: for each claim,
         // probe `query_referencing` to discover any back-pointers from
@@ -189,11 +236,11 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
 ///
 /// Out of FQ-1 scope (covered by a later slice-03 scenario, currently RED):
 /// the inline counter template (FQ-7 / WD-42).
-fn run_federated(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
+fn run_federated(wiring: &Wiring, subject: &str) -> Result<GraphQueryOutcome> {
     let rows = wiring
         .storage
-        .query_federated_by_subject(&args.subject)
-        .with_context(|| format!("federated query by subject {}", args.subject))?;
+        .query_federated_by_subject(subject)
+        .with_context(|| format!("federated query by subject {subject}"))?;
 
     // FQ-6 / WD-39: prepend the one-time orientation (empty after the first
     // invocation) ahead of the rendered result. Gating + the non-fatal state
@@ -206,6 +253,46 @@ fn run_federated(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOut
         exit_code: 0,
         stdout,
     })
+}
+
+/// Slice-04 (ADR-020): the explorer dispatch entry. Routes a `graph query`
+/// invocation carrying any explorer flag (`--object` / `--contributor` /
+/// `--traverse` / `--weighted` / `--explain`) to the matching read path. The
+/// explorer surface IMPLIES federated scope (WD-87 / OD-GRAPH-4) — own + peer
+/// claims via the extended `StoragePort` scoring-feed / dimension / traversal
+/// read methods, then the pure `scoring` core for `--weighted`/`--explain`.
+///
+/// SCAFFOLD: true (slice-04) — the body is a `todo!()`. DD-GRAPH-13 bootstrap:
+/// this routes the parsed explorer flags into per-dimension handlers whose
+/// bodies are also `todo!()`, so every slice-04 acceptance scenario reaches a
+/// `todo!()` panic (RED) rather than a compile error (BROKEN). The per-scenario
+/// GREEN implementation (Release 1: GQE-1/10/26; Release 2: GQE-6/20; Release 3:
+/// GQE-16) lands the read path one acceptance scenario at a time.
+fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
+    // SCAFFOLD: true (slice-04)
+    //
+    // The dispatch tree (DELIVER materializes per scenario):
+    //   - --weighted [--explain S]  -> score the attributed feed (pure
+    //     `scoring::score`) and render WeightedView (+ Contribution list for
+    //     --explain); --explain for a subject absent from the result set is a
+    //     usage error (non-zero exit) per architecture-design §5.2 invariant 5.
+    //   - --traverse [--depth K]    -> StoragePort::traverse_graph(start, bound)
+    //     and render the bounded, cycle-safe edge tree (Gate 5).
+    //   - --object O / --contributor D (no --weighted/--traverse) -> the plain
+    //     attributed dimension listing grouped by subject / under the DID.
+    //
+    // The dimension feed is read through the extended StoragePort:
+    //   query_by_object / query_by_contributor / query_attributed_for_scoring
+    //   (federated UNION ALL, explicit author_did projection — anti-merging).
+    let _ = (wiring, args);
+    todo!(
+        "DELIVER (slice-04): dispatch the explorer surface — for --weighted/--explain feed the \
+         extended StoragePort attributed claims into the pure scoring::score core and render the \
+         WeightedView (+ Contribution breakdown for --explain); for --traverse call \
+         StoragePort::traverse_graph(start, bound); else render the plain attributed dimension \
+         listing. Explorer flags imply federated scope (WD-87/OD-GRAPH-4); every rendered row \
+         carries its author_did (anti-merging, WD-73). (ADR-020; GQE-1..27)"
+    )
 }
 
 /// Emit the first-federated-query orientation block exactly once per install

@@ -94,13 +94,57 @@ pub enum ClaimCommand {
 #[derive(Debug, Subcommand)]
 pub enum GraphCommand {
     /// Query the local store (and slice-03+ federated peers).
+    ///
+    /// Slice-04 (ADR-020) adds the explorer flags on top of the slice-01/03
+    /// `--subject`/`--federated` surface. `--subject` stays optional now (the
+    /// dimension flags `--object`/`--contributor` are alternative entry points);
+    /// the verb body adjudicates which dimension was supplied. The explorer
+    /// flags are strictly OPT-IN — a bare `--subject` query is byte-identical to
+    /// slice-01/03 (WD-87 / architecture-design §5.2 invariant 2).
     Query {
+        /// Slice-01/03 subject dimension. Optional in slice-04 because
+        /// `--object`/`--contributor` are alternative dimensions.
         #[arg(long)]
-        subject: String,
+        subject: Option<String>,
         /// `--federated` (slice-03): include subscribed peers' claims in
-        /// the result. Defaults to local-only (the slice-01 behavior).
+        /// the result. Defaults to local-only (the slice-01 behavior). The
+        /// slice-04 explorer flags IMPLY federated scope (WD-87 / OD-GRAPH-4),
+        /// so the verb treats `--object`/`--contributor`/`--traverse`/
+        /// `--weighted`/`--explain` as own + peers without an explicit
+        /// `--federated`.
         #[arg(long)]
         federated: bool,
+        /// Slice-04 (ADR-020): query by OBJECT (philosophy URI) — which
+        /// projects embody this philosophy, grouped by subject, every claim
+        /// row attributed (US-GRAPH-001). Implies federated scope.
+        #[arg(long)]
+        object: Option<String>,
+        /// Slice-04 (ADR-020): query by CONTRIBUTOR (DID) — one developer's
+        /// full reasoning trail across subjects (US-GRAPH-002). Implies
+        /// federated scope.
+        #[arg(long)]
+        contributor: Option<String>,
+        /// Slice-04 (ADR-020): traverse contributor↔project↔philosophy edges
+        /// from the queried dimension, bounded + cycle-safe (US-GRAPH-004).
+        /// OPT-IN. Implies federated scope.
+        #[arg(long)]
+        traverse: bool,
+        /// Slice-04 (ADR-020): traversal depth bound (WD-76). Defaults to 2;
+        /// `--depth K` widens the bound for a deeper walk. Only meaningful with
+        /// `--traverse`.
+        #[arg(long, default_value_t = 2)]
+        depth: u8,
+        /// Slice-04 (ADR-020): render the transparent, display-only adherence
+        /// weight + bucket ranking via the pure `scoring` core (US-GRAPH-003).
+        /// OPT-IN. `--score` is an accepted alias. Implies federated scope.
+        #[arg(long, visible_alias = "score")]
+        weighted: bool,
+        /// Slice-04 (ADR-020): audit one subject's weight — render the per-claim
+        /// `Contribution` breakdown whose running sum reproduces the displayed
+        /// weight by hand (US-GRAPH-005). Takes the subject to explain. A
+        /// subject absent from the result set is a usage error (non-zero exit).
+        #[arg(long)]
+        explain: Option<String>,
     },
 }
 
@@ -278,10 +322,28 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        Command::Graph(GraphCommand::Query { subject, federated }) => {
+        Command::Graph(GraphCommand::Query {
+            subject,
+            federated,
+            object,
+            contributor,
+            traverse,
+            depth,
+            weighted,
+            explain,
+        }) => {
             match verbs::graph_query::run(
                 &wiring,
-                &verbs::graph_query::GraphQueryArgs { subject, federated },
+                &verbs::graph_query::GraphQueryArgs {
+                    subject,
+                    federated,
+                    object,
+                    contributor,
+                    traverse,
+                    depth,
+                    weighted,
+                    explain,
+                },
             ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);
@@ -530,8 +592,10 @@ mod clap_dispatch_tests {
     fn graph_query_without_federated_defaults_federated_false() {
         let cmd = parse(&["graph", "query", "--subject", "github:rust-lang/cargo"]);
         match cmd {
-            Command::Graph(GraphCommand::Query { subject, federated }) => {
-                assert_eq!(subject, "github:rust-lang/cargo");
+            Command::Graph(GraphCommand::Query {
+                subject, federated, ..
+            }) => {
+                assert_eq!(subject.as_deref(), Some("github:rust-lang/cargo"));
                 assert!(!federated, "--federated must default to false when absent");
             }
             other => panic!("expected Graph(Query), got {other:?}"),
@@ -548,11 +612,150 @@ mod clap_dispatch_tests {
             "--federated",
         ]);
         match cmd {
-            Command::Graph(GraphCommand::Query { subject, federated }) => {
-                assert_eq!(subject, "github:rust-lang/cargo");
+            Command::Graph(GraphCommand::Query {
+                subject, federated, ..
+            }) => {
+                assert_eq!(subject.as_deref(), Some("github:rust-lang/cargo"));
                 assert!(federated, "--federated flag must set federated=true");
             }
             other => panic!("expected Graph(Query --federated), got {other:?}"),
+        }
+    }
+
+    // ---- slice-04: the six explorer flags (ADR-020 / DD-GRAPH-13) ----
+    //
+    // RED_UNIT (step 01-04): pin the clap ROUTING contract for the explorer
+    // surface. The driving port is the clap parser; the observable outcome is
+    // the parsed `Command::Graph(Query { .. })` ADT with the right fields. The
+    // verb body is a `todo!()` scaffold at this step — these tests verify only
+    // that the six flags parse into the correct command variant, NOT execution.
+
+    #[test]
+    fn graph_query_explorer_flags_default_off_and_depth_defaults_to_two() {
+        // A bare `--subject` query: every explorer flag is off, depth defaults
+        // to the WD-76 value of 2. This is the byte-identical slice-01/03
+        // surface (architecture-design §5.2 invariant 2).
+        let cmd = parse(&["graph", "query", "--subject", "github:rust-lang/cargo"]);
+        match cmd {
+            Command::Graph(GraphCommand::Query {
+                object,
+                contributor,
+                traverse,
+                depth,
+                weighted,
+                explain,
+                ..
+            }) => {
+                assert!(object.is_none(), "--object defaults to None");
+                assert!(contributor.is_none(), "--contributor defaults to None");
+                assert!(!traverse, "--traverse defaults to false");
+                assert_eq!(depth, 2, "--depth defaults to the WD-76 value of 2");
+                assert!(!weighted, "--weighted defaults to false");
+                assert!(explain.is_none(), "--explain defaults to None");
+            }
+            other => panic!("expected Graph(Query), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_query_object_dimension_routes_with_philosophy() {
+        let cmd = parse(&[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.dependency-pinning",
+        ]);
+        match cmd {
+            Command::Graph(GraphCommand::Query { object, .. }) => {
+                assert_eq!(
+                    object.as_deref(),
+                    Some("org.openlore.philosophy.dependency-pinning"),
+                    "--object carries the philosophy URI"
+                );
+            }
+            other => panic!("expected Graph(Query --object), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_query_contributor_dimension_routes_with_did() {
+        let cmd = parse(&["graph", "query", "--contributor", "did:plc:rachel-test"]);
+        match cmd {
+            Command::Graph(GraphCommand::Query { contributor, .. }) => {
+                assert_eq!(
+                    contributor.as_deref(),
+                    Some("did:plc:rachel-test"),
+                    "--contributor carries the DID"
+                );
+            }
+            other => panic!("expected Graph(Query --contributor), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_query_traverse_with_depth_override_routes() {
+        let cmd = parse(&[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.dependency-pinning",
+            "--traverse",
+            "--depth",
+            "3",
+        ]);
+        match cmd {
+            Command::Graph(GraphCommand::Query {
+                traverse, depth, ..
+            }) => {
+                assert!(traverse, "--traverse flag sets traverse=true");
+                assert_eq!(depth, 3, "--depth 3 overrides the default bound");
+            }
+            other => panic!("expected Graph(Query --traverse --depth 3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_query_weighted_flag_and_score_alias_both_route() {
+        for flag in ["--weighted", "--score"] {
+            let cmd = parse(&[
+                "graph",
+                "query",
+                "--object",
+                "org.openlore.philosophy.dependency-pinning",
+                flag,
+            ]);
+            match cmd {
+                Command::Graph(GraphCommand::Query { weighted, .. }) => {
+                    assert!(weighted, "{flag} sets weighted=true (--score is an alias)");
+                }
+                other => panic!("expected Graph(Query {flag}), got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn graph_query_explain_routes_with_subject_to_audit() {
+        let cmd = parse(&[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.dependency-pinning",
+            "--weighted",
+            "--explain",
+            "github:denoland/deno",
+        ]);
+        match cmd {
+            Command::Graph(GraphCommand::Query {
+                weighted, explain, ..
+            }) => {
+                assert!(weighted, "--weighted is set alongside --explain");
+                assert_eq!(
+                    explain.as_deref(),
+                    Some("github:denoland/deno"),
+                    "--explain carries the subject to audit"
+                );
+            }
+            other => panic!("expected Graph(Query --explain), got {other:?}"),
         }
     }
 
