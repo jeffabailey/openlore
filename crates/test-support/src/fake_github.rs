@@ -672,6 +672,19 @@ fn error_response(posture: &FakeGithubErrorPosture) -> HttpResponse {
             "authenticated": authenticated,
             "documentation_url": "https://docs.github.com/rest/overview/rate-limits",
         }),
+        // A private/inaccessible target serves the PUBLIC-API 404 shape (the
+        // public API deliberately 404s a private repo to avoid leaking its
+        // existence) PLUS a `private: true` discriminator on the body — the
+        // SG-5 seam (step 03-05) the adapter keys on to classify
+        // `GithubError::NotPublic` (vs a bare 404 => `NotFound`). There is
+        // still NO private surface served (no signals); public-data-only stays
+        // structural. The discriminator only distinguishes the REFUSAL cause so
+        // the CLI can reassure "the scraper only reads public data" (WD-51 /
+        // I-SCR-2) rather than the generic not-found message.
+        FakeGithubErrorPosture::NotPublic => serde_json::json!({
+            "message": posture.message(),
+            "private": true,
+        }),
         _ => serde_json::json!({ "message": posture.message() }),
     };
     json_response(posture.http_status(), body)

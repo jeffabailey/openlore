@@ -402,15 +402,81 @@ fn scrape_github_rejects_nonexistent_target_with_zero_candidates() {
 /// @us-scr-001 @real-io @driving_port @j-004a @kpi-scr-4 @error @release-gate
 #[test]
 fn scrape_github_refuses_private_target_and_calls_no_private_endpoint() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-5 — scraper_only_reads_public_data gate (KPI-SCR-4 \
-         release-blocking). GIVEN FakeGithub::for_private_target(\"acme-corp/secret-repo\"); \
-         WHEN scrape github acme-corp/secret-repo; THEN exit non-zero, stderr contains \
-         'scraper only reads public data', assert_only_public_endpoints_called(&github) \
-         (every FakeGithub::seen_paths entry is on the public allowlist; no private path), \
-         no candidates, assert_no_claim_persisted(&env)."
-    )
+    // GIVEN an initialized env + a PRIVATE/inaccessible target. The double has
+    // NO private surface (public-data-only is structural): the public-only API
+    // refuses with a 404 that carries the private signal, which the adapter
+    // classifies as GithubError::NotPublic (03-05).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_private_target("acme-corp/secret-repo"));
+
+    // WHEN Maria scrapes the private target (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "acme-corp/secret-repo"],
+        github.base_url(),
+    );
+
+    // THEN the run exits NON-ZERO — a private target is refused, not an empty
+    // harvest (KPI-SCR-4 release-gate).
+    assert_ne!(
+        outcome.status, 0,
+        "a private target must be refused with a non-zero exit; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the refusal message states the scraper only reads public data — the
+    // load-bearing no-surveillance reassurance (WD-51 / I-SCR-2). This is the
+    // `GithubError::NotPublic` Display, distinct from the `NotFound` cause.
+    assert!(
+        outcome.stderr.contains("only reads public data"),
+        "stderr must state the scraper only reads public data; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND the error names the refused target so the refusal is explainable.
+    assert!(
+        outcome.stderr.contains("acme-corp/secret-repo"),
+        "stderr must name the refused target acme-corp/secret-repo; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND — the load-bearing structural guarantee (gate
+    // `scraper_only_reads_public_data`, KPI-SCR-4): EVERY request path the
+    // production code hit is on the PUBLIC endpoint allowlist (`/repos/...` or
+    // `/users/...`). NO private/authenticated-private endpoint was ever called.
+    // The refusal short-circuits at resolve, so no deeper private fetch follows.
+    let seen_paths = github.fake().seen_paths();
+    assert!(
+        seen_paths
+            .iter()
+            .all(|path| path.starts_with("/repos/") || path.starts_with("/users/")),
+        "scraper_only_reads_public_data (KPI-SCR-4): every requested path must be on the \
+         public allowlist (/repos/... or /users/...); no private endpoint may be called; \
+         got {seen_paths:?}"
+    );
+
+    // AND ZERO candidates are produced — no numbered candidate list is rendered
+    // (the resolve refusal short-circuits BEFORE any harvest / derivation).
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "a refused private target must render NO numbered candidate list; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "a refused private target must render NO candidate-list footer; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND nothing was persisted: zero `claims` rows, zero PDS writes, zero
+    // claim artifact files (scraper_never_persists_unsigned holds on the
+    // refusal path too — a refused scrape is never a mutation).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-6 / Sad (US-SCR-001 offline UAT): with no network connectivity the

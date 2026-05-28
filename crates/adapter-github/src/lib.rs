@@ -267,7 +267,21 @@ impl GithubAdapter {
                 .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")));
         }
 
-        Err(classify_status(status.as_u16(), target))
+        // Read the refusal body so the classifier can distinguish a private
+        // target (404 + `private: true`) from a plain not-found 404 (WD-51 /
+        // I-SCR-2). The public API serves the SAME 404 status for both — the
+        // body discriminator is the only honest signal. A body that fails to
+        // parse degrades to an empty object, so an unrecognized refusal stays
+        // on the conservative `NotFound` arm (never silently treated as a
+        // successful empty harvest). This is still a PUBLIC endpoint
+        // (`/repos/...` or `/users/...`); no private surface is ever reached.
+        let status_code = status.as_u16();
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+
+        Err(classify_status(status_code, &body, target))
     }
 }
 
@@ -292,13 +306,29 @@ fn split_target(target: &str) -> ResolvedTarget {
     }
 }
 
-/// Classify a non-2xx HTTP status into the railway-oriented [`GithubError`].
-/// A 404 is the not-found cause; 403 is rate-budget exhaustion; 401 is a
-/// rejected token (the value is NEVER echoed — US-SCR-004). The NotPublic
-/// distinction (a private repo the public API also 404s) lands with the
-/// SG-5 scenario; at this step a 404 is surfaced as `NotFound`.
-fn classify_status(status: u16, target: &str) -> GithubError {
+/// Classify a non-2xx HTTP status + its refusal body into the railway-oriented
+/// [`GithubError`]. PURE — a value-in / value-out transform of the
+/// already-fetched status + body, so the classification is testable without any
+/// network.
+///
+/// A 404 is split by the body discriminator (WD-51 / I-SCR-2; SG-5):
+///
+/// - 404 + `private: true` => [`GithubError::NotPublic`] — the public API 404s
+///   a private repo to avoid leaking its existence; the `private` marker is the
+///   only honest signal that the refusal is a private/inaccessible cause, so the
+///   CLI can reassure "the scraper only reads public data" rather than the
+///   generic not-found message. Public-data-only stays STRUCTURAL: this is a
+///   classification of a PUBLIC-endpoint refusal, NOT a private endpoint call.
+/// - any other 404 (no `private` marker, or `private: false`) =>
+///   [`GithubError::NotFound`] — the conservative not-found cause.
+///
+/// 403 is rate-budget exhaustion; 401 is a rejected token (the value is NEVER
+/// echoed — US-SCR-004).
+fn classify_status(status: u16, body: &serde_json::Value, target: &str) -> GithubError {
     match status {
+        404 if is_private_refusal(body) => GithubError::NotPublic {
+            target: target.to_string(),
+        },
         404 => GithubError::NotFound {
             target: target.to_string(),
         },
@@ -308,6 +338,16 @@ fn classify_status(status: u16, target: &str) -> GithubError {
         401 => GithubError::TokenRejected,
         other => GithubError::ApiShape(format!("unexpected HTTP status {other} for {target}")),
     }
+}
+
+/// Whether a refusal body marks a PRIVATE/inaccessible target — the `private`
+/// discriminator the public API surfaces alongside its existence-hiding 404
+/// (WD-51 / I-SCR-2). `true` only when the body carries `private: true`; a
+/// missing marker or `private: false` is NOT a private refusal (it stays on the
+/// conservative `NotFound` arm). Reading a body field is a pure inspection — no
+/// private endpoint is ever called to obtain it.
+fn is_private_refusal(body: &serde_json::Value) -> bool {
+    body.get("private").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 /// Lift a refusal-arm shape into a `ProbeOutcome::Refused`. Pulled out so the
@@ -442,19 +482,68 @@ mod tests {
     /// (US-SCR-004 no-token-leak).
     #[test]
     fn classify_status_maps_refusals_without_leaking_a_token() {
+        let empty = serde_json::json!({});
         assert!(matches!(
-            classify_status(404, "ghost-org/ghost-repo"),
+            classify_status(404, &empty, "ghost-org/ghost-repo"),
             GithubError::NotFound { .. }
         ));
         assert!(matches!(
-            classify_status(403, "torvalds"),
+            classify_status(403, &empty, "torvalds"),
             GithubError::RateLimited { authenticated: false }
         ));
-        let rejected = classify_status(401, "rust-lang/cargo");
+        let rejected = classify_status(401, &empty, "rust-lang/cargo");
         assert!(matches!(rejected, GithubError::TokenRejected));
         assert!(
             !rejected.to_string().contains("ghp_"),
             "TokenRejected must never echo a token value"
+        );
+    }
+
+    /// SG-5 / 03-05: a 404 whose body carries the `private: true`
+    /// discriminator is the private/inaccessible cause — classified
+    /// `GithubError::NotPublic` (not `NotFound`) so the CLI reassures "the
+    /// scraper only reads public data" (WD-51 / I-SCR-2). A BARE 404 (no
+    /// `private` marker) stays `NotFound`: the two refusals are distinguished
+    /// ONLY by the body discriminator, never by a private endpoint call
+    /// (public-data-only is structural; KPI-SCR-4).
+    #[test]
+    fn classify_status_distinguishes_private_target_from_not_found() {
+        // A private repo: 404 + `private: true` body => NotPublic, target named.
+        let private_body = serde_json::json!({ "message": "Not Found", "private": true });
+        match classify_status(404, &private_body, "acme-corp/secret-repo") {
+            GithubError::NotPublic { target } => {
+                assert_eq!(
+                    target, "acme-corp/secret-repo",
+                    "NotPublic must name the refused target (WD-51)"
+                );
+            }
+            other => panic!("a 404 with private:true must classify NotPublic, got {other:?}"),
+        }
+        assert!(
+            classify_status(404, &private_body, "acme-corp/secret-repo")
+                .to_string()
+                .contains("only reads public data"),
+            "the NotPublic Display must carry the public-data-only reassurance"
+        );
+
+        // A bare 404 (no `private` marker) is the not-found cause => NotFound.
+        let plain_404 = serde_json::json!({ "message": "Not Found" });
+        assert!(
+            matches!(
+                classify_status(404, &plain_404, "ghost-org/ghost-repo"),
+                GithubError::NotFound { .. }
+            ),
+            "a bare 404 (no private discriminator) must stay NotFound"
+        );
+
+        // A `private: false` marker is NOT a private refusal => NotFound.
+        let not_private = serde_json::json!({ "message": "Not Found", "private": false });
+        assert!(
+            matches!(
+                classify_status(404, &not_private, "ghost-org/ghost-repo"),
+                GithubError::NotFound { .. }
+            ),
+            "private:false must not be misread as a private refusal"
         );
     }
 }
