@@ -131,12 +131,49 @@ fn scrape_candidates_each_names_its_exact_source_signal() {
 /// @us-scr-002 @real-io @driving_port @j-004b @happy
 #[test]
 fn scrape_candidates_footer_states_nothing_is_signed_until_user_signs() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SC-2. WHEN scrape github rust-lang/cargo; THEN stdout footer \
-         states nothing is a claim until the user signs it AND names `--sign N` as the next \
-         step."
-    )
+    // GIVEN an initialized env + a public repo serving >=1 matching public
+    // signal (the five canonical cargo signals → >=1 derived candidate, so the
+    // footer is always rendered).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign — a pure read; nothing is
+    // signed or published).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the candidate-list footer carries the human-gate reassurance beat
+    // (WD-49 / I-SCR-1): it states nothing is a claim until the user signs it
+    // AND points at `--sign N` as the next step. Both fragments are
+    // content-frozen UX copy (render::NOTHING_IS_A_CLAIM_FOOTER) — an
+    // example-based substring assertion pins the exact literal; property-framing
+    // would add no coverage over a fixed string. The footer is always rendered
+    // when >=1 candidate is shown.
+    let stdout = &outcome.stdout;
+    assert!(
+        stdout.contains("nothing is a claim until you sign it"),
+        "candidate-list footer must state nothing is a claim until the user signs it \
+         (human-gate reassurance, WD-49 / I-SCR-1); \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+    assert!(
+        stdout.contains("--sign N"),
+        "candidate-list footer must name `--sign N` as the next step (the human-gate \
+         affordance — WD-49); \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
 }
 
 // =============================================================================
