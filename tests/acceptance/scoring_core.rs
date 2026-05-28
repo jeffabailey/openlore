@@ -485,11 +485,113 @@ fn scoring_two_author_pairing_decomposes_to_two_attributed_contributions() {
     // ALWAYS enumerate its individually-attributed claims (no faceless
     // consensus weight). The structural xtask SQL-string layer + the layer-3
     // subprocess --explain rendering complete the three-layer enforcement.
-    todo!(
-        "DELIVER (slice-04): score the two-author deno/dependency-pinning fixture; assert the \
-         WeightedPairing has exactly 2 contributions each with its own non-empty author_did + \
-         cid, and weight == sum(subtotals) (Gate 1 type-level; WD-73/WD-88/I-GRAPH-2)"
-    )
+    const EPS: f64 = 1e-9;
+
+    const TOBIAS: &str = "did:plc:tobias";
+    const MARIA: &str = "did:plc:maria";
+    const TOBIAS_CID: &str = "bafy...d3no";
+    const MARIA_CID: &str = "bafy...mz01";
+
+    // Two attributed claims on deno/dependency-pinning by two DISTINCT authors
+    // (Tobias 0.55, Maria 0.40) — the worked-arithmetic fixture from
+    // US-GRAPH-005 Example 1 / data-models.md §"Worked example (deno)". Both on
+    // ONE subject so neither author triangulates (no cross-project bonus
+    // muddies the per-author subtotals).
+    let claims = vec![
+        AttributedClaim {
+            author_did: Did(TOBIAS.to_string()),
+            cid: Cid(TOBIAS_CID.to_string()),
+            subject: "github:denoland/deno".to_string(),
+            predicate: "adheres-to".to_string(),
+            object: "dependency-pinning".to_string(),
+            confidence: 0.55,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::You,
+        },
+        AttributedClaim {
+            author_did: Did(MARIA.to_string()),
+            cid: Cid(MARIA_CID.to_string()),
+            subject: "github:denoland/deno".to_string(),
+            predicate: "adheres-to".to_string(),
+            object: "dependency-pinning".to_string(),
+            confidence: 0.40,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::You,
+        },
+    ];
+
+    let view = scoring::score(&claims, &ScoringConfig::DEFAULT);
+
+    // Exactly one pairing — both claims share (subject, object), so the
+    // grouping yields a single deno/dependency-pinning WeightedPairing.
+    assert_eq!(
+        view.ranked.len(),
+        1,
+        "two claims on one (subject, object) must group into exactly one ranked pairing"
+    );
+    let pairing = &view.ranked[0];
+
+    // Anti-merging: a two-author pairing decomposes to EXACTLY two
+    // Contributions — never one merged/faceless consensus row (WD-73 /
+    // I-GRAPH-2).
+    assert_eq!(
+        pairing.contributions().len(),
+        2,
+        "a two-distinct-author pairing must decompose to exactly 2 attributed contributions \
+         (anti-merging in aggregates; WD-73/I-GRAPH-2)"
+    );
+
+    // Each Contribution carries its OWN non-`Option` author_did + cid: the two
+    // distinct authors are individually attributed, never merged away. Look up
+    // by DID to stay independent of any ordering choice in the decomposition.
+    let tobias = pairing
+        .contributions()
+        .iter()
+        .find(|c| c.author_did().0 == TOBIAS)
+        .expect("Tobias's contribution must be present and attributed to his DID");
+    let maria = pairing
+        .contributions()
+        .iter()
+        .find(|c| c.author_did().0 == MARIA)
+        .expect("Maria's contribution must be present and attributed to her DID");
+
+    // Each contribution's attribution is its OWN non-empty DID + its OWN cid —
+    // the load-bearing per-author attribution the aggregate never loses.
+    assert!(
+        !tobias.author_did().0.is_empty() && !maria.author_did().0.is_empty(),
+        "each contribution must carry a non-empty author_did (I-GRAPH-2: non-Option attribution)"
+    );
+    assert_eq!(
+        tobias.cid.0, TOBIAS_CID,
+        "Tobias's contribution must carry his own signed-claim cid"
+    );
+    assert_eq!(
+        maria.cid.0, MARIA_CID,
+        "Maria's contribution must carry her own signed-claim cid"
+    );
+
+    // distinct_author_count reflects the two distinct authors.
+    assert_eq!(
+        pairing.distinct_author_count, 2,
+        "the pairing must report 2 distinct contributing authors"
+    );
+
+    // The aggregate VIEW never loses attribution: the weight is EXACTLY the sum
+    // of the two per-author subtotals (Gate 2 reproducibility on the SC-5
+    // fixture: Tobias 0.55 + Maria 0.40*1.25 = 0.50 => 1.05).
+    let recomputed: f64 = pairing.contributions().iter().map(|c| c.subtotal).sum();
+    assert!(
+        (pairing.weight - recomputed).abs() < EPS,
+        "weight {} must equal the sum of the 2 contribution subtotals {} (no merge that loses \
+         attribution; Gate 1/Gate 2)",
+        pairing.weight,
+        recomputed
+    );
+    assert!(
+        (pairing.weight - 1.05).abs() < EPS,
+        "the worked deno fixture weight must be 1.05 (Tobias 0.55 + Maria 0.50); got {}",
+        pairing.weight
+    );
 }
 
 // =============================================================================
