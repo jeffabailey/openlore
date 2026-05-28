@@ -198,12 +198,36 @@ impl GithubPort for GithubAdapter {
     /// Harvest a BOUNDED cross-repo aggregate for a user / contributor target
     /// (deep triangulation deferred to slice-04 per WD-64).
     ///
-    /// `GET {base}/users/{user}` and reshape the response's `signals[]`.
+    /// `GET {base}/users/{user}` and reshape the response's `signals[]`, then
+    /// CAP the aggregate to [`USER_AGGREGATE_SIGNAL_CAP`] so a user-target can
+    /// never fan out unboundedly (WD-64 / Q-DELIVER-4). The cap is the
+    /// slice-02 bound; deep cross-repo triangulation (a larger, scored walk)
+    /// is slice-04's concern.
     async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
         let path = format!("/users/{user}");
         let body = self.get_public(&path, user).await?;
-        Ok(client::parse_signals(&body))
+        Ok(bound_user_aggregate(client::parse_signals(&body)))
     }
+}
+
+/// The slice-02 bound on a USER-target's cross-repo aggregate (WD-64 /
+/// Q-DELIVER-4). A user with many public repos must NOT fan out unboundedly;
+/// the aggregate harvest is capped at this many signals (a small fixed cap —
+/// deep, scored cross-repo triangulation is deferred to slice-04). The cap is
+/// surfaced as a constant so the bound is explicit + auditable rather than an
+/// incidental side effect of how many signals a single response happened to
+/// carry.
+pub const USER_AGGREGATE_SIGNAL_CAP: usize = 25;
+
+/// Apply the slice-02 user-aggregate bound (WD-64): truncate the harvested
+/// aggregate to at most [`USER_AGGREGATE_SIGNAL_CAP`] signals. PURE — a
+/// value-in / value-out transform of the already-fetched signal set, so the
+/// bound is testable without any network. Repo harvests are NOT capped here:
+/// a repo's signal set is intrinsically bounded by the SSOT mapping, whereas a
+/// user aggregates across an unbounded number of public repos.
+fn bound_user_aggregate(mut signals: Vec<Signal>) -> Vec<Signal> {
+    signals.truncate(USER_AGGREGATE_SIGNAL_CAP);
+    signals
 }
 
 impl GithubAdapter {
@@ -372,6 +396,45 @@ mod tests {
             ResolvedTarget::User { user } => assert_eq!(user, "torvalds"),
             ResolvedTarget::Repo { .. } => panic!("a bare token must resolve as User"),
         }
+    }
+
+    /// `bound_user_aggregate` enforces the WD-64 / Q-DELIVER-4 slice-02 cap:
+    /// an over-cap aggregate is truncated to EXACTLY `USER_AGGREGATE_SIGNAL_CAP`
+    /// (preserving the leading prefix order — a user-target can never fan out
+    /// unboundedly), while an at-or-under-cap aggregate passes through
+    /// unchanged. Pure decomposition of `harvest_user`'s GREEN body — the bound
+    /// is testable without any network.
+    #[test]
+    fn bound_user_aggregate_caps_an_oversized_aggregate_and_preserves_small_ones() {
+        use ports::SignalKind;
+
+        let signal = |n: usize| Signal {
+            kind: SignalKind::TestRatioOrCiMatrix,
+            value: format!("aggregate signal {n}"),
+            source_url: format!("https://github.com/torvalds#{n}"),
+        };
+
+        // Over the cap: truncate to exactly the cap, leading prefix preserved.
+        let oversized: Vec<Signal> = (0..USER_AGGREGATE_SIGNAL_CAP + 7).map(signal).collect();
+        let bounded = bound_user_aggregate(oversized.clone());
+        assert_eq!(
+            bounded.len(),
+            USER_AGGREGATE_SIGNAL_CAP,
+            "an over-cap user aggregate must be bounded to the slice-02 cap (WD-64)"
+        );
+        assert_eq!(
+            bounded.as_slice(),
+            &oversized[..USER_AGGREGATE_SIGNAL_CAP],
+            "the bound must preserve the leading prefix (no fan-out reordering)"
+        );
+
+        // At or under the cap: pass through unchanged.
+        let small: Vec<Signal> = (0..2).map(signal).collect();
+        assert_eq!(
+            bound_user_aggregate(small.clone()),
+            small,
+            "an at-or-under-cap aggregate must pass through unchanged"
+        );
     }
 
     /// `classify_status` maps HTTP refusal statuses onto the railway-oriented

@@ -126,7 +126,9 @@ fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing()
 
     // AND the "nothing is a claim until you sign it" footer is rendered.
     assert!(
-        outcome.stdout.contains("nothing is a claim until you sign it"),
+        outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
         "the candidate-list footer must reassure that nothing is a claim until signed; \
          \n--- stdout ---\n{}",
         outcome.stdout
@@ -215,13 +217,99 @@ fn scrape_github_prints_public_data_banner_before_any_harvest() {
 /// @us-scr-001 @real-io @driving_port @j-004a @wd-64 @edge
 #[test]
 fn scrape_github_resolves_user_target_and_harvests_bounded_aggregate() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-3. GIVEN FakeGithub::for_public_user(\"torvalds\", \
-         fixture_torvalds_user_aggregate_signals()); WHEN scrape github torvalds; THEN exit \
-         0, stdout reports the user resolved as a USER (not a repo) and a bounded aggregate \
-         signal count; candidates render normally."
-    )
+    // GIVEN an initialized env + a PUBLIC USER target serving a BOUNDED
+    // cross-repo aggregate (two coarse signals; deep triangulation deferred
+    // to slice-04 per WD-64).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_user(
+        "torvalds",
+        fixture_torvalds_user_aggregate_signals(),
+    ));
+
+    // WHEN Maria scrapes the bare-user target (no --sign).
+    let outcome = run_openlore_scrape(&env, &["scrape", "github", "torvalds"], github.base_url());
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape of a public user must exit 0; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the public-data-only banner precedes the first harvest line
+    // (the user is reassured BEFORE any network beat begins).
+    let banner_idx = outcome
+        .stdout
+        .find("PUBLIC")
+        .expect("public-data-only banner must be present in stdout");
+    let harvest_idx = outcome
+        .stdout
+        .find("Harvesting public signals")
+        .expect("the harvest line must be present in stdout");
+    assert!(
+        banner_idx < harvest_idx,
+        "the public-data-only banner must precede the harvest line; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the target resolves as a USER (not a repo) — `torvalds` has no
+    // `owner/repo` slash, so it is disambiguated to TargetKind::User and the
+    // resolution line names it "(user)".
+    assert!(
+        outcome
+            .stdout
+            .contains("Resolving target torvalds ... ok (user)"),
+        "a bare-user target must resolve as a USER (not a repo); \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND a BOUNDED aggregate signal count is reported (the fixture's two
+    // coarse cross-repo signals — bounded per WD-64, not an unbounded fan-out).
+    assert!(
+        outcome.stdout.contains("2 signals"),
+        "the bounded aggregate signal count (2 signals) must be reported; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND candidates render normally: a numbered list (1..2), one per distinct
+    // mapped predicate (test-driven + semantic-versioning).
+    for index in 1..=2 {
+        assert!(
+            outcome.stdout.contains(&format!("[{index}]")),
+            "expected a numbered candidate [{index}] in the user aggregate list; \
+             \n--- stdout ---\n{}",
+            outcome.stdout
+        );
+    }
+
+    // AND the subject of every candidate is the resolved user github_target.
+    assert!(
+        outcome.stdout.contains("github:torvalds"),
+        "the candidate list must name the resolved subject github:torvalds; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND every candidate is the conservative speculative default (0.25).
+    assert!(
+        outcome.stdout.contains("0.25"),
+        "every candidate must display the conservative default confidence 0.25; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the "nothing is a claim until you sign it" footer is rendered.
+    assert!(
+        outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "the candidate-list footer must reassure that nothing is a claim until signed; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the human-gate held at the storage layer: zero `claims` rows, zero
+    // PDS writes, zero claim artifact files (scraper_never_persists_unsigned).
+    assert_no_claim_persisted(&env);
 }
 
 // =============================================================================
