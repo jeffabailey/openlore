@@ -407,7 +407,161 @@ fn federated_query_renders_identical_content_from_different_authors_as_two_separ
 /// @us-fed-003 @real-io @driving_port @j-003 @regression @default-off
 #[test]
 fn federated_query_default_without_flag_is_byte_identical_to_slice_01_behavior() {
-    todo!("DELIVER (slice-03): assert running graph query WITHOUT --federated against a TestEnv with 1 own + 2 peer claims returns ONLY the 1 own claim + footer 'Use --federated to include 1 subscribed peer'; assert exit 0. Reference: WS-12 of slice-01 (regression).")
+    let env = TestEnv::initialized();
+    let subject = "github:rust-lang/cargo";
+
+    // -- The LOCAL user adds ONE of their own claims (the only row the
+    // default, non-federated path may ever surface). --
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.local-first",
+            "--evidence",
+            "https://github.com/rust-lang/cargo",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // BASELINE: capture the default (non-federated) output BEFORE any peer
+    // exists. This is the slice-01 behaviour — own claim only, the
+    // content-frozen local-only header, and the federation pointer footer
+    // naming `--federated` + `slice-03` (WS-12). It is the byte-for-byte
+    // oracle the post-subscription run must reproduce.
+    let baseline = run_openlore(&env, &["graph", "query", "--subject", subject]);
+    assert_eq!(
+        baseline.status, 0,
+        "baseline graph query must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        baseline.stdout, baseline.stderr
+    );
+
+    // -- Now subscribe to a peer AND pull 2+ of their verified claims about
+    // the SAME subject, so `peer_claims` is genuinely populated. This makes
+    // the regression assertion load-bearing: if the default path EVER widened
+    // to peers, these rows WOULD appear. They must not. --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer_claim_count = records.len();
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    // Confirm peer_claims is non-empty — the precondition that makes the
+    // default-off regression meaningful (peers exist, yet the default path
+    // ignores them).
+    assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
+
+    // -- Action: the DEFAULT read through the driving port — NO `--federated`. --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject]);
+    assert_eq!(
+        outcome.status, 0,
+        "default graph query must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    let stdout = &outcome.stdout;
+
+    // 1. BYTE-IDENTITY (the regression guarantee, US-FED-003 AC #2 +
+    //    architecture §5.1 invariant #5): the non-federated output AFTER
+    //    subscribing + pulling peers is byte-for-byte equal to the slice-01
+    //    baseline captured BEFORE any peer existed. Subscribing to peers does
+    //    NOT alter the default path in any byte.
+    assert_eq!(
+        stdout, &baseline.stdout,
+        "default (non-federated) output must be BYTE-IDENTICAL to the slice-01 \
+         baseline (captured before any peer existed) — the --federated flag is \
+         strictly opt-in and does NOT change the default path;\n\
+         --- baseline stdout ---\n{}\n--- after-peers stdout ---\n{}",
+        baseline.stdout, stdout
+    );
+
+    // 2. The slice-01 contract holds verbatim (WS-12): own claim rendered,
+    //    content-frozen local-only header, federation-pointer footer naming
+    //    both `--federated` and `slice-03`.
+    assert!(
+        stdout.contains("Showing local claims only"),
+        "expected the content-frozen slice-01 local-only header;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--federated") && stdout.contains("slice-03"),
+        "expected the slice-01 footer to name both `--federated` and `slice-03`;\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.91") && stdout.contains("org.openlore.philosophy.local-first"),
+        "expected the user's OWN claim (confidence 0.91 + its object) to render;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. NO peer rows: the peer's DID never appears, and none of the pulled
+    //    peer claim CIDs leak into the default output.
+    assert!(
+        !stdout.contains(peer_did),
+        "default (non-federated) output must NOT name the peer DID {peer_did} — \
+         peer claims are excluded unless --federated is passed;\n--- stdout ---\n{stdout}"
+    );
+    for record in peer.records() {
+        assert!(
+            !stdout.contains(&record.rkey),
+            "default output must NOT contain the peer claim cid {} — peer rows are \
+             excluded without --federated;\n--- stdout ---\n{stdout}",
+            record.rkey
+        );
+    }
+
+    // 4. NO federated grouping artefacts: neither the federated no-merge
+    //    guarantee footer nor the per-author relationship annotations
+    //    (`(you)` / `(subscribed peer)`) that ONLY the --federated grouping
+    //    renders may appear on the default path. (The `author:` field label
+    //    is shared with the slice-01 per-claim block, so it is NOT a
+    //    federated-only marker — the relationship annotations are.)
+    assert!(
+        !stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "default output must NOT carry the federated no-merge footer (that footer \
+         belongs only to the --federated path);\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("(subscribed peer)") && !stdout.contains("(you)"),
+        "default output must NOT carry the federated per-author relationship \
+         annotations ('(you)' / '(subscribed peer)') — federated grouping is opt-in;\n\
+         --- stdout ---\n{stdout}"
+    );
 }
 
 /// FQ-4: `--federated` requested with zero peer subscriptions degrades
