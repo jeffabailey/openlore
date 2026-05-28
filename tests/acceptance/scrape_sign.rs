@@ -264,14 +264,132 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
 /// @us-scr-003 @driving_port @real-io @j-004c @wd-62 @i-scr-7 @cid-stability @happy
 #[test]
 fn scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-3. Sign a scraper candidate with fields F (provenance line \
-         shown), AND hand-author a claim via `claim add` with the SAME fields F; THEN the two \
-         CIDs are EQUAL, and the scraper claim's on-disk claims/<cid>.json contains NO \
-         `derived-from`/`derivedFrom` key (provenance is display-only; the signed shape is \
-         byte-identical to a hand-authored claim — WD-62 / I-SCR-7)."
-    )
+    // GIVEN Maria has an initialized env + the public repo serving the five
+    // canonical cargo signals → five derived candidates. Candidate 1 is the
+    // dependency-pinning proposal derived from "Cargo.lock committed".
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she signs candidate 1 with fields F, raising confidence 0.25 -> 0.55
+    // and accepting the rest, then signs (Enter) and publishes (Y). The
+    // compose/publish output shows the DISPLAY-ONLY `derived-from` provenance
+    // line — but it is NEVER folded into the signed payload (WD-62 / I-SCR-7).
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1"],
+        github.base_url(),
+        "\n\n\n\n0.55\n\nY\n",
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 1 must exit 0 on the happy path; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the DISPLAY-ONLY `derived-from` provenance line appeared in the
+    // compose/publish output (it is SHOWN — just never signed).
+    assert!(
+        outcome
+            .stdout
+            .contains("derived-from: openlore-github-scraper (signal:"),
+        "expected a display-only 'derived-from: openlore-github-scraper (signal: ...)' line \
+         in the compose/publish output (WD-62 / I-SCR-7); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Recover the CID from the success block so we can target the exact signed
+    // record on disk.
+    let cid = published_cid_from_stdout(&outcome.stdout);
+
+    // Read the on-disk signed payload (the same `claims/<cid>.json` →
+    // `SignedClaim` surface SS-2 uses).
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected signed-from-scraper claim file at {}; got {e}",
+            artifact_path.display()
+        )
+    });
+    let signed: claim_domain::SignedClaim =
+        serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "could not deserialize signed claim at {}: {e}\n--- file ---\n{}",
+                artifact_path.display(),
+                String::from_utf8_lossy(&json_bytes)
+            )
+        });
+
+    // THEN the scraper claim's CID equals the CID a HAND-AUTHORED claim with
+    // the SAME fields F would produce. We reconstruct that hand-authored
+    // equivalent INDEPENDENTLY from the signed claim's observable fields
+    // (subject / predicate / object / evidence / confidence / author /
+    // composedAt / references) — carrying NO derived-from provenance, exactly
+    // as `claim add` would build it — then run it through the SAME pure core
+    // (canonicalize -> compute_cid). If the provenance leaked into the signed
+    // payload, this reconstructed CID would differ (WD-62 / I-SCR-7 / ADR-018:
+    // no Lexicon change, no CID path change).
+    let hand_authored = claim_domain::UnsignedClaim {
+        subject: signed.unsigned.subject.clone(),
+        predicate: signed.unsigned.predicate.clone(),
+        object: signed.unsigned.object.clone(),
+        evidence: signed.unsigned.evidence.clone(),
+        // `Confidence`'s inner f64 is crate-private; round-trip the SAME
+        // numeric value through serde to reconstruct the wrapper (the trick
+        // the support module uses for `build_verifiable_peer_records`).
+        confidence: serde_json::from_value(
+            serde_json::to_value(signed.unsigned.confidence)
+                .expect("re-serialize signed confidence"),
+        )
+        .expect("reconstruct hand-authored confidence from the same numeric value"),
+        author_did: signed.unsigned.author_did.clone(),
+        composed_at: signed.unsigned.composed_at.clone(),
+        references: signed.unsigned.references.clone(),
+        reason: signed.unsigned.reason.clone(),
+    };
+    let hand_authored_bytes =
+        claim_domain::canonicalize(&hand_authored).expect("canonicalize hand-authored claim");
+    let hand_authored_cid = claim_domain::compute_cid(&hand_authored_bytes);
+
+    assert_eq!(
+        hand_authored_cid.0, cid,
+        "the scraper-signed claim's CID must EQUAL the CID a hand-authored claim with the \
+         SAME fields produces — the derived-from provenance is display-only and must NOT alter \
+         the signed CID (WD-62 / I-SCR-7 / ADR-018, CID stability); \
+         scraper cid={cid}, hand-authored cid={}",
+        hand_authored_cid.0
+    );
+
+    // AND the published CID equals the CID computed from the signed payload's
+    // OWN unsigned bytes — pinning that the on-disk signed shape is exactly
+    // what the CID covers (no provenance folded in).
+    let signed_payload_bytes =
+        claim_domain::canonicalize(&signed.unsigned).expect("canonicalize on-disk signed payload");
+    assert_eq!(
+        claim_domain::compute_cid(&signed_payload_bytes).0,
+        cid,
+        "the on-disk signed payload must canonicalize to exactly the published CID \
+         (the provenance line contributes ZERO bytes to the signed shape)"
+    );
+
+    // AND the on-disk signed JSON carries NO `derived-from` / `derivedFrom`
+    // key anywhere — the provenance is display-only, never a signed-payload
+    // field (the byte-level guard mirroring the canonicalize-omits-extras
+    // contract).
+    let raw_json = String::from_utf8_lossy(&json_bytes);
+    assert!(
+        !raw_json.contains("derived-from") && !raw_json.contains("derivedFrom"),
+        "the scraper-signed claim's on-disk JSON must contain NO 'derived-from'/'derivedFrom' \
+         key (provenance is display-only — WD-62 / I-SCR-7); \n--- {} ---\n{}",
+        artifact_path.display(),
+        raw_json
+    );
 }
 
 // =============================================================================
