@@ -642,12 +642,57 @@ fn scrape_github_with_no_matching_signals_proposes_nothing_and_exits_zero() {
 /// @us-scr-001 @us-scr-002 @real-io @driving_port @j-004 @kpi-scr-2 @edge
 #[test]
 fn scrape_github_without_sign_makes_zero_pds_writes() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-8. WHEN scrape github rust-lang/cargo (no --sign); THEN \
-         assert_no_pds_call_was_made(&env) AND env.pds.records().is_empty() — the human-gate \
-         holds at the publish layer."
-    )
+    // GIVEN an initialized env + a public repo serving 5 public signals (so
+    // candidates ARE derived — the gate must hold regardless of how many
+    // candidates are proposed, not only on the empty path).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo WITHOUT --sign.
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    // THEN the run succeeds on the happy path (a successful harvest+propose;
+    // the human-gate guarantee is about a SUCCESSFUL scrape persisting nothing,
+    // not about an error path).
+    assert_eq!(
+        outcome.status, 0,
+        "scrape without --sign must exit 0 on the happy path; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the harvest+propose actually happened (candidates were derived) — so
+    // the zero-writes assertion below is load-bearing, not vacuous on an empty
+    // harvest. The numbered candidate list is rendered.
+    assert!(
+        outcome.stdout.contains("[1]"),
+        "the scrape must have derived candidates (so zero-writes is non-vacuous); \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the human-gate held at the PUBLISH layer: ZERO records exist on the
+    // user's own PDS and ZERO `create_record` (publish) calls were made
+    // (scraper_never_persists_unsigned from the PDS side; WD-55 / KPI-SCR-2).
+    assert_no_pds_call_was_made(&env);
+    assert!(
+        env.pds.records().is_empty(),
+        "the human-gate must hold at the publish layer: ZERO PDS records after a \
+         scrape with no --sign; got {} records: {:?}",
+        env.pds.records().len(),
+        env.pds.records()
+    );
+
+    // AND nothing was persisted anywhere else either: zero `claims` rows, zero
+    // claim artifact files (the storage-layer half of the same gate).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-9: a second identical `scrape github <target>` invocation is a pure
