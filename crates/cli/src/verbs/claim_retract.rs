@@ -111,6 +111,8 @@ pub fn run(wiring: &Wiring, args: &ClaimRetractArgs) -> Result<ClaimRetractOutco
             ref_type: ReferenceType::Retracts,
             cid: original_cid.clone(),
         }],
+        // A retraction is not a counter-claim — no reason text.
+        reason: None,
     };
 
     // Step 3: reference-rules validation. Backed by a small adapter

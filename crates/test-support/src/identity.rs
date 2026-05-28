@@ -152,6 +152,7 @@ mod tests {
             author_did: author.clone(),
             composed_at: "2026-05-26T12:00:00Z".into(),
             references: Vec::<ClaimReference>::new(),
+            reason: None,
         }
     }
 

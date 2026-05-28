@@ -208,6 +208,13 @@ pub fn arb_unsigned_claim() -> impl Strategy<Value = UnsignedClaim> {
                     author_did,
                     composed_at,
                     references,
+                    // Slice-01 strategy generates non-counter claims; the
+                    // counter-claim `reason` is exercised by
+                    // `validate_counter_claim`'s own tests. `None` keeps the
+                    // generated claim byte-stable with the slice-01 wire
+                    // shape (serde skips `None`), preserving LC-3's CID
+                    // byte-stability property.
+                    reason: None,
                 }
             },
         )

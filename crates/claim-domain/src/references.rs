@@ -150,6 +150,7 @@ mod tests {
             author_did: Did("did:plc:jeff#org.openlore.application".into()),
             composed_at: "2026-05-25T12:00:00Z".into(),
             references: Vec::new(),
+            reason: None,
         }
     }
 

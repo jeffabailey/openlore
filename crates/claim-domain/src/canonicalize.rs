@@ -135,6 +135,7 @@ mod tests {
                 ref_type: ReferenceType::Supersedes,
                 cid: crate::Cid("bafyreiexamplecidxxxxxxxxxxxxxxxxxxxx".into()),
             }],
+            reason: None,
         }
     }
 

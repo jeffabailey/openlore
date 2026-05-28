@@ -54,6 +54,7 @@ pub fn fixture_jeff_rust_memory_safety() -> UnsignedClaim {
         author_did: Did("did:plc:jeff#org.openlore.application".to_string()),
         composed_at: "2026-05-25T12:00:00Z".to_string(),
         references: Vec::<ClaimReference>::new(),
+        reason: None,
     }
 }
 

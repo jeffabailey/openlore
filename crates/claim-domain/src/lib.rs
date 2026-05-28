@@ -28,6 +28,7 @@ mod confidence;
 mod normalize;
 mod references;
 mod sign;
+mod validate_counter_claim;
 mod verify;
 
 pub use canonicalize::canonicalize;
@@ -36,6 +37,7 @@ pub use confidence::confidence_bucket;
 pub use normalize::normalize_reason;
 pub use references::reference_rules_validate;
 pub use sign::sign;
+pub use validate_counter_claim::validate_counter_claim;
 pub use verify::verify;
 
 // Step 02-04: proptest strategies for the one @property scenario in
@@ -117,6 +119,14 @@ pub struct UnsignedClaim {
     /// RFC3339 UTC. Pinned via test env var for determinism in tests.
     pub composed_at: String,
     pub references: Vec<ClaimReference>,
+    /// Free-text explanation, present only on counter-claims (ADR-015 /
+    /// WD-34). NFC-normalized at compose time via [`normalize_reason`].
+    /// OPTIONAL at the wire level (mirrors `lexicon::Claim::reason`):
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]` keeps
+    /// a `reason: None` claim byte-identical to a slice-01 claim, so the
+    /// CID is stable across the slice-01 → slice-03 upgrade (I-FED-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The signature block attached during `sign`.
@@ -154,6 +164,19 @@ pub enum ClaimError {
     SignatureFailed { message: String },
     #[error("signature verification failed")]
     VerificationFailed,
+    /// A counter-claim (a claim whose `references[]` carries a `Counters`
+    /// entry) was composed without a reason — the normalized reason is
+    /// `None` or empty. ADR-015 / WD-34: a counter MUST explain itself.
+    #[error("a counter-claim requires a non-empty reason")]
+    CounterReasonMissing,
+    /// The target of a counter-claim resolves (via [`ClaimLookup`]) to a
+    /// claim authored by the current user. You cannot counter your own
+    /// claim — use `openlore claim retract` instead. WD-34.
+    #[error(
+        "cannot counter your own claim (target authored by you); \
+         use `openlore claim retract` instead"
+    )]
+    SelfCounter,
 }
 
 // -----------------------------------------------------------------------------

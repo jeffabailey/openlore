@@ -274,6 +274,8 @@ fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
         author_did: Did(composed.author_did.clone()),
         composed_at: composed.composed_at.clone(),
         references: Vec::<ClaimReference>::new(),
+        // Plain `claim add` is never a counter-claim — no reason.
+        reason: None,
     })
 }
 
