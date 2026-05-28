@@ -232,14 +232,86 @@ fn scrape_candidates_all_default_to_speculative_quarter_confidence() {
 /// @us-scr-002 @real-io @driving_port @j-004b @i-scr-4 @edge
 #[test]
 fn scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SC-4. GIVEN \
-         FakeGithub::with_multi_signal_single_predicate(\"some-org/well-documented\") backed \
-         by fixture_three_docs_signals_one_predicate(); WHEN scrape github \
-         some-org/well-documented; THEN exactly ONE documentation-first candidate is \
-         rendered and its source-signal line lists all THREE contributing signals."
-    )
+    // GIVEN an initialized env + a public repo whose harvest yields THREE
+    // DISTINCT signals (docs/ directory + a 400-line README + high doc-comment
+    // density) that ALL map to the single `documentation-first` predicate. The
+    // collapse is the PURE `scraper-domain` derivation's job (proven exhaustively
+    // at layer 2 — SD-4 + step 01-02); here we pin its user-visible rendering
+    // through the real CLI (the subprocess-layer view of SD-4).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::with_multi_signal_single_predicate(
+        "some-org/well-documented",
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign — a pure read).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "some-org/well-documented"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    let stdout = &outcome.stdout;
+
+    // THEN exactly ONE candidate is rendered (no near-duplicate candidates):
+    // the three docs signals COLLAPSE into a single documentation-first
+    // candidate (US-SCR-002 Ex 4 / I-SCR-4). The renderer numbers candidates
+    // `[1]`, `[2]`, ...; a collapsed single candidate means `[1]` is present and
+    // `[2]` is absent.
+    assert!(
+        stdout.contains("[1]"),
+        "expected a numbered candidate [1] for the collapsed documentation-first \
+         predicate; \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+    assert!(
+        !stdout.contains("[2]"),
+        "three signals for ONE predicate must collapse into exactly ONE candidate — \
+         a second candidate [2] means the collapse failed (I-SCR-4); \
+         \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND that single candidate is the `documentation-first` philosophy (the
+    // predicate all three signals map to).
+    assert!(
+        stdout.contains("org.openlore.philosophy.documentation-first"),
+        "the collapsed candidate must be the documentation-first philosophy (the \
+         predicate all three docs signals map to); \
+         \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND its source-signal lines name ALL THREE contributing signals — the
+    // auditability contract for the collapse (each fixture signal's detail
+    // string appears on a `from signal :` line within the one candidate's
+    // block). This is what proves the collapse listed all N signals rather than
+    // silently dropping the duplicates.
+    let from_signal_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.contains("from signal :"))
+        .collect();
+    for signal_substring in [
+        "docs/ directory present",
+        "README 412 lines (> 200)",
+        "doc-comment density high (0.34)",
+    ] {
+        assert!(
+            from_signal_lines
+                .iter()
+                .any(|line| line.contains(signal_substring)),
+            "the collapsed documentation-first candidate must list ALL THREE \
+             contributing signals — missing {signal_substring:?} on a `from signal :` \
+             line (auditability for the collapse, I-SCR-4); \
+             \n--- from-signal lines ---\n{}\n--- full stdout ---\n{stdout}",
+            from_signal_lines.join("\n")
+        );
+    }
 }
 
 /// SC-5: a candidate the user disagrees with is fully auditable and

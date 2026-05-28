@@ -84,24 +84,35 @@ pub fn fixture_torvalds_user_aggregate_signals() -> Vec<FakeSignal> {
 
 /// Three DISTINCT signals that ALL map to the single `documentation-first`
 /// predicate (docs/ directory + a 400-line README + high doc-comment
-/// density). Used by SC-3 to assert `scraper-domain` collapses them into
-/// ONE candidate whose source-signal line lists all three (US-SCR-002 Ex 4
+/// density). Used by SC-4 to assert `scraper-domain` collapses them into
+/// ONE candidate whose source-signal lines list all three (US-SCR-002 Ex 4
 /// / I-SCR-4). The collapse is the PURE derivation's job; the fixture only
 /// supplies the three raw signals.
+///
+/// All three carry the SAME wire `kind` (`DocsPresentAndSubstantial`) — the
+/// single docs-related entry in the bounded SSOT `SignalKind` set
+/// (`jobs.yaml :: J-004.signal_predicate_mapping`). The DISTINCTNESS the
+/// collapse must preserve is in each signal's `value` (the auditable evidence
+/// detail the user traces back to: a docs/ directory, a long README, high
+/// doc-comment density) and its `source_url`, NOT in the kind. The mapping
+/// resolves the shared kind to `documentation-first`, and the derivation
+/// groups all three by that predicate into one candidate listing every
+/// contributing signal — exactly the SD-4-proven collapse, exercised here
+/// through the live CLI.
 pub fn fixture_three_docs_signals_one_predicate() -> Vec<FakeSignal> {
     vec![
         FakeSignal::new(
-            "DocsDirectoryPresent",
+            "DocsPresentAndSubstantial",
             "docs/ directory present",
             "https://github.com/some-org/well-documented/tree/main/docs",
         ),
         FakeSignal::new(
-            "ReadmeSubstantial",
+            "DocsPresentAndSubstantial",
             "README 412 lines (> 200)",
             "https://github.com/some-org/well-documented/blob/main/README.md",
         ),
         FakeSignal::new(
-            "DocCommentDensityHigh",
+            "DocsPresentAndSubstantial",
             "doc-comment density high (0.34)",
             "https://github.com/some-org/well-documented",
         ),
