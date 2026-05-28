@@ -607,6 +607,18 @@ fn render_object_query_footer(subject_count: usize, author_count: usize) -> Stri
 pub const CONTRIBUTOR_TRAIL_FOOTER: &str =
     "This is one developer's reasoning trail, not a community consensus.";
 
+/// Slice-04 content-frozen graceful-degrade hint for the `--contributor`
+/// dimension view when the queried DID has NO local claims (not subscribed /
+/// not pulled). US-GRAPH-002 Example 3 / UAT scenario 3: an absent contributor
+/// is a valid empty result (exit 0), NOT an error — the view degrades to a
+/// no-local-claims message plus a subscribe/pull next step pointing at
+/// `openlore peer add` + `openlore peer pull` so the user can populate that
+/// contributor's trail (J-002 anxiety mitigation; slice-03 `peer add`/`pull`
+/// hint precedent). `{contributor}` is filled with the queried DID. Do NOT
+/// paraphrase — the exact phrasing is the user-visible contract.
+const CONTRIBUTOR_ABSENT_HINT_TEMPLATE: &str =
+    "No local claims authored by {contributor}. Subscribe and pull with `openlore peer add` + `openlore peer pull`.";
+
 /// Render the `graph query --contributor <did>` dimension result: every claim
 /// that DID authored, across all subjects, listed under the contributor's DID
 /// with subject/object/confidence/cid. Pure function — no I/O, no storage
@@ -629,10 +641,24 @@ pub const CONTRIBUTOR_TRAIL_FOOTER: &str =
 ///   [`CONTRIBUTOR_TRAIL_FOOTER`] ("one developer's reasoning trail, not a
 ///   community consensus") so the view never reads as community endorsement.
 ///
-/// The empty branch (an absent contributor / soft-removed-peer relationship
-/// labelling) is a later slice-04 scenario; this happy-path renderer lists the
-/// found trail.
+/// ## Empty branch (GQE-8 / US-GRAPH-002 Example 3 — absent contributor)
+///
+/// When `claims` is empty the queried DID has NO local claims (the user has
+/// not subscribed to / pulled that contributor). This is a VALID empty result,
+/// not an error — the renderer degrades GRACEFULLY to a no-local-claims message
+/// naming the queried DID plus the content-frozen subscribe/pull hint
+/// ([`CONTRIBUTOR_ABSENT_HINT_TEMPLATE`]) pointing at `openlore peer add` +
+/// `openlore peer pull`. The honest-trail footer is omitted — there is no trail
+/// to frame (J-002 anxiety mitigation: sparse renders sparse, with a next step).
+/// The verb keeps exit 0.
 pub fn render_contributor_query_trail(contributor: &str, claims: &[AttributedClaim]) -> String {
+    // GQE-8: an absent contributor (no local claims) degrades to the
+    // no-local-claims message + subscribe/pull hint. Branch on the data shape
+    // (empty vs found) so the found-trail path below stays uncluttered.
+    if claims.is_empty() {
+        return render_contributor_absent_hint(contributor);
+    }
+
     let mut out = String::new();
     out.push_str(&format!(
         "Reasoning trail for contributor {contributor}:\n\n"
@@ -680,6 +706,18 @@ fn render_one_contributor_claim(claim: &AttributedClaim) -> String {
 /// content-frozen honest-trail framing (US-GRAPH-002). Pure helper.
 fn render_contributor_trail_footer(claim_count: usize) -> String {
     format!("{claim_count} claim(s). {CONTRIBUTOR_TRAIL_FOOTER}\n")
+}
+
+/// Render the absent-contributor graceful-degrade hint (GQE-8 / US-GRAPH-002
+/// Example 3): the queried DID has no local claims, so emit the content-frozen
+/// [`CONTRIBUTOR_ABSENT_HINT_TEMPLATE`] with `{contributor}` filled in. No
+/// per-claim row, no honest-trail footer — there is no trail to frame, only the
+/// subscribe/pull next step. Pure helper.
+fn render_contributor_absent_hint(contributor: &str) -> String {
+    format!(
+        "{}\n",
+        CONTRIBUTOR_ABSENT_HINT_TEMPLATE.replace("{contributor}", contributor)
+    )
 }
 
 /// One bidirectional counter relationship discovered in the federated row

@@ -790,10 +790,8 @@ fn graph_query_by_contributor_absent_did_degrades_with_subscribe_pull_hint_exit_
     // by the queried stranger DID.
     let graph = seed_federated_graph(&env, FederatedGraphFixture::own_claims_only_three());
 
-    let outcome = run_openlore(
-        &env,
-        &["graph", "query", "--contributor", "did:plc:stranger-test"],
-    );
+    let stranger_did = "did:plc:stranger-test";
+    let outcome = run_openlore(&env, &["graph", "query", "--contributor", stranger_did]);
 
     // Absent contributor is NOT an error: exit 0 (a valid empty result).
     assert_eq!(
@@ -803,11 +801,59 @@ fn graph_query_by_contributor_absent_did_degrades_with_subscribe_pull_hint_exit_
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert an absent contributor yields a no-local-claims message + a \
-         subscribe/pull hint ('openlore peer add' + 'openlore peer pull') and exit 0 \
-         (US-GRAPH-002 Example 3);\n--- graph ---\n{graph:?}"
-    )
+    // The absent contributor degrades GRACEFULLY (J-002 anxiety mitigation —
+    // sparse renders sparse, with a helpful next step): a no-local-claims
+    // message naming the queried DID, plus a subscribe/pull hint pointing at
+    // `openlore peer add` + `openlore peer pull` so the user knows how to
+    // populate that contributor's trail. (US-GRAPH-002 Example 3 / UAT 3.)
+    //
+    // Universe (port-exposed observable surface of the absent-contributor
+    // view): cli.graph_query.no_local_claims_message_present (the message names
+    // the QUERIED stranger DID), cli.graph_query.subscribe_pull_hint_present
+    // (the hint names BOTH `openlore peer add` + `openlore peer pull`),
+    // cli.graph_query.cid_rows (0 — no fabricated trail row), AND
+    // cli.graph_query.honest_consensus_framing_absent (NO "reasoning trail, not
+    // a community consensus" footer — there is no trail to frame). Asserted
+    // against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The no-local-claims message names the QUERIED stranger DID — the user
+    //    sees WHICH contributor came back empty (self-explanatory, not silent).
+    assert!(
+        stdout.contains(&format!("No local claims authored by {stranger_did}.")),
+        "expected a no-local-claims message naming the queried absent contributor {stranger_did};\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. The subscribe/pull hint names BOTH `openlore peer add` and
+    //    `openlore peer pull` — the graceful-degrade next step that populates
+    //    the absent contributor's trail (slice-03 peer add/pull hint precedent).
+    assert!(
+        stdout.contains("openlore peer add") && stdout.contains("openlore peer pull"),
+        "expected a subscribe/pull hint naming BOTH `openlore peer add` + `openlore peer pull` so \
+         the user can populate the absent contributor's trail;\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. The degrade is HONEST — NO per-claim cid row is manufactured for a
+    //    contributor with no local claims (empty stays empty; J-002).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 0,
+        "expected ZERO per-claim cid rows for an absent contributor (clean empty degrade, not a \
+         fabricated trail); got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. The honest-trail footer ("one developer's reasoning trail, not a
+    //    community consensus") frames a FOUND trail — it must NOT appear when
+    //    there is no trail to frame (the empty degrade carries the hint instead).
+    assert!(
+        !stdout.contains("one developer's reasoning trail, not a community consensus"),
+        "the absent-contributor degrade must NOT carry the found-trail framing — there is no \
+         trail; it carries the subscribe/pull hint instead;\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-9 (US-GRAPH-002 edge): Maria soft-removed Tobias (slice-03
