@@ -13,6 +13,8 @@ path = "src/lib.rs"
 
 # PURE-SHAPED traits. `async-trait` permitted ONLY because PdsPort is
 # inherently network-async (per component-boundaries.md + ADR-004).
+# `url` is a pure parser (no I/O); permitted for typing peer PDS endpoints
+# per slice-03 `PeerInfo` + `PeerSubscription`.
 # Forbidden: tokio runtime, reqwest, duckdb, keyring, atrium-*, std::fs/net.
 [dependencies]
 serde = { workspace = true }
@@ -20,5 +22,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 async-trait = "0.1"
+url = { workspace = true }
 claim-domain = { path = "../claim-domain" }
 lexicon = { path = "../lexicon" }
+
+[dev-dependencies]
+proptest = { workspace = true }

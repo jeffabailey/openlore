@@ -48,6 +48,9 @@ multihash = "0.19"
 tempfile = "3"
 assert_cmd = "2"
 proptest = "1"
+# Pure URL parser — no I/O. Used by slice-03 `PeerInfo.pds_endpoint`
+# + `PeerSubscription.peer_pds_endpoint` + `PdsPort::list_peer_records`.
+url = { version = "2", features = ["serde"] }
 
 [profile.release]
 lto = "thin"

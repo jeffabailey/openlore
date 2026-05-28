@@ -1,0 +1,1174 @@
+{
+  "roadmap": {
+    "project_id": "openlore-federated-read",
+    "created_at": "2026-05-28T02:20:35Z",
+    "total_steps": 40,
+    "feature": "openlore-federated-read (slice-03 walking skeleton for federated read)",
+    "wave": "DELIVER",
+    "architect": "Morgan (nw-solution-architect)",
+    "paradigm": "functional-rust (ADR-007 — pure core + effect shell)",
+    "style": "Hexagonal + Modular Monolith (ADR-009; inherited from slice-01)",
+    "inherits": "slice-01 ADR-001..ADR-012 + WD-1..WD-13 + DD-1..DD-13 + I-1..I-12; slice-03 DISCUSS WD-14..WD-25 + DESIGN WD-26..WD-45 + DISTILL DD-FED-1..DD-FED-14 + DEVOPS D-D14..D-D21 + ADR-013..ADR-016",
+    "default_agent": "nw-functional-software-crafter",
+    "scenario_coverage": {
+      "total_distill_scenarios": 35,
+      "covered_in_roadmap": 35,
+      "peer_subscribe": 8,
+      "peer_pull": 8,
+      "counter_claim": 6,
+      "federated_query": 8,
+      "lexicon_counter_claim": 5
+    },
+    "crate_scope": {
+      "production_crates": 8,
+      "test_support_crates": 1,
+      "xtask_crates": 1,
+      "new_crates": 0,
+      "language": "rust",
+      "framework": "cargo workspace + cargo nextest + proptest",
+      "paradigm": "functional-rust (pure core + effect shell)",
+      "constraint": "WD-26: no new crates — slice-03 extends slice-01's 8 production crates + test-support + xtask in place"
+    },
+    "external_integrations_contract_tested": [
+      {
+        "service": "Peer ATProto PDSes (XRPC read paths: com.atproto.repo.listRecords, getRecord)",
+        "protocol": "XRPC over HTTPS",
+        "tool": "Pact (consumer-driven; extends slice-01 suite)",
+        "owner": "platform-architect (DEVOPS)",
+        "test_location": "tests/contracts/pact/",
+        "note": "Out of DELIVER scope; DEVOPS owns the Pact extension per devops/wave-decisions.md D-D12 + D-D15. DELIVER uses FakePeerPds (wiremock HTTP server in test-support) for acceptance scenarios."
+      },
+      {
+        "service": "PLC Directory (com.atproto.identity.resolveDid)",
+        "protocol": "HTTPS",
+        "tool": "Pact (consumer-driven; fixture replay)",
+        "owner": "platform-architect (DEVOPS)",
+        "test_location": "tests/contracts/pact/",
+        "note": "Identity resolution for peer DIDs at subscribe AND each pull. DELIVER consumes FakePeerPds's serve_http identity.resolveDid handler."
+      },
+      {
+        "service": "Adversarial peer PDS fixture (KPI-FED-6 release-gate)",
+        "protocol": "Wiremock XRPC stub",
+        "tool": "tests/fixtures/peer-adversarial/ (wiremock-driven)",
+        "owner": "platform-architect (DEVOPS) per D-D15",
+        "test_location": "tests/fixtures/peer-adversarial/",
+        "note": "Tampered-signature + CID-mismatch fixtures land via DEVOPS; DELIVER consumes via FakePeerPds::with_tampered_signature and fixture_adversarial_peer_* helpers."
+      }
+    ],
+    "validation": {
+      "status": "pending",
+      "gate": "des-roadmap validate (this file) + des-verify-integrity --roadmap-only + reviewer (nw-acceptance-designer-reviewer) 35/35 scenarios mapped",
+      "approved_at": "TODO",
+      "approved_by": "TODO"
+    },
+    "notes": [
+      "Phase 01 is the DISTILL fail-for-right-reason gate per acceptance-tests.md §12 + DD-FED-13: extends ports/adapter-duckdb/adapter-atproto-{did,pds}/cli with todo!()-bodied surfaces, materializes test-support FakePeerPds + fixtures, lands xtask anti-merging rule + autoconfirm build-time guard, runs migration v3. After this phase all 35 ATs classify RED (panic at todo!()), not BROKEN.",
+      "Phase 02 ships the layer-2 (in-memory) lexicon scenarios first: LCC-1..LCC-5 + validate_counter_claim pure-core. These unblock CC-2, CC-3, CC-4 in Phase 05 (counter-claim validation depends on claim-domain pure functions).",
+      "Phase 03 (peer_subscribe) and Phase 04 (peer_pull) ship the subscribe -> pull -> verify -> store pipeline. PP-1 is the load-bearing happy path (J-003 walking-skeleton beat); PP-3 + PP-5 + PP-6 are release-gate (KPI-FED-6 + WD-40 + WD-41).",
+      "Phase 05 ships counter-claim authoring (J-003b first-class disagreement) and federated query rendering (J-003a anti-merging). CC-1 chains to FQ-5 (publish-then-query annotation cross-file narrative per Pillar 2). FQ-2 + FQ-8 are KPI-FED-2 release-gates.",
+      "Sizing: 40 steps for 35 ATs = 1.14 steps/AT (within Phase 01 bootstrap overhead). Three groupings (PS-3+PS-4, CC-2+CC-3, LCC-3+LCC-4) each ≤3 scenarios per step per task brief cap.",
+      "DD-FED-10 state-delta migration: load-bearing scenarios (PS-6, PP-1, PP-3, PP-5, PP-6, FQ-2, FQ-8) carry an implementation_notes call-out to migrate from named assertion helpers to assert_state_delta(before, after, universe, expected) when helpers in tests/common/state_delta.rs are made real for slice-03 (slice-01 bootstrapped the file per DD-3).",
+      "Q-DELIVER resolutions baked into implementation_notes: Q-1 (unicode-normalization = \"0.1\") at LCC-3+LCC-4 step; Q-2 (DID-to-fs-encoding: colon->underscore) at bootstrap + every peer_claims write/purge step; Q-3 (PeerStoragePort reuses adapter-duckdb pool) at bootstrap + PS-1; Q-5 (list_peer_records walks all cursors) at PP-1; Q-6 (peer pull progress block matches journey YAML tui_mockup) at PP-1; Q-7 (OrientationState lives in cli) at FQ-6 + CC-5 + PP-1.",
+      "External-integration annotation: peer ATProto read paths + PLC directory + adversarial fixture owned by DEVOPS Pact suite extension; DELIVER consumes FakePeerPds + tests/fixtures/peer-adversarial/ per D-D12 + D-D15.",
+      "Mutation testing scope (per D-D8 unchanged + D-D17): slice-03 adds claim-domain::normalize_reason + validate_counter_claim to the cargo-mutants --package list (release-tag blocking, PR advisory)."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Bootstrap — DISTILL fail-for-right-reason gate (slice-03)",
+      "description": "Extend ports + adapter-duckdb + adapter-atproto-{did,pds} + cli + test-support to make all 35 slice-03 acceptance tests classify RED (panic at todo!()) rather than BROKEN. Land migration v3, xtask anti-merging rule, and the build-time autoconfirm guard.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Bootstrap PeerStoragePort + extended port surfaces",
+          "criteria": [
+            "ports crate exposes PeerStoragePort trait with probe + add_subscription + list_active_subscriptions + lookup_subscription + soft_remove + hard_purge + write_peer_claim + get_peer_claim_by_cid + list_peer_claims_by_subject + query_peer_referencing",
+            "ports declares PeerInfo + PeerSubscription + AddSubscriptionOutcome + SoftRemoveOutcome + HardPurgeOutcome + WritePeerClaimOutcome + PeerStorageError + FederatedRow + AuthorRelationship + SourceTable",
+            "IdentityPort extended with resolve_peer; PdsPort extended with list_peer_records + get_peer_record; StoragePort extended with query_federated_by_subject",
+            "ProbeRefusalReason gains StoragePeerSchemaMismatch + StoragePeerSelfAttribution + StoragePeerSoftRemoveBleed + StoragePeerPurgeIncomplete + PdsPeerCidRoundTripFailed + IdentityPeerResolutionFailed",
+            "cargo build -p ports succeeds"
+          ],
+          "test_file": "crates/ports/src/lib.rs",
+          "scenario_name": "bootstrap_peer_storage_port_trait_surface",
+          "implementation_scope": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/peer_storage.rs",
+            "crates/ports/src/federated_row.rs",
+            "crates/ports/src/probe.rs"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/peer_storage.rs",
+            "crates/ports/src/federated_row.rs",
+            "crates/ports/src/probe.rs"
+          ],
+          "deps": [],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per component-boundaries.md §crates/ports + design §6.1. FederatedRow.author_did is `Did` (NOT `Option<Did>`) — compile-time enforcement of I-FED-1 anti-merging layer 1. PeerStoragePort is SYNC (local DB only); PdsPort peer-read methods are async (#[async_trait], reuse existing declaration). Method bodies are trait declarations only; impls land in 01-02 + 01-03 + 01-04. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: trait-surface step has no runtime behavior; proptest applies only if helper combinator types are introduced."
+        },
+        {
+          "id": "01-02",
+          "name": "Bootstrap DuckDB migration v3 + DuckDbPeerStorageAdapter stub",
+          "criteria": [
+            "Migration v3 creates peer_subscriptions + peer_claims + peer_claim_references + peer_claim_evidence idempotently",
+            "schema_version row registered with version=3 + description 'slice-03 peer storage'",
+            "DuckDbPeerStorageAdapter struct exists; every PeerStoragePort method bodied as todo!() with a slice-03 SCAFFOLD marker comment",
+            "DuckDbStorageAdapter::query_federated_by_subject bodied as todo!()",
+            "Adapter shares the same Connection pool as slice-01 DuckDbStorageAdapter (Q-DELIVER-3 resolution)",
+            "cargo build -p adapter-duckdb succeeds"
+          ],
+          "test_file": "crates/adapter-duckdb/src/lib.rs",
+          "scenario_name": "bootstrap_adapter_duckdb_migration_v3_and_peer_storage_adapter_stub",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/schema_v3.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/adapter-duckdb/src/probe.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/schema_v3.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/adapter-duckdb/src/probe.rs"
+          ],
+          "deps": ["01-01"],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per data-models.md §DuckDB schema slice-03 additions + ADR-014. CHECK constraints: peer_claims.author_did <> '' AND cid <> '' AND 0.0 <= confidence <= 1.0. Indexes per data-models.md (idx_peer_subs_active partial WHERE removed_at IS NULL; idx_peer_claims_author + subject + composed_at). FK on peer_claim_references.referencing_cid -> peer_claims.cid; FK on peer_claim_evidence.cid -> peer_claims.cid. NO FK on peer_claims.author_did (intentional — soft-remove leaves dangling per WD-25). Q-DELIVER-3: PeerStoragePort impl shares Connection pool with StoragePort impl (single-writer DuckDB constraint). Migration script idempotent forward-only; CREATE TABLE IF NOT EXISTS. Probe gains StoragePeerSchemaMismatch variant + sentinel-roundtrip stub (real probe bodies land per-scenario in Phase 03+). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: migration test asserts schema_version=3 row present + every required table reachable via SELECT * LIMIT 0."
+        },
+        {
+          "id": "01-03",
+          "name": "Bootstrap extended adapter-atproto-{did,pds} stubs",
+          "criteria": [
+            "AtProtoDidAdapter::resolve_peer body is todo!() with SCAFFOLD marker",
+            "AtProtoPdsAdapter::list_peer_records + get_peer_record bodies are todo!() with SCAFFOLD markers",
+            "Probe extensions declared but bodied as todo!() to be filled per-scenario in Phase 03+",
+            "cargo build -p adapter-atproto-did -p adapter-atproto-pds succeeds"
+          ],
+          "test_file": "crates/adapter-atproto-pds/src/lib.rs",
+          "scenario_name": "bootstrap_extended_atproto_adapter_stubs",
+          "implementation_scope": [
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-atproto-pds/src/lib.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-atproto-pds/src/lib.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs"
+          ],
+          "deps": ["01-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per component-boundaries.md §adapter-atproto-{did,pds} + ADR-016. resolve_peer reuses the same atrium/PLC client as slice-01's own-DID resolution (no new dependency per WD-29). list_peer_records + get_peer_record take peer_pds_endpoint as input parameter (NOT cached on the adapter) per ADR-016 §re-resolve at every pull. Bodies remain todo!() at this step; live implementations land driven by PP-* scenarios in Phase 04. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this is a trait-impl-skeleton step; no proptest applicable until live impls land per-scenario."
+        },
+        {
+          "id": "01-04",
+          "name": "Bootstrap cli verb dispatch + OrientationState + autoconfirm guard",
+          "criteria": [
+            "clap subcommand additions for peer add | peer pull | peer remove [--purge] [--no-tty] | claim counter --target-cid --reason; graph query gains --federated flag",
+            "Verb handlers VerbClaimCounter + VerbPeerAdd + VerbPeerPull + VerbPeerRemove are present with todo!() bodies + SCAFFOLD markers",
+            "VerbGraphQuery extended for --federated dispatch (body todo!() in default-on branch)",
+            "OrientationState reads/writes ~/.config/openlore/identity.toml under [federation] with the three keys (first_pull_completed_at, first_federated_query_completed_at, first_counter_claim_completed_at)",
+            "Wiring constructs DuckDbPeerStorageAdapter alongside DuckDbStorageAdapter; ProbeGauntlet runs PeerStoragePort.probe() + extended IdentityPort/PdsPort probes",
+            "--yes-i-am-tested flag + OPENLORE_TEST_AUTOCONFIRM=1 env var are gated by #[cfg(any(test, feature=\"test-autoconfirm\"))] and rejected at compile time from release builds (D-D20)",
+            "cargo build -p cli + cargo build --release -p cli succeeds; cargo build --release with the autoconfirm flag set on CLI fails to compile (asserted by xtask check-arch)"
+          ],
+          "test_file": "crates/cli/src/lib.rs",
+          "scenario_name": "bootstrap_cli_verb_dispatch_and_autoconfirm_guard",
+          "implementation_scope": [
+            "crates/cli/src/main.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/probe_gauntlet.rs",
+            "crates/cli/src/orientation.rs",
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/main.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/probe_gauntlet.rs",
+            "crates/cli/src/orientation.rs",
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "deps": ["01-01", "01-02", "01-03"],
+          "estimated_minutes": 60,
+          "implementation_notes": "Per ADR-013 verb shape table + component-boundaries.md §cli + WD-39/43 OrientationState. D-D20 build-time guard mechanism: the --yes-i-am-tested clap arg and OPENLORE_TEST_AUTOCONFIRM=1 env-var path are sealed behind #[cfg(any(test, feature=\"test-autoconfirm\"))]. Cargo.toml declares feature `test-autoconfirm` (only enabled for cargo test); release profile builds without it, so the flag literal is not even in the binary. xtask check-arch adds a new rule asserting `release` cfg never sees the autoconfirm code path (regex check on cli source). Q-DELIVER-7: OrientationState owned by cli (file I/O lives here); pure parse/format helpers MAY live in a shared module if extracted (deferred to refactor). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: OrientationState parse/format covered by proptest strategies for RFC3339 timestamp round-trip; verb dispatch covered by clap-derive snapshot tests (single-example fallback acceptable since clap parsing is itself a substrate)."
+        },
+        {
+          "id": "01-05",
+          "name": "Bootstrap FakePeerPds HTTP server + adversarial fixture bodies",
+          "criteria": [
+            "openlore_test_support::FakePeerPds::for_peer(did, handle) constructs a wiremock-driven HTTP server hosting com.atproto.repo.listRecords + getRecord + identity.resolveDid handlers",
+            "FakePeerPds adversarial constructors: with_tampered_signature, with_cid_mismatch, with_self_attribution, with_cross_attribution, with_unreachable",
+            "FakePeerPds::serve_http returns a base URL the cli uses via OPENLORE_PEER_PDS_ENDPOINT_<did> env-var seam",
+            "Fixtures: fixture_other_developer_three_claims + fixture_adversarial_peer_tampered_signature + fixture_adversarial_peer_cid_mismatch + fixture_adversarial_peer_self_attribution + fixture_adversarial_peer_cross_attribution",
+            "tests/acceptance/support/mod.rs extended with assert_peer_claims_attributed_to + assert_no_merged_rows_in_federated_output + assert_peer_subscription_active + assert_peer_subscription_soft_removed + assert_peer_filesystem_dir_purged helpers (named assertion helpers per CM-E)",
+            "tests/fixtures/peer-adversarial/ contains the 4 adversarial recorded bodies (D-D15)",
+            "cargo build --tests succeeds; cargo nextest run --tests classifies all 35 slice-03 ATs as RED (panic at todo!()), not BROKEN"
+          ],
+          "test_file": "tests/acceptance/support/mod.rs",
+          "scenario_name": "bootstrap_fake_peer_pds_and_adversarial_fixtures",
+          "implementation_scope": [
+            "crates/test-support/src/fake_peer_pds.rs",
+            "crates/test-support/src/fixtures_peer.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "tests/fixtures/peer-adversarial/tampered_signature.json",
+            "tests/fixtures/peer-adversarial/cid_mismatch.json",
+            "tests/fixtures/peer-adversarial/self_attribution.json",
+            "tests/fixtures/peer-adversarial/cross_attribution.json",
+            "tests/fixtures/peer-adversarial/README.md"
+          ],
+          "files_to_modify": [
+            "crates/test-support/src/fake_peer_pds.rs",
+            "crates/test-support/src/fixtures_peer.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "tests/fixtures/peer-adversarial/tampered_signature.json",
+            "tests/fixtures/peer-adversarial/cid_mismatch.json",
+            "tests/fixtures/peer-adversarial/self_attribution.json",
+            "tests/fixtures/peer-adversarial/cross_attribution.json"
+          ],
+          "deps": ["01-04"],
+          "estimated_minutes": 60,
+          "implementation_notes": "Per acceptance-tests.md §11 + §12 + DD-FED-13 + D-D15 + Q-DELIVER-4. FakePeerPds is the test seam for peer XRPC reads (READ-only; no createRecord on peer surface). One wiremock server per peer keeps wiring simple; PLC handler hosted on same base URL. Adversarial postures: tampered_signature = byte-flip in signature.sig; cid_mismatch = published rkey != recomputed CID; self_attribution = author field = local user's DID; cross_attribution = author field = third-party DID different from subscribed peer. Q-DELIVER-2: DID-to-fs-path encoding = replace colons with underscores (did:plc:rachel-test -> did_plc_rachel-test); fixtures pre-name accordingly. Cli verb env-var seam: OPENLORE_PEER_PDS_ENDPOINT_<did> overrides the resolved PDS URL in test mode (planned per DD-FED-14). After this step `cargo nextest run --tests --no-fail-fast 2>&1 | grep -c 'not yet implemented' equals 35'. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: test-support bodies are themselves test infrastructure; proptest applies to the adversarial-posture invariants (any byte-flip in sig => verify fails; any field mutation => CID differs)."
+        },
+        {
+          "id": "01-06",
+          "name": "xtask check-arch — anti-merging SQL rule + autoconfirm release-build guard",
+          "criteria": [
+            "cargo xtask check-arch runs rule no_cross_table_join_elides_author: any SQL string literal in adapter-duckdb mentioning BOTH `claims` AND `peer_claims` MUST also project `author_did` in the SELECT list; violation fails CI",
+            "Rule includes a positive fixture (UNION ALL safe pattern from data-models.md §SAFE pattern) and a negative fixture (the FORBIDDEN JOIN pattern from data-models.md) committed to xtask tests",
+            "cargo xtask check-arch runs rule no_autoconfirm_in_release_build: --yes-i-am-tested and OPENLORE_TEST_AUTOCONFIRM literals MUST appear only inside #[cfg(any(test, feature=\"test-autoconfirm\"))] blocks",
+            "cargo xtask check-probes EXTENDED: every `impl PeerStoragePort for <Adapter>` block MUST contain a non-stub probe body (rejects todo!(), unimplemented!(), single-Ok(_) expression, comment-only)",
+            "Both rules wired into .github/workflows/ci.yml arch-check stage (existing job extended; no new workflow file)"
+          ],
+          "test_file": "xtask/src/check_arch.rs",
+          "scenario_name": "bootstrap_xtask_anti_merging_and_autoconfirm_rules",
+          "implementation_scope": [
+            "xtask/src/check_arch.rs",
+            "xtask/src/check_probes.rs",
+            "xtask/tests/anti_merging.rs",
+            "xtask/tests/autoconfirm_guard.rs",
+            ".github/workflows/ci.yml"
+          ],
+          "files_to_modify": [
+            "xtask/src/check_arch.rs",
+            "xtask/src/check_probes.rs",
+            "xtask/tests/anti_merging.rs",
+            "xtask/tests/autoconfirm_guard.rs",
+            ".github/workflows/ci.yml"
+          ],
+          "deps": ["01-04"],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per WD-30 + I-FED-1 + I-FED-3 + D-D20. Anti-merging rule = regex pass over quote!/format!/SQL string literals in adapter-duckdb src; future-proof by also walking sqlx::query! if added. Autoconfirm rule = AST walker (syn) checking that any token tree containing `--yes-i-am-tested` or `OPENLORE_TEST_AUTOCONFIRM` is enclosed by a #[cfg(...)] attribute with `test` or `feature=\"test-autoconfirm\"` predicate. Probe-check extension reuses slice-01 mechanism (syn walker per ADR-009 D-10 structural layer). The two rules are load-bearing for KPI-FED-1 (anti-merging) and WD-21 + WD-36 (purge confirmation cannot be bypassed in release). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: xtask rule unit tests use proptest to generate adversarial SQL strings (e.g., 'SELECT c.foo FROM claims c JOIN peer_claims pc') and assert the rule fires; positive cases (UNION ALL with author_did projection) assert pass."
+        },
+        {
+          "id": "01-07",
+          "name": "Lexicon `reason` field + Claim.reason serde extension",
+          "criteria": [
+            "lexicons/org/openlore/claim.json gains `reason` under defs.main.record.properties as { type: string, minLength: 1, maxLength: 1000 } — NOT added to required[]",
+            "Claim struct in crates/lexicon gains `pub reason: Option<String>` with #[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "Lexicon probe extension: validates `reason` field declaration (type/minLength/maxLength/NOT required); serde round-trip with reason=Some + reason=None; CID stability against a gold fixture slice-01 claim",
+            "cargo build -p lexicon succeeds; lexicon probe passes"
+          ],
+          "test_file": "crates/lexicon/src/lib.rs",
+          "scenario_name": "bootstrap_lexicon_reason_field_extension",
+          "implementation_scope": [
+            "lexicons/org/openlore/claim.json",
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/claim.rs",
+            "crates/lexicon/src/probe.rs"
+          ],
+          "files_to_modify": [
+            "lexicons/org/openlore/claim.json",
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/claim.rs",
+            "crates/lexicon/src/probe.rs"
+          ],
+          "deps": ["01-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per ADR-015 + data-models.md §Lexicon org.openlore.claim slice-03 extension + WD-32 + I-FED-6. Field placement is TOP-LEVEL optional property (NOT nested in references[] entries). CBOR canonical order: lexicographic by key bytes — `reason` lies between `references` and `signature`; serde's skip_serializing_if = \"Option::is_none\" preserves CID stability for claims without reason (I-FED-7). The lexicon probe self-validates per component-boundaries.md §lexicon probe responsibilities #1-#4. This is a pure-core step; LCC-1 + LCC-2 in Phase 02 assert the observable behavior at the test-acceptance level. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: proptest a serde round-trip property: forall claim_without_reason: serialize(claim) == serialize(claim with reason=None) byte-equal; forall reason_str within 1..=1000 chars: deserialize(serialize(claim with reason=Some(s))) preserves reason."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Lexicon + claim-domain pure core (layer-2 scenarios)",
+      "description": "Ship LCC-1..LCC-5 (forward-compat + CID stability + NFC properties + length boundary) and the validate_counter_claim + normalize_reason pure-core extensions. Layer 2 in-memory direct against claim_domain — foundation for counter-claim authoring in Phase 05.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "LCC-1 slice-01-era claim loads without reason field",
+          "criteria": [
+            "A slice-01-era claim JSON (no reason field present) deserializes into a Claim with reason: None",
+            "Serializing the loaded claim back to JSON produces output WITHOUT a `reason` key",
+            "Lexicon validation accepts the slice-01-era claim (reason not in required[])",
+            "LCC-1 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_counter_claim.rs",
+          "scenario_name": "lexicon_counter_claim_slice_01_era_claim_loads_without_reason_field",
+          "implementation_scope": [
+            "crates/lexicon/src/claim.rs",
+            "tests/fixtures/gold_cids/slice_01_era_claim.json"
+          ],
+          "files_to_modify": [
+            "crates/lexicon/src/claim.rs"
+          ],
+          "deps": ["01-07"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per ADR-015 §forward-compat + I-FED-6 + WD-23. Uses a committed gold-fixture slice-01-era claim (no `reason` key). Asserts deserialize succeeds, reason field is None, re-serialize produces byte-equal output (no spurious null key). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: LCC-1 is example-based per Mandate 11 (forward-compat fixture replay)."
+        },
+        {
+          "id": "02-02",
+          "name": "LCC-2 reason=None preserves CID stability with slice-01 (LOAD-BEARING)",
+          "criteria": [
+            "A claim with reason: None canonicalizes (CBOR) to byte-identical output as the equivalent slice-01-era claim",
+            "compute_cid(claim with reason: None) returns the SAME CID as the slice-01 gold fixture",
+            "Property test: forall non-counter claims C: cid_slice_01(C) == cid_slice_03(C with reason: None)",
+            "LCC-2 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_counter_claim.rs",
+          "scenario_name": "lexicon_counter_claim_reason_none_preserves_cid_stability_with_slice_01",
+          "implementation_scope": [
+            "crates/lexicon/src/claim.rs",
+            "crates/claim-domain/src/canonicalize.rs",
+            "tests/fixtures/gold_cids/slice_01_era_claim.cid"
+          ],
+          "files_to_modify": [
+            "crates/lexicon/src/claim.rs",
+            "crates/claim-domain/src/canonicalize.rs"
+          ],
+          "deps": ["02-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per I-FED-7 + WD-32 + ADR-015 §CID stability. LOAD-BEARING for forward-compat across slice-01 -> slice-03 upgrade. Asserts via gold-fixture round-trip: tests/fixtures/gold_cids/slice_01_era_claim.json + .cid pair (committed; CID was frozen by slice-01 step 02-05). The slice-03 binary recomputes the CID and asserts byte-equal. Mechanism: serde `skip_serializing_if = \"Option::is_none\"` on `reason` field ensures the CBOR map never includes the key when None. DD-FED-10 state-delta migration: this is a layer-2 pure-core scenario; the load-bearing property is byte-equality, not state delta. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: proptest a CID-stability property over arb_unsigned_claim() with reason: None — assert compute_cid result is independent of the reason field being absent vs explicitly None."
+        },
+        {
+          "id": "02-03",
+          "name": "LCC-3 + LCC-4 normalize_reason NFC properties (@property)",
+          "criteria": [
+            "claim_domain::normalize_reason(s) returns NFC-normalized form of s; pure function",
+            "Property LCC-3: forall s: normalize_reason(normalize_reason(s)) == normalize_reason(s) (idempotent)",
+            "Property LCC-4: forall (r, s) where NFC(r) == NFC(s): normalize_reason(r) == normalize_reason(s) (canonical-equivalence unifying)",
+            "proptest.toml seed pinned for CI determinism; PROPTEST_CASES default 256, nightly 4096",
+            "Both LCC-3 and LCC-4 pass"
+          ],
+          "test_file": "tests/acceptance/lexicon_counter_claim.rs",
+          "scenario_name": "lexicon_counter_claim_normalize_reason_is_idempotent_property",
+          "implementation_scope": [
+            "crates/claim-domain/src/normalize.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/claim-domain/Cargo.toml",
+            "crates/claim-domain/src/proptest_strategies.rs"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/normalize.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/claim-domain/Cargo.toml",
+            "crates/claim-domain/src/proptest_strategies.rs"
+          ],
+          "deps": ["02-02"],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per WD-35 + ADR-015 §NFC normalization + data-models.md properties 2-3. Q-DELIVER-1 resolution: dependency pin `unicode-normalization = \"0.1\"` (latest stable line). normalize_reason is a pure function in claim-domain; whitelist in xtask check-arch pure-core allowlist (functional-rust paradigm — pure transformation, no I/O). Combined step per task brief cap (≤3 scenarios sharing same files_to_modify + implementation_notes; LCC-3 and LCC-4 are the two @property layer-2 tests per acceptance-tests.md §10 CM-F). proptest strategy: arb_reason_str() generates UTF-8 strings up to 1000 chars including known NFC/NFD pairs (precomposed é U+00E9 vs decomposed e + U+0301). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this step is LAYER-2 PROPTEST per Mandate 9 — proptest IS the implementation strategy. The lexicon_counter_claim_normalize_reason_unifies_canonically_equivalent_strings_property function runs as a sibling #[test] within the same file (one #[test] per LCC-N; scenario_name pins LCC-3 here; LCC-4 is a sibling fn ratified by this step's criteria)."
+        },
+        {
+          "id": "02-04",
+          "name": "LCC-5 rejects reason length outside 1..=1000",
+          "criteria": [
+            "Lexicon-level validation rejects reason field with len < 1 (empty string)",
+            "Lexicon-level validation rejects reason field with len > 1000 chars",
+            "Boundary values 1 and 1000 are accepted",
+            "Error names the 'reason' field and the [1, 1000] bounds",
+            "LCC-5 passes"
+          ],
+          "test_file": "tests/acceptance/lexicon_counter_claim.rs",
+          "scenario_name": "lexicon_counter_claim_rejects_reason_length_outside_one_to_one_thousand",
+          "implementation_scope": [
+            "crates/lexicon/src/claim.rs",
+            "crates/lexicon/src/validation.rs"
+          ],
+          "files_to_modify": [
+            "crates/lexicon/src/claim.rs",
+            "crates/lexicon/src/validation.rs"
+          ],
+          "deps": ["02-01"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per ADR-015 §Lexicon minLength/maxLength + WD-20 (defense-in-depth at Lexicon layer; CC-2 + CC-3 in Phase 05 enforce at CLI layer). Lexicon-level rejection is independent of the CLI's pre-compose check — both layers reject (defense-in-depth per CM-H). Error type LexiconError::FieldLengthOutOfRange { field: \"reason\", min: 1, max: 1000, actual: usize }. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: layer-2 boundary scenario per Mandate 11 (example-only at acceptance layer); proptest applies to inner-loop unit test for the validator (forall len < 1: reject; forall len > 1000: reject; forall 1 <= len <= 1000: accept)."
+        },
+        {
+          "id": "02-05",
+          "name": "claim-domain validate_counter_claim pure core + ClaimLookup spans both stores",
+          "criteria": [
+            "claim_domain::validate_counter_claim(unsigned, lookup, current_did) is a pure function",
+            "Rejects with ClaimError::CounterReasonMissing if references[] has a Counters entry AND reason is None or empty",
+            "Rejects with ClaimError::SelfCounter if target_cid resolves (via lookup) to a claim whose author_did == current_did",
+            "Delegates cycle/self-reference detection to reference_rules_validate (slice-01 inherited)",
+            "ClaimLookup trait (in ports) extended/clarified to support reading from BOTH claims AND peer_claims (CC-4 needs to detect self-counter even when target is in either store)",
+            "Unit tests pass; inner-loop TDD covers all three rejection branches + happy path"
+          ],
+          "test_file": "crates/claim-domain/src/lib.rs",
+          "scenario_name": "claim_domain_validate_counter_claim_rejects_self_counter_and_missing_reason",
+          "implementation_scope": [
+            "crates/claim-domain/src/validate_counter_claim.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/claim-domain/src/errors.rs",
+            "crates/ports/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/validate_counter_claim.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/claim-domain/src/errors.rs",
+            "crates/ports/src/lib.rs"
+          ],
+          "deps": ["02-03"],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per WD-34 + component-boundaries.md §claim-domain extensions + ADR-015. PURE CORE — no I/O, no async; takes `&dyn ClaimLookup` so it can resolve target_cid against EITHER claims OR peer_claims. ClaimError enum extended with CounterReasonMissing + SelfCounter variants. The slice-01 ClaimLookup trait (declared in ports at step 03-04 of slice-01) ALREADY supports lookup by CID against the unified claim set — this step extends documentation + adds the cross-store invariant (an implementation MUST consult both `claims` and `peer_claims` to honor the WD-34 self-counter check). CC-4 in Phase 05 is the load-bearing acceptance scenario that asserts this end-to-end. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: pure-core layer-1 step (out of DISTILL scope per DD-FED-7); proptest the validation rules — forall unsigned claim WITH counters reference AND empty reason: reject; forall unsigned claim where target.author_did == current_did: reject; forall valid input: accept. Inner-loop TDD uses an InMemoryClaimLookup test double."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "peer_subscribe — subscription lifecycle (8 scenarios)",
+      "description": "Ship US-FED-001 (subscribe) + US-FED-005 (remove with optional purge). Includes the load-bearing PS-6 (hard-purge atomic transaction; KPI-FED-4 release-gate; integration gate 4) and PS-8 (--no-tty refusal per WD-36). PS-3 + PS-4 combined per task brief cap (same files_to_modify; both error paths).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "PS-1 peer add resolves DID and persists subscription (happy path)",
+          "criteria": [
+            "`openlore peer add did:plc:rachel-test` resolves the DID via IdentityPort::resolve_peer + persists a peer_subscriptions row via PeerStoragePort::add_subscription",
+            "stdout contains the peer handle + PDS endpoint resolved at subscribe time",
+            "Exit code 0; subscribed_at is set via ClockPort",
+            "PS-1 passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_add_resolves_did_and_persists_subscription",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["01-05", "01-06", "01-07"],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per ADR-013 §verb peer add + US-FED-001 AC #1 + WD-29 + Q-DELIVER-3. Resolves peer DID via the same atrium/PLC client as slice-01 own-DID resolution (no new dep). PeerStoragePort::add_subscription reuses adapter-duckdb's connection pool (Q-DELIVER-3). The FakePeerPds::serve_http identity.resolveDid handler hosts the fixture peer DID document; the cli env-var seam OPENLORE_PEER_PDS_ENDPOINT_<did> routes the live resolver to the FakePeerPds base URL during test. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: VerbPeerAdd handler: resolve -> add_subscription -> render summary. Inner-loop proptest covers PeerStoragePort::add_subscription idempotency + uniqueness on peer_did PK."
+        },
+        {
+          "id": "03-02",
+          "name": "PS-2 peer add is idempotent on re-subscribe",
+          "criteria": [
+            "Running `openlore peer add <did>` twice returns AlreadyExisted on the second invocation",
+            "subscribed_at on the existing row is preserved (NOT overwritten)",
+            "Output indicates the peer was already subscribed since the original timestamp",
+            "PS-2 passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_add_is_idempotent_on_re_subscribe",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["03-01"],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per ADR-013 §peer add idempotency row + US-FED-001 failure_modes Example 2 + AddSubscriptionOutcome::AlreadyExisted{since}. PRIMARY KEY (peer_did) handles the DB-level guarantee; the adapter detects the conflict and returns AlreadyExisted rather than erroring. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: idempotency exercised via a 2-call proptest at the adapter unit-test layer."
+        },
+        {
+          "id": "03-03",
+          "name": "PS-3 + PS-4 peer add rejects unresolvable DID + self-DID",
+          "criteria": [
+            "PS-3: `openlore peer add did:plc:does-not-exist-test` exits 1 with stderr naming the resolution failure; no peer_subscriptions row written",
+            "PS-4: `openlore peer add <user's own DID>` exits 1 with stderr 'cannot subscribe to your own DID'; no row written",
+            "Both error branches leave the DB byte-identical to pre-invocation",
+            "PS-3 and PS-4 pass"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_add_rejects_unresolvable_did_and_writes_no_subscription",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_add.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs"
+          ],
+          "deps": ["03-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Combined step per task brief cap (≤3 scenarios sharing files_to_modify + implementation_notes; both are error branches of `peer add` with no DB write). Per ADR-013 §exit-code table + US-FED-001 AC #5. Self-DID detection: IdentityPort::author_did() returns the local user's DID; VerbPeerAdd rejects if peer_did == author_did() pre-resolve (no need to call PLC). The PS-4 fn name in scenario_name is the primary scenario; PS-3 is asserted by the sibling #[test] fn peer_subscribe_add_rejects_unresolvable_did_and_writes_no_subscription within the same file (both criteria gated by this step). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: both error branches asserted via PINNED examples per Mandate 11 (sad-paths example-based); inner-loop unit covers the pure pre-resolve self-DID rejection."
+        },
+        {
+          "id": "03-04",
+          "name": "PS-5 peer remove (soft) keeps cached peer claims",
+          "criteria": [
+            "Pre-state: subscription exists + N cached peer_claims rows for that peer",
+            "`openlore peer remove did:plc:rachel-test` (no --purge) calls PeerStoragePort::soft_remove",
+            "Post-state: peer_subscriptions.removed_at is SET; peer_claims row count for that peer is unchanged",
+            "Filesystem peer_claims/<encoded-did>/ directory still exists with N files",
+            "Output reports the N cached claims preserved as 'unsubscribed cache'",
+            "PS-5 passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_remove_soft_keeps_cached_peer_claims",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["03-01"],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per WD-25 + J-003c sub-job + SoftRemoveOutcome{was_subscribed, cached_claim_count}. soft_remove updates peer_subscriptions.removed_at = now_utc() and does NOT touch peer_claims rows. The renderer later distinguishes SubscribedPeer (removed_at IS NULL) vs UnsubscribedCache (removed_at IS NOT NULL) for the federated-query output. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: inner-loop proptest the adapter — forall N cached rows + soft_remove: peer_claims.row_count_by_author[did] == N (universe.unchanged())."
+        },
+        {
+          "id": "03-05",
+          "name": "PS-6 peer remove --purge atomic transaction (LOAD-BEARING; integration gate 4; KPI-FED-4)",
+          "criteria": [
+            "Pre-state: subscription + N cached peer_claims + M user-authored counter-claims referencing this peer's claims",
+            "Interactive `y` at the [y/N] prompt triggers PeerStoragePort::hard_purge as a SINGLE DuckDB transaction (subscription + peer_claims + peer_claim_references + peer_claim_evidence rows for this peer DID all DELETE'd in one tx; commit; THEN filesystem peer_claims/<encoded-did>/ removed)",
+            "Post-state: peer_subscriptions row gone; peer_claims rows for peer gone; filesystem dir gone; user's M counter-claim rows in `claims` UNCHANGED",
+            "Output reports HardPurgeOutcome{deleted_peer_claim_count: N, preserved_user_counter_claim_count: M}",
+            "PS-6 passes; integration gate `peer_remove_purge_separation` passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_remove_purge_with_confirmation_deletes_peer_claims_and_preserves_user_counters",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/cli/src/io.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_remove.rs",
+            "crates/cli/src/io.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["03-04"],
+          "estimated_minutes": 55,
+          "implementation_notes": "LOAD-BEARING per acceptance-tests.md §7 integration gate 4 + KPI-FED-4 release-blocking + I-FED-4 + WD-21 + WD-25 + Q-DELIVER-2. Single atomic DuckDB transaction per I-FED-4: BEGIN; DELETE FROM peer_subscriptions WHERE peer_did=?; DELETE FROM peer_claim_references WHERE referencing_cid IN (SELECT cid FROM peer_claims WHERE author_did=?); DELETE FROM peer_claim_evidence WHERE cid IN (SELECT cid FROM peer_claims WHERE author_did=?); DELETE FROM peer_claims WHERE author_did=?; COMMIT; std::fs::remove_dir_all(peer_claims/<encoded_did>/). Filesystem cleanup happens AFTER COMMIT (best-effort; orphans harmless and detectable). Q-DELIVER-2: encoded DID = colons replaced with underscores. TtyIO confirmation prompt uses build-time-gated autoconfirm bypass (--yes-i-am-tested or OPENLORE_TEST_AUTOCONFIRM=1, both #[cfg(any(test, feature=\"test-autoconfirm\"))]) per D-D20. DD-FED-10 STATE-DELTA MIGRATION: this scenario is load-bearing; implementation_notes for crafter — migrate assertion to assert_state_delta(before, after, universe, expected) once helpers in tests/common/state_delta.rs are real for slice-03 (slot keys: peer_storage.subscriptions.exists[did], peer_storage.claims.row_count_by_author[did], peer_storage.filesystem.peer_dir_exists[did], storage.claims.row_count_by_author[user_did]; universe.unchanged() covers other slots). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: PeerStoragePort::probe extends with hard-purge sentinel (write fixture, purge, assert all four tables clean + dir gone) per component-boundaries.md §adapter-duckdb probe responsibilities #6."
+        },
+        {
+          "id": "03-06",
+          "name": "PS-7 peer remove --purge declined leaves state unchanged",
+          "criteria": [
+            "Pre-state: subscription + N cached peer_claims for peer",
+            "Answering `n` at the [y/N] prompt aborts the transaction",
+            "Post-state: peer_subscriptions row unchanged (NOT soft-removed; declining --purge ≠ soft-remove); peer_claims rows unchanged; filesystem dir unchanged",
+            "Exit code 0; output indicates 'purge canceled, subscription unchanged'",
+            "PS-7 passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_remove_purge_declined_leaves_state_unchanged",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_remove.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_remove.rs"
+          ],
+          "deps": ["03-05"],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per WD-21 + US-FED-005 AC #4. Decline branch ('n' or anything other than 'y') returns Ok with no DB modification. CRITICAL: declining --purge does NOT degrade to soft-remove — the subscription stays active. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: edge-case scenario per CM-H; the universe.unchanged() predicate over the entire peer_storage namespace is the assertion shape."
+        },
+        {
+          "id": "03-07",
+          "name": "PS-8 peer remove --purge refuses --no-tty mode (defense-in-depth)",
+          "criteria": [
+            "`openlore peer remove <did> --purge --no-tty` exits NON-ZERO (per ADR-013 exit-code table)",
+            "stderr names --no-tty + --purge and directs user to remove --no-tty (NOT to use a --yes flag — that flag does not exist in slice-03)",
+            "DB and filesystem unchanged",
+            "PS-8 passes"
+          ],
+          "test_file": "tests/acceptance/peer_subscribe.rs",
+          "scenario_name": "peer_subscribe_remove_purge_refuses_no_tty_mode",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_remove.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_remove.rs"
+          ],
+          "deps": ["03-05"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-36 + KPI-FED-4 defense-in-depth + ADR-013 §exit-code table. CRITICAL safety property: --no-tty + --purge MUST refuse — auto-confirming would defeat the J-003c trust promise. The test-mode autoconfirm bypass (--yes-i-am-tested) is gated behind #[cfg(any(test, feature=\"test-autoconfirm\"))] per D-D20 and NEVER compiles into release binaries — so production --no-tty cannot bypass the refusal. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: error-path PINNED example per CM-H; xtask check-arch rule no_autoconfirm_in_release_build (landed in 01-06) provides the compile-time defense."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "peer_pull — verification pipeline + fault isolation (8 scenarios)",
+      "description": "Ship US-FED-002 (pull peer claims with sig + CID verification). PP-1 is the load-bearing happy path (J-003 walking-skeleton beat); PP-3 + PP-5 + PP-6 are release-gate (KPI-FED-6 + WD-40 + WD-41). All 8 scenarios are individual steps (no combining) — the adversarial surface admits per-scenario distinct fixtures and assertions.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "PP-1 peer pull fetches verifies and stores per-record (LOAD-BEARING; J-003 walking skeleton)",
+          "criteria": [
+            "Pre-state: 1 subscription to peer with 3 published claims on FakePeerPds",
+            "`openlore peer pull` resolves peer's CURRENT pds_endpoint via IdentityPort::resolve_peer (NOT cached); calls PdsPort::list_peer_records walking ALL cursors (Q-DELIVER-5); for each record: claim_domain::verify(record, peer_pubkey) + claim_domain::compute_cid(record) verified byte-equal against published rkey; on both passing: PeerStoragePort::write_peer_claim with author_did from signed payload",
+            "Post-state: 3 peer_claims rows + 3 entries in peer_claim_references + N entries in peer_claim_evidence; 3 JSON files under peer_claims/<encoded_did>/<cid>.json; every author_did byte-equal to subscribed peer's DID",
+            "Per-peer progress block format matches journey YAML tui_mockup byte-for-byte (Q-DELIVER-6): 'Pulling from did:plc:rachel-test...' / '  fetched: 3, new: 3, verified: 3, rejected: 0' / '  done.'",
+            "OrientationState.first_pull_completed_at is written; exit code 0",
+            "PP-1 passes (drives indirectly the orientation probe for first-pull per ADR-013 §Earned Trust #7)"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_fetches_verifies_and_stores_peer_claims_attributed_per_record",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/orientation.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/orientation.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs",
+            "crates/adapter-atproto-did/src/peer_resolve.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["03-01"],
+          "estimated_minutes": 75,
+          "implementation_notes": "LOAD-BEARING per acceptance-tests.md §6 + WD-24 + WD-27 + WD-30 + I-FED-1 + ADR-013 + ADR-016. The walking-skeleton beat for J-003 federated read. Pipeline: resolve_peer (fresh, NOT cached) -> list_peer_records walks all cursors per Q-DELIVER-5 -> per-record verify+CID -> write_peer_claim. Q-DELIVER-6: per-peer progress block format lands HERE (the source of truth for all PP-* assertions). Q-DELIVER-7: OrientationState lives in cli; first_pull_completed_at written after EACH successful pull on first-ever invocation. DD-FED-10 STATE-DELTA MIGRATION: load-bearing scenario; crafter MUST migrate assertion to assert_state_delta(before, after, universe, expected) once helpers are real (universe slots: peer_storage.claims.row_count_by_author[did], peer_storage.filesystem.peer_files_count[did], orientation.first_pull_completed_at, peer_storage.peer_claim_references.row_count_for_peer[did]). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: per-record fault-isolated control flow uses Result-and-collect-skipping-Err pattern (functional). Inner-loop proptest covers the verify+CID pipeline (forall valid signed record: write succeeds; forall record with any tampered byte: write rejects)."
+        },
+        {
+          "id": "04-02",
+          "name": "PP-2 peer pull idempotent — skip already-stored claims by CID",
+          "criteria": [
+            "Pre-state: 3 peer_claims already stored from a previous pull",
+            "Re-running `openlore peer pull` against the same peer (unchanged FakePeerPds fixture) detects existing CIDs via PeerStoragePort::write_peer_claim's WritePeerClaimOutcome{written:false} idempotency contract",
+            "Per-peer progress block reports: 'fetched: 3, new: 0, verified: 3, rejected: 0' (verify still runs even on existing; only the write is skipped)",
+            "Post-state: row count unchanged; no duplicate filesystem files; exit code 0",
+            "PP-2 passes"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_is_idempotent_skipping_already_stored_claims_by_cid",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-FED-002 AC #6 + ADR-013 §peer pull idempotency. write_peer_claim uses INSERT ... ON CONFLICT (cid) DO NOTHING in DuckDB (or equivalent) and returns WritePeerClaimOutcome{written:false} on conflict. Verify still runs per-record (defense-in-depth — a re-pull is also a re-check; if the local row's signature has drifted, the failure surfaces). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: inner-loop proptest the adapter — forall row already present: write returns written:false + row count unchanged."
+        },
+        {
+          "id": "04-03",
+          "name": "PP-3 peer pull rejects tampered signature per-record (KPI-FED-6 release-gate)",
+          "criteria": [
+            "Fixture: FakePeerPds::with_tampered_signature publishes 3 records, 1 of which has byte-flipped signature.sig",
+            "Pull: per-record verify fails on the tampered one; PeerStorageError::SignatureInvalid (or equivalent) raised; record SKIPPED, not stored",
+            "Honest 2 records are written normally",
+            "Per-peer progress block reports: 'fetched: 3, new: 2, verified: 2, rejected: 1' with rejection reason 'signature invalid'",
+            "Exit code is NON-ZERO (any rejection => non-zero exit per WD-37)",
+            "PP-3 passes; integration gate 5 (peer_tampered_signature_rejected) passes; KPI-FED-6 release-gate observable"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_rejects_tampered_signature_per_record_and_stores_honest_records",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/claim-domain/src/verify.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/claim-domain/src/verify.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 35,
+          "implementation_notes": "LOAD-BEARING per acceptance-tests.md §7 integration gate 5 + KPI-FED-6 release-blocking + WD-24 + WD-37 + D-D15. Adversarial fixture from tests/fixtures/peer-adversarial/tampered_signature.json (DEVOPS-owned per D-D15; consumed via FakePeerPds::with_tampered_signature). Fault isolation per WD-37: one record reject does NOT abort the peer's other records. Exit non-zero on any rejection per ADR-013. DD-FED-10 STATE-DELTA MIGRATION: load-bearing; crafter MUST migrate assertion to assert_state_delta (universe slots: peer_storage.claims.row_count_by_author[did]==2, peer_storage.filesystem.peer_files_count[did]==2, exit_code==non_zero). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: claim_domain::verify is pure (slice-01); the test extends fixture coverage in claim-domain proptests (forall record with any sig byte flipped => verify returns Err)."
+        },
+        {
+          "id": "04-04",
+          "name": "PP-4 peer pull rejects CID mismatch per-record (integration gate 2)",
+          "criteria": [
+            "Fixture: FakePeerPds::with_cid_mismatch publishes 3 records, 1 of which has recomputed CID != published rkey",
+            "Pull: per-record CID recomputation detects mismatch; record SKIPPED, not stored",
+            "Honest 2 records are written normally",
+            "Per-peer progress block reports: 'fetched: 3, new: 2, verified: 2, rejected: 1' with rejection reason 'CID mismatch'",
+            "Exit code NON-ZERO",
+            "PP-4 passes; integration gate 2 (peer_cid_round_trip) passes"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_rejects_cid_mismatch_per_record_and_stores_honest_records",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/claim-domain/src/cid.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/claim-domain/src/cid.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per acceptance-tests.md §7 integration gate 2 + WD-24 + ADR-006 CID determinism. Adversarial fixture tests/fixtures/peer-adversarial/cid_mismatch.json. The compute_cid is pure (slice-01 ADR-006); the slice-03 pull-time verification compares against the published rkey byte-equal. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: inner-loop proptest for the cid-recompute pipeline (forall record with any payload byte mutated => recomputed CID != original)."
+        },
+        {
+          "id": "04-05",
+          "name": "PP-5 peer pull rejects self-attribution at write time (WD-40 defense vs key compromise)",
+          "criteria": [
+            "Fixture: FakePeerPds::with_self_attribution publishes 1 record where author field == local user's DID",
+            "Pull: PeerStoragePort::write_peer_claim rejects with PeerStorageError::SelfAttribution",
+            "Per-peer progress block reports: 'fetched: 1, new: 0, verified: 0, rejected: 1' (verify may or may not have passed — irrelevant; the write-time guard is the load-bearing rejection)",
+            "Exit code NON-ZERO",
+            "PP-5 passes (defense-in-depth backing KPI-FED-1)"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_rejects_self_attribution_at_write_time",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "LOAD-BEARING per WD-40 + I-FED-2 + acceptance-tests.md §10 CM-G defense-in-depth. The check happens at the write boundary in DuckDbPeerStorageAdapter::write_peer_claim: if signed.author.did_without_fragment() == identity_port.author_did(), reject with PeerStorageError::SelfAttribution. This is policy enforcement at the storage write surface — the slice-03 trust model is 'we trust signatures, not author fields.' Even if the signature did verify against the user's key (key compromise), the SelfAttribution rejection still fires. DD-FED-10 STATE-DELTA MIGRATION: load-bearing; crafter MUST migrate to assert_state_delta. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: PeerStoragePort::probe extends with SelfAttribution sentinel — attempt to write a fixture with author==author_did, assert error per component-boundaries.md probe #4."
+        },
+        {
+          "id": "04-06",
+          "name": "PP-6 peer pull rejects cross-attribution to third-party DID at write time (WD-41)",
+          "criteria": [
+            "Fixture: FakePeerPds::with_cross_attribution publishes 1 record where author field references a third-party DID (NOT the subscribed peer's DID)",
+            "Pull: PeerStoragePort::write_peer_claim rejects with PeerStorageError::CrossAttribution (signed.author != subscribed_peer.did)",
+            "Per-peer progress block reports the rejection",
+            "Exit code NON-ZERO",
+            "PP-6 passes (resolves DISTILL anxiety scenario 1.2 per WD-41)"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_rejects_cross_attribution_to_third_party_did_at_write_time",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/ports/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/ports/src/peer_storage.rs"
+          ],
+          "deps": ["04-05"],
+          "estimated_minutes": 30,
+          "implementation_notes": "LOAD-BEARING per WD-41 + I-FED-2 + acceptance-tests.md §2 + RESOLVES DISTILL anxiety 1.2. The slice-03 trust model: subscribing to a peer means accepting THEIR claims; cross-attributed records on that peer's PDS are out of scope. write_peer_claim takes `peer_did: &Did` (the subscription's peer DID, NOT the signed-record's author) as a separate argument; rejects if signed.author.did_without_fragment() != peer_did. PeerStorageError gains CrossAttribution variant. DD-FED-10 STATE-DELTA MIGRATION: load-bearing; crafter MUST migrate to assert_state_delta. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the CrossAttribution rejection is structurally enforced by the write_peer_claim signature taking `peer_did` separately from the signed payload; the API design itself denies a back-door."
+        },
+        {
+          "id": "04-07",
+          "name": "PP-7 peer pull skips unreachable peer and proceeds with others (fault isolation across peers)",
+          "criteria": [
+            "Pre-state: 2 subscriptions; peer A reachable with 3 records; peer B unreachable (FakePeerPds::with_unreachable())",
+            "Pull: peer A's records are fetched + verified + stored; peer B fetch errors with PdsError::PdsUnreachable; pull PROCEEDS to peer A (sequential order independent)",
+            "Per-peer progress block for unreachable peer reports the error; honest peer's progress block reports success",
+            "Exit code NON-ZERO (any skip => non-zero per WD-37)",
+            "PP-7 passes"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_skips_unreachable_peer_and_proceeds_with_others",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per WD-37 + ADR-016 §Failure modes + US-FED-002 failure_modes Example 3. Sequential pull per WD-37 (concurrency deferred to slice-04); per-peer fault isolation (one peer error does not abort the others). The control-flow uses Result-and-continue-on-Err per-peer; non-zero overall exit code if any peer was skipped. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: per-peer fault isolation = fold over subscriptions collecting (Did, Result<PullSummary, PullError>)."
+        },
+        {
+          "id": "04-08",
+          "name": "PP-8 peer pull with zero subscriptions exits 0 with no-peers-subscribed message",
+          "criteria": [
+            "Pre-state: no peer_subscriptions rows",
+            "`openlore peer pull` exits 0 (NOT an error)",
+            "stdout contains 'no peers subscribed' line + hint pointing at `openlore peer add`",
+            "PP-8 passes"
+          ],
+          "test_file": "tests/acceptance/peer_pull.rs",
+          "scenario_name": "peer_pull_with_zero_subscriptions_prints_no_peers_subscribed_and_exits_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/peer_pull.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/peer_pull.rs"
+          ],
+          "deps": ["04-01"],
+          "estimated_minutes": 15,
+          "implementation_notes": "Per WD-18 (pull-on-demand only) + ADR-013 §Earned Trust #4 + US-FED-002 failure_modes empty list. PeerStoragePort::list_active_subscriptions returns empty Vec; the verb handler prints the message and exits 0 — silent empty would be hostile per slice-01 WS-13 precedent. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: edge-case PINNED example; trivial pure-flow branch."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "counter_claim + federated_query — authoring + reader pillars (14 scenarios)",
+      "description": "Ship US-FED-004 (counter-claim authoring; J-003b first-class disagreement) and US-FED-003 (federated graph query; J-003a anti-merging). CC-1 chains to FQ-5 for the cross-file Pillar-2 chained narrative. FQ-2 + FQ-8 are KPI-FED-2 release-gates. CC-2 + CC-3 combined (both --reason validation errors).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "CC-1 counter-claim compose signs and publishes via slice-01 pipeline (LOAD-BEARING; KPI-FED-3 north star; integration gate 3)",
+          "criteria": [
+            "`openlore claim counter <target_cid> --reason \"...\"` constructs UnsignedClaim with references[]=[{type:Counters, cid:target_cid}] + reason populated (NFC-normalized via claim_domain::normalize_reason)",
+            "Compose preview contains 'counters: <target_cid> (by <peer_did>)' + 'not as truth' (slice-01) + 'counter-claims coexist, never overwrite' (slice-03) + reason wrapped at 78 cols",
+            "Enter at sign prompt -> claim_domain::canonicalize + compute_cid + sign (slice-01 pipeline); Y at publish prompt -> VerbClaimPublish invoked as a function (single-publish-path I-FED-5)",
+            "Post-state: counter-claim row in `claims` table; <cid>.json file under claims/ (NOT peer_claims/); FakePds receives the record at-uri",
+            "Output prints 'at-uri: at://<user_did>/org.openlore.claim/<cid>' + 'retract' hint (inherited from slice-01)",
+            "CC-1 passes; integration gate 3 (counter_target_cid_round_trip) passes"
+          ],
+          "test_file": "tests/acceptance/counter_claim.rs",
+          "scenario_name": "counter_claim_compose_signs_and_publishes_via_slice_01_pipeline_with_required_framing",
+          "implementation_scope": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/render.rs",
+            "crates/claim-domain/src/normalize.rs",
+            "crates/claim-domain/src/validate_counter_claim.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/render.rs",
+            "crates/claim-domain/src/normalize.rs",
+            "crates/claim-domain/src/validate_counter_claim.rs"
+          ],
+          "deps": ["02-05", "04-01"],
+          "estimated_minutes": 60,
+          "implementation_notes": "LOAD-BEARING per acceptance-tests.md §7 integration gate 3 + KPI-FED-3 north-star + WD-17 + WD-22 + WD-33 + I-FED-5 + ADR-013 + ADR-015. Single-publish-path invariant: VerbClaimCounter MUST call VerbClaimPublish internals as a function (no parallel publish code). The two-prompt contract (ADR-003) extends to counter-claims: compose preview rendered BEFORE signing; publish prompt SEPARATE [Y/n] beat after sign. Content-frozen literals: 'not as truth' (slice-01 inherited) AND 'counter-claims coexist, never overwrite' (slice-03 new). claim_domain::normalize_reason applied to --reason text before canonicalize. claim_domain::validate_counter_claim invoked PRE-compose to detect self-counter or empty reason before user sees a useless preview. Cli probe #1+#2+#3 of ADR-013 §Earned Trust assert: sign-survives-kill; already-published idempotency; literal-string match probes. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: inner-loop proptest covers VerbClaimCounter's pure construction step (forall valid target_cid + reason: produces UnsignedClaim with the right references[] shape)."
+        },
+        {
+          "id": "05-02",
+          "name": "CC-2 + CC-3 counter-claim rejects missing reason + reason > 1000 chars (CLI-layer pre-compose)",
+          "criteria": [
+            "CC-2: `openlore claim counter <cid>` without --reason exits 1 with stderr naming '--reason' as required; NO compose preview rendered; no file written; no PDS call",
+            "CC-3: `openlore claim counter <cid> --reason \"<1001-char string>\"` exits 1 with stderr naming '--reason' and the 1..=1000 bound; no side effects",
+            "Both errors fire BEFORE compose preview is rendered (defense-in-depth on top of LCC-5)",
+            "CC-2 and CC-3 pass"
+          ],
+          "test_file": "tests/acceptance/counter_claim.rs",
+          "scenario_name": "counter_claim_rejects_missing_reason_pre_compose",
+          "implementation_scope": [
+            "crates/cli/src/verbs/claim_counter.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_counter.rs"
+          ],
+          "deps": ["05-01"],
+          "estimated_minutes": 25,
+          "implementation_notes": "Combined step per task brief cap (≤3 scenarios; both share same files_to_modify + implementation_notes — CLI-layer --reason validation; both are pre-compose rejections). Per WD-20 + ADR-013 §exit-code table + ADR-015 §minLength/maxLength. CC-2's fn name is the scenario_name; CC-3 (counter_claim_rejects_reason_exceeding_one_thousand_chars) is a sibling #[test] fn gated by this step's criteria. The scenario_name pinning is CC-2's fn; CC-3 lives at line 73 of counter_claim.rs and is asserted by the same step. clap can declare --reason as required + the verb handler validates len <= 1000 before any other work. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: error-path PINNED examples per Mandate 11; inner-loop proptest the validator (forall len in [1, 1000]: accept; forall len > 1000 OR len == 0: reject)."
+        },
+        {
+          "id": "05-03",
+          "name": "CC-4 counter-claim rejects self-counter with retract hint (WD-34 ClaimLookup spans both stores)",
+          "criteria": [
+            "Pre-state: user has published a claim with CID X; runs `openlore claim counter X --reason '...'`",
+            "Pre-compose validation via claim_domain::validate_counter_claim detects target X resolves (via ClaimLookup) to a `claims` row with author_did == current_user_did",
+            "Error message: 'cannot counter your own claim; use openlore claim retract <cid> instead' (or equivalent retract-hint per ADR-015)",
+            "ClaimLookup implementation MUST span BOTH `claims` AND `peer_claims` so this works whether the target is the user's own or a peer's (validate_counter_claim is store-agnostic per WD-34)",
+            "No compose preview rendered; no side effects; exit 1",
+            "CC-4 passes"
+          ],
+          "test_file": "tests/acceptance/counter_claim.rs",
+          "scenario_name": "counter_claim_rejects_self_counter_with_retract_hint",
+          "implementation_scope": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs"
+          ],
+          "deps": ["05-01", "02-05"],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per WD-34 + ADR-015 + acceptance-tests.md §3. The ClaimLookup wiring at composition root is the load-bearing detail: VerbClaimCounter constructs a `UnifiedClaimLookup { storage, peer_storage }` that queries BOTH stores (storage.read_signed_claim THEN peer_storage.get_peer_claim_by_cid) when validate_counter_claim asks for the target. The pure-core function (landed at 02-05) is unchanged — only the adapter-side ClaimLookup impl is new at this step. Retract-hint text content-frozen per ADR-015 (referenced in error message). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: UnifiedClaimLookup is a thin composition adapter; inner-loop unit covers (target in claims AND author matches) -> reject + (target in peer_claims AND author != current) -> accept."
+        },
+        {
+          "id": "05-04",
+          "name": "CC-5 counter-claim first-invocation framing block fires once-per-user (WD-43 habit affordance)",
+          "criteria": [
+            "First-ever successful `openlore claim counter` invocation: framing block emitted to stdout BEFORE compose preview; OrientationState.first_counter_claim_completed_at is written to ~/.config/openlore/identity.toml on success",
+            "Second invocation: framing block OMITTED; same compose preview shape but without the orientation header",
+            "Framing block content-frozen literal includes 'first counter-claim' and the J-003b coexistence framing",
+            "CC-5 passes"
+          ],
+          "test_file": "tests/acceptance/counter_claim.rs",
+          "scenario_name": "counter_claim_first_invocation_renders_one_time_framing_block_then_omits_on_subsequent_invocations",
+          "implementation_scope": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/orientation.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_counter.rs",
+            "crates/cli/src/orientation.rs"
+          ],
+          "deps": ["05-01"],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per WD-43 + WD-39 OrientationState mechanism + Q-DELIVER-7. OrientationState owned by cli; the three keys (first_pull_completed_at, first_federated_query_completed_at, first_counter_claim_completed_at) form the source of truth. Resolution: WD-43 LOCKS once-per-user (NOT first-3-times). On success, write first_counter_claim_completed_at = now_utc(); failure to write is logged but not fatal (worst case user sees orientation twice — degradation acceptable). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: OrientationState is a tiny pure-ish helper around identity.toml read/write; inner-loop proptest covers (key absent -> emit + write) + (key present -> omit + don't write)."
+        },
+        {
+          "id": "05-05",
+          "name": "CC-6 counter-claim publish does NOT auto-notify target peer PDS (WD-44)",
+          "criteria": [
+            "Successful `openlore claim counter <peer_target_cid>` publishes to USER's own PDS only",
+            "Assertion: zero network traffic to the target peer's PDS beyond what the slice-01 own-publish path emits to the user's own PDS",
+            "FakePeerPds for the target peer receives no XRPC calls during the counter-claim publish",
+            "CC-6 passes"
+          ],
+          "test_file": "tests/acceptance/counter_claim.rs",
+          "scenario_name": "counter_claim_publish_does_not_auto_notify_target_peer_pds",
+          "implementation_scope": [
+            "crates/cli/src/verbs/claim_counter.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_counter.rs"
+          ],
+          "deps": ["05-01"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-44 + RESOLVES DISTILL anxiety scenario 4. The slice-03 architecture ships NO notification mechanism in either direction; the peer learns about the counter-claim only if they pull from the user (which slice-03 doesn't bridge). The assertion is observable as zero call-count on the target's FakePeerPds during the counter-claim publish path. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: anxiety-mitigation observable; the universe.unchanged() predicate over the target FakePeerPds's request log is the assertion shape."
+        },
+        {
+          "id": "05-06",
+          "name": "FQ-1 federated query returns author + peer claims grouped by author DID (LOAD-BEARING; integration gate 1; KPI-FED-1)",
+          "criteria": [
+            "Pre-state: 1 own claim about subject S + 2 peer claims from 2 different peers about the same subject S",
+            "`openlore graph query --subject S --federated` reads via StoragePort::query_federated_by_subject (UNION ALL with explicit author_did projection per data-models.md §SAFE pattern)",
+            "Output grouped by author DID (one header per author); 3 distinct rows (1 user + 2 peers); every row carries author_did + confidence + cid",
+            "Renderer distinguishes 'You' vs 'SubscribedPeer' vs 'UnsubscribedCache' (via AuthorRelationship enum) by joining peer_subscriptions WHERE removed_at IS NULL",
+            "Footer states author count + no-merge guarantee text (ADR-013 footer convention) + 'None merged with your own claims.'",
+            "FQ-1 passes; integration gate 1 (federation_attribution_preserved) passes"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_returns_author_and_peer_claims_grouped_by_author_did",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs"
+          ],
+          "deps": ["04-01", "03-04"],
+          "estimated_minutes": 55,
+          "implementation_notes": "LOAD-BEARING per acceptance-tests.md §7 integration gate 1 + KPI-FED-1 + KPI-FED-2 release-blocking + WD-30 three-layer anti-merging + I-FED-1. Implementation MUST use UNION ALL with explicit author_did projection per data-models.md §SAFE pattern (NOT JOIN — xtask check-arch rule no_cross_table_join_elides_author from 01-06 forbids JOIN-shapes). FederatedRow.author_did is compile-time non-Option (layer 1 of the three-layer enforcement; layer 2 is xtask; this scenario is layer 3 behavioral). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer is a pure transformation from Vec<FederatedRow> -> formatted output; inner-loop proptest covers the grouping invariant (forall input rows: output distinct_authors == input.iter().map(|r| r.author_did).unique().count())."
+        },
+        {
+          "id": "05-07",
+          "name": "FQ-2 federated query renders identical content from different authors as two separate rows (KPI-FED-2 zero-merge)",
+          "criteria": [
+            "Pre-state: peer A and peer B independently publish two claims with byte-identical content (same subject, predicate, object) — different CIDs (different author_did in canonicalization) and different sigs",
+            "`openlore graph query --subject ... --federated` renders TWO separate rows under TWO different author headers",
+            "ZERO rows labeled 'merged' or 'consensus' anywhere in output",
+            "FQ-2 passes (KPI-FED-2 zero-merge guardrail)"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_renders_identical_content_from_different_authors_as_two_separate_rows",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": ["05-06"],
+          "estimated_minutes": 30,
+          "implementation_notes": "LOAD-BEARING per KPI-FED-2 release-blocking + WD-30 + I-FED-1. The renderer MUST NOT collapse rows with identical (subject, predicate, object) but different author_did. This is the surface where the anti-merging type-level + structural enforcement gets behaviorally tested. DD-FED-10 STATE-DELTA MIGRATION: load-bearing; crafter MUST migrate assertion to assert_state_delta (universe slots: cli.graph_query.distinct_authors_in_output, cli.graph_query.row_count, cli.graph_query.has_merged_or_consensus_label). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: renderer invariant exercised via proptest at inner-loop layer (forall rows with N distinct author_dids: output has N headers + no merge label)."
+        },
+        {
+          "id": "05-08",
+          "name": "FQ-3 federated query default (no flag) is byte-identical to slice-01 behavior (regression gate)",
+          "criteria": [
+            "`openlore graph query --subject S` (no --federated) reads via the slice-01 StoragePort::query_by_subject path (NOT query_federated_by_subject)",
+            "Output is byte-identical to what slice-01 would produce for the same input",
+            "Footer still mentions '--federated' as the slice-03 affordance (per WS-12)",
+            "FQ-3 passes (regression gate for slice-01)"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_default_without_flag_is_byte_identical_to_slice_01_behavior",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": ["05-06"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-FED-003 AC #2 + WD-13 + VerbGraphQuery extended branch (slice-01 path unchanged when --federated is absent). The flag default is OFF; behavior with the flag absent is byte-identical to slice-01 step 05-11/05-12 output. Regression gate against the slice-01 walking skeleton. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: regression test; byte-equal comparison against a slice-01 gold output fixture (committed)."
+        },
+        {
+          "id": "05-09",
+          "name": "FQ-4 federated query with zero peers subscribed degrades with hint",
+          "criteria": [
+            "Pre-state: zero peer_subscriptions rows; some own claims about subject S",
+            "`openlore graph query --subject S --federated` shows the user's own claims + a hint 'no peers subscribed; subscribe with openlore peer add'",
+            "Exit code 0",
+            "FQ-4 passes"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_with_zero_peers_subscribed_degrades_with_hint",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": ["05-06"],
+          "estimated_minutes": 15,
+          "implementation_notes": "Per US-FED-003 AC #7. Graceful degradation surface: --federated with zero peers is not an error; it's a UX nudge. The hint text content-frozen per ADR-013. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: edge-case PINNED example."
+        },
+        {
+          "id": "05-10",
+          "name": "FQ-5 federated query annotates counter relationships bidirectionally (cross-file chained narrative; Pillar 2)",
+          "criteria": [
+            "Pre-state: user has published a counter-claim against peer A's claim (chained from CC-1)",
+            "`openlore graph query --subject ... --federated` annotates BOTH directions: user's counter-claim row shows 'counters <peer_a_cid> (by did:plc:rachel-test)'; peer A's claim row shows 'countered by <user_counter_cid> (by you)'",
+            "Renderer joins peer_claim_references AND claim_references to compute bidirectional annotations",
+            "FQ-5 passes (Pillar 2 chained narrative across CC-1 -> FQ-5 cross-file)"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_annotates_counter_relationships_bidirectionally",
+          "implementation_scope": [
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/ports/src/peer_storage.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/ports/src/peer_storage.rs"
+          ],
+          "deps": ["05-06", "05-01"],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-FED-003 AC #8 + acceptance-tests.md §9 Pillar 2. Cross-file chained narrative: CC-1 publishes a counter-claim; FQ-5 asserts the resulting query annotates BOTH directions. PeerStoragePort::query_peer_referencing(target_cid) returns Vec<(Did, Cid, ReferenceType)> for peer claims referencing a target; StoragePort's slice-01 equivalent (query_referencing) handles user's own claims. Renderer joins both result sets to compute the bidirectional annotation. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: bidirectional annotation = pure functional fold over (own_refs, peer_refs); inner-loop proptest the symmetry (forall pair (a, b) in references: a annotates b iff b annotates a)."
+        },
+        {
+          "id": "05-11",
+          "name": "FQ-6 federated query first-invocation orientation fires once-per-user (WD-39 habit affordance)",
+          "criteria": [
+            "First-ever `openlore graph query --federated` invocation: orientation message emitted to stdout BEFORE the normal output (additive at the top); OrientationState.first_federated_query_completed_at written on success",
+            "Second invocation: orientation OMITTED; output starts at the normal grouped-by-author header",
+            "Orientation text contains load-bearing guidance lines per ADR-013",
+            "FQ-6 passes"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_first_invocation_emits_orientation_then_omits_on_subsequent_invocations",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/orientation.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/orientation.rs"
+          ],
+          "deps": ["05-06"],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per WD-39 + OD-FED-2 + Q-DELIVER-7. Symmetric with CC-5 (first-counter-claim) and PP-1 (first-pull). OrientationState lives in cli; the three keys form the source of truth for once-per-user emission. Failure to write the key is logged but not fatal. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: same once-per-user pattern as CC-5; inner-loop coverage of OrientationState already at 05-04 + 04-01."
+        },
+        {
+          "id": "05-12",
+          "name": "FQ-7 federated query renders inline counter-claim template per peer row by default (WD-42)",
+          "criteria": [
+            "Every peer-claim row in `openlore graph query --federated` output is followed by a small inline template: `openlore claim counter <peer_cid> --reason \"...\"` (suggestion text content-frozen)",
+            "Template appears BY DEFAULT; no `--verbose` gate (per WD-42 resolves habit scenario 2)",
+            "Template does NOT appear on user's own claim rows",
+            "FQ-7 passes"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_renders_inline_counter_template_per_peer_row_by_default",
+          "implementation_scope": [
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs"
+          ],
+          "deps": ["05-06"],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-42 + RESOLVES DISTILL habit scenario 2 inline template. Habit-bridging is the explicit purpose; gating behind --verbose would defeat the point. Template emitted per FederatedRow where AuthorRelationship is SubscribedPeer or UnsubscribedCache (NOT You). Output cost is small (~3 lines per peer row). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: render layer pure transformation; inner-loop proptest (forall row with AuthorRelationship::You: no template; forall row with SubscribedPeer|UnsubscribedCache: template present)."
+        },
+        {
+          "id": "05-13",
+          "name": "FQ-8 federated query no merged rows across multi-author multi-record fixture (RELEASE-GATE; KPI-FED-2)",
+          "criteria": [
+            "Pre-state: 4 peers each with 3 published claims about the same subject (12 peer claims total) + user's own 2 claims = 14 distinct claims; multiple authors agree byte-equal on some (subject, predicate, object) triples",
+            "`openlore graph query --subject ... --federated` returns EXACTLY 14 rows (no row aggregation regardless of content equality)",
+            "Output groups under EXACTLY 5 author headers (4 peers + 1 user)",
+            "Footer states: 5 authors; no rows merged",
+            "FQ-8 passes (KPI-FED-2 release-gate; load-bearing for multi-author shape)"
+          ],
+          "test_file": "tests/acceptance/federated_query.rs",
+          "scenario_name": "federated_query_no_merged_rows_across_multi_author_multi_record_fixture",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-duckdb/src/lib.rs"
+          ],
+          "deps": ["05-07"],
+          "estimated_minutes": 35,
+          "implementation_notes": "RELEASE-GATE per KPI-FED-1 + KPI-FED-2 release-blocking + acceptance-tests.md §7 integration gate 1 multi-author shape + WD-30. The 4-peer × 3-claim fixture is the worst-case multi-author shape for the anti-merging invariant. xtask check-arch rule no_cross_table_join_elides_author (from 01-06) + FederatedRow.author_did non-Option (type-level) + this scenario (behavioral) = three-layer enforcement (WD-30) all green. DD-FED-10 STATE-DELTA MIGRATION: load-bearing; crafter MUST migrate to assert_state_delta with universe.unchanged() over (claims.row_count, peer_claims.row_count, peer_subscriptions.row_count) PLUS strict-assert on (cli.graph_query.row_count==14, cli.graph_query.distinct_authors_in_output==5, cli.graph_query.has_merged_label==false). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-03 DD-FED-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 lexicon scenarios LCC-3 + LCC-4 carry the @property tag and DO use proptest. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this is the release-gate scenario; mutation testing scope (D-D8) extends to cover the renderer's grouping logic (cargo-mutants on crates/cli/src/render.rs)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/claim-domain/src/",
+      "crates/lexicon/src/",
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-atproto-did/src/",
+      "crates/adapter-atproto-pds/src/",
+      "crates/cli/src/",
+      "crates/test-support/src/",
+      "xtask/src/",
+      "lexicons/org/openlore/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "tests/fixtures/",
+      "tests/common/",
+      "tests/contracts/"
+    ],
+    "excluded_patterns": [
+      "**/target/**",
+      "**/Cargo.lock",
+      "**/*.swp"
+    ]
+  },
+  "validation": {
+    "status": "pending",
+    "reviewer": "TODO",
+    "approved_at": "TODO"
+  }
+}

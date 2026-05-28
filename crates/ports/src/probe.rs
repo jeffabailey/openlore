@@ -49,6 +49,30 @@ pub enum ProbeRefusalReason {
     PdsIdempotencyViolation,
     LexiconInvalid,
     LexiconSerdeRoundTripFailed,
+
+    // -------- slice-03 additions (federated read) --------
+    /// `peer_subscriptions` / `peer_claims` schema does not match
+    /// migration v3. Per ADR-014.
+    StoragePeerSchemaMismatch,
+    /// Probe-time write of a peer_claim attributed to the local user's
+    /// own DID was accepted by the adapter (the adapter is REQUIRED to
+    /// reject it). Anti-merging layer-2 enforcement.
+    StoragePeerSelfAttribution,
+    /// `soft_remove` deleted peer_claims rows (it MUST only set
+    /// `removed_at` on the subscription, retaining the cached claims).
+    StoragePeerSoftRemoveBleed,
+    /// `hard_purge` left orphan peer_claims or peer_claim_references
+    /// rows (cascade incomplete) — see ADR-014 transaction shape.
+    StoragePeerPurgeIncomplete,
+    /// A peer record fetched from the peer's PDS did not recompute to
+    /// the same CID locally. Indicates either a canonicalization
+    /// regression (claim_domain) or a PDS-side mutation; either way the
+    /// adapter MUST refuse to serve.
+    PdsPeerCidRoundTripFailed,
+    /// A fixture peer DID failed to resolve through the identity
+    /// adapter. Either the PLC directory is unreachable or the resolver
+    /// is misconfigured.
+    IdentityPeerResolutionFailed,
 }
 
 // -----------------------------------------------------------------------------
