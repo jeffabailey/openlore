@@ -36,12 +36,52 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/adapter-atproto-pds` | effect      | Implements `PdsPort` over ATProto XRPC                                  | slice-01     |
 | `crates/adapter-system-clock`| effect      | Implements `ClockPort` over `std::time`                                 | slice-01     |
 | `crates/cli`                 | driver      | clap-based composition root; threads adapters into pure core            | slice-01     |
-| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg` hermetic test doubles | slice-01     |
+| `crates/scraper-domain`      | pure core   | Derives candidate claims from harvested GitHub signals via the `jobs.yaml` signal->predicate SSOT mapping; no I/O | slice-02     |
+| `crates/adapter-github`      | effect      | Implements `GithubPort` over the GitHub public REST/HTTPS API; optional PAT; public-data-only probe | slice-02     |
+| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub` hermetic test doubles | slice-01/02  |
 | `xtask`                      | dev tooling | `check-arch` (hexagonal invariants), `check-probes` (probe contracts)   | slice-01     |
 
-**Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.**
+**Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.
+Slice-02 adds 2 production crates (`scraper-domain` + `adapter-github`),
+bringing the production count to 10 + 1 test-support + 1 xtask binary.**
 
-Shipped slice extensions (no new crates):
+Shipped slice extensions:
+
+- **slice-02 (openlore-github-scraper): SHIPPED 2026-05-28 — TWO-CRATE ADDITIVE
+  EXTENSION (WD-59; the first crate addition since slice-01).** Per WD-13 the
+  umbrella sequence is federation -> scrapers -> scoring -> appview, so slice-02
+  (scrapers) shipped AFTER slice-03 (federation) — recorded here as shipped
+  alongside slice-03. Adds 2 production crates + extends slice-01 crates in place:
+  - **NEW `crates/scraper-domain` (PURE)**: derives auditable candidate claims
+    from harvested GitHub `Signal`s via the `jobs.yaml` J-004 signal->predicate
+    SSOT mapping (embedded at build time via `include_str!` + a pure parse;
+    `mapping_matches_ssot` drift gate, WD-67). Every candidate names >=1 source
+    signal (I-SCR-4), carries the conservative 0.25 numeric confidence
+    (never auto-inflated, WD-52/I-SCR-3), and derives deterministically.
+    No I/O (`check-arch` pure-core allowlist, WD-65).
+  - **NEW `crates/adapter-github` (EFFECT)**: implements `GithubPort` (a NEW
+    port, WD-61/ADR-019 — GitHub shares no contract with ATProto) over the
+    GitHub PUBLIC REST/HTTPS API using the workspace `reqwest`; reads the
+    optional `GITHUB_TOKEN` PAT from env (WD-63); refuses private/non-existent
+    targets; public-data-only `probe()` within the 250ms budget. Holds NO
+    `StoragePort`/`IdentityPort`/`PdsPort` reference by construction (the
+    human-gate at the architecture layer, I-SCR-1 — it CANNOT sign or publish).
+  - `crates/ports`: adds the `GithubPort` trait + `TargetKind`
+    (`Repo{owner,repo}` | `User{user}`) + `GithubError` + slice-02
+    `ProbeRefusalReason` variants.
+  - `crates/cli`: `scrape github <target> [--sign N[,N,...]]` verb +
+    `CandidatePrefill` (the ONLY bridge from a candidate to a signed claim,
+    reusing `VerbClaimAdd` + `VerbClaimPublish` internals — no parallel publish
+    path, WD-66/I-SCR-6) + `SelectionParser`.
+  - `crates/lexicon` + `crates/claim-domain`: UNCHANGED — `derived-from`
+    provenance is DISPLAY-ONLY (WD-62/ADR-018), so the signed payload is
+    byte-identical to a hand-authored claim and CID stability holds with zero
+    new CID path (I-SCR-7).
+  - `xtask`: `scraper-domain` added to the pure-core allowlist (its
+    `serde_yaml_ng` dep whitelisted) + the GitHub public-only enforcement rule +
+    the `impl GithubPort for <Adapter>` non-stub `probe()` rule.
+  - See ADR-017..ADR-019, `docs/evolution/openlore-github-scraper-evolution.md`,
+    and `docs/feature/openlore-github-scraper/design/`.
 
 - **slice-03 (openlore-federated-read): SHIPPED 2026-05-28 — EXTENSION ONLY,
   ZERO new crates (WD-26).** Extends the slice-01 crates in place:
@@ -70,14 +110,17 @@ Shipped slice extensions (no new crates):
 
 Future slices extend this inventory (planned / in-progress):
 
-- slice-02 (github-scraper): adds `adapter-github` + `scraper-domain`.
 - slice-04 (scoring-graph): may swap or augment `adapter-duckdb` with a graph
   store; revisits ADR-001 / WD-8. Also lands real PLC DID-document multibase
-  pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its DV-4).
+  pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its DV-4) and
+  deep cross-repo contributor triangulation (slice-02 shipped a bounded
+  aggregate per WD-64).
 - slice-05 (appview-search): adds an indexer service (separate binary).
 
-**Crate count is unchanged by slice-03: 8 production crates + 1 test-support +
-1 xtask binary (same as slice-01; WD-26 holds).**
+**Crate count: slice-03 was EXTENSION ONLY (zero new crates, WD-26 — 8
+production + 1 test-support + 1 xtask). slice-02 adds the first 2 production
+crates since slice-01 (`scraper-domain` + `adapter-github`, WD-59), bringing the
+cumulative production count to 10 + 1 test-support + 1 xtask binary.**
 
 ## CLI surface (cumulative)
 
@@ -88,6 +131,7 @@ Future slices extend this inventory (planned / in-progress):
 | `openlore claim publish` | slice-01 | ADR-003 |
 | `openlore claim retract` | slice-01 | ADR-003 + ADR-008 |
 | `openlore graph query` | slice-01 | ADR-003 |
+| **`openlore scrape github <target> [--sign N[,N,...]]`** | slice-02 | **ADR-017** |
 | **`openlore peer add`** | slice-03 | **ADR-013** |
 | **`openlore peer pull`** | slice-03 | **ADR-013 + ADR-016** |
 | **`openlore peer remove`** (`[--purge]`) | slice-03 | **ADR-013 + ADR-014** |
@@ -133,9 +177,20 @@ cross-feature I-1..I-12 set (mirroring how slice-01 kept its feature-scoped
 invariants in its own workspace). They cover the anti-merging guarantee
 (I-FED-1, enforced at three layers per WD-30), the single-publish-path reuse
 (I-FED-5), and CID stability of the optional `reason` field (I-FED-6/7). Detail
-lives in `docs/feature/openlore-federated-read/design/` + ADR-014/ADR-015. If a
-future slice needs one of these enforced cross-feature, promote it to the table
-above in the same commit as the ADR that generalizes it.
+lives in `docs/feature/openlore-federated-read/design/` + ADR-014/ADR-015.
+
+**Slice-02 invariants (I-SCR-1..7) are likewise slice-02-scoped**, NOT promoted
+to I-1..I-12 (same handling as slice-03's I-FED-*). They cover the human-gate
+(I-SCR-1: `adapter-github` holds no storage/identity/pds reference and
+`CandidatePrefill` is the only bridge), public-data-only (I-SCR-2), confidence
+0.25 never auto-inflated (I-SCR-3), candidate auditability / names-its-signal
+(I-SCR-4), mapping SSOT no-drift (I-SCR-5), single-publish-path reuse (I-SCR-6),
+and display-only-provenance CID stability (I-SCR-7). Detail lives in
+`docs/feature/openlore-github-scraper/design/` + ADR-017/ADR-018/ADR-019.
+
+If a future slice needs one of these (I-FED-* or I-SCR-*) enforced
+cross-feature, promote it to the table above in the same commit as the ADR that
+generalizes it.
 
 ## Production dependencies (notable additions)
 
@@ -143,6 +198,12 @@ above in the same commit as the ADR that generalizes it.
   for NFC normalization of the counter-claim `reason` field (WD-35, ADR-015).
   Required for CID determinism; covered by the existing `deny.toml` MIT/Apache-2.0
   allowlist. Stays within the pure-core allowlist in `xtask check-arch`.
+- `serde_yaml_ng` (slice-02): pure dependency in `crates/scraper-domain` for
+  parsing the embedded `jobs.yaml` signal->predicate mapping snapshot (DV-5,
+  WD-67). A maintained drop-in fork of the archived `serde_yaml`; license-clean
+  (MIT/Apache-2.0) under the existing `deny.toml` allowlist; whitelisted in the
+  `xtask check-arch` pure-core allowlist (WD-65). `adapter-github` (slice-02)
+  adds NO new transport crate — it reuses the workspace `reqwest` (rustls).
 
 ## SSOT discipline
 
@@ -159,11 +220,15 @@ above in the same commit as the ADR that generalizes it.
 
 ## Pointers
 
-- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-016-*.md`
-  (ADR-013..016 accepted with openlore-federated-read; shipped 2026-05-28)
+- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-019-*.md`
+  (ADR-013..016 accepted with openlore-federated-read; ADR-017..019 accepted/
+  shipped with openlore-github-scraper; both shipped 2026-05-28)
 - Slice-01 evolution: `docs/evolution/openlore-foundation-evolution.md`
+- Slice-02 evolution: `docs/evolution/openlore-github-scraper-evolution.md`
 - Slice-03 evolution: `docs/evolution/openlore-federated-read-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
+- Slice-02 architecture design:
+  `docs/feature/openlore-github-scraper/design/architecture-design.md`
 - Slice-03 architecture design:
   `docs/feature/openlore-federated-read/design/architecture-design.md`
 - KPI contracts: `docs/product/kpi-contracts.yaml`

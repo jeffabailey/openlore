@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-05-28
+last_updated: 2026-05-28  # slice-02 (openlore-github-scraper) KPI-SCR-1..5 recorded at finalize
 
 kpis:
   - id: KPI-1
@@ -143,6 +143,61 @@ kpis:
     baseline_at_ga: "MET — PP-3 (release-gate) + PP-4 + PP-5 (SelfAttribution, WD-40) + PP-6 (CrossAttribution, WD-41) GREEN as of slice-03 ship; signature verify + CID recompute happen at write time"
     notes: "Guardrail / security. CI alert if any run reports != 100% (release-blocking). CAVEAT: slice-03 verifies against a test-only peer-pubkey seam (OPENLORE_PEER_PUBKEY_HEX_<did>, DV-4); production multibase (z6Mk...) decode from a real PLC DID document is deferred to slice-04+."
 
+  # --- slice-02 (openlore-github-scraper), recorded at finalize 2026-05-28 ---
+  # Per WD-13 the umbrella sequence is federation -> scrapers -> scoring ->
+  # appview, so slice-02 (scrapers) shipped AFTER slice-03 (federation); these
+  # KPIs are recorded alongside the slice-03 block.
+
+  - id: KPI-SCR-1
+    name: "Cost-to-first-signed-claim via the scraper (scrape github -> sign, e2e wall-clock)"
+    type: leading
+    feature_origin: openlore-github-scraper
+    persona: P-002
+    target: "< 2 minutes from `scrape github` invocation to signed claim, INCLUDING predicate-vocabulary discovery (vs the slice-01 hand-authoring baseline of <2 min once vocabulary is known)"
+    measurement_method: "author-side timing telemetry (tracing histogram `scrape.to_sign.duration_seconds`) + 30-day think-aloud study; P50 + P95 dashboard bucketed by target-type (small repo / large repo / contributor-user) per DEVOPS D-D26"
+    baseline_at_ga: "per-user GREEN (SG-1 harvest->propose + SS-1 sign-via-slice-01 pipeline both GREEN as of slice-02 ship); cohort = YELLOW — pending opt-in telemetry endpoint per DEVOPS D-D26. Comparison baseline is the slice-01 hand-authoring time (J-001 success signal)."
+    notes: "North star of slice-02 (the scraper EXISTS to lower the cost of producing well-evidenced claims). Also targets P-001 in the evaluator hat. Disprover / kill criterion: P95 > 4 minutes (2x budget) forces candidate-review UX re-investigation before slice-04. Cohort aggregation requires the same opt-in telemetry endpoint deferred per ADR-010 (shared with slice-01 KPI-1/3/6). Informational alert if P95 > 4 min (escalate to PO; does not block release alone)."
+
+  - id: KPI-SCR-2
+    name: "Human-gate: zero unsigned persistence / auto-publish (scrape without --sign signs nothing)"
+    type: guardrail
+    feature_origin: openlore-github-scraper
+    persona: P-002
+    target: "100% — zero unsigned persistence; zero auto-publish; confidence never auto-inflated above the 0.25 default by the tool"
+    measurement_method: "release-gate acceptance tests `scraper_never_persists_unsigned` (SG-1/SG-8/SG-9: zero author_claims rows + zero PDS writes + zero claims/<cid>.json files) + `candidate_confidence_no_autoinflate` (SD-2 @property proposal half + SS-2 sign half)"
+    baseline_at_ga: "MET — SG-1/SG-8/SG-9 + SD-2 + SS-2 GREEN as of slice-02 ship; the `CandidatePrefill` bridge reuses the slice-01 single-publish-path (I-SCR-6), so the only way a candidate becomes a claim is the human signing it"
+    notes: "Guardrail / outcome. Any unsigned persistence or auto-publish is a fatal failure of the human-gate and the slice-01 'claims are signed human assertions' invariant — UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-SCR-3
+    name: "Candidate auditability (every proposed candidate names its source signal)"
+    type: leading
+    feature_origin: openlore-github-scraper
+    persona: P-002
+    target: "100% — every candidate traces to the exact public GitHub signal(s) that produced it"
+    measurement_method: "release-gate acceptance test `candidate_names_source_signal` (SC-1 rendering + SD-1 @property: every CandidateClaim.source_signals is non-empty) + 5-user think-aloud at day-30"
+    baseline_at_ga: "MET — SC-1 (release-gate) + SD-1 (@property, non-vacuous) GREEN as of slice-02 ship; a candidate with zero source signals is a bug, not a proposal"
+    notes: "Leading indicator for the KPI-SCR-1 north star (users will not sign a candidate they cannot trace to a signal, so auditability is a precondition for fast signing). Day-30 think-aloud study owned by nw-product-owner."
+
+  - id: KPI-SCR-4
+    name: "Public-data-only (scraper never triggers a private read or surveillance affordance)"
+    type: guardrail
+    feature_origin: openlore-github-scraper
+    persona: P-002
+    target: "100% — zero private-endpoint calls; private/non-existent targets refused"
+    measurement_method: "release-gate acceptance test `scraper_only_reads_public_data` (SG-5: FakeGithub seen_paths public-endpoint allowlist + private-target refusal) + DEVOPS Pact-style GitHub public-endpoint allowlist contract test (D-D22/D-D24)"
+    baseline_at_ga: "MET — SG-5 GREEN as of slice-02 ship; adapter-github calls only public endpoints by construction (no private surface) and holds no storage/identity/pds reference"
+    notes: "Guardrail / trust. Any private-data read or surveillance affordance violates the J-004 anxiety mitigation ('will this become a surveillance / blacklist tool?') — UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-SCR-5
+    name: "Edit-rate (human-in-the-loop is real, not theatre)"
+    type: leading
+    feature_origin: openlore-github-scraper
+    persona: P-002
+    target: ">= 50% of signed-from-scraper claims show >= 1 field (predicate / evidence / confidence) edited from the proposed default"
+    measurement_method: "author-side telemetry: per-signed-claim diff between the proposed candidate and the signed payload, emitted via tracing event `scrape.candidate.signed{target, predicate, fields_edited, proposed_confidence, signed_confidence}`"
+    baseline_at_ga: "per-user instrumented (the edit path is GREEN — SS-1 edit-then-sign + the conservative 0.25 default that forces a conscious confidence-raise per WD-52); cohort = YELLOW — pending opt-in telemetry endpoint per DEVOPS D-D26"
+    notes: "Leading indicator for KPI-SCR-1 (proves the human-in-the-loop is real, which is what makes users trust candidates enough to sign quickly). Disprover / kill criterion: < 20% edit-rate at day-30 suggests users rubber-stamp machine proposals — re-investigate whether candidates are over-confident or the edit affordance is too hidden."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -153,9 +208,16 @@ kpis:
 #   all three are release-blocking per the slice-03 disprovers in
 #   docs/feature/openlore-federated-read/discuss/outcome-kpis.md.
 #
+#   Slice-02 guardrails: KPI-SCR-2 (human-gate: zero unsigned persistence /
+#   auto-publish) and KPI-SCR-4 (public-data-only). Both MET at GA; both are
+#   release-blocking per the slice-02 disprovers in
+#   docs/feature/openlore-github-scraper/discuss/outcome-kpis.md.
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-03): docs/feature/openlore-federated-read/discuss/outcome-kpis.md
+#   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
