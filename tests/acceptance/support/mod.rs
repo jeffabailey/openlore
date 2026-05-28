@@ -2850,8 +2850,31 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 ],
             )
         }
+        FederatedGraphFixture::DenoIdenticalContentTwoAuthors => {
+            // US-GRAPH-001 Example 3 (KPI-GRAPH-2 zero-merge): the SAME
+            // (subject, object) on github:denoland/deno asserted by TWO distinct
+            // authors — the LOCAL user's OWN claim (0.40) AND a pulled PEER claim
+            // from Tobias (0.55). The identical-content pair must render as TWO
+            // rows (never merged), so the seeder mixes one own `claim add` with
+            // one peer `peer add` + `peer pull`.
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let deno = "github:denoland/deno";
+            seed_own_plus_peer_graph(
+                env,
+                &[OwnClaim {
+                    subject: deno,
+                    object: dep,
+                    confidence: 0.40,
+                }],
+                &[SeedPeer {
+                    peer_did: "did:plc:tobias-test",
+                    seed: [9u8; 32],
+                    triples: &[(deno, dep, 0.55)],
+                }],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
-        // steps (GQE-2..27 stay RED until then).
+        // steps (GQE-3..27 stay RED until then).
         other => {
             let _ = env;
             todo!(
@@ -2868,6 +2891,82 @@ struct SeedPeer<'a> {
     peer_did: &'a str,
     seed: [u8; 32],
     triples: &'a [(&'a str, &'a str, f64)],
+}
+
+/// One of the LOCAL user's own claims to seed via the real `claim add` verb
+/// (signed + persisted locally, NOT published — the read path only needs the
+/// local row). The author is `env.identity.author_did()` ("(you)").
+struct OwnClaim<'a> {
+    subject: &'a str,
+    object: &'a str,
+    confidence: f64,
+}
+
+/// Seed a federated graph that MIXES the local user's own claims (via the real
+/// `claim add` verb) with subscribed-peer claims (via `peer add` + `peer pull`).
+/// Used by the identical-content zero-merge fixture (GQE-2 /
+/// `DenoIdenticalContentTwoAuthors`): the same `(subject, object)` is asserted
+/// by both the local user AND a peer, and they must land as TWO attributed rows
+/// (own → `You`, peer → `SubscribedPeer`) — never a merged aggregate.
+///
+/// Returns a [`SeededGraph`] owning the live `PeerPds` doubles AND recording the
+/// canonical seeded attribution shape (own claims first, attributed to the bare
+/// local DID; then peer claims attributed to their authors) so the assertion can
+/// pin per-author rows.
+fn seed_own_plus_peer_graph(
+    env: &TestEnv,
+    own_claims: &[OwnClaim<'_>],
+    peers: &[SeedPeer<'_>],
+) -> SeededGraph {
+    let local_did = env.identity.author_did().to_string();
+
+    // -- Own claims via the real `claim add` verb. `\n` confirms the sign
+    // prompt; `N` declines publishing (local-only — the read path needs only
+    // the persisted local row). --
+    let mut seeded: Vec<SeededClaim> = Vec::new();
+    for own in own_claims {
+        let confidence = own.confidence.to_string();
+        let added = run_openlore_with_stdin(
+            env,
+            &[
+                "claim",
+                "add",
+                "--subject",
+                own.subject,
+                "--predicate",
+                "embodiesPhilosophy",
+                "--object",
+                own.object,
+                "--evidence",
+                "https://example.test/own",
+                "--confidence",
+                &confidence,
+            ],
+            "\nN\n",
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_own_plus_peer_graph: claim add for {} must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            own.subject, added.stdout, added.stderr
+        );
+        seeded.push(SeededClaim {
+            author_did: local_did.clone(),
+            subject: own.subject.to_string(),
+            object: own.object.to_string(),
+            confidence: own.confidence,
+        });
+    }
+
+    // -- Peer claims via the real `peer add` + `peer pull` verbs, reusing the
+    // peer-authored seeding path (its returned graph owns the live PeerPds
+    // doubles + records the peer attribution). --
+    let peer_graph = seed_peer_authored_graph(env, peers);
+    seeded.extend(peer_graph.seeded);
+
+    SeededGraph {
+        _peers: peer_graph._peers,
+        seeded,
+    }
 }
 
 /// Seed a federated graph whose claims are ALL authored by subscribed peers

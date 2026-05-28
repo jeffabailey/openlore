@@ -219,12 +219,83 @@ fn graph_query_by_object_identical_content_different_authors_renders_two_rows() 
     // Both claims appear as distinct rows under github:denoland/deno: one under
     // "(you)" (local 0.40), one under "(subscribed peer)" (Tobias 0.55). NO row
     // collapses the two authors. The renderer keeps each author's cid distinct.
-    todo!(
-        "DELIVER (slice-04): assert the two identical-(subject,object) claims by different authors \
-         render as TWO distinct rows under github:denoland/deno (one (you) at 0.40, one \
-         (subscribed peer) at 0.55) with NO combined consensus row (US-GRAPH-001 Example 3; \
-         KPI-GRAPH-2 anti-merging);\n--- graph ---\n{graph:?}"
-    )
+    //
+    // Universe (port-exposed observable surface of the `--object` dimension
+    // view): cli.graph_query.distinct_subjects_in_output (1 — only deno),
+    // cli.graph_query.distinct_authors_in_output (2 — local + Tobias),
+    // cli.graph_query.cid_rows (2 — identical content stays TWO rows),
+    // cli.graph_query.rows_collapsed (0 — no merged/consensus/aggregate row).
+    // Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, "(you)"
+
+    // 1. ONE subject heads the group: github:denoland/deno (both claims share it).
+    assert!(
+        stdout.contains("subject: github:denoland/deno"),
+        "cli.graph_query.distinct_subjects_in_output: expected github:denoland/deno to head the \
+         (single) subject group;\n--- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. BOTH authors appear on their own per-claim rows, each annotated with its
+    //    relationship: the local user's row "(you)", Tobias's "(subscribed peer)".
+    //    Identical content does NOT erase either author's attribution.
+    assert!(
+        stdout.contains(&format!("author_did: {local_did} (you)")),
+        "expected the local user's claim row annotated '(you)' (the OWN 0.40 claim);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("author_did: did:plc:tobias-test (subscribed peer)"),
+        "expected Tobias's claim row annotated '(subscribed peer)' (the PEER 0.55 claim);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. Each author's numeric confidence appears verbatim on its row — the two
+    //    identical-content claims keep their DISTINCT confidences (0.40 renders as
+    //    the minimal decimal `0.4`; both sit in the [0.4, 0.7) 'weighted' bucket).
+    for (confidence, bucket) in [("0.4", "weighted"), ("0.55", "weighted")] {
+        assert!(
+            stdout.contains(&format!("confidence: {confidence} ({bucket})")),
+            "expected a per-claim row showing numeric confidence {confidence} with its \
+             display-only bucket ({bucket});\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 4. The identical-content pair renders as TWO cid-bearing rows — NOT merged
+    //    into one. Count the canonical `cid:` field lines (each row independently
+    //    attributable; the renderer never collapses the two authors' claims).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 2,
+        "anti-merging (KPI-GRAPH-2): expected exactly 2 cid-bearing rows (identical content by \
+         two authors stays TWO rows, none merged); got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. NO combined consensus/aggregate row: the two authors are never collapsed.
+    //    The no-merge FOOTER legitimately contains "merged"; strip it first.
+    for label in ["merged", "consensus", "aggregate"] {
+        let scanned = stdout.replace("No claims are merged.", "");
+        assert!(
+            !scanned.to_lowercase().contains(label),
+            "anti-merging (KPI-GRAPH-2): the --object output must contain NO {label:?} row — the \
+             identical-content pair coexists as two attributed rows;\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 6. The footer states the count honestly: 1 subject, 2 authors, plus the
+    //    content-frozen no-merge guarantee verbatim.
+    assert!(
+        stdout.contains("1 subject(s), 2 author(s)."),
+        "expected the footer to honestly state 1 subject + 2 authors;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "expected the footer to carry the content-frozen no-merge guarantee verbatim;\n\
+         --- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-3 (US-GRAPH-001 regression; WD-87): bare `graph query --subject <S>`
