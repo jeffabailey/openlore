@@ -66,4 +66,26 @@ makes ZERO writes (SG-8, SG-9, SC-5, scraper_never_persists_unsigned); public-da
 
 - `cargo xtask check-arch`: OK (12 workspace members) — scraper-domain pure-core allowlist + GitHub public-only enforcement active.
 - `cargo xtask check-probes`: OK (GithubAdapter probe is real; the 1 allowlisted-stub warning is the pre-existing slice-03 peer-storage probe, knowingly accepted at slice-03 review — out of slice-02 scope).
-- Per-phase L1-L6 refactor / adversarial review / mutation outcomes recorded below as those phases run.
+- Per-phase L1-L6 refactor / adversarial review / mutation outcomes recorded below.
+
+## Phase 4 — L1-L6 refactoring (commit 6d45612)
+
+RPP applied (honest "already clean" assessment — minimal warranted): the `adapter-github` auth-report side channel was contained (process-global `OnceLock<Mutex>` → thread-local `Cell`; documented as accepted slice-02 tech-debt because `GithubPort` can't carry `AuthReport` without a contract change); `--sign` batch orchestration extracted out of `run()`. All tests green; check-arch + check-probes + clippy clean. Source writes flowed (the 05-01 first-attempt block was a confirmed transient hook race, resolved by normal re-dispatch).
+
+## Phase 5 — Adversarial review: APPROVED (zero blockers)
+
+@nw-software-crafter-reviewer verdict APPROVED. All scrutinized "no-production-change, just-unskip" clusters (SG-2/4/6/7/8/9, SC-1..5, SS-2/3/4/5, SA-2/3/4/5) confirmed GENUINE (load-bearing port-to-port; deletion-test would red them) — zero Testing Theater. Human-gate (no-write-without-sign + single-publish-path), public-data-only, token-no-leak (double-observable: saw_token + assert_token_value_absent), scraper-domain purity + mapping-SSOT + confidence-no-inflate + auditability, provenance CID-stability — all PASS. All 9 TDD gates satisfied. Auth thread-local = accepted documented tech-debt (single-threaded CLI; revisit when GithubPort widens). parse_selection dup+range fix correct. Test seams contained.
+
+## Phase 6 — Mutation testing (per-feature ≥80%): PASS
+
+cargo-mutants 25.3.1 on the new pure-core `scraper-domain`:
+
+| Target | Mutants | Caught | Missed | Unviable | Kill rate |
+|---|---|---|---|---|---|
+| `scraper-domain` (derive + mapping) | 20 | 12 | 1 | 7 | **92.3%** (12/13 viable) |
+
+Gate SATISFIED (>80%). The 1 surviving mutant replaces `MappingError`'s `Display::fmt` with a default — i.e. the error-message TEXT for a malformed mapping is not assertion-covered. Low-value: `MappingError` cannot fire in practice (the embedded mapping is build-time SSOT-validated by `mapping_matches_ssot`). Logged for a future test-optimizer pass; not a slice-02 deliverable.
+
+## Phase 7 — Deliver integrity verification: PASS
+
+`des-verify-integrity docs/feature/openlore-github-scraper/deliver/` → "All 39 steps have complete DES traces" (exit 0).
