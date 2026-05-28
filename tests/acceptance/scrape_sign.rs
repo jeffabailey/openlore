@@ -478,14 +478,79 @@ fn scrape_sign_out_of_range_index_is_rejected_before_compose() {
 /// @us-scr-003 @driving_port @real-io @j-004c @error
 #[test]
 fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-5. WHEN --sign 1 with stdin '...\\n1.5\\n0.55\\n\\nY\\n' \
-         (accept fields, type 1.5 then 0.55 for confidence); THEN stdout re-prompts \
-         'confidence must be between 0.0 and 1.0', and the claim is only written after the \
-         valid 0.55 — assert the eventual signed claim records 0.55 and that no claim file \
-         existed at the moment of the re-prompt."
-    )
+    // GIVEN Maria has an initialized env + the public repo serving the five
+    // canonical cargo signals → five derived candidates. Candidate 1 is the
+    // dependency-pinning proposal derived from "Cargo.lock committed".
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she runs `--sign 1` and walks the slice-01 compose editor: accept
+    // subject / predicate / object / evidence (four Enters), then types an
+    // OUT-OF-RANGE confidence `1.5` (outside [0.0, 1.0]) followed by the VALID
+    // `0.55` — the re-prompt loop must reject 1.5, re-ask, and accept 0.55. A
+    // final Enter signs and `Y` publishes. The invalid value must NEVER reach a
+    // write: nothing is composed/signed/published until a valid confidence is in
+    // hand.
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1"],
+        github.base_url(),
+        "\n\n\n\n1.5\n0.55\n\nY\n",
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 1 must exit 0 once a valid confidence is finally entered; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the CLI re-prompted with the range constraint when `1.5` was entered
+    // (the SS-5 hard AC: "confidence must be between 0.0 and 1.0").
+    assert!(
+        outcome.stdout.contains("confidence must be between 0.0 and 1.0"),
+        "expected the out-of-range confidence 1.5 to trigger the re-prompt \
+         'confidence must be between 0.0 and 1.0'; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the re-prompt happened BEFORE any write crossed the storage boundary:
+    // the validation message appears in stdout strictly before the
+    // `Published claim <cid>.` success line — proving 1.5 never produced a claim
+    // (nothing was written until the valid 0.55 was in hand).
+    let reprompt_at = outcome
+        .stdout
+        .find("confidence must be between 0.0 and 1.0")
+        .expect("re-prompt message must be present in stdout");
+    let published_at = outcome
+        .stdout
+        .find("Published claim ")
+        .expect("publish success line must be present in stdout after a valid confidence");
+    assert!(
+        reprompt_at < published_at,
+        "the out-of-range re-prompt must occur BEFORE the claim is written/published \
+         (no claim until a valid confidence is entered); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the eventual signed claim records EXACTLY the valid 0.55 the human
+    // finally entered — never the rejected 1.5 (the re-prompt loop accepted only
+    // the in-range value).
+    let cid = published_cid_from_stdout(&outcome.stdout);
+    assert_candidate_confidence_unchanged(&env, &cid, 0.55);
+
+    // AND exactly ONE claim crossed the storage boundary — the valid one. The
+    // rejected 1.5 produced ZERO writes, so the user's OWN PDS holds exactly the
+    // single signed-from-scraper record at the user's own at-uri (the
+    // single-publish-path proof doubles as the "1.5 wrote nothing" guard).
+    assert_scraper_reuses_slice01_publish_path(&env, &cid);
 }
 
 /// SS-6 / Edge (US-SCR-003 Ex 5): declining the publish prompt retains the
