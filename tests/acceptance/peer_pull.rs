@@ -1109,5 +1109,112 @@ fn peer_pull_skips_unreachable_peer_and_proceeds_with_others() {
 /// @us-fed-002 @real-io @driving_port @j-003 @edge
 #[test]
 fn peer_pull_with_zero_subscriptions_prints_no_peers_subscribed_and_exits_zero() {
-    todo!("DELIVER (slice-03): wire VerbPeerPull early-return on empty list_active_subscriptions; assert stdout contains 'no peers subscribed' (case-insensitive) + exit 0 + zero peer_claims rows + zero filesystem writes under peer_claims/ directory tree")
+    // A freshly-initialized env has run `openlore init` ONLY — no `peer add`,
+    // so `list_active_subscriptions` is empty. This is the pull-on-demand-only
+    // clean no-op (ADR-016): the user runs `peer pull` before subscribing to
+    // anyone. Distinct from PP-7 (a peer SKIP → non-zero); an EMPTY list is a
+    // clean no-op → exit ZERO.
+    let env = TestEnv::initialized();
+
+    // Action: `openlore peer pull` with ZERO subscriptions. No peer resolver /
+    // pubkey seams are wired — the empty-list early-return fires before any
+    // peer wiring is reached, so the plain runner is the correct driving-port
+    // entry.
+    let outcome = run_openlore(&env, &["peer", "pull"]);
+
+    // 1. Exit ZERO + a "no peers subscribed" hint on stdout (ADR-013 §Earned
+    //    Trust #4). Asserted case-insensitively so the exact casing of the
+    //    rendered line is not over-pinned (the load-bearing contract is the
+    //    presence of the hint, not its capitalization).
+    assert_eq!(
+        outcome.status, 0,
+        "an empty subscription list is a clean no-op, NOT an error — exit must be \
+         ZERO (distinct from PP-7's peer-skip non-zero);\n--- stdout ---\n{}\n\
+         --- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome.stdout.to_lowercase().contains("no peers subscribed"),
+        "expected the no-op to print a 'no peers subscribed' hint on stdout \
+         (ADR-013 §Earned Trust #4);\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 2. The hint points the user at `peer add` (the next step to take —
+    //    journey step 2 empty-subscription-list orientation).
+    assert!(
+        outcome.stdout.contains("peer add"),
+        "the no-op hint must point the user at `peer add`;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. ZERO peer_claims rows written. A pull that subscribes to nobody must
+    //    not touch the peer_claims store at all. After `init` only, the
+    //    `peer_claims` table may not even exist yet — its ABSENCE is the
+    //    strongest possible form of "zero rows written". If the table DOES
+    //    exist (created at init), assert it is empty.
+    assert_peer_claims_store_empty(&env);
+
+    // 4. ZERO filesystem writes under the `peer_claims/` directory tree. The
+    //    no-op writes no artifacts; the partition root is either absent or
+    //    empty.
+    assert_peer_claims_dir_tree_empty(&env);
+}
+
+/// Universe-bound: "the `peer_claims` store holds ZERO rows (under ANY
+/// author)". Port-exposed name: `peer_storage.claims.row_count`.
+///
+/// A clean no-op pull (PP-8) must not touch the peer_claims store. After
+/// `openlore init` only, the `peer_claims` TABLE may not exist yet — its
+/// absence is the strongest "zero rows" signal, so a missing-table query
+/// error is treated as zero. If the table exists, assert the count is zero.
+fn assert_peer_claims_store_empty(env: &TestEnv) {
+    let db_path = env.duckdb_path();
+    if !db_path.exists() {
+        return;
+    }
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for empty-store assertion: {err}",
+            db_path.display()
+        )
+    });
+    // Missing table ⇒ zero rows (no peer claim was ever written).
+    let total: i64 = match conn.query_row("SELECT count(*) FROM peer_claims", [], |r| r.get(0)) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    assert_eq!(
+        total, 0,
+        "a zero-subscription pull must write ZERO peer_claims rows; got {total}"
+    );
+}
+
+/// Universe-bound: "no file exists anywhere under the `peer_claims/`
+/// directory tree". Port-exposed name: `filesystem.peer_claims_tree.file_count`.
+///
+/// The no-op writes no artifacts, so the partition root is either absent
+/// (strongest form of "nothing written") or present-but-empty.
+fn assert_peer_claims_dir_tree_empty(env: &TestEnv) {
+    let peer_claims_root = env
+        .home
+        .join(".local")
+        .join("share")
+        .join("openlore")
+        .join("peer_claims");
+    if !peer_claims_root.exists() {
+        return;
+    }
+    let entries: Vec<_> = std::fs::read_dir(&peer_claims_root)
+        .unwrap_or_else(|e| panic!("read peer_claims root {}: {e}", peer_claims_root.display()))
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "a zero-subscription pull must write nothing under the peer_claims/ tree \
+         at {} but found {} entries: {:?}",
+        peer_claims_root.display(),
+        entries.len(),
+        entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
 }
