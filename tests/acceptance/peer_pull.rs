@@ -192,7 +192,130 @@ fn user_author_claim_count_now(env: &TestEnv) -> usize {
 /// @us-fed-002 @real-io @driving_port @j-003 @edge
 #[test]
 fn peer_pull_is_idempotent_skipping_already_stored_claims_by_cid() {
-    todo!("DELIVER (slice-03): assert second-invocation peer_claims row count UNCHANGED + stdout contains 'already in peer_claims' + exit 0; assert WritePeerClaimOutcome.written == false on second pull per component-boundaries §PeerStoragePort.write_peer_claim")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes THREE honest, REAL-signed claims (same builder as
+    // PP-1). The peer's PDS is STATIC across both pulls — no new records
+    // appear between invocations, so the second pull must find every CID
+    // already cached.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(records.len(), 3, "Rachel publishes exactly three claims");
+
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Precondition: ONE active subscription created through the real
+    // `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // FIRST pull: stores all three (PP-1 still green — the happy path is a
+    // precondition for the idempotency claim).
+    let first = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_exit_zero_and_stdout_contains(&first, "None merged with your own claims");
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+    // First pull reports three NEW; the re-pull marker is absent yet.
+    assert!(
+        first.stdout.contains("Pulled 3 new peer claims"),
+        "first pull reports 3 NEW peer claims;\n--- stdout ---\n{}",
+        first.stdout
+    );
+    // First-pull orientation fires on the FIRST EVER pull (WD-39). The
+    // once-per-user marker is the distinctive "First federated pull
+    // complete" line — NOT the `--federated` token, which also appears in
+    // the always-present content-frozen anti-merging line.
+    assert!(
+        first.stdout.contains("First federated pull complete"),
+        "first pull emits the once-per-user orientation;\n--- stdout ---\n{}",
+        first.stdout
+    );
+
+    // SECOND pull against the UNCHANGED peer PDS. Every record's CID is
+    // already cached ⇒ `write_peer_claim` returns `written: false` for each,
+    // so the pull stores ZERO new rows and reports them all as
+    // already-present/skipped.
+    let second = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Exit 0 — an idempotent re-pull is NOT a failure (no peer skip, no
+    //    record rejection).
+    assert_exit_zero_and_stdout_contains(&second, "None merged with your own claims");
+
+    // 2. The progress block reports the records as already-present/skipped,
+    //    NEVER as "new". This is the user-observable proof that
+    //    `WritePeerClaimOutcome.written == false` for each existing CID
+    //    (component-boundaries §PeerStoragePort.write_peer_claim).
+    assert!(
+        second.stdout.contains("already in peer_claims"),
+        "second pull must report records as already in peer_claims (skipped), \
+         not new;\n--- stdout ---\n{}",
+        second.stdout
+    );
+    assert!(
+        second.stdout.contains("Pulled 0 new peer claims"),
+        "second pull must report ZERO new peer claims (every CID already \
+         cached — written:false);\n--- stdout ---\n{}",
+        second.stdout
+    );
+
+    // 3. DD-FED-10 (LOAD-BEARING) — the storage state-delta across the
+    //    re-pull is EMPTY: the row count attributed to Rachel is STILL
+    //    exactly 3 (no duplicate peer_claims rows), and the anti-merging
+    //    total-equals-attributed invariant (I-FED-1) still holds.
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    //    The on-disk artifact partition still holds exactly three
+    //    `<cid>.json` files — no duplicate artifacts written on re-pull.
+    let partition = peer_claims_dir_for(&env, peer_did);
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        3,
+        "expected exactly 3 `<cid>.json` artifacts under {} after the re-pull \
+         (idempotent — no duplicates); got {artifact_count}",
+        partition.display()
+    );
+
+    // 4. WD-39: the once-per-user orientation does NOT re-fire on the second
+    //    pull (it already fired on the first). Asserted on the distinctive
+    //    orientation marker, not the `--federated` token shared with the
+    //    always-present anti-merging line.
+    assert!(
+        !second.stdout.contains("First federated pull complete"),
+        "the first-pull orientation must NOT re-fire on a re-pull (WD-39 \
+         once-per-user);\n--- stdout ---\n{}",
+        second.stdout
+    );
 }
 
 // =============================================================================
