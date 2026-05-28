@@ -329,6 +329,19 @@ fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Re
                 return Err(anyhow!("publishing signed candidate claim failed"));
             }
         }
+    } else {
+        // Decline (SS-6): the publish prompt was answered with anything other
+        // than Y/yes (n / N / Enter / EOF). This is the local-only outcome —
+        // the signed claim STAYS on disk (the sign + write above ran first and
+        // is NOT rolled back) and NO PDS call is made (KPI-5 local-first). Hint
+        // the standalone publish verb naming the exact CID so the human can
+        // federate it later at will (`openlore claim publish <cid>`).
+        let cid = &signed.signature.signed_cid.0;
+        writeln!(
+            stdout,
+            "\nNot published. Publish it later with: openlore claim publish {cid}"
+        )?;
+        stdout.flush()?;
     }
 
     Ok(())

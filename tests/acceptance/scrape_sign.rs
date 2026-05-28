@@ -565,13 +565,91 @@ fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
 /// @us-scr-003 @driving_port @real-io @j-004c @i-scr-6 @edge
 #[test]
 fn scrape_sign_declining_publish_retains_local_claim_with_publish_hint() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-6. WHEN --sign 2 with stdin '\\nn\\n' (Enter sign, n decline \
-         publish); THEN exit 0, the claim file exists under claims_dir (local sign \
-         succeeded), assert_no_pds_call_was_made(&env) (NOT published), and stdout hints \
-         `openlore claim publish <cid>`."
-    )
+    // GIVEN Tobias has an initialized env + the public repo serving the five
+    // canonical cargo signals → five derived candidates. He selects candidate
+    // 2 (a valid 1-based index within the 1..5 range).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN he runs `--sign 2` and walks the slice-01 compose editor accepting
+    // every pre-filled field (four Enters: subject / predicate / object /
+    // evidence, plus a fifth Enter for the conservative confidence default),
+    // presses Enter to sign locally, then answers `n` to DECLINE the SEPARATE
+    // publish prompt (the two-prompt contract; ADR-017 inherits the slice-01
+    // sign/publish pipeline). The decline is the local-only outcome: signed +
+    // stored, never federated.
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "2"],
+        github.base_url(),
+        "\n\n\n\n\n\nn\n",
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "declining publish after a successful local sign must exit 0 \
+         (local-only outcome, not an error); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Recover the CID from the `Written to local store: <...>/<cid>.json` line
+    // — the decline path emits NO `Published claim <cid>.` block, so the CID is
+    // read from the local-store artifact path the sign step printed.
+    let cid = local_store_cid_from_stdout(&outcome.stdout);
+
+    // THEN the signed claim IS persisted to the local store: the on-disk
+    // `claims/<cid>.json` artifact exists (the slice-01 local-sign behavior the
+    // scraper path reuses).
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    assert!(
+        artifact_path.exists(),
+        "expected the locally-signed claim file to exist at {} after declining \
+         publish (the sign step persists locally regardless of the publish answer); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        artifact_path.display(),
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the claim was NOT published — ZERO `create_record` calls reached the
+    // user's PDS (the decline branch makes no PDS call; KPI-5 local-first /
+    // I-SCR-6 single-publish-path stays unexercised).
+    assert_no_pds_call_was_made(&env);
+
+    // AND stdout hints the claim can be published later with the standalone
+    // verb naming the exact CID (`openlore claim publish <cid>`), so the human
+    // can federate it at will.
+    let expected_hint = format!("openlore claim publish {cid}");
+    assert!(
+        outcome.stdout.contains(&expected_hint),
+        "expected stdout to hint the claim can be published later with \
+         {expected_hint:?}; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+}
+
+/// Recover the locally-signed claim's CID from the `Written to local store:
+/// <...>/<cid>.json` line the sign step prints. The decline-publish path emits
+/// NO `Published claim <cid>.` block (that line only appears after a real
+/// publish), so SS-6 reads the CID from the local-store artifact path instead.
+fn local_store_cid_from_stdout(stdout: &str) -> String {
+    for line in stdout.lines() {
+        if let Some(rest) = line.trim().strip_prefix("Written to local store:") {
+            let path = rest.trim();
+            if let Some(name) = std::path::Path::new(path).file_stem() {
+                return name.to_string_lossy().into_owned();
+            }
+        }
+    }
+    panic!(
+        "could not find a 'Written to local store: <path>/<cid>.json' line in stdout \
+         to recover the locally-signed CID; \n--- stdout ---\n{stdout}"
+    );
 }
 
 // =============================================================================
