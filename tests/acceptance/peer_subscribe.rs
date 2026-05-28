@@ -481,7 +481,87 @@ fn peer_subscribe_remove_purge_with_confirmation_deletes_peer_claims_and_preserv
 /// @us-fed-005 @real-io @driving_port @j-003 @j-003c @edge
 #[test]
 fn peer_subscribe_remove_purge_declined_leaves_state_unchanged() {
-    todo!("DELIVER (slice-03): feed 'n\\n' to the --purge prompt via run_openlore_with_stdin; assert peer_subscriptions row STILL present AND peer_claims rows unchanged AND stdout literal 'Cancelled. Subscription and cached peer claims unchanged.'")
+    let env = TestEnv::initialized();
+
+    // Precondition 1: an ACTIVE subscription to the peer (real `peer add`),
+    // exactly as PS-6 sets up. The decline contract is "leave WHATEVER is
+    // present untouched", so the precondition mirrors the affirmative path.
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+    let _added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_one_active_subscription_for(&env, peer_did);
+
+    // Precondition 2: N cached peer_claims rows AND the on-disk
+    // `peer_claims/<encoded_did>/` partition — the same cached state PS-6
+    // deletes. A correct decline must leave BOTH intact.
+    let cached_count = 3;
+    seed_cached_peer_claims(&env, peer_did, cached_count);
+    seed_peer_claims_dir(&env, peer_did, cached_count);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
+
+    // Precondition 3: M user-authored counter-claims — the user's OWN table,
+    // never targeted by purge. Captured in the universe so the decline's
+    // no-op contract pins it byte-for-byte too.
+    let user_counter_count = 2;
+    seed_user_author_claims(&env, user_counter_count);
+
+    // DD-FED-10: capture the FULL observable universe BEFORE the action.
+    let before = capture_purge_universe(&env, peer_did);
+
+    // Action: hard-purge with the interactive `[y/N]` confirmation answered
+    // "n" via piped stdin. Drives the --purge branch → confirm → DECLINE
+    // (the `confirm()` decline path from 03-05; "no" is the safe default).
+    let outcome = run_openlore_with_stdin(&env, &["peer", "remove", peer_did, "--purge"], "n\n");
+
+    // Observable #1 — the CLI reports the clean cancel with the literal
+    // message and exits 0 (US-FED-005 AC 4; UAT scenario #3).
+    assert_exit_zero_and_stdout_contains(
+        &outcome,
+        "Cancelled. Subscription and cached peer claims unchanged.",
+    );
+
+    // Observable #2 — the defining no-op invariant: the FULL purge universe
+    // is UNCHANGED. An EMPTY expected `Delta` over the four PS-6 purge slots
+    // makes EVERY slot implicit-unchanged, so a decline that silently deleted
+    // ANY slot (the subscription, the cached rows, the on-disk partition, or
+    // — worst — a user counter-claim) surfaces HERE, not in production.
+    let after = capture_purge_universe(&env, peer_did);
+    {
+        use std::collections::HashSet;
+
+        use support::state_delta::{assert_state_delta, Delta};
+
+        let universe: HashSet<String> = [
+            PURGE_SLOT_PEER_CLAIMS,
+            PURGE_SLOT_AUTHOR_CLAIMS,
+            PURGE_SLOT_FS_DIR,
+            PURGE_SLOT_SUBSCRIPTION,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        // No `with_slot` calls → every universe slot is implicit-unchanged.
+        let expected: Delta<String> = Delta::new();
+        assert_state_delta(&before, &after, &universe, &expected);
+    }
+
+    // Belt-and-suspenders against the named single-slot helpers: the
+    // subscription is STILL active (removed_at NULL — not even soft-removed),
+    // the cached peer claims are retained, and the on-disk partition survives.
+    assert_one_active_subscription_for(&env, peer_did);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
+    assert_user_author_claim_count(&env, user_counter_count);
+    assert!(
+        peer_claims_dir_for(&env, peer_did).exists(),
+        "expected the on-disk peer_claims partition for {peer_did} to SURVIVE \
+         a declined purge; it was removed"
+    );
 }
 
 /// PS-8: `openlore peer remove --purge --no-tty <did>` REFUSES to run
