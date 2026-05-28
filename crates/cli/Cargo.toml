@@ -44,6 +44,7 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
@@ -88,4 +89,12 @@ harness = true
 [[test]]
 name = "lexicon_counter_claim"
 path = "../../tests/acceptance/lexicon_counter_claim.rs"
+harness = true
+
+# Slice-03 subprocess acceptance (peer subscribe — US-FED-001 + US-FED-005).
+# Drives the real `openlore` binary via `assert_cmd` + `FakePeerPds`. Step
+# 03-01 activates the PS-1 scenario; PS-2..PS-8 stay RED (`todo!()`).
+[[test]]
+name = "peer_subscribe"
+path = "../../tests/acceptance/peer_subscribe.rs"
 harness = true

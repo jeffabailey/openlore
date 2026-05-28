@@ -170,21 +170,20 @@ impl AtProtoDidAdapter {
     /// canonical WSL2 signal), the adapter falls back to reading
     /// `$XDG_DATA_HOME/openlore/keys/<kid>`. The fallback file's mode
     /// bits are stashed for the probe arm.
-    pub fn for_did(
-        did: &str,
-        did_document_methods: Vec<String>,
-    ) -> Result<Self, IdentityError> {
+    pub fn for_did(did: &str, did_document_methods: Vec<String>) -> Result<Self, IdentityError> {
         let kid = format!("{did}{OPENLORE_VERIFICATION_METHOD_FRAGMENT}");
         let (key_bytes, fallback_state) = load_key_material(&kid)?;
 
-        let key_array: [u8; 32] = key_bytes.as_slice().try_into().map_err(|_| {
-            IdentityError::KeychainUnreachable {
-                message: format!(
-                    "key material at {kid} is {} bytes; Ed25519 seed must be 32",
-                    key_bytes.len()
-                ),
-            }
-        })?;
+        let key_array: [u8; 32] =
+            key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| IdentityError::KeychainUnreachable {
+                    message: format!(
+                        "key material at {kid} is {} bytes; Ed25519 seed must be 32",
+                        key_bytes.len()
+                    ),
+                })?;
 
         let dalek_sk = DalekSigningKey::from_bytes(&key_array);
         let dalek_vk = dalek_sk.verifying_key();
@@ -212,13 +211,11 @@ impl IdentityPort for AtProtoDidAdapter {
     /// returns `ProbeOutcome::Ok`.
     fn probe(&self) -> ProbeOutcome {
         // Arm 1 — DID document verification-method presence.
-        if let probe::ArmOutcome::Refused(r) =
-            probe::check_did_document_lists_verification_method(
-                &self.did.0,
-                &self.did_document_methods,
-                OPENLORE_VERIFICATION_METHOD_FRAGMENT,
-            )
-        {
+        if let probe::ArmOutcome::Refused(r) = probe::check_did_document_lists_verification_method(
+            &self.did.0,
+            &self.did_document_methods,
+            OPENLORE_VERIFICATION_METHOD_FRAGMENT,
+        ) {
             return ProbeOutcome::Refused {
                 reason: r.reason,
                 detail: r.detail,
@@ -337,9 +334,7 @@ impl IdentityPort for AtProtoDidAdapter {
 /// Outcome of loading key material: the raw 32-byte seed plus a flag
 /// indicating whether the WSL2 fallback path was used (and if so, the
 /// mode bits the probe must check).
-fn load_key_material(
-    kid: &str,
-) -> Result<(Vec<u8>, Option<FallbackKeyState>), IdentityError> {
+fn load_key_material(kid: &str) -> Result<(Vec<u8>, Option<FallbackKeyState>), IdentityError> {
     match load_from_keychain(kid) {
         Ok(bytes) => Ok((bytes, None)),
         Err(KeychainLoadError::NoStorage) => {
@@ -352,9 +347,8 @@ fn load_key_material(
             #[cfg(not(target_os = "linux"))]
             {
                 Err(IdentityError::KeychainUnreachable {
-                    message:
-                        "no OS keychain available and fallback file only supported on Linux"
-                            .to_string(),
+                    message: "no OS keychain available and fallback file only supported on Linux"
+                        .to_string(),
                 })
             }
         }
@@ -379,9 +373,11 @@ enum KeychainLoadError {
 /// `Err(NoStorage)` to trigger the WSL2 fallback; `Err(Other)` for any
 /// other failure (which surfaces as `KeychainUnreachable`).
 fn load_from_keychain(kid: &str) -> Result<Vec<u8>, KeychainLoadError> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, kid)
+    let entry =
+        keyring::Entry::new(KEYCHAIN_SERVICE, kid).map_err(|e| classify_keyring_error(&e))?;
+    let hex = entry
+        .get_password()
         .map_err(|e| classify_keyring_error(&e))?;
-    let hex = entry.get_password().map_err(|e| classify_keyring_error(&e))?;
     decode_hex_seed(&hex).map_err(KeychainLoadError::Other)
 }
 
@@ -440,29 +436,16 @@ fn load_from_fallback_file(kid: &str) -> Result<(Vec<u8>, FallbackKeyState), Ide
 
     let path = fallback_key_path(kid)?;
     let metadata = std::fs::metadata(&path).map_err(|e| IdentityError::KeychainUnreachable {
-        message: format!(
-            "WSL2 fallback key file {} unreadable: {e}",
-            path.display()
-        ),
+        message: format!("WSL2 fallback key file {} unreadable: {e}", path.display()),
     })?;
     let mode_bits = metadata.permissions().mode();
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        IdentityError::KeychainUnreachable {
-            message: format!(
-                "WSL2 fallback key file {} read failed: {e}",
-                path.display()
-            ),
-        }
-    })?;
-    let seed = decode_hex_seed(&content)
-        .map_err(|m| IdentityError::KeychainUnreachable { message: m })?;
-    Ok((
-        seed,
-        FallbackKeyState {
-            path,
-            mode_bits,
-        },
-    ))
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| IdentityError::KeychainUnreachable {
+            message: format!("WSL2 fallback key file {} read failed: {e}", path.display()),
+        })?;
+    let seed =
+        decode_hex_seed(&content).map_err(|m| IdentityError::KeychainUnreachable { message: m })?;
+    Ok((seed, FallbackKeyState { path, mode_bits }))
 }
 
 /// Resolve the per-user fallback key directory + filename. Pure modulo
@@ -577,8 +560,8 @@ mod tests {
         let cid = compute_cid(&canonical);
 
         let adapter_sig = adapter.sign(&cid).expect("adapter sign succeeds");
-        let pure_sig = claim_domain::sign(&cid, &SigningKey(test_seed()))
-            .expect("pure sign succeeds");
+        let pure_sig =
+            claim_domain::sign(&cid, &SigningKey(test_seed())).expect("pure sign succeeds");
 
         assert_eq!(
             adapter_sig.signature_bytes, pure_sig.signature_bytes,
@@ -641,7 +624,10 @@ mod tests {
         let outcome = adapter.probe();
         match outcome {
             ProbeOutcome::Refused { reason, .. } => {
-                assert_eq!(reason, ports::ProbeRefusalReason::IdentityDidDocumentMismatch);
+                assert_eq!(
+                    reason,
+                    ports::ProbeRefusalReason::IdentityDidDocumentMismatch
+                );
             }
             ProbeOutcome::Ok => panic!("expected probe refusal"),
         }
@@ -682,16 +668,15 @@ mod tests {
         assert!(matches!(result, Err(IdentityError::SignatureFailed { .. })));
     }
 
-    /// Step 01-03 scaffold pin: `resolve_peer` exists on the
-    /// `IdentityPort` surface and is wired to the `peer_resolve` scaffold,
-    /// which is `todo!()` until the PP-* scenarios fill it in (Phase 04).
-    /// Driving it through the port MUST panic at the scaffold (not return
-    /// a silently-empty `PeerInfo`), proving the method is present and
-    /// routed without yet asserting any business behavior. This test is
-    /// replaced by behavioral assertions when the live body lands.
+    /// Behavioral (replaces the step-01-03 scaffold pin now that the live
+    /// `peer_resolve` body has landed, step 03-01): driving `resolve_peer`
+    /// through the `IdentityPort` against an unreachable resolver endpoint
+    /// surfaces `IdentityError::PeerResolutionFailed` carrying the peer DID
+    /// — never a silently-empty `PeerInfo`, never a panic. The resolver
+    /// base URL is forced to a refused local port via the per-peer env
+    /// seam so the test does no real network I/O.
     #[test]
-    #[should_panic(expected = "resolve_peer_did")]
-    fn resolve_peer_is_scaffolded_and_routed() {
+    fn resolve_peer_surfaces_resolution_failure_on_unreachable_resolver() {
         let adapter = AtProtoDidAdapter::new_with_did_document(
             "did:plc:test-jeff",
             test_seed(),
@@ -700,7 +685,18 @@ mod tests {
         .expect("adapter constructs");
 
         let peer = Did("did:plc:test-peer".to_string());
-        // Drives through the IdentityPort method; reaches the `todo!()`.
-        let _ = adapter.resolve_peer(&peer);
+        // Point the per-peer resolver at a port nothing is listening on so
+        // the HTTP GET fails fast with a transport error.
+        let env_name = "OPENLORE_PEER_PDS_ENDPOINT_DID_PLC_TEST_PEER";
+        std::env::set_var(env_name, "http://127.0.0.1:1");
+        let result = adapter.resolve_peer(&peer);
+        std::env::remove_var(env_name);
+
+        match result {
+            Err(IdentityError::PeerResolutionFailed { did, .. }) => {
+                assert_eq!(did, peer, "the failure must carry the peer DID verbatim");
+            }
+            other => panic!("expected PeerResolutionFailed, got {other:?}"),
+        }
     }
 }

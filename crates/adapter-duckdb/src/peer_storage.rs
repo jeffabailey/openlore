@@ -34,7 +34,7 @@
 //! real probe lands).
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
@@ -87,6 +87,76 @@ impl DuckDbPeerStorageAdapter {
     pub(crate) fn shared_connection(&self) -> &Arc<Mutex<Connection>> {
         &self.conn
     }
+
+    /// Acquire the shared single-writer lock. A poisoned mutex (a previous
+    /// holder panicked) surfaces as a `DuckDb` error rather than a panic so
+    /// callers compose railway-style.
+    fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, PeerStorageError> {
+        self.conn
+            .lock()
+            .map_err(|_| PeerStorageError::DuckDb("peer-storage connection mutex poisoned".into()))
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Row helpers — pure-ish projections from a DuckDB row to the port ADTs.
+// Kept as free functions so both the trait methods and a held lock guard
+// can reuse them without re-locking.
+// -----------------------------------------------------------------------------
+
+/// Look up one subscription row by DID (active OR soft-removed). Returns
+/// `Ok(None)` when no row exists. Caller holds the connection lock.
+fn lookup_subscription_row(
+    conn: &Connection,
+    peer_did: &Did,
+) -> Result<Option<PeerSubscription>, PeerStorageError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT peer_did, peer_handle, peer_pds_endpoint, subscribed_at, removed_at \
+             FROM peer_subscriptions WHERE peer_did = ?",
+        )
+        .map_err(|err| PeerStorageError::DuckDb(format!("prepare lookup_subscription: {err}")))?;
+
+    let mut rows = stmt
+        .query_map(duckdb::params![peer_did.0], row_to_subscription)
+        .map_err(|err| PeerStorageError::DuckDb(format!("query lookup_subscription: {err}")))?;
+
+    match rows.next() {
+        Some(row) => Ok(Some(row.map_err(|err| {
+            PeerStorageError::DuckDb(format!("read lookup_subscription row: {err}"))
+        })?)),
+        None => Ok(None),
+    }
+}
+
+/// Map a `peer_subscriptions` result row to a `PeerSubscription`. A stored
+/// `peer_pds_endpoint` that no longer parses as a URL is a data-corruption
+/// signal surfaced as a duckdb error (never silently dropped).
+fn row_to_subscription(row: &duckdb::Row<'_>) -> Result<PeerSubscription, duckdb::Error> {
+    let peer_did: String = row.get(0)?;
+    let peer_handle: String = row.get(1)?;
+    let endpoint_str: String = row.get(2)?;
+    let subscribed_at: DateTime<Utc> = row.get(3)?;
+    let removed_at: Option<DateTime<Utc>> = row.get(4)?;
+
+    let peer_pds_endpoint = Url::parse(&endpoint_str).map_err(|err| {
+        duckdb::Error::FromSqlConversionFailure(
+            2,
+            duckdb::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("stored peer_pds_endpoint {endpoint_str:?} is not a valid URL: {err}"),
+            )),
+        )
+    })?;
+
+    Ok(PeerSubscription {
+        peer_did: Did(peer_did),
+        peer_handle,
+        peer_pds_endpoint,
+        subscribed_at,
+        removed_at,
+    })
 }
 
 // -----------------------------------------------------------------------------
@@ -102,23 +172,72 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
 
     fn add_subscription(
         &self,
-        _sub: PeerSubscription,
+        sub: PeerSubscription,
     ) -> Result<AddSubscriptionOutcome, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::add_subscription — driven by PS-* scenarios")
+        let conn = self.lock_conn()?;
+
+        // Idempotency (US-FED-001 AC #3): if a row already exists for this
+        // DID — active OR soft-removed — report `AlreadyExisted` with its
+        // original `subscribed_at` and do NOT insert a duplicate. The
+        // PRIMARY KEY on `peer_did` would reject a second insert anyway;
+        // checking first lets us surface the original timestamp the cli
+        // renders without relying on a constraint-violation error string.
+        if let Some(existing) = lookup_subscription_row(&conn, &sub.peer_did)? {
+            return Ok(AddSubscriptionOutcome::AlreadyExisted {
+                since: existing.subscribed_at,
+            });
+        }
+
+        conn.execute(
+            "INSERT INTO peer_subscriptions \
+                (peer_did, peer_handle, peer_pds_endpoint, subscribed_at, removed_at) \
+             VALUES (?, ?, ?, ?, NULL)",
+            duckdb::params![
+                sub.peer_did.0,
+                sub.peer_handle,
+                sub.peer_pds_endpoint.to_string(),
+                sub.subscribed_at.naive_utc(),
+            ],
+        )
+        .map_err(|err| PeerStorageError::DuckDb(format!("insert peer_subscriptions: {err}")))?;
+
+        Ok(AddSubscriptionOutcome::Added {
+            subscribed_at: sub.subscribed_at,
+        })
     }
 
     fn list_active_subscriptions(&self) -> Result<Vec<PeerSubscription>, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::list_active_subscriptions — driven by PS-* scenarios")
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT peer_did, peer_handle, peer_pds_endpoint, subscribed_at, removed_at \
+                 FROM peer_subscriptions \
+                 WHERE removed_at IS NULL \
+                 ORDER BY subscribed_at",
+            )
+            .map_err(|err| {
+                PeerStorageError::DuckDb(format!("prepare list_active_subscriptions: {err}"))
+            })?;
+
+        let rows = stmt
+            .query_map([], row_to_subscription)
+            .map_err(|err| {
+                PeerStorageError::DuckDb(format!("query list_active_subscriptions: {err}"))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                PeerStorageError::DuckDb(format!("read list_active_subscriptions row: {err}"))
+            })?;
+
+        Ok(rows)
     }
 
     fn lookup_subscription(
         &self,
-        _peer_did: &Did,
+        peer_did: &Did,
     ) -> Result<Option<PeerSubscription>, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::lookup_subscription — driven by PS-* scenarios")
+        let conn = self.lock_conn()?;
+        lookup_subscription_row(&conn, peer_did)
     }
 
     fn soft_remove(&self, _peer_did: &Did) -> Result<SoftRemoveOutcome, PeerStorageError> {

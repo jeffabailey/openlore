@@ -35,6 +35,13 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 keyring = "3"
 ed25519-dalek = { version = "2", default-features = false }
+# Slice-03: peer DID-document resolution (`resolve_peer`) issues a
+# synchronous HTTP GET against `com.atproto.identity.resolveDid` (real
+# PLC directory in production; the `FakePeerPds` resolveDid handler in
+# acceptance tests). `IdentityPort` is a SYNC trait, so we use reqwest's
+# blocking client to avoid threading a tokio runtime through the port.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls-webpki-roots"] }
+url = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

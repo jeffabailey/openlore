@@ -39,10 +39,166 @@ use support::*;
 /// `peer_subscriptions`, and prints the next-step hint + the
 /// unsubscribe hint. (US-FED-001 AC 1-2-6; UAT scenario #1.)
 ///
+/// Port-to-port (subprocess): the driving port is the real `openlore`
+/// binary; the driven boundaries are faked — `FakePeerPds` substitutes
+/// both the PLC `resolveDid` handler (so `IdentityPort::resolve_peer`
+/// resolves) AND the peer PDS itself, while the local DuckDB store is
+/// REAL. The observable universe is `{exit code, stdout lines,
+/// peer_subscriptions row state}`; assertions read the binary's stdout
+/// and the persisted DuckDB row, never internal verb state.
+///
 /// @us-fed-001 @real-io @driving_port @j-003
 #[test]
 fn peer_subscribe_add_resolves_did_and_persists_subscription() {
-    todo!("DELIVER (slice-03): wire VerbPeerAdd → PeerStoragePort.add_subscription + IdentityPort.resolve_peer + the next-step + unsubscribe hint output lines per ADR-013")
+    let env = TestEnv::initialized();
+
+    // The peer PDS double hosts Rachel's records AND her resolveDid DID
+    // document on one base URL. The DID document's service endpoint points
+    // back at this same fake, so `resolve_peer` learns the PDS endpoint
+    // from the resolved document.
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+
+    // The in-binary peer resolver finds the fake via the per-peer endpoint
+    // env-var seam (mirrors the slice-01 `OPENLORE_PDS_ENDPOINT` pattern;
+    // see acceptance-tests.md §test-doubles `OPENLORE_PEER_PDS_ENDPOINT_<did>`).
+    let outcome = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+
+    // 1. Resolve confirmation names the DID + handle + claim collection.
+    assert_exit_zero_and_stdout_contains(&outcome, peer_did);
+    assert!(
+        outcome.stdout.contains("org.openlore.claim"),
+        "expected the resolve step to confirm the peer exposes the \
+         org.openlore.claim collection;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // 2. Next-pull hint + 3. unsubscribe hint (ADR-013 / journey step 1).
+    assert!(
+        outcome.stdout.contains("openlore peer pull"),
+        "expected the next-pull hint `openlore peer pull`;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains(&format!("openlore peer remove {peer_did}")),
+        "expected the unsubscribe hint `openlore peer remove {peer_did}`;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. A subscription row is persisted in `peer_subscriptions` — exactly
+    //    one row, active (removed_at IS NULL), attributed to the peer DID.
+    assert_one_active_subscription_for(&env, peer_did);
+}
+
+/// Run the `openlore` binary with the per-peer resolver endpoint wired so
+/// the in-binary `IdentityPort::resolve_peer` resolves `peer_did` against
+/// the supplied `FakePeerPds` base URL instead of the real PLC directory.
+///
+/// Mirrors `run_openlore` (clean env + the slice-01 stub seams) and adds
+/// the `OPENLORE_PEER_PDS_ENDPOINT_<encoded_did>` env var the production
+/// resolver reads. Lives here (not in `support/mod.rs`) because the
+/// per-peer-endpoint seam is slice-03-specific to the peer verbs.
+fn run_openlore_with_peer_resolver(
+    env: &TestEnv,
+    args: &[&str],
+    peer_did: &str,
+    peer_endpoint: &str,
+) -> CliOutcome {
+    use std::process::{Command, Stdio};
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env(peer_resolver_env_var(peer_did), peer_endpoint)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// The per-peer resolver env-var NAME for a DID. Encoding: uppercase the
+/// DID and replace every non-`[A-Z0-9]` character with `_` so the result
+/// is a legal POSIX environment-variable name. This MUST agree with the
+/// production resolver's lookup (adapter-atproto-did `peer_resolve`).
+///
+/// `did:plc:rachel-test` → `OPENLORE_PEER_PDS_ENDPOINT_DID_PLC_RACHEL_TEST`.
+fn peer_resolver_env_var(did: &str) -> String {
+    let encoded: String = did
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("OPENLORE_PEER_PDS_ENDPOINT_{encoded}")
+}
+
+/// Universe-bound: "the `peer_subscriptions` store holds exactly ONE row
+/// for `peer_did`, and that row is active (`removed_at IS NULL`)".
+/// Port-exposed name: `peer_storage.subscriptions.active_row_count[did]`.
+///
+/// Opens a raw `duckdb::Connection` for the assertion (test-support is the
+/// only place raw SQL is acceptable; production goes through
+/// `PeerStoragePort`). Mirrors `assert_duckdb_publication_metadata_for_cid`.
+fn assert_one_active_subscription_for(env: &TestEnv, peer_did: &str) {
+    let db_path = env.duckdb_path();
+    assert!(
+        db_path.exists(),
+        "expected DuckDB to exist at {} after peer add; file missing",
+        db_path.display()
+    );
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for subscription assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let (total, active): (i64, i64) = conn
+        .query_row(
+            "SELECT \
+                count(*), \
+                count(*) FILTER (WHERE removed_at IS NULL) \
+             FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or_else(|err| panic!("query peer_subscriptions for {peer_did}: {err}"));
+
+    assert_eq!(
+        total, 1,
+        "expected exactly one peer_subscriptions row for {peer_did}; got {total}"
+    );
+    assert_eq!(
+        active, 1,
+        "expected the peer_subscriptions row for {peer_did} to be active \
+         (removed_at IS NULL); got {active} active rows"
+    );
 }
 
 /// PS-2: Re-running `openlore peer add` against an already-subscribed
