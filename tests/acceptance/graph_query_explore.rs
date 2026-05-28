@@ -2847,12 +2847,82 @@ fn graph_query_scoring_uses_the_same_numeric_confidence_shown_in_per_claim_rows(
         explained.stdout, explained.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert the numeric confidence shown in the `--object` per-claim row \
-         (e.g. 0.91) is byte-equal to the base value the `--explain` arithmetic consumes for the \
-         same claim — no silent rounding to a bucket midpoint (Gate 6 scoring_uses_numeric_confidence; \
-         confidence must-match-across steps 1+4);\n--- graph ---\n{graph:?}"
-    )
+    // The SAME claim under audit: Rachel's cargo claim. Its seeded confidence
+    // is the ground truth a silent bucket-midpoint rounding would corrupt — pull
+    // it from the live fixture (not a hardcoded literal) so the assertion proves
+    // the SYSTEM surfaces the stored value, not a value the test re-derived.
+    let cargo_claim = graph
+        .seeded
+        .iter()
+        .find(|c| c.subject == "github:rust-lang/cargo")
+        .expect("fixture seeds Rachel's cargo claim (the worked-example base)");
+    // serde renders the stored f64 as the minimal decimal the renderer also uses
+    // (render_candidate_confidence) — never `{:.2}`; this is the byte-form both
+    // views must print verbatim.
+    let stored_token = serde_json::to_value(cargo_claim.confidence)
+        .map(|v| v.to_string())
+        .expect("the seeded confidence serializes to its minimal decimal token");
+
+    // Universe (port-exposed observable surface — the byte-level confidence token
+    // each view prints for cargo, both asserted against stdout, the CLI driving
+    // port). The Gate-6 invariant is a CROSS-VIEW byte-equality:
+    //   cli.graph_query.per_claim_confidence_token  — the token in the `--object`
+    //                                                  per-claim row for cargo
+    //   cli.graph_query.explain_base_confidence_token — the token the `--explain`
+    //                                                  arithmetic consumes as base
+    // Both MUST equal the stored f64's minimal decimal (no bucket-midpoint round).
+    let dimension_stdout = &dimension.stdout;
+    let explained_stdout = &explained.stdout;
+
+    // 1. The `--object` per-claim row prints cargo's confidence as the raw numeric
+    //    token followed by its DISPLAY-ONLY bucket label: `confidence: <tok> (...)`.
+    //    The dimension view groups BY SUBJECT, so scope extraction to cargo's
+    //    group (it heads `subject: github:rust-lang/cargo`) to pin the SAME claim
+    //    the explain audits. Extract the token actually printed (not the literal).
+    let cargo_group = dimension_stdout
+        .split_once("subject: github:rust-lang/cargo")
+        .map(|(_, after)| after)
+        .expect("the --object view must head a `subject: github:rust-lang/cargo` group");
+    let per_claim_token = extract_confidence_token(cargo_group, "(")
+        .expect("cargo's group must print a `confidence: <tok> (<bucket>)` per-claim row");
+
+    // 2. The `--explain` arithmetic enumerates cargo's base confidence as
+    //    `confidence: <tok> (base)` — the value it then multiplies/adds. Extract
+    //    the token the arithmetic actually consumes.
+    let explain_base_token = extract_confidence_token(explained_stdout, "(base)")
+        .expect("the --explain view must print a `confidence: <tok> (base)` arithmetic line");
+
+    // 3. Gate 6 (scoring_uses_numeric_confidence) — byte-equality across views:
+    //    the per-claim row token, the explain base token, AND the stored f64's
+    //    minimal decimal are ALL identical. A silent rounding to a bucket midpoint
+    //    (e.g. 0.91 -> 0.85) would diverge one of these and red the assertion.
+    assert_eq!(
+        per_claim_token, explain_base_token,
+        "Gate 6 (scoring_uses_numeric_confidence): the numeric confidence shown in the `--object` \
+         per-claim row ({per_claim_token:?}) must be BYTE-EQUAL to the base the `--explain` \
+         arithmetic consumes ({explain_base_token:?}) for the SAME claim — no silent rounding to a \
+         bucket midpoint;\n--- dimension stdout ---\n{dimension_stdout}\n--- explained stdout ---\n{explained_stdout}"
+    );
+    assert_eq!(
+        per_claim_token, stored_token,
+        "Gate 6 (scoring_uses_numeric_confidence / KPI-4): the displayed confidence ({per_claim_token:?}) \
+         must equal the STORED claim confidence verbatim ({stored_token:?}) — the displayed number IS \
+         the consumed number (WD-71), never a bucket-midpoint substitute;\n\
+         --- dimension stdout ---\n{dimension_stdout}\n--- graph ---\n{graph:?}"
+    );
+}
+
+/// Extract the numeric confidence token from a `confidence: <tok> <suffix-marker>`
+/// line. The token is whatever the renderer printed between `confidence:` and the
+/// suffix marker (`(` for the per-claim bucket row, `(base)` for the explain
+/// arithmetic line) — returned VERBATIM so a byte-level comparison detects any
+/// silent rounding. Returns the first match's token, trimmed of surrounding space.
+fn extract_confidence_token(stdout: &str, suffix_marker: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let after_label = line.split_once("confidence:")?.1;
+        let token = after_label.split_once(suffix_marker)?.0.trim();
+        (!token.is_empty()).then(|| token.to_string())
+    })
 }
 
 // =============================================================================
