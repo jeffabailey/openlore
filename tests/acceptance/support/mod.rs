@@ -29,8 +29,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
 use openlore_test_support::fake_pds::FakePdsHttpHandle;
+use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
 use ports::IdentityPort;
 use tempfile::TempDir;
 
@@ -97,7 +97,13 @@ impl TestEnv {
         let env = Self::fresh();
         let outcome = run_openlore(
             &env,
-            &["init", "--handle", "jeff.test", "--app-password", "fake-app-password"],
+            &[
+                "init",
+                "--handle",
+                "jeff.test",
+                "--app-password",
+                "fake-app-password",
+            ],
         );
         if outcome.status != 0 {
             panic!(
@@ -111,7 +117,11 @@ impl TestEnv {
 
     /// Path to the local claims directory: `{home}/.local/share/openlore/claims/`.
     pub fn claims_dir(&self) -> PathBuf {
-        self.home.join(".local").join("share").join("openlore").join("claims")
+        self.home
+            .join(".local")
+            .join("share")
+            .join("openlore")
+            .join("claims")
     }
 
     /// Path to the local DuckDB file: `{home}/.local/share/openlore/openlore.duckdb`.
@@ -125,7 +135,10 @@ impl TestEnv {
 
     /// Path to the identity config: `{home}/.config/openlore/identity.toml`.
     pub fn identity_toml_path(&self) -> PathBuf {
-        self.home.join(".config").join("openlore").join("identity.toml")
+        self.home
+            .join(".config")
+            .join("openlore")
+            .join("identity.toml")
     }
 }
 
@@ -435,11 +448,7 @@ pub fn run_openlore(env: &TestEnv, args: &[&str]) -> CliOutcome {
 /// Run `openlore <args>` feeding `stdin_lines` (newline-joined) on
 /// stdin. Used for the two-prompt chained flow: pass "\n" to confirm
 /// the sign prompt, "Y\n" to confirm publish.
-pub fn run_openlore_with_stdin(
-    env: &TestEnv,
-    args: &[&str],
-    stdin_lines: &str,
-) -> CliOutcome {
+pub fn run_openlore_with_stdin(env: &TestEnv, args: &[&str], stdin_lines: &str) -> CliOutcome {
     use std::io::Write;
 
     let bin = assert_cmd::cargo::cargo_bin("openlore");
@@ -457,10 +466,7 @@ pub fn run_openlore_with_stdin(
         // PATH is required for libc / dynamic linker resolution on
         // some hosts; pass through the parent's PATH so `cargo bin`
         // can launch.
-        .env(
-            "PATH",
-            std::env::var("PATH").unwrap_or_default(),
-        )
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -493,6 +499,64 @@ pub fn run_openlore_no_tty(env: &TestEnv, args: &[&str]) -> CliOutcome {
     todo!("DELIVER: invoke run_openlore_with_stdin with the standard scripting confirmations")
 }
 
+/// Run the `openlore` binary with the per-peer resolver endpoint wired so
+/// the in-binary `IdentityPort::resolve_peer` resolves `peer_did` against
+/// the supplied `PeerPds` base URL instead of the real PLC directory.
+///
+/// Mirrors [`run_openlore`] (clean env + the slice-01 stub seams) and adds
+/// the `OPENLORE_PEER_PDS_ENDPOINT_<encoded_did>` env var the production
+/// resolver reads. Promoted to shared support (step 03-02) so the
+/// `peer_subscribe`, `peer_pull`, `counter_claim`, and `federated_query`
+/// scaffolds reuse one slice-03 peer-resolver seam.
+pub fn run_openlore_with_peer_resolver(
+    env: &TestEnv,
+    args: &[&str],
+    peer_did: &str,
+    peer_endpoint: &str,
+) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env(peer_resolver_env_var(peer_did), peer_endpoint)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// The per-peer resolver env-var NAME for a DID. Encoding: uppercase the
+/// DID and replace every non-`[A-Z0-9]` character with `_` so the result
+/// is a legal POSIX environment-variable name. This MUST agree with the
+/// production resolver's lookup (adapter-atproto-did `peer_resolve`).
+///
+/// `did:plc:rachel-test` → `OPENLORE_PEER_PDS_ENDPOINT_DID_PLC_RACHEL_TEST`.
+pub fn peer_resolver_env_var(did: &str) -> String {
+    let encoded: String = did
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("OPENLORE_PEER_PDS_ENDPOINT_{encoded}")
+}
+
 // -----------------------------------------------------------------------------
 // Assertion helpers — universe-bound observable checks
 // -----------------------------------------------------------------------------
@@ -502,12 +566,9 @@ pub fn run_openlore_no_tty(env: &TestEnv, args: &[&str]) -> CliOutcome {
 /// for debuggability.
 pub fn assert_exit_zero_and_stdout_contains(outcome: &CliOutcome, expected_substring: &str) {
     assert_eq!(
-        outcome.status,
-        0,
+        outcome.status, 0,
         "expected exit 0; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.status,
-        outcome.stdout,
-        outcome.stderr
+        outcome.status, outcome.stdout, outcome.stderr
     );
     assert!(
         outcome.stdout.contains(expected_substring),
@@ -528,7 +589,9 @@ pub fn assert_exit_nonzero_and_stderr_contains(outcome: &CliOutcome, expected_su
     assert!(
         outcome.stderr.contains(expected_substring),
         "expected stderr to contain {:?} \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        expected_substring, outcome.stdout, outcome.stderr
+        expected_substring,
+        outcome.stdout,
+        outcome.stderr
     );
 }
 
@@ -630,12 +693,9 @@ pub fn assert_graph_query_output_matches_fixture(
     expected_cid: &str,
 ) {
     assert_eq!(
-        outcome.status,
-        0,
+        outcome.status, 0,
         "graph query must exit 0; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.status,
-        outcome.stdout,
-        outcome.stderr
+        outcome.status, outcome.stdout, outcome.stderr
     );
 
     // Author DID column carries only the bare DID (the `#fragment` is a
@@ -689,7 +749,9 @@ pub fn assert_graph_query_output_matches_fixture(
 /// 'triangulated' in the confidence-bearing area". Port-exposed name:
 /// `storage.local_claim_store.no_bucket_label_string`.
 pub fn assert_persisted_payload_has_no_bucket_label(env: &TestEnv, cid: &str) {
-    todo!("DELIVER: read claims_dir/<cid>.json; assert none of the four bucket-label strings appear")
+    todo!(
+        "DELIVER: read claims_dir/<cid>.json; assert none of the four bucket-label strings appear"
+    )
 }
 
 /// Universe-bound: "the DuckDB row for the given CID has `published_at`
@@ -768,8 +830,7 @@ pub fn assert_claim_references_retract(env: &TestEnv, retract_cid: &str, origina
         });
 
     let has_retracts_pointer = signed.unsigned.references.iter().any(|r| {
-        matches!(r.ref_type, claim_domain::ReferenceType::Retracts)
-            && r.cid.0 == original_cid
+        matches!(r.ref_type, claim_domain::ReferenceType::Retracts) && r.cid.0 == original_cid
     });
     assert!(
         has_retracts_pointer,

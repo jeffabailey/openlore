@@ -99,65 +99,6 @@ fn peer_subscribe_add_resolves_did_and_persists_subscription() {
     assert_one_active_subscription_for(&env, peer_did);
 }
 
-/// Run the `openlore` binary with the per-peer resolver endpoint wired so
-/// the in-binary `IdentityPort::resolve_peer` resolves `peer_did` against
-/// the supplied `FakePeerPds` base URL instead of the real PLC directory.
-///
-/// Mirrors `run_openlore` (clean env + the slice-01 stub seams) and adds
-/// the `OPENLORE_PEER_PDS_ENDPOINT_<encoded_did>` env var the production
-/// resolver reads. Lives here (not in `support/mod.rs`) because the
-/// per-peer-endpoint seam is slice-03-specific to the peer verbs.
-fn run_openlore_with_peer_resolver(
-    env: &TestEnv,
-    args: &[&str],
-    peer_did: &str,
-    peer_endpoint: &str,
-) -> CliOutcome {
-    use std::process::{Command, Stdio};
-
-    let bin = assert_cmd::cargo::cargo_bin("openlore");
-    let output = Command::new(&bin)
-        .args(args)
-        .env_clear()
-        .env("OPENLORE_HOME", &env.home)
-        .env("OPENLORE_DID", env.identity.author_did())
-        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
-        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
-        .env(peer_resolver_env_var(peer_did), peer_endpoint)
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
-
-    CliOutcome {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
-}
-
-/// The per-peer resolver env-var NAME for a DID. Encoding: uppercase the
-/// DID and replace every non-`[A-Z0-9]` character with `_` so the result
-/// is a legal POSIX environment-variable name. This MUST agree with the
-/// production resolver's lookup (adapter-atproto-did `peer_resolve`).
-///
-/// `did:plc:rachel-test` → `OPENLORE_PEER_PDS_ENDPOINT_DID_PLC_RACHEL_TEST`.
-fn peer_resolver_env_var(did: &str) -> String {
-    let encoded: String = did
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("OPENLORE_PEER_PDS_ENDPOINT_{encoded}")
-}
-
 /// Universe-bound: "the `peer_subscriptions` store holds exactly ONE row
 /// for `peer_did`, and that row is active (`removed_at IS NULL`)".
 /// Port-exposed name: `peer_storage.subscriptions.active_row_count[did]`.
@@ -209,7 +150,71 @@ fn assert_one_active_subscription_for(env: &TestEnv, peer_did: &str) {
 /// @us-fed-001 @real-io @driving_port @j-003 @edge
 #[test]
 fn peer_subscribe_add_is_idempotent_on_re_subscribe() {
-    todo!("DELIVER (slice-03): assert AddSubscriptionOutcome::AlreadyExisted dispatch path emits the original subscribed_at timestamp; assert exactly one peer_subscriptions row remains after two add invocations")
+    let env = TestEnv::initialized();
+
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+
+    // First add: fresh subscribe. Persists exactly one active row whose
+    // `subscribed_at` becomes the canonical "since" timestamp the second
+    // add must echo back unchanged.
+    let first = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_exit_zero_and_stdout_contains(&first, peer_did);
+    assert_one_active_subscription_for(&env, peer_did);
+
+    // The original `subscribed_at`, read straight from the persisted row —
+    // this is the universe slot the idempotent path must NOT mutate.
+    let original_subscribed_at = subscribed_at_for(&env, peer_did);
+
+    // Second add of the SAME peer: idempotent re-subscribe. Exits 0, prints
+    // "already subscribed since <original_ts>", and does NOT duplicate the
+    // row. (US-FED-001 AC 3; Example 2.)
+    let second = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+
+    assert_exit_zero_and_stdout_contains(&second, "already subscribed since");
+    assert!(
+        second.stdout.contains(&original_subscribed_at.to_rfc3339()),
+        "expected the idempotent re-add to echo the ORIGINAL subscribed_at \
+         {} (not a fresh clock read);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        original_subscribed_at.to_rfc3339(),
+        second.stdout,
+        second.stderr
+    );
+
+    // The defining idempotency invariant: still exactly ONE active row —
+    // the second add appended nothing.
+    assert_one_active_subscription_for(&env, peer_did);
+}
+
+/// Read the persisted `subscribed_at` for `peer_did` straight from the
+/// DuckDB `peer_subscriptions` row. Port-exposed name:
+/// `peer_storage.subscriptions.subscribed_at[did]`. Test-support is the
+/// only place raw SQL is acceptable; production goes through
+/// `PeerStoragePort`. Mirrors `assert_one_active_subscription_for`.
+fn subscribed_at_for(env: &TestEnv, peer_did: &str) -> chrono::DateTime<chrono::Utc> {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for subscribed_at read: {err}",
+            db_path.display()
+        )
+    });
+    conn.query_row(
+        "SELECT subscribed_at FROM peer_subscriptions WHERE peer_did = ?",
+        duckdb::params![peer_did],
+        |r| r.get::<_, chrono::DateTime<chrono::Utc>>(0),
+    )
+    .unwrap_or_else(|err| panic!("read subscribed_at for {peer_did}: {err}"))
 }
 
 /// PS-3: `openlore peer add did:plc:not-a-real-did` exits non-zero with
