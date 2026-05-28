@@ -193,13 +193,29 @@ fn scrape_candidates_footer_states_nothing_is_signed_until_user_signs() {
 /// @us-scr-002 @real-io @driving_port @j-004b @wd-52 @kpi-scr-2 @happy
 #[test]
 fn scrape_candidates_all_default_to_speculative_quarter_confidence() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SC-3 — candidate_confidence_no_autoinflate (proposal half). \
-         WHEN scrape github rust-lang/cargo; THEN assert_candidate_confidence(&outcome, 0.25, \
-         \"speculative\") for EVERY candidate AND assert no candidate displays a confidence \
-         above 0.3."
-    )
+    // GIVEN an initialized env + a public repo serving the five canonical cargo
+    // signals — each maps to one derived candidate, so the rendered list carries
+    // several candidate confidence lines to quantify over.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign — a pure read; the scraper
+    // only ever PROPOSES candidates, it never asserts a claim).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    // THEN EVERY rendered candidate's proposed confidence is the conservative
+    // 0.25 default, displayed as the "speculative" bucket, and NO candidate is
+    // proposed with a confidence above 0.3 — the human-gate forces the user to
+    // consciously raise confidence rather than the scraper auto-inflating it
+    // (gate candidate_confidence_no_autoinflate, KPI-SCR-2 / WD-52 / WD-10).
+    assert_candidate_confidence(&outcome, 0.25, "speculative");
 }
 
 /// SC-4 (US-SCR-002 Ex 4; I-SCR-4): when THREE distinct signals all map to

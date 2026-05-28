@@ -2336,14 +2336,73 @@ pub fn assert_candidate_names_signal(outcome: &CliOutcome, expected: &[(usize, &
 /// numeric confidence + bucket label, and no candidate displays a confidence
 /// above 0.3 (WD-52 / I-SCR-3).
 ///
-/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+/// Materialized (step 04-03).
 pub fn assert_candidate_confidence(outcome: &CliOutcome, expected: f64, bucket_label: &str) {
-    // SCAFFOLD: true
-    let _ = (outcome, expected, bucket_label);
-    todo!(
-        "DELIVER (slice-02): assert every candidate displays confidence==expected as \
-         bucket_label AND none > 0.3 (candidate_confidence_no_autoinflate, proposal half)"
-    )
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 before its candidate confidences can be asserted; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    let stdout = &outcome.stdout;
+
+    // The render layer prints, per candidate:
+    //   confidence  : 0.25 (speculative)
+    // where the numeric form mirrors serde's minimal-decimal rendering (e.g.
+    // `0.25`) and the bucket label is the WD-10 compose-time display bucket.
+    // We pin BOTH the exact displayed line AND the parsed numeric value so the
+    // no-auto-inflate guardrail (<= 0.3) is enforced over EVERY candidate, not
+    // just the literal string match.
+    let expected_numeric = serde_json::to_value(expected)
+        .map(|value| value.to_string())
+        .expect("expected confidence value is well-formed");
+    let expected_line = format!("confidence  : {expected_numeric} ({bucket_label})");
+
+    // Collect every rendered candidate's `confidence  :` line. The renderer
+    // emits exactly one per candidate, so this IS the per-candidate universe.
+    let confidence_lines: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("confidence  :"))
+        .collect();
+
+    assert!(
+        !confidence_lines.is_empty(),
+        "expected at least one rendered candidate confidence line \
+         (`confidence  : ...`) in the candidate list; \n--- stdout ---\n{stdout}"
+    );
+
+    for line in &confidence_lines {
+        // Exact display contract: confidence shows `expected (bucket_label)`.
+        assert_eq!(
+            *line, expected_line,
+            "every candidate's confidence must display as {expected_line:?} \
+             (candidate_confidence_no_autoinflate, proposal half — WD-52 / I-SCR-3); \
+             \n--- offending line ---\n{line}\n--- full stdout ---\n{stdout}"
+        );
+
+        // No-auto-inflate guardrail: parse the displayed numeric and prove it
+        // is never proposed above 0.3 (KPI-SCR-2), independent of the label.
+        let numeric_text = line
+            .trim_start_matches("confidence  :")
+            .split('(')
+            .next()
+            .map(str::trim)
+            .unwrap_or("");
+        let numeric: f64 = numeric_text.parse().unwrap_or_else(|err| {
+            panic!(
+                "candidate confidence {numeric_text:?} must parse as a number \
+                 to enforce the no-auto-inflate ceiling: {err}; \n--- line ---\n{line}"
+            )
+        });
+        assert!(
+            numeric <= 0.3,
+            "no candidate may be proposed with confidence above 0.3 \
+             (candidate_confidence_no_autoinflate, KPI-SCR-2); got {numeric} on line {line:?}; \
+             \n--- full stdout ---\n{stdout}"
+        );
+    }
 }
 
 /// Universe-bound (gate `candidate_confidence_no_autoinflate`, sign half):
