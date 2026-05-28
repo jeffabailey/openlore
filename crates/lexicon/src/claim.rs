@@ -61,6 +61,16 @@ pub enum LexiconError {
     )]
     InvalidReferenceType { value: String },
 
+    /// `reason` is present but its character length falls outside the
+    /// Lexicon-defined inclusive range `1..=1000` (ADR-015 `minLength: 1`,
+    /// `maxLength: 1000`). Length is measured in Unicode scalar values
+    /// (`chars().count()`), matching ATProto Lexicon string-length
+    /// semantics (codepoints, not bytes or grapheme clusters). This is the
+    /// Lexicon-layer defense-in-depth gate; the `claim counter` CLI verb
+    /// (step 05-02) enforces the same bound at a different layer.
+    #[error("reason length {length} is outside 1..=1000 (ADR-015 minLength 1 / maxLength 1000)")]
+    ReasonLengthOutOfRange { length: usize },
+
     /// Catch-all for serde-level deserialization failures after the
     /// per-field gates above have passed. Should be rare in practice.
     #[error("schema mismatch: {message}")]
@@ -220,10 +230,40 @@ pub fn validate_claim_json(value: &serde_json::Value) -> Result<Claim, LexiconEr
         }
     }
 
-    // Gate 4: serde-level deserialization (final shape check).
+    // Gate 4: reason length in 1..=1000 (ADR-015). Optional field —
+    // the gate fires ONLY when `reason` is present as a JSON string.
+    if let Some(reason) = object.get("reason") {
+        if let Some(text) = reason.as_str() {
+            validate_reason_length(text)?;
+        }
+        // A present-but-non-string `reason` (e.g. a number or null) is
+        // left to the serde gate below to reject with a schema error;
+        // the length gate only governs string-valued reasons.
+    }
+
+    // Gate 5: serde-level deserialization (final shape check).
     serde_json::from_value::<Claim>(value.clone()).map_err(|err| LexiconError::SchemaMismatch {
         message: err.to_string(),
     })
+}
+
+/// Enforce the ADR-015 `reason` length bound: `1..=1000` Unicode scalar
+/// values (`chars().count()` — codepoints, matching ATProto Lexicon
+/// string-length semantics; NOT bytes, NOT grapheme clusters).
+///
+/// Pure: takes the already-extracted reason text and returns
+/// `Ok(())` when the length is in range, or
+/// `ReasonLengthOutOfRange { length }` naming the offending char count.
+/// Bounds are inclusive on both ends (`minLength: 1`, `maxLength: 1000`).
+fn validate_reason_length(text: &str) -> Result<(), LexiconError> {
+    const MIN_LENGTH: usize = 1;
+    const MAX_LENGTH: usize = 1000;
+    let length = text.chars().count();
+    if (MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+        Ok(())
+    } else {
+        Err(LexiconError::ReasonLengthOutOfRange { length })
+    }
 }
 
 // =============================================================================
@@ -378,5 +418,111 @@ mod tests {
         let claim =
             validate_claim_json(&value).expect("confidence=1.0 must validate (inclusive)");
         assert_eq!(claim.confidence, 1.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 02-04: `reason` length — Lexicon-layer defense-in-depth.
+    //
+    // ADR-015 declares `reason: { type: "string", minLength: 1,
+    // maxLength: 1000 }`. minLength/maxLength are INCLUSIVE; length is
+    // measured in Unicode scalar values (`chars().count()`), matching
+    // ATProto Lexicon string-length semantics (codepoints — NOT bytes,
+    // NOT grapheme clusters). Slice-01 introduced no string-length gate
+    // (it validates only presence, confidence range, and the reference
+    // enum), so there is no prior length-unit convention to match; this
+    // step establishes chars().count() per the ATProto default.
+    //
+    // `reason` is OPTIONAL at the wire level — the gate fires ONLY when
+    // `reason` is present (a non-null JSON string). Absence / null defers
+    // to the existing forward-compat behavior (reason -> None).
+    //
+    // Boundary-pinning example tests (no proptest at this layer: the
+    // contract IS the four boundary points 0/1/1000/1001 plus the
+    // chars-vs-bytes semantic; per nw-test-optimization Mandate 11 a
+    // boundary contract is correctly pinned by its boundaries).
+    // -------------------------------------------------------------------------
+
+    fn claim_with_reason(reason: serde_json::Value) -> serde_json::Value {
+        let mut value = well_formed_claim_value();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("reason".to_string(), reason);
+        value
+    }
+
+    #[test]
+    fn rejects_empty_reason_at_inclusive_lower_bound_minus_one() {
+        // length 0 < minLength 1 -> reject.
+        let value = claim_with_reason(json!(""));
+        let err = validate_claim_json(&value).expect_err("reason=\"\" (length 0) must reject");
+        assert_eq!(err, LexiconError::ReasonLengthOutOfRange { length: 0 });
+        let msg = err.to_string();
+        assert!(msg.contains("1..=1000"), "msg must name the range: {msg}");
+    }
+
+    #[test]
+    fn rejects_reason_one_over_inclusive_upper_bound() {
+        // length 1001 > maxLength 1000 -> reject.
+        let value = claim_with_reason(json!("a".repeat(1001)));
+        let err =
+            validate_claim_json(&value).expect_err("reason length 1001 must reject");
+        assert_eq!(err, LexiconError::ReasonLengthOutOfRange { length: 1001 });
+    }
+
+    #[test]
+    fn accepts_reason_at_inclusive_lower_bound() {
+        // length 1 == minLength -> accept (inclusive).
+        let value = claim_with_reason(json!("x"));
+        let claim =
+            validate_claim_json(&value).expect("reason length 1 must validate (inclusive)");
+        assert_eq!(claim.reason.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn accepts_reason_at_inclusive_upper_bound() {
+        // length 1000 == maxLength -> accept (inclusive).
+        let value = claim_with_reason(json!("a".repeat(1000)));
+        let claim =
+            validate_claim_json(&value).expect("reason length 1000 must validate (inclusive)");
+        assert_eq!(claim.reason.as_deref().map(str::len), Some(1000));
+    }
+
+    #[test]
+    fn measures_reason_length_in_chars_not_bytes() {
+        // The load-bearing length-unit decision: "é" (U+00E9) is ONE
+        // Unicode scalar value but TWO UTF-8 bytes. A 1000-`é` reason is
+        // 1000 chars (== maxLength, ACCEPT) but 2000 bytes (would REJECT
+        // under a byte gate). This test fails loudly if the validator ever
+        // switches to byte-length, which would diverge from the ATProto
+        // Lexicon codepoint semantics and break valid multi-byte reasons.
+        let one_thousand_accented = "é".repeat(1000);
+        assert_eq!(one_thousand_accented.chars().count(), 1000);
+        assert_eq!(one_thousand_accented.len(), 2000, "precondition: 2 bytes/char");
+        let value = claim_with_reason(json!(one_thousand_accented));
+        let claim = validate_claim_json(&value)
+            .expect("a 1000-CHAR (2000-byte) reason must validate: length is measured in chars");
+        assert_eq!(claim.reason.as_deref().map(|s| s.chars().count()), Some(1000));
+
+        // And one char over the limit (1001 chars / 2002 bytes) rejects
+        // with the CHAR count, not the byte count.
+        let value_over = claim_with_reason(json!("é".repeat(1001)));
+        let err = validate_claim_json(&value_over)
+            .expect_err("1001 chars must reject regardless of byte count");
+        assert_eq!(
+            err,
+            LexiconError::ReasonLengthOutOfRange { length: 1001 },
+            "the rejected length must be the CHAR count (1001), not the byte count (2002)"
+        );
+    }
+
+    #[test]
+    fn accepts_absent_reason_unchanged_forward_compat() {
+        // The gate must NOT fire when `reason` is absent — slice-01
+        // forward-compat (reason -> None) is preserved.
+        let value = well_formed_claim_value(); // no `reason` key
+        let claim =
+            validate_claim_json(&value).expect("an absent reason must validate (-> None)");
+        assert_eq!(claim.reason, None);
     }
 }

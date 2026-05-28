@@ -320,5 +320,83 @@ fn lexicon_counter_claim_normalize_reason_unifies_canonically_equivalent_strings
 /// @us-fed-004 @j-003b @adr-015 @error
 #[test]
 fn lexicon_counter_claim_rejects_reason_length_outside_one_to_one_thousand() {
-    todo!("DELIVER (slice-03): use lexicon::validate to assert empty string ('' for reason) is REJECTED with a minLength error AND a 1001-char string is REJECTED with a maxLength error AND a 1-char + a 1000-char string are ACCEPTED. Boundary-pinning example test; no proptest needed at this layer (Mandate 11 applies even though we're at layer 2 because the contract IS the boundary).")
+    use lexicon::{validate_claim_json, LexiconError};
+
+    // GIVEN: a well-formed `org.openlore.claim` JSON value, parameterized
+    // by the `reason` field under test. Every other field is a fixed,
+    // valid placeholder so the ONLY thing the validator can reject on is
+    // the `reason`-length gate (boundary-pinning). The reason string is
+    // built from a single ASCII char repeated `len` times, so character
+    // count == byte count here — the boundary assertions hold regardless
+    // of whether the validator measures chars or bytes for ASCII input.
+    // (The chars-vs-bytes distinction is exercised by the in-crate unit
+    // tests in `claim.rs`; this layer-2 test pins the boundary contract.)
+    fn claim_value_with_reason(reason: &str) -> serde_json::Value {
+        serde_json::json!({
+            "subject": "github:rust-lang/cargo",
+            "predicate": "embodiesPhilosophy",
+            "object": "org.openlore.philosophy.dependency-pinning",
+            "evidence": ["https://github.com/rust-lang/cargo/issues/5359"],
+            "confidence": 0.42,
+            "author": "did:plc:rachel-test#org.openlore.application",
+            "composedAt": "2026-05-22T09:18:44Z",
+            "references": [
+                { "type": "counters", "cid": "bafy-target" }
+            ],
+            "reason": reason,
+            "signature": {
+                "kid": "did:plc:rachel-test#org.openlore.application",
+                "alg": "EdDSA",
+                "sig": "AAAA"
+            }
+        })
+    }
+
+    // WHEN/THEN (criterion 1 — minLength: 1): an empty `reason` ("") is
+    // REJECTED. ADR-015 declares `minLength: 1`; the Lexicon-layer gate
+    // is defense-in-depth even if the `claim counter` CLI verb (step
+    // 05-02, a different layer) is bypassed.
+    let empty = claim_value_with_reason("");
+    let err = validate_claim_json(&empty)
+        .expect_err("an empty `reason` must be REJECTED (minLength: 1, ADR-015)");
+    assert_eq!(
+        err,
+        LexiconError::ReasonLengthOutOfRange { length: 0 },
+        "an empty reason must reject with a length-out-of-range error naming length 0"
+    );
+
+    // WHEN/THEN (criterion 2 — maxLength: 1000): a 1001-char `reason` is
+    // REJECTED.
+    let too_long_text = "a".repeat(1001);
+    let too_long = claim_value_with_reason(&too_long_text);
+    let err = validate_claim_json(&too_long)
+        .expect_err("a 1001-char `reason` must be REJECTED (maxLength: 1000, ADR-015)");
+    assert_eq!(
+        err,
+        LexiconError::ReasonLengthOutOfRange { length: 1001 },
+        "a 1001-char reason must reject with a length-out-of-range error naming length 1001"
+    );
+
+    // WHEN/THEN (criterion 3 — inclusive lower bound): a 1-char `reason`
+    // is ACCEPTED (minLength is inclusive).
+    let at_min = claim_value_with_reason("x");
+    let claim = validate_claim_json(&at_min)
+        .expect("a 1-char `reason` must be ACCEPTED (minLength 1 is inclusive)");
+    assert_eq!(
+        claim.reason.as_deref(),
+        Some("x"),
+        "the accepted 1-char reason must survive into the parsed Claim"
+    );
+
+    // WHEN/THEN (criterion 4 — inclusive upper bound): a 1000-char
+    // `reason` is ACCEPTED (maxLength is inclusive).
+    let at_max_text = "a".repeat(1000);
+    let at_max = claim_value_with_reason(&at_max_text);
+    let claim = validate_claim_json(&at_max)
+        .expect("a 1000-char `reason` must be ACCEPTED (maxLength 1000 is inclusive)");
+    assert_eq!(
+        claim.reason.as_deref().map(str::len),
+        Some(1000),
+        "the accepted 1000-char reason must survive into the parsed Claim"
+    );
 }
