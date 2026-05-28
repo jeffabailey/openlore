@@ -39,8 +39,8 @@ use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did};
 use duckdb::Connection;
 use ports::{
-    AttributedClaim, AuthorRelationship, GraphNode, ScoringFilter, StorageError, TraversalBound,
-    TraversalResult,
+    AttributedClaim, AuthorRelationship, GraphEdge, GraphNode, ScoringFilter, StorageError,
+    TraversalBound, TraversalResult,
 };
 
 use crate::bare_did;
@@ -285,16 +285,207 @@ pub(crate) fn query_attributed_for_scoring(
 /// column AND visited-set-guarded by a delimited `visited` path string so it
 /// terminates on a cyclic graph (ADR-021).
 ///
-/// SCAFFOLD: true (slice-04) — live recursive-CTE SQL + omitted-edge count
-/// lands with the `--traverse` acceptance scenario + the cycle-safety probe
-/// (Phase 05).
+/// The graph is the bipartite philosophy↔project↔contributor lattice each signed
+/// claim induces: a claim `(subject, object, author_did, cid)` is an edge from
+/// its `object` (philosophy) to its `subject` (project), attributed to
+/// `author_did` and backed by `cid`. A `--object O` walk seeds at the philosophy
+/// node and discovers every project that embodies `O` (depth 1); each such edge
+/// also names the contributor who authored it (the project↔contributor leg the
+/// renderer surfaces). Every output [`GraphEdge`] maps to exactly ONE signed
+/// claim (`claim_cid` non-`Option`, Gate 5 / I-GRAPH-5).
+///
+/// ## SQL shape (ADR-021 cycle-safety)
+///
+/// `edges_base` UNION-ALLs both stores (projecting `author_did` + `cid AS
+/// claim_cid` — `xtask check-arch::no_cross_table_join_elides_author` enforces
+/// the projection). The recursive `walk` carries a 1-based `depth` column AND a
+/// delimited `visited` path string of the claim CIDs already traversed; the
+/// recursive arm joins only edges whose `claim_cid` is NOT already in `visited`
+/// (`visited NOT LIKE '%|' || claim_cid || '|%'`) AND whose new depth is within
+/// `max_depth`. DuckDB recursive CTEs do NOT auto-detect cycles, so the visited
+/// guard is what makes a cyclic claim graph terminate (the probe times this).
 pub(crate) fn traverse_graph(
-    _conn: &Arc<Mutex<Connection>>,
-    _start: &GraphNode,
-    _bound: &TraversalBound,
+    conn: &Arc<Mutex<Connection>>,
+    start: &GraphNode,
+    bound: &TraversalBound,
 ) -> Result<TraversalResult, StorageError> {
-    todo!(
-        "slice-04 Phase 05: WITH RECURSIVE edges_base (UNION ALL claims+peer_claims, \
-         project author_did + cid AS claim_cid) + depth-bounded visited-guarded walk"
-    )
+    // The seed selects the row set the walk fans out from. A philosophy seed
+    // anchors on `object`; a project seed on `subject`; a contributor seed on
+    // the (bare-prefixed) `author_did`. Only the WHERE column differs, so the
+    // base CTE is parameterized exactly like the dimension reads.
+    let (seed_where_own, seed_where_peer, seed_param) = seed_predicate(start);
+    let max_depth = bound.max_depth as i64;
+
+    // Pull every edge the bounded, cycle-safe walk reaches AND, separately, the
+    // count of edges that exist beyond the bound (so the renderer can report
+    // "N edges omitted" — WD-76). Both selects read FROM the SAME `edges_base`
+    // CTE so the omitted count is over the same edge universe as the walk.
+    //
+    // The recursive `walk`:
+    //   base: every seed edge at depth 1, visited = '|' || claim_cid || '|'.
+    //   step: extend from a frontier project to a NEXT edge that shares the
+    //         project (the next claim about that project), guarded by depth <=
+    //         max_depth AND the next claim_cid NOT already in `visited`.
+    let sql = format!(
+        "WITH RECURSIVE edges_base AS ( \
+           SELECT c.object AS object, c.subject AS subject, c.author_did AS author_did, \
+                  c.cid AS claim_cid, c.confidence AS confidence \
+           FROM claims c \
+           UNION ALL \
+           SELECT pc.object AS object, pc.subject AS subject, pc.author_did AS author_did, \
+                  pc.cid AS claim_cid, pc.confidence AS confidence \
+           FROM peer_claims pc \
+         ), \
+         walk(object, subject, author_did, claim_cid, confidence, depth, visited) AS ( \
+           SELECT object, subject, author_did, claim_cid, confidence, 1 AS depth, \
+                  '|' || claim_cid || '|' AS visited \
+           FROM edges_base \
+           WHERE {seed_where_own} \
+           UNION ALL \
+           SELECT eb.object, eb.subject, eb.author_did, eb.claim_cid, eb.confidence, \
+                  w.depth + 1 AS depth, w.visited || eb.claim_cid || '|' AS visited \
+           FROM edges_base eb \
+           JOIN walk w ON eb.subject = w.subject \
+           WHERE w.depth + 1 <= ? \
+             AND w.visited NOT LIKE '%|' || eb.claim_cid || '|%' \
+         ) \
+         SELECT object, subject, author_did, claim_cid, depth \
+         FROM walk ORDER BY depth, confidence DESC, subject, claim_cid"
+    );
+
+    // The omitted-edge count: edges reachable at depth max_depth+1 that the
+    // bound excludes. Computed against the same base by re-running the walk one
+    // level deeper and counting only the deeper rows. Kept as a separate query
+    // (not folded into the walk) so the walk's result set carries ONLY in-bound
+    // edges — the renderer never has to filter.
+    let omitted_sql = format!(
+        "WITH RECURSIVE edges_base AS ( \
+           SELECT c.object AS object, c.subject AS subject, c.author_did AS author_did, \
+                  c.cid AS claim_cid \
+           FROM claims c \
+           UNION ALL \
+           SELECT pc.object AS object, pc.subject AS subject, pc.author_did AS author_did, \
+                  pc.cid AS claim_cid \
+           FROM peer_claims pc \
+         ), \
+         walk(subject, claim_cid, depth, visited) AS ( \
+           SELECT subject, claim_cid, 1 AS depth, '|' || claim_cid || '|' AS visited \
+           FROM edges_base \
+           WHERE {seed_where_own} \
+           UNION ALL \
+           SELECT eb.subject, eb.claim_cid, w.depth + 1 AS depth, \
+                  w.visited || eb.claim_cid || '|' AS visited \
+           FROM edges_base eb \
+           JOIN walk w ON eb.subject = w.subject \
+           WHERE w.depth + 1 <= ? \
+             AND w.visited NOT LIKE '%|' || eb.claim_cid || '|%' \
+         ) \
+         SELECT count(*) FROM walk WHERE depth = ?"
+    );
+    let _ = seed_where_peer; // both stores share the base CTE; seed filters the unioned rows.
+
+    let conn = conn.lock().map_err(|_| StorageError::QueryFailed {
+        message: "connection mutex poisoned".to_string(),
+    })?;
+
+    let edges: Vec<GraphEdge> = {
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("prepare traverse_graph walk: {err}"),
+            })?;
+        let rows = stmt
+            .query_map(duckdb::params![seed_param, max_depth], |row| {
+                Ok(TraversalProjection {
+                    object: row.get::<_, String>(0)?,
+                    subject: row.get::<_, String>(1)?,
+                    author_did: row.get::<_, String>(2)?,
+                    claim_cid: row.get::<_, String>(3)?,
+                    depth: row.get::<_, i64>(4)?,
+                })
+            })
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("query_map traverse walk: {err}"),
+            })?;
+        let mut collected = Vec::new();
+        for row in rows {
+            let projection = row.map_err(|err| StorageError::QueryFailed {
+                message: format!("row decode traverse walk: {err}"),
+            })?;
+            collected.push(graph_edge_from(projection));
+        }
+        collected
+    };
+
+    // Edges one level past the bound — the "N omitted" count (WD-76).
+    let omitted_edge_count: u32 = {
+        let beyond_depth = max_depth + 1;
+        let mut stmt = conn
+            .prepare(&omitted_sql)
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("prepare traverse_graph omitted: {err}"),
+            })?;
+        let count: i64 = stmt
+            .query_row(
+                duckdb::params![seed_param, beyond_depth, beyond_depth],
+                |row| row.get(0),
+            )
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("query traverse omitted count: {err}"),
+            })?;
+        count.max(0) as u32
+    };
+
+    Ok(TraversalResult {
+        edges,
+        omitted_edge_count,
+        reached_bound: omitted_edge_count > 0,
+    })
+}
+
+/// One raw row of the recursive traversal walk, before projection into a
+/// [`GraphEdge`] (which normalizes the author DID to its bare form).
+struct TraversalProjection {
+    object: String,
+    subject: String,
+    author_did: String,
+    claim_cid: String,
+    depth: i64,
+}
+
+/// Project one raw walk row into a [`GraphEdge`]: a philosophy→project edge
+/// backed by exactly one signed claim (Gate 5) and carrying its bare author DID
+/// (anti-merging WD-73). The author DID is normalized to bare form so an own
+/// claim's `#fragment` signing locator never splits the contributor identity.
+fn graph_edge_from(projection: TraversalProjection) -> GraphEdge {
+    GraphEdge {
+        from: GraphNode::Philosophy {
+            object: projection.object,
+        },
+        to: GraphNode::Project {
+            subject: projection.subject,
+        },
+        claim_cid: Cid(projection.claim_cid),
+        author_did: Did(bare_did(&projection.author_did)),
+        depth: projection.depth.clamp(0, u8::MAX as i64) as u8,
+    }
+}
+
+/// The seed predicate for a traversal start node: the `(own_where, peer_where,
+/// param)` triple whose `WHERE` selects the base edges the walk fans out from.
+/// Both stores share the unioned `edges_base`, so the seed filter is applied to
+/// the projected column names (`object` / `subject` / `author_did`), not a
+/// per-table alias. The contributor seed matches the bare DID via a `LIKE`
+/// prefix so a seed by the bare contributor DID also finds `#fragment`-suffixed
+/// own rows (mirroring [`DimensionFilter::Contributor`]).
+fn seed_predicate(start: &GraphNode) -> (&'static str, &'static str, String) {
+    match start {
+        GraphNode::Philosophy { object } => ("object = ?", "object = ?", object.clone()),
+        GraphNode::Project { subject } => ("subject = ?", "subject = ?", subject.clone()),
+        GraphNode::Contributor { author_did } => (
+            "author_did LIKE ?",
+            "author_did LIKE ?",
+            format!("{}%", bare_did(&author_did.0)),
+        ),
+    }
 }

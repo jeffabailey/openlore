@@ -290,6 +290,18 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     //     trail, listed under the DID (step 03-06).
     // The --weighted / --traverse / --explain branches stay RED (todo!()) so
     // GQE-10.. fail for the right reason.
+    // GQE-20 (US-GRAPH-004): the `--traverse` branch — a bounded, cycle-safe
+    // walk of contributor<->project<->philosophy edges via
+    // `StoragePort::traverse_graph`, rendered as the philosophy->projects->
+    // authors tree with the cross-project "Connections found" callout (Gate 5).
+    // Routed before the dimension listings so `--object O --traverse` traverses
+    // rather than listing. (--contributor/--depth legs stay RED for GQE-21..25.)
+    if args.traverse && !args.weighted && args.explain.is_none() {
+        if let Some(object) = args.object.as_deref() {
+            return run_traverse_object(wiring, object, args.depth);
+        }
+    }
+
     if !args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_object_dimension(wiring, object);
@@ -376,6 +388,37 @@ fn run_contributor_dimension(wiring: &Wiring, contributor: &str) -> Result<Graph
         .with_context(|| format!("querying claims by contributor {contributor}"))?;
 
     let stdout = crate::render::render_contributor_query_trail(contributor, &claims);
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// GQE-20 (US-GRAPH-004 happy): the `--object <philosophy> --traverse` branch —
+/// a bounded, cycle-safe walk of the contributor↔project↔philosophy graph seeded
+/// at the queried philosophy. Calls `StoragePort::traverse_graph(start, bound)`
+/// (a `WITH RECURSIVE` CTE over `claims` and `peer_claims` projecting both
+/// `author_did` and `cid AS claim_cid`, so every edge maps to exactly ONE signed
+/// claim, Gate 5 / I-GRAPH-5; depth-bounded and visited-guarded, ADR-021) and
+/// renders the philosophy→projects→authors tree with the cross-project
+/// "Connections found" callout (KPI-GRAPH-1).
+///
+/// The verb stays a thin port-call + pure render: the read is one port call; the
+/// tree + callout + Gate-5 notice are a pure projection
+/// (`render::render_traversal_tree`). Explorer flags imply federated scope
+/// (WD-87) — the recursive CTE already spans own + peers.
+fn run_traverse_object(wiring: &Wiring, object: &str, depth: u8) -> Result<GraphQueryOutcome> {
+    let start = ports::GraphNode::Philosophy {
+        object: object.to_string(),
+    };
+    let bound = ports::TraversalBound { max_depth: depth };
+    let result = wiring
+        .storage
+        .traverse_graph(&start, &bound)
+        .with_context(|| format!("traversing the graph from philosophy {object}"))?;
+
+    let stdout = crate::render::render_traversal_tree(object, &result, bound.max_depth);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

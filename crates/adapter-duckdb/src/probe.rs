@@ -252,16 +252,94 @@ pub(crate) const TRAVERSAL_BUDGET_MS: u64 = 250;
 
 /// Slice-04 probe: recursive-CTE traversal is cycle-safe + depth-bounded.
 ///
-/// SCAFFOLD: true (slice-04) — returns `ProbeOutcome::Ok` until the live
-/// recursive-CTE traversal lands in `graph_query::traverse_graph` (Phase 05);
-/// the real probe then seeds the A↔B cyclic fixture, times the walk against
-/// [`TRAVERSAL_BUDGET_MS`], and refuses with
-/// `ProbeRefusalReason::StorageFsyncUnreliable` (the umbrella substrate-lie
-/// refusal) on non-termination, mirroring the fsync probe's mapping.
+/// Seeds a CYCLIC fixture into an isolated in-memory DuckDB (two claims sharing
+/// a project subject so the `eb.subject = w.subject` recursive join would loop
+/// without the visited guard), runs the SAME `WITH RECURSIVE` shape
+/// `graph_query::traverse_graph` uses at a depth large enough to loop forever
+/// without the guard, and asserts the walk TERMINATES within
+/// [`TRAVERSAL_BUDGET_MS`] (I-5 / probe #2). DuckDB recursive CTEs do NOT
+/// auto-detect cycles (ADR-021), so a missing/broken visited guard would either
+/// hang (caught by the budget) or explode the row count; this probe is the
+/// substrate-lie guard that proves the guard is live BEFORE the first real
+/// traversal. Refuses with `ProbeRefusalReason::StorageFsyncUnreliable` (the
+/// umbrella substrate-lie refusal) on timeout, mirroring the fsync probe.
+///
+/// The probe runs against a SEPARATE in-memory connection (not the live store)
+/// so it never mutates user data — it proves the engine + SQL terminate, which
+/// is a property of the substrate, not of any particular claim set.
 #[allow(dead_code)]
 pub(crate) fn probe_traversal_cycle_safe(_conn: &Connection, _claims_dir: &Path) -> ProbeOutcome {
-    // SCAFFOLD: true (slice-04) — no cyclic walk to exercise until the live
-    // recursive CTE exists; the budget constant + refusal wiring above are the
-    // contract. Phase 05 replaces this body with the seed-cycle-and-time check.
+    let probe_conn = match Connection::open_in_memory() {
+        Ok(c) => c,
+        Err(err) => {
+            return ProbeFailure {
+                reason: ProbeRefusalReason::StorageFsyncUnreliable,
+                detail: format!("cycle-safety probe: open in-memory connection failed: {err}"),
+                structured: json!({"phase": "open"}),
+            }
+            .into_outcome();
+        }
+    };
+
+    // Minimal cyclic fixture: two claims that share a project subject so the
+    // recursive `eb.subject = w.subject` self-join revisits the same edge — a
+    // loop that only the delimited `visited` guard breaks. The schema mirrors
+    // the live `claims` table's traversal columns (subject/object/author_did/cid).
+    let seed = "CREATE TABLE claims (cid VARCHAR PRIMARY KEY, subject VARCHAR, object VARCHAR, \
+                author_did VARCHAR); \
+                INSERT INTO claims VALUES \
+                ('bafycyclea', 'github:test/project', 'org.test.philosophy', 'did:plc:a'), \
+                ('bafycycleb', 'github:test/project', 'org.test.philosophy', 'did:plc:b');";
+    if let Err(err) = probe_conn.execute_batch(seed) {
+        return ProbeFailure {
+            reason: ProbeRefusalReason::StorageFsyncUnreliable,
+            detail: format!("cycle-safety probe: seed cyclic fixture failed: {err}"),
+            structured: json!({"phase": "seed"}),
+        }
+        .into_outcome();
+    }
+
+    // The SAME visited-guarded recursive shape `traverse_graph` uses, at a depth
+    // (64) that without the guard would loop on the shared subject indefinitely.
+    // The guard bounds it to each claim_cid being traversed at most once.
+    let walk = "WITH RECURSIVE walk(subject, claim_cid, depth, visited) AS ( \
+                  SELECT subject, cid AS claim_cid, 1 AS depth, '|' || cid || '|' AS visited \
+                  FROM claims WHERE object = 'org.test.philosophy' \
+                  UNION ALL \
+                  SELECT c.subject, c.cid AS claim_cid, w.depth + 1 AS depth, \
+                         w.visited || c.cid || '|' AS visited \
+                  FROM claims c JOIN walk w ON c.subject = w.subject \
+                  WHERE w.depth + 1 <= 64 \
+                    AND w.visited NOT LIKE '%|' || c.cid || '|%' \
+                ) SELECT count(*) FROM walk";
+
+    let started = std::time::Instant::now();
+    let walk_result: Result<i64, _> = probe_conn.query_row(walk, [], |row| row.get(0));
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    if let Err(err) = walk_result {
+        return ProbeFailure {
+            reason: ProbeRefusalReason::StorageFsyncUnreliable,
+            detail: format!("cycle-safety probe: recursive walk failed: {err}"),
+            structured: json!({"phase": "walk"}),
+        }
+        .into_outcome();
+    }
+
+    if elapsed_ms > TRAVERSAL_BUDGET_MS {
+        return ProbeFailure {
+            reason: ProbeRefusalReason::StorageFsyncUnreliable,
+            detail: format!(
+                "cycle-safety probe: cyclic traversal took {elapsed_ms}ms, over the \
+                 {TRAVERSAL_BUDGET_MS}ms budget — the visited guard may be ineffective (ADR-021)"
+            ),
+            structured: json!({
+                "elapsed_ms": elapsed_ms,
+                "budget_ms": TRAVERSAL_BUDGET_MS,
+            }),
+        }
+        .into_outcome();
+    }
+
     ProbeOutcome::Ok
 }

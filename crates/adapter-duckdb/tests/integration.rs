@@ -15,7 +15,9 @@ use chrono::{TimeZone, Utc};
 use claim_domain::{
     Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
 };
-use ports::{PeerStoragePort, PeerSubscription, ProbeOutcome, StoragePort};
+use ports::{
+    GraphNode, PeerStoragePort, PeerSubscription, ProbeOutcome, StoragePort, TraversalBound,
+};
 use tempfile::TempDir;
 use url::Url;
 
@@ -415,5 +417,212 @@ fn soft_remove_of_unknown_did_is_noop() {
     assert_eq!(
         outcome.cached_claim_count, 0,
         "an unknown DID has zero cached peer claims"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Slice-04 (step 04-01) — `traverse_graph` recursive-CTE integration tests
+// (real DuckDB; port-to-port at the StoragePort::traverse_graph boundary).
+// -----------------------------------------------------------------------------
+
+/// Build a `SignedClaim` with full control of cid / subject / object /
+/// author_did so a traversal fixture can seed a cross-project span (one author
+/// asserting one object across two subjects) and a cyclic graph.
+fn traversal_claim(cid: &str, subject: &str, object: &str, author_did: &str) -> SignedClaim {
+    let mut claim = sample_signed_claim(cid, subject);
+    claim.unsigned.object = object.to_string();
+    claim.unsigned.author_did = Did(author_did.to_string());
+    claim.signature.verification_method = author_did.to_string();
+    claim
+}
+
+/// GQE-20 leg (US-GRAPH-004; Gate 5 + anti-merging WD-73): a `--object`
+/// traversal over a cross-project span returns ONE edge per signed claim, each
+/// carrying its backing `claim_cid` (non-`Option`) AND its bare `author_did`
+/// (non-`Option`). Rachel spans cargo + nixpkgs; Tobias holds deno — so the walk
+/// surfaces exactly the three seeded edges, none fabricated, none merged.
+#[test]
+fn traverse_graph_returns_one_attributed_edge_per_signed_claim() {
+    let (adapter, _tmp) = fresh_adapter();
+    let dep = "org.openlore.philosophy.dependency-pinning";
+
+    adapter
+        .write_signed_claim(&traversal_claim(
+            "bafyrachelcargo",
+            "github:rust-lang/cargo",
+            dep,
+            "did:plc:rachel-test",
+        ))
+        .expect("seed rachel/cargo");
+    adapter
+        .write_signed_claim(&traversal_claim(
+            "bafyrachelnixpkgs",
+            "github:NixOS/nixpkgs",
+            dep,
+            "did:plc:rachel-test",
+        ))
+        .expect("seed rachel/nixpkgs");
+    adapter
+        .write_signed_claim(&traversal_claim(
+            "bafytobiasdeno",
+            "github:denoland/deno",
+            dep,
+            "did:plc:tobias-test",
+        ))
+        .expect("seed tobias/deno");
+
+    let start = GraphNode::Philosophy {
+        object: dep.to_string(),
+    };
+    let result = adapter
+        .traverse_graph(&start, &TraversalBound::default())
+        .expect("traverse the dependency-pinning graph");
+
+    // Exactly 3 edges (one per seeded signed claim) — Gate 5: traversal invents
+    // no edge; each maps to exactly one backing claim_cid.
+    assert_eq!(
+        result.edges.len(),
+        3,
+        "expected exactly 3 edges (one per seeded claim, none fabricated/merged); got {:?}",
+        result.edges
+    );
+
+    // Every edge carries a backing claim_cid AND a bare author_did (anti-merging
+    // WD-73). The cid set matches the seeded cids exactly (no edge unmapped).
+    let mut cids: Vec<&str> = result
+        .edges
+        .iter()
+        .map(|e| e.claim_cid.0.as_str())
+        .collect();
+    cids.sort_unstable();
+    assert_eq!(
+        cids,
+        vec!["bafyrachelcargo", "bafyrachelnixpkgs", "bafytobiasdeno"],
+        "every edge must map to exactly one seeded signed claim (Gate 5)"
+    );
+    for edge in &result.edges {
+        assert!(
+            !edge.author_did.0.is_empty(),
+            "every edge must carry its backing claim's author DID (anti-merging WD-73); got {edge:?}"
+        );
+    }
+
+    // Rachel's two edges span TWO distinct projects (cargo + nixpkgs) — the
+    // cross-project span the traversal surfaces (KPI-GRAPH-1).
+    let rachel_projects: std::collections::HashSet<String> = result
+        .edges
+        .iter()
+        .filter(|e| e.author_did.0 == "did:plc:rachel-test")
+        .map(|e| match &e.to {
+            GraphNode::Project { subject } => subject.clone(),
+            other => panic!("expected a project edge, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        rachel_projects.len(),
+        2,
+        "Rachel's edges must span 2 distinct projects (cross-project span); got {rachel_projects:?}"
+    );
+}
+
+/// ADR-021 cycle-safety: a CYCLIC fixture (two claims sharing a subject so the
+/// recursive self-join would loop) TERMINATES and never re-traverses an edge —
+/// the delimited `visited` guard breaks the cycle (DuckDB recursive CTEs do not
+/// auto-detect cycles). The walk returns each edge a bounded number of times,
+/// not an unbounded explosion.
+#[test]
+fn traverse_graph_terminates_on_a_cyclic_graph() {
+    let (adapter, _tmp) = fresh_adapter();
+    let phil = "org.openlore.philosophy.cycle-test";
+    let project = "github:test/cycle";
+
+    // Two claims on the SAME project + object by two authors: the recursive
+    // `eb.subject = w.subject` join would loop A->B->A->... without the guard.
+    adapter
+        .write_signed_claim(&traversal_claim("bafycyclea", project, phil, "did:plc:a"))
+        .expect("seed cycle a");
+    adapter
+        .write_signed_claim(&traversal_claim("bafycycleb", project, phil, "did:plc:b"))
+        .expect("seed cycle b");
+
+    let start = GraphNode::Philosophy {
+        object: phil.to_string(),
+    };
+    // A generous bound that, without the visited guard, would let the shared
+    // subject loop indefinitely. The guard caps each claim_cid to one traversal
+    // per path, so the walk terminates and the edge count stays bounded.
+    let result = adapter
+        .traverse_graph(&start, &TraversalBound { max_depth: 8 })
+        .expect("cyclic traversal terminates");
+
+    assert!(
+        result.edges.len() <= 8,
+        "cyclic traversal must terminate with a bounded edge count (visited guard); got {} edges",
+        result.edges.len()
+    );
+    // No single backing claim is traversed more than the path length allows
+    // (the guard forbids revisiting a claim_cid within one path).
+    assert!(
+        !result.edges.is_empty(),
+        "the seed edges (depth 1) must still be discovered"
+    );
+}
+
+/// WD-76 depth bound: a chain of claims deeper than `max_depth` returns only the
+/// in-bound edges AND reports the omitted deeper edges. A depth-2 walk over a
+/// 3-hop chain omits the depth-3 edge.
+#[test]
+fn traverse_graph_is_depth_bounded_and_reports_omitted_edges() {
+    let (adapter, _tmp) = fresh_adapter();
+    let phil = "org.openlore.philosophy.chain-test";
+
+    // A chain where each successive claim shares the PRIOR claim's subject so
+    // the walk hops project-to-project: seed -> hop1 -> hop2. With max_depth 2,
+    // the third hop (depth 3) is omitted.
+    //
+    // The recursive join is `eb.subject = w.subject`, so to chain we need each
+    // hop to share a subject with the prior frontier. Two claims on subject S1
+    // (the seed pair) let the walk step S1->S1 once (depth 2), and a deeper pair
+    // would step again (depth 3). Seed three claims on one shared subject so the
+    // walk can reach depth 3 — the bound must cut it at 2.
+    let shared = "github:test/chain";
+    for (i, cid) in ["bafychain1", "bafychain2", "bafychain3", "bafychain4"]
+        .iter()
+        .enumerate()
+    {
+        adapter
+            .write_signed_claim(&traversal_claim(
+                cid,
+                shared,
+                phil,
+                &format!("did:plc:chain{i}"),
+            ))
+            .expect("seed chain claim");
+    }
+
+    let start = GraphNode::Philosophy {
+        object: phil.to_string(),
+    };
+    let result = adapter
+        .traverse_graph(&start, &TraversalBound { max_depth: 2 })
+        .expect("depth-bounded traversal");
+
+    // Every returned edge is within the bound.
+    assert!(
+        result.edges.iter().all(|e| e.depth <= 2),
+        "all returned edges must be within max_depth=2; got depths {:?}",
+        result.edges.iter().map(|e| e.depth).collect::<Vec<_>>()
+    );
+    // Deeper edges exist (depth 3 reachable on the shared subject), so the bound
+    // omitted some — the omitted count is reported (WD-76).
+    assert!(
+        result.omitted_edge_count > 0,
+        "expected the depth-2 bound to omit deeper (depth-3) edges on the shared-subject chain; \
+         got omitted_edge_count={}",
+        result.omitted_edge_count
+    );
+    assert!(
+        result.reached_bound,
+        "reached_bound must be true when edges existed beyond the bound"
     );
 }

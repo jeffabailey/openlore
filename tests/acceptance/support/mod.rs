@@ -3002,6 +3002,42 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
 
             graph
         }
+        FederatedGraphFixture::DependencyPinningRachelSpansTwoProjects => {
+            // US-GRAPH-004 Example 1 (GQE-20 / KPI-GRAPH-1 north star): the
+            // cross-project span the traversal must surface. Rachel asserts
+            // dependency-pinning on BOTH github:rust-lang/cargo (0.91) AND
+            // github:NixOS/nixpkgs (0.88) — so a `--object dependency-pinning
+            // --traverse` walk discovers that ONE contributor's claims
+            // triangulate across two projects (the non-obvious "aha"). Tobias
+            // contributes the third project (github:denoland/deno, 0.55) so the
+            // tree fans philosophy -> {cargo, nixpkgs, deno} -> their authors,
+            // and Rachel's two-project span stands out against Tobias's one.
+            // All PEER claims (the local user makes none here), materialized
+            // with REAL Ed25519 crypto + CID recompute so the production pull
+            // pipeline verifies them and each edge maps to a real signed claim
+            // (Gate 5). The two Rachel triples assert the SAME object on
+            // DISTINCT subjects, so their canonical CIDs differ (the store keys
+            // on cid; identical triples would collide into one row).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[
+                            ("github:rust-lang/cargo", dep, 0.91),
+                            ("github:NixOS/nixpkgs", dep, 0.88),
+                        ],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[("github:denoland/deno", dep, 0.55)],
+                    },
+                ],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
         // steps (GQE-10..27 stay RED until then).
         other => {

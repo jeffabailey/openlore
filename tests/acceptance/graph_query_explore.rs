@@ -1426,12 +1426,85 @@ fn graph_query_traverse_surfaces_a_non_obvious_cross_project_contributor_connect
     // 2. A "Connections found" callout names Rachel as spanning 2 projects.
     // 3. Every displayed edge maps to exactly one signed claim (Gate 5).
     // 4. The output states "Traversal does not invent edges."
-    todo!(
-        "DELIVER (slice-04): assert `--traverse` renders the philosophy->projects->authors tree, a \
-         'Connections found' callout names did:plc:rachel-test spanning 2 projects, every edge maps \
-         to exactly one signed claim, and the output states 'Traversal does not invent edges.' \
-         (US-GRAPH-004 Example 1; KPI-GRAPH-1 north star; Gate 5);\n--- graph ---\n{graph:?}"
-    )
+    //
+    // Universe (port-exposed observable surface of the `--traverse` view):
+    // cli.graph_query.tree_roots_at_philosophy (the queried object heads the
+    // tree), cli.graph_query.projects_in_tree (cargo, nixpkgs, deno),
+    // cli.graph_query.connection_callout (names did:plc:rachel-test spanning 2
+    // projects cargo+nixpkgs), cli.graph_query.edge_cid_rows (one cid per
+    // displayed edge — every edge maps to exactly one seeded signed claim, none
+    // fabricated), cli.graph_query.invents_no_edges_notice (the content-frozen
+    // Gate-5 line). Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The tree roots at the queried philosophy and fans to its 3 projects.
+    assert!(
+        stdout.contains(&format!("philosophy: {object}")),
+        "expected the traversal tree to root at the queried philosophy {object};\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+    let projects = [
+        "github:rust-lang/cargo",
+        "github:NixOS/nixpkgs",
+        "github:denoland/deno",
+    ];
+    let projects_in_tree = projects
+        .iter()
+        .filter(|p| stdout.contains(&format!("project: {p}")))
+        .count();
+    assert_eq!(
+        projects_in_tree, 3,
+        "cli.graph_query.projects_in_tree: expected all 3 seeded projects to appear in the tree; \
+         got {projects_in_tree};\n--- stdout ---\n{stdout}"
+    );
+
+    // 2. The "Connections found" callout names Rachel spanning EXACTLY the two
+    //    projects she claims dependency-pinning on (cargo + nixpkgs) — the
+    //    non-obvious cross-project contributor connection (KPI-GRAPH-1).
+    assert!(
+        stdout.contains("Connections found"),
+        "expected a 'Connections found' callout surfacing the cross-project connection;\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("did:plc:rachel-test spans 2 of these projects (github:rust-lang/cargo, github:NixOS/nixpkgs)"),
+        "expected the callout to name did:plc:rachel-test spanning 2 projects \
+         (github:rust-lang/cargo, github:NixOS/nixpkgs) — the contributor whose \
+         dependency-pinning claims triangulate across projects (KPI-GRAPH-1);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. Every displayed edge maps to exactly ONE signed claim (Gate 5): each
+    //    seeded claim's cid appears on its edge, and the edge-cid count equals
+    //    the seeded-claim count (no edge is fabricated, none merged). Each edge
+    //    also carries its backing claim's author DID (anti-merging WD-73).
+    for claim in &graph.seeded {
+        assert!(
+            stdout.contains(&format!("author_did: {}", claim.author_did)),
+            "expected every traversal edge to carry its backing claim's author DID {} \
+             (anti-merging WD-73);\n--- stdout ---\n{stdout}",
+            claim.author_did
+        );
+    }
+    let edge_cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("claim_cid:"))
+        .count();
+    assert_eq!(
+        edge_cid_rows,
+        graph.seeded.len(),
+        "Gate 5 (traversal invents no edges): expected exactly {} claim_cid-bearing edge rows \
+         (one per seeded signed claim, none fabricated/merged); got {edge_cid_rows};\n\
+         --- stdout ---\n{stdout}",
+        graph.seeded.len()
+    );
+
+    // 4. The output states the content-frozen Gate-5 honesty notice verbatim.
+    assert!(
+        stdout.contains("Traversal does not invent edges."),
+        "expected the output to carry the content-frozen 'Traversal does not invent edges.' \
+         notice (Gate 5);\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-21 (US-GRAPH-004 edge; Gate 5): Tobias runs `--object actor-model
