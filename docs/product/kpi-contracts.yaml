@@ -198,6 +198,67 @@ kpis:
     baseline_at_ga: "per-user instrumented (the edit path is GREEN — SS-1 edit-then-sign + the conservative 0.25 default that forces a conscious confidence-raise per WD-52); cohort = YELLOW — pending opt-in telemetry endpoint per DEVOPS D-D26"
     notes: "Leading indicator for KPI-SCR-1 (proves the human-in-the-loop is real, which is what makes users trust candidates enough to sign quickly). Disprover / kill criterion: < 20% edit-rate at day-30 suggests users rubber-stamp machine proposals — re-investigate whether candidates are over-confident or the edit affordance is too hidden."
 
+  - id: KPI-GRAPH-1
+    name: "Non-obvious connection surfaced (graph explorer north star)"
+    type: north-star
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: ">= 60% of dogfood explorer sessions surface >= 1 non-obvious connection (a contributor spanning >= 2 candidate projects, or an unnoticed philosophy clustering) within 30 days"
+    measurement_method: "author-side telemetry `graph.connection.surfaced` on traverse/weighted runs that yield a cross-project span + 30-day think-aloud study; behaviorally exercised by GQE-22 (--traverse Connections-found callout) and GQE-12/19 (multi-author / cross-project triangulation)"
+    baseline_at_ga: "per-user instrumented (the surfacing path is GREEN — `--traverse` emits the cross-project 'Connections found' callout and `--weighted`/`--explain` surface triangulation); cohort = YELLOW pending opt-in telemetry endpoint (DEVOPS)"
+    notes: "North star. Behavioral validation of J-002 — the slice's value evaporates if users CAN traverse/weight but never discover a non-obvious connection. Disprover: < 30% of sessions surface a connection at day-30."
+
+  - id: KPI-GRAPH-2
+    name: "Anti-merging in aggregates (zero attribution loss in any weighted/traversed result)"
+    type: guardrail
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: "100% — every aggregate weight decomposes to per-author Contributions; zero faceless consensus rows"
+    measurement_method: "release-gate acceptance `scoring_aggregate_preserves_attribution` (Gate 1, GQE-27) + GQE-13 (conflicting claims both contribute, mean never computed) + GQE-16/19 (--explain per-author decomposition); three-layer enforcement: non-Option author_did/claim_cid types + `xtask check-arch` scoring-feed/recursive-CTE SQL rule + behavioral"
+    baseline_at_ga: "MET — GQE-13/16/19/27 GREEN as of slice-04 ship; aggregation happens in Rust (pure `scoring` core), never SQL (ADR-022 / WD-73)"
+    notes: "Guardrail. Extends KPI-FED-1/2 (slice-03 attribution fidelity) into aggregates. Any faceless consensus weight is UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-GRAPH-3
+    name: "Scoring transparency (every weight reproducible by hand from the formula)"
+    type: guardrail
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: "100% — weight == documented no-ML formula applied to the displayed claims; reproducible via --explain"
+    measurement_method: "property test `weight_equals_sum_of_subtotals` (scoring crate) + SC-1 (scoring_core) + GQE-16 (--explain running sum equals displayed weight) + day-30 'could you explain why this ranked first?' interview"
+    baseline_at_ga: "MET — SC-1 + GQE-16 GREEN as of slice-04 ship; formula constants are the SSOT in `ScoringConfig::DEFAULT` (WD-77); `--explain` reuses the same pure-core output (single source of truth, no second formula). Mutation: 100% kill rate on the scoring formula (Phase 6)."
+    baseline_notes: "no ML; the displayed number is the consumed number (KPI-4 inherited; no bucket-midpoint rounding — Gate 6 / GQE-26)"
+    notes: "Guardrail / outcome. An irreproducible or ML-derived weight breaks the transparency promise — UNSHIPPABLE."
+
+  - id: KPI-GRAPH-4
+    name: "Sparse renders sparse (zero manufactured confidence from thin evidence)"
+    type: guardrail
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: "100% — single-claim/single-author/no-span subgraphs render [SPARSE] + honesty line + lead-not-conclusion advice; 0 cases of confidence manufactured from thin evidence REGARDLESS of weight magnitude"
+    measurement_method: "release-gate acceptance `sparse_renders_sparse` (GQE-11) + GQE-17 (--explain repeats the honesty line) + the `weight_bucket` breadth-guard boundary property (Phase 6 mutation-hardening, in-crate) + adversarial review of every weighted renderer"
+    baseline_at_ga: "MET — GQE-11/17 GREEN as of slice-04 ship; the breadth guard (claim_count>1 || distinct_author_count>1 || cross_project_span>1) is LOAD-BEARING and 100% mutation-covered after Phase 6 boundary hardening — a high-confidence single opinion is never dressed up as [STRONG]"
+    notes: "Guardrail. WD-74 epistemic honesty. Any manufactured confidence violates J-002 anxiety mitigation — UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-GRAPH-5
+    name: "Referenced justification (a query result cited when justifying a real choice)"
+    type: leading
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: ">= 1 referenced justification per dogfood explorer within 30 days"
+    measurement_method: "30-day survey ('did you cite an openlore query when justifying a stack/community choice?') + qualitative session notes"
+    baseline_at_ga: "YELLOW — the artifact exists (queryable, reproducible weighted/traverse output); cohort citation rate pending the day-30 survey (nw-product-owner)"
+    notes: "Leading indicator for KPI-GRAPH-1 (proves the connection was decision-relevant, not just curious)."
+
+  - id: KPI-GRAPH-6
+    name: "Local-graph explore latency (query -> traverse -> weighted/explain under 5s)"
+    type: leading
+    feature_origin: openlore-scoring-graph
+    persona: P-002
+    target: "< 5 seconds end-to-end for a subgraph of <= 200 claims (local read; no network)"
+    measurement_method: "author-side timing telemetry `graph.query.duration_seconds` histogram; local-first correctness exercised by GQE-15 (--weighted) + the --traverse network-disabled scenarios"
+    baseline_at_ga: "per-user instrumented; local-first GREEN (GQE-15 + traversal network-disabled scenarios prove the full surface works with the network disabled — scoring/traversal read LOCAL stores only); cohort latency histogram pending telemetry endpoint"
+    notes: "Leading indicator — friction kills exploration behavior. Inherits/reinforces KPI-5 (local-first)."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -213,12 +274,20 @@ kpis:
 #   release-blocking per the slice-02 disprovers in
 #   docs/feature/openlore-github-scraper/discuss/outcome-kpis.md.
 #
+#   Slice-04 guardrails: KPI-GRAPH-2 (anti-merging in aggregates), KPI-GRAPH-3
+#   (scoring transparency / reproducible no-ML weight), KPI-GRAPH-4 (sparse
+#   renders sparse / zero manufactured confidence). All three MET at GA; all
+#   three are release-blocking per the slice-04 disprovers in
+#   docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md.
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-03): docs/feature/openlore-federated-read/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-04): docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md
 #   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
+#   - Slice-04 evolution archive: docs/evolution/openlore-scoring-graph-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml

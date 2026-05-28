@@ -38,12 +38,14 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/cli`                 | driver      | clap-based composition root; threads adapters into pure core            | slice-01     |
 | `crates/scraper-domain`      | pure core   | Derives candidate claims from harvested GitHub signals via the `jobs.yaml` signal->predicate SSOT mapping; no I/O | slice-02     |
 | `crates/adapter-github`      | effect      | Implements `GithubPort` over the GitHub public REST/HTTPS API; optional PAT; public-data-only probe | slice-02     |
-| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub` hermetic test doubles | slice-01/02  |
+| `crates/scoring`             | pure core   | Transparent no-ML adherence-weight + `WeightBucket` over per-author `Contribution`s; the WD-77 formula SSOT (`ScoringConfig::DEFAULT`); aggregation in Rust, never SQL (anti-merging in aggregates) | slice-04     |
+| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub`, scoring fixtures — hermetic test doubles | slice-01/02/04 |
 | `xtask`                      | dev tooling | `check-arch` (hexagonal invariants), `check-probes` (probe contracts)   | slice-01     |
 
 **Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.
-Slice-02 adds 2 production crates (`scraper-domain` + `adapter-github`),
-bringing the production count to 10 + 1 test-support + 1 xtask binary.**
+Slice-02 adds 2 production crates (`scraper-domain` + `adapter-github`); slice-04
+adds 1 (`scoring`), bringing the production count to 11 + 1 test-support + 1 xtask
+binary (13 workspace members total; `cargo xtask check-arch` reports 13).**
 
 Shipped slice extensions:
 
@@ -83,6 +85,36 @@ Shipped slice extensions:
   - See ADR-017..ADR-019, `docs/evolution/openlore-github-scraper-evolution.md`,
     and `docs/feature/openlore-github-scraper/design/`.
 
+- **slice-04 (openlore-scoring-graph): SHIPPED 2026-05-28 — ONE-CRATE ADDITIVE
+  EXTENSION (the pure `scoring` core) + read-side port/adapter/cli extensions.**
+  Per WD-13 (federation -> scrapers -> scoring -> appview) slice-04 shipped after
+  slice-02/03. It does NOT swap `adapter-duckdb` for a graph store (ADR-001 / WD-8
+  re-evaluated and KEPT — DuckDB recursive CTEs serve the bounded depth-2 traversal;
+  no graph DB warranted). Adds:
+  - **NEW `crates/scoring` (PURE)**: `score(claims, cfg) -> WeightedView` — a
+    transparent no-ML adherence weight (`subtotal = confidence x author_distinct_share
+    + cross_project_triangulation`; `weight = Σsubtotals`) decomposed into per-author
+    `Contribution`s; `weight_bucket` breadth guard renders thin evidence as `[SPARSE]`
+    (WD-74/WD-90). Formula constants are the SSOT in `ScoringConfig::DEFAULT` (WD-77).
+    Aggregation happens in Rust, NEVER SQL — the anti-merging-in-aggregates rule
+    (ADR-022 / WD-73). No I/O (`check-arch` pure-core allowlist).
+  - `crates/ports`: adds `graph.rs` — `GraphEdge` / `AttributedClaim` (non-`Option`
+    `author_did` + `claim_cid`), `ScoringFilter`, `GraphNode`, `TraversalBound`
+    (default depth 2), `TraversalResult`; extends `StoragePort` with
+    `query_by_object`, `query_by_contributor`, `query_attributed_for_scoring`
+    (the per-claim scoring feed), `traverse_graph`.
+  - `crates/adapter-duckdb`: `graph_query.rs` — dimension/scoring-feed `UNION ALL`
+    SQL (per-claim `author_did` projected, no aggregating JOIN) + a `WITH RECURSIVE`
+    depth-bounded, visited-path cycle-safe traversal with `omitted_edge_count`.
+  - `crates/cli`: 6 OPT-IN `graph query` explorer flags (`--object`, `--contributor`,
+    `--traverse`, `--depth`, `--weighted`, `--explain`) + grouped/trail/tree/weighted/
+    explain renderers; a bare `--subject` query stays byte-identical to slice-01/03
+    (WD-87). Weights are DISPLAY-ONLY, recomputed at query time, never persisted (WD-72).
+  - `xtask`: anti-merging rule extended to AGGREGATES (scoring-feed `UNION ALL` +
+    recursive-CTE base must project `author_did`).
+  - See ADR-020..ADR-022, `docs/evolution/openlore-scoring-graph-evolution.md`,
+    and `docs/feature/openlore-scoring-graph/design/`.
+
 - **slice-03 (openlore-federated-read): SHIPPED 2026-05-28 — EXTENSION ONLY,
   ZERO new crates (WD-26).** Extends the slice-01 crates in place:
   - `crates/ports`: adds `PeerStoragePort` (new port, WD-27); extends `PdsPort`
@@ -110,17 +142,17 @@ Shipped slice extensions:
 
 Future slices extend this inventory (planned / in-progress):
 
-- slice-04 (scoring-graph): may swap or augment `adapter-duckdb` with a graph
-  store; revisits ADR-001 / WD-8. Also lands real PLC DID-document multibase
-  pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its DV-4) and
-  deep cross-repo contributor triangulation (slice-02 shipped a bounded
-  aggregate per WD-64).
 - slice-05 (appview-search): adds an indexer service (separate binary).
 
-**Crate count: slice-03 was EXTENSION ONLY (zero new crates, WD-26 — 8
-production + 1 test-support + 1 xtask). slice-02 adds the first 2 production
-crates since slice-01 (`scraper-domain` + `adapter-github`, WD-59), bringing the
-cumulative production count to 10 + 1 test-support + 1 xtask binary.**
+Deferred to a later slice (NOT addressed by slice-04): real PLC DID-document
+multibase pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its
+DV-4) remains a documented TODO.
+
+**Crate count: slice-01 = 8 production + 1 test-support + 1 xtask. slice-02 added
+the first 2 production crates since slice-01 (`scraper-domain` + `adapter-github`,
+WD-59); slice-03 was EXTENSION ONLY (zero new crates, WD-26); slice-04 adds 1 pure
+crate (`scoring`). Cumulative: 11 production + 1 test-support + 1 xtask = 13
+workspace members.**
 
 ## CLI surface (cumulative)
 
@@ -137,6 +169,7 @@ cumulative production count to 10 + 1 test-support + 1 xtask binary.**
 | **`openlore peer remove`** (`[--purge]`) | slice-03 | **ADR-013 + ADR-014** |
 | **`openlore claim counter`** | slice-03 | **ADR-013 + ADR-015** |
 | **`openlore graph query --federated`** (flag, not verb) | slice-03 | **ADR-013 + ADR-014** |
+| **`openlore graph query --object\|--contributor\|--traverse\|--depth\|--weighted\|--explain`** (explorer flags, not verbs) | slice-04 | **ADR-020** |
 
 ## C4 reference
 
@@ -188,7 +221,18 @@ to I-1..I-12 (same handling as slice-03's I-FED-*). They cover the human-gate
 and display-only-provenance CID stability (I-SCR-7). Detail lives in
 `docs/feature/openlore-github-scraper/design/` + ADR-017/ADR-018/ADR-019.
 
-If a future slice needs one of these (I-FED-* or I-SCR-*) enforced
+**Slice-04 invariants (I-GRAPH-1..8) are likewise slice-04-scoped**, NOT promoted
+to I-1..I-12. They cover anti-merging IN AGGREGATES (I-GRAPH-1/2: a weight is an
+aggregate view that decomposes to per-author `Contribution`s — enforced at three
+layers: non-`Option` `author_did`/`claim_cid` types + the `xtask check-arch`
+scoring-feed/recursive-CTE SQL rule + behavioral GQE-13/27), scoring transparency
+(I-GRAPH-3: `weight == formula`, reproducible via `--explain`), display-only/
+never-persisted weights (I-GRAPH-4, WD-72), sparse-renders-sparse epistemic honesty
+(I-GRAPH-5/6, WD-74), numeric-confidence pass-through with no bucket rounding
+(Gate 6), and local-first/no-network scoring + traversal (I-GRAPH-7). Detail lives
+in `docs/feature/openlore-scoring-graph/design/` + ADR-020/ADR-021/ADR-022.
+
+If a future slice needs one of these (I-FED-*, I-SCR-*, or I-GRAPH-*) enforced
 cross-feature, promote it to the table above in the same commit as the ADR that
 generalizes it.
 

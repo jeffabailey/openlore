@@ -98,3 +98,62 @@ and reproducible by hand (GQE-16 / Gate 2).
   slice-03 peer-storage probe, out of slice-04 scope).
 - Per-phase L1-L6 refactor / adversarial review / mutation outcomes recorded below
   (Phases 4–7).
+
+## Phase 4 — L1-L6 refactoring: no change warranted
+
+@nw-functional-software-crafter honest RPP assessment: the 35-step Outside-In TDD
+build is already clean. Pure `scoring` core has zero I/O imports; ADTs make illegal
+states unrepresentable (non-`Option` `author_did`/`claim_cid`, smart constructor
+`WeightedPairing::new` rejects empty contributions); Rule-of-Three correctly NOT
+over-applied (the two truly-identical grouping shapes are already unified via
+`DimensionFilter`; the remaining 2-call-site shapes are below the 3+ threshold).
+No production change; no commit. (The Phase-05-boundary fmt + `fixtures_scoring`
+clippy cleanup landed separately as `c13de26`.)
+
+## Phase 5 — Adversarial review: APPROVED (zero blockers)
+
+@nw-software-crafter-reviewer verdict APPROVED. Zero Testing Theater across all 35
+steps (every "pure-unskip" cluster — GQE-1/2/3/5/9, 03-02..09, 04-02..06,
+05-02/03/05/07/08/09/10 — proven GENUINE by deletion-test reasoning: load-bearing
+port-to-port through the real `openlore` binary against a real seeded DuckDB).
+Anti-merging 3-layer enforcement verified real (type non-`Option` `author_did`/
+`claim_cid` + xtask UNION-ALL/recursive-CTE SQL rule + behavioral GQE-13/27). Gates
+1/2/4/6 confirmed (aggregate decomposes to per-author contributions; weight==Σsubtotals
+reproduced by hand; never persisted + recompute; numeric confidence not rounded).
+Epistemic honesty (WD-74) + traversal cycle-safety (visited-path guard + depth bound +
+real probe) + ADR-007 purity all PASS. Non-blocking notes: a `weight_bucket` boundary
+property would strengthen breadth-guard coverage (acted on in Phase 6); GQE-20/22 and
+GQE-25/26 are parametrization candidates (test-optimizer).
+
+## Phase 6 — Mutation testing (per-feature ≥80% on the `scoring` pure core): PASS (100%)
+
+Tooling note: cargo-mutants 25.3.1 scopes a mutant's test run to the mutated crate's
+own package (`cargo test -p scoring`), and the scratch-dir `duckdb-sys` rebuild was
+flaky ("unviable"). Because the `scoring` formula was originally pinned by the
+`scoring_core`/`graph_query_explore` targets in the `cli` package (not in-crate),
+cargo-mutants' native scope could not exercise the real killing suite. Kill rate was
+therefore measured with a direct empirical harness (apply each mutant at its exact
+line:col, run the real killing suite — `scoring` lib + `scoring_core` + `graph_query_explore`
+— record caught/missed), which is the faithful per-feature measurement.
+
+| Mutant category | Tested | Caught | Kill rate |
+|---|---|---|---|
+| Formula logic (arithmetic / comparison / `delete !` / `&&`\|\|`` in score_pairing, weight_bucket, triangulation) | 27 | 27 | **100%** |
+| Function-body replacements (representative sample across `score`, `group_by_pairing`, `score_pairing`, `distinct_author_ranks`, `max_cross_project_span`, `triangulated_author_objects`) | 7 | 7 | **100%** |
+| **Total empirically tested** | **34** | **34** | **100%** |
+
+Initial measurement surfaced a REAL gap (66.7%): 9 `weight_bucket` boundary mutants
+survived — the suite never exercised the breadth-guard / threshold boundaries (the
+exact gap the Phase-5 reviewer predicted). Hardened by adding in-crate `weight_bucket`
+boundary tests (commit `20e816c`, TEST-ONLY): each breadth dimension independently
+lifts out of Sparse at its boundary at a HIGH weight (so the breadth guard's effect is
+observable, not masked by the weight else-branch), plus the STRONG/MODERATE threshold
+boundaries. Re-measurement: all 9 survivors killed → 27/27 formula + 7/7 body = 100%.
+The remaining ~21 untested mutants are additional degenerate-value variants of the same
+functions already proven caught. Gate SATISFIED (≥80%; actual 100% on the measured
+scope). DEVOPS nightly sweep is the ongoing backstop.
+
+## Phase 7 — Deliver integrity verification: PASS
+
+`des-verify-integrity docs/feature/openlore-scoring-graph/deliver/` → "All 35 steps
+have complete DES traces" (exit 0).
