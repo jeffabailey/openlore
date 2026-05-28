@@ -55,7 +55,57 @@ const DEFAULT_RESOLVER_BASE_URL: &str = "https://plc.directory";
 pub(crate) fn resolve_peer_did(peer_did: &Did) -> Result<PeerInfo, IdentityError> {
     let base = resolver_base_url(peer_did);
     let document = fetch_did_document(peer_did, &base)?;
-    parse_peer_info(peer_did, &document)
+    let mut info = parse_peer_info(peer_did, &document)?;
+    // Acceptance-test pubkey seam (DD; mirrors the resolver-endpoint seam):
+    // the `FakePeerPds` resolveDid DID-document only carries a PLACEHOLDER
+    // `publicKeyMultibase`, so when the per-peer pubkey env override is
+    // present we inject a verification method whose `public_key_multibase`
+    // carries the REAL Ed25519 key (encoded `hex:<64-char-hex>`). The pull
+    // pipeline (`VerbPeerPull`) decodes it for `claim_domain::verify`. In
+    // production this env var is absent and the resolved DID-document key
+    // stands as the authority.
+    if let Some(method) = pubkey_override_method(peer_did) {
+        info.verification_methods.insert(0, method);
+    }
+    Ok(info)
+}
+
+/// Build a verification method from the per-peer pubkey env override, if
+/// set. Returns `None` in production (no env var) so the resolved
+/// DID-document verification methods stand unchanged.
+fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
+    let hex = std::env::var(peer_pubkey_env_var(&peer_did.0)).ok()?;
+    let trimmed = hex.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(VerificationMethod {
+        id: format!("{}#org.openlore.application", peer_did.0),
+        type_: "Multikey".to_string(),
+        controller: peer_did.clone(),
+        // Carry the raw key as `hex:<64-char-hex>` so the consumer
+        // (`VerbPeerPull`) can decode it without a multibase dependency.
+        public_key_multibase: format!("hex:{trimmed}"),
+    })
+}
+
+/// The per-peer pubkey env-var NAME for a DID: uppercase the DID, replace
+/// every non-`[A-Z0-9]` char with `_`. MUST agree with the acceptance
+/// harness (`tests/acceptance/support/mod.rs::peer_pubkey_env_var`).
+///
+/// `did:plc:rachel-test` → `OPENLORE_PEER_PUBKEY_HEX_DID_PLC_RACHEL_TEST`.
+fn peer_pubkey_env_var(did: &str) -> String {
+    let encoded: String = did
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("OPENLORE_PEER_PUBKEY_HEX_{encoded}")
 }
 
 /// Determine the resolver base URL: the per-peer env override if present,

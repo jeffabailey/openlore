@@ -44,7 +44,144 @@ use support::*;
 /// @us-fed-002 @real-io @driving_port @j-003 @j-003a @happy
 #[test]
 fn peer_pull_fetches_verifies_and_stores_peer_claims_attributed_per_record() {
-    todo!("DELIVER (slice-03): wire VerbPeerPull → PdsPort.list_peer_records → claim_domain::verify + compute_cid per record → PeerStoragePort.write_peer_claim. Use fixture_other_developer_three_claims via FakePeerPds::for_peer('did:plc:rachel-test', ...). Assert per-row author_did = did:plc:rachel-test (anti-merging: NEVER under any other DID) + author_claims row count UNCHANGED + stdout literal 'None merged with your own claims.'")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes THREE honest, REAL-signed claims. The slice-03
+    // peer fixtures ship placeholder sigs/rkeys (see fixtures_peer.rs); the
+    // happy path needs genuine crypto so the pull pipeline's per-record
+    // verify + CID-recompute actually pass. `build_verifiable_peer_records`
+    // materializes them deterministically and returns Rachel's real pubkey
+    // hex for the verify seam.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(records.len(), 3, "Rachel publishes exactly three claims");
+
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Precondition: ONE active subscription, created through the real
+    // `peer add` verb (so the row exists exactly as a user would create it).
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // DD-FED-10 universe BEFORE the pull: zero peer claims, the author
+    // `claims` table at its post-init count, the peer partition absent.
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Action: `openlore peer pull`. The in-binary pipeline re-resolves
+    // Rachel's PDS, walks listRecords cursors, and for EACH record verifies
+    // the signature against Rachel's DID-doc key AND recomputes the CID
+    // before writing through PeerStoragePort.write_peer_claim.
+    let outcome = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Exit 0 + the ADR-013 content-frozen anti-merging line.
+    assert_exit_zero_and_stdout_contains(&outcome, "None merged with your own claims");
+
+    // 2. Per-peer progress block (Q-DELIVER-6 / journey YAML tui_mockup):
+    //    fetched / new / verified / stored counts, named under the peer DID.
+    assert!(
+        outcome.stdout.contains(peer_did),
+        "expected the progress block to name the peer DID {peer_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    for needle in ["fetched", "verified", "stored"] {
+        assert!(
+            outcome.stdout.contains(needle),
+            "expected the per-peer progress block to report `{needle}`;\n\
+             --- stdout ---\n{}",
+            outcome.stdout
+        );
+    }
+    assert!(
+        outcome.stdout.contains("3/3"),
+        "expected the progress block to report 3/3 signatures verified;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. First-pull orientation fires (WD-39 once-per-user; the FIRST EVER
+    //    successful pull emits the orientation marker — re-asserted absent
+    //    on a re-pull by PP-2).
+    assert!(
+        outcome.stdout.contains("--federated"),
+        "expected the first-pull orientation to point at `graph query --federated`;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_storage.claims.row_count_by_author[rachel] : 0 → 3
+    //    - every stored CID attributed to Rachel, NEVER any other DID
+    //      (anti-merging, I-FED-1 — total row count == 3).
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    //    - author_claims.row_count : UNCHANGED (no merge with own claims).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull (no merge \
+         with your own claims — DD-FED-10)"
+    );
+
+    //    - filesystem.peer_claims_dir.exists[rachel] : → true, with one
+    //      <cid>.json artifact per stored record (Q-DELIVER-2 encoding).
+    let partition = peer_claims_dir_for(&env, peer_did);
+    assert!(
+        partition.exists(),
+        "expected the on-disk peer_claims partition for {peer_did} to exist \
+         after pull, at {}",
+        partition.display()
+    );
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        3,
+        "expected exactly 3 `<cid>.json` artifacts under {} after pull; got {artifact_count}",
+        partition.display()
+    );
+}
+
+/// Read the author `claims` table row count straight from DuckDB.
+/// Port-exposed name: `author_claims.row_count`. The author store is
+/// single-tenant, so a global count is the observable surface for "the
+/// user's own claims were not touched by a peer pull" (DD-FED-10).
+fn user_author_claim_count_now(env: &TestEnv) -> usize {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for author-claims count: {err}",
+            db_path.display()
+        )
+    });
+    let total: i64 = conn
+        .query_row("SELECT count(*) FROM claims", [], |r| r.get(0))
+        .unwrap_or_else(|err| panic!("query author claims count: {err}"));
+    total.max(0) as usize
 }
 
 /// PP-2: Re-running `openlore peer pull` with no new records on the

@@ -65,6 +65,11 @@ serde_json = { workspace = true }
 # goes through StoragePort.
 duckdb = { version = "1.3", features = ["bundled", "chrono"] }
 chrono = { workspace = true }
+# Step 04-01: the peer_pull acceptance helper `build_verifiable_peer_records`
+# materializes REAL Ed25519 signatures (the slice-03 peer fixtures ship
+# placeholder sigs per `fixtures_peer.rs`). Deterministic seeded keypair;
+# `default-features = false` keeps OS randomness off the test compile path.
+ed25519-dalek = { version = "2", default-features = false }
 
 [[test]]
 name = "walking_skeleton"
@@ -97,4 +102,13 @@ harness = true
 [[test]]
 name = "peer_subscribe"
 path = "../../tests/acceptance/peer_subscribe.rs"
+harness = true
+
+# Slice-03 subprocess acceptance (peer pull — US-FED-002). Drives the real
+# `openlore` binary via `assert_cmd` + `FakePeerPds`. Step 04-01 activates
+# the PP-1 scenario (LOAD-BEARING J-003 walking-skeleton beat); PP-2..PP-8
+# stay RED (`todo!()`).
+[[test]]
+name = "peer_pull"
+path = "../../tests/acceptance/peer_pull.rs"
 harness = true

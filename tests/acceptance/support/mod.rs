@@ -1016,19 +1016,235 @@ pub fn peer_claims_dir_for(env: &TestEnv, peer_did: &str) -> PathBuf {
 /// author — never any other DID (anti-merging, I-FED-1)". Port-exposed
 /// name: `peer_storage.claims.row_count_by_author[did]`.
 ///
-/// DD-FED-10: the load-bearing body (open a raw `duckdb::Connection` to
-/// `env.duckdb_path()`, `SELECT count(*) FROM peer_claims WHERE author_did = ?`
-/// AND assert no row exists under any OTHER did for these CIDs) materializes
-/// in DELIVER's PP-1 / FQ-1 scenarios once migration v3 + the peer_claims
-/// table land. Signature is final now so the peer_pull / federated_query
-/// scaffolds compile.
+/// DD-FED-10: materialized for PP-1 (step 04-01). Opens a raw
+/// `duckdb::Connection` to `env.duckdb_path()`, asserts
+/// `SELECT count(*) FROM peer_claims WHERE author_did = peer_did == count`
+/// AND that the TOTAL `peer_claims` row count equals `count` too — so no
+/// stored CID leaked under any OTHER author_did (anti-merging, I-FED-1).
+/// Test-support is the only place raw SQL is acceptable; production goes
+/// through `PeerStoragePort`.
 pub fn assert_peer_claims_attributed_to(env: &TestEnv, peer_did: &str, count: usize) {
-    let _ = (env, peer_did, count);
-    todo!(
-        "DELIVER (slice-03): open duckdb at env.duckdb_path(); assert \
-         SELECT count(*) FROM peer_claims WHERE author_did = peer_did == count \
-         AND assert these CIDs appear under NO other author_did (anti-merging, I-FED-1)"
-    )
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for peer_claims attribution assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let attributed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_claims WHERE author_did = ?",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_claims for {peer_did}: {err}"));
+    assert_eq!(
+        attributed as usize, count,
+        "expected exactly {count} peer_claims rows attributed to {peer_did}; got {attributed}"
+    );
+
+    // Anti-merging (I-FED-1): the TOTAL row count must equal the
+    // attributed count — no stored CID may appear under any OTHER DID.
+    let total: i64 = conn
+        .query_row("SELECT count(*) FROM peer_claims", [], |r| r.get(0))
+        .unwrap_or_else(|err| panic!("query total peer_claims: {err}"));
+    assert_eq!(
+        total as usize, count,
+        "anti-merging (I-FED-1): expected the TOTAL peer_claims row count to equal \
+         {count} (every row attributed to {peer_did}); got {total} total rows — \
+         a CID leaked under a DIFFERENT author_did"
+    );
+}
+
+/// Build a verifiable peer record set for the PP-1 happy path.
+///
+/// The slice-03 peer fixtures (`fixture_other_developer_three_claims`)
+/// carry PLACEHOLDER signatures + PLACEHOLDER rkeys — per the
+/// `fixtures_peer.rs` docstring, "the real Ed25519 bytes are materialized
+/// per-scenario in DELIVER." This helper does that materialization for the
+/// honest happy path: it deterministically signs each `(subject, object,
+/// confidence)` triple with `peer_seed` and re-keys each record so
+/// `rkey == compute_cid(canonical(unsigned))`, mirroring exactly what the
+/// production pull pipeline recomputes + verifies.
+///
+/// Returns `(records, peer_pubkey_hex)`:
+///   - `records`: the verifiable wire records to host on `PeerPds::for_peer`.
+///   - `peer_pubkey_hex`: the peer's Ed25519 public key as 64-char lowercase
+///     hex, wired into the subprocess via [`peer_pubkey_env_var`] so the
+///     in-binary resolver surfaces the REAL key for `claim_domain::verify`.
+///
+/// Test-support is the only place this construction is acceptable; the
+/// production populate path is `peer pull` itself.
+pub fn build_verifiable_peer_records(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+) -> (Vec<FakePeerRecord>, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    // Three distinct (subject shared, object distinct) honest claims —
+    // mirrors `fixture_other_developer_three_claims` but with REAL crypto.
+    let triples = [
+        (
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.42,
+        ),
+        (
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.reproducible-builds",
+            0.71,
+        ),
+        (
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.workspace-cohesion",
+            0.88,
+        ),
+    ];
+
+    let records = triples
+        .iter()
+        .map(|(subject, object, confidence)| {
+            // Build the unsigned domain claim (Confidence is crate-private,
+            // so route through serde — the same trick test-support uses).
+            let confidence_wrapper: claim_domain::Confidence =
+                serde_json::from_value(serde_json::json!(confidence))
+                    .expect("confidence value is well-formed");
+            let unsigned = claim_domain::UnsignedClaim {
+                subject: (*subject).to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: (*object).to_string(),
+                evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+                confidence: confidence_wrapper,
+                author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+
+            let canonical = canonicalize(&unsigned).expect("canonicalize honest claim");
+            let cid = compute_cid(&canonical);
+            let signature = sign(&cid, &signing_key).expect("sign honest claim");
+            let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+            // The peer wire shape (lexicon JSON) — what the peer PDS hosts.
+            // rkey == the real CID so the pull pipeline's recompute matches.
+            let body = serde_json::json!({
+                "subject": subject,
+                "predicate": "embodiesPhilosophy",
+                "object": object,
+                "evidence": ["https://github.com/rust-lang/cargo"],
+                "confidence": confidence,
+                "author": format!("{peer_did}#org.openlore.application"),
+                "composedAt": "2026-05-22T09:18:44Z",
+                "references": [],
+                "signature": {
+                    "kid": format!("{peer_did}#org.openlore.application"),
+                    "alg": "EdDSA",
+                    "sig": sig_b64,
+                }
+            });
+            FakePeerRecord::claim(cid.0, body)
+        })
+        .collect();
+
+    (records, pubkey_hex)
+}
+
+/// The per-peer pubkey env-var NAME for a DID, carrying the peer's Ed25519
+/// public key as 64-char lowercase hex. The in-binary peer resolver reads
+/// this so `claim_domain::verify` has the REAL key (the `FakePeerPds`
+/// resolveDid DID-document only carries a placeholder multibase string).
+/// Same encoding rule as [`peer_resolver_env_var`].
+///
+/// `did:plc:rachel-test` → `OPENLORE_PEER_PUBKEY_HEX_DID_PLC_RACHEL_TEST`.
+pub fn peer_pubkey_env_var(did: &str) -> String {
+    let encoded: String = did
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("OPENLORE_PEER_PUBKEY_HEX_{encoded}")
+}
+
+/// Run `openlore <args>` with BOTH the per-peer resolver endpoint AND the
+/// per-peer pubkey hex wired into the subprocess. Used by `peer pull`
+/// (PP-1): the resolver finds the fake PDS via the endpoint seam, and the
+/// pull pipeline verifies each record against `peer_pubkey_hex` via the
+/// pubkey seam. Mirrors [`run_openlore_with_peer_resolver`].
+pub fn run_openlore_pull(
+    env: &TestEnv,
+    args: &[&str],
+    peer_did: &str,
+    peer_endpoint: &str,
+    peer_pubkey_hex: &str,
+) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env(peer_resolver_env_var(peer_did), peer_endpoint)
+        .env(peer_pubkey_env_var(peer_did), peer_pubkey_hex)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// base64url-no-pad encode raw bytes (the lexicon `signature.sig` wire
+/// encoding per ADR-006). Hand-rolled to avoid pulling a base64 crate into
+/// the acceptance-support dev-deps; the production decoder in
+/// `adapter-atproto-pds::peer_read` must agree byte-for-byte.
+fn base64url_no_pad(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(n & 0x3f) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Lowercase-hex encode raw bytes (the peer-pubkey env-seam wire shape).
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 /// Universe-bound: "the `graph query --federated` stdout contains NO merged

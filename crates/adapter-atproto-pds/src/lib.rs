@@ -549,34 +549,44 @@ mod tests {
         );
     }
 
-    /// Step 01-03 scaffold pin: `list_peer_records` exists on the
-    /// `PdsPort` surface and routes to the `peer_read` scaffold, which is
-    /// `todo!()` until the PP-* scenarios fill it in (Phase 04). Driving
-    /// it through the port MUST panic at the scaffold (not return a
-    /// silently-empty page), proving the method is present and routed
-    /// without yet asserting business behavior. Replaced by behavioral
-    /// assertions when the live body lands.
+    /// Step 04-01 (replaces the 01-03 scaffold pin now that the live
+    /// `peer_read` body has landed): driving `list_peer_records` through the
+    /// `PdsPort` against a refused local port surfaces `PdsError::Unreachable`
+    /// — never a panic, never a silently-empty page (the WD-37 / PP-7 fault
+    /// isolation path the verb relies on). Bind+drop a listener to get a
+    /// fast connection-refused without depending on a network timeout.
     #[tokio::test]
-    #[should_panic(expected = "list_peer_records_xrpc")]
-    async fn list_peer_records_is_scaffolded_and_routed() {
+    async fn list_peer_records_surfaces_unreachable_against_refused_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
         let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
         let peer = Did("did:plc:test-peer".to_string());
-        let endpoint = Url::parse("https://peer-pds.example").expect("url parses");
-        // Drives through the PdsPort method; reaches the `todo!()`.
-        let _ = adapter.list_peer_records(&peer, &endpoint, None).await;
+        let endpoint = Url::parse(&format!("http://127.0.0.1:{port}")).expect("url parses");
+        let result = adapter.list_peer_records(&peer, &endpoint, None).await;
+        assert!(
+            matches!(result, Err(PdsError::Unreachable { .. })),
+            "expected Unreachable against a refused peer PDS port, got {result:?}"
+        );
     }
 
-    /// Step 01-03 scaffold pin: `get_peer_record` exists on the `PdsPort`
-    /// surface and routes to the `peer_read` scaffold (`todo!()` until
-    /// Phase 04). Same scaffold-presence rationale as
-    /// `list_peer_records_is_scaffolded_and_routed`.
+    /// Step 04-01 (replaces the 01-03 scaffold pin): `get_peer_record`
+    /// against a refused local port surfaces `PdsError::Unreachable` (the
+    /// re-pull path's network-failure shape) rather than a panic.
     #[tokio::test]
-    #[should_panic(expected = "get_peer_record_xrpc")]
-    async fn get_peer_record_is_scaffolded_and_routed() {
+    async fn get_peer_record_surfaces_unreachable_against_refused_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
         let adapter = AtProtoPdsAdapter::for_endpoint("https://pds.example");
         let peer = Did("did:plc:test-peer".to_string());
-        let endpoint = Url::parse("https://peer-pds.example").expect("url parses");
-        // Drives through the PdsPort method; reaches the `todo!()`.
-        let _ = adapter.get_peer_record(&peer, &endpoint, "rkey-001").await;
+        let endpoint = Url::parse(&format!("http://127.0.0.1:{port}")).expect("url parses");
+        let result = adapter.get_peer_record(&peer, &endpoint, "rkey-001").await;
+        assert!(
+            matches!(result, Err(PdsError::Unreachable { .. })),
+            "expected Unreachable against a refused peer PDS port, got {result:?}"
+        );
     }
 }
