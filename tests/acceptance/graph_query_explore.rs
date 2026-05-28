@@ -1749,11 +1749,154 @@ fn graph_query_traverse_depth_override_reveals_previously_omitted_real_edges() {
         depth_three.stdout, depth_three.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert `--depth 3` reveals edges the default depth-2 run omitted, the \
-         deeper edges are real signed claims (Gate 5, lookuppable via --subject), and the omitted \
-         count shrinks accordingly (US-GRAPH-004 Example 3 --depth override);\n--- graph ---\n{graph:?}"
-    )
+    // `--depth 3` widens the WD-76 bound by one: the depth-3 edges the default
+    // depth-2 bound CUT-AND-REPORTED-AS-OMITTED now render in the tree, and every
+    // edge it surfaces is a REAL signed claim (Gate 5 — the override reveals what
+    // already existed in the store, it fabricates nothing). The dense fixture
+    // seeds four distinct authors (Rachel + Tobias + Maria + Aanya) all asserting
+    // dependency-pinning on the SAME shared subject (github:rust-lang/cargo), so
+    // the contributor-seeded walk steps within that subject: depth 2 shows
+    // Rachel's seed edge + the first co-claimant hops; depth 3 the deeper paths
+    // the default bound omitted and reported via the WD-76 "N edge(s) omitted"
+    // line.
+    //
+    // Universe (port-exposed observable surface of the depth-2 vs depth-3
+    // `--contributor --traverse` views): cli.graph_query.traverse.edge_rows (the
+    // count of rendered `claim_cid:` edge rows — depth-3 renders strictly MORE
+    // than depth-2, the previously-omitted edges now visible),
+    // cli.graph_query.omitted_edge_count_reported (depth-2's POSITIVE WD-76
+    // omitted count is exactly the number of additional edge rows the depth-3
+    // override reveals — `depth_three_rows == depth_two_rows + depth_two_omitted`),
+    // cli.graph_query.traverse.edge_cid_resolvable[cid] (every cid the depth-3
+    // view renders resolves via `graph query --subject github:rust-lang/cargo` —
+    // a real signed claim, Gate 5), cli.graph_query.max_depth_shown (the depth-3
+    // report names depth 3, never the superseded default depth 2). Asserted
+    // against the two CLI driving-port stdout observables.
+    let two_out = &depth_two.stdout;
+    let three_out = &depth_three.stdout;
+    let shared_subject = "github:rust-lang/cargo";
+
+    // The rendered edge rows of a traversal (the `claim_cid:` lines — every
+    // displayed edge maps to exactly one signed claim, Gate 5). Returned in render
+    // order; the count is the load-bearing observable (a deeper bound surfaces
+    // MORE edge rows), the cid values feed the Gate-5 resolution probe below.
+    let edge_cids = |stdout: &str| -> Vec<String> {
+        stdout
+            .lines()
+            .filter_map(|line| {
+                line.trim_start()
+                    .strip_prefix("claim_cid:")
+                    .map(|cid| cid.trim().to_string())
+            })
+            .collect()
+    };
+
+    // The WD-76 omitted-edge count a run reported at a given bound depth (parsed
+    // from "Showing depth N; M edge(s) omitted."). No report line ⟹ nothing beyond
+    // the bound ⟹ zero omitted.
+    let omitted_count = |stdout: &str, depth: u8| -> u32 {
+        let marker = format!("Showing depth {depth}; ");
+        stdout
+            .lines()
+            .find(|line| line.contains(&marker) && line.contains("edge(s) omitted."))
+            .and_then(|line| line.split(&marker).nth(1))
+            .and_then(|rest| rest.split(" edge(s) omitted.").next())
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or(0)
+    };
+
+    // Both runs are honest about their walk: each roots at the queried contributor
+    // seed and carries the content-frozen Gate-5 notice (the depth override widens
+    // the bound, it does NOT change the no-fabrication contract).
+    for (label, stdout) in [("depth-2", two_out), ("depth-3", three_out)] {
+        assert!(
+            stdout.contains(&format!("contributor: {rachel_did}")),
+            "expected the {label} traversal to root at the queried contributor {rachel_did};\n\
+             --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+        );
+        assert!(
+            stdout.contains("Traversal does not invent edges."),
+            "expected the {label} traversal to carry the content-frozen Gate-5 honesty notice;\n\
+             --- stdout ---\n{stdout}"
+        );
+    }
+
+    // 1. The default depth-2 run reported a POSITIVE omitted-edge count — the
+    //    precondition the `--depth 3` override relieves (the dense fan-out
+    //    genuinely has edges beyond depth 2).
+    let two_rows = edge_cids(two_out);
+    let three_rows = edge_cids(three_out);
+    let two_omitted = omitted_count(two_out, 2);
+    assert!(
+        two_omitted > 0,
+        "cli.graph_query.omitted_edge_count_reported: the default depth-2 run must report a POSITIVE \
+         omitted count for the dense fan-out (the precondition the override relieves);\n\
+         --- depth-2 stdout ---\n{two_out}"
+    );
+
+    // 2. `--depth 3` REVEALS the previously-omitted edges: the depth-3 view renders
+    //    strictly MORE edge rows than depth-2, and the increase is EXACTLY the
+    //    count depth-2 reported as omitted — the depth-3 layer the default bound
+    //    cut is now shown (`depth_three_rows == depth_two_rows + depth_two_omitted`).
+    assert!(
+        three_rows.len() > two_rows.len(),
+        "cli.graph_query.traverse.edge_rows: `--depth 3` must render strictly MORE edge rows than \
+         the default depth-2 bound — the previously-omitted deeper edges now appear (US-GRAPH-004 \
+         Example 3 --depth override); got depth-2 rows={}, depth-3 rows={};\n\
+         --- depth-2 stdout ---\n{two_out}\n--- depth-3 stdout ---\n{three_out}",
+        two_rows.len(),
+        three_rows.len()
+    );
+    assert_eq!(
+        three_rows.len(),
+        two_rows.len() + two_omitted as usize,
+        "cli.graph_query.omitted_edge_count_reported: the additional edge rows the `--depth 3` \
+         override reveals must be EXACTLY the count the depth-2 run reported as omitted — the \
+         previously-omitted depth-3 edges are now revealed, none invented; got depth-2 rows={}, \
+         depth-2 omitted={two_omitted}, depth-3 rows={};\n--- depth-2 stdout ---\n{two_out}\n\
+         --- depth-3 stdout ---\n{three_out}",
+        two_rows.len(),
+        three_rows.len()
+    );
+
+    // 3. The revealed deeper edges are REAL signed claims (Gate 5): EVERY
+    //    `claim_cid` the depth-3 view renders resolves to an existing signed claim
+    //    via `graph query --subject github:rust-lang/cargo` (the override surfaces
+    //    what already existed in the store — it fabricates nothing). The dense
+    //    fixture's claims are all subscribed-PEER claims, and the traverse walk
+    //    reads them under the explorer surface's implied federated scope (WD-87),
+    //    so the resolution probe widens to the same scope with `--federated` (the
+    //    bare own-only `--subject` would honestly return empty for peer claims —
+    //    GQE-3 default-off).
+    let subject_lookup = run_openlore(
+        &env,
+        &["graph", "query", "--subject", shared_subject, "--federated"],
+    );
+    assert_eq!(
+        subject_lookup.status, 0,
+        "graph query --subject {shared_subject} --federated (Gate-5 resolution probe) must exit 0;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        subject_lookup.stdout, subject_lookup.stderr
+    );
+    for cid in &three_rows {
+        assert!(
+            subject_lookup.stdout.contains(cid.as_str()),
+            "Gate 5 (traversal invents no edges): the depth-3 edge cid {cid} must resolve to a real \
+             signed claim via `graph query --subject {shared_subject} --federated` — the deeper edge \
+             is genuine, not a fabrication;\n--- subject-lookup stdout ---\n{}\n\
+             --- depth-3 stdout ---\n{three_out}",
+            subject_lookup.stdout
+        );
+    }
+
+    // 4. The depth-3 view is HONEST about its (wider) bound: it never claims to be
+    //    still bounded at the default depth 2 — any omitted report it carries names
+    //    depth 3 (the actual bound the override applied), not the superseded 2.
+    assert!(
+        !three_out.contains("Showing depth 2;"),
+        "the --depth 3 traversal must NOT report the superseded default depth-2 bound — the \
+         override raised the bound to depth 3;\n--- depth-3 stdout ---\n{three_out}"
+    );
 }
 
 /// GQE-24 (US-GRAPH-004 happy; Gate 5): every traversed edge maps to a
