@@ -157,14 +157,96 @@ fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
 /// @us-scr-003 @driving_port @real-io @j-004c @wd-52 @kpi-scr-2 @release-gate @edge
 #[test]
 fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-2 — candidate_confidence_no_autoinflate (sign half). WHEN \
-         --sign 3 with stdin accepting every field (Enter x5, Enter sign, Y publish); THEN \
-         assert_candidate_confidence_unchanged(&env, &cid, 0.25) AND the signed payload's \
-         subject/predicate/object/evidence equal candidate 3's PROPOSED values byte-for-byte \
-         (no auto-inflation, KPI-SCR-5 zero-edit sign)."
-    )
+    // GIVEN Tobias has an initialized env + the public repo serving the five
+    // canonical cargo signals → five derived candidates. Candidate 3 is the
+    // test-driven proposal derived from the "test/source ratio 0.61" signal
+    // (signal `TestRatioOrCiMatrix` → `org.openlore.philosophy.test-driven`,
+    // its single source_url the candidate's only evidence). Its PROPOSED
+    // values are deterministic — the SSOT mapping + the fixture fix them
+    // exactly, so the test pins them as the byte-for-byte oracle below.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN he runs `--sign 3` and presses Enter through EVERY pre-filled
+    // compose field WITHOUT editing any of them: accept subject / predicate /
+    // object / evidence (four Enters) AND accept the conservative 0.25
+    // confidence default (a fifth Enter), then Enter to sign and Y to publish.
+    // This is the zero-edit sign (KPI-SCR-5): the human consciously signs but
+    // changes nothing, so the proposal is signed exactly as derived.
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "3"],
+        github.base_url(),
+        "\n\n\n\n\n\nY\n",
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 3 accepting all defaults must exit 0; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Recover the CID from the success block so the universe-bound assertions
+    // below target the exact signed record.
+    let cid = published_cid_from_stdout(&outcome.stdout);
+
+    // THEN the signed-from-scraper claim's payload equals candidate 3's
+    // PROPOSED values BYTE-FOR-BYTE — no field drifted between proposal and
+    // sign because the human edited nothing (KPI-SCR-5 zero-edit sign; WD-52 /
+    // I-SCR-3 the sign half). Read the on-disk signed payload (the same
+    // `claims/<cid>.json` → `SignedClaim` surface `assert_candidate_confidence_unchanged`
+    // uses) and compare each field to candidate 3's proposed values, which the
+    // SSOT mapping + the fixture fix exactly:
+    //   subject   : github:rust-lang/cargo            (the resolved target)
+    //   predicate : embodiesPhilosophy                (EMBODIES_PHILOSOPHY)
+    //   object    : org.openlore.philosophy.test-driven  (mapping entry 3)
+    //   evidence  : [the single TestRatioOrCiMatrix source_url]
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected signed-from-scraper claim file at {}; got {e}",
+            artifact_path.display()
+        )
+    });
+    let signed: claim_domain::SignedClaim =
+        serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "could not deserialize signed claim at {}: {e}\n--- file ---\n{}",
+                artifact_path.display(),
+                String::from_utf8_lossy(&json_bytes)
+            )
+        });
+
+    assert_eq!(
+        signed.unsigned.subject, "github:rust-lang/cargo",
+        "accepting all defaults must sign candidate 3's PROPOSED subject \
+         byte-for-byte (no edit); signed payload = {signed:#?}"
+    );
+    assert_eq!(
+        signed.unsigned.predicate, "embodiesPhilosophy",
+        "accepting all defaults must sign candidate 3's PROPOSED predicate \
+         byte-for-byte (no edit); signed payload = {signed:#?}"
+    );
+    assert_eq!(
+        signed.unsigned.object, "org.openlore.philosophy.test-driven",
+        "accepting all defaults must sign candidate 3's PROPOSED object \
+         byte-for-byte (no edit); signed payload = {signed:#?}"
+    );
+    assert_eq!(
+        signed.unsigned.evidence,
+        vec!["https://github.com/rust-lang/cargo/tree/master/tests".to_string()],
+        "accepting all defaults must sign candidate 3's PROPOSED evidence \
+         byte-for-byte (no edit); signed payload = {signed:#?}"
+    );
+
+    // AND the confidence stayed at the conservative 0.25 default — the scraper
+    // NEVER auto-inflated it and the human did not raise it (the sign-time half
+    // of `candidate_confidence_no_autoinflate`, KPI-SCR-2 / WD-52 / I-SCR-3).
+    assert_candidate_confidence_unchanged(&env, &cid, 0.25);
 }
 
 /// SS-3 (WD-62 / I-SCR-7): the `derived-from` provenance is DISPLAY-ONLY —
