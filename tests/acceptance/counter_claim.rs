@@ -475,7 +475,140 @@ fn counter_claim_rejects_reason_exceeding_one_thousand_chars() {
 /// @us-fed-004 @real-io @driving_port @j-003b @error @wd-34
 #[test]
 fn counter_claim_rejects_self_counter_with_retract_hint() {
-    todo!("DELIVER (slice-03): wire validate_counter_claim → if lookup(target_cid).author_did == current_user_did → return ClaimError::SelfCounter. Seed an own-claim via VerbClaimAdd first to give the lookup a target, then invoke 'claim counter <own_cid> --reason ...'. Assert: exit nonzero, stderr contains 'cannot counter your own claim' AND 'openlore claim retract', zero new files under claims_dir beyond the seeded own-claim")
+    let env = TestEnv::initialized();
+
+    // GIVEN: the user authors + signs ONE of their OWN claims (declining
+    // publish with "n"), so a genuine self-target lives in the user's own
+    // `claims` table. The CombinedClaimLookup resolves the own store FIRST,
+    // so this is the row that trips the self-counter guard (WD-34).
+    let seed = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
+        ],
+        "\nn\n", // <Enter> sign, "n" decline publish — keep it local.
+    );
+    assert_eq!(
+        seed.status, 0,
+        "seeding an own claim must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        seed.stdout, seed.stderr
+    );
+    // Recover the seeded own-claim CID from the sign marker — this is the
+    // self-target we will (illegally) try to counter.
+    let own_cid = parse_counter_claim_cid(&seed.stdout);
+
+    // Universe BEFORE the self-counter: the user's own `claims` table holds
+    // exactly the one seeded claim; one artifact sits under claims_dir; the
+    // user's own PDS has accepted zero records (we declined publish).
+    let author_claims_before = author_claim_count_now(&env);
+    assert_eq!(
+        author_claims_before, 1,
+        "exactly the one seeded own claim must exist before the self-counter"
+    );
+    let artifacts_before = claims_dir_artifact_count(&env);
+    assert_eq!(
+        artifacts_before, 1,
+        "exactly one on-disk artifact (the seeded own claim) before the self-counter"
+    );
+    assert_no_pds_call_was_made(&env);
+
+    // WHEN: the user tries to counter their OWN claim with a perfectly good
+    // reason (so ONLY the self-counter rule — not the missing-reason rule —
+    // can fire). The reason being valid is what proves WD-34 specifically.
+    let outcome = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &own_cid,
+            "--reason",
+            "On reflection I no longer stand behind this assertion.",
+        ],
+        // Provide confirmations defensively: the guard MUST fire pre-compose,
+        // so these should never be consumed. If they ARE consumed (the guard
+        // failed), the artifact-count assertion below catches it.
+        "\nY\n",
+    );
+
+    // THEN (criterion 1): non-zero exit — the self-counter is rejected.
+    assert_ne!(
+        outcome.status, 0,
+        "countering your own claim must exit non-zero;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN (criterion 2 — WD-34 message): stderr carries the self-counter
+    // refusal AND the retract hint, both content-frozen substrings of
+    // `ClaimError::SelfCounter`'s Display.
+    assert!(
+        outcome.stderr.contains("cannot counter your own claim"),
+        "stderr must explain the self-counter refusal \
+         (\"cannot counter your own claim\");\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("openlore claim retract"),
+        "stderr must HINT the retract path (\"openlore claim retract\");\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // THEN (criterion 3 — pre-compose ordering): NO compose preview was
+    // rendered; the guard fired BEFORE any preview reached stdout.
+    assert!(
+        !outcome
+            .stdout
+            .contains("counter-claims coexist, never overwrite"),
+        "the rejection must happen PRE-COMPOSE — no compose preview may be rendered;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN (criterion 4 — nothing signed): the on-disk artifact count is
+    // UNCHANGED (still just the seeded own claim) — no counter-claim file
+    // was written.
+    assert_eq!(
+        claims_dir_artifact_count(&env),
+        artifacts_before,
+        "no counter-claim artifact may be written when self-countering \
+         (artifact count must be unchanged from the seeded baseline)"
+    );
+    // And the own `claims` table is unchanged too — the self-counter never
+    // reaches the persist step.
+    assert_eq!(
+        author_claim_count_now(&env),
+        author_claims_before,
+        "the user's OWN `claims` table must be unchanged after a rejected self-counter"
+    );
+
+    // THEN (criterion 5 — nothing published): zero PDS calls — the guard
+    // fires long before any publish prompt.
+    assert_no_pds_call_was_made(&env);
+}
+
+/// Universe-bound: count `*.json` artifacts under `claims_dir`. Port-exposed
+/// name: `claims_dir.artifact_count`. CC-4 asserts this is UNCHANGED across a
+/// rejected self-counter (nothing new signed), distinct from CC-2/CC-3 which
+/// assert it starts at zero.
+fn claims_dir_artifact_count(env: &TestEnv) -> usize {
+    let dir = env.claims_dir();
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count(),
+        Err(_) => 0,
+    }
 }
 
 // =============================================================================
