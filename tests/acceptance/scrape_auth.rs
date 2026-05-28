@@ -95,13 +95,39 @@ fn scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token() {
 /// @us-scr-004 @driving_port @real-io @j-004a @wd-63 @edge
 #[test]
 fn scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SA-2. GIVEN FakeGithub::for_public_repo(\"small-org/tiny-lib\", \
-         fixture_cargo_five_signals()) (anonymous posture) + NO GITHUB_TOKEN in env; WHEN \
-         scrape github small-org/tiny-lib; THEN exit 0, stdout reports 'unauthenticated', the \
-         harvest completes, and a candidate list renders."
-    )
+    let env = TestEnv::initialized();
+
+    // GIVEN an UNAUTHENTICATED (anonymous) GitHub posture for a SMALL public
+    // repo target whose five signals stay well within the anonymous rate
+    // budget. `for_public_repo` defaults to `FakeAuthMode::Anonymous`, so no
+    // `GITHUB_TOKEN` is implied — and `run_openlore_scrape` (below) sets none.
+    let github =
+        FakeGithub::for_public_repo("small-org/tiny-lib", fixture_cargo_five_signals());
+    let server = GithubServer::start(github);
+
+    // WHEN Tobias runs `scrape github small-org/tiny-lib` with NO GITHUB_TOKEN
+    // set (the token-less harvest helper, mirroring SA-1's token helper).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "small-org/tiny-lib"],
+        server.base_url(),
+    );
+
+    // THEN the run completes within the anonymous budget (exit 0) and reports
+    // the unauthenticated status verbatim (the `render_auth_report` →
+    // "unauthenticated" line wired in 04-06).
+    assert_exit_zero_and_stdout_contains(&outcome, "unauthenticated");
+
+    // AND the candidate list renders normally — the harvested signals map to
+    // at least one numbered candidate under the resolved subject header.
+    assert!(
+        outcome.stdout.contains("Candidate claims for subject")
+            && outcome.stdout.contains(" [1] "),
+        "expected an unauthenticated small-target harvest to render a numbered \
+         candidate list (US-SCR-004 Ex 2); \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
 }
 
 // =============================================================================
