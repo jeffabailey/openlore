@@ -56,6 +56,9 @@ pub enum Command {
     /// Peer subscription operations (add / pull / remove) — slice-03.
     #[command(subcommand)]
     Peer(PeerCommand),
+    /// Scrape a public source for candidate claims — slice-02 (ADR-017).
+    #[command(subcommand)]
+    Scrape(ScrapeCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -125,6 +128,29 @@ pub enum PeerCommand {
         /// confirmation cannot be answered without a TTY).
         #[arg(long = "no-tty")]
         no_tty: bool,
+    },
+}
+
+/// Scrape verbs (slice-02; US-SCR-001..004; ADR-017 / ADR-019).
+///
+/// `scrape` is a new top-level verb; `github` is its only subcommand in
+/// slice-02 (the enum leaves room for future sources). The verb shape is
+/// `openlore scrape github <target> [--sign N[,N...]]`.
+#[derive(Debug, Subcommand)]
+pub enum ScrapeCommand {
+    /// Derive candidate claims from a public GitHub target, optionally
+    /// signing selected candidates through the slice-01 pipeline.
+    Github {
+        /// The public GitHub target: `owner/repo` or a bare `user`.
+        target: String,
+        /// Optional 1-based candidate indices to sign, comma-separated
+        /// (`--sign 1` or `--sign 1,3`). Captured here as the RAW string;
+        /// the verb-level `SelectionParser` (Phase 03/05) validates the
+        /// list (rejecting duplicates / out-of-range) BEFORE any compose
+        /// begins. Absent → derive + render only, ZERO writes (the
+        /// human-gate, WD-49 / I-SCR-1).
+        #[arg(long)]
+        sign: Option<String>,
     },
 }
 
@@ -321,6 +347,21 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
+        Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+            match verbs::scrape_github::run(
+                &wiring,
+                &verbs::scrape_github::ScrapeGithubArgs { target, sign },
+            ) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore scrape github: {err:#}");
+                    1
+                }
+            }
+        }
     }
 }
 
@@ -329,8 +370,11 @@ pub fn dispatch(cli: Cli) -> i32 {
 /// `Init` itself is the bootstrap verb and MUST be permitted on a fresh
 /// environment (otherwise the system is unreachable). Every other verb
 /// in the ADR-003 contract — `claim add`, `claim publish`, `claim
-/// retract`, `graph query` — operates on initialized identity + storage
-/// state and is therefore gated on the bootstrap-state arm.
+/// retract`, `graph query`, `peer *`, and the slice-02 `scrape github`
+/// — operates on initialized identity + storage state and is therefore
+/// gated on the bootstrap-state arm. (`scrape github --sign` reuses the
+/// slice-01 sign/publish pipeline, which requires the identity; harvest
+/// alone is harmless, but gating uniformly keeps the contract simple.)
 fn requires_initialized_state(cmd: &Command) -> bool {
     !matches!(cmd, Command::Init { .. })
 }
@@ -509,6 +553,63 @@ mod clap_dispatch_tests {
                 assert!(federated, "--federated flag must set federated=true");
             }
             other => panic!("expected Graph(Query --federated), got {other:?}"),
+        }
+    }
+
+    // ---- slice-02: `scrape github <target> [--sign N[,N...]]` (ADR-017) ----
+    //
+    // `scrape` is a NEW top-level verb; `github` its subcommand; `<target>`
+    // is `owner/repo` or a bare `user`; `--sign` is an OPTIONAL comma-
+    // separated list of 1-based candidate indices. The raw `--sign` string
+    // is carried verbatim here — the verb-level `SelectionParser` (Phase 03+,
+    // architecture-design §5.1) is what rejects duplicates / out-of-range
+    // indices. The clap layer only routes + captures the raw selection.
+
+    #[test]
+    fn scrape_github_without_sign_routes_with_target_and_no_selection() {
+        let cmd = parse(&["scrape", "github", "rust-lang/cargo"]);
+        match cmd {
+            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+                assert_eq!(target, "rust-lang/cargo");
+                assert!(
+                    sign.is_none(),
+                    "--sign must default to None (derive+render only, zero writes)"
+                );
+            }
+            other => panic!("expected Scrape(Github), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scrape_github_user_with_single_sign_index_routes_with_raw_selection() {
+        // US-SCR-003: a bare-user target plus a single `--sign` index.
+        let cmd = parse(&["scrape", "github", "torvalds", "--sign", "1"]);
+        match cmd {
+            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+                assert_eq!(target, "torvalds");
+                assert_eq!(
+                    sign.as_deref(),
+                    Some("1"),
+                    "--sign carries the raw index list for the verb's SelectionParser"
+                );
+            }
+            other => panic!("expected Scrape(Github --sign 1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scrape_github_with_comma_separated_sign_list_routes_with_raw_selection() {
+        let cmd = parse(&["scrape", "github", "rust-lang/cargo", "--sign", "1,3"]);
+        match cmd {
+            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+                assert_eq!(target, "rust-lang/cargo");
+                assert_eq!(
+                    sign.as_deref(),
+                    Some("1,3"),
+                    "--sign N,N,... is captured verbatim; the verb parses the list"
+                );
+            }
+            other => panic!("expected Scrape(Github --sign 1,3), got {other:?}"),
         }
     }
 }

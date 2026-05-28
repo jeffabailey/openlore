@@ -27,9 +27,12 @@
 use adapter_atproto_did::AtProtoDidAdapter;
 use adapter_atproto_pds::AtProtoPdsAdapter;
 use adapter_duckdb::DuckDbStorageAdapter;
+use adapter_github::GithubAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
-use ports::{ClockPort, IdentityPort, PdsPort, PeerStoragePort, ProbeOutcome, StoragePort};
+use ports::{
+    ClockPort, GithubPort, IdentityPort, PdsPort, PeerStoragePort, ProbeOutcome, StoragePort,
+};
 
 use crate::paths::OpenLorePaths;
 
@@ -45,6 +48,11 @@ pub struct Wiring {
     pub peer_storage: Box<dyn PeerStoragePort>,
     pub pds: Box<dyn PdsPort>,
     pub clock: Box<dyn ClockPort>,
+    /// Slice-02 GitHub-scraper adapter (ADR-019). Reads `GITHUB_TOKEN` +
+    /// `OPENLORE_GITHUB_API_BASE` from the environment via
+    /// `GithubAdapter::from_env`. Holds NO storage/identity/pds reference —
+    /// by construction it cannot sign or publish (the human-gate, I-SCR-1).
+    pub github: Box<dyn GithubPort>,
     pub paths: OpenLorePaths,
 }
 
@@ -108,12 +116,22 @@ impl Wiring {
 
         let clock: Box<dyn ClockPort> = Box::new(SystemClockAdapter::new());
 
+        // Slice-02 GitHub-scraper adapter (ADR-019). Construction reads the
+        // optional `GITHUB_TOKEN` PAT and resolves the API base (the real
+        // public API, or the `OPENLORE_GITHUB_API_BASE` test seam). It holds
+        // no signing/storage capability — the human-gate is structural
+        // (I-SCR-1 / WD-49). The harvest method bodies are RED `todo!()`
+        // scaffolds at this step; only the `scrape github` dispatch routing +
+        // this wiring slot land in 01-04 (the live harvest is Phase 03/04).
+        let github: Box<dyn GithubPort> = Box::new(GithubAdapter::from_env());
+
         Ok(Self {
             identity,
             storage,
             peer_storage,
             pds,
             clock,
+            github,
             paths,
         })
     }
@@ -141,6 +159,18 @@ impl Wiring {
         let _ = &self.peer_storage; // SCAFFOLD: true (slice-03) — slot wired; probe body lands with PS-*
         check_probe("pds", self.pds.probe())?;
         check_probe("clock", self.clock.probe())?;
+        // Slice-02 GitHub-scraper probe entry (ADR-019 §6). Unlike the slice-03
+        // peer-storage slot above, `GithubAdapter::probe()` does REAL
+        // non-network work at this bootstrap step (an empty-API-base guard +
+        // the no-token-leak auth-mode arm) and returns `ProbeOutcome::Ok` for a
+        // non-empty base — `from_env()` resolves the real public API base (or
+        // the test seam), so the call is safe at startup and need NOT be
+        // feature-gated. The live network arms (public reachability, private
+        // refusal, rate-limit headers) fill in around the pinned arm contracts
+        // in Phase 03/04; the gauntlet shape + the `self.github` wiring are
+        // exercised now, satisfying the step-01-04 AC "ProbeGauntlet includes
+        // the new GithubPort.probe()".
+        check_probe("github", self.github.probe())?;
         Ok(())
     }
 

@@ -39,6 +39,12 @@ adapter-duckdb = { path = "../adapter-duckdb" }
 adapter-atproto-did = { path = "../adapter-atproto-did" }
 adapter-atproto-pds = { path = "../adapter-atproto-pds" }
 adapter-system-clock = { path = "../adapter-system-clock" }
+# Slice-02 (github scraper; ADR-019). The composition root is the only crate
+# allowed to depend on `adapter-*`. `scraper-domain` is the PURE candidate
+# derivation crate the `scrape github` verb calls (the live derive lands in
+# Phase 03/05; the dep is wired now so the verb module can name it).
+adapter-github = { path = "../adapter-github" }
+scraper-domain = { path = "../scraper-domain" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = { workspace = true }

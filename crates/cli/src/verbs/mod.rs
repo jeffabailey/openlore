@@ -14,6 +14,11 @@
 //! - `claim_counter`: author a counter-claim against another claim.
 //! - `peer_add` / `peer_pull` / `peer_remove`: peer subscription lifecycle.
 //! - `graph_query` gains the `--federated` branch.
+//!
+//! Slice-02 verbs (github scraper; step 01-04 declares the handler as a
+//! `todo!()` scaffold; the live pipeline lands per-scenario in Phases 03-05):
+//! - `scrape_github`: derive candidate claims from a public GitHub target,
+//!   optionally signing selected candidates via the slice-01 pipeline.
 
 pub mod claim_add;
 pub mod claim_counter;
@@ -24,6 +29,7 @@ pub mod init;
 pub mod peer_add;
 pub mod peer_pull;
 pub mod peer_remove;
+pub mod scrape_github;
 
 /// Strip a `#fragment` from a DID, returning the bare DID. A signed
 /// claim's `author` carries the verification-method fragment
