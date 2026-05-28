@@ -905,12 +905,72 @@ fn scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest() {
 /// @us-scr-005 @driving_port @real-io @j-004c @error
 #[test]
 fn scrape_sign_batch_invalid_selection_list_is_rejected_before_compose() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-9. GIVEN a 5-candidate list; WHEN --sign 1,1,9; THEN exit \
-         non-zero, stderr names BOTH the duplicate index 1 AND the out-of-range index 9 \
-         (valid 1..5), no compose preview reached stdout, assert_no_claim_persisted(&env). \
-         (A single index --sign 2 behaving identically to SS-1's single sign is covered by \
-         SS-1's contract; batch is a superset.)"
-    )
+    // GIVEN Aanya has an initialized env + the public repo serving the five
+    // canonical cargo signals → a candidate list of exactly five entries
+    // (valid selection range 1..5). The batch selection `1,1,9` is doubly
+    // invalid: index 1 is DUPLICATED and index 9 is OUT OF RANGE.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she runs `--sign 1,1,9` — an invalid batch selection list. No stdin
+    // is supplied: the rejection must happen BEFORE any compose prompt, so the
+    // run never blocks waiting for input (the validation short-circuits up
+    // front, exactly like SS-4's out-of-range single index).
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1,1,9"],
+        github.base_url(),
+        "",
+    );
+
+    // THEN the CLI exits non-zero (the selection list is rejected before any
+    // compose begins).
+    assert_ne!(
+        outcome.status, 0,
+        "an invalid --sign selection list (duplicate + out-of-range) must exit non-zero; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND stderr names BOTH offending indices — the DUPLICATE index 1 AND the
+    // OUT-OF-RANGE index 9 (valid range 1..5). A single batch validation pass
+    // reports every problem at once so the human can fix the whole list in one
+    // edit (US-SCR-005 Ex 3; the batch superset of SS-4's single-index reject).
+    assert!(
+        outcome.stderr.contains("duplicate candidate index 1"),
+        "expected stderr to name the DUPLICATE index ('duplicate candidate index 1'); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+    assert!(
+        outcome
+            .stderr
+            .contains("candidate 9 does not exist; valid range 1..5"),
+        "expected stderr to name the OUT-OF-RANGE index + valid range \
+         ('candidate 9 does not exist; valid range 1..5'); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND NO compose preview ever reached stdout — the rejection short-circuits
+    // BEFORE any candidate is composed, so the inherited "not as truth" framing
+    // (I-7), which only the compose preview emits, is ABSENT.
+    assert!(
+        !outcome.stdout.contains("not as truth"),
+        "an invalid --sign list must be rejected BEFORE any compose begins; \
+         the 'not as truth' compose-preview literal must be ABSENT from stdout; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND nothing was composed, signed, or published: zero `claims` rows, zero
+    // PDS records, zero local claim artifacts (the human-gate held — no claim
+    // crossed the storage boundary).
+    assert_no_claim_persisted(&env);
 }

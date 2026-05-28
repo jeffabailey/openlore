@@ -233,25 +233,43 @@ enum SignOutcome {
 
 /// Parse + validate the raw `--sign N[,N...]` selection against the derived
 /// candidate count. Returns the 1-based indices in input order, or a
-/// domain-shaped error naming the offending value(s). Pure — no I/O — so the
-/// rejection happens BEFORE any compose preview (SS-4 / SS-9 pre-compose
+/// domain-shaped error naming EVERY offending value at once. Pure — no I/O —
+/// so the rejection happens BEFORE any compose preview (SS-4 / SS-9 pre-compose
 /// ordering). SS-1 exercises the single-index happy path; the multi-index +
 /// duplicate-rejection paths are pinned by SS-7 / SS-9.
+///
+/// Validation is APPLICATIVE, not short-circuiting (nw-fp-domain-modeling §8):
+/// a single pass over the list accumulates ALL problems — every out-of-range
+/// index AND every duplicate index — so the human can fix the whole list in one
+/// edit (US-SCR-005 Ex 3) rather than fixing one error at a time. A
+/// non-numeric token is a structural parse failure and still short-circuits
+/// (the list is unintelligible past that point). The out-of-range message is
+/// byte-identical to SS-4's single-index reject so its contract is unchanged.
 fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, String> {
     let mut indices = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut errors = Vec::new();
     for token in raw.split(',') {
         let token = token.trim();
         let index: usize = token.parse().map_err(|_| {
             format!("invalid --sign selection {token:?}; expected 1-based candidate indices")
         })?;
         if index == 0 || index > candidate_count {
-            return Err(format!(
+            errors.push(format!(
                 "candidate {index} does not exist; valid range 1..{candidate_count}"
             ));
+        } else if !seen.insert(index) {
+            // The first occurrence is `insert`ed (returns true); any repeat
+            // returns false and is flagged as a duplicate selection.
+            errors.push(format!("duplicate candidate index {index}"));
         }
         indices.push(index);
     }
-    Ok(indices)
+    if errors.is_empty() {
+        Ok(indices)
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// Carry ONE selected candidate through the SAME slice-01 compose-sign-publish
