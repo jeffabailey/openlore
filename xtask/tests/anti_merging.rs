@@ -114,3 +114,80 @@ fn cross_table_join_with_author_did_projected_passes() {
          it uses JOIN syntax"
     );
 }
+
+// -----------------------------------------------------------------------------
+// Slice-04 (scoring + graph) extension fixtures — component-boundaries.md §xtask
+// + data-models.md §"Scoring-feed query" / §"Traversal query".
+// -----------------------------------------------------------------------------
+//
+// The classifier scans EVERY `.rs` file in `adapter-duckdb/src` (incl. the new
+// `graph_query.rs`), so the slice-04 scoring-feed `UNION ALL` and recursive-CTE
+// `traverse_graph` literals fall under the SAME `no_cross_table_join_elides_author`
+// pass. These fixtures pin the NEW query shapes against the classifier so that
+// when the live SQL lands (Phase 03/04/05) the rule already covers it: the safe
+// cross-store scoring UNION-ALL (and the recursive CTE) — both projecting
+// `author_did` — pass; the FORBIDDEN aggregating query that elides `author_did`
+// is rejected.
+
+/// SAFE scoring-feed: the `query_attributed_for_scoring(ByObject)` UNION ALL —
+/// identical shape to `query_by_object`, projecting `author_did` from BOTH
+/// stores. Aggregation (the weight) happens in the pure `scoring` core in Rust,
+/// NEVER in SQL — so this literal stays per-claim and attribution-preserving.
+/// MUST pass (the rule must not false-positive on the correct scoring feed).
+const SAFE_SCORING_FEED_UNION_ALL: &str = "\
+SELECT c.author_did, c.cid, c.subject, c.predicate, c.object, c.confidence, c.composed_at
+FROM claims c
+WHERE c.object = ?object
+UNION ALL
+SELECT pc.author_did, pc.cid, pc.subject, pc.predicate, pc.object, pc.confidence, pc.composed_at
+FROM peer_claims pc
+WHERE pc.object = ?object;";
+
+/// FORBIDDEN aggregating scoring query verbatim from data-models.md
+/// §"Scoring-feed query" — the outer `GROUP BY` over a `claims`+`peer_claims`
+/// UNION subquery DROPS `author_did`, merging the weight in SQL across authors
+/// (I-GRAPH-2 violation). MUST be rejected: it mentions both tables and elides
+/// `author_did`.
+const FORBIDDEN_AGGREGATING_GROUP_BY: &str = "\
+SELECT subject, object, SUM(confidence) AS faux_weight
+FROM (SELECT subject, object, confidence FROM claims
+      UNION ALL SELECT subject, object, confidence FROM peer_claims)
+GROUP BY subject, object;";
+
+/// SAFE recursive-CTE traversal base verbatim shape from data-models.md
+/// §"Traversal query" — the `edges_base` CTE UNION-ALLs `claims` + `peer_claims`
+/// and projects `author_did` on EVERY edge row (Gate 5 / I-GRAPH-2). MUST pass.
+const SAFE_TRAVERSAL_RECURSIVE_CTE: &str = "\
+SELECT author_did, cid AS claim_cid, subject, object FROM claims
+UNION ALL
+SELECT author_did, cid AS claim_cid, subject, object FROM peer_claims";
+
+#[test]
+fn safe_scoring_feed_union_all_with_author_did_passes() {
+    assert!(
+        classify_sql_literal(SAFE_SCORING_FEED_UNION_ALL).is_none(),
+        "the slice-04 scoring-feed UNION ALL projects `author_did` across both \
+         stores and MUST pass; classifier flagged it: {:?}",
+        classify_sql_literal(SAFE_SCORING_FEED_UNION_ALL)
+    );
+}
+
+#[test]
+fn forbidden_aggregating_group_by_eliding_author_did_is_rejected() {
+    assert!(
+        classify_sql_literal(FORBIDDEN_AGGREGATING_GROUP_BY).is_some(),
+        "the FORBIDDEN aggregating query unions `claims`+`peer_claims` and \
+         GROUP BYs without `author_did` — it merges the weight in SQL and MUST \
+         be flagged (I-GRAPH-2); classifier returned None"
+    );
+}
+
+#[test]
+fn safe_traversal_recursive_cte_base_with_author_did_passes() {
+    assert!(
+        classify_sql_literal(SAFE_TRAVERSAL_RECURSIVE_CTE).is_none(),
+        "the recursive-CTE traversal base projects `author_did` on every edge \
+         across both stores and MUST pass; classifier flagged it: {:?}",
+        classify_sql_literal(SAFE_TRAVERSAL_RECURSIVE_CTE)
+    );
+}

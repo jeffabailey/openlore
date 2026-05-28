@@ -226,3 +226,42 @@ fn probe_fsync_honored(claims_dir: &Path) -> Result<(), ProbeFailure> {
     let _ = fs::remove_file(&path);
     Ok(())
 }
+
+// -----------------------------------------------------------------------------
+// Slice-04 (scoring + graph) probe extension — recursive-CTE cycle-safety
+// (ADR-021 / component-boundaries.md §`crates/adapter-duckdb` probe #2/#3).
+// -----------------------------------------------------------------------------
+//
+// The slice-04 substrate-lie probe: DuckDB recursive CTEs do NOT auto-detect
+// cycles, so the design refuses to trust the engine — it bounds the walk by a
+// depth column AND guards a delimited `visited` path. This probe seeds a cyclic
+// claim graph (A↔B via two claims), runs `traverse_graph` at a depth that would
+// loop without the guard, and asserts it TERMINATES within the 250ms budget
+// (I-5) emitting each edge exactly once (probe #2), and that a depth-bounded
+// walk omits deeper edges (probe #3).
+//
+// SCAFFOLD: true (slice-04) — the live cycle-safety probe lands WITH the live
+// recursive-CTE impl in `graph_query::traverse_graph` (Phase 05). Until the SQL
+// exists there is no cyclic walk to time; the body is a stub. The signature +
+// the refusal reason wiring below are the contract the live probe satisfies.
+
+/// The budget (ms) the cyclic-fixture traversal MUST terminate within (I-5 /
+/// component-boundaries.md probe #2). The recursive CTE without the visited
+/// guard would loop forever; the guard is what keeps this bounded.
+pub(crate) const TRAVERSAL_BUDGET_MS: u64 = 250;
+
+/// Slice-04 probe: recursive-CTE traversal is cycle-safe + depth-bounded.
+///
+/// SCAFFOLD: true (slice-04) — returns `ProbeOutcome::Ok` until the live
+/// recursive-CTE traversal lands in `graph_query::traverse_graph` (Phase 05);
+/// the real probe then seeds the A↔B cyclic fixture, times the walk against
+/// [`TRAVERSAL_BUDGET_MS`], and refuses with
+/// `ProbeRefusalReason::StorageFsyncUnreliable` (the umbrella substrate-lie
+/// refusal) on non-termination, mirroring the fsync probe's mapping.
+#[allow(dead_code)]
+pub(crate) fn probe_traversal_cycle_safe(_conn: &Connection, _claims_dir: &Path) -> ProbeOutcome {
+    // SCAFFOLD: true (slice-04) — no cyclic walk to exercise until the live
+    // recursive CTE exists; the budget constant + refusal wiring above are the
+    // contract. Phase 05 replaces this body with the seed-cycle-and-time check.
+    ProbeOutcome::Ok
+}

@@ -44,12 +44,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use claim_domain::{Cid, ReferenceType, SignedClaim};
+use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
 use duckdb::Connection;
 use ports::{
-    AuthorRelationship, FederatedRow, ProbeOutcome, SourceTable, StorageError, StoragePort,
+    AttributedClaim, AuthorRelationship, FederatedRow, GraphNode, ProbeOutcome, ScoringFilter,
+    SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
 };
 
+mod graph_query;
 mod peer_storage;
 mod probe;
 mod schema;
@@ -605,6 +607,43 @@ impl StoragePort for DuckDbStorageAdapter {
         }
 
         Ok(results)
+    }
+
+    // -------- slice-04 (scoring + graph) --------
+    //
+    // The four new read methods AUGMENT the SAME single-file DuckDB store
+    // (WD-8 — NO new table, NO store swap). Each delegates to the
+    // `graph_query` effect-shell helpers, which carry the recursive-CTE +
+    // attributed `UNION ALL` SQL (cross-store reads project `author_did`
+    // explicitly — `xtask check-arch`'s extended
+    // `no_cross_table_join_elides_author` enforces it; aggregation is the pure
+    // `scoring` core's job, NEVER SQL). Bodies are SCAFFOLD: true (slice-04) —
+    // the live SQL lands per-scenario in Phase 03/04/05.
+
+    fn query_by_object(&self, object: &str) -> Result<Vec<AttributedClaim>, StorageError> {
+        graph_query::query_by_object(&self.conn, object)
+    }
+
+    fn query_by_contributor(
+        &self,
+        author_did: &Did,
+    ) -> Result<Vec<AttributedClaim>, StorageError> {
+        graph_query::query_by_contributor(&self.conn, author_did)
+    }
+
+    fn query_attributed_for_scoring(
+        &self,
+        filter: &ScoringFilter,
+    ) -> Result<Vec<AttributedClaim>, StorageError> {
+        graph_query::query_attributed_for_scoring(&self.conn, filter)
+    }
+
+    fn traverse_graph(
+        &self,
+        start: &GraphNode,
+        bound: &TraversalBound,
+    ) -> Result<TraversalResult, StorageError> {
+        graph_query::traverse_graph(&self.conn, start, bound)
     }
 }
 
