@@ -79,3 +79,13 @@ harness = true
 name = "federation_roundtrip"
 path = "../../tests/acceptance/federation_roundtrip.rs"
 harness = true
+
+# Slice-03 layer-2 lexicon-conformance acceptance (counter-claim). Like
+# `lexicon_conformance` above it exercises the pure core (`lexicon` +
+# `claim_domain`) DIRECTLY — no CLI subprocess — so it lives under the
+# cli package's test targets purely for workspace co-location. Step 02-01
+# activates the LCC-1 scenario; sibling scenarios stay RED (`todo!()`).
+[[test]]
+name = "lexicon_counter_claim"
+path = "../../tests/acceptance/lexicon_counter_claim.rs"
+harness = true

@@ -45,7 +45,61 @@
 /// @us-fed-006 @real-io @j-003 @forward-compat @adr-015
 #[test]
 fn lexicon_counter_claim_slice_01_era_claim_loads_without_reason_field() {
-    todo!("DELIVER (slice-03): use claim_domain::SignedClaim with Option<String> reason field; load a slice-01-era fixture JSON (one without the 'reason' key in the JSON object); assert deserialize succeeds AND signed.unsigned.reason == None AND re-serialize byte-equal (modulo whitespace) — the 'reason' key MUST NOT appear in the re-serialized output")
+    use lexicon::Claim;
+
+    // GIVEN: a slice-01-era `org.openlore.claim` JSON value — note the
+    // object has NO `reason` key at all (slice-01 binaries never emitted
+    // one; ADR-005 forward-compat requires slice-03 readers tolerate its
+    // absence). This is the exact wire shape a slice-01 peer publishes.
+    let slice_01_era_json = serde_json::json!({
+        "subject": "github:rust-lang/rust",
+        "predicate": "embodiesPhilosophy",
+        "object": "org.openlore.philosophy.memory-safety",
+        "evidence": ["https://www.rust-lang.org/"],
+        "confidence": 0.86,
+        "author": "did:plc:test-jeff#org.openlore.application",
+        "composedAt": "2026-05-25T12:00:00Z",
+        "references": [],
+        "signature": {
+            "kid": "did:plc:test-jeff#org.openlore.application",
+            "alg": "EdDSA",
+            "sig": "AAAA"
+        }
+    });
+    assert!(
+        !slice_01_era_json
+            .as_object()
+            .expect("fixture is an object")
+            .contains_key("reason"),
+        "precondition: the slice-01-era fixture MUST NOT carry a `reason` key"
+    );
+
+    // WHEN: a slice-03 reader deserializes it through the lexicon `Claim`
+    // serde shape (layer-2 pure-core direct invocation — no subprocess).
+    let claim: Claim = serde_json::from_value(slice_01_era_json)
+        .expect("slice-01-era claim (no `reason` key) MUST deserialize under slice-03 (LCC-1 forward-compat gate)");
+
+    // THEN (criterion 1): the missing `reason` key defaults to `None`
+    // (`#[serde(default, ...)]` on `Claim::reason`, per ADR-015).
+    assert_eq!(
+        claim.reason, None,
+        "an absent `reason` key must deserialize to None, never an empty string or a panic"
+    );
+
+    // THEN (criterion 2): re-serializing the `reason: None` claim drops
+    // the key entirely (`skip_serializing_if = \"Option::is_none\"`), so
+    // the re-emitted JSON is byte-equal to a slice-01 claim modulo the
+    // `reason` key being omitted — this is what preserves CID stability
+    // across the slice-01 -> slice-03 upgrade (I-FED-7).
+    let reserialized = serde_json::to_value(&claim)
+        .expect("a `reason: None` Claim must re-serialize");
+    assert!(
+        !reserialized
+            .as_object()
+            .expect("re-serialized claim is an object")
+            .contains_key("reason"),
+        "a `reason: None` claim must NOT re-emit the `reason` key (forward-compat / CID stability); got: {reserialized}"
+    );
 }
 
 /// LCC-2 (I-FED-7): A slice-03 claim with `reason: None` produces the
