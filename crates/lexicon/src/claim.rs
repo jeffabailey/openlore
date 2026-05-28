@@ -89,6 +89,20 @@ pub struct Claim {
     pub composed_at: String,
     #[serde(default)]
     pub references: Vec<ClaimReference>,
+    /// (slice-03; ADR-015) Optional free-text explanation. REQUIRED by the
+    /// `claim counter` verb at the CLI level; permitted but semantically
+    /// unused on other claim types. UTF-8 NFC-normalized at compose time
+    /// (`claim-domain::normalize_reason`). OPTIONAL at the wire level (NOT
+    /// in `required[]`) per ADR-005 forward-compat.
+    ///
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]` is
+    /// load-bearing: a `reason: None` claim serializes byte-identically to
+    /// a slice-01-era claim (the key is dropped entirely), preserving CID
+    /// stability across the slice-01 -> slice-03 upgrade (I-FED-7). In CBOR
+    /// canonical lex order (ADR-006) `reason` falls between `references`
+    /// and `signature` — relevant only for claims that CARRY the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     #[serde(default)]
     pub signature: Option<SignatureBlock>,
 }

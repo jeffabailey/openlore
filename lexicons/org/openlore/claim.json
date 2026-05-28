@@ -29,6 +29,12 @@
             },
             "description": "Zero or more typed references to other claims. See ADR-008."
           },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "(slice-03; ADR-015) Optional free-text explanation. REQUIRED by the `claim counter` verb (CLI-level enforcement); permitted but semantically unused on other claim types. UTF-8 NFC-normalized at compose time. Byte-stable across the federation round-trip per ADR-006 canonicalization. OPTIONAL at the wire level (not in required[]) per ADR-005 forward-compat."
+          },
           "signature":   {
             "type": "object",
             "required": ["kid", "alg", "sig"],

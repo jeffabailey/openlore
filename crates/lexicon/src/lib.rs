@@ -54,6 +54,12 @@ pub use claim::{validate_claim_json, Claim, ClaimReference, LexiconError, Signat
 pub mod serde_impls;
 pub use serde_impls::{claim_from_json, claim_to_canonical_json, ConfidenceField};
 
+// Step 01-07: lexicon module-level startup probe extended for the
+// slice-03 `reason`-field federation-contract invariants (ADR-015 /
+// WD-32 / I-FED-7). Pure: no I/O.
+pub mod probe;
+pub use probe::{probe, ProbeError};
+
 // =============================================================================
 // org.openlore.philosophy — RED scaffold (later step turns this GREEN)
 // =============================================================================

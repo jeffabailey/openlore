@@ -619,6 +619,10 @@ fn lexicon_persisted_payload_never_contains_bucket_label_string() {
             author: "did:plc:jeff#org.openlore.application".to_string(),
             composed_at: "2026-05-25T12:00:00Z".to_string(),
             references: Vec::<ClaimReference>::new(),
+            // slice-03 (step 01-07): the struct gained an optional `reason`.
+            // None here keeps this slice-01-era LC-8 fixture byte-stable;
+            // the no-bucket-label invariant under test is unchanged.
+            reason: None,
             signature: Some(SignatureBlock {
                 kid: "did:plc:jeff#org.openlore.application".to_string(),
                 alg: "EdDSA".to_string(),
