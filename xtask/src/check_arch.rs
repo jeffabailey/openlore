@@ -14,7 +14,9 @@
 //!
 //! 1. `claim-domain` MUST NOT transitively depend on any banned I/O crate
 //!    (`tokio`, `reqwest`, `duckdb`, `keyring`, any `atrium-*`).
-//! 2. `lexicon` — same ban list.
+//! 2. `lexicon` — same ban list. `scraper-domain` (slice-02 pure derivation,
+//!    WD-56/WD-65) — same ban list; its only non-`ports` dep is the pure
+//!    `serde_yaml_ng` parser (allowlisted).
 //! 3. `ports` MAY depend on `async-trait` (the `PdsPort` trait is
 //!    inherently async per ADR-004) but MUST NOT depend on a tokio
 //!    runtime or any other I/O crate.
@@ -45,7 +47,10 @@ const BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 ///
 /// - `unicode-normalization`: NFC normalization of `--reason` text
 ///   (`claim-domain::normalize_reason`); Servo's pure NFC crate.
-const PURE_CORE_ALLOWED_CRATES: &[&str] = &["unicode-normalization"];
+/// - `serde_yaml_ng`: pure YAML parse of the embedded `signal_predicate_mapping`
+///   SSOT snapshot in `scraper-domain` (WD-65 / Q-DELIVER-1). The maintained
+///   drop-in fork of the deprecated `serde_yaml`; no I/O, no async runtime.
+const PURE_CORE_ALLOWED_CRATES: &[&str] = &["unicode-normalization", "serde_yaml_ng"];
 
 /// `ports` is async-shaped (PdsPort) so `async-trait` is the one allowed
 /// async dep; the runtime itself (tokio) and HTTP/DB I/O crates remain
@@ -429,6 +434,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "lexicon",
         "lexicon MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-*",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "scraper-domain",
+        "scraper-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-56/I-2)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -679,6 +689,34 @@ mod tests {
             check_workspace(&w).is_empty(),
             "unicode-normalization must be an allowed pure-core dep (WD-35), got: {:?}",
             check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn scraper_domain_with_pure_yaml_dep_is_allowed() {
+        // WD-65 / Q-DELIVER-1: scraper-domain is PURE; its only non-ports dep is
+        // the pure `serde_yaml_ng` parser, which the pure-core allowlist permits.
+        let w = ws(&[
+            ("scraper-domain", &["ports", "serde", "serde_yaml_ng"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "scraper-domain + serde_yaml_ng must be an allowed pure-core shape (WD-65), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn scraper_domain_depending_on_reqwest_is_violation() {
+        // The pure-core ban list is in force for scraper-domain (I-2).
+        let w = ws(&[("scraper-domain", &["reqwest"])]);
+        let v = check_workspace(&w);
+        assert!(
+            v.iter()
+                .any(|x| x.package == "scraper-domain" && x.forbidden == "reqwest"),
+            "expected scraper-domain→reqwest violation, got: {v:?}"
         );
     }
 

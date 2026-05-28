@@ -1,0 +1,16 @@
+signal_predicate_mapping:
+  - signal: "Dependency manifest pins exact versions (Cargo.lock committed, == pins)"
+    predicate: org.openlore.philosophy.dependency-pinning
+    default_confidence: 0.25
+  - signal: "Docs directory present + README > 200 lines + doc-comment density high"
+    predicate: org.openlore.philosophy.documentation-first
+    default_confidence: 0.25
+  - signal: "Test-to-source file ratio > 0.5 OR CI runs a test matrix"
+    predicate: org.openlore.philosophy.test-driven
+    default_confidence: 0.25
+  - signal: "Tags follow semver + CHANGELOG present"
+    predicate: org.openlore.philosophy.semantic-versioning
+    default_confidence: 0.25
+  - signal: "Primary language is Rust OR memory-safety language + no unsafe blocks"
+    predicate: org.openlore.philosophy.memory-safety
+    default_confidence: 0.25

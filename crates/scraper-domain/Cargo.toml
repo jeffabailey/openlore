@@ -1,0 +1,36 @@
+[package]
+name = "scraper-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure scraper domain: derive_candidates + the signal->predicate mapping (embedded jobs.yaml SSOT). NO I/O."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE (WD-56): pure core + effect shell paradigm — this crate is pure core.
+# Consumes `ports::Signal`, produces `ports::CandidateClaim` (Q-DELIVER-3:
+# the slice-02 value types live in `ports`, both pure). The signal->predicate
+# mapping is the `jobs.yaml :: J-004.signal_predicate_mapping` SSOT, embedded
+# at compile time via `include_str!` (no filesystem I/O) and parsed by a pure
+# YAML parser.
+#
+# Forbidden (I-2; enforced by `cargo xtask check-arch`): tokio, reqwest,
+# duckdb, keyring, atrium-*, std::fs/net/process/env/SystemTime, any adapter-*.
+#
+# `serde_yaml_ng` is the Q-DELIVER-1 YAML-parser pin: the maintained drop-in
+# fork of the now-deprecated `serde_yaml` (dtolnay archived `serde_yaml` in
+# 2024). It is a PURE parser — no I/O, no async runtime — so it is added to the
+# `xtask check-arch` pure-core allowlist (WD-65). Pinned crate-locally (not at
+# the workspace root) because only this pure crate parses the embedded mapping;
+# a later workspace-cleanup step may hoist it if another pure crate adopts it.
+[dependencies]
+ports = { path = "../ports" }
+serde = { workspace = true }
+serde_yaml_ng = "0.10"
+
+[dev-dependencies]
+proptest = { workspace = true }

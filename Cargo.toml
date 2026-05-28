@@ -15,6 +15,7 @@ members = [
     "crates/claim-domain",
     "crates/lexicon",
     "crates/ports",
+    "crates/scraper-domain",
     "crates/adapter-duckdb",
     "crates/adapter-atproto-did",
     "crates/adapter-atproto-pds",
