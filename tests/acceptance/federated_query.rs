@@ -1158,5 +1158,277 @@ fn federated_query_renders_inline_counter_template_per_peer_row_by_default() {
 /// @us-fed-003 @real-io @driving_port @j-003a @kpi-fed-1 @kpi-fed-2 @release-gate
 #[test]
 fn federated_query_no_merged_rows_across_multi_author_multi_record_fixture() {
-    todo!("DELIVER (slice-03): seed 1 own + 3 peer-Rachel + 2 peer-Tobias claims about same subject; assert exactly 6 output rows + 6 distinct (author_did, cid) tuples + 3 distinct author headers + zero substring 'merged' / 'consensus' / 'aggregate' in stdout. Mandatory release-blocking gate per KPI-FED-2 + outcome-kpis.md alerting threshold.")
+    let env = TestEnv::initialized();
+
+    // The shared subject ALL three authors make claims about. The verifiable
+    // peer-record builders publish under this exact subject, so the local
+    // user's own claim must use it too for the federated query to group all
+    // three authors under one subject.
+    let subject = "github:rust-lang/cargo";
+
+    // -- Author 1: the LOCAL user (Maria) adds ONE of her OWN claims. `\n`
+    // confirms the sign prompt; `N\n` declines publishing (local-only — the
+    // federated READ path only needs the locally-signed claim). --
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.local-first",
+            "--evidence",
+            "https://github.com/rust-lang/cargo",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // -- Author 2: subscribed PEER Rachel publishes her THREE canonical
+    // verifiable claims (objects dependency-pinning / reproducible-builds /
+    // workspace-cohesion) about the SAME subject. --
+    let rachel_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) =
+        build_verifiable_peer_records(rachel_did, rachel_seed);
+    let rachel_claim_count = rachel_records.len();
+    assert_eq!(
+        rachel_claim_count, 3,
+        "FQ-8 fixture expects Rachel to host exactly 3 verifiable claims"
+    );
+    let rachel = PeerPds::for_peer(rachel_did, rachel_records);
+
+    // -- Author 3: subscribed PEER Tobias publishes TWO distinct verifiable
+    // claims about the SAME subject. A SECOND distinct peer with a DIFFERENT
+    // record count is the at-scale multi-author release-gate fixture
+    // (KPI-FED-2). Tobias's objects are distinct from Rachel's so no CID can
+    // alias even before the author_did differentiator. --
+    let tobias_did = "did:plc:tobias-test";
+    let tobias_seed = [9u8; 32];
+    let tobias_objects = [
+        "org.openlore.philosophy.gradual-typing",
+        "org.openlore.philosophy.zero-cost-abstractions",
+    ];
+    let (tobias_records, tobias_pubkey_hex) =
+        build_verifiable_peer_records_with_objects(tobias_did, tobias_seed, &tobias_objects);
+    let tobias_claim_count = tobias_records.len();
+    assert_eq!(
+        tobias_claim_count, 2,
+        "FQ-8 fixture expects Tobias to host exactly 2 verifiable claims"
+    );
+    let tobias = PeerPds::for_peer(tobias_did, tobias_records);
+
+    // Precondition: subscribe to BOTH peers via the real `peer add` verb.
+    for (did, peer) in [(rachel_did, &rachel), (tobias_did, &tobias)] {
+        let added =
+            run_openlore_with_peer_resolver(&env, &["peer", "add", did], did, peer.endpoint_url());
+        assert_eq!(
+            added.status, 0,
+            "peer add {did} precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+
+    // Precondition: pull BOTH peers' verified claims in ONE invocation (the
+    // per-peer seams are threaded for each peer at once, mirroring PP-7's
+    // multi-peer pull). Each row is attributed to its own author (anti-merging
+    // held at the pull boundary).
+    let pulled = run_openlore_pull_multi(
+        &env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: rachel_did,
+                peer_endpoint: rachel.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: tobias_did,
+                peer_endpoint: tobias.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull (multi) precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Confirm BOTH peers' caches are populated + attributed before the read.
+    // Two distinct authors share the `peer_claims` store, so the TOTAL-row
+    // guard in `assert_peer_claims_attributed_to` would over-count each peer;
+    // assert each peer's PER-AUTHOR count directly. That no row leaked under
+    // any OTHER DID is proven by the distinct-(author_did, cid)-tuple
+    // assertion on the rendered output below (the load-bearing DD-FED-10
+    // surface).
+    let peer_claim_count_for = |did: &str| -> usize {
+        let conn = duckdb::Connection::open(env.duckdb_path())
+            .expect("open DuckDB for peer attribution precondition");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM peer_claims WHERE author_did = ?",
+                duckdb::params![did],
+                |r| r.get(0),
+            )
+            .expect("query peer_claims by author");
+        rows as usize
+    };
+    assert_eq!(
+        peer_claim_count_for(rachel_did),
+        rachel_claim_count,
+        "expected exactly {rachel_claim_count} peer_claims rows attributed to {rachel_did}"
+    );
+    assert_eq!(
+        peer_claim_count_for(tobias_did),
+        tobias_claim_count,
+        "expected exactly {tobias_claim_count} peer_claims rows attributed to {tobias_did}"
+    );
+
+    // -- Action: the federated read through the driving port. --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr,
+    );
+
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+
+    // DD-FED-10 (LOAD-BEARING) — multi-author multi-record federated-output
+    // universe over the observable stdout surface. The KPI-FED-2 release gate
+    // is that NO author/record collapses: 3 distinct authors, 6 total rows, 6
+    // distinct (author_did, cid) tuples, zero merge labels.
+    //
+    // Universe slots (port-exposed, derived from the rendered output — never
+    // internal struct fields):
+    //   - cli.graph_query.distinct_authors_in_output  (== 3)
+    //   - cli.graph_query.total_rows                  (== 6)
+    //   - cli.graph_query.distinct_author_cid_tuples  (== 6)
+    //   - cli.graph_query.merged_row_count            (== 0)
+    let expected_rows = 1 + rachel_claim_count + tobias_claim_count; // 6
+
+    // Slot: distinct_authors_in_output == 3. ONE header per author (you +
+    // Rachel + Tobias), each under its own relationship annotation — never one
+    // combined "all authors" aggregate header.
+    for author in [local_did, rachel_did, tobias_did] {
+        assert!(
+            stdout.contains(&format!("author: {author}")),
+            "DD-FED-10: expected a per-author header naming {author};\n--- stdout ---\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("(you)") && stdout.contains("(subscribed peer)"),
+        "DD-FED-10: expected the local user's '(you)' header AND the peers' \
+         '(subscribed peer)' headers;\n--- stdout ---\n{stdout}"
+    );
+    let distinct_authors_in_output = stdout.lines().filter(|l| l.starts_with("author: ")).count();
+    assert_eq!(
+        distinct_authors_in_output, 3,
+        "DD-FED-10: expected EXACTLY 3 distinct author headers (you + Rachel + \
+         Tobias) — multi-author rows never collapse into an aggregate;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // Slot: total_rows == 6 AND distinct_author_cid_tuples == 6. Walk each row
+    // block's `author_did:` + `cid:` field lines to recover the (author_did,
+    // cid) row-identity tuples, and pin every tuple as distinct. We pair the
+    // `cid:` FIELD line with its row's author (the FQ-7 inline counter template
+    // names the peer cid a SECOND time, so a raw cid substring count would
+    // over-count; the `cid:` FIELD line is the canonical row identity).
+    let tuples = federated_author_cid_tuples(stdout);
+    assert_eq!(
+        tuples.len(),
+        expected_rows,
+        "DD-FED-10: expected EXACTLY {expected_rows} output rows (1 own + \
+         {rachel_claim_count} Rachel + {tobias_claim_count} Tobias); got {} \
+         (author_did, cid) row tuples;\n--- stdout ---\n{stdout}",
+        tuples.len()
+    );
+    let distinct_tuples: std::collections::HashSet<(String, String)> =
+        tuples.iter().cloned().collect();
+    assert_eq!(
+        distinct_tuples.len(),
+        expected_rows,
+        "DD-FED-10: expected all {expected_rows} (author_did, cid) tuples to be \
+         DISTINCT (zero merge / zero drop / zero dup); got {} distinct of {} \
+         total;\n--- tuples ---\n{tuples:?}\n--- stdout ---\n{stdout}",
+        distinct_tuples.len(),
+        tuples.len()
+    );
+
+    // Both peers' rows are attributed to the RIGHT author: each peer's claim
+    // CIDs appear as distinct attributed rows (no phantom author, no
+    // cross-attribution, no merge).
+    for (peer, peer_did) in [(&rachel, rachel_did), (&tobias, tobias_did)] {
+        for record in peer.records() {
+            assert!(
+                distinct_tuples.contains(&(peer_did.to_string(), record.rkey.clone())),
+                "DD-FED-10: expected peer claim ({peer_did}, {}) to render as a \
+                 distinct attributed row;\n--- stdout ---\n{stdout}",
+                record.rkey
+            );
+        }
+    }
+
+    // Footer states the distinct-author count (3) AND the content-frozen
+    // no-merge guarantee (KPI-FED-1 attribution fidelity + ADR-013 footer).
+    assert!(
+        stdout.contains("3 author(s)."),
+        "DD-FED-10: expected the footer to state the distinct-author count (3);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "expected the content-frozen no-merge footer guarantee;\n--- stdout ---\n{stdout}"
+    );
+
+    // Slot: merged_row_count == 0. KPI-FED-2 release gate — NO row labels
+    // itself merged / consensus / aggregate across the multi-author fixture.
+    assert_no_merged_rows_in_federated_output(&outcome);
+}
+
+/// Parse the federated `graph query --federated` stdout into the ordered list
+/// of `(author_did, cid)` ROW tuples — the row-identity surface DD-FED-10
+/// asserts over. Each peer row block opens with an `author_did:` field line
+/// and carries a `cid:` field line; own rows are nested under the local user's
+/// header with no `author_did:` line, so the current per-author header is the
+/// fallback row author.
+///
+/// Counting the `cid:` FIELD line (not a raw CID substring) is deliberate: the
+/// FQ-7 inline counter template legitimately names the peer cid a SECOND time
+/// on its `openlore claim counter <cid>` hint, so a raw substring count would
+/// over-count. The tuple is the canonical per-row identity.
+fn federated_author_cid_tuples(stdout: &str) -> Vec<(String, String)> {
+    let mut tuples = Vec::new();
+    let mut current_header_author: Option<String> = None;
+    let mut current_row_author: Option<String> = None;
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = line.strip_prefix("author: ") {
+            let did = rest.split_whitespace().next().unwrap_or(rest).to_string();
+            current_header_author = Some(did);
+            current_row_author = None;
+        } else if let Some(rest) = trimmed.strip_prefix("author_did:") {
+            current_row_author = Some(rest.trim().to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("cid:") {
+            let cid = rest.trim().to_string();
+            let author = current_row_author
+                .clone()
+                .or_else(|| current_header_author.clone())
+                .expect("a cid: field line must follow an author header or author_did line");
+            tuples.push((author, cid));
+        }
+    }
+    tuples
 }

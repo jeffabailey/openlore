@@ -1236,6 +1236,84 @@ pub fn build_verifiable_peer_records(
     (records, pubkey_hex)
 }
 
+/// Build a verifiable peer record set for a SPECIFIC list of `objects`.
+///
+/// The multi-peer sibling of [`build_verifiable_peer_records`] (which hardcodes
+/// Rachel's three canonical triples). FQ-8's multi-author release gate needs a
+/// SECOND distinct peer (Tobias) hosting a DIFFERENT number of records (2), so
+/// this helper materializes the same REAL Ed25519 crypto + CID-recompute the
+/// pull pipeline verifies, but over a caller-supplied object list. Each object
+/// MUST be distinct from the others (so CIDs cannot alias within the peer); a
+/// distinct `peer_did` already differentiates CIDs ACROSS peers because
+/// `author_did` is part of the canonicalized claim.
+///
+/// Confidence is derived deterministically per index (`0.30 + i * 0.07`) so the
+/// values stay in `[0,1]` and differ per row — keeping the fixture's rows
+/// independently identifiable without the caller threading confidences too.
+///
+/// Returns `(records, peer_pubkey_hex)` exactly like
+/// [`build_verifiable_peer_records`]. Test-support is the only place this
+/// construction is acceptable; the production populate path is `peer pull`.
+pub fn build_verifiable_peer_records_with_objects(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    objects: &[&str],
+) -> (Vec<FakePeerRecord>, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    let records = objects
+        .iter()
+        .enumerate()
+        .map(|(i, object)| {
+            let confidence = 0.30 + (i as f64) * 0.07;
+            let confidence_wrapper: claim_domain::Confidence =
+                serde_json::from_value(serde_json::json!(confidence))
+                    .expect("confidence value is well-formed");
+            let unsigned = claim_domain::UnsignedClaim {
+                subject: "github:rust-lang/cargo".to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: (*object).to_string(),
+                evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+                confidence: confidence_wrapper,
+                author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+
+            let canonical = canonicalize(&unsigned).expect("canonicalize peer claim");
+            let cid = compute_cid(&canonical);
+            let signature = sign(&cid, &signing_key).expect("sign peer claim");
+            let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+            let body = serde_json::json!({
+                "subject": "github:rust-lang/cargo",
+                "predicate": "embodiesPhilosophy",
+                "object": object,
+                "evidence": ["https://github.com/rust-lang/cargo"],
+                "confidence": confidence,
+                "author": format!("{peer_did}#org.openlore.application"),
+                "composedAt": "2026-05-22T09:18:44Z",
+                "references": [],
+                "signature": {
+                    "kid": format!("{peer_did}#org.openlore.application"),
+                    "alg": "EdDSA",
+                    "sig": sig_b64,
+                }
+            });
+            FakePeerRecord::claim(cid.0, body)
+        })
+        .collect();
+
+    (records, pubkey_hex)
+}
+
 /// Build a tampered-signature peer record set for the PP-3 sad path
 /// (KPI-FED-6).
 ///
