@@ -116,14 +116,12 @@ fn scraper_domain_every_candidate_names_at_least_one_source_signal_property() {
     // forced head the property could pass vacuously on the empty-candidate
     // case; the head makes "every candidate names a signal" a real assertion.
     fn arb_signal_set() -> impl Strategy<Value = Vec<Signal>> {
-        (
-            arb_signal(),
-            proptest::collection::vec(arb_signal(), 0..6),
-        )
-            .prop_map(|(head, mut tail)| {
+        (arb_signal(), proptest::collection::vec(arb_signal(), 0..6)).prop_map(
+            |(head, mut tail)| {
                 tail.insert(0, head);
                 tail
-            })
+            },
+        )
     }
 
     let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");
@@ -231,14 +229,12 @@ fn scraper_domain_every_candidate_confidence_is_the_quarter_default_property() {
     // case; the head makes "every candidate confidence == 0.25" a real
     // assertion over >=1 candidate.
     fn arb_signal_set() -> impl Strategy<Value = Vec<Signal>> {
-        (
-            arb_signal(),
-            proptest::collection::vec(arb_signal(), 0..6),
-        )
-            .prop_map(|(head, mut tail)| {
+        (arb_signal(), proptest::collection::vec(arb_signal(), 0..6)).prop_map(
+            |(head, mut tail)| {
                 tail.insert(0, head);
                 tail
-            })
+            },
+        )
     }
 
     let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");

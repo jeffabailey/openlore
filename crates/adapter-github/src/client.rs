@@ -397,8 +397,14 @@ mod tests {
     fn signal_kind_from_wire_maps_the_bounded_set() {
         use ports::SignalKind;
         for (wire, expected) in [
-            ("DependencyManifestPinned", SignalKind::DependencyManifestPinned),
-            ("DocsPresentAndSubstantial", SignalKind::DocsPresentAndSubstantial),
+            (
+                "DependencyManifestPinned",
+                SignalKind::DependencyManifestPinned,
+            ),
+            (
+                "DocsPresentAndSubstantial",
+                SignalKind::DocsPresentAndSubstantial,
+            ),
             ("TestRatioOrCiMatrix", SignalKind::TestRatioOrCiMatrix),
             ("SemverAndChangelog", SignalKind::SemverAndChangelog),
             ("MemorySafetyLanguage", SignalKind::MemorySafetyLanguage),

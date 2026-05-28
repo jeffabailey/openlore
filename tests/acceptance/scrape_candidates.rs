@@ -360,7 +360,9 @@ fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_
     // the merits — naming the signal is what makes the human-gate meaningful.
     let stdout = &outcome.stdout;
     let start = stdout.find("[1]").unwrap_or_else(|| {
-        panic!("expected a numbered candidate [1] in the candidate list; \n--- stdout ---\n{stdout}")
+        panic!(
+            "expected a numbered candidate [1] in the candidate list; \n--- stdout ---\n{stdout}"
+        )
     });
     let rest = &stdout[start..];
     let block_end = rest[1..].find("[2]").map(|i| i + 1).unwrap_or(rest.len());

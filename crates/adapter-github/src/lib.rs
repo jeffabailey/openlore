@@ -298,11 +298,7 @@ impl GithubAdapter {
     ///
     /// `path` is always on the public allowlist (`/repos/...` or
     /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
-    async fn get_public(
-        &self,
-        path: &str,
-        target: &str,
-    ) -> Result<serde_json::Value, GithubError> {
+    async fn get_public(&self, path: &str, target: &str) -> Result<serde_json::Value, GithubError> {
         let client = client::build_client()
             .map_err(|e| GithubError::Network(format!("could not build HTTP client: {e}")))?;
         let url = format!("{}{}", self.api_base, path);
@@ -547,7 +543,9 @@ mod tests {
         ));
         assert!(matches!(
             classify_status(403, &empty, "torvalds"),
-            GithubError::RateLimited { authenticated: false }
+            GithubError::RateLimited {
+                authenticated: false
+            }
         ));
         let rejected = classify_status(401, &empty, "rust-lang/cargo");
         assert!(matches!(rejected, GithubError::TokenRejected));

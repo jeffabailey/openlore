@@ -1134,7 +1134,10 @@ fn peer_pull_with_zero_subscriptions_prints_no_peers_subscribed_and_exits_zero()
         outcome.stdout, outcome.stderr
     );
     assert!(
-        outcome.stdout.to_lowercase().contains("no peers subscribed"),
+        outcome
+            .stdout
+            .to_lowercase()
+            .contains("no peers subscribed"),
         "expected the no-op to print a 'no peers subscribed' hint on stdout \
          (ADR-013 §Earned Trust #4);\n--- stdout ---\n{}",
         outcome.stdout

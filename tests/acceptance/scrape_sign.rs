@@ -511,7 +511,9 @@ fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
     // THEN the CLI re-prompted with the range constraint when `1.5` was entered
     // (the SS-5 hard AC: "confidence must be between 0.0 and 1.0").
     assert!(
-        outcome.stdout.contains("confidence must be between 0.0 and 1.0"),
+        outcome
+            .stdout
+            .contains("confidence must be between 0.0 and 1.0"),
         "expected the out-of-range confidence 1.5 to trigger the re-prompt \
          'confidence must be between 0.0 and 1.0'; \
          \n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -724,13 +726,15 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
         outcome.stdout.contains("(1 of 3 signed)"),
         "expected the running progress line '(1 of 3 signed)' after the first candidate is \
          signed; \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
+        outcome.stdout,
+        outcome.stderr
     );
     assert!(
         outcome.stdout.contains("(2 of 3 signed)"),
         "expected the running progress line '(2 of 3 signed)' after the second candidate is \
          signed; \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
+        outcome.stdout,
+        outcome.stderr
     );
 
     // AND there is NO "sign all without review" affordance anywhere in output —
@@ -739,7 +743,8 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
         !outcome.stdout.to_lowercase().contains("sign all"),
         "batch must offer NO 'sign all' affordance (the human signs each candidate \
          individually; WD-49 / J-004c); \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
+        outcome.stdout,
+        outcome.stderr
     );
 
     // AND exactly THREE records landed on the user's OWN PDS — one per signed
@@ -769,7 +774,9 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
             record.collection
         );
         assert!(
-            record.at_uri.starts_with(&format!("at://{bare_author_did}/org.openlore.claim/")),
+            record
+                .at_uri
+                .starts_with(&format!("at://{bare_author_did}/org.openlore.claim/")),
             "each batched record must live at the user's OWN at-uri (bare author DID, \
              slice-01 publish path); got {}",
             record.at_uri

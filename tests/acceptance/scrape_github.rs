@@ -771,7 +771,8 @@ fn scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs() {
     for (attempt, outcome) in runs.iter().enumerate() {
         let count = count_candidates(&outcome.stdout);
         assert_eq!(
-            count, first_count,
+            count,
+            first_count,
             "every repeated scrape run must render the SAME candidate count ({} expected); \
              run #{} rendered {}; a pure read must not drift or accumulate; \
              \n--- stdout ---\n{}",

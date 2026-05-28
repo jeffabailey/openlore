@@ -46,7 +46,9 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use claim_domain::{Cid, ReferenceType, SignedClaim};
 use duckdb::Connection;
-use ports::{AuthorRelationship, FederatedRow, ProbeOutcome, SourceTable, StorageError, StoragePort};
+use ports::{
+    AuthorRelationship, FederatedRow, ProbeOutcome, SourceTable, StorageError, StoragePort,
+};
 
 mod peer_storage;
 mod probe;
@@ -195,7 +197,10 @@ impl DuckDbStorageAdapter {
             message: format!("read federated artifact {}: {err}", resolved.display()),
         })?;
         serde_json::from_slice(&bytes).map_err(|err| StorageError::QueryFailed {
-            message: format!("deserialize federated artifact {}: {err}", resolved.display()),
+            message: format!(
+                "deserialize federated artifact {}: {err}",
+                resolved.display()
+            ),
         })
     }
 }
@@ -886,8 +891,13 @@ mod tests {
             ),
         ] {
             let peer_claim = signed_claim(peer_did, subject, object, cid);
-            peer.write_peer_claim(&Did(peer_did.to_string()), &peer_claim, &endpoint, Utc::now())
-                .expect("write peer claim");
+            peer.write_peer_claim(
+                &Did(peer_did.to_string()),
+                &peer_claim,
+                &endpoint,
+                Utc::now(),
+            )
+            .expect("write peer claim");
         }
 
         let rows = storage
@@ -908,10 +918,8 @@ mod tests {
             .iter()
             .filter(|r| r.author_did.0 == local_did)
             .collect();
-        let peer_rows: Vec<&FederatedRow> = rows
-            .iter()
-            .filter(|r| r.author_did.0 == peer_did)
-            .collect();
+        let peer_rows: Vec<&FederatedRow> =
+            rows.iter().filter(|r| r.author_did.0 == peer_did).collect();
         assert_eq!(own_rows.len(), 1, "exactly one own-authored row");
         assert_eq!(peer_rows.len(), 2, "exactly two peer-authored rows");
 

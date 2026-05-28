@@ -120,13 +120,15 @@ fn federated_query_returns_author_and_peer_claims_grouped_by_author_did() {
     assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
 
     // -- Action: the federated read through the driving port --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
 
     assert_eq!(
         outcome.status, 0,
         "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.status,
-        outcome.stdout,
+        outcome.status, outcome.stdout,
     );
 
     let stdout = &outcome.stdout;
@@ -292,7 +294,10 @@ fn federated_query_renders_identical_content_from_different_authors_as_two_separ
     assert_peer_claims_attributed_to(&env, peer_did, peer_records.len());
 
     // -- Action: the federated read through the driving port --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         outcome.status, 0,
         "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -334,10 +339,7 @@ fn federated_query_renders_identical_content_from_different_authors_as_two_separ
         stdout.contains("(subscribed peer)"),
         "expected the peer's header annotated '(subscribed peer)';\n--- stdout ---\n{stdout}"
     );
-    let distinct_authors_in_output = stdout
-        .lines()
-        .filter(|l| l.starts_with("author: "))
-        .count();
+    let distinct_authors_in_output = stdout.lines().filter(|l| l.starts_with("author: ")).count();
     assert_eq!(
         distinct_authors_in_output, 2,
         "DD-FED-10: expected exactly 2 distinct author headers (zero-merge: \
@@ -617,7 +619,10 @@ fn federated_query_with_zero_peers_subscribed_degrades_with_hint() {
     // -- Action: the federated read through the driving port, with ZERO peers
     // ever subscribed. The degraded path must NOT be an error — it is a
     // graceful local-first fallback (architecture §8 "local-first latency"). --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
 
     // 1. Graceful degradation: exit 0, NOT an error. Zero subscriptions is a
     //    normal not-yet-following state, not a failure.
@@ -761,7 +766,10 @@ fn federated_query_annotates_counter_relationships_bidirectionally() {
     // -- Action: the federated read through the driving port. This is the
     // OBSERVE half of the chained narrative — CC-1 published the counter, FQ-5
     // sees the bidirectional annotation in a single query. --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         outcome.status, 0,
         "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -931,7 +939,10 @@ fn federated_query_first_invocation_emits_orientation_then_omits_on_subsequent_i
     );
 
     // -- FIRST invocation through the driving port: the orientation fires. --
-    let first = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let first = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         first.status, 0,
         "first graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -965,7 +976,10 @@ fn federated_query_first_invocation_emits_orientation_then_omits_on_subsequent_i
     );
 
     // -- SECOND invocation: the orientation is OMITTED (once-per-user). --
-    let second = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let second = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         second.status, 0,
         "second graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -1068,7 +1082,10 @@ fn federated_query_renders_inline_counter_template_per_peer_row_by_default() {
 
     // -- Action: the federated read through the driving port. WD-42 LOCKS the
     // inline template ON by default — NO `--verbose` flag is passed. --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         outcome.status, 0,
         "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -1295,7 +1312,10 @@ fn federated_query_no_merged_rows_across_multi_author_multi_record_fixture() {
     );
 
     // -- Action: the federated read through the driving port. --
-    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    let outcome = run_openlore(
+        &env,
+        &["graph", "query", "--subject", subject, "--federated"],
+    );
     assert_eq!(
         outcome.status, 0,
         "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
