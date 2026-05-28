@@ -734,10 +734,14 @@ fn render_contributor_absent_hint(contributor: &str) -> String {
 /// contract (US-GRAPH-004 Example 1 / Gate 5).
 pub const TRAVERSAL_INVENTS_NO_EDGES_NOTICE: &str = "Traversal does not invent edges.";
 
-/// Content-frozen line the renderer emits when a traversal seed has NO
-/// connecting edges within the bound (GQE-21 / US-GRAPH-004 Example 2). The
-/// `{depth}` placeholder is filled with the bound so the honest "nothing found,
-/// nothing fabricated" message names the depth searched. Do NOT paraphrase.
+/// Content-frozen line the renderer emits when a traversal surfaces NO
+/// connecting (cross-project) edges within the bound (GQE-21 / US-GRAPH-004
+/// Example 2). Emitted in two honest cases: (a) the seed reaches zero edges at
+/// all, and (b) the seed reaches edges but NO contributor's claims span more
+/// than one project (a lone author on a lone project triangulates with
+/// nothing — there is no non-obvious connection to surface). The `{depth}`
+/// placeholder is filled with the bound so the honest "nothing found, nothing
+/// fabricated" message names the depth searched. Do NOT paraphrase.
 const TRAVERSAL_NO_EDGES_TEMPLATE: &str = "No connecting edges found at depth {depth}.";
 
 /// Render the `graph query --object <philosophy> --traverse` result: a bounded,
@@ -796,8 +800,19 @@ pub fn render_traversal_tree(object: &str, result: &TraversalResult, max_depth: 
 
     // KPI-GRAPH-1: the non-obvious connection — any contributor whose claims
     // span MORE THAN ONE project. The callout names each such contributor and
-    // the exact projects they triangulate across.
-    out.push_str(&render_connections_callout(&result.edges));
+    // the exact projects they triangulate across. When NO contributor spans
+    // multiple projects (e.g. a lone author on a lone project — GQE-21), there
+    // is no non-obvious connection to surface: state that HONESTLY rather than
+    // silently omitting the callout, and fabricate nothing (Gate 5 / I-GRAPH-5).
+    let callout = render_connections_callout(&result.edges);
+    if callout.is_empty() {
+        out.push_str(&format!(
+            "{}\n\n",
+            TRAVERSAL_NO_EDGES_TEMPLATE.replace("{depth}", &max_depth.to_string())
+        ));
+    } else {
+        out.push_str(&callout);
+    }
 
     // Gate 5: the content-frozen honesty notice.
     out.push_str(&format!("{TRAVERSAL_INVENTS_NO_EDGES_NOTICE}\n"));

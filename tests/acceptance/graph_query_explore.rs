@@ -1532,11 +1532,75 @@ fn graph_query_traverse_single_node_no_edges_renders_without_fabrication() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert the single isolated tokio node renders with 'no connecting \
-         edges found at depth 2' and NO connection to any other project/contributor is fabricated \
-         (US-GRAPH-004 Example 2; Gate 5 traversal_invents_no_edges);\n--- graph ---\n{graph:?}"
-    )
+    // The isolated tokio node renders UNDER the philosophy, but the walk finds NO
+    // connecting (cross-project) edges: a single author on a single project
+    // triangulates with nothing. The renderer must say so HONESTLY ("no
+    // connecting edges found at depth 2") and fabricate NO connection to any
+    // other project or contributor (Gate 5 / I-GRAPH-5). The content-frozen
+    // "Traversal does not invent edges." notice still frames the (sparse) result.
+    //
+    // Universe (port-exposed observable surface of the single-node `--traverse`
+    // view): cli.graph_query.tree_roots_at_philosophy (the queried object heads
+    // the tree), cli.graph_query.node_rendered (the single tokio project node is
+    // present), cli.graph_query.no_connecting_edges_notice (the content-frozen
+    // "no connecting edges found at depth 2" line — the depth searched is named),
+    // cli.graph_query.connections_callout_absent (NO "Connections found" callout
+    // — nothing to triangulate), cli.graph_query.no_other_project_fabricated (no
+    // OTHER project/contributor invented), cli.graph_query.invents_no_edges_notice
+    // (the Gate-5 honesty notice still present). Asserted against stdout (the CLI
+    // driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The tree roots at the queried philosophy (the seed is honestly rendered).
+    assert!(
+        stdout.contains(&format!("philosophy: {object}")),
+        "expected the traversal tree to root at the queried philosophy {object};\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. The single isolated tokio node IS rendered (the node itself is honest —
+    //    the sparse result shows what exists, it does not blank the seed).
+    assert!(
+        stdout.contains("github:tokio-rs/tokio"),
+        "expected the single isolated tokio node to be rendered under the philosophy \
+         (the node itself is honest);\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. The content-frozen no-connecting-edges line is present and NAMES the
+    //    depth searched (default depth 2). Honest "nothing found, nothing
+    //    fabricated" — US-GRAPH-004 Example 2.
+    assert!(
+        stdout.contains("No connecting edges found at depth 2."),
+        "expected the content-frozen 'No connecting edges found at depth 2.' line for the single \
+         isolated node (no cross-project span to surface);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. NO connection is fabricated: there is no "Connections found" callout
+    //    (nothing triangulates), and NO OTHER project/contributor is invented —
+    //    only tokio and its single seeded author appear (Gate 5 / I-GRAPH-5).
+    assert!(
+        !stdout.contains("Connections found"),
+        "the single-node traversal must NOT emit a 'Connections found' callout — a lone author on \
+         a lone project triangulates with nothing (no fabrication, Gate 5);\n--- stdout ---\n{stdout}"
+    );
+    for other_project in [
+        "github:rust-lang/cargo",
+        "github:NixOS/nixpkgs",
+        "github:denoland/deno",
+    ] {
+        assert!(
+            !stdout.contains(other_project),
+            "the single-node traversal must NOT fabricate a connection to any OTHER project \
+             ({other_project}) — only the seeded tokio node exists (Gate 5);\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 5. The content-frozen Gate-5 honesty notice still frames the sparse result.
+    assert!(
+        stdout.contains("Traversal does not invent edges."),
+        "expected the content-frozen 'Traversal does not invent edges.' notice to frame the \
+         single-node (sparse) result (Gate 5);\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-22 (US-GRAPH-004 edge; WD-76/WD-91): Aanya runs `--contributor

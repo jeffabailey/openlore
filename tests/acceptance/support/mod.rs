@@ -3038,6 +3038,27 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 ],
             )
         }
+        FederatedGraphFixture::ActorModelSingleSparseClaim => {
+            // US-GRAPH-003 Example 2 (GQE-11 sparse) + US-GRAPH-004 Example 2
+            // (GQE-21 no-fabrication): ONE isolated claim — the local user's own
+            // actor-model claim on github:tokio-rs/tokio at confidence 0.50, with
+            // NO cross-project span and NO co-author. A single author on a single
+            // project means the `--traverse` walk discovers the node but NO
+            // connecting (cross-project) edges; the renderer states "no connecting
+            // edges found at depth 2" and fabricates nothing (Gate 5). Seeded via
+            // the real `claim add` verb (source_table "Own"), so the single edge
+            // maps to a real signed local claim.
+            let actor = "org.openlore.philosophy.actor-model";
+            seed_own_plus_peer_graph(
+                env,
+                &[OwnClaim {
+                    subject: "github:tokio-rs/tokio",
+                    object: actor,
+                    confidence: 0.50,
+                }],
+                &[],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
         // steps (GQE-10..27 stay RED until then).
         other => {
