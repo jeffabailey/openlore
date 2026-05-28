@@ -46,6 +46,11 @@ pub struct PeerRemoveArgs {
     /// `--purge`: hard-delete cached peer claims (gated by interactive
     /// confirmation). Defaults to false (soft-remove).
     pub purge: bool,
+    /// `--no-tty`: scripting mode (no interactive terminal available).
+    /// WD-36 LOCK: combined with `--purge`, this REFUSES the destructive
+    /// branch — the `[y/N]` confirmation cannot be answered without a TTY,
+    /// and auto-confirming a purge would defeat the J-003c trust promise.
+    pub no_tty: bool,
 }
 
 /// Outcome of one `peer remove` invocation — exit code + stdout chunk.
@@ -65,6 +70,19 @@ pub fn run(wiring: &Wiring, args: &PeerRemoveArgs) -> Result<PeerRemoveOutcome> 
     let peer_did = claim_domain::Did(args.did.clone());
 
     if args.purge {
+        // WD-36 defense-in-depth: the `--purge` confirmation REQUIRES an
+        // interactive `[y/N]` answer (WD-21: no `--yes` in slice-03). In
+        // `--no-tty` mode there is no terminal to answer it, so we REFUSE
+        // the destructive branch HERE — before any storage lookup and,
+        // crucially, before `confirm()` is ever reached — and leave the
+        // subscription AND every cached peer claim untouched. Returning a
+        // directing error makes the dispatcher exit non-zero (ADR-013
+        // exit-code table). The error names BOTH flags and points at the
+        // two ways forward: drop `--no-tty` to confirm interactively now,
+        // or wait for slice-04's `--yes` flag.
+        if args.no_tty {
+            return Err(refuse_purge_no_tty(&peer_did.0));
+        }
         return run_purge(wiring, &peer_did);
     }
 
@@ -148,6 +166,25 @@ fn run_purge(wiring: &Wiring, peer_did: &claim_domain::Did) -> Result<PeerRemove
         exit_code: 0,
         stdout: render_hard_purge(&peer_did.0, outcome),
     })
+}
+
+/// Pure constructor for the WD-36 `--no-tty --purge` refusal error.
+///
+/// Returns the directing error the dispatcher prints to stderr (and which
+/// makes the verb exit non-zero per the ADR-013 exit-code table). No I/O,
+/// no storage — a refusal is a value, computed before any side effect.
+///
+/// The message is load-bearing: PS-8 asserts stderr contains `--no-tty`,
+/// `--purge`, AND `--yes`. Per WD-36 it names the missing TTY and offers
+/// the two ways forward — drop `--no-tty` to confirm interactively now, or
+/// wait for slice-04's future `--yes` flag (which does NOT exist yet).
+fn refuse_purge_no_tty(peer_did: &str) -> anyhow::Error {
+    anyhow!(
+        "refusing to --purge {peer_did} in --no-tty mode: deleting cached \
+         peer claims requires answering an interactive [y/N] confirmation, \
+         and there is no terminal to answer it. Re-run without --no-tty to \
+         confirm interactively, or wait for slice-04's --yes flag."
+    )
 }
 
 /// Pure render for the hard-purge outcome. Reports the deleted cached

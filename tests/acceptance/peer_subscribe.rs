@@ -573,5 +573,58 @@ fn peer_subscribe_remove_purge_declined_leaves_state_unchanged() {
 /// @us-fed-005 @real-io @driving_port @j-003c @error
 #[test]
 fn peer_subscribe_remove_purge_refuses_no_tty_mode() {
-    todo!("DELIVER (slice-03): wire VerbPeerRemove --purge + --no-tty detection BEFORE TtyIO.confirm is called; assert exit-nonzero + stderr containing the directing error per WD-36; assert peer_subscriptions row STILL present AND peer_claims rows unchanged (no silent purge)")
+    let env = TestEnv::initialized();
+
+    // Precondition 1: an ACTIVE subscription to the peer (real `peer add`),
+    // exactly as PS-6/PS-7 set up. The refusal contract is "leave WHATEVER
+    // is present untouched", so the precondition mirrors the purge paths.
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+    let _added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_one_active_subscription_for(&env, peer_did);
+
+    // Precondition 2: N cached peer_claims rows — the cached state a real
+    // `--purge` would delete. A correct --no-tty refusal must leave them
+    // intact (defense-in-depth; WD-36 / KPI-FED-4).
+    let cached_count = 3;
+    seed_cached_peer_claims(&env, peer_did, cached_count);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
+
+    // Action: hard-purge in `--no-tty` mode. WD-36 LOCK: the `--purge`
+    // confirmation REQUIRES an interactive TTY, so `--no-tty` must REFUSE
+    // to run the destructive branch BEFORE `confirm()` is ever reached.
+    // Auto-confirming here would defeat the J-003c trust promise.
+    let outcome = run_openlore(&env, &["peer", "remove", peer_did, "--purge", "--no-tty"]);
+
+    // Observable #1 — exit non-zero with a DIRECTING error (ADR-013
+    // exit-code table). Per WD-36 the message names the missing TTY and
+    // directs the user to remove `--no-tty` OR wait for slice-04's future
+    // `--yes` flag (which does NOT exist in slice-03).
+    assert_exit_nonzero_and_stderr_contains(&outcome, "--no-tty");
+    assert!(
+        outcome.stderr.contains("--purge"),
+        "expected the refusal to name the `--purge` flag whose confirmation \
+         needs a TTY;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("--yes"),
+        "expected the refusal to point at slice-04's future `--yes` flag \
+         (WD-36 directing error);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Observable #2 — the defining NO-PURGE invariant: the subscription is
+    // STILL active (removed_at NULL — not even soft-removed) AND every
+    // cached peer claim is retained. A refusal that silently purged ANY
+    // slot surfaces HERE, not in production.
+    assert_one_active_subscription_for(&env, peer_did);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
 }

@@ -120,6 +120,11 @@ pub enum PeerCommand {
         /// is interactive). Defaults to soft-remove (cache retained).
         #[arg(long)]
         purge: bool,
+        /// Scripting mode — no interactive terminal. WD-36 LOCK: combined
+        /// with `--purge` this REFUSES the destructive branch (the `[y/N]`
+        /// confirmation cannot be answered without a TTY).
+        #[arg(long = "no-tty")]
+        no_tty: bool,
     },
 }
 
@@ -301,10 +306,10 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Peer(PeerCommand::Remove { did, purge }) => {
+        Command::Peer(PeerCommand::Remove { did, purge, no_tty }) => {
             match verbs::peer_remove::run(
                 &wiring,
-                &verbs::peer_remove::PeerRemoveArgs { did, purge },
+                &verbs::peer_remove::PeerRemoveArgs { did, purge, no_tty },
             ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);
@@ -406,9 +411,10 @@ mod clap_dispatch_tests {
     fn peer_remove_without_purge_defaults_purge_false() {
         let cmd = parse(&["peer", "remove", "did:plc:rachel-test"]);
         match cmd {
-            Command::Peer(PeerCommand::Remove { did, purge }) => {
+            Command::Peer(PeerCommand::Remove { did, purge, no_tty }) => {
                 assert_eq!(did, "did:plc:rachel-test");
                 assert!(!purge, "--purge must default to false when absent");
+                assert!(!no_tty, "--no-tty must default to false when absent");
             }
             other => panic!("expected Peer(Remove), got {other:?}"),
         }
@@ -418,11 +424,31 @@ mod clap_dispatch_tests {
     fn peer_remove_with_purge_flag_sets_purge_true() {
         let cmd = parse(&["peer", "remove", "did:plc:rachel-test", "--purge"]);
         match cmd {
-            Command::Peer(PeerCommand::Remove { did, purge }) => {
+            Command::Peer(PeerCommand::Remove { did, purge, no_tty }) => {
                 assert_eq!(did, "did:plc:rachel-test");
                 assert!(purge, "--purge flag must set purge=true");
+                assert!(!no_tty, "--no-tty must default to false when absent");
             }
             other => panic!("expected Peer(Remove --purge), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_remove_with_no_tty_flag_sets_no_tty_true() {
+        let cmd = parse(&[
+            "peer",
+            "remove",
+            "did:plc:rachel-test",
+            "--purge",
+            "--no-tty",
+        ]);
+        match cmd {
+            Command::Peer(PeerCommand::Remove { did, purge, no_tty }) => {
+                assert_eq!(did, "did:plc:rachel-test");
+                assert!(purge, "--purge flag must set purge=true");
+                assert!(no_tty, "--no-tty flag must set no_tty=true");
+            }
+            other => panic!("expected Peer(Remove --purge --no-tty), got {other:?}"),
         }
     }
 
