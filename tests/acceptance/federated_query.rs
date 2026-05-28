@@ -207,7 +207,194 @@ fn federated_query_returns_author_and_peer_claims_grouped_by_author_did() {
 /// @us-fed-003 @real-io @driving_port @j-003a @kpi-fed-2 @anti-merging
 #[test]
 fn federated_query_renders_identical_content_from_different_authors_as_two_separate_rows() {
-    todo!("DELIVER (slice-03): seed one author claim (Aanya) + pull one peer claim (Rachel) with the same (subject, predicate, object). Assert: exactly 2 rows in output, BOTH cids appear distinctly, NO occurrence of substrings 'merged' OR 'consensus' OR 'aggregate' in stdout, each row under its own author header. This is the load-bearing zero-merge gate (KPI-FED-2 release-blocking).")
+    let env = TestEnv::initialized();
+
+    // The shared subject + the IDENTICAL (subject, predicate, object) triple
+    // both authors make a claim about. Rachel's verifiable peer records use
+    // this exact subject/predicate; her FIRST triple's object
+    // (`org.openlore.philosophy.dependency-pinning`) is the one the local
+    // user mirrors, so the two claims share an identical (subject, predicate,
+    // object) content tuple under DIFFERENT authors — the precise zero-merge
+    // fixture (KPI-FED-2; US-FED-003 AC 5 + Example 3).
+    let subject = "github:rust-lang/cargo";
+    let shared_predicate = "embodiesPhilosophy";
+    let shared_object = "org.openlore.philosophy.dependency-pinning";
+
+    // -- Author 1 (the LOCAL user) adds ONE of her OWN claims with the SAME
+    // content triple but a DIFFERENT confidence (0.91 vs Rachel's 0.42). `\n`
+    // confirms the sign prompt; `N\n` declines publishing (local-only — the
+    // federated READ path only needs the locally-signed claim). --
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            shared_predicate,
+            "--object",
+            shared_object,
+            "--evidence",
+            "https://github.com/rust-lang/cargo",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // -- Author 2 (subscribed PEER Rachel) publishes verifiable claims about
+    // the SAME subject. Her FIRST record carries the IDENTICAL (subject,
+    // predicate, object) triple the local user just authored (confidence
+    // 0.42) — so the federated read sees identical content from two distinct
+    // authors. --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    // The first verifiable record IS the identical-content sibling (its
+    // (subject, predicate, object) == the local user's triple, confidence
+    // 0.42). Capture its CID so the two-distinct-rows assertion can pin both.
+    let peer = PeerPds::for_peer(peer_did, records);
+    let peer_records = peer.records();
+    let shared_content_peer_cid = peer_records[0].rkey.clone();
+
+    // Precondition: subscribe to Rachel via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // Precondition: pull Rachel's verified claims into `peer_claims`.
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(&env, peer_did, peer_records.len());
+
+    // -- Action: the federated read through the driving port --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr,
+    );
+
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+
+    // DD-FED-10 (LOAD-BEARING) — federated-output universe over the
+    // observable stdout surface. The zero-merge guardrail is the assertion
+    // that identical content from two authors NEVER collapses into one row.
+    //
+    // Universe slots (port-exposed, derived from the rendered output —
+    // never internal struct fields):
+    //   - cli.graph_query.distinct_authors_in_output
+    //   - cli.graph_query.own_content_row_present
+    //   - cli.graph_query.peer_content_row_present
+    //   - cli.graph_query.rows_collapsed (must be ZERO)
+
+    // Slot: distinct_authors_in_output == 2. BOTH author headers appear, each
+    // under its own relationship annotation — never one combined "both
+    // authors" header.
+    assert!(
+        stdout.contains(local_did),
+        "expected the local user's per-author header naming DID {local_did};\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains(peer_did),
+        "expected the peer's per-author header naming DID {peer_did};\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(you)"),
+        "expected the local user's header annotated '(you)';\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(subscribed peer)"),
+        "expected the peer's header annotated '(subscribed peer)';\n--- stdout ---\n{stdout}"
+    );
+    let distinct_authors_in_output = stdout
+        .lines()
+        .filter(|l| l.starts_with("author: "))
+        .count();
+    assert_eq!(
+        distinct_authors_in_output, 2,
+        "DD-FED-10: expected exactly 2 distinct author headers (zero-merge: \
+         identical content from two authors renders under two SEPARATE author \
+         headers, never one aggregate);\n--- stdout ---\n{stdout}"
+    );
+
+    // Slot: own_content_row_present + peer_content_row_present — the
+    // identical-content pair survives as TWO distinct rows. Both confidences
+    // appear verbatim (0.91 from the local user, 0.42 from Rachel) for the
+    // SAME (subject, predicate, object) triple: proof no aggregation occurred.
+    assert!(
+        stdout.contains(shared_object),
+        "expected the shared (identical-content) object {shared_object} to render;\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.91"),
+        "expected the local user's confidence 0.91 rendered verbatim (its own row);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.42"),
+        "expected the peer's confidence 0.42 rendered verbatim (its own row) — \
+         the identical-content claims are NOT averaged/merged into one row;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // Slot: both cids present AND distinct. The local own claim's cid and the
+    // identical-content peer claim's cid each appear EXACTLY ONCE — no row
+    // collapse (rows_collapsed == 0), no row duplication.
+    assert_eq!(
+        stdout.matches(&shared_content_peer_cid).count(),
+        1,
+        "DD-FED-10: the identical-content peer claim cid {shared_content_peer_cid} must \
+         appear EXACTLY ONCE as its own distinct row (no merge / no drop / no dup);\n\
+         --- stdout ---\n{stdout}"
+    );
+    // The two authors' rows are independently attributable: the peer cid must
+    // sit under the peer header, and the local DID owns a separate header — so
+    // the identical-content claims cannot have collapsed into a single row.
+    let peer_header_idx = stdout
+        .find(&format!("author: {peer_did}"))
+        .expect("peer author header present");
+    let peer_cid_idx = stdout
+        .find(&shared_content_peer_cid)
+        .expect("peer content cid present");
+    assert!(
+        peer_cid_idx > peer_header_idx,
+        "DD-FED-10: the identical-content peer cid must render UNDER the peer's own \
+         author header (distinct rows preserved);\n--- stdout ---\n{stdout}"
+    );
+
+    // KPI-FED-2 zero-merge gate (release-blocking): NO row labels itself
+    // merged / consensus / aggregate. The no-merge footer's own "are merged"
+    // sentence is excluded by the helper.
+    assert_no_merged_rows_in_federated_output(&outcome);
 }
 
 /// FQ-3: `openlore graph query --subject <S>` WITHOUT `--federated`
