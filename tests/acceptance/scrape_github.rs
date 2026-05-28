@@ -490,13 +490,58 @@ fn scrape_github_refuses_private_target_and_calls_no_private_endpoint() {
 /// @us-scr-001 @real-io @driving_port @j-004a @error
 #[test]
 fn scrape_github_offline_exits_with_requires_network_and_no_partial_list() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-6. GIVEN FakeGithub::offline() (base URL points at a dead \
-         port); WHEN scrape github rust-lang/cargo; THEN exit non-zero, stderr contains \
-         'requires network', stdout renders NO numbered candidate list, \
-         assert_no_claim_persisted(&env)."
-    )
+    // GIVEN an initialized env + an OFFLINE posture: FakeGithub::offline()
+    // serves a server that DROPS every connection without responding, so the
+    // production code's reqwest GET sees a transport error (the adapter lifts
+    // that into GithubError::Network — US-SCR-001 offline UAT).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::offline());
+
+    // WHEN Maria scrapes a public repo with no reachable network (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    // THEN the run exits NON-ZERO — an offline harvest is a failure, not an
+    // empty harvest (the only network step refuses; nothing is fabricated).
+    assert_ne!(
+        outcome.status, 0,
+        "an offline scrape must exit non-zero; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the error on stderr states the scrape REQUIRES NETWORK access — the
+    // honest, actionable cause (GithubError::Network Display: "... — scrape
+    // requires network access"), so the offline user knows WHY it failed.
+    assert!(
+        outcome.stderr.contains("requires network"),
+        "stderr must state the scrape requires network access; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND NO partial candidate list is rendered — the transport failure
+    // short-circuits at the harvest (the ONLY network step) BEFORE any
+    // derivation, so no `[1]` line and no candidate-list footer can appear
+    // (no half-built, misleading output).
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "an offline scrape must render NO numbered candidate list; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "an offline scrape must render NO candidate-list footer; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND nothing was persisted: zero `claims` rows, zero PDS writes, zero
+    // claim artifact files (scraper_never_persists_unsigned holds on the
+    // offline path too — a failed scrape is never a mutation).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-7 (US-SCR-002 Ex 2; gate-adjacent): a public target whose harvest
