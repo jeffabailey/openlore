@@ -1843,11 +1843,94 @@ fn graph_query_explain_on_sparse_subject_repeats_the_honesty_line() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert `--explain` on the sparse tokio subject shows the single \
-         contributing claim with no bonuses + running sum 0.50, AND repeats the [SPARSE] 'based on \
-         1 claim by 1 author' honesty line (US-GRAPH-005 Example 2; Gate 3);\n--- graph ---\n{graph:?}"
-    )
+    // The breakdown shows the ONE contributing claim (1 author, conf 0.50, no
+    // bonuses, running sum 0.50) AND repeats the [SPARSE] honesty line so a thin
+    // single-opinion audit never reads as a settled verdict (WD-74 / Gate 3).
+    //
+    // Universe (port-exposed observable surface of the sparse `--explain`
+    // breakdown, all asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.single_contribution_shown — the lone tokio claim is
+    //                                                enumerated under its author DID
+    //   cli.graph_query.no_bonuses_applied         — author-distinct x1.0, NO
+    //                                                cross-project triangulation line
+    //   cli.graph_query.running_sum_equals_weight  — 0.50 == displayed weight 0.50
+    //   cli.graph_query.sparse_honesty_line_repeated — the verbatim 05-02 honesty
+    //                                                line + lead-not-conclusion advice
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: exactly the 1-claim single-project sparse subgraph
+    // (the local user's own actor-model claim on tokio at confidence 0.50).
+    assert_eq!(
+        graph.seeded.len(),
+        1,
+        "fixture precondition: the sparse fixture seeds exactly 1 claim; got {}",
+        graph.seeded.len()
+    );
+
+    // 1. The single contributing claim is enumerated under its OWN author DID
+    //    (the local user). Exactly ONE contribution block — no co-author to merge.
+    let contribution_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Contribution:"))
+        .count();
+    assert_eq!(
+        contribution_rows, 1,
+        "cli.graph_query.single_contribution_shown: expected exactly 1 contribution block (the \
+         lone sparse tokio claim, no co-author); got {contribution_rows};\n--- stdout ---\n{stdout}\n\
+         --- graph ---\n{graph:?}"
+    );
+
+    // 2. The contribution shows its base confidence VERBATIM (0.50 -> minimal
+    //    decimal 0.5; KPI-4 zero-normalization), with the no-bonus case made
+    //    EXPLICIT: author-distinct multiplier x1.0 (first/only author).
+    assert!(
+        stdout.contains("confidence: 0.5 (base)"),
+        "cli.graph_query.single_contribution_shown: expected the lone claim's base confidence 0.5 \
+         shown verbatim;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("author-distinct bonus: x1.0"),
+        "cli.graph_query.no_bonuses_applied: expected the first/only author's distinct-bonus share \
+         x1.0 (no second author);\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. NO cross-project triangulation bonus applied (a lone author on a lone
+    //    project triangulates with nothing) — the bonus line is ABSENT.
+    assert!(
+        !stdout.contains("cross-project triangulation"),
+        "cli.graph_query.no_bonuses_applied: a single-claim single-project pairing must apply NO \
+         cross-project triangulation bonus;\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. The running sum (the lone subtotal 0.50) EQUALS the displayed adherence
+    //    weight 0.50 — reproduce-by-hand holds even for the sparse case (Gate 2).
+    assert!(
+        stdout.contains("subtotal:   0.50"),
+        "cli.graph_query.running_sum_equals_weight: expected the lone claim's subtotal 0.50;\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Running sum 0.50 = displayed adherence weight 0.50"),
+        "cli.graph_query.running_sum_equals_weight: expected the running sum (0.50) to EQUAL the \
+         displayed adherence weight 0.50 (reproduce-by-hand; Gate 2);\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. The [SPARSE] honesty line is REPEATED in the per-claim audit, using the
+    //    SAME verbatim wording as the non-explain sparse view from 05-02 (WD-74,
+    //    Gate 3): "based on 1 claim by 1 author" + the lead-not-conclusion advice.
+    //    A single high-confidence opinion is NEVER presented as a settled verdict.
+    assert!(
+        stdout.contains("based on 1 claim by 1 author"),
+        "cli.graph_query.sparse_honesty_line_repeated: expected the verbatim 05-02 honesty line \
+         'based on 1 claim by 1 author' repeated in the --explain audit (WD-74; Gate 3);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("treat as a lead, not a defensible conclusion"),
+        "cli.graph_query.sparse_honesty_line_repeated: expected the lead-not-conclusion advice \
+         'treat as a lead, not a defensible conclusion' repeated in the --explain audit (WD-74);\n\
+         --- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-18 (US-GRAPH-005 error): Aanya runs `--object dependency-pinning
@@ -1891,11 +1974,24 @@ fn graph_query_explain_for_subject_absent_from_result_set_is_a_usage_error() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert `--explain github:foo/bar` (absent from the result set) prints \
-         'Subject github:foo/bar is not in this result set.' and exits non-zero — a usage error \
-         distinct from an empty dimension query's exit 0 (US-GRAPH-005 Example 3);\n--- graph ---\n{graph:?}"
-    )
+    // The error names the ABSENT subject so the operator knows which lookup
+    // missed. This is a USAGE ERROR (the non-zero exit asserted above), distinct
+    // from an empty dimension query's exit 0 (architecture-design §5.2 invariant
+    // 5). The dispatcher surfaces the bail message on stderr.
+    //
+    // Universe (port-exposed observable surface of the absent-subject error):
+    //   cli.graph_query.exit_code         — non-zero (asserted above)
+    //   cli.graph_query.absent_subject_msg — the exact content-frozen message on
+    //                                        stderr naming github:foo/bar
+    assert!(
+        outcome
+            .stderr
+            .contains("Subject github:foo/bar is not in this result set."),
+        "cli.graph_query.absent_subject_msg: expected the exact message 'Subject github:foo/bar is \
+         not in this result set.' (naming the absent subject) on stderr;\n--- stdout ---\n{}\n\
+         --- stderr ---\n{}\n--- graph ---\n{graph:?}",
+        outcome.stdout, outcome.stderr
+    );
 }
 
 /// GQE-19 (US-GRAPH-005 edge; Gate 1): Maria runs `--explain
