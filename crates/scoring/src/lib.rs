@@ -131,4 +131,114 @@ mod tests {
             );
         }
     }
+
+    // -- Behavior 3: WD-74/WD-90 breadth guard — each dimension lifts ---------
+    //
+    // The breadth guard (`weight_bucket`, score.rs:310-312) is LOAD-BEARING:
+    // a single thin opinion stays Sparse REGARDLESS of how high its weight is.
+    // These boundary tests pin the guard at a weight HIGH enough (>= the SSOT
+    // strong_threshold) that ANY breach of the guard is observable as a
+    // mis-bucket to Strong instead of the correct Sparse — the existing
+    // fixtures used a below-moderate weight, which let a flipped guard fall
+    // through to the same Sparse via the weight else-branch and hid the
+    // mutants. Thresholds are pulled from `ScoringConfig::DEFAULT` (the WD-77
+    // SSOT), never hardcoded, so the tests track the SSOT.
+    //
+    // Mutation coverage (the 9 score.rs:310/314 survivors):
+    //   - claim_count `> 1` -> `== 1` / `< 1`: case A (2,1,1) is non-Sparse;
+    //     a `==1`/`<1` mutant computes claim_count breadth = false -> Sparse.
+    //   - claim_count `> 1` -> `>= 1`: case D (1,1,1) is Sparse; a `>=1` mutant
+    //     treats claim_count=1 as breadth -> buckets by weight -> Strong.
+    //   - distinct_author_count `> 1` -> `== 1` / `< 1`: case B (1,2,1) is
+    //     non-Sparse; the mutant -> author breadth false -> Sparse.
+    //   - distinct_author_count `> 1` -> `>= 1`: case D (1,1,1) -> mutant
+    //     treats author=1 as breadth -> Strong, correct is Sparse.
+    //   - cross_project_span `> 1` -> `>= 1`: case D (1,1,1) -> mutant treats
+    //     span=1 as breadth -> Strong, correct is Sparse. (The key gap.)
+    //   - `||` (author/span, col 39) -> `&&`: case C (1,1,2) lifts via span
+    //     ALONE; `&&` mutant needs BOTH author>1 AND span>1 -> false ->
+    //     Sparse, correct is Strong.
+    //   - `weight >= strong_threshold` -> `weight < strong_threshold`
+    //     (score.rs:314): case A (2,1,1) at exactly strong_threshold is Strong;
+    //     the flipped mutant falls through to Moderate.
+    #[test]
+    fn breadth_guard_each_dimension_lifts_out_of_sparse_at_high_weight() {
+        let cfg = ScoringConfig::DEFAULT;
+        // High weight: at the strong cut, so a correctly-bredth pairing is
+        // Strong and any guard breach is observable (Strong/Moderate != Sparse).
+        let w_strong = cfg.strong_threshold;
+
+        // Case A: claim_count alone is the breadth (2,1,1) -> bucket by weight.
+        assert_eq!(
+            weight_bucket(w_strong, 2, 1, 1, &cfg),
+            WeightBucket::Strong,
+            "claim_count=2 alone clears the breadth guard; at the strong cut -> Strong"
+        );
+        // Case B: distinct_author_count alone is the breadth (1,2,1).
+        assert_eq!(
+            weight_bucket(w_strong, 1, 2, 1, &cfg),
+            WeightBucket::Strong,
+            "distinct_author_count=2 alone clears the breadth guard -> Strong"
+        );
+        // Case C: cross_project_span alone is the breadth (1,1,2) — the OR-term
+        // that must NOT degrade to AND.
+        assert_eq!(
+            weight_bucket(w_strong, 1, 1, 2, &cfg),
+            WeightBucket::Strong,
+            "cross_project_span=2 alone clears the breadth guard -> Strong"
+        );
+        // Case D: NO breadth (1,1,1) -> Sparse DESPITE a strong-cut weight. The
+        // guard overrides weight magnitude (Gate 3; mitigates J-002).
+        assert_eq!(
+            weight_bucket(w_strong, 1, 1, 1, &cfg),
+            WeightBucket::Sparse,
+            "thin evidence (1,1,1) stays Sparse regardless of a high weight"
+        );
+    }
+
+    // -- Behavior 4: threshold boundaries WITH breadth present ----------------
+    //
+    // Once the breadth guard clears, the bucket is decided purely by weight
+    // against the SSOT cuts. Pin all three cuts at the boundary so the
+    // `>=`/`<` mutants on score.rs:314/316 are observable. Breadth is held
+    // constant (claim_count=2) so the guard never confounds the threshold
+    // assertions. Thresholds come from the SSOT const.
+    #[test]
+    fn threshold_boundaries_with_breadth_bucket_by_weight() {
+        let cfg = ScoringConfig::DEFAULT;
+        // Exactly at strong_threshold -> Strong (kills `>= -> <` at line 314).
+        assert_eq!(
+            weight_bucket(cfg.strong_threshold, 2, 1, 1, &cfg),
+            WeightBucket::Strong,
+            "weight == strong_threshold buckets Strong"
+        );
+        // Just below strong, but >= moderate -> Moderate.
+        let just_below_strong = (cfg.strong_threshold + cfg.moderate_threshold) / 2.0;
+        assert!(
+            just_below_strong < cfg.strong_threshold && just_below_strong >= cfg.moderate_threshold,
+            "fixture midpoint must sit in [moderate, strong)"
+        );
+        assert_eq!(
+            weight_bucket(just_below_strong, 2, 1, 1, &cfg),
+            WeightBucket::Moderate,
+            "weight in [moderate_threshold, strong_threshold) buckets Moderate"
+        );
+        // Exactly at moderate_threshold -> Moderate (kills `>= -> <` at 316).
+        assert_eq!(
+            weight_bucket(cfg.moderate_threshold, 2, 1, 1, &cfg),
+            WeightBucket::Moderate,
+            "weight == moderate_threshold buckets Moderate"
+        );
+        // Below moderate_threshold -> Sparse, even WITH breadth present.
+        let below_moderate = cfg.moderate_threshold - 0.5;
+        assert!(
+            below_moderate < cfg.moderate_threshold,
+            "fixture must sit below the moderate cut"
+        );
+        assert_eq!(
+            weight_bucket(below_moderate, 2, 1, 1, &cfg),
+            WeightBucket::Sparse,
+            "weight below moderate_threshold buckets Sparse even with breadth"
+        );
+    }
 }
