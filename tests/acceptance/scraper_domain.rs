@@ -171,12 +171,110 @@ fn scraper_domain_every_candidate_names_at_least_one_source_signal_property() {
 /// @property @us-scr-002 @j-004b @wd-52 @i-scr-3 @kpi-scr-2
 #[test]
 fn scraper_domain_every_candidate_confidence_is_the_quarter_default_property() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-2 @property. Drive proptest over arb_signal_set() x the SSOT \
-         mapping; assert EVERY produced CandidateClaim.confidence == 0.25 AND none > 0.3 (no \
-         auto-inflation; the conservative default forces the human to consciously raise it)."
-    )
+    use ports::{Signal, SignalKind};
+    use proptest::prelude::*;
+    use proptest::test_runner::TestRunner;
+    use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+
+    // Layer-2 @property (Mandate 9; DD-SCR): pure-core direct invocation, NO
+    // CLI subprocess. The driving port IS the pure `derive_candidates`
+    // signature; we drive it over an arbitrary signal set x the embedded SSOT
+    // mapping and assert the no-auto-inflation invariant from data-models.md
+    // (I-SCR-3 / KPI-SCR-2 / WD-52 / WD-10):
+    //
+    //     forall (signals, mapping):
+    //         derive_candidates(signals, mapping).all(|c| c.confidence == 0.25)
+    //
+    // The scraper has only weak public-signal evidence; it MUST stamp the
+    // conservative mapping default and NEVER auto-inflate. Only the human, at
+    // sign time, may consciously raise confidence (slice-01 pipeline). This
+    // layer-2 property PINS that `derive_candidates` propagates the mapping's
+    // 0.25 default verbatim onto every candidate (via `entry.default_confidence`
+    // -> `CandidateClaim.confidence`), so a future change that derives a higher
+    // proposal-time confidence fails LOUDLY here.
+    //
+    // Generators are inlined (not shared from a proptest_strategies module)
+    // because that module is #[cfg(test)]-gated for the crate's own inner loop;
+    // same approach as SD-1 (02-01).
+    const SUBJECT: &str = "github:rust-lang/cargo";
+
+    // Any one of the five bounded SignalKind variants the SSOT mapping uses.
+    fn arb_signal_kind() -> impl Strategy<Value = SignalKind> {
+        prop_oneof![
+            Just(SignalKind::DependencyManifestPinned),
+            Just(SignalKind::DocsPresentAndSubstantial),
+            Just(SignalKind::TestRatioOrCiMatrix),
+            Just(SignalKind::SemverAndChangelog),
+            Just(SignalKind::MemorySafetyLanguage),
+        ]
+    }
+
+    // A single Signal with an arbitrary kind, printable value, and a
+    // GitHub-shaped public URL.
+    fn arb_signal() -> impl Strategy<Value = Signal> {
+        (
+            arb_signal_kind(),
+            "[ -~]{0,64}",
+            "https://github\\.com/[a-z0-9-]{1,16}/[a-z0-9-]{1,16}",
+        )
+            .prop_map(|(kind, value, source_url)| Signal {
+                kind,
+                value,
+                source_url,
+            })
+    }
+
+    // Non-vacuous signal set: a guaranteed mapping-matching head signal so at
+    // least one candidate is derived on every case, plus an arbitrary tail
+    // (0..6 further signals) to explore collapse + drop shapes. Without the
+    // forced head the property could pass vacuously on the empty-candidate
+    // case; the head makes "every candidate confidence == 0.25" a real
+    // assertion over >=1 candidate.
+    fn arb_signal_set() -> impl Strategy<Value = Vec<Signal>> {
+        (
+            arb_signal(),
+            proptest::collection::vec(arb_signal(), 0..6),
+        )
+            .prop_map(|(head, mut tail)| {
+                tail.insert(0, head);
+                tail
+            })
+    }
+
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");
+
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arb_signal_set(), |signals| {
+            let candidates = derive_candidates(SUBJECT, &signals, &mapping);
+            // Non-vacuity guard: the forced mapping-matching head signal means
+            // at least one candidate is always produced, so this property
+            // actually exercises the per-candidate confidence assertion below.
+            prop_assert!(
+                !candidates.is_empty(),
+                "generator forces >=1 mapping-matching signal, so >=1 candidate is expected \
+                 (else the no-auto-inflation property is vacuous)"
+            );
+            for candidate in &candidates {
+                prop_assert_eq!(
+                    candidate.confidence,
+                    0.25_f64,
+                    "every derived CandidateClaim must carry the conservative mapping default \
+                     0.25 (WD-52 / I-SCR-3): the scraper never auto-inflates proposal-time \
+                     confidence; only the human raises it at sign time"
+                );
+                prop_assert!(
+                    candidate.confidence <= 0.3_f64,
+                    "no derived candidate may exceed 0.3 (no auto-inflation guardrail; \
+                     KPI-SCR-2)"
+                );
+            }
+            Ok(())
+        })
+        .expect(
+            "no-auto-inflation invariant (WD-52 / I-SCR-3): every derived candidate must carry \
+             confidence == 0.25 for all generated signal sets",
+        );
 }
 
 // =============================================================================
