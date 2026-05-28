@@ -224,7 +224,40 @@ fn subscribed_at_for(env: &TestEnv, peer_did: &str) -> chrono::DateTime<chrono::
 /// @us-fed-001 @real-io @driving_port @j-003 @error
 #[test]
 fn peer_subscribe_add_rejects_unresolvable_did_and_writes_no_subscription() {
-    todo!("DELIVER (slice-03): wire IdentityPort.resolve_peer failure path → VerbPeerAdd exit-1 + stderr containing the DID + resolution-failure message per ADR-013 exit-code table; assert zero peer_subscriptions rows")
+    let env = TestEnv::initialized();
+
+    // An unresolvable DID: a `PeerPds` whose resolveDid handler is driven
+    // into the "unreachable" failure mode (PP-7 seam). Wiring the per-peer
+    // resolver env var at this dead endpoint makes resolution fail
+    // DETERMINISTICALLY — `IdentityPort::resolve_peer` lifts the transport
+    // error to `PeerResolutionFailed`, which `VerbPeerAdd` propagates as a
+    // non-zero exit BEFORE any storage call. No real PLC-directory network
+    // egress, so the @error path is hermetic.
+    let bad_did = "did:plc:not-a-real-did";
+    let dead_peer = PeerPds::for_peer(bad_did, vec![]);
+    dead_peer.simulate_unreachable();
+
+    let outcome = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", bad_did],
+        bad_did,
+        dead_peer.endpoint_url(),
+    );
+
+    // Exit non-zero with stderr naming BOTH the DID and the
+    // resolution-failure cause (ADR-013 exit-code table / Example 3).
+    assert_exit_nonzero_and_stderr_contains(&outcome, bad_did);
+    assert!(
+        outcome.stderr.contains("resolve"),
+        "expected stderr to name the resolution-failure cause for {bad_did};\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // The defining no-write invariant: ZERO peer_subscriptions rows — the
+    // resolve failure short-circuited before `add_subscription` ran.
+    assert_zero_subscriptions_for(&env, bad_did);
 }
 
 /// PS-4: `openlore peer add <self_did>` (where <self_did> is the local
@@ -236,7 +269,61 @@ fn peer_subscribe_add_rejects_unresolvable_did_and_writes_no_subscription() {
 /// @us-fed-001 @real-io @driving_port @j-003 @error
 #[test]
 fn peer_subscribe_add_rejects_self_did_subscription() {
-    todo!("DELIVER (slice-03): wire self-DID short-circuit in VerbPeerAdd BEFORE PeerStoragePort.add_subscription is called; assert stderr literal 'cannot subscribe to yourself' + zero peer_subscriptions rows")
+    let env = TestEnv::initialized();
+
+    // The local user's own DID, read from the same identity the harness
+    // wires into the subprocess via `OPENLORE_DID`. `peer add <self_did>`
+    // must short-circuit in `VerbPeerAdd` BEFORE any network or storage
+    // call (anti-merging; PS-4 / UAT scenario #4).
+    let self_did = env.identity.author_did().to_string();
+
+    let outcome = run_openlore(&env, &["peer", "add", &self_did]);
+
+    // Exit non-zero with the literal self-subscribe refusal (US-FED-001 AC 5).
+    assert_exit_nonzero_and_stderr_contains(&outcome, "cannot subscribe to yourself");
+
+    // No-write invariant: ZERO peer_subscriptions rows for the self DID —
+    // the short-circuit fired before `add_subscription`.
+    assert_zero_subscriptions_for(&env, &self_did);
+}
+
+/// Universe-bound: "the `peer_subscriptions` store holds ZERO rows for
+/// `peer_did`" — the no-write invariant both error paths (PS-3 + PS-4)
+/// must satisfy. Port-exposed name:
+/// `peer_storage.subscriptions.row_count[did] == 0`.
+///
+/// Opens a raw `duckdb::Connection` for the assertion (test-support is the
+/// only place raw SQL is acceptable; production goes through
+/// `PeerStoragePort`). Sibling of `assert_one_active_subscription_for`.
+/// The `peer_subscriptions` table exists post-`init` (migration v3), so a
+/// COUNT against it is well-defined even when the verb wrote nothing.
+fn assert_zero_subscriptions_for(env: &TestEnv, peer_did: &str) {
+    let db_path = env.duckdb_path();
+    assert!(
+        db_path.exists(),
+        "expected DuckDB to exist at {} after init; file missing",
+        db_path.display()
+    );
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for no-write assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_subscriptions for {peer_did}: {err}"));
+
+    assert_eq!(
+        total, 0,
+        "expected ZERO peer_subscriptions rows for {peer_did} on the error \
+         path (no-write invariant); got {total}"
+    );
 }
 
 // =============================================================================
