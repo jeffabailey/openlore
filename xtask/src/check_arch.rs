@@ -24,6 +24,9 @@
 //!    are exempt by name.)
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
+
+use syn::visit::Visit;
 
 /// Banned I/O crates the pure core (claim-domain / lexicon / ports)
 /// MUST NOT pull in transitively. `atrium-*` is matched by prefix.
@@ -105,7 +108,7 @@ impl Violation {
 
 /// True if `dep` matches any banned name or banned prefix.
 fn is_banned(dep: &str, names: &[&str], prefixes: &[&str]) -> Option<String> {
-    if names.iter().any(|n| *n == dep) {
+    if names.contains(&dep) {
         return Some(dep.to_string());
     }
     for p in prefixes {
@@ -208,6 +211,191 @@ fn check_only_cli_depends_on_adapters(workspace: &Workspace) -> Vec<Violation> {
     violations
 }
 
+// -----------------------------------------------------------------------------
+// Anti-merging rule — `no_cross_table_join_elides_author` (WD-30 / I-FED-1)
+// -----------------------------------------------------------------------------
+//
+// Structural enforcement layer 2 of 3 (layer 1 = `FederatedRow.author_did`
+// non-Option from 01-01; layer 3 = integration test
+// `federation_attribution_preserved`, Phase 05). Per component-boundaries.md
+// §xtask and data-models.md §"Cross-store query examples": any SQL string
+// literal in `adapter-duckdb` that mentions BOTH the standalone `claims` table
+// AND the `peer_claims` table MUST also project `author_did` in its SELECT
+// list, else the query could silently MERGE attribution across stores
+// (KPI-FED-1 / KPI-FED-2 regression). The classifier is a pure word-boundary
+// regex pass over a single literal; the effect shell extracts literals with
+// `syn` (so comments are never matched).
+
+/// A cross-store SQL literal that elides `author_did` — the anti-merging
+/// violation. Carries an excerpt for the error message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqlAntiMergingViolation {
+    /// First ~80 chars of the offending literal, for the operator's error.
+    pub excerpt: String,
+}
+
+/// True if `haystack` contains `needle` as a whole word (the chars on either
+/// side, if any, are not `[A-Za-z0-9_]`). Distinguishes the `claims` table
+/// from the `peer_claims` substring and from `claim_references` etc.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let nlen = needle.len();
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let at = start + pos;
+        let before_ok = at == 0 || !is_word_byte(bytes[at - 1]);
+        let after_idx = at + nlen;
+        let after_ok = after_idx >= bytes.len() || !is_word_byte(bytes[after_idx]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = at + 1;
+    }
+    false
+}
+
+/// True for ASCII word characters (`[A-Za-z0-9_]`) — the boundary alphabet
+/// for SQL identifiers.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Pure classifier for the anti-merging rule. Given one SQL string literal,
+/// return `Some(violation)` iff it references BOTH the `claims` table AND the
+/// `peer_claims` table but does NOT mention `author_did`. Otherwise `None`
+/// (single-table query, or cross-table query that projects attribution).
+///
+/// Word-boundary matching ensures `peer_claims` (which contains the substring
+/// `claims`) does NOT count as a `claims`-table mention on its own.
+pub fn classify_sql_literal(literal: &str) -> Option<SqlAntiMergingViolation> {
+    let mentions_peer_claims = contains_word(literal, "peer_claims");
+    let mentions_own_claims = contains_word(literal, "claims");
+    // `contains_word("...peer_claims...", "claims")` is false (the `_` before
+    // `claims` is a word byte), so `mentions_own_claims` is only true for a
+    // standalone `claims` table reference. A cross-store query is one that
+    // names both tables.
+    let is_cross_store = mentions_peer_claims && mentions_own_claims;
+    if !is_cross_store {
+        return None;
+    }
+    if contains_word(literal, "author_did") {
+        return None;
+    }
+    Some(SqlAntiMergingViolation {
+        excerpt: excerpt_of(literal),
+    })
+}
+
+/// First non-empty line (trimmed) of a literal, capped at 80 chars — enough
+/// for an operator to locate the offending query.
+fn excerpt_of(literal: &str) -> String {
+    let first = literal
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if first.len() > 80 {
+        format!("{}…", &first[..80])
+    } else {
+        first.to_string()
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Autoconfirm release-build guard rule (D-D20)
+// -----------------------------------------------------------------------------
+//
+// WD-21 forbids a `--yes` flag in production. The test escape hatch
+// `OPENLORE_TEST_AUTOCONFIRM` (crates/cli/src/verbs/peer_remove.rs) MUST NOT
+// compile into release builds. Source-level contract (acceptable per task /
+// component-boundaries.md): every occurrence of the `OPENLORE_TEST_AUTOCONFIRM`
+// token must sit inside a `#[cfg(...)]`-gated item. A leak into an ungated item
+// would ship the env-var read in a release binary.
+
+/// The build-time-gated escape-hatch token D-D20 requires to be cfg-guarded.
+const AUTOCONFIRM_TOKEN: &str = "OPENLORE_TEST_AUTOCONFIRM";
+
+/// A leaked autoconfirm token — present in source but NOT behind a `#[cfg]`
+/// gate, so it would compile into a release binary (D-D20 violation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoconfirmGuardViolation {
+    /// The line (trimmed) where the ungated token appears.
+    pub line: String,
+}
+
+/// Pure classifier for the autoconfirm release-build guard (D-D20). Given the
+/// full source text of `peer_remove.rs`, return `Some(violation)` iff the
+/// `OPENLORE_TEST_AUTOCONFIRM` token appears inside an item that is NOT
+/// cfg-gated (and would therefore compile into a release binary).
+///
+/// Approach: brace-depth tracking. At top level (depth 0) an attribute run is
+/// accumulated; when the item's body opens (`{`, depth 0→1) the gate state for
+/// that whole item is fixed from the run (any `#[cfg(...)]` ⇒ gated). The gate
+/// stays in force for every line until the body closes back to depth 0. A token
+/// seen while the enclosing item is ungated is a violation; a token at top
+/// level with no enclosing gated item is also a violation.
+pub fn classify_autoconfirm_guard(source: &str) -> Option<AutoconfirmGuardViolation> {
+    if !source.contains(AUTOCONFIRM_TOKEN) {
+        return None;
+    }
+
+    let mut depth: i32 = 0;
+    // Gate state of the top-level item currently open (depth >= 1). `None`
+    // when at depth 0 (between items).
+    let mut item_gated: Option<bool> = None;
+    // Whether any `#[cfg(...)]` was seen in the attribute run preceding the
+    // next top-level item.
+    let mut pending_cfg = false;
+
+    for raw in source.lines() {
+        let line = raw.trim();
+
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+
+        // Accumulate cfg attributes at top level before an item opens.
+        if depth == 0 && (line.starts_with("#[") || line.starts_with("#![")) {
+            if line.contains("cfg(") {
+                pending_cfg = true;
+            }
+            continue;
+        }
+
+        // Token check uses the gate state currently in force: inside an open
+        // item, that item's `item_gated`; at top level (e.g. a `const` or
+        // `static` on one line), the pending attribute run's cfg state.
+        if line.contains(AUTOCONFIRM_TOKEN) {
+            let gated = match item_gated {
+                Some(g) => g,
+                None => pending_cfg,
+            };
+            if !gated {
+                return Some(AutoconfirmGuardViolation {
+                    line: line.to_string(),
+                });
+            }
+        }
+
+        // Update brace depth from this line. When we transition 0→>=1, the
+        // top-level item just opened: freeze its gate state from pending_cfg.
+        let opens = line.matches('{').count() as i32;
+        let closes = line.matches('}').count() as i32;
+        let was_top = depth == 0;
+        depth += opens - closes;
+        if was_top && depth > 0 {
+            item_gated = Some(pending_cfg);
+        }
+        if depth <= 0 {
+            depth = 0;
+            item_gated = None;
+            pending_cfg = false;
+        }
+    }
+
+    None
+}
+
 /// Pure entry point — given a workspace shape, return every violation.
 /// Empty vec = healthy.
 pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
@@ -272,18 +460,124 @@ pub fn load_workspace() -> anyhow::Result<Workspace> {
     Ok(Workspace { members, deps })
 }
 
-/// Effect shell: composes load + check + render. Returns process exit
-/// code (0 = healthy, 1 = violations).
+/// Locate the workspace root by walking up from the current dir looking for a
+/// `Cargo.toml` that declares `[workspace]`. xtask is always invoked from
+/// somewhere inside the workspace.
+fn locate_workspace_root() -> anyhow::Result<PathBuf> {
+    let mut dir = std::env::current_dir()?;
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() {
+            let body = std::fs::read_to_string(&manifest)?;
+            if body.contains("[workspace]") {
+                return Ok(dir);
+            }
+        }
+        if !dir.pop() {
+            return Err(anyhow::anyhow!("no workspace Cargo.toml found"));
+        }
+    }
+}
+
+/// `syn` visitor that collects every string-literal value in a source file.
+/// Used by the anti-merging rule so it scans REAL string literals (SQL) and
+/// never matches `claims`/`peer_claims` mentions inside comments.
+struct StringLiteralCollector {
+    literals: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for StringLiteralCollector {
+    fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
+        self.literals.push(lit.value());
+        syn::visit::visit_lit_str(self, lit);
+    }
+}
+
+/// Effect shell for the anti-merging rule: scan `adapter-duckdb` source for
+/// SQL string literals and classify each. Returns one rendered violation per
+/// offending literal. A missing crate dir is treated as "nothing to scan"
+/// (the rule is for slice-03 onward; absence is not a failure).
+fn scan_adapter_duckdb_sql(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let src_dir = workspace_root.join("crates/adapter-duckdb/src");
+    if !src_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut findings = Vec::new();
+    for entry in walkdir::WalkDir::new(&src_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !(path.is_file() && path.extension().is_some_and(|e| e == "rs")) {
+            continue;
+        }
+        let src = std::fs::read_to_string(path)?;
+        let file = match syn::parse_file(&src) {
+            Ok(f) => f,
+            Err(e) => return Err(anyhow::anyhow!("syn parse {}: {e}", path.display())),
+        };
+        let mut collector = StringLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        for literal in &collector.literals {
+            if let Some(v) = classify_sql_literal(literal) {
+                findings.push(format!(
+                    "{}: SQL literal joins `claims`+`peer_claims` without \
+                     projecting `author_did` (I-FED-1 / no_cross_table_join_elides_author): {}",
+                    path.display(),
+                    v.excerpt
+                ));
+            }
+        }
+    }
+    Ok(findings)
+}
+
+/// Effect shell for the autoconfirm guard (D-D20): read `peer_remove.rs` and
+/// verify the `OPENLORE_TEST_AUTOCONFIRM` token is cfg-gated. A missing file is
+/// "nothing to check" (slice-03 verb may not exist yet in older trees).
+fn scan_autoconfirm_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let path = workspace_root.join("crates/cli/src/verbs/peer_remove.rs");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let src = std::fs::read_to_string(&path)?;
+    Ok(match classify_autoconfirm_guard(&src) {
+        Some(v) => vec![format!(
+            "{}: `OPENLORE_TEST_AUTOCONFIRM` token is NOT behind a `#[cfg(...)]` \
+             gate — it would ship in a release binary (D-D20): {}",
+            path.display(),
+            v.line
+        )],
+        None => Vec::new(),
+    })
+}
+
+/// Effect shell: composes load + dep-graph check + source-scanning rules +
+/// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
     let workspace = load_workspace()?;
-    let violations = check_workspace(&workspace);
-    if violations.is_empty() {
-        println!("check-arch: OK ({} workspace members)", workspace.members.len());
+    let dep_violations = check_workspace(&workspace);
+
+    let workspace_root = locate_workspace_root()?;
+    let sql_findings = scan_adapter_duckdb_sql(&workspace_root)?;
+    let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
+
+    let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
+    rendered.extend(sql_findings);
+    rendered.extend(autoconfirm_findings);
+
+    if rendered.is_empty() {
+        println!(
+            "check-arch: OK ({} workspace members)",
+            workspace.members.len()
+        );
         Ok(0)
     } else {
-        eprintln!("check-arch: {} violation(s) found:", violations.len());
-        for v in &violations {
-            eprintln!("  - {}", v.render());
+        eprintln!("check-arch: {} violation(s) found:", rendered.len());
+        for r in &rendered {
+            eprintln!("  - {r}");
         }
         Ok(1)
     }
@@ -323,13 +617,11 @@ mod tests {
 
     #[test]
     fn claim_domain_depending_on_tokio_is_violation() {
-        let w = ws(&[
-            ("claim-domain", &["tokio"]),
-            ("lexicon", &[]),
-        ]);
+        let w = ws(&[("claim-domain", &["tokio"]), ("lexicon", &[])]);
         let v = check_workspace(&w);
         assert!(
-            v.iter().any(|x| x.package == "claim-domain" && x.forbidden == "tokio"),
+            v.iter()
+                .any(|x| x.package == "claim-domain" && x.forbidden == "tokio"),
             "expected claim-domain→tokio violation, got: {v:?}"
         );
     }
@@ -352,7 +644,8 @@ mod tests {
         };
         let v = check_workspace(&w);
         assert!(
-            v.iter().any(|x| x.package == "claim-domain" && x.forbidden == "reqwest"),
+            v.iter()
+                .any(|x| x.package == "claim-domain" && x.forbidden == "reqwest"),
             "expected transitive claim-domain→reqwest violation, got: {v:?}"
         );
     }
@@ -361,7 +654,9 @@ mod tests {
     fn lexicon_depending_on_atrium_api_is_violation() {
         let w = ws(&[("lexicon", &["atrium-api"])]);
         let v = check_workspace(&w);
-        assert!(v.iter().any(|x| x.package == "lexicon" && x.forbidden == "atrium-api"));
+        assert!(v
+            .iter()
+            .any(|x| x.package == "lexicon" && x.forbidden == "atrium-api"));
     }
 
     // --- Invariant 3: ports may have async-trait, not tokio ------------
@@ -380,7 +675,8 @@ mod tests {
         let w = ws(&[("ports", &["async-trait", "tokio"])]);
         let v = check_workspace(&w);
         assert!(
-            v.iter().any(|x| x.package == "ports" && x.forbidden == "tokio"),
+            v.iter()
+                .any(|x| x.package == "ports" && x.forbidden == "tokio"),
             "expected ports→tokio violation, got: {v:?}"
         );
     }
@@ -433,9 +729,8 @@ mod tests {
         ]);
         let v = check_workspace(&w);
         assert!(
-            v.iter().any(|x| {
-                x.package == "claim-domain" && x.forbidden == "adapter-duckdb"
-            }),
+            v.iter()
+                .any(|x| { x.package == "claim-domain" && x.forbidden == "adapter-duckdb" }),
             "expected claim-domain→adapter-duckdb (invariant 5) violation, got: {v:?}"
         );
     }
@@ -445,10 +740,7 @@ mod tests {
         // xtask is workspace tooling, not shipped — invariant 5 doesn't
         // apply to it. (Today it has no adapter dep, but tomorrow's
         // codegen task might.)
-        let w = ws(&[
-            ("xtask", &["adapter-duckdb"]),
-            ("adapter-duckdb", &[]),
-        ]);
+        let w = ws(&[("xtask", &["adapter-duckdb"]), ("adapter-duckdb", &[])]);
         let v = check_workspace(&w);
         assert!(
             !v.iter().any(|x| x.package == "xtask"),
@@ -503,10 +795,7 @@ mod tests {
                 ],
             ),
             ("xtask", &["cargo_metadata", "anyhow"]),
-            (
-                "openlore-test-support",
-                &["ports", "claim-domain", "tokio"],
-            ),
+            ("openlore-test-support", &["ports", "claim-domain", "tokio"]),
         ]);
         let v = check_workspace(&w);
         assert!(

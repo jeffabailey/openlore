@@ -14,10 +14,9 @@
 
 #![forbid(unsafe_code)]
 
-mod check_arch;
-mod check_probes;
-
 use std::process::ExitCode;
+
+use xtask::{check_arch, check_probes};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
