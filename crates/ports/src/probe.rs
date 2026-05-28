@@ -73,6 +73,25 @@ pub enum ProbeRefusalReason {
     /// adapter. Either the PLC directory is unreachable or the resolver
     /// is misconfigured.
     IdentityPeerResolutionFailed,
+
+    // -------- slice-02 additions (github scraper) --------
+    /// `adapter-github` probe step 1 failed — the public GitHub API was
+    /// unreachable (or did not respond within the 250ms budget) for a
+    /// stable public fixture target. Emitted as `github.public_api_unreachable`.
+    GithubPublicApiUnreachable,
+    /// `adapter-github` probe step 2 failed — a known-private / inaccessible
+    /// target was NOT refused (the public-data-only guarantee broke). This is
+    /// the load-bearing trust event (KPI-SCR-4); emitted as
+    /// `github.private_not_refused`.
+    GithubPrivateNotRefused,
+    /// `adapter-github` probe step 3 failed — a configured `GITHUB_TOKEN` was
+    /// rejected (HTTP 401). The adapter refuses to start rather than silently
+    /// fall back to the anon budget. Emitted as `github.token_rejected`.
+    GithubTokenRejected,
+    /// `adapter-github` probe step 4 failed — the rate-limit headers the
+    /// budget-reporting path depends on were absent from the response.
+    /// Emitted as `github.rate_limit_headers_missing`.
+    GithubRateLimitHeadersMissing,
 }
 
 // -----------------------------------------------------------------------------

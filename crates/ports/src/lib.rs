@@ -46,6 +46,7 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason};
 // local-DB only) plus its outcomes + `PeerStorageError`.
 
 mod federated_row;
+mod github;
 mod peer_storage;
 
 pub use federated_row::{
@@ -55,6 +56,23 @@ pub use federated_row::{
 pub use peer_storage::{
     AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, SoftRemoveOutcome,
     WritePeerClaimOutcome,
+};
+
+// -----------------------------------------------------------------------------
+// Slice-02 (github scraper) — GitHub port surface + harvested signal /
+// candidate value types
+// -----------------------------------------------------------------------------
+//
+// `github` owns the slice-02 value types that flow across `GithubPort`:
+// `TargetKind` (repo vs user), `Signal` + `SignalKind` (one harvested public
+// artifact), `CandidateClaim` (a purely-derived proposal; non-empty
+// source_signals is the I-SCR-4 type-level auditability invariant), and
+// `GithubError`. Placed in `ports` (not `scraper-domain`) per Q-DELIVER-3 so
+// the trait signatures reference them with zero new `ports` dependency; the
+// pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
+
+pub use github::{
+    CandidateClaim, CandidateClaimError, GithubError, Signal, SignalKind, TargetKind,
 };
 
 // -----------------------------------------------------------------------------
@@ -246,6 +264,53 @@ pub trait IdentityPort {
 pub trait ClockPort {
     fn probe(&self) -> ProbeOutcome;
     fn now_utc(&self) -> DateTime<Utc>;
+}
+
+// -----------------------------------------------------------------------------
+// Slice-02 (github scraper) — GithubPort (WD-61 / ADR-019)
+// -----------------------------------------------------------------------------
+
+/// The GitHub-scraper driving port.
+///
+/// A NEW port (NOT a `PdsPort` extension): GitHub is a wholly different
+/// external system from ATProto — no method shape, auth model, rate-limit
+/// semantic, or failure surface is shared (WD-61). `adapter-github`
+/// (step 01-03/04) implements it over the GitHub PUBLIC REST/GraphQL API and
+/// holds the optional `GITHUB_TOKEN` PAT as an effect-shell credential. By
+/// construction the adapter holds NO `StoragePort` / `IdentityPort` /
+/// `PdsPort` reference — it CANNOT sign or publish (the human-gate at the
+/// architecture layer, I-SCR-1).
+///
+/// `async fn` (network I/O) so `#[async_trait]` is permitted exactly as for
+/// `PdsPort` (ADR-004 / component-boundaries.md §`crates/ports`). Trait
+/// bodies are declarations only here; the probe + harvest logic lives in the
+/// adapter.
+///
+/// Harvest returns already-fetched [`Signal`]s ready for the pure
+/// `scraper-domain::derive_candidates` (step 01-02) — no derivation happens
+/// in the adapter.
+#[async_trait]
+pub trait GithubPort: Send + Sync {
+    /// Earned-Trust probe — see ADR-009 + `probe.rs`. The `adapter-github`
+    /// implementation exercises (within the 250ms budget, I-5): public
+    /// reachability; private-target refusal (the load-bearing KPI-SCR-4
+    /// check); optional-PAT auth mode + rate-budget reporting; rate-limit
+    /// header parsing; and the no-token-leak invariant.
+    fn probe(&self) -> ProbeOutcome;
+
+    /// Disambiguate `owner/repo` ([`TargetKind::Repo`]) vs `user`
+    /// ([`TargetKind::User`]); REFUSE private / non-existent targets with
+    /// [`GithubError::NotPublic`] / [`GithubError::NotFound`].
+    /// Public-data-only (WD-51 / I-SCR-2).
+    async fn resolve_target(&self, target: &str) -> Result<TargetKind, GithubError>;
+
+    /// Harvest the bounded public-signal set for a repo. Returns
+    /// already-fetched [`Signal`]s ready for `derive_candidates`.
+    async fn harvest_repo(&self, owner: &str, repo: &str) -> Result<Vec<Signal>, GithubError>;
+
+    /// Harvest a BOUNDED cross-repo aggregate for a user / contributor
+    /// target (deep triangulation deferred to slice-04 per WD-64).
+    async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError>;
 }
 
 // -----------------------------------------------------------------------------
