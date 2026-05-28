@@ -1,0 +1,1025 @@
+{
+  "roadmap": {
+    "project_id": "openlore-scoring-graph",
+    "created_at": "2026-05-28T17:39:18Z",
+    "total_steps": 35,
+    "feature": "openlore-scoring-graph (slice-04 \u2014 explore/traverse/transparently-weight the local federated graph)",
+    "wave": "DELIVER",
+    "architect": "Morgan (nw-solution-architect)",
+    "paradigm": "functional-rust (ADR-007 \u2014 pure core + effect shell)",
+    "style": "Hexagonal + Modular Monolith (ADR-009; inherited from slice-01)",
+    "inherits": "slice-01 ADR-001..ADR-012 + WD-1..WD-13 + DD-1..DD-13 + I-1..I-12; slice-02 ADR-017..019 + WD-46..68 + I-SCR-1..7; slice-03 ADR-013..016 + WD-26..45 + DD-FED-1..14 + I-FED-1..7 + D-D14..D-D21; slice-04 DISCUSS WD-69..79 + OD-GRAPH-1..4 + DESIGN WD-80..93 + ADR-020..022 + I-GRAPH-1..8 + DISTILL DD-GRAPH-1..14 + DEVOPS D-D30..D-D34",
+    "default_agent": "nw-functional-software-crafter",
+    "scenario_coverage": {
+      "total_distill_scenarios": 33,
+      "covered_in_roadmap": 33,
+      "graph_query_explore_subprocess_layer3": 27,
+      "scoring_core_pure_layer2": 6,
+      "scoring_core_property_count": 4,
+      "scoring_core_example_count": 2
+    },
+    "crate_scope": {
+      "production_crates": 11,
+      "test_support_crates": 1,
+      "xtask_crates": 1,
+      "new_crates": 1,
+      "new_crate_name": "scoring (PURE \u2014 the transparent closed-form adherence weight; formula constants SSOT; NO I/O)",
+      "language": "rust",
+      "framework": "cargo workspace + cargo nextest + proptest",
+      "paradigm": "functional-rust (pure core + effect shell)",
+      "constraint": "WD-80/WD-82: slice-04 ADDS one pure crate (scoring) + EXTENDS ports, adapter-duckdb, cli, xtask in place. AUGMENT DuckDB (recursive CTE; no graph store, no new external dependency, no new persisted table \u2014 WD-81/WD-72)."
+    },
+    "external_integrations_contract_tested": [],
+    "external_integrations_note": "NONE (WD-92 / DESIGN \u00a76.4 / D-D34). Slice-04 is a read-only LOCAL slice; it consumes no external API and opens no socket. The slice-01/03 Pact suites are unchanged and gain nothing. The slice-04 'adversarial substrate' surface is the cyclic-graph recursive-CTE traversal fixture, handled by the AUGMENTED adapter-duckdb probe (ADR-021 probe #2/#3), NOT an external contract test.",
+    "validation": {
+      "status": "approved",
+      "gate": "des-roadmap validate (this file) + reviewer (nw-acceptance-designer-reviewer) 33/33 scenarios mapped + DD-GRAPH-13 fail-for-right-reason gate after Phase 01",
+      "approved_at": "2026-05-28",
+      "approved_by": "orchestrator (validate+integrity+quality-gate PASS, 33/33)"
+    },
+    "notes": [
+      "Phase 01 is the DD-GRAPH-13 fail-for-right-reason gate: lands the pure crates/scoring crate (ADTs + score/weight_bucket/ScoringConfig::DEFAULT stubs), the four StoragePort read methods + ADTs in ports, the adapter-duckdb recursive-CTE + scoring-feed read-method stubs, the cli 6-flag dispatch (todo!() bodies), the xtask anti-merging-extension + scoring pure-core allowlist, and the test-support seeder + fixtures_scoring + assertion helpers + the two [[test]] registrations (DD-GRAPH-14). After Phase 01 all 33 slice-04 ATs classify RED (panic at todo!()), not BROKEN.",
+      "Phase 02 ships the layer-2 pure-core scoring scenarios (scoring_core.rs SC-1..SC-6) FIRST: the 4 @property formula invariants (reproducibility SC-1/Gate 2, determinism SC-2, sparse-stays-sparse SC-3/Gate 3, triangulation-monotonicity SC-4) + the 2 example-pinned (anti-merging type contract SC-5/Gate 1, cross-project-triangulation-counts-as-breadth SC-6/Q-DELIVER-SCORE-1). These drive the pure scoring crate fully and unblock the layer-3 weighted/explain scenarios in Phase 05 (the renderers only need to verify the user-visible rendering of already-proven invariants).",
+      "Phase 03 (query by dimension) ships the GQE-1..9 object/contributor scenarios (US-GRAPH-001/002 + J-002a) + the recursive-CTE UNION-ALL dimension/scoring-feed adapter impls. GQE-1 is the slice-04 walking-skeleton (object dimension); GQE-2/GQE-9 carry the anti-merging row-shape; GQE-5 is the local-first guardrail.",
+      "Phase 04 (traverse) ships the GQE-20..25 traversal scenarios (US-GRAPH-004 + J-002b) + the cycle-safe depth-bounded recursive CTE. GQE-20 is a walking-skeleton + the KPI-GRAPH-1 north-star connection; GQE-24 is Gate 5 (every edge maps to a signed claim).",
+      "Phase 05 (weighted + explain + sparse + anti-merging-in-aggregates) ships GQE-10..19 + GQE-26 + GQE-27 (US-GRAPH-003/005/006 + J-002c). The load-bearing release-gates land here: GQE-11 (Gate 3 sparse_renders_sparse), GQE-14 (Gate 4 weight_and_bucket_never_persisted), GQE-16 (Gate 1 + Gate 2 explain reproduces), GQE-26 (Gate 6 scoring_uses_numeric_confidence), GQE-27 (e2e Gate 1 + Gate 4 wiring).",
+      "Anti-merging-in-aggregates (WD-73/WD-88/I-GRAPH-2; extends slice-03 I-FED-1) is three-layer: TYPE (non-Option author_did on AttributedClaim/Contribution/GraphEdge + non-empty WeightedPairing.contributions \u2014 Phase 01 lands the types, SC-5 proves it at layer 2); STRUCTURAL (xtask no_cross_table_join_elides_author extended to scoring-feed + traversal SQL \u2014 Phase 01 + Phase 03/04); BEHAVIORAL (scoring_aggregate_preserves_attribution \u2014 GQE-1/16/26 + SC-5 in Phase 02/03/05). Aggregation happens in PURE Rust (scoring::score), NEVER in SQL (no SUM/GROUP BY across authors); the scoring-feed query returns per-claim attributed rows.",
+      "Weights/buckets are DERIVED + display-only + NEVER persisted (WD-72/WD-89/I-GRAPH-3): no persistence code path; the no-persist test scans every DuckDB table + on-disk artifact for adherence_weight / STRONG / MODERATE / SPARSE substrings (Gate 4; GQE-14 + GQE-27 in Phase 05).",
+      "Scoring is transparent/auditable, no ML (WD-71/WD-86/I-GRAPH-1): ScoringConfig::DEFAULT is a compile-time const SSOT (Q-DELIVER-4; author_distinct_bonus=0.25, cross_project_triangulation_bonus=0.5); the formula is printed in --weighted output; --explain reproduces the per-claim running sum by hand (Gate 2; SC-1 + GQE-16). DELIVER may tune the constants (a code + test change), never a config file or a learned weight.",
+      "Read-only / local-first (WD-79/WD-92/I-GRAPH-7): NO slice-04 scenario creates or signs a claim \u2014 claims are SEEDED as preconditions via the slice-03 PeerPds + claim add / peer add / peer pull seam (DD-GRAPH-2); scoring/traversal/dimension queries READ them. Bounded traversal default depth 2 (WD-76/WD-91), cycle-safe via a visited-set guard. Every explorer verb succeeds with the network disabled (GQE-5/15/25 + run_openlore_network_disabled).",
+      "Q-DELIVER resolutions baked into implementation_notes: Q-DELIVER-1 (exact recursive-CTE SQL = the data-models.md delimited visited-path string + depth column) at 01-03 + Phase 04; Q-DELIVER-2 (one query_attributed_for_scoring(ScoringFilter) filtered method, NOT three thin methods) at 01-02 + 01-03; Q-DELIVER-3 (scoring module split = formula.rs + bucket.rs + types.rs for mutation-test clarity) at 01-01; Q-DELIVER-4 (ScoringConfig compile-time const SSOT) at 01-01 + Phase 02; Q-DELIVER-5 (STRONG/MODERATE/SPARSE thresholds = WD-77/ADR-022 defaults; DISTILL asserts only the NOT-Sparse half for triangulated cargo) at 02-06 + Phase 05; Q-DELIVER-6 (Connections-found callout + omitted-edge + sparse-honesty line formats match the journey/user-story mockup; the named assertion helpers pin the content contract) at Phase 04 + Phase 05; Q-DELIVER-7 (explorer orientation message is optional, NOT load-bearing \u2014 no slice-04 AT requires it) deferred, recorded at 01-04.",
+      "SCORE-1 / WD-90 bucket rule (the resolved # DISTILL: confirm flag): cross-project triangulation by the SAME author counts toward evidence breadth for the bucket \u2014 a triangulated single-claim pairing (cargo, Rachel spanning cargo+nixpkgs) is NOT Sparse; a single claim with NO triangulation AND NO co-author STAYS Sparse regardless of confidence magnitude (tokio at 0.50; a 0.99 single claim too). Pinned by SC-3 (sparse leg) + SC-6 (triangulation leg) at layer 2 and GQE-11 (sparse) + GQE-19 (cargo triangulation explained) at layer 3.",
+      "Mutation testing scope (D-D31, the SECOND widening after slice-02 D-D23): crates/scoring (formula.rs + bucket.rs) joins the nightly cargo-mutants --package list at >=95% kill rate (release-tag blocking, PR advisory). adapter-duckdb is NOT mutated (effect shell; covered by the extended probe). The pure-core layer-1 unit/mutation tests in crates/scoring/src/#[cfg(test)] are DELIVER's inner TDD loop, OUT of DISTILL scope (DD-GRAPH-7).",
+      "DEVOPS gate jobs (D-D30, NOT a DELIVER roadmap deliverable but the CI mapping): three release-blocking GUARDRAIL ATs (at-scoring-aggregate-preserves-attribution / Gate 1 / GQE-16, at-weight-equals-formula / Gate 2 / GQE-16+SC-1, at-sparse-renders-sparse / Gate 3 / GQE-11+SC-3) + three blocking-on-PR gate ATs (Gate 4/5/6) + four explorer-scenario ATs. DELIVER also lands the extended adapter-duckdb probe + the scripts/kpi-graph-*.jq snippets + the graph.* tracing events per the DEVOPS handoff.",
+      "DD-GRAPH-10 state-delta migration: load-bearing scenarios (GQE-14 never-persisted, GQE-16 explain-sums, GQE-11 sparse, GQE-20 traversal, GQE-1/GQE-26 attribution) carry an implementation_notes call-out to migrate from named assertion helpers (assert_weight_not_persisted, assert_explain_sums_to_weight, assert_sparse_rendered_as_sparse, assert_every_edge_has_backing_claim, assert_weight_decomposes_to_per_author) to assert_state_delta(before, after, universe, expected) over PORT-EXPOSED universe names (cli.graph_query.bucket[subject], cli.graph_query.explain.running_sum[subject], storage.duckdb.no_weight_or_bucket_column, cli.graph_query.traverse.edge_cids) once the helper bodies are real. NEVER internal scoring/StoragePort struct fields.",
+      "Sizing: 35 steps for 33 ATs = 1.06 steps/AT (Phase 01 bootstrap overhead of 4 steps for the new crate + port surface + adapter stubs + cli/test-support/[[test]]). Three groupings (GQE-12+GQE-13, GQE-17+GQE-18) each <=3 scenarios per step per task brief cap, sharing files_to_modify + notes."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Bootstrap \u2014 DD-GRAPH-13 fail-for-right-reason gate (slice-04)",
+      "description": "Create the pure crates/scoring crate + extend ports/adapter-duckdb/cli/xtask + materialize the test-support seeder/fixtures/helpers + register the two [[test]] targets, so all 33 slice-04 acceptance tests classify RED (panic at todo!()) rather than BROKEN.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Create pure crates/scoring + workspace member + xtask allowlist",
+          "criteria": [
+            "crates/scoring is a NEW pure workspace member declaring ADTs AttributedClaim (non-Option author_did), Contribution (non-Option author_did + cid + base + author_distinct_bonus + cross_project_triangulation_bonus + subtotal), WeightedPairing (non-empty contributions), WeightedView, WeightBucket {Strong|Moderate|Sparse}, ScoringConfig",
+            "ScoringConfig::DEFAULT is a compile-time const SSOT (author_distinct_bonus 0.25, cross_project_triangulation_bonus 0.5, strong/moderate thresholds); score(claims, cfg) -> WeightedView and weight_bucket(...) entry points exist with todo!() bodies + SCAFFOLD markers",
+            "crates/scoring depends only on std/chrono + pure Did/Cid value types; NO duckdb/tokio/reqwest/std::fs/std::time::SystemTime/adapter-*/ML crate",
+            "xtask check-arch pure-core allowlist gains crates/scoring",
+            "cargo build -p scoring + cargo xtask check-arch succeed"
+          ],
+          "test_file": "crates/scoring/src/lib.rs",
+          "scenario_name": "bootstrap_pure_scoring_crate_adts_and_const_config",
+          "implementation_scope": [
+            "crates/scoring/Cargo.toml",
+            "crates/scoring/src/lib.rs",
+            "crates/scoring/src/types.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/bucket.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/Cargo.toml",
+            "crates/scoring/src/lib.rs",
+            "crates/scoring/src/types.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/bucket.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "deps": [],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/scoring + ADR-022 + WD-82 + DD-GRAPH-13(a). Q-DELIVER-3: split the crate into types.rs (the ADTs) + formula.rs (score + per-claim contribution arithmetic) + bucket.rs (weight_bucket breadth guard) for mutation-test clarity (D-D31 mutates formula.rs + bucket.rs at >=95% kill). Q-DELIVER-4: ScoringConfig::DEFAULT is a compile-time `const`, NOT config/learned (WD-86/WD-71); a constant change is a code + test change. LOAD-BEARING type-level anti-merging (WD-88 layer 1): Contribution.author_did and WeightedPairing have a non-Option Did and a NON-EMPTY contributions Vec \u2014 the aggregate decomposes by construction; there is NO API returning a bare weight without its contributions. Bodies are todo!() at this step; the formula/bucket land in Phase 02 driven by SC-1..SC-6. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: crate-skeleton step has no runtime behavior yet; proptest applies once formula/bucket bodies land in Phase 02 (the property generators live in this crate's #[cfg(test)] inner loop, DD-GRAPH-7)."
+        },
+        {
+          "id": "01-02",
+          "name": "Extend ports StoragePort + AttributedClaim/GraphEdge/Traversal ADTs",
+          "criteria": [
+            "StoragePort gains four SYNC read methods: query_by_object(object), query_by_contributor(author_did), query_attributed_for_scoring(filter: ScoringFilter), traverse_graph(start: GraphNode, bound: TraversalBound)",
+            "ports declares AttributedClaim (non-Option author_did + cid + subject + predicate + object + confidence f64 + composed_at + AuthorRelationship), ScoringFilter {ByObject|BySubject|ByContributor}, GraphNode {Philosophy|Project|Contributor}, TraversalBound {max_depth: u8 default 2}, GraphEdge (non-Option author_did + non-Option claim_cid + depth), TraversalResult {edges + omitted_edge_count + reached_bound}",
+            "AuthorRelationship enum is reused from slice-03 (You|SubscribedPeer|UnsubscribedCache); no new port introduced",
+            "cargo build -p ports succeeds"
+          ],
+          "test_file": "crates/ports/src/lib.rs",
+          "scenario_name": "bootstrap_ports_storage_read_methods_and_attributed_adts",
+          "implementation_scope": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/attributed_claim.rs",
+            "crates/ports/src/graph.rs"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/attributed_claim.rs",
+            "crates/ports/src/graph.rs"
+          ],
+          "deps": [
+            "01-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/ports + design \u00a76.1 + WD-83 + DD-GRAPH-13(b). NO new port (StoragePort EXTENSION, mirrors slice-03 adding query_federated_by_subject). Q-DELIVER-2: ONE query_attributed_for_scoring(ScoringFilter) filtered method, NOT three thin methods (smaller anti-merging enforcement surface). AttributedClaim is the shared boundary value (defined in ports, consumed by cli AND the pure scoring crate); its author_did is `Did` (NOT Option) \u2014 compile-time anti-merging layer 1 (I-GRAPH-2, extends slice-03 I-FED-1 FederatedRow discipline). GraphEdge.claim_cid is `Cid` (NOT Option) \u2014 every edge maps to exactly one signed claim (Gate 5/I-GRAPH-5). All four methods are SYNC (local DB only; no async_trait). Method bodies are trait declarations only; impls land in 01-03. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: trait-surface step has no runtime behavior; proptest applies only if helper combinator types are introduced."
+        },
+        {
+          "id": "01-03",
+          "name": "Stub adapter-duckdb recursive-CTE + scoring-feed reads + xtask anti-merging rule",
+          "criteria": [
+            "DuckDbStorageAdapter gains query_by_object + query_by_contributor + query_attributed_for_scoring + traverse_graph, every body todo!() with a slice-04 SCAFFOLD marker, over the SAME single-file DuckDB (no new table, no store swap, no new dependency)",
+            "The recursive-CTE traversal shape (delimited visited-path string + depth column) and the UNION ALL dimension/scoring-feed shape are sketched in comments per data-models.md, with author_did projected in every cross-store SELECT",
+            "xtask check-arch rule no_cross_table_join_elides_author EXTENDS to the scoring-feed + traversal SQL string literals: any literal mentioning BOTH claims AND peer_claims MUST also project author_did; a positive fixture (UNION ALL safe pattern) and a negative fixture (the FORBIDDEN SUM/GROUP BY pattern from data-models.md) are committed to xtask tests",
+            "cargo build -p adapter-duckdb + cargo xtask check-arch succeed"
+          ],
+          "test_file": "crates/adapter-duckdb/src/lib.rs",
+          "scenario_name": "bootstrap_adapter_duckdb_read_method_stubs_and_anti_merging_rule",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/anti_merging_scoring.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/anti_merging_scoring.rs"
+          ],
+          "deps": [
+            "01-02"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per component-boundaries.md \u00a7adapter-duckdb + data-models.md \u00a7Read-side query shapes + ADR-021 + WD-81/WD-88 + DD-GRAPH-13(c). AUGMENT only: no new table, no store swap, no new external dependency (recursive CTEs are built-in DuckDB). Q-DELIVER-1: the traverse_graph CTE uses a delimited visited-path string (cycle guard) + a depth column (depth bound), per the data-models.md illustrative shape; the live impl lands in Phase 04 driven by GQE-20..25. CRITICAL I-GRAPH-2: aggregation (the weight) happens in the PURE scoring core in Rust, NEVER in SQL \u2014 query_attributed_for_scoring returns per-claim attributed rows (no SUM/GROUP BY across authors); this is what keeps the aggregate decomposable. The xtask anti-merging rule is the STRUCTURAL layer of the three-layer enforcement (type = 01-01/01-02 non-Option author_did; behavioral = GQE-1/16/26 + SC-5). Probe extensions (scoring-feed attribution round-trip + recursive-CTE cycle-safety/termination + depth-bound, ADR-021 probe #2/#3) are declared but bodied todo!() to fill per-scenario in Phase 03+. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: xtask rule unit tests use proptest to generate adversarial SQL strings (e.g. 'SELECT subject, object, SUM(confidence) FROM (... claims UNION ALL ... peer_claims) GROUP BY subject, object') and assert the rule fires; positive cases (UNION ALL projecting author_did) assert pass."
+        },
+        {
+          "id": "01-04",
+          "name": "cli 6-flag dispatch + test-support seeder/fixtures/helpers + [[test]] registration",
+          "criteria": [
+            "clap parses the 6 explorer flags on graph query (--object, --contributor, --traverse, --depth K, --weighted, --explain <subject>) per ADR-020; VerbGraphQuery + DimensionRouter + WeightedRenderer + TraversalRenderer + SparseHonestyRenderer present with todo!() bodies + SCAFFOLD markers; explorer flags imply federated scope (WD-87) and bare --subject is unchanged",
+            "wiring constructs the scoring core call seam (cli -> scoring::score) alongside the extended StoragePort; the AUGMENTED adapter-duckdb probe runs in the ProbeGauntlet",
+            "openlore_test_support::fixtures_scoring is materialized (ScoringClaimSpec + the named FederatedGraphFixture recipes: dependency_pinning_three_authors, deno_identical_content_two_authors, cargo_own_plus_one_peer, rachel_five_claims_four_subjects, own_claims_only_three, tobias_then_soft_removed, dependency_pinning_weighted_worked_example, actor_model_single_sparse_claim, reproducible_builds_multi_author, conflicting_confidences_one_project, dependency_pinning_rachel_spans_two_projects, dense_fan_out_beyond_depth_two) re-exported from lib.rs; EXPECTED_* cross-checked against ScoringConfig::DEFAULT",
+            "tests/acceptance/support/mod.rs gains seed_federated_graph + SeededGraph::add_peer_claim (+ AddedPeerClaim::deno_third_author) + run_openlore_network_disabled + the assertion-helper bodies assert_weight_not_persisted, assert_weight_decomposes_to_per_author, assert_sparse_rendered_as_sparse, assert_explain_sums_to_weight, assert_every_edge_has_backing_claim (named helpers per DD-GRAPH-10)",
+            "cli/Cargo.toml registers the two [[test]] targets graph_query_explore + scoring_core (DD-GRAPH-14)",
+            "cargo build --tests succeeds; cargo nextest run --tests classifies all 33 slice-04 ATs as RED (panic at todo!()), not BROKEN"
+          ],
+          "test_file": "tests/acceptance/support/mod.rs",
+          "scenario_name": "bootstrap_cli_explorer_flags_test_support_seeder_and_test_registration",
+          "implementation_scope": [
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs",
+            "crates/cli/src/render/traversal.rs",
+            "crates/cli/Cargo.toml",
+            "crates/test-support/src/fixtures_scoring.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs",
+            "crates/cli/src/render/traversal.rs",
+            "crates/cli/Cargo.toml",
+            "crates/test-support/src/fixtures_scoring.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "deps": [
+            "01-01",
+            "01-02",
+            "01-03"
+          ],
+          "estimated_minutes": 70,
+          "implementation_notes": "Per ADR-020 + component-boundaries.md \u00a7cli + \u00a7test-support + acceptance-tests.md \u00a712 + DD-GRAPH-5/6/13(d)(e)/14. WD-87: --object/--contributor/--traverse/--weighted imply federated scope (own + subscribed peers + unsubscribed-cache + scraper-signed); bare --subject WITHOUT explorer flags is byte-identical to slice-01 (own-claims-only); --federated remains an accepted no-op-when-implied flag. DD-GRAPH-2: the seeder introduces NO new external fake \u2014 it reuses the slice-03 PeerPds double + build_verifiable_peer_records* + the real claim add / peer add / peer pull verbs to populate claims + peer_claims; scoring/traversal then READ the local store. Q-DELIVER-7: the once-per-user explorer orientation message is OPTIONAL (no slice-04 AT requires it); DELIVER may add an [explorer] identity.toml key but DISTILL does not assert it. The named assertion helpers encode the universe shape (DD-GRAPH-10) for the later state-delta migration. After this step `cargo nextest run --tests --no-fail-fast 2>&1 | grep -c 'not yet implemented' equals 33` (DD-GRAPH-13 gate). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: test-support bodies are test infrastructure; clap-derive flag parsing covered by snapshot tests (single-example fallback acceptable since clap parsing is itself a substrate); the fixture EXPECTED_* constants are proptest-checkable against ScoringConfig::DEFAULT."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "scoring pure core \u2014 layer-2 properties (SC-1..SC-6)",
+      "description": "Ship the pure scoring crate fully: the 4 @property formula invariants (reproducibility, determinism, sparse-stays-sparse, triangulation-monotonicity) + the 2 example-pinned (anti-merging type contract, cross-project-triangulation-counts-as-breadth). Layer 2 in-memory direct against scoring::score \u2014 drives the formula + bucket + the per-claim apportionment.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "SC-1 weight equals sum of contributions (PROPERTY; Gate 2)",
+          "criteria": [
+            "scoring::score returns a WeightedView in which every WeightedPairing.weight equals the sum of its Contribution.subtotal values (within f64 EPS)",
+            "The per-claim author-distinct-multiplier apportionment is fixed so weight == sum(subtotals) holds EXACTLY (the --explain running-sum reproduces it by hand)",
+            "Property over arbitrary Vec<AttributedClaim> (subject in 3, object in 2, author in 3, confidence in [0,1]) with a >=1-claim non-vacuity guard",
+            "SC-1 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_weight_equals_sum_of_contributions_property",
+          "implementation_scope": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/scoring/src/proptest_strategies.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/scoring/src/proptest_strategies.rs"
+          ],
+          "deps": [
+            "01-04"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per data-models.md \u00a7The scoring formula + ADR-022 + WD-71/WD-86 + Gate 2 weight_equals_formula + I-GRAPH-1. LOAD-BEARING transparency: the contributions list IS the auditable decomposition --explain prints; if the displayed weight ever drifts from the sum of per-claim subtotals the transparency promise breaks. DELIVER fixes author_multiplier_share(c) so the per-claim subtotals sum EXACTLY to the displayed weight. Constants come from ScoringConfig::DEFAULT (const SSOT, Q-DELIVER-4): author_distinct_bonus 0.25, cross_project_triangulation_bonus 0.5. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this is LAYER-2 PROPTEST per Mandate 9 \u2014 proptest IS the implementation strategy; generator arb_attributed_claims() over the small bounded universe; assert (weight - sum(subtotals)).abs() < EPS for every pairing; the exhaustive per-arm + bucket-threshold + mutation tests live in crates/scoring/src/#[cfg(test)] (DELIVER inner loop, DD-GRAPH-7; D-D31 mutates formula.rs)."
+        },
+        {
+          "id": "02-02",
+          "name": "SC-2 score is deterministic (PROPERTY)",
+          "criteria": [
+            "score(claims, ScoringConfig::DEFAULT) == score(claims, ScoringConfig::DEFAULT) for all inputs \u2014 byte-identical WeightedView (same ranking, weights, buckets, contribution lists)",
+            "WeightedView.ranked is sorted by weight desc with a stable tiebreak by subject (no HashMap-iteration-order leak)",
+            "Property over arbitrary Vec<AttributedClaim>",
+            "SC-2 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_score_is_deterministic_property",
+          "implementation_scope": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per DESIGN \u00a75.1 invariant 2 + WD-71 + US-GRAPH-006 UAT scenario 1. Determinism is the precondition of reproducibility (the weight a user reproduces by hand must equal the weight a re-run displays); it is structural in a pure core (no clock, no I/O) but a HashMap-ordered ranking would break it \u2014 pin the stable tiebreak by subject (data-models.md \u00a7WeightedView). Mirrors slice-02's scraper_domain_derive_candidates_is_deterministic_property. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: LAYER-2 PROPTEST per Mandate 9; assert score(c) == score(c) over arb_attributed_claims(); the determinism is enforced by sorting with a stable key (weight desc, then subject asc), not relying on insertion order."
+        },
+        {
+          "id": "02-03",
+          "name": "SC-3 single-author single-claim is sparse at any confidence (PROPERTY; Gate 3)",
+          "criteria": [
+            "A (subject, object) pairing backed by a SINGLE claim from a SINGLE author with NO cross-project triangulation buckets WeightBucket::Sparse regardless of confidence magnitude \u2014 even at confidence 0.99",
+            "weight_bucket takes claim_count + distinct_author_count as breadth inputs (the breadth guard), not just weight magnitude",
+            "Property over confidence in [0.0, 1.0]",
+            "SC-3 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_single_author_single_claim_is_sparse_at_any_confidence_property",
+          "implementation_scope": [
+            "crates/scoring/src/bucket.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/bucket.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per WD-74/WD-90 + ADR-022 + Gate 3 sparse_renders_sparse + KPI-GRAPH-4 (release-blocking) + I-GRAPH-4. The breadth guard (data-models.md \u00a7Bucket rule): if claim_count <= 1 OR distinct_author_count <= 1 (and no cross-project triangulation breadth) -> Sparse regardless of weight. The NEGATIVE is load-bearing: a single 0.99-confidence claim bucketed Strong would manufacture confidence from thin evidence (the exact J-002 failure). This is the SC-3 leg of the Q-DELIVER-SCORE-1 rule (SC-6 is the triangulation leg). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: LAYER-2 PROPTEST per Mandate 9; generator draws confidence from the FULL [0.0,1.0] range so the property covers the boundary where a naive weight-only threshold would flip the bucket; the single-claim fixture has ONE author on ONE subject (no second subject => no triangulation breadth)."
+        },
+        {
+          "id": "02-04",
+          "name": "SC-4 multi-author outweighs single-author at equal confidence (PROPERTY)",
+          "criteria": [
+            "A (subject, object) pairing supported by TWO distinct authors scores STRICTLY HIGHER than an otherwise-identical pairing supported by ONE author at the same max confidence",
+            "The +author_distinct_bonus multiplier per additional distinct author makes triangulation monotonically raise the weight (the ranking-meaningful property)",
+            "Property over confidence in (0.0, 1.0] (strictly-positive base so the bonus is observable; 0.0 degenerate case excluded or asserted with >=)",
+            "SC-4 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_multi_author_outweighs_single_author_at_equal_confidence_property",
+          "implementation_scope": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per WD-77 (author_distinct_bonus monotonicity) + KPI-GRAPH-1 (better-triangulated support ranks higher) + I-GRAPH-1. forall confidence in (0.0,1.0]: weight(two_distinct_authors) > weight(one_author) \u2014 two distinct authors on the SAME (subject, object) apply the +author_distinct_bonus multiplier (0.25 per additional distinct author from ScoringConfig::DEFAULT). This is the formula property that gives triangulation its meaning. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: LAYER-2 PROPTEST per Mandate 9; generator confidence in (0.0,1.0] (exclude the degenerate 0.0 case where both weights are 0); assert two.ranked[0].weight > one.ranked[0].weight."
+        },
+        {
+          "id": "02-05",
+          "name": "SC-5 two-author pairing decomposes to two attributed contributions (Gate 1 type-level)",
+          "criteria": [
+            "score over the worked deno/dependency-pinning fixture (Tobias 0.55, Maria 0.40) yields a WeightedPairing with EXACTLY 2 contributions",
+            "Each Contribution carries its own non-empty author_did (Tobias's, Maria's) + its own cid; there is no faceless consensus contribution",
+            "Tobias subtotal 0.55 (first author, no bonus); Maria subtotal 0.50 (base 0.40 + 0.25 second-author bonus); weight 1.05 == sum of subtotals; distinct_authors 2 -> bucket Moderate",
+            "SC-5 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_two_author_pairing_decomposes_to_two_attributed_contributions",
+          "implementation_scope": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/test-support/src/fixtures_scoring.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/test-support/src/fixtures_scoring.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per WD-73/WD-88 + ADR-022 + Gate 1 type-level scoring_aggregate_preserves_attribution + I-GRAPH-2 (extends slice-03 I-FED-1 to aggregates) + data-models.md \u00a7Worked example (deno). Example-pinned (worked-arithmetic fixture), NOT a property, per acceptance-tests.md \u00a7CM-F. The assertion pins contributions.len() == 2, each Contribution's non-empty author_did + cid, and weight == sum(subtotals) exactly (the decomposition is exact). This is the type-level + behavioral layer-2 proof that the aggregate can ALWAYS enumerate its individually-attributed claims \u2014 no API returns a bare weight without its contributions. The structural xtask SQL-string layer (01-03) + the layer-3 --explain rendering (GQE-16, 05-06) complete the three-layer enforcement. EXPECTED_* in fixtures_scoring mirror ScoringConfig::DEFAULT. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: SC-5 is example-pinned per DD-GRAPH-12 (worked-arithmetic decomposition); the exhaustive per-arm coverage is in crates/scoring/src/#[cfg(test)] (DELIVER inner loop)."
+        },
+        {
+          "id": "02-06",
+          "name": "SC-6 cross-project triangulation counts as breadth, lifts out of sparse (SCORE-1)",
+          "criteria": [
+            "score over a fixture where cargo has 1 dependency-pinning claim by Rachel (conf 0.91) AND Rachel ALSO asserts dependency-pinning on nixpkgs (a 2nd distinct subject) yields a cargo pairing that is NOT bucketed Sparse (the cross-project span is breadth)",
+            "A contrasting tokio/actor-model pairing with 1 claim by 1 author and NO span IS bucketed Sparse",
+            "weight_bucket takes cross-project span as a breadth input, not just weight magnitude",
+            "SC-6 passes"
+          ],
+          "test_file": "tests/acceptance/scoring_core.rs",
+          "scenario_name": "scoring_cross_project_triangulation_counts_as_breadth_lifts_out_of_sparse",
+          "implementation_scope": [
+            "crates/scoring/src/bucket.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/test-support/src/fixtures_scoring.rs"
+          ],
+          "files_to_modify": [
+            "crates/scoring/src/bucket.rs",
+            "crates/scoring/src/formula.rs",
+            "crates/scoring/src/lib.rs",
+            "crates/test-support/src/fixtures_scoring.rs"
+          ],
+          "deps": [
+            "02-03",
+            "02-05"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per Q-DELIVER-SCORE-1 + WD-90 + data-models.md \u00a7Worked example (triangulation, cargo) + \u00a7Bucket nuance. RESOLVES the # DISTILL: confirm flag verbatim: cross-project triangulation by the SAME author counts toward evidence breadth for the bucket \u2014 a triangulated single-claim pairing (cargo, Rachel spanning cargo+nixpkgs, cross_project_triangulation_bonus +0.5 -> subtotal 1.41) is NOT Sparse; a single claim with NO triangulation AND NO co-author STAYS Sparse regardless of confidence (the SC-3 leg). The bucket function takes cross_project_span as a breadth input. Q-DELIVER-5: DELIVER picks the exact STRONG-vs-MODERATE cut within WD-86's tunable const; DISTILL asserts ONLY the load-bearing NOT-Sparse half here. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: SC-6 is example-pinned per DD-GRAPH-12; assert cargo.bucket != Sparse AND tokio.bucket == Sparse; the boundary STRONG/MODERATE arithmetic + mutation tests live in crates/scoring/src/#[cfg(test)] (D-D31)."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "query by dimension \u2014 object + contributor (GQE-1..9)",
+      "description": "Ship US-GRAPH-001 (object/subject dimension) + US-GRAPH-002 (contributor dimension) + J-002a, with the adapter-duckdb UNION-ALL dimension + scoring-feed query impls. Every row carries its author_did (anti-merging); explorer flags imply federated scope (WD-87); local-first.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "GQE-1 query by object groups by subject with per-author attribution (WS)",
+          "criteria": [
+            "graph query --object <philosophy> groups claims by subject (project), each row carrying author_did + numeric confidence + display bucket + cid",
+            "Two claims with identical (subject, object) by different authors render as TWO rows (deno: Tobias + Maria) \u2014 no multi-author aggregate",
+            "Footer states distinct-subject count (3) + distinct-author count (3) + the no-merge guarantee verbatim; exit 0",
+            "GQE-1 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_object_groups_by_subject_with_per_author_attribution",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "01-04"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-GRAPH-001 Example 1 + ADR-020 + WD-75/WD-87/WD-73 + Gate 1 (dimension baseline) + KPI-GRAPH-2. SLICE-04 WALKING SKELETON (object dimension). query_by_object is the SAFE UNION ALL over claims + peer_claims projecting author_did explicitly (data-models.md \u00a7Dimension query \u2014 by object); the renderer groups by subject. WD-87: explorer scope implies federated (own + peers). DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing attribution scenario; migrate to assert_state_delta with universe.unchanged() over (claims.row_count, peer_claims.row_count) PLUS strict-assert on cli.graph_query.distinct_subjects_in_output==3, cli.graph_query.distinct_authors_in_output==3, cli.graph_query.rows_collapsed==0 once the helper bodies are real. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: VerbGraphQuery dimension router -> query_by_object -> group-by-subject renderer; inner-loop proptest covers the renderer's grouping (forall claim set: every output row has exactly one author_did; no row merges two authors)."
+        },
+        {
+          "id": "03-02",
+          "name": "GQE-2 identical content different authors renders two rows (anti-merging)",
+          "criteria": [
+            "An own claim (0.40) and a pulled peer claim from Tobias (0.55) on the same (github:denoland/deno, dependency-pinning) render as TWO distinct rows",
+            "One row annotated (you) at 0.40, one annotated (subscribed peer) at 0.55; each keeps its own cid; NO combined consensus row",
+            "Exit 0",
+            "GQE-2 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_object_identical_content_different_authors_renders_two_rows",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-001 Example 3 + WD-73 + KPI-GRAPH-2 anti-merging. The renderer keeps each author's cid distinct; the UNION ALL never collapses identical (subject, object) across authors. Relationship labels (you / subscribed peer) reuse the slice-03 resolution (join Peer-sourced rows to peer_subscriptions WHERE removed_at IS NULL). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: inner-loop proptest (forall pair of claims with identical subject+object but distinct author_did: render two rows, two cids)."
+        },
+        {
+          "id": "03-03",
+          "name": "GQE-3 bare subject is unchanged from prior slice behavior (regression)",
+          "criteria": [
+            "bare graph query --subject <S> WITHOUT any explorer flag shows ONLY the own claim \u2014 the seeded peer DID + its cid never appear",
+            "The slice-01/03 own-claims-only default is preserved (WD-87 bare-subject-unchanged); the explorer flags are strictly opt-in",
+            "Exit 0",
+            "GQE-3 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_bare_subject_is_unchanged_from_prior_slice_behavior",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-GRAPH-001 Example 2 + AC subject-unchanged + WD-87. LOAD-BEARING regression: if the bare --subject path EVER widened to peers under the explorer changes, the seeded peer row WOULD appear; it must NOT. Bare --subject (no --object/--contributor/--traverse/--weighted/--federated) routes to the slice-01/03 own-claims-only query path, byte-identical. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: dispatch-branch test; the bare-subject branch is the slice-01 path with zero slice-04 widening; inner-loop proptest (forall graph with own+peer claims on a subject: bare --subject output contains no peer author_did)."
+        },
+        {
+          "id": "03-04",
+          "name": "GQE-4 unknown philosophy returns empty with suggestion, exit zero",
+          "criteria": [
+            "A misspelled object URI yields a no-claims-found message + a near-match suggestion naming the correctly-spelled philosophy",
+            "Exit code 0 (a valid empty result, not an error)",
+            "GQE-4 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-001 Example 4 + UAT scenario 4. Empty result is NOT an error: exit 0 (a valid not-yet-found state). The near-match suggestion engine proposes the closest existing object string ('did you mean org.openlore.philosophy.dependency-pinning?'); data-models.md \u00a7object near-miss suggestion. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: sad-path example per Mandate 11; inner-loop proptest on the suggestion ranker (forall query + candidate set: the suggested string is the minimum-edit-distance candidate)."
+        },
+        {
+          "id": "03-05",
+          "name": "GQE-5 object query succeeds with network disabled (local-first)",
+          "criteria": [
+            "graph query --object renders its full attributed result with the network disabled (run_openlore_network_disabled)",
+            "The assertion confirms NO network call was attempted (reads touch only the local store)",
+            "Exit 0",
+            "GQE-5 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_object_succeeds_with_network_disabled",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-GRAPH-001 integration_checkpoint + WD-79/WD-92 + I-GRAPH-7 (extends slice-01 KPI-5 / I-9). The object dimension reads the LOCAL graph only (no socket); the cli probe #8 (network-disabled success) is exercised here at the acceptance layer. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the network-disabled seam is the slice-01 run_openlore_network_disabled harness; no new code path \u2014 the assertion proves the explorer read never opens a socket."
+        },
+        {
+          "id": "03-06",
+          "name": "GQE-6 query by contributor lists full reasoning trail with honest framing",
+          "criteria": [
+            "graph query --contributor <did> lists all 5 of Rachel's claims across 4 subjects with subject/object/confidence/cid",
+            "Footer states 'one developer's reasoning trail, not a community consensus'; every row carries Rachel's DID",
+            "Exit 0",
+            "GQE-6 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_contributor_lists_full_reasoning_trail_with_honest_framing",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-GRAPH-002 Example 1 + WD-75 + KPI-GRAPH-2. query_by_contributor is the SAFE UNION ALL over claims + peer_claims WHERE author_did = ? projecting author_did (data-models.md \u00a7Dimension query \u2014 by contributor). The renderer lists across all subjects; footer is the honest-framing line verbatim. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: dimension router -> query_by_contributor -> trail renderer; inner-loop proptest (forall contributor's claims: every output row carries that author_did)."
+        },
+        {
+          "id": "03-07",
+          "name": "GQE-7 own DID is a valid self-review annotated you",
+          "criteria": [
+            "Querying one's OWN DID lists the own claims annotated (you), not (subscribed peer) \u2014 a valid self-review",
+            "Exit 0",
+            "GQE-7 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_contributor_own_did_is_a_valid_self_review_annotated_you",
+          "implementation_scope": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-06"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-GRAPH-002 Example 2. The relationship label resolution maps the local user's own DID to (you); reuses the slice-03 AuthorRelationship enum (You|SubscribedPeer|UnsubscribedCache). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: render-label test; inner-loop proptest (forall claim where author_did == own_did: label == You)."
+        },
+        {
+          "id": "03-08",
+          "name": "GQE-8 absent DID degrades with subscribe/pull hint, exit zero",
+          "criteria": [
+            "An absent contributor yields a no-local-claims message + a subscribe/pull hint ('openlore peer add' + 'openlore peer pull')",
+            "Exit code 0 (a valid empty result)",
+            "GQE-8 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_contributor_absent_did_degrades_with_subscribe_pull_hint_exit_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-06"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-GRAPH-002 Example 3 + UAT scenario 3. Absent contributor is NOT an error: exit 0 (a valid empty result). The hint names the slice-03 peer add + peer pull verbs so the user can fix the gap. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: sad-path example per Mandate 11; the empty-result branch renders the hint; exit code 0."
+        },
+        {
+          "id": "03-09",
+          "name": "GQE-9 soft-removed peer labels unsubscribed cache",
+          "criteria": [
+            "A soft-removed peer's cached claims (peer remove without --purge) list annotated (unsubscribed cache), not (subscribed peer)",
+            "Every row carries Tobias's DID (no claim shown without its author); slice-03 relationship labeling preserved",
+            "Exit 0",
+            "GQE-9 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_by_contributor_soft_removed_peer_labels_unsubscribed_cache",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "03-06"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-002 Example 4 + WD-11 inherited (slice-03 relationship labels) + KPI-GRAPH-2 (attribution). A soft-removed peer (peer_subscriptions.removed_at IS NOT NULL but peer_claims rows survive) resolves to AuthorRelationship::UnsubscribedCache; the dimension query still returns the cached claims with author_did. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the relationship-label resolver maps removed_at-non-null peers to UnsubscribedCache; inner-loop proptest (forall cached claim from a soft-removed peer: label == UnsubscribedCache, author_did present)."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "traverse \u2014 bounded cycle-safe edges (GQE-20..25)",
+      "description": "Ship US-GRAPH-004 (traverse contributor<->project<->philosophy edges) + J-002b, with the cycle-safe depth-bounded recursive CTE. Default depth 2 (WD-76); every edge maps to exactly one signed claim (Gate 5); no invented edges; local-first.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "GQE-20 traverse surfaces a non-obvious cross-project contributor connection (WS)",
+          "criteria": [
+            "graph query --object --traverse renders a tree from the philosophy to its projects to their claim authors",
+            "A 'Connections found' callout names did:plc:rachel-test spanning 2 projects (cargo, nixpkgs)",
+            "Every displayed edge maps to exactly one signed claim; the output states 'Traversal does not invent edges.'",
+            "Exit 0; GQE-20 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_surfaces_a_non_obvious_cross_project_contributor_connection",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "deps": [
+            "01-04"
+          ],
+          "estimated_minutes": 55,
+          "implementation_notes": "Per US-GRAPH-004 Example 1 + ADR-021 + WD-76/WD-91 + Gate 5 traversal_invents_no_edges + KPI-GRAPH-1 (north star). SLICE-04 WALKING SKELETON (traverse). Q-DELIVER-1: traverse_graph is the cycle-safe depth-bounded recursive CTE (data-models.md \u00a7Traversal query) \u2014 a delimited visited-path string cycle guard + a depth column bound; every output row -> one GraphEdge with claim_cid (Gate 5) + author_did (anti-merging). Q-DELIVER-6: the 'Connections found' callout names contributors spanning >=2 projects, matching the journey/user-story mockup line. DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing traversal scenario; migrate to assert_state_delta with universe.unchanged() over (claims.row_count, peer_claims.row_count) PLUS strict-assert on cli.graph_query.traverse.edge_cids (every edge has a backing cid) + cli.graph_query.connection_callout_present. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: cli TraversalRenderer builds the tree from Vec<GraphEdge> + detects >=2-project spans; the recursive-CTE cycle-safety/termination is exercised by the adapter probe (ADR-021 #2/#3), NOT this acceptance test; inner-loop proptest on the span detector (forall edge set: a contributor spanning >=2 distinct subjects yields a callout)."
+        },
+        {
+          "id": "04-02",
+          "name": "GQE-21 single node no edges renders without fabrication",
+          "criteria": [
+            "A single isolated tokio node renders under the philosophy with 'no connecting edges found at depth 2'",
+            "NO connection to any other project/contributor is fabricated",
+            "Exit 0; GQE-21 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_single_node_no_edges_renders_without_fabrication",
+          "implementation_scope": [
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-GRAPH-004 Example 2 + WD-76 + Gate 5 (no fabrication leg). A single-claim subgraph with no shared author/subject/object beyond itself yields zero adjacency at depth 2; the renderer states 'no connecting edges found at depth 2' and fabricates nothing. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer's no-edges branch; inner-loop proptest (forall isolated single-claim graph: traverse_graph returns 0 edges; renderer emits the no-edges line, invents nothing)."
+        },
+        {
+          "id": "04-03",
+          "name": "GQE-22 traverse is bounded to default depth two and reports omitted edges",
+          "criteria": [
+            "On a dense graph where Rachel's claims fan out beyond depth 2, the traversal is bounded to depth 2 by default",
+            "Output prints how many edges were omitted and how to go deeper with --depth, and returns responsively",
+            "Exit 0; GQE-22 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_is_bounded_to_default_depth_two_and_reports_omitted_edges",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-GRAPH-004 Example 3 + WD-76 (depth 2 default) + WD-91 (bounded) + I-GRAPH-6 + KPI-GRAPH-6 (latency). TraversalBound.max_depth defaults to 2; the CTE's depth column enforces the bound; omitted_edge_count is computed at the depth = max_depth+1 boundary. Q-DELIVER-6: the omitted-edge line matches the mockup ('Showing depth 2; N edges omitted. Use --depth 3 to go deeper.'). The cycle-safety/termination probe (ADR-021 #2/#3) backs the responsiveness within the 250ms budget. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the depth bound lives in the recursive CTE (WHERE depth < ?max_depth); inner-loop proptest (forall dense graph + max_depth: no returned edge exceeds max_depth; omitted_edge_count > 0 when fan-out exists)."
+        },
+        {
+          "id": "04-04",
+          "name": "GQE-23 depth override reveals previously omitted real edges",
+          "criteria": [
+            "--depth 3 reveals edges the default depth-2 run omitted; the deeper edges are real signed claims (lookuppable via --subject)",
+            "The omitted count shrinks accordingly",
+            "Exit 0; GQE-23 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_depth_override_reveals_previously_omitted_real_edges",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "deps": [
+            "04-03"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-GRAPH-004 Example 3 (--depth override leg) + WD-76 + Gate 5. --depth K widens TraversalBound.max_depth; the deeper edges are real signed claims (Gate 5: each carries a backing claim_cid lookuppable via --subject). The override is still bounded (no unbounded depth, WD-76 LOCKED). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: --depth parses to TraversalBound.max_depth; inner-loop proptest (forall graph + d2 < d3: edges(d3) is a superset of edges(d2); omitted(d3) <= omitted(d2))."
+        },
+        {
+          "id": "04-05",
+          "name": "GQE-24 every edge maps to a verifiable signed claim (Gate 5)",
+          "criteria": [
+            "For every traversal edge, its claim_cid is lookuppable via graph query --subject <project> (it traces to a real signed claim)",
+            "Every edge carries the author DID of its backing claim (anti-merging); no edge lacks a backing signed claim",
+            "Exit 0; GQE-24 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_every_edge_maps_to_a_verifiable_signed_claim",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/traversal.rs",
+            "crates/cli/src/render/traversal.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-004 Example 4 + UAT scenario 4 + WD-76/WD-91 (GraphEdge.claim_cid non-Option) + WD-73 + Gate 5 traversal_invents_no_edges + I-GRAPH-5. The recursive CTE selects FROM existing claims + peer_claims rows only \u2014 it never CROSS JOINs to fabricate pairs; every GraphEdge.claim_cid resolves to an existing cid. Uses assert_every_edge_has_backing_claim (universe: cli.graph_query.edge_cids, cli.graph_query.edge_cid_resolvable[cid]). DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing Gate-5 scenario; the helper encodes the universe shape for the later assert_state_delta migration. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: for each rendered edge, the test re-runs graph query --subject <project> and asserts the edge's cid appears; inner-loop proptest (forall traversal result: every GraphEdge.claim_cid is in the seeded claim set; no fabricated cid)."
+        },
+        {
+          "id": "04-06",
+          "name": "GQE-25 traversal succeeds with network disabled (local-first)",
+          "criteria": [
+            "The traversal tree renders fully with the network disabled (run_openlore_network_disabled)",
+            "NO network call is attempted (traversal reads the LOCAL graph only)",
+            "Exit 0; GQE-25 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_traverse_succeeds_with_network_disabled",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 15,
+          "implementation_notes": "Per US-GRAPH-004 integration_checkpoint + WD-79/WD-92 + I-GRAPH-7 (extends slice-01 KPI-5 / I-9). Traversal reads the local store only; the cli probe #8 network-disabled-success guardrail is exercised here. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: reuses the slice-01 run_openlore_network_disabled harness; no new code path \u2014 the assertion proves traversal opens no socket."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "weighted + explain + sparse + anti-merging-in-aggregates (GQE-10..19, GQE-26, GQE-27)",
+      "description": "Ship US-GRAPH-003 (transparent weighted/sparse view) + US-GRAPH-005 (--explain) + US-GRAPH-006 (infra wiring) + J-002c. The load-bearing release-gates land here: sparse_renders_sparse (GQE-11), weight_and_bucket_never_persisted (GQE-14), explain reproduces (GQE-16), scoring_uses_numeric_confidence (GQE-26), e2e wiring (GQE-27).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "GQE-10 weighted ranks projects with transparent no-ML formula (WS; Gate 2)",
+          "criteria": [
+            "--object --weighted ranks projects by adherence weight (desc), each weight shown WITH its inputs (claim count, distinct author count, max confidence, cross-project span)",
+            "The formula is printed AND the output states 'no ML'",
+            "A footer states weights are a display-only aggregate view, never stored; exit 0",
+            "GQE-10 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_ranks_projects_with_transparent_no_ml_formula",
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/scoring_reads.rs",
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "02-06",
+            "03-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-GRAPH-003 Example 1 + ADR-020/022 + WD-71/WD-72/WD-77/WD-84/WD-86 + Gate 2 weight_equals_formula + KPI-GRAPH-1/3. SLICE-04 WALKING SKELETON (weighted). VerbGraphQuery routes the scoring-feed (query_attributed_for_scoring(ByObject)) -> scoring::score -> WeightedRenderer; the renderer prints the formula + 'no ML' + the never-stored footer (Q-DELIVER-6 line formats). The scoring core is the SINGLE source of weight arithmetic (no second weight-computing code path). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the WeightedRenderer renders WeightedView.ranked; the weight arithmetic is already proven at layer 2 (SC-1) so this step verifies the user-visible RENDERING; inner-loop proptest on the ranking-order rendering."
+        },
+        {
+          "id": "05-02",
+          "name": "GQE-11 single-claim single-author renders sparse with honesty line (Gate 3; release-gate)",
+          "criteria": [
+            "--object actor-model --weighted on a single-claim single-author no-span pairing (tokio, 1 claim, conf 0.50) labels it [SPARSE]",
+            "Output states 'based on 1 claim by 1 author', advises treating it as a lead not a conclusion, and manufactures NO confidence",
+            "Exit 0; GQE-11 passes (Gate 3 sparse_renders_sparse; KPI-GRAPH-4 release-gate)"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_single_claim_single_author_renders_sparse_with_honesty_line",
+          "implementation_scope": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-003 Example 2 + WD-74/WD-90 + ADR-022 + Gate 3 sparse_renders_sparse + KPI-GRAPH-4 (release-blocking). RELEASE-GATE. The SparseHonestyRenderer fires the 'based on N claims by M authors' line verbatim (Q-DELIVER-6) when weight_bucket == Sparse; the renderer MUST NOT suppress it for brevity. The bucket is already proven sparse at any confidence by SC-3 (layer 2). Uses assert_sparse_rendered_as_sparse (universe: cli.graph_query.bucket[subject], cli.graph_query.sparse_honesty_line_present, cli.graph_query.no_manufactured_confidence). DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta over the named universe once helper bodies are real. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer's sparse branch; inner-loop proptest (forall pairing with bucket Sparse: the honesty line is present and no [STRONG]/[MODERATE] label appears)."
+        },
+        {
+          "id": "05-03",
+          "name": "GQE-12 + GQE-13 triangulation raises weight + conflicting claims both contribute",
+          "criteria": [
+            "GQE-12: deno's weight includes the per-additional-distinct-author bonus; breakdown states 'multi-author: 2 distinct authors raise triangulation'; deno ranks above a single-author comparator at similar max confidence; both authors stay individually attributed",
+            "GQE-13: two conflicting claims (0.85 and 0.20) on one project BOTH contribute per their confidence; the breakdown shows both authors + both confidences; NO claim is dropped or collapsed into a single averaged value",
+            "Both exit 0; GQE-12 and GQE-13 pass"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_multi_author_support_raises_triangulation_weight + graph_query_weighted_conflicting_claims_both_contribute_nothing_dropped",
+          "implementation_scope": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-GRAPH-003 Example 3 (GQE-12) + Example 4 (GQE-13) + WD-73/WD-77/WD-85 + KPI-GRAPH-1/2. Combined per task-brief cap (2 closely-related weighted-edge scenarios sharing the WeightedRenderer breakdown). WD-85: countered/conflicting claims contribute NORMALLY per confidence (nothing silently subtracted \u2014 that would break reproducibility/Gate 2); the counter relationship is SHOWN, not applied. The triangulation lift + the both-contribute decomposition are already proven at layer 2 (SC-4 monotonicity + SC-5 decomposition); this step verifies the user-visible breakdown rendering keeps both authors individually attributed. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: two sibling #[test] fns in the same file; inner-loop proptest on the breakdown renderer (forall multi-author pairing: every author appears once with its own confidence; no averaged consensus value)."
+        },
+        {
+          "id": "05-04",
+          "name": "GQE-14 weighted outputs never persisted + recompute at query time (Gate 4; release-gate)",
+          "criteria": [
+            "After a weighted query, NO adherence_weight / weight_bucket (STRONG/MODERATE/SPARSE) appears in any DuckDB table, any <cid>.json, or any record (assert_weight_not_persisted)",
+            "Re-running the same query after adding a contributing peer claim yields a DIFFERENT weight for the affected pairing (proves query-time compute)",
+            "Both runs exit 0; GQE-14 passes (Gate 4 weight_and_bucket_never_persisted; release-gate)"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_outputs_are_never_persisted_and_recompute_at_query_time",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-GRAPH-003 Example 5 + WD-72/WD-89 + ADR-022 + Gate 4 weight_and_bucket_never_persisted + I-GRAPH-3 + D-D30. RELEASE-GATE. There is NO persistence code path for weights/buckets \u2014 the scoring core RETURNS values; nothing writes them. assert_weight_not_persisted scans every DuckDB table + on-disk artifact for adherence_weight / STRONG / MODERATE / SPARSE substrings (extends the slice-01/03 confidence-bucket no-persist test). SeededGraph::add_peer_claim(AddedPeerClaim::deno_third_author) adds a contributing claim mid-scenario so the re-run weight observably changes. DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta with universe.unchanged() over (claims.row_count modulo the deliberate add, peer_claims schema) PLUS strict-assert storage.duckdb.no_weight_or_bucket_column + storage.local_claim_store.no_weight_or_bucket_string + cli.graph_query.weighted.displayed_weight changed-after-add. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the no-persist invariant is structural (no write code path); inner-loop proptest on the no-persist scanner (forall table/artifact set: no forbidden substring after a weighted query)."
+        },
+        {
+          "id": "05-05",
+          "name": "GQE-15 weighted query succeeds with network disabled (local-first)",
+          "criteria": [
+            "A weighted query renders the full weighted view with the network disabled (run_openlore_network_disabled)",
+            "NO network call is attempted (scoring is local read-only over the seeded store)",
+            "Exit 0; GQE-15 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_succeeds_with_network_disabled",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 15,
+          "implementation_notes": "Per US-GRAPH-003 integration_checkpoint + WD-79/WD-92 + I-GRAPH-7 (extends slice-01 KPI-5 / I-9). Scoring is a pure read over the local store; the cli probe #8 network-disabled-success guardrail is exercised here for the weighted path. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: reuses the slice-01 run_openlore_network_disabled harness; no new code path."
+        },
+        {
+          "id": "05-06",
+          "name": "GQE-16 explain reproduces weight from per-claim arithmetic (Gate 1 + Gate 2)",
+          "criteria": [
+            "--object --weighted --explain github:denoland/deno enumerates each contributing claim with author DID + cid + confidence + applied bonus (Tobias 0.55 -> 0.55; Maria 0.40 +0.25 second-author -> 0.50)",
+            "The running sum (0.55 + 0.50 = 1.05) equals the displayed adherence weight (reproduce-by-hand)",
+            "No contributing claim is merged into a faceless aggregate",
+            "Exit 0; GQE-16 passes (Gate 1 scoring_aggregate_preserves_attribution + Gate 2 weight_equals_formula)"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_explain_reproduces_weight_from_per_claim_arithmetic",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-GRAPH-005 Example 1 + WD-71/WD-73/WD-88 + ADR-022 + Gate 1 + Gate 2 + KPI-GRAPH-2/3 (load-bearing). RELEASE-GATE (anti-merging-in-aggregates BEHAVIORAL layer + transparency). --explain renders the pure scoring core's Contribution list (the SAME WeightedView SC-1 proved sums exactly); the running sum reproduces the weight by hand. Uses assert_explain_sums_to_weight + assert_weight_decomposes_to_per_author. DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta strict-asserting cli.graph_query.explain.running_sum[subject] == cli.graph_query.weighted.displayed_weight[subject] + per-(author,cid) decomposition present. The single scoring path discipline (no second weight-computing code path) makes --explain and --weighted render the same values. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the WeightedRenderer's --explain branch renders WeightedPairing.contributions; the arithmetic is layer-2-proven (SC-1/SC-5); inner-loop proptest (forall pairing: rendered running sum == displayed weight)."
+        },
+        {
+          "id": "05-07",
+          "name": "GQE-17 + GQE-18 explain on sparse repeats honesty line + explain absent subject is usage error",
+          "criteria": [
+            "GQE-17: --explain on the sparse tokio subject shows the single contributing claim (no bonuses, running sum 0.50) AND repeats the [SPARSE] 'based on 1 claim by 1 author' honesty line; exit 0",
+            "GQE-18: --explain github:foo/bar (absent from the result set) prints 'Subject github:foo/bar is not in this result set.' and exits NON-ZERO (a usage error, distinct from an empty dimension query's exit 0)",
+            "GQE-17 and GQE-18 pass"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_explain_on_sparse_subject_repeats_the_honesty_line + graph_query_explain_for_subject_absent_from_result_set_is_a_usage_error",
+          "implementation_scope": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/graph_query.rs",
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-02",
+            "05-06"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-GRAPH-005 Example 2 (GQE-17) + Example 3 + DESIGN \u00a75.2 invariant 5 (GQE-18) + WD-74/WD-90 + Gate 3. Combined per task-brief cap (both --explain edge/error paths sharing the WeightedRenderer --explain branch). GQE-17: --explain on a sparse subject repeats the honesty line (the renderer never suppresses it). GQE-18: --explain for a subject ABSENT from the result set is a USAGE ERROR (non-zero exit) \u2014 distinct from an empty dimension query (exit 0). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: two sibling #[test] fns; the absent-subject branch returns a non-zero exit distinct from the exit-0 empty-dimension branch; inner-loop proptest (forall subject not in result set: --explain exits non-zero)."
+        },
+        {
+          "id": "05-08",
+          "name": "GQE-19 explain attributes triangulation bonus to the contributor who earned it (Gate 1)",
+          "criteria": [
+            "--explain github:rust-lang/cargo shows the base claim PLUS an explicit '+0.5 cross-project triangulation' line attributed to did:plc:rachel-test (who spans cargo+nixpkgs)",
+            "Maria sees exactly why the triangulation bonus applied and to whom; the running sum equals cargo's displayed weight",
+            "Exit 0; GQE-19 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_explain_attributes_triangulation_bonus_to_the_contributor_who_earned_it",
+          "implementation_scope": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-06"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-005 Example 4 + Q-DELIVER-SCORE-1/WD-90 + WD-73 + Gate 1 (attribution-of-bonus) + KPI-GRAPH-2/3. The cargo triangulation leg of SCORE-1 (SC-6 proves cargo NOT sparse at layer 2; this renders the bonus attribution at layer 3): Rachel asserts dependency-pinning on BOTH cargo and nixpkgs -> +0.5 cross_project_triangulation_bonus on cargo's contribution; the --explain breakdown attributes the bonus to Rachel by DID. The Contribution.cross_project_triangulation_bonus field carries the bonus per (author, cid). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the --explain branch renders each Contribution's applied bonuses with its author_did; inner-loop proptest (forall triangulating contribution: the +0.5 line is attributed to the spanning author's DID)."
+        },
+        {
+          "id": "05-09",
+          "name": "GQE-26 scoring uses the same numeric confidence shown in per-claim rows (Gate 6)",
+          "criteria": [
+            "The numeric confidence shown in the --object per-claim row (e.g. 0.91) is byte-equal to the base value the --explain arithmetic consumes for the same claim",
+            "No silent rounding to a bucket midpoint",
+            "Both runs exit 0; GQE-26 passes (Gate 6 scoring_uses_numeric_confidence)"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_scoring_uses_the_same_numeric_confidence_shown_in_per_claim_rows",
+          "implementation_scope": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render/weighted.rs"
+          ],
+          "deps": [
+            "05-06"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per Gate 6 scoring_uses_numeric_confidence + WD-10/I-6 inherited (numeric-only) + I-GRAPH-8 + KPI-GRAPH-3. AttributedClaim.confidence: f64 carries the raw [0.0,1.0] numeric; the value shown in the dimension per-claim row equals the base value the --explain arithmetic consumes (no bucket-rounded value enters the formula). confidence_bucket is a SEPARATE display-only concern (claim-domain::confidence_bucket, reused unchanged). DD-GRAPH-10 STATE-DELTA MIGRATION: load-bearing Gate-6 scenario; the integration_validation 'confidence must-match-across [steps 1+4]' contract maps to byte-equality between the dimension row's confidence and the explain base. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the dimension row prints AttributedClaim.confidence raw; --explain renders Contribution.base == that same f64; inner-loop proptest (forall claim: displayed confidence == scored base, no rounding)."
+        },
+        {
+          "id": "05-10",
+          "name": "GQE-27 weighted end-to-end wires scoring feed without persisting outputs (Gate 1 + Gate 4)",
+          "criteria": [
+            "A weighted query runs end-to-end through the extended StoragePort scoring-feed (query_attributed_for_scoring) -> pure scoring core -> WeightedRenderer (the @infrastructure wiring proof)",
+            "No scoring output is persisted (assert_weight_not_persisted; Gate 4)",
+            "The rendered aggregate decomposes to per-author contributions, no faceless consensus row (Gate 1)",
+            "Exit 0; GQE-27 passes"
+          ],
+          "test_file": "tests/acceptance/graph_query_explore.rs",
+          "scenario_name": "graph_query_weighted_end_to_end_wires_scoring_feed_without_persisting_outputs",
+          "implementation_scope": [
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/graph_query.rs"
+          ],
+          "deps": [
+            "05-01",
+            "05-04",
+            "05-06"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-GRAPH-006 UAT scenario 2 + WD-83/WD-88/WD-89 + ADR-020/022 + Gate 1 + Gate 4 + D-D30. The @infrastructure wiring proof that US-GRAPH-001..005 depend on: the production composition root wires query_attributed_for_scoring -> scoring::score -> WeightedRenderer with NO persistence code path for weights/buckets and the anti-merging check covering the new scoring query path. assert_weight_not_persisted (Gate 4) + per-author decomposition (Gate 1) both fire. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-04 DD-GRAPH-12 + Mandate 11 (subprocess layer 3 is example-only). Layer 2 scoring scenarios SC-1..SC-4 carry the @property tag and DO use proptest; SC-5/SC-6 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this exercises the production wiring (no hand-rebuilt composition); the AUGMENTED adapter-duckdb probe runs at startup (wire -> probe -> use); inner-loop coverage is the wiring assembly + the no-persist scan."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scoring/src/",
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/cli/src/",
+      "crates/test-support/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "tests/fixtures/",
+      "tests/common/"
+    ],
+    "excluded_patterns": [
+      "**/target/**",
+      "**/Cargo.lock",
+      "**/*.swp"
+    ]
+  },
+  "validation": {
+    "status": "pending",
+    "reviewer": "TODO",
+    "approved_at": "TODO"
+  }
+}
