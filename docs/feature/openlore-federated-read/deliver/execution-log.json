@@ -296,6 +296,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-28T05:01:30Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T05:02:09Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T05:04:55Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T05:06:31Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: CID stability already guaranteed by 01-07 skip_serializing_if + structural absence of reason on claim_domain::UnsignedClaim; LCC-2 acceptance + slice-01 LC-3 proptest + LC-4 gold-fixture suite pin it. Zero production gap; an added proptest would duplicate LC-3.",
+      "t": "2026-05-28T05:06:33Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T05:08:33Z"
     }
   ]
 }
