@@ -81,3 +81,26 @@ pub fn prompt_line<W: Write, R: Read>(
 pub fn is_scripted(force_no_tty: bool) -> bool {
     force_no_tty || !std::io::stdin().is_terminal()
 }
+
+/// Issue a destructive-action confirmation prompt and read the answer.
+///
+/// Prints `prompt` (e.g. `"Proceed? [y/N]: "`), then reads one line. The
+/// `[y/N]` shape makes "no" the safe default: ONLY an affirmative answer
+/// (`y` / `Y` / `yes`, case-insensitive, surrounding whitespace trimmed)
+/// returns `Ok(true)`. Everything else — `n`, an empty line (the bare
+/// `<Enter>` default), or EOF (the user closed stdin without answering,
+/// `prompt_line` → `None`) — returns `Ok(false)`. This is the
+/// `peer remove --purge` confirmation seam (WD-21: a real interactive
+/// confirmation, never a `--yes` flag). The acceptance subprocess drives
+/// it in scripted mode by piping `"y\n"` / `"n\n"` on stdin.
+pub fn confirm<W: Write, R: Read>(
+    writer: &mut W,
+    reader: &mut R,
+    prompt: &str,
+) -> std::io::Result<bool> {
+    let answer = prompt_line(writer, reader, prompt)?;
+    Ok(matches!(
+        answer.as_deref().map(str::trim),
+        Some("y") | Some("Y") | Some("yes") | Some("YES")
+    ))
+}

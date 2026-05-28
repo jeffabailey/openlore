@@ -28,9 +28,12 @@
 //! SCAFFOLD: true (slice-03) — the verb body is a `todo!()` stub; the
 //! autoconfirm guard itself is LIVE so step 01-06's xtask can verify it.
 
-use anyhow::{anyhow, Result};
-use ports::SoftRemoveOutcome;
+use std::io::Write;
 
+use anyhow::{anyhow, Result};
+use ports::{HardPurgeOutcome, SoftRemoveOutcome};
+
+use crate::io::confirm;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `peer remove` verb (mirrors the clap
@@ -62,13 +65,7 @@ pub fn run(wiring: &Wiring, args: &PeerRemoveArgs) -> Result<PeerRemoveOutcome> 
     let peer_did = claim_domain::Did(args.did.clone());
 
     if args.purge {
-        // SCAFFOLD: true (slice-03) — the --purge branch (TtyIO confirm OR
-        // autoconfirm_purge() → hard_purge; --no-tty refusal per WD-36) is
-        // driven by PS-6 / PS-7 / PS-8 in a later slice-03 phase.
-        todo!(
-            "VerbPeerRemove --purge branch → TtyIO confirm OR autoconfirm_purge() \
-             → hard_purge; --no-tty refuses --purge (WD-36). Driven by PS-6..PS-8."
-        );
+        return run_purge(wiring, &peer_did);
     }
 
     // Soft-remove (default): drop the subscription (set `removed_at`) but
@@ -83,6 +80,86 @@ pub fn run(wiring: &Wiring, args: &PeerRemoveArgs) -> Result<PeerRemoveOutcome> 
         exit_code: 0,
         stdout: render_soft_remove(&peer_did.0, outcome),
     })
+}
+
+/// The `--purge` (hard) branch: interactive `[y/N]` confirmation, then
+/// the atomic `PeerStoragePort::hard_purge` (delete the subscription + all
+/// of the peer's cached peer_claims in one DuckDB transaction; remove the
+/// `peer_claims/<encoded_did>/` directory after the commit; PRESERVE the
+/// user's own counter-claims in the author `claims` table).
+///
+/// Confirmation seam (WD-21: no `--yes` flag in production):
+///   - the build-time test hatch [`autoconfirm_purge`] (compiled out of
+///     release builds) confirms when `OPENLORE_TEST_AUTOCONFIRM=1`, OR
+///   - the interactive `[y/N]` prompt — answered "y" to proceed; anything
+///     else (n / Enter / EOF) is a clean decline.
+///
+/// A decline leaves BOTH the subscription AND the cached peer claims
+/// untouched and exits 0 (PS-7 contract).
+fn run_purge(wiring: &Wiring, peer_did: &claim_domain::Did) -> Result<PeerRemoveOutcome> {
+    // Look up the subscription first so a never-subscribed DID short-circuits
+    // to an idempotent no-op WITHOUT prompting for a destructive action that
+    // would delete nothing.
+    let subscription = wiring
+        .peer_storage
+        .lookup_subscription(peer_did)
+        .map_err(|err| anyhow!("could not look up subscription for {}: {err}", peer_did.0))?;
+
+    if subscription.is_none() {
+        return Ok(PeerRemoveOutcome {
+            exit_code: 0,
+            stdout: format!("Not subscribed to {}; nothing to purge.\n", peer_did.0),
+        });
+    }
+
+    // Confirmation gate. The build-time autoconfirm hatch (test-only) takes
+    // precedence so CI/acceptance builds need not drive an interactive
+    // prompt; otherwise prompt on stdout and read the answer from stdin
+    // (scripted mode in the acceptance subprocess pipes "y\n" / "n\n").
+    let confirmed = if autoconfirm_purge() {
+        true
+    } else {
+        let preview = format!(
+            "About to delete the subscription and ALL cached peer claims for {}.\n\
+             Your own counter-claims are preserved.\n",
+            peer_did.0
+        );
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(preview.as_bytes())?;
+        stdout.flush()?;
+
+        let mut stdin = std::io::stdin().lock();
+        confirm(&mut stdout, &mut stdin, "Proceed? [y/N]: ")?
+    };
+
+    if !confirmed {
+        return Ok(PeerRemoveOutcome {
+            exit_code: 0,
+            stdout: "Cancelled. Subscription and cached peer claims unchanged.\n".to_string(),
+        });
+    }
+
+    let outcome = wiring
+        .peer_storage
+        .hard_purge(peer_did)
+        .map_err(|err| anyhow!("could not purge peer {}: {err}", peer_did.0))?;
+
+    Ok(PeerRemoveOutcome {
+        exit_code: 0,
+        stdout: render_hard_purge(&peer_did.0, outcome),
+    })
+}
+
+/// Pure render for the hard-purge outcome. Reports the deleted cached
+/// peer-claim count AND the preserved user-counter-claim count so the
+/// purge separation (WD-25 / WD-41) is visible to the user. The phrase
+/// "N cached peer claims" mirrors the soft-remove vocabulary.
+fn render_hard_purge(peer_did: &str, outcome: HardPurgeOutcome) -> String {
+    format!(
+        "Purged subscription to {peer_did}. Deleted {} cached peer claims; \
+         preserved {} of your own counter-claims.\n",
+        outcome.deleted_peer_claim_count, outcome.preserved_user_counter_claim_count,
+    )
 }
 
 /// Pure render for the soft-remove outcome.

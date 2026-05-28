@@ -405,7 +405,71 @@ fn peer_subscribe_remove_soft_keeps_cached_peer_claims() {
 /// @us-fed-005 @real-io @driving_port @j-003 @j-003c @happy
 #[test]
 fn peer_subscribe_remove_purge_with_confirmation_deletes_peer_claims_and_preserves_user_counters() {
-    todo!("DELIVER (slice-03): wire VerbPeerRemove --purge branch → TtyIO prompt → PeerStoragePort.hard_purge; assert (a) peer_subscriptions row gone, (b) peer_claims rows for that peer gone, (c) peer_claims/<did>/ directory removed, (d) author_claims (including counter-claims) untouched. Drives integration gate 4 (peer_remove_purge_separation).")
+    let env = TestEnv::initialized();
+
+    // Precondition 1: an ACTIVE subscription to the peer (real `peer add`).
+    let peer_did = "did:plc:rachel-test";
+    let peer = PeerPds::for_peer(peer_did, fixture_other_developer_three_claims());
+    let _added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_one_active_subscription_for(&env, peer_did);
+
+    // Precondition 2: N cached peer_claims rows for this peer AND the
+    // on-disk `peer_claims/<encoded_did>/` partition (the directory
+    // hard-purge must remove after the DB commit). Seeded via the
+    // test-support raw-SQL + filesystem helper because `peer pull` (the
+    // production populate path) lands in Phase 04; the purge-separation
+    // contract under test is "delete WHATEVER is cached", independent of
+    // how it got there.
+    let cached_count = 3;
+    seed_cached_peer_claims(&env, peer_did, cached_count);
+    seed_peer_claims_dir(&env, peer_did, cached_count);
+    assert_peer_claims_row_count_for(&env, peer_did, cached_count);
+
+    // Precondition 3: M user-authored counter-claims in the `claims`
+    // (author) table. These are the user's OWN claims — hard-purge must
+    // NEVER touch them (WD-25 / WD-41 user-counter-claim preservation).
+    let user_counter_count = 2;
+    seed_user_author_claims(&env, user_counter_count);
+
+    // DD-FED-10: capture the FULL observable universe BEFORE the action.
+    let before = capture_purge_universe(&env, peer_did);
+
+    // Action: hard-purge with the interactive `[y/N]` confirmation
+    // answered "y" via piped stdin (scripted mode — the subprocess'
+    // stdin is a pipe, never a TTY; WD-21: a real confirmation, no
+    // `--yes`). Drives the --purge branch → confirm → hard_purge.
+    let outcome = run_openlore_with_stdin(&env, &["peer", "remove", peer_did, "--purge"], "y\n");
+
+    // Observable #1 — the CLI shows the cached-record count + reports the
+    // purge result (deleted peer claims; preserved user counter-claims).
+    assert_exit_zero_and_stdout_contains(&outcome, &format!("{cached_count} cached peer claims"));
+    assert!(
+        outcome.stdout.contains(&cached_count.to_string()),
+        "expected the purge confirmation to report {cached_count} deleted peer \
+         claims;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // DD-FED-10: capture the universe AFTER and assert the state-delta.
+    //   - peer_storage.claims.row_count_by_author[did] : N → 0 (deleted)
+    //   - author_claims.row_count                      : UNCHANGED (preserved)
+    //   - filesystem.peer_claims_dir.exists[did]       : true → false (removed)
+    //   - peer_storage.subscriptions.row_count[did]    : 1 → 0 (subscription gone)
+    let after = capture_purge_universe(&env, peer_did);
+    assert_purge_state_delta(&before, &after);
+
+    // Belt-and-suspenders against the named single-slot helpers (the
+    // purge-separation integration gate reads each observable independently).
+    assert_peer_claims_row_count_for(&env, peer_did, 0);
+    assert_user_author_claim_count(&env, user_counter_count);
+    assert_peer_claims_dir_removed_for(&env, peer_did);
+    assert_zero_subscriptions_for(&env, peer_did);
 }
 
 /// PS-7: `openlore peer remove <did> --purge` answered "n" to the

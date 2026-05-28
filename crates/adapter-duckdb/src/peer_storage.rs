@@ -143,6 +143,36 @@ fn count_peer_claims(conn: &Connection, peer_did: &Did) -> Result<u32, PeerStora
     Ok(count.max(0) as u32)
 }
 
+/// Count the user's OWN claims in the slice-01 `claims` (author) table.
+/// The author store is single-tenant (the local user is the sole author),
+/// so a global COUNT is the observable surface for "user counter-claims
+/// were preserved" (WD-25 / WD-41). Hard-purge reads this purely to REPORT
+/// the preserved count — it never deletes from `claims`. Caller holds the
+/// connection lock.
+fn count_author_claims(conn: &Connection) -> Result<u32, PeerStorageError> {
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM claims", [], |row| row.get(0))
+        .map_err(|err| PeerStorageError::DuckDb(format!("count author claims: {err}")))?;
+    Ok(count.max(0) as u32)
+}
+
+/// Best-effort removal of the on-disk peer-claim partition
+/// `<peer_claims_root>/<encoded_did>/` (Q-DELIVER-2 colon→underscore
+/// encoding). Runs AFTER the DB commit. A non-existent directory is a clean
+/// no-op (nothing was ever cached on disk); a removal failure on an existing
+/// directory is surfaced as an `Io` error so a half-purged filesystem cannot
+/// pass as clean (KPI-FED-4 zero purge residue).
+fn remove_peer_claims_dir(
+    peer_claims_root: &std::path::Path,
+    peer_did: &Did,
+) -> Result<(), PeerStorageError> {
+    let partition = peer_claims_root.join(did_to_fs_segment(&peer_did.0));
+    if !partition.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&partition).map_err(PeerStorageError::Io)
+}
+
 /// Extract the inner `f64` from a `Confidence` without going through
 /// `Confidence::value()` (still a RED smart-constructor scaffold in
 /// `claim-domain`). `Confidence` serializes transparently to its inner
@@ -313,9 +343,87 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         })
     }
 
-    fn hard_purge(&self, _peer_did: &Did) -> Result<HardPurgeOutcome, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::hard_purge — driven by PS-* scenarios")
+    fn hard_purge(&self, peer_did: &Did) -> Result<HardPurgeOutcome, PeerStorageError> {
+        // Acquire the single-writer lock as `mut` so we can open a
+        // transaction (DuckDB's `Connection::transaction` needs `&mut self`).
+        let mut conn = self.lock_conn()?;
+
+        // Read the observable counts the cli renders BEFORE the deletes:
+        //   - `deleted_peer_claim_count`: rows that the purge will remove;
+        //   - `was_subscribed`: whether a subscription row exists (active OR
+        //     soft-removed) — drives the idempotent no-op render.
+        // The user's OWN counter-claims live in the slice-01 `claims` table,
+        // which this operation NEVER touches; `preserved_user_counter_claim_count`
+        // is read so the cli can report the preservation explicitly (WD-25 /
+        // WD-41) and so a regression deleting them would surface as a count
+        // mismatch rather than silently.
+        let deleted_peer_claim_count = count_peer_claims(&conn, peer_did)?;
+        let was_subscribed = lookup_subscription_row(&conn, peer_did)?.is_some();
+        let preserved_user_counter_claim_count = count_author_claims(&conn)?;
+
+        // ALL three DB deletes run in ONE transaction (ADR-014 atomicity:
+        // either the subscription AND every cached peer_claim of this peer
+        // disappear together, or nothing does). Delete order honors the
+        // migration-v3 foreign keys:
+        //   1. peer_claim_references / peer_claim_evidence reference
+        //      peer_claims(cid) → delete the child rows FIRST (scoped to the
+        //      peer's CIDs via the author_did subquery);
+        //   2. peer_claims for this author;
+        //   3. the peer_subscriptions row.
+        // The author `claims` table is NEVER named — the own-vs-peer
+        // separation is structural (different tables), not a runtime filter.
+        let tx = conn
+            .transaction()
+            .map_err(|err| PeerStorageError::DuckDb(format!("begin hard-purge tx: {err}")))?;
+
+        tx.execute(
+            "DELETE FROM peer_claim_references WHERE referencing_cid IN \
+                (SELECT cid FROM peer_claims WHERE author_did = ?)",
+            duckdb::params![peer_did.0],
+        )
+        .map_err(|err| {
+            PeerStorageError::DuckDb(format!("hard-purge delete peer_claim_references: {err}"))
+        })?;
+
+        tx.execute(
+            "DELETE FROM peer_claim_evidence WHERE cid IN \
+                (SELECT cid FROM peer_claims WHERE author_did = ?)",
+            duckdb::params![peer_did.0],
+        )
+        .map_err(|err| {
+            PeerStorageError::DuckDb(format!("hard-purge delete peer_claim_evidence: {err}"))
+        })?;
+
+        tx.execute(
+            "DELETE FROM peer_claims WHERE author_did = ?",
+            duckdb::params![peer_did.0],
+        )
+        .map_err(|err| PeerStorageError::DuckDb(format!("hard-purge delete peer_claims: {err}")))?;
+
+        tx.execute(
+            "DELETE FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did.0],
+        )
+        .map_err(|err| {
+            PeerStorageError::DuckDb(format!("hard-purge delete peer_subscriptions: {err}"))
+        })?;
+
+        tx.commit()
+            .map_err(|err| PeerStorageError::DuckDb(format!("commit hard-purge tx: {err}")))?;
+
+        // Effect-shell tail (AFTER the DB commit, per the data-models.md
+        // "remove the directory after the DB commit" contract): best-effort
+        // removal of the on-disk `peer_claims/<encoded_did>/` partition. A
+        // missing directory is not an error (the purge may run before any
+        // artifact landed); a removal failure on an existing directory IS
+        // surfaced so a half-purged filesystem cannot masquerade as clean.
+        remove_peer_claims_dir(&self.peer_claims_root, peer_did)?;
+
+        Ok(HardPurgeOutcome {
+            was_subscribed,
+            deleted_peer_claim_count,
+            preserved_user_counter_claim_count,
+        })
     }
 
     fn write_peer_claim(

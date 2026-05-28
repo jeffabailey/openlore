@@ -26,8 +26,17 @@
 
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+
+// DD-FED-10: the universe-bound state-delta assertion module (DD-3
+// bootstrap, `tests/common/state_delta.rs`). Pulled in via the documented
+// `#[path]` seam (see `tests/common/mod.rs` §Usage) so the PS-6 hard-purge
+// scenario can assert the FULL observable purge universe in one call rather
+// than a scatter of single-slot asserts.
+#[path = "../../common/state_delta.rs"]
+pub mod state_delta;
 
 use openlore_test_support::fake_pds::FakePdsHttpHandle;
 use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
@@ -1198,4 +1207,207 @@ pub fn assert_orientation_emitted_exactly_once(
         second.stdout,
         second.stderr
     );
+}
+
+// =============================================================================
+// Slice-03 — PS-6 hard-purge preconditions + DD-FED-10 state-delta universe
+// =============================================================================
+
+/// Seed the on-disk `peer_claims/<encoded_did>/` partition with `count`
+/// `<cid>.json` placeholder artifacts — the filesystem half of the cached
+/// peer-claim state hard-purge must remove AFTER the DB commit (Q-DELIVER-2
+/// colon→underscore encoding; data-models.md §"On-disk artifact format").
+/// Pairs with [`seed_cached_peer_claims`] (the DB half). Test-support is the
+/// only place these are written directly; `peer pull` (Phase 04) is the
+/// production populate path.
+pub fn seed_peer_claims_dir(env: &TestEnv, peer_did: &str, count: usize) {
+    let dir = peer_claims_dir_for(env, peer_did);
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|e| panic!("create peer_claims dir {}: {e}", dir.display()));
+    for i in 0..count {
+        let cid = format!("bafyseed{peer_did}{i}").replace(':', "_");
+        let artifact = dir.join(format!("{cid}.json"));
+        std::fs::write(&artifact, b"{}\n")
+            .unwrap_or_else(|e| panic!("write peer claim artifact {}: {e}", artifact.display()));
+    }
+}
+
+/// Seed `count` user-authored claims directly into the slice-01 `claims`
+/// (author) table — the user's OWN claims (including counter-claims) that
+/// hard-purge MUST preserve (WD-25 / WD-41). Distinct table from
+/// `peer_claims`; never targeted by purge. Test-support is the only place
+/// raw SQL is acceptable; production goes through `StoragePort`.
+pub fn seed_user_author_claims(env: &TestEnv, count: usize) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} to seed author claims: {err}",
+            db_path.display()
+        )
+    });
+    let author_did = env.identity.author_did().to_string();
+    for i in 0..count {
+        let cid = format!("bafyuser{i}");
+        conn.execute(
+            "INSERT INTO claims \
+                (cid, subject, predicate, object, confidence, author_did, \
+                 composed_at, artifact_path) \
+             VALUES (?, ?, ?, ?, ?, ?, now(), ?)",
+            duckdb::params![
+                cid,
+                format!("user-subject-{i}"),
+                "counters",
+                format!("user-object-{i}"),
+                0.9_f64,
+                author_did,
+                format!("claims/{cid}.json"),
+            ],
+        )
+        .unwrap_or_else(|err| panic!("seed author claims row {i}: {err}"));
+    }
+}
+
+/// Universe-bound: "the `claims` (author) store holds exactly `count` rows".
+/// Port-exposed name: `author_claims.row_count`. PS-6 uses it to assert
+/// hard-purge PRESERVES every user-authored counter-claim (count unchanged —
+/// the user's own table is never targeted). Test-support is the only place
+/// raw SQL is acceptable; production goes through `StoragePort`.
+pub fn assert_user_author_claim_count(env: &TestEnv, count: usize) {
+    let total = author_claim_row_count(env);
+    assert_eq!(
+        total, count,
+        "expected exactly {count} rows in the author `claims` table after \
+         hard-purge (user counter-claims PRESERVED — WD-25 / WD-41); got {total}"
+    );
+}
+
+/// Raw `SELECT count(*) FROM claims`. Port-exposed name:
+/// `author_claims.row_count`. The author store is single-tenant, so a global
+/// count is the observable surface for "the user's own claims were not
+/// touched".
+fn author_claim_row_count(env: &TestEnv) -> usize {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for author-claims count: {err}",
+            db_path.display()
+        )
+    });
+    let total: i64 = conn
+        .query_row("SELECT count(*) FROM claims", [], |r| r.get(0))
+        .unwrap_or_else(|err| panic!("query author claims count: {err}"));
+    total.max(0) as usize
+}
+
+/// Raw `SELECT count(*) FROM peer_claims WHERE author_did = ?`. Port-exposed
+/// name: `peer_storage.claims.row_count_by_author[did]`.
+fn peer_claim_row_count(env: &TestEnv, peer_did: &str) -> usize {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for peer-claims count: {err}",
+            db_path.display()
+        )
+    });
+    let total: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_claims WHERE author_did = ?",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_claims count for {peer_did}: {err}"));
+    total.max(0) as usize
+}
+
+/// Raw `SELECT count(*) FROM peer_subscriptions WHERE peer_did = ?`.
+/// Port-exposed name: `peer_storage.subscriptions.row_count[did]`.
+fn peer_subscription_row_count(env: &TestEnv, peer_did: &str) -> usize {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for subscription count: {err}",
+            db_path.display()
+        )
+    });
+    let total: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query subscription count for {peer_did}: {err}"));
+    total.max(0) as usize
+}
+
+/// The four port-exposed slot NAMES that make up the PS-6 hard-purge
+/// universe (DD-FED-10). Kept as one source of truth so `capture` and the
+/// `universe` set never drift.
+pub const PURGE_SLOT_PEER_CLAIMS: &str = "peer_storage.claims.row_count_by_author[did]";
+pub const PURGE_SLOT_AUTHOR_CLAIMS: &str = "author_claims.row_count";
+pub const PURGE_SLOT_FS_DIR: &str = "filesystem.peer_claims_dir.exists[did]";
+pub const PURGE_SLOT_SUBSCRIPTION: &str = "peer_storage.subscriptions.row_count[did]";
+
+/// DD-FED-10: capture the FULL observable purge universe as a slot-name →
+/// value map (all values stringified so the heterogeneous count/bool slots
+/// share one comparable type, matching the `state_delta` skeleton's
+/// `HashMap<String, String>` shape). Port-exposed names only — never an
+/// internal adapter field — so refactoring the adapter stays GREEN.
+pub fn capture_purge_universe(env: &TestEnv, peer_did: &str) -> HashMap<String, String> {
+    let mut snapshot = HashMap::new();
+    snapshot.insert(
+        PURGE_SLOT_PEER_CLAIMS.to_string(),
+        peer_claim_row_count(env, peer_did).to_string(),
+    );
+    snapshot.insert(
+        PURGE_SLOT_AUTHOR_CLAIMS.to_string(),
+        author_claim_row_count(env).to_string(),
+    );
+    snapshot.insert(
+        PURGE_SLOT_FS_DIR.to_string(),
+        peer_claims_dir_for(env, peer_did).exists().to_string(),
+    );
+    snapshot.insert(
+        PURGE_SLOT_SUBSCRIPTION.to_string(),
+        peer_subscription_row_count(env, peer_did).to_string(),
+    );
+    snapshot
+}
+
+/// DD-FED-10: assert the hard-purge state-delta over the captured universe
+/// via the inherited `assert_state_delta` port (`tests/common/state_delta.rs`).
+///
+/// Expected delta (the integration gate `peer_remove_purge_separation`):
+///   - `peer_storage.claims.row_count_by_author[did]` → `set_to("0")` (peer
+///     claims for the purged DID deleted);
+///   - `author_claims.row_count`                      → UNCHANGED (the user's
+///     own counter-claims PRESERVED — the load-bearing separation invariant);
+///   - `filesystem.peer_claims_dir.exists[did]`       → `set_to("false")`
+///     (the on-disk partition removed after the DB commit);
+///   - `peer_storage.subscriptions.row_count[did]`    → `set_to("0")`
+///     (the subscription row hard-deleted).
+///
+/// `assert_state_delta`'s implicit-unchanged rule pins `author_claims.row_count`
+/// to byte-equality even though it is not named in `expected` — a regression
+/// that deleted a user counter-claim would surface here, NOT silently.
+pub fn assert_purge_state_delta(before: &HashMap<String, String>, after: &HashMap<String, String>) {
+    use state_delta::{set_to, Delta};
+
+    let universe: HashSet<String> = [
+        PURGE_SLOT_PEER_CLAIMS,
+        PURGE_SLOT_AUTHOR_CLAIMS,
+        PURGE_SLOT_FS_DIR,
+        PURGE_SLOT_SUBSCRIPTION,
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    let expected = Delta::new()
+        .with_slot(PURGE_SLOT_PEER_CLAIMS, set_to("0".to_string()))
+        .with_slot(PURGE_SLOT_FS_DIR, set_to("false".to_string()))
+        .with_slot(PURGE_SLOT_SUBSCRIPTION, set_to("0".to_string()));
+    // PURGE_SLOT_AUTHOR_CLAIMS deliberately omitted → implicit-unchanged:
+    // the user's own claims MUST be byte-equal before/after the purge.
+
+    state_delta::assert_state_delta(before, after, &universe, &expected);
 }
