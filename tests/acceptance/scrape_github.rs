@@ -556,13 +556,78 @@ fn scrape_github_offline_exits_with_requires_network_and_no_partial_list() {
 /// @us-scr-002 @real-io @driving_port @j-004b @edge
 #[test]
 fn scrape_github_with_no_matching_signals_proposes_nothing_and_exits_zero() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-7. GIVEN \
-         FakeGithub::with_no_matching_signals(\"some-user/empty-experiment\"); WHEN scrape \
-         github some-user/empty-experiment; THEN exit 0, stdout contains 'No candidate \
-         claims could be derived', assert_no_claim_persisted(&env)."
-    )
+    // GIVEN an initialized env + a REACHABLE public target whose harvest
+    // yields ZERO signals the mapping can use (resolve succeeds; the signal
+    // set maps to no predicate — the SD-5 empty-derive path). This is the
+    // edge case distinct from SG-4: nothing-to-propose is NOT an error.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::with_no_matching_signals(
+        "some-user/empty-experiment",
+    ));
+
+    // WHEN Maria scrapes the empty-experiment target (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "some-user/empty-experiment"],
+        github.base_url(),
+    );
+
+    // THEN the run exits ZERO — a target that resolves but yields no usable
+    // signals is a clean no-op, NOT an error (contrast SG-4's non-zero 404).
+    assert_eq!(
+        outcome.status, 0,
+        "no-matching-signals must exit 0 (nothing to propose is NOT an error); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the public-data-only banner still precedes the harvest line — the
+    // reassurance arc is unchanged by the empty result (the resolve succeeded,
+    // so the full happy-path preamble runs).
+    let banner_idx = outcome
+        .stdout
+        .find("PUBLIC")
+        .expect("public-data-only banner must be present in stdout");
+    let harvest_idx = outcome
+        .stdout
+        .find("Harvesting public signals")
+        .expect("the harvest line must be present in stdout");
+    assert!(
+        banner_idx < harvest_idx,
+        "the public-data-only banner must precede the harvest line; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the no-candidates message is printed verbatim (US-SCR-002 Ex 2):
+    // the user is told nothing could be derived rather than seeing an empty
+    // numbered list.
+    assert!(
+        outcome
+            .stdout
+            .contains("No candidate claims could be derived"),
+        "stdout must state that no candidate claims could be derived; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND ZERO candidates are rendered — no numbered candidate list and no
+    // candidate-list footer (the empty branch short-circuits the list render).
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "an empty harvest must render NO numbered candidate list; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "an empty harvest must render NO candidate-list footer; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND nothing was persisted: zero `claims` rows, zero PDS writes, zero
+    // claim artifact files (scraper_never_persists_unsigned holds on the
+    // empty path too — a scrape that proposes nothing is never a mutation).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-8: running `scrape github <target>` makes ZERO PDS writes regardless
