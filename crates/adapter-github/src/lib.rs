@@ -55,48 +55,53 @@ use client::AuthMode;
 /// only the budget numbers — never a token (no-token-leak; US-SCR-004).
 pub use client::AuthReport;
 
-/// Process-global slot recording the auth/rate-budget posture the MOST RECENT
-/// harvest observed (ADR-019 §5). The `GithubPort` trait returns `Vec<Signal>`
-/// — by design the pure derivation never sees auth state — so the observed
-/// rate budget (which lives only on the harvest RESPONSE, not the configured
-/// `AuthMode`) is surfaced to the composition root through this effect-shell
-/// side channel rather than by widening the port. The CLI verb reads it via
-/// [`take_last_auth_report`] AFTER the harvest to render the auth-mode line.
-///
-/// This is the effect boundary: the parse (`client::parse_auth_report`) and
-/// the render (cli `render_auth_report`) are PURE and unit-tested; only the
-/// record/read of this slot is the side effect, and it lives in the effect
-/// shell where credentials and I/O already live (pure-core/effect-shell;
-/// ADR-007 / ADR-009). One scrape runs per process, so a process-global slot
-/// is unambiguous (no concurrent-scrape interleaving in the CLI).
-static LAST_AUTH_REPORT: std::sync::OnceLock<std::sync::Mutex<Option<AuthReport>>> =
-    std::sync::OnceLock::new();
-
-fn auth_report_slot() -> &'static std::sync::Mutex<Option<AuthReport>> {
-    LAST_AUTH_REPORT.get_or_init(|| std::sync::Mutex::new(None))
+// ACCEPTED SLICE-02 TECH-DEBT (auth-report side channel; revisit in a future
+// slice). The `GithubPort` trait (a LOCKED contract; ADR-019 §1) returns
+// `Vec<Signal>` from its harvest methods — by design the pure derivation never
+// sees auth state. The observed rate budget lives ONLY on the harvest RESPONSE
+// (not on the configured `AuthMode`), so it must reach the CLI verb through a
+// side channel rather than by widening the port. The verb sees the adapter only
+// as `Box<dyn GithubPort>` (cli `Wiring.github`), so an adapter instance method
+// is not reachable without concrete-typing the field (which would break the
+// port abstraction AND the FakeGithub substitution). The smallest correct
+// option that keeps the contract is therefore a side channel; removing it
+// entirely is a future-slice concern that needs a contract change.
+//
+// CONTAINMENT (refactor-02): the slot is THREAD-LOCAL, not process-global. The
+// scrape verb drives its harvest on a `new_current_thread` tokio runtime
+// (`build_tokio_runtime`), so `record_auth_report` (inside the async harvest)
+// and `take_last_auth_report` (after `block_on` returns) run on the SAME OS
+// thread. A thread-local slot is strictly safer than the former
+// `OnceLock<Mutex<..>>`: no lock (no poisoning, no contention) and two scrapes
+// on different threads can never alias one slot. Single-shot take semantics and
+// observable behavior are byte-identical to the global version.
+//
+// This is the effect boundary: the parse (`client::parse_auth_report`) and the
+// render (cli `render_auth_report`) are PURE and unit-tested; only the
+// record/read of this slot is the side effect, and it lives in the effect shell
+// where credentials and I/O already live (pure-core/effect-shell; ADR-007 /
+// ADR-009).
+thread_local! {
+    static LAST_AUTH_REPORT: std::cell::Cell<Option<AuthReport>> = const { std::cell::Cell::new(None) };
 }
 
 /// Record the auth/rate-budget posture observed on a harvest response into the
-/// process-global slot (the effect-shell side channel; see
-/// [`LAST_AUTH_REPORT`]). Called from the harvest paths once the response body
-/// is in hand. The token bytes are NEVER stored here — an [`AuthReport`]
-/// carries only the budget numbers (no-token-leak; US-SCR-004).
+/// thread-local side channel (see [`LAST_AUTH_REPORT`]). Called from the
+/// harvest paths once the response body is in hand. The token bytes are NEVER
+/// stored here — an [`AuthReport`] carries only the budget numbers
+/// (no-token-leak; US-SCR-004).
 fn record_auth_report(report: AuthReport) {
-    if let Ok(mut slot) = auth_report_slot().lock() {
-        *slot = Some(report);
-    }
+    LAST_AUTH_REPORT.with(|slot| slot.set(Some(report)));
 }
 
-/// Take the auth/rate-budget posture the most recent harvest observed (ADR-019
-/// §5), clearing the slot. Returns [`AuthReport::Anonymous`] when no harvest
-/// has run (e.g. a resolve-only refusal). The CLI verb calls this AFTER the
-/// harvest to render the "authenticated (N/M rate budget)" line. Never
-/// surfaces a token value — an [`AuthReport`] has no token field.
+/// Take the auth/rate-budget posture the most recent harvest observed on THIS
+/// thread (ADR-019 §5), clearing the slot. Returns [`AuthReport::Anonymous`]
+/// when no harvest has run (e.g. a resolve-only refusal). The CLI verb calls
+/// this AFTER the harvest to render the "authenticated (N/M rate budget)" line.
+/// Never surfaces a token value — an [`AuthReport`] has no token field.
 pub fn take_last_auth_report() -> AuthReport {
-    auth_report_slot()
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
+    LAST_AUTH_REPORT
+        .with(|slot| slot.take())
         .unwrap_or(AuthReport::Anonymous)
 }
 

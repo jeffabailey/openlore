@@ -160,28 +160,42 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         });
     };
 
-    // (7) --sign N[,N...]: validate the selection BEFORE any compose begins
-    // (out-of-range / duplicate rejected up front; SS-4 / SS-9), then walk
-    // each selected candidate through its OWN slice-01 compose-sign-publish
-    // pipeline — the SINGLE publish path (no parallel publish; WD-66 /
-    // I-SCR-6). The candidate-list block already accumulated in `out` is
-    // emitted to stdout NOW so the user reviews it before composing.
+    // (7) --sign N[,N...]: validate + run the batch of individual human-gates.
+    // The candidate-list block already accumulated in `out` is handed to the
+    // batch, which emits it to stdout BEFORE composing so the user reviews it.
+    sign_selected_candidates(wiring, &candidates, raw_selection, &out)
+}
+
+/// Run the `--sign N[,N...]` batch: validate the selection, then walk each
+/// selected candidate through its OWN slice-01 compose-sign-publish gesture.
+///
+/// The selection is validated BEFORE any compose begins (out-of-range /
+/// duplicate rejected up front; SS-4 / SS-9). The batch is a SEQUENCE of
+/// individual human-gates (US-SCR-005; WD-49 / J-004c) — never a "sign all"
+/// bypass — each routed through the SINGLE publish path (no parallel publish;
+/// WD-66 / I-SCR-6). Between candidates a running "(k of M signed)" progress
+/// line surfaces the batch advancing one conscious signature at a time.
+///
+/// A candidate may be SKIPPED mid-batch (the human cancels its compose at the
+/// sign prompt). A skip is fault-isolated (US-SCR-005 Ex 2): it neither
+/// persists a claim nor aborts the remaining selection — the batch proceeds to
+/// the next candidate and the final summary reports the signed-vs-skipped
+/// tally. The progress line counts ACTUAL signatures, not iterations, so it
+/// stays accurate across skips.
+///
+/// `candidate_list_out` is the already-rendered candidate-list block from
+/// `run`; it is emitted to stdout NOW (before the first compose) so the user
+/// reviews it before signing.
+fn sign_selected_candidates(
+    wiring: &Wiring,
+    candidates: &[CandidateClaim],
+    raw_selection: &str,
+    candidate_list_out: &str,
+) -> Result<ScrapeGithubOutcome> {
     let selection = parse_selection(raw_selection, candidates.len()).map_err(|e| anyhow!(e))?;
-    print!("{out}");
+    print!("{candidate_list_out}");
     std::io::stdout().flush()?;
 
-    // Batch is a SEQUENCE of individual human-gates (US-SCR-005; WD-49 /
-    // J-004c) — never a "sign all" bypass. Each selected candidate is carried
-    // through its OWN slice-01 compose-sign-publish gesture; between them we
-    // surface a running "(k of M signed)" progress line so the human sees the
-    // batch advancing one conscious signature at a time.
-    //
-    // A candidate may be SKIPPED mid-batch (the human cancels its compose at
-    // the sign prompt). A skip is fault-isolated (US-SCR-005 Ex 2): it neither
-    // persists a claim nor aborts the remaining selection — the batch proceeds
-    // to the next candidate and the final summary reports the signed-vs-skipped
-    // tally. The progress line counts ACTUAL signatures, not iterations, so it
-    // stays accurate across skips.
     let total_selected = selection.len();
     let mut signed_count = 0usize;
     let mut skipped_count = 0usize;
