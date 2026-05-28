@@ -101,8 +101,7 @@ fn scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget() {
     // repo target whose five signals stay well within the anonymous rate
     // budget. `for_public_repo` defaults to `FakeAuthMode::Anonymous`, so no
     // `GITHUB_TOKEN` is implied — and `run_openlore_scrape` (below) sets none.
-    let github =
-        FakeGithub::for_public_repo("small-org/tiny-lib", fixture_cargo_five_signals());
+    let github = FakeGithub::for_public_repo("small-org/tiny-lib", fixture_cargo_five_signals());
     let server = GithubServer::start(github);
 
     // WHEN Tobias runs `scrape github small-org/tiny-lib` with NO GITHUB_TOKEN
@@ -121,8 +120,7 @@ fn scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget() {
     // AND the candidate list renders normally — the harvested signals map to
     // at least one numbered candidate under the resolved subject header.
     assert!(
-        outcome.stdout.contains("Candidate claims for subject")
-            && outcome.stdout.contains(" [1] "),
+        outcome.stdout.contains("Candidate claims for subject") && outcome.stdout.contains(" [1] "),
         "expected an unauthenticated small-target harvest to render a numbered \
          candidate list (US-SCR-004 Ex 2); \n--- stdout ---\n{}\n--- stderr ---\n{}",
         outcome.stdout,
@@ -298,12 +296,158 @@ fn scrape_auth_rejected_token_exits_with_401_without_echoing_value() {
 /// @us-scr-004 @driving_port @real-io @j-004a @j-004c @wd-63 @edge
 #[test]
 fn scrape_auth_token_never_reaches_signed_claim_or_output_on_authenticated_sign() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SA-5. GIVEN authenticated posture + GITHUB_TOKEN=FIXTURE_VALID_PAT; \
-         WHEN scrape github rust-lang/cargo --sign 1 (sign + publish); THEN exit 0, the \
-         on-disk claims/<cid>.json contains NO occurrence of FIXTURE_VALID_PAT, and \
-         assert_token_value_absent(&outcome, FIXTURE_VALID_PAT) — the token is an effect-shell \
-         credential that never reaches the pure derivation or the signed payload."
-    )
+    let env = TestEnv::initialized();
+
+    // GIVEN an AUTHENTICATED posture for the `rust-lang/cargo` public repo
+    // whose five canonical cargo signals derive five candidates, carrying a
+    // 4982/5000 rate budget; and a valid PAT in the child's `GITHUB_TOKEN`.
+    // `authenticated(..)` preserves the resolution + signals, so candidate 1
+    // is the same dependency-pinning proposal the SS-* sign scenarios use.
+    let github = GithubServer::start(
+        FakeGithub::for_public_repo("rust-lang/cargo", fixture_cargo_five_signals())
+            .authenticated(4982, 5000),
+    );
+
+    // WHEN Maria runs `scrape github rust-lang/cargo --sign 1` with the PAT set
+    // and walks the slice-01 compose editor accepting every pre-filled field
+    // (four field Enters + the conservative confidence default Enter), presses
+    // Enter to sign, then `Y` to publish — the same zero-edit sign+publish
+    // gesture SS-2 uses, but carried over the AUTHENTICATED harvest. The PAT
+    // leaves the test ONLY into the child's `GITHUB_TOKEN`; the assertions
+    // below prove it never surfaces anywhere observable.
+    let outcome = run_scrape_sign_with_token(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1"],
+        github.base_url(),
+        FIXTURE_VALID_PAT,
+        "\n\n\n\n\n\nY\n",
+    );
+
+    // THEN the authenticated sign+publish completes (exit 0) and a signed claim
+    // is produced — recover its CID from the `Published claim <cid>.` block.
+    assert_eq!(
+        outcome.status, 0,
+        "authenticated scrape --sign 1 must exit 0 on the happy path; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    let cid = published_cid_from_stdout(&outcome.stdout);
+
+    // AND the production code DID send the PAT to GitHub — auth genuinely
+    // happened (the only place the token leaves the adapter is the
+    // Authorization header). This is the saw_token side of the no-leak pin:
+    // the token WAS used, yet never echoed.
+    assert!(
+        server_saw_token(&github, FIXTURE_VALID_PAT),
+        "the production code must send the PAT so authentication genuinely happens \
+         (the only place the token leaves the adapter is the Authorization header)"
+    );
+
+    // AND the signed claim was published via the SAME slice-01 publish path:
+    // exactly ONE record on the user's OWN PDS under the user's OWN author DID
+    // at-uri (a signed-from-authenticated-scrape claim is byte-identical in
+    // shape to any other — no token field).
+    assert_scraper_reuses_slice01_publish_path(&env, &cid);
+
+    // AND the token VALUE appears NOWHERE in the captured stdout/stderr (the
+    // load-bearing no-token-leak invariant — US-SCR-004 / WD-63).
+    assert_token_value_absent(&outcome, FIXTURE_VALID_PAT);
+
+    // AND the token VALUE appears NOWHERE in the on-disk signed claim payload:
+    // `claims/<cid>.json` is a pure derivation of the composed fields
+    // (subject/predicate/object/evidence/confidence/author/composedAt) — the
+    // token is an effect-shell credential the pure core never sees, so it
+    // cannot be a signed-payload field by construction.
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    let signed_json = std::fs::read_to_string(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected signed-from-authenticated-scrape claim file at {}; got {e}",
+            artifact_path.display()
+        )
+    });
+    assert!(
+        !signed_json.contains(FIXTURE_VALID_PAT),
+        "no-token-leak (US-SCR-004 / WD-63): the PAT value must NEVER appear in the \
+         on-disk signed claim at {}; \n--- offending token ---\n{FIXTURE_VALID_PAT}\n\
+         --- {} ---\n{signed_json}",
+        artifact_path.display(),
+        artifact_path.display()
+    );
+
+    // AND the token VALUE appears NOWHERE in the published PDS record content
+    // (the federated surface — the record body is the canonical signed claim,
+    // which carries no token). Closes the cross-path assertion over all four
+    // surfaces: stdout, stderr, the on-disk signed JSON, and the PDS record.
+    for record in env.pds.records() {
+        assert!(
+            !record.body.contains(FIXTURE_VALID_PAT),
+            "no-token-leak (US-SCR-004 / WD-63): the PAT value must NEVER appear in any \
+             published PDS record body; \n--- offending token ---\n{FIXTURE_VALID_PAT}\n\
+             --- record at {} ---\n{}",
+            record.at_uri,
+            record.body
+        );
+    }
+}
+
+/// Run `openlore scrape github <target> --sign ...` with BOTH a `GITHUB_TOKEN`
+/// PAT set in the child env (WD-63 env-var seam) AND `stdin_lines` piped at the
+/// chained compose/sign/publish prompts.
+///
+/// SA-5 is the only scenario that needs both seams at once: the AUTHENTICATED
+/// harvest (token) carried through to an interactive `--sign` (stdin). It is a
+/// thin local composition of the two shared helpers' seams — the token env-var
+/// of [`run_openlore_scrape_with_token`] plus the piped stdin of
+/// [`run_openlore_scrape_with_stdin`] — kept private to this scenario rather
+/// than added to shared support (no other scenario needs the combination).
+fn run_scrape_sign_with_token(
+    env: &TestEnv,
+    args: &[&str],
+    github_base_url: &str,
+    github_token: &str,
+    stdin_lines: &str,
+) -> CliOutcome {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_GITHUB_API_BASE", github_base_url)
+        .env("GITHUB_TOKEN", github_token)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// Whether the `FakeGithub` behind `server` observed the production code send
+/// `token` as an Authorization credential (the saw_token side of the no-leak
+/// pin: the token WAS used, yet never echoed). Local thin wrapper over
+/// `GithubServer::fake().saw_token(..)` so SA-5 reads symmetrically to SA-1.
+fn server_saw_token(server: &GithubServer, token: &str) -> bool {
+    server.fake().saw_token(token)
 }
