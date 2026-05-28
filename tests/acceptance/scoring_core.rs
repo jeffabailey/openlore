@@ -54,6 +54,13 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use chrono::{TimeZone, Utc};
+use claim_domain::{Cid, Did};
+use ports::{AttributedClaim, AuthorRelationship};
+use proptest::prelude::*;
+use proptest::test_runner::TestRunner;
+use scoring::ScoringConfig;
+
 // NOTE — unlike the subprocess-driven graph_query_explore tests, this file
 // invokes `scoring` directly (layer 2). It does NOT use `support/mod.rs`'s
 // TestEnv (no subprocess). Same pattern as slice-02's `scraper_domain.rs` and
@@ -85,8 +92,6 @@
 /// @property @us-graph-003 @us-graph-006 @j-002 @i-graph-1 @kpi-graph-3 @gate-2
 #[test]
 fn scoring_weight_equals_sum_of_contributions_property() {
-    // SCAFFOLD: true
-    //
     // Layer-2 @property (Mandate 9; DD-GRAPH): pure-core direct invocation, NO
     // CLI subprocess. The driving port IS the pure `scoring::score` signature;
     // we drive it over an arbitrary attributed-claim set and assert the
@@ -95,26 +100,81 @@ fn scoring_weight_equals_sum_of_contributions_property() {
     //
     //     forall claims:
     //         score(claims, ScoringConfig::DEFAULT).ranked.all(|p|
-    //             (p.weight - p.contributions.iter().map(|c| c.subtotal).sum::<f64>()).abs() < EPS)
+    //             (p.weight - p.contributions().iter().map(|c| c.subtotal).sum::<f64>()).abs() < EPS)
     //
     // The contributions list IS the auditable decomposition `--explain` prints;
     // if the displayed weight ever drifts from the sum of the per-claim
     // subtotals, the transparency promise breaks (the user cannot reproduce the
-    // number by hand). Pin it here so a future formula refactor that computes
-    // the weight by any path OTHER than summing the visible contributions fails
-    // LOUDLY at the cheap layer-2 boundary.
+    // number by hand). A future formula refactor that computes the weight by any
+    // path OTHER than summing the visible contributions fails LOUDLY here at the
+    // cheap layer-2 boundary.
     //
-    // Generator shape (DELIVER materializes): an arbitrary Vec<AttributedClaim>
-    // over a small bounded universe of {subject in 3, object in 2, author in 3}
-    // with confidence in [0.0, 1.0], so the generated sets exercise
-    // single-author, multi-author, and cross-project-triangulation pairings.
-    // Non-vacuity guard: force >=1 claim so the WeightedView is never empty
-    // (an empty ranked list passes the all(..) vacuously).
-    todo!(
-        "DELIVER (slice-04): proptest over arbitrary Vec<AttributedClaim>; for every \
-         WeightedPairing assert weight == sum(contributions.subtotal) within f64 EPS \
-         (Gate 2 weight_equals_formula; WD-71/KPI-GRAPH-3 transparency)"
-    )
+    // Generator: an arbitrary NON-EMPTY Vec<AttributedClaim> over a small
+    // bounded universe of {subject in 3, object in 2, author in 3} with
+    // confidence in [0.0, 1.0], so the generated sets exercise single-author,
+    // multi-author, AND cross-project-triangulation pairings. Forcing >=1 claim
+    // makes the WeightedView never empty (an empty ranked list would pass the
+    // all(..) vacuously — the non-vacuity guard below asserts ranked non-empty).
+    const EPS: f64 = 1e-9;
+
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_attributed_claims(), |claims| {
+            let view = scoring::score(&claims, &ScoringConfig::DEFAULT);
+
+            // Non-vacuity: a non-empty claim set yields >=1 ranked pairing, so
+            // the per-pairing invariant below is never asserted vacuously.
+            prop_assert!(
+                !view.ranked.is_empty(),
+                "a non-empty attributed-claim set must produce at least one ranked pairing"
+            );
+
+            // Gate 2: every displayed weight reproduces by hand as the sum of
+            // its per-claim Contribution subtotals (the `--explain` running sum).
+            for pairing in &view.ranked {
+                let recomputed: f64 = pairing.contributions().iter().map(|c| c.subtotal).sum();
+                prop_assert!(
+                    (pairing.weight - recomputed).abs() < EPS,
+                    "weight {} != sum(subtotals) {} for ({}, {})",
+                    pairing.weight,
+                    recomputed,
+                    pairing.subject,
+                    pairing.object
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Generator for a NON-EMPTY `Vec<AttributedClaim>` over a small bounded
+/// universe (3 subjects x 2 objects x 3 authors, confidence in `[0.0, 1.0]`)
+/// so generated sets exercise single-author, multi-author, and
+/// cross-project-triangulation pairings. Used by the SC-1 reproducibility
+/// property; sibling properties (SC-2/SC-3/SC-4) reuse it as they activate.
+fn arbitrary_attributed_claims() -> impl Strategy<Value = Vec<AttributedClaim>> {
+    let subject = prop_oneof![Just("deno"), Just("cargo"), Just("nixpkgs")];
+    let object = prop_oneof![Just("dependency-pinning"), Just("immutability")];
+    let author = prop_oneof![
+        Just("did:plc:tobias"),
+        Just("did:plc:maria"),
+        Just("did:plc:rachel")
+    ];
+
+    let one_claim = (subject, object, author, 0.0_f64..=1.0).prop_map(
+        |(subject, object, author, confidence)| AttributedClaim {
+            author_did: Did(author.to_string()),
+            cid: Cid(format!("bafy-{subject}-{object}-{author}")),
+            subject: subject.to_string(),
+            predicate: "adheres-to".to_string(),
+            object: object.to_string(),
+            confidence,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::You,
+        },
+    );
+
+    prop::collection::vec(one_claim, 1..12)
 }
 
 // =============================================================================

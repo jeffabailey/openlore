@@ -25,7 +25,9 @@ mod score;
 
 pub use config::ScoringConfig;
 pub use explain::Contribution;
-pub use score::{score, EmptyContributions, WeightBucket, WeightedPairing, WeightedView};
+pub use score::{
+    score, weight_bucket, EmptyContributions, WeightBucket, WeightedPairing, WeightedView,
+};
 
 // `AttributedClaim` is hoisted to `ports` (step 01-02) so the single
 // definition is shared by the `cli` composition root, the extended
