@@ -57,6 +57,7 @@
 
 use anyhow::{Context, Result};
 
+use crate::orientation::{self, OrientationMilestone};
 use crate::render::{
     is_retracted_by, render_annotated_graph_query_result, render_federated_query_result,
     AnnotatedClaim,
@@ -72,6 +73,12 @@ const LOCAL_ONLY_HEADER: &str = "Showing local claims only.";
 /// so operators grepping for either find this pointer.
 const FEDERATION_FOOTER: &str =
     "(Federated peers are not queried in slice-01; pass --federated in slice-03 to widen the search.)";
+
+/// One-time orientation line shown on the FIRST EVER `--federated`
+/// invocation per install (FQ-6 / WD-39; gherkin habit scenario 1).
+/// Content-frozen by the acceptance contract; do NOT paraphrase — the exact
+/// string is the user-visible contract.
+const FIRST_FEDERATED_QUERY_ORIENTATION: &str = "First federated query complete. Peer claims appear under their author DIDs. No claims are merged. Use `openlore peer add <did>` to follow more peers.";
 
 /// Argument struct for the `graph query` verb (mirrors the clap subcommand).
 #[derive(Debug, Clone)]
@@ -173,21 +180,73 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
 /// row, it swaps the no-merge footer for the content-frozen `peer add` hint.
 /// The verb stays a thin port-call + render — no branching here.
 ///
-/// Out of FQ-1 scope (covered by later slice-03 scenarios, currently RED):
-/// the first-federated-query orientation (FQ-6 / WD-39) and the inline
-/// counter template (FQ-7 / WD-42).
+/// First-federated-query orientation (FQ-6 / WD-39): the FIRST EVER
+/// `--federated` invocation per install emits a one-time orientation block
+/// (gated by `OrientationState.first_federated_query_completed_at`), then
+/// records the milestone so subsequent invocations omit it. Emitted BEFORE
+/// the rendered result (data-models.md §OrientationState) so the framing
+/// reads as an introduction to the per-author output that follows.
+///
+/// Out of FQ-1 scope (covered by a later slice-03 scenario, currently RED):
+/// the inline counter template (FQ-7 / WD-42).
 fn run_federated(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
     let rows = wiring
         .storage
         .query_federated_by_subject(&args.subject)
         .with_context(|| format!("federated query by subject {}", args.subject))?;
 
-    let stdout = render_federated_query_result(&rows);
+    // FQ-6 / WD-39: prepend the one-time orientation (empty after the first
+    // invocation) ahead of the rendered result. Gating + the non-fatal state
+    // write live in the helper; the federated read itself is unaffected.
+    let orientation_block = maybe_emit_first_federated_query_orientation(wiring);
+    let rendered = render_federated_query_result(&rows);
+    let stdout = format!("{orientation_block}{rendered}");
 
     Ok(GraphQueryOutcome {
         exit_code: 0,
         stdout,
     })
+}
+
+/// Emit the first-federated-query orientation block exactly once per install
+/// (FQ-6 / WD-39). Returns the rendered framing text to prepend ahead of the
+/// federated result, or the empty string if it has already fired.
+///
+/// Mirrors `peer_pull::maybe_emit_first_pull_orientation` +
+/// `claim_counter::maybe_emit_first_counter_claim_orientation`: load the
+/// `[federation]` snapshot, consult the PURE `should_fire`, record the
+/// milestone on first fire, and return the block. A write failure is
+/// logged-and-ignored (the orientation may re-fire on the next query, but the
+/// query itself succeeds) — never fatal (data-models.md §OrientationState).
+fn maybe_emit_first_federated_query_orientation(wiring: &Wiring) -> String {
+    let identity_path = wiring.paths.identity_toml();
+    let state = orientation::load(&identity_path).unwrap_or_default();
+    if !state.should_fire(OrientationMilestone::FirstFederatedQuery) {
+        return String::new();
+    }
+
+    let now = wiring.clock.now_utc().to_rfc3339();
+    if let Err(err) = orientation::mark_completed(
+        &identity_path,
+        OrientationMilestone::FirstFederatedQuery,
+        now,
+    ) {
+        // Non-fatal: the orientation may re-fire on the next federated query,
+        // but the query itself succeeds. Log to stderr, do not abort.
+        eprintln!(
+            "openlore graph query --federated: could not record first-federated-query orientation: {err:#}"
+        );
+    }
+
+    first_federated_query_orientation_block()
+}
+
+/// PURE render of the one-time first-federated-query orientation block
+/// (WD-39; gherkin habit scenario 1, content-frozen). One orientation line
+/// followed by a blank line so the per-author result that follows reads as a
+/// distinct section.
+fn first_federated_query_orientation_block() -> String {
+    format!("{FIRST_FEDERATED_QUERY_ORIENTATION}\n\n")
 }
 
 /// Compute the per-claim `is_retracted` annotation by probing the

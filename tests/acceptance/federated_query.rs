@@ -866,7 +866,116 @@ fn parse_counter_claim_cid(stdout: &str) -> String {
 /// @us-fed-003 @real-io @driving_port @j-003 @habit @wd-39
 #[test]
 fn federated_query_first_invocation_emits_orientation_then_omits_on_subsequent_invocations() {
-    todo!("DELIVER (slice-03): wire OrientationState.first_federated_query_completed_at check in VerbGraphQuery --federated branch; assert orientation present in first invocation stdout AND absent in second invocation stdout AND identity.toml gains the timestamp key after success")
+    let env = TestEnv::initialized();
+    let subject = "github:rust-lang/cargo";
+
+    // The content-frozen orientation message (WD-39; gherkin habit scenario 1
+    // + FQ-6 docstring). Verbatim — the exact phrasing is the user-visible
+    // contract; do NOT paraphrase.
+    const ORIENTATION: &str = "First federated query complete. Peer claims appear under their author DIDs. No claims are merged. Use `openlore peer add <did>` to follow more peers.";
+
+    // -- Precondition: subscribe to + pull a peer so the federated read has
+    // real peer rows to render. The orientation gating is independent of the
+    // row content, but a populated result makes the scenario representative of
+    // a genuine first federated query (not the degraded zero-peers path). --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer_claim_count = records.len();
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
+
+    // BASELINE: no [federation] first_federated_query key yet — the
+    // orientation is armed.
+    let identity_path = env.identity_toml_path();
+    let before = std::fs::read_to_string(&identity_path).unwrap_or_default();
+    assert!(
+        !before.contains("first_federated_query_completed_at"),
+        "precondition: identity.toml must NOT carry the federated-query milestone \
+         key before the first --federated invocation;\n--- identity.toml ---\n{before}"
+    );
+
+    // -- FIRST invocation through the driving port: the orientation fires. --
+    let first = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        first.status, 0,
+        "first graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        first.stdout, first.stderr
+    );
+    assert!(
+        first.stdout.contains(ORIENTATION),
+        "expected the FIRST --federated invocation to emit the content-frozen \
+         orientation message VERBATIM (WD-39);\n--- stdout ---\n{}",
+        first.stdout
+    );
+
+    // The federated result itself still renders alongside the orientation: the
+    // orientation augments the output, it does not replace it.
+    assert!(
+        first.stdout.contains(peer_did),
+        "expected the first invocation to STILL render the federated result \
+         (peer header present) alongside the orientation;\n--- stdout ---\n{}",
+        first.stdout
+    );
+
+    // The milestone key is now persisted (data-models §OrientationState): the
+    // timestamp is written under `[federation]` so the orientation never
+    // re-fires.
+    let after_first = std::fs::read_to_string(&identity_path)
+        .expect("identity.toml must exist after the first federated query");
+    assert!(
+        after_first.contains("first_federated_query_completed_at"),
+        "expected identity.toml to gain the `first_federated_query_completed_at` \
+         key after the first --federated invocation;\n--- identity.toml ---\n{after_first}"
+    );
+
+    // -- SECOND invocation: the orientation is OMITTED (once-per-user). --
+    let second = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        second.status, 0,
+        "second graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        second.stdout, second.stderr
+    );
+    assert!(
+        !second.stdout.contains(ORIENTATION),
+        "expected the SECOND --federated invocation to OMIT the orientation \
+         (once-per-user; WD-39);\n--- stdout ---\n{}",
+        second.stdout
+    );
+
+    // The federated result STILL renders on the second invocation — only the
+    // one-time orientation is suppressed, never the query result.
+    assert!(
+        second.stdout.contains(peer_did),
+        "expected the second invocation to STILL render the federated result \
+         (only the orientation is suppressed);\n--- stdout ---\n{}",
+        second.stdout
+    );
 }
 
 /// FQ-7 (WD-42 — RESOLVES `# DISTILL: confirm` habit scenario 2 inline
