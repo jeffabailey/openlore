@@ -968,6 +968,468 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-28T07:43:05Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T07:48:54Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T07:48:54Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T07:49:34Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T07:57:20Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T07:57:58Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:00:56Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:01:27Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: CLI-layer pre-compose guards (empty + >1000 chars) are covered port-to-port by CC-2/CC-3 acceptance; domain emptiness already tested in claim-domain, lexicon length in LCC-5 (02-04/02-05)",
+      "t": "2026-05-28T08:01:27Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:03:56Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:04:16Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:07:05Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:08:29Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: pure-core SelfCounter unit+property tests authored in 02-05 (validate_counter_claim.rs); composite CombinedClaimLookup (own+peer) is thin CLI glue exercised end-to-end by CC-4 against real DuckDB own store; mutation check confirmed CC-4 load-bearing",
+      "t": "2026-05-28T08:08:29Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:10:03Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:10:47Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:12:53Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:14:27Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: OrientationState should_fire/with_completed/mark_completed for FirstCounterClaim already unit-tested in orientation.rs (PP-1 precedent); call-site wiring is pure stdout emission fully driven by CC-5 acceptance test port-to-port",
+      "t": "2026-05-28T08:14:38Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:16:57Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:17:27Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:19:12Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:20:12Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: CC-6 is an absence-of-behavior invariant covered port-to-port by the acceptance scenario; no unit decomposition needed",
+      "t": "2026-05-28T08:20:12Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:21:25Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:21:44Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:24:54Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:26:09Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:28:43Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:34:22Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:34:54Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:37:46Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:40:34Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: 05-06 render proptest (render_federated_groups_exactly_one_header_per_distinct_author) already covers the zero-merge invariant \u2014 each cid appears exactly once over an arbitrary author alphabet; no new unit test needed to drive GREEN.",
+      "t": "2026-05-28T08:40:34Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:40:34Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:41:02Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:43:01Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:45:39Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: FQ-3 is a port-to-port regression assertion through the graph query driving port; no unit decomposition needed (no production change)",
+      "t": "2026-05-28T08:45:39Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:45:39Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:46:08Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:49:16Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:49:16Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:50:41Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:52:38Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:53:08Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:55:48Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:57:34Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T08:58:41Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:04:39Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:05:08Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:07:25Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:08:18Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: FirstFederatedQuery once-per-user gating already unit-covered in orientation.rs (recording_one_milestone_silences_only_that_milestone + load_then_mark_completed_round_trips) per PP-1/CC-5 precedent",
+      "t": "2026-05-28T09:08:26Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:10:46Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:11:08Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:12:46Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:14:11Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:14:50Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "GREEN",
+      "s": "SKIPPED",
+      "d": "BLOCKED_BY_DEPENDENCY: FQ-7 unit+acceptance green, but locked WD-42 template (openlore claim counter <peer_cid> ...) makes the peer CID appear a 2nd time in stdout, breaking FQ-2 line 372 raw-substring assert matches(cid).count()==1 which is outside the editable boundary (FQ-7 body only). Cross-scenario scaffold conflict; needs authorization to fix FQ-2 to count cid: field lines.",
+      "t": "2026-05-28T09:18:10Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:20:49Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:21:14Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:23:22Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:25:33Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: 05-06/05-07 render proptest (render_federated_groups_exactly_one_header_per_distinct_author) already proves the N-author anti-merging invariant over an arbitrary author alphabet; FQ-8 is the at-scale acceptance gate needing no new unit test",
+      "t": "2026-05-28T09:25:33Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:31:53Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T09:32:18Z"
     }
   ]
 }
