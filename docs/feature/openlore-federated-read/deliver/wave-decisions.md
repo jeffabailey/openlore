@@ -76,4 +76,27 @@ Pitch is fictional — every pitch maps to demonstrable visible output.
 - `cargo xtask check-arch`: OK (10 workspace members) — anti-merging SQL rule + autoconfirm-release-build guard active.
 - `cargo xtask check-probes`: OK (one bootstrap-allowlisted stub warning for the not-yet-live PeerStoragePort gauntlet probe; exit unaffected).
 - `cargo deny check`: clean (unicode-normalization MIT/Apache-2.0 covered by existing allowlist).
-- Per-phase L1-L6 refactor / adversarial review / mutation outcomes recorded below as those phases run.
+- Per-phase L1-L6 refactor / adversarial review / mutation outcomes recorded below.
+
+## Phase 4 — L1-L6 refactoring (commit 38fa240)
+
+RPP L1-L4 applied; production clippy warnings cleared (~10 → 0). Shared `bare_did` + `render_resolve_header` helpers extracted. Honest assessment: the 40-step TDD build was already clean — minimal churn warranted. All tests green; check-arch + check-probes OK.
+
+## Phase 5 — Adversarial review: APPROVED (zero blockers)
+
+@nw-software-crafter-reviewer verdict APPROVED. All 15 scrutinized "no-production-change-needed" scenarios confirmed GENUINE (load-bearing port-to-port; deletion-test logic verified) — zero Testing Theater. Three-layer anti-merging enforcement verified real (type non-Option `author_did` + xtask check-arch SQL rule + FQ-2/FQ-8 behavioral). All 6 security/trust guards live + load-bearing (sig verify, CID recompute, SelfAttribution WD-40, CrossAttribution WD-41, self-counter WD-34, TTY-gated purge WD-21/36 + autoconfirm cfg-gated out of release). Single-publish-path (I-FED-5) enforced. ADR-007 functional discipline verified. FQ-2 zero-merge assertion confirmed genuine (counts `cid:` field-lines == 1 per row, excludes FQ-7 template mention).
+Non-blocking notes for future: FQ-1 docstring says "Maria" but test uses harness identity (cosmetic); dead test-support exports (`fixture_adversarial_*`, `ADVERSARIAL_RKEY`) — test-optimizer candidate; production multibase pubkey decode is a slice-04+ TODO (FakePeerPds is the slice-03 acceptance seam).
+
+## Phase 6 — Mutation testing (per-feature ≥80%): PASS
+
+cargo-mutants 25.3.1, scoped to slice-03 pure-core additions:
+
+| Target | Mutants | Caught | Missed | Kill rate |
+|---|---|---|---|---|
+| `claim-domain::normalize_reason` + `validate_counter_claim` | 14 | 14 | 0 | **100%** |
+| `claim-domain::canonicalize` (reason folding) | 3 | 3 | 0 | **100%** |
+| `lexicon::claim` (slice-03 reason Gate 4) | slice-03 mutants caught | — | — | gate met |
+
+Slice-03 per-feature gate SATISFIED (≥80%; actual 100% on the declared scope per D-D8 + roadmap mutation note).
+
+**Slice-01 finding (out of slice-03 scope, for D-D8 nightly backstop):** whole-file mutation of `lexicon/src/claim.rs` surfaced 2 surviving mutants in pre-existing slice-01 reference validation — `delete !` at line 207 (`!entry_obj.contains_key`) and line 220 (`!ALLOWED_REFERENCE_TYPES.contains`). These are ADR-008 reference-field-presence / allowed-type checks that predate slice-03's `reason` gate; no slice-03 test exercises a reference missing a required field or carrying a disallowed type at the lexicon layer. Logged for slice-01 reference-validation test hardening via the nightly mutation sweep; NOT a slice-03 deliverable.
