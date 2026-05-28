@@ -175,24 +175,60 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // through its OWN slice-01 compose-sign-publish gesture; between them we
     // surface a running "(k of M signed)" progress line so the human sees the
     // batch advancing one conscious signature at a time.
+    //
+    // A candidate may be SKIPPED mid-batch (the human cancels its compose at
+    // the sign prompt). A skip is fault-isolated (US-SCR-005 Ex 2): it neither
+    // persists a claim nor aborts the remaining selection — the batch proceeds
+    // to the next candidate and the final summary reports the signed-vs-skipped
+    // tally. The progress line counts ACTUAL signatures, not iterations, so it
+    // stays accurate across skips.
     let total_selected = selection.len();
-    for (signed_so_far, index) in selection.into_iter().enumerate() {
-        // After the first candidate is signed, announce progress BEFORE the
-        // next candidate's compose preview: "(1 of 3 signed)" precedes the
-        // second preview, "(2 of 3 signed)" the third, and so on.
-        if signed_so_far > 0 {
-            println!("\n({signed_so_far} of {total_selected} signed)");
+    let mut signed_count = 0usize;
+    let mut skipped_count = 0usize;
+    for index in selection {
+        // After each signed candidate, announce progress BEFORE the next
+        // candidate's compose preview: "(1 of 3 signed)" precedes the next
+        // preview, "(2 of 3 signed)" the one after, and so on. A skip does NOT
+        // bump this count (it tracks signatures, not attempts).
+        if signed_count > 0 {
+            println!("\n({signed_count} of {total_selected} signed)");
             std::io::stdout().flush()?;
         }
         // 1-based selection -> 0-based slice access (validated above).
         let candidate = &candidates[index - 1];
-        sign_candidate_via_slice01(wiring, candidate)?;
+        match sign_candidate_via_slice01(wiring, candidate)? {
+            SignOutcome::Signed => signed_count += 1,
+            SignOutcome::Skipped => {
+                // The skip is VISIBLE (named by its 1-based selection index)
+                // and NON-FATAL — the loop continues to the next candidate.
+                println!("\nskipped candidate {index}");
+                std::io::stdout().flush()?;
+                skipped_count += 1;
+            }
+        }
     }
+
+    // Final batch summary — the signed-vs-skipped tally over the whole pass
+    // (US-SCR-005 Ex 2). Always emitted for a `--sign` batch so the human has a
+    // single closing line confirming what crossed the human-gate.
+    println!("\n{signed_count} signed, {skipped_count} skipped");
+    std::io::stdout().flush()?;
 
     Ok(ScrapeGithubOutcome {
         exit_code: 0,
         stdout: String::new(),
     })
+}
+
+/// Whether one candidate's slice-01 compose-sign gesture resulted in a signed
+/// claim or was SKIPPED by the human (compose canceled at the sign prompt).
+/// Modeling the per-candidate result as a type — rather than a bare `()` —
+/// lets the batch loop tally signed-vs-skipped without inspecting I/O state
+/// (US-SCR-005 Ex 2; the skip is a first-class outcome, not an error).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignOutcome {
+    Signed,
+    Skipped,
 }
 
 /// Parse + validate the raw `--sign N[,N...]` selection against the derived
@@ -226,7 +262,7 @@ fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, Stri
 /// DISPLAY-ONLY (WD-62 / I-SCR-7) — it appears in the preview but is NEVER a
 /// signed-payload field, so the signed CID is byte-identical to a
 /// hand-authored claim's.
-fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Result<()> {
+fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Result<SignOutcome> {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
 
@@ -265,12 +301,15 @@ fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Re
     stdout.write_all(render_derived_from_line(candidate).as_bytes())?;
     stdout.flush()?;
 
-    // Two-prompt (ADR-003). Enter to sign; EOF/skip before any input is a
-    // clean cancel (no side effects).
-    let sign_prompt = "\nPress Enter to sign this candidate locally (or Ctrl-C to cancel): ";
+    // Two-prompt (ADR-003). Enter to sign; the `skip` gesture (or EOF before
+    // any input) is a clean cancel of THIS candidate with NO side effects
+    // (US-SCR-005 Ex 2; Q-DELIVER-5 — the skip is in-band so a batch can drop
+    // one candidate and keep going). A skipped candidate consumes NO publish
+    // answer below — it returns immediately.
+    let sign_prompt = "\nPress Enter to sign this candidate locally (or type 'skip' to skip it): ";
     let confirmation = prompt_line(&mut stdout, &mut stdin, sign_prompt)?;
-    if confirmation.is_none() {
-        return Ok(());
+    if is_skip_gesture(confirmation.as_deref()) {
+        return Ok(SignOutcome::Skipped);
     }
 
     // Canonicalize -> compute_cid -> sign -> persist. SAME pure-core path
@@ -357,7 +396,22 @@ fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Re
         stdout.flush()?;
     }
 
-    Ok(())
+    // The candidate cleared the sign prompt and was locally persisted (whether
+    // or not the human then published — declining publish, SS-6, is still a
+    // signature). So this is a SIGNED outcome for the batch tally.
+    Ok(SignOutcome::Signed)
+}
+
+/// Whether the sign-prompt answer is the SKIP gesture: the literal `skip` /
+/// `s` (case-insensitive, trimmed) OR EOF (`None` — the user closed stdin
+/// without typing anything, the canonical "I changed my mind" signal). An
+/// empty `Some("")` (a bare Enter) is NOT a skip — it is the affirmative sign
+/// gesture. Pure function of the prompt answer (US-SCR-005 Ex 2; Q-DELIVER-5).
+fn is_skip_gesture(answer: Option<&str>) -> bool {
+    match answer {
+        None => true,
+        Some(line) => matches!(line.trim().to_ascii_lowercase().as_str(), "skip" | "s"),
+    }
 }
 
 /// Prompt the user to accept (Enter) or override a pre-filled compose field.

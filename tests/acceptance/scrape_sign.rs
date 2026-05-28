@@ -789,13 +789,109 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
 /// @us-scr-005 @driving_port @real-io @j-004c @edge
 #[test]
 fn scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-8 (skip gesture per Q-DELIVER-5 — behavior asserted, not the \
-         keystroke). WHEN --sign 1,2,5, sign 1, cancel 2's compose, sign 5; THEN stdout \
-         contains 'skipped candidate 2', the flow proceeds to candidate 5, the summary \
-         reports '2 signed, 1 skipped', and exactly TWO records exist on the user's own PDS."
-    )
+    // GIVEN Tobias has an initialized env + the public repo serving the five
+    // canonical cargo signals → a candidate list of exactly five entries. He
+    // batch-selects 1, 2, and 5 — but mid-batch he changes his mind about
+    // candidate 2 and SKIPS it (cancels its compose). The skip must NOT abort
+    // the batch: candidates 1 and 5 still get signed + published (US-SCR-005
+    // Ex 2; batch fault isolation, WD-49 / J-004c).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN he runs `--sign 1,2,5`:
+    //   - candidate 1: accept every field (four field Enters + the confidence
+    //     default Enter), press Enter to sign, `Y` to publish;
+    //   - candidate 2: accept every field (the same five Enters reach the
+    //     compose preview), then SKIP at the sign prompt with the `skip`
+    //     gesture (Q-DELIVER-5; behavior asserted, not the exact keystroke) —
+    //     this cancels candidate 2's compose WITHOUT aborting the batch and
+    //     consumes NO publish answer (a skipped candidate is never published);
+    //   - candidate 5: accept every field, press Enter to sign, `Y` to publish.
+    // The skip is in-band (a line on the SAME piped stdin), never EOF — EOF
+    // would end the whole stream and starve candidate 5.
+    let sign_then_publish = "\n\n\n\n\n\nY\n";
+    let skip = "\n\n\n\n\nskip\n";
+    let stdin = format!("{sign_then_publish}{skip}{sign_then_publish}");
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1,2,5"],
+        github.base_url(),
+        &stdin,
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 1,2,5 with one mid-batch skip must still exit 0 \
+         (a skip is a normal outcome, not an error); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN stdout announces the skipped candidate by its 1-based selection
+    // index — "skipped candidate 2" — so the human sees WHICH candidate was
+    // dropped (the skip is visible, not silent).
+    assert!(
+        outcome.stdout.contains("skipped candidate 2"),
+        "expected stdout to announce 'skipped candidate 2' when candidate 2's compose \
+         is canceled mid-batch; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the batch did NOT abort after the skip — it PROCEEDED to candidate 5,
+    // which was composed (its compose preview carries the inherited "not as
+    // truth" framing, I-7) AFTER the skip announcement. Ordering proves the
+    // skip did not short-circuit the remaining selection.
+    let skip_at = outcome
+        .stdout
+        .find("skipped candidate 2")
+        .expect("the skip announcement must be present in stdout");
+    let last_preview_at = outcome
+        .stdout
+        .rfind("not as truth")
+        .expect("at least one compose preview must reach stdout");
+    assert!(
+        skip_at < last_preview_at,
+        "the skip must NOT abort the batch — candidate 5's compose preview must appear \
+         AFTER 'skipped candidate 2' (the batch proceeded past the skip); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the final summary reports the signed-vs-skipped tally for the whole
+    // batch — "2 signed, 1 skipped" (two human-gates held, one was declined).
+    assert!(
+        outcome.stdout.contains("2 signed, 1 skipped"),
+        "expected the final batch summary to report '2 signed, 1 skipped'; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND exactly TWO records landed on the user's OWN PDS — one per SIGNED
+    // candidate (1 and 5); the skipped candidate 2 produced ZERO writes (no
+    // sign, no publish). The skip is fully fault-isolated: it neither persists
+    // a claim nor blocks its neighbors.
+    let records = env.pds.records();
+    assert_eq!(
+        records.len(),
+        2,
+        "a mid-batch skip must publish EXACTLY TWO records (the two signed \
+         candidates); the skipped candidate writes nothing; got {}: {:?}",
+        records.len(),
+        records
+    );
+    for record in &records {
+        assert_eq!(
+            record.collection, "org.openlore.claim",
+            "each published record must be in the org.openlore.claim collection; got {}",
+            record.collection
+        );
+    }
 }
 
 /// SS-9 / Sad (US-SCR-005 Ex 3): an invalid selection list (duplicate index
