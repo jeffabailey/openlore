@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-05-27
+last_updated: 2026-05-28
 
 kpis:
   - id: KPI-1
@@ -81,13 +81,82 @@ kpis:
     baseline_at_ga: "instrumentation ships in slice-01 (day-30 prompt scheduler hook lands in cli); cohort aggregation requires opt-in telemetry endpoint deferred per ADR-010"
     notes: "This is the actual product hypothesis; every other KPI is a leading indicator of this one. PO owns survey copy and day-30 prompt timing. Cohort analysis requires either an opt-in telemetry endpoint or manual aggregation from dogfood users."
 
+  # --- slice-03 (openlore-federated-read), recorded at finalize 2026-05-28 ---
+
+  - id: KPI-FED-1
+    name: "Attribution fidelity (author DID preserved for every federated-query claim)"
+    type: leading
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: "100% — zero attribution loss across all federated-query output surfaces"
+    measurement_method: "integration test (tests/acceptance/federated_query.rs::FQ-1 grouped-by-author) + 5-user think-aloud study at day-30; three-layer anti-merging enforcement (type FederatedRow.author_did non-Option + xtask check-arch SQL rule + behavioral FQ-1/FQ-2/FQ-8)"
+    baseline_at_ga: "MET — FQ-1/FQ-2/FQ-8 GREEN as of slice-03 ship; 0 merged rows observed; also targets P-001 in reader hat"
+    notes: "Leading indicator for the KPI-FED-3 north star (users cannot counter what they cannot attribute). Day-30 think-aloud study owned by nw-product-owner. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-FED-2
+    name: "Zero merged-consensus rows (multi-author claims never collapsed)"
+    type: guardrail
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: "0 occurrences of merged-consensus rendering across all UI surfaces"
+    measurement_method: "release-gate acceptance test (tests/acceptance/federated_query.rs::FQ-8 multi-author multi-record fixture; FQ-2 identical-content-different-author renders as two rows) + adversarial review of every output renderer"
+    baseline_at_ga: "MET — FQ-8 (release-gate) + FQ-2 GREEN as of slice-03 ship; FQ-2 zero-merge assertion reviewer-confirmed genuine (counts cid: field-lines == 1 per row)"
+    notes: "Guardrail — any release with > 0 merged rows is unshippable regardless of leading-indicator movement. CI alert if any run reports > 0 (release-blocking)."
+
+  - id: KPI-FED-3
+    name: "Counter-claim publication rate (J-003b disagreement as first-class artifact)"
+    type: north-star
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: ">= 30% of dogfood cohort publishes >= 1 counter-claim within 30 days of slice-03 release"
+    measurement_method: "author-side tracing event `claim.counter.published{counter_cid, target_cid, target_author_did, reason_len}` per active reader-user + 30-day survey (\"did the counter-claim feel as light as a comment?\")"
+    baseline_at_ga: "per-user GREEN (CC-1 publishes via slice-01 pipeline; CC-5 first-counter framing affordance ships); cohort = YELLOW — pending opt-in telemetry endpoint per DEVOPS D-D17. Implicit baseline is 0 (no counter-claim verb existed before slice-03)."
+    notes: "North star of slice-03; every other KPI-FED is a leading indicator of this one. Kill criterion: < 10% at day-30 forces UX re-investigation before slice-04. Cohort aggregation requires the same opt-in telemetry endpoint deferred per ADR-010 (shared with slice-01 KPI-3/6)."
+
+  - id: KPI-FED-4
+    name: "Zero purge residue (peer remove --purge leaves no peer claims)"
+    type: guardrail
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: "100% — zero residual peer claims from a removed peer in subsequent federated queries"
+    measurement_method: "release-gate acceptance test (tests/acceptance/peer_subscribe.rs::PS-6 atomic hard-purge transaction; integration gate 4) + dogfood log audit (random 5% sample of purge events, monthly)"
+    baseline_at_ga: "MET — PS-6 atomic-purge GREEN as of slice-03 ship (DB rows + per-peer filesystem dir both removed in one transaction per WD-31/ADR-014)"
+    notes: "Guardrail / outcome. PS-8 also enforces the --no-tty --purge refusal (WD-36) so purge cannot be silently scripted at this dogfeed maturity."
+
+  - id: KPI-FED-5
+    name: "End-to-end federation latency (subscribe -> pull -> federated query)"
+    type: leading
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: "<= 90 seconds for a peer publishing <= 20 claims"
+    measurement_method: "author-side timing telemetry: tracing histogram `federation.e2e.duration_seconds` from start of `peer pull` to first row rendered by `graph query --federated`"
+    baseline_at_ga: "per-user GREEN (sequential pull within budget for bounded peer claim sets); cohort = YELLOW — pending opt-in telemetry endpoint per DEVOPS D-D17"
+    notes: "Leading indicator (friction kills the KPI-FED-3 behavior change). P95 dashboard bucketed by peer-cardinality (<=5, 6-20, 21-100, >100). Informational alert if P95 > 180s (escalate to PO; does not block release alone)."
+
+  - id: KPI-FED-6
+    name: "Zero invalid signatures stored (pull-time verification gate)"
+    type: guardrail
+    feature_origin: openlore-federated-read
+    persona: P-002
+    target: "100% — no signature-verification false positive accepted into peer_claims"
+    measurement_method: "release-gate adversarial fixture acceptance test (tests/acceptance/peer_pull.rs::PP-3 tampered-signature rejected; PP-4 CID-mismatch rejected) driving tests/fixtures/peer-adversarial/"
+    baseline_at_ga: "MET — PP-3 (release-gate) + PP-4 + PP-5 (SelfAttribution, WD-40) + PP-6 (CrossAttribution, WD-41) GREEN as of slice-03 ship; signature verify + CID recompute happen at write time"
+    notes: "Guardrail / security. CI alert if any run reports != 100% (release-blocking). CAVEAT: slice-03 verifies against a test-only peer-pubkey seam (OPENLORE_PEER_PUBKEY_HEX_<did>, DV-4); production multibase (z6Mk...) decode from a real PLC DID document is deferred to slice-04+."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
 #   matrix and how mutation-test kill-rate + guardrail KPIs gate version tags.
 #
+#   Slice-03 guardrails: KPI-FED-2 (zero merged rows), KPI-FED-4 (zero purge
+#   residue), KPI-FED-6 (zero invalid signatures stored). All three MET at GA;
+#   all three are release-blocking per the slice-03 disprovers in
+#   docs/feature/openlore-federated-read/discuss/outcome-kpis.md.
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-03): docs/feature/openlore-federated-read/discuss/outcome-kpis.md
+#   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml

@@ -41,19 +41,43 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 
 **Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.**
 
+Shipped slice extensions (no new crates):
+
+- **slice-03 (openlore-federated-read): SHIPPED 2026-05-28 — EXTENSION ONLY,
+  ZERO new crates (WD-26).** Extends the slice-01 crates in place:
+  - `crates/ports`: adds `PeerStoragePort` (new port, WD-27); extends `PdsPort`
+    with peer-read methods (`list_peer_records`, `get_peer_record`, WD-28),
+    `IdentityPort` with `resolve_peer` (WD-29), and `StoragePort` with
+    `query_federated_by_subject`; adds `FederatedRow` (non-`Option`
+    `author_did`), `PeerInfo`, `PeerSubscription`, and the peer-storage outcome/
+    error ADTs.
+  - `crates/adapter-duckdb`: adds `DuckDbPeerStorageAdapter` implementing
+    `PeerStoragePort` (sharing the slice-01 connection pool) + migration v3 with
+    **4 new DuckDB tables** (`peer_subscriptions`, `peer_claims`,
+    `peer_claim_references`, `peer_claim_evidence`) plus a per-peer-DID
+    filesystem partition for auditable hard-purge (WD-31, ADR-014).
+  - `crates/adapter-atproto-did` / `adapter-atproto-pds`: peer DID resolution +
+    peer XRPC reads (ADR-016).
+  - `crates/lexicon` + `crates/claim-domain`: optional top-level `reason` field
+    on `org.openlore.claim` (CID-stable when absent, WD-32, ADR-015) +
+    `normalize_reason` (NFC) + `validate_counter_claim` pure functions (WD-34/35).
+  - `crates/cli`: `peer add | pull | remove`, `claim counter`,
+    `graph query --federated` + `OrientationState` habit affordances.
+  - `xtask`: `no_cross_table_join_elides_author` anti-merging SQL rule +
+    `no_autoconfirm_in_release_build` guard.
+  - See ADR-013..ADR-016, `docs/evolution/openlore-federated-read-evolution.md`,
+    and `docs/feature/openlore-federated-read/design/`.
+
 Future slices extend this inventory (planned / in-progress):
 
 - slice-02 (github-scraper): adds `adapter-github` + `scraper-domain`.
-- **slice-03 (openlore-federated-read): EXTENSION ONLY — no new crates.**
-  Adds `PeerStoragePort` (in `ports`) implemented by `adapter-duckdb`;
-  extends `PdsPort` with peer-read methods and `IdentityPort` with
-  `resolve_peer`; adds 4 DuckDB tables (`peer_subscriptions`,
-  `peer_claims`, `peer_claim_references`, `peer_claim_evidence`); adds
-  optional `reason` field on `org.openlore.claim` Lexicon. See
-  ADR-013..ADR-016 + `docs/feature/openlore-federated-read/design/`.
 - slice-04 (scoring-graph): may swap or augment `adapter-duckdb` with a graph
-  store; revisits ADR-001 / WD-8.
+  store; revisits ADR-001 / WD-8. Also lands real PLC DID-document multibase
+  pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its DV-4).
 - slice-05 (appview-search): adds an indexer service (separate binary).
+
+**Crate count is unchanged by slice-03: 8 production crates + 1 test-support +
+1 xtask binary (same as slice-01; WD-26 holds).**
 
 ## CLI surface (cumulative)
 
@@ -104,6 +128,22 @@ build-fail.
 | I-11 | Workspace dependencies MUST pass cargo-deny advisories, bans, sources, and licenses | `cargo deny check` (CI gate)                   |
 | I-12 | Every git commit on a roadmap step MUST carry a `Step-ID: NN-NN` trailer matching the roadmap | `des-verify-integrity` (Phase 6 gate)          |
 
+**Slice-03 invariants (I-FED-1..7) are slice-03-scoped**, NOT promoted to the
+cross-feature I-1..I-12 set (mirroring how slice-01 kept its feature-scoped
+invariants in its own workspace). They cover the anti-merging guarantee
+(I-FED-1, enforced at three layers per WD-30), the single-publish-path reuse
+(I-FED-5), and CID stability of the optional `reason` field (I-FED-6/7). Detail
+lives in `docs/feature/openlore-federated-read/design/` + ADR-014/ADR-015. If a
+future slice needs one of these enforced cross-feature, promote it to the table
+above in the same commit as the ADR that generalizes it.
+
+## Production dependencies (notable additions)
+
+- `unicode-normalization` (slice-03): pure dependency in `crates/claim-domain`
+  for NFC normalization of the counter-claim `reason` field (WD-35, ADR-015).
+  Required for CID determinism; covered by the existing `deny.toml` MIT/Apache-2.0
+  allowlist. Stays within the pure-core allowlist in `xtask check-arch`.
+
 ## SSOT discipline
 
 - This brief is **cross-feature**. Add a row to **Component Inventory** when a
@@ -120,10 +160,11 @@ build-fail.
 ## Pointers
 
 - ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-016-*.md`
-  (ADR-013..016 proposed by openlore-federated-read DESIGN on 2026-05-27)
+  (ADR-013..016 accepted with openlore-federated-read; shipped 2026-05-28)
 - Slice-01 evolution: `docs/evolution/openlore-foundation-evolution.md`
+- Slice-03 evolution: `docs/evolution/openlore-federated-read-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
-- **Slice-03 (in-progress) architecture design**:
+- Slice-03 architecture design:
   `docs/feature/openlore-federated-read/design/architecture-design.md`
 - KPI contracts: `docs/product/kpi-contracts.yaml`
 - Jobs (JTBD): `docs/product/jobs.yaml`
