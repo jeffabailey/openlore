@@ -1541,10 +1541,123 @@ fn graph_query_weighted_succeeds_with_network_disabled() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert the weighted view renders fully with the network disabled and \
-         NO network call is attempted (I-GRAPH-7 local-first);\n--- graph ---\n{graph:?}"
-    )
+    // The `--weighted` view renders its FULL transparent ranking from the LOCAL
+    // store alone — the same observable surface as the GQE-10 happy path, just
+    // with no reachable network. Asserting the SAME universe as GQE-10
+    // (port-exposed stdout slots) proves scoring is genuinely local read-only,
+    // not merely "exits 0".
+    //
+    // Universe (port-exposed observable surface of the network-disabled
+    // `--weighted` view, all asserted against stdout — the CLI driving-port
+    // observable):
+    //   cli.graph_query.ranking_order        — cargo (1.41) > nixpkgs (1.38) > deno (1.05)
+    //   cli.graph_query.weight_shown          — each pairing displays its WD-77 weight
+    //   cli.graph_query.weight_inputs_shown   — claims + authors + max-confidence + span
+    //   cli.graph_query.no_ml_stated          — the output states "no ML" (WD-71)
+    //   cli.graph_query.never_stored_footer   — the DISPLAY-ONLY / NOT-stored notice (WD-72)
+    //   cli.graph_query.anti_merging          — both deno authors stay individually named
+    //   AND pds.create_record.call_count (0 — no outbound call attempted, I-GRAPH-7)
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: exactly the 4-claim / 3-project worked example.
+    assert_eq!(
+        graph.seeded.len(),
+        4,
+        "fixture precondition: the weighted worked example seeds 4 claims; got {}",
+        graph.seeded.len()
+    );
+
+    // 1. RANKING ORDER — the three projects rank by adherence weight descending
+    //    (cargo 1.41 > nixpkgs 1.38 > deno 1.05), computed from the LOCAL store
+    //    with the network disabled.
+    let cargo_pos = stdout
+        .find("github:rust-lang/cargo")
+        .expect("the network-disabled weighted view must rank github:rust-lang/cargo");
+    let nixpkgs_pos = stdout
+        .find("github:NixOS/nixpkgs")
+        .expect("the network-disabled weighted view must rank github:NixOS/nixpkgs");
+    let deno_pos = stdout
+        .find("github:denoland/deno")
+        .expect("the network-disabled weighted view must rank github:denoland/deno");
+    assert!(
+        cargo_pos < nixpkgs_pos && nixpkgs_pos < deno_pos,
+        "cli.graph_query.ranking_order: expected cargo (1.41) before nixpkgs (1.38) before \
+         deno (1.05) ranked by adherence weight descending — from the LOCAL store with the \
+         network disabled;\n--- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. Each project's WD-77 weight is displayed (reproducible by hand from the
+    //    seeded claims; Gate 2 / KPI-GRAPH-3) — derived locally, no network.
+    for (project, weight) in [
+        ("github:rust-lang/cargo", "1.41"),
+        ("github:NixOS/nixpkgs", "1.38"),
+        ("github:denoland/deno", "1.05"),
+    ] {
+        assert!(
+            stdout.contains(&format!("weight {weight}")),
+            "cli.graph_query.weight_shown: expected {project} to display the documented adherence \
+             weight {weight} from the LOCAL store with the network disabled;\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 3. Each weight is shown WITH its inputs (the transparency contract — a
+    //    weight is never a bare number): deno carries 2 claims / 2 authors; the
+    //    triangulated cargo + nixpkgs carry 1 claim / 1 author each, with their
+    //    max-confidence values, plus Rachel's cross-project span.
+    assert!(
+        stdout.contains("claims  : 2") && stdout.contains("authors: 2"),
+        "cli.graph_query.weight_inputs_shown: expected deno's weight inputs to show \
+         claims: 2 + authors: 2 (network disabled);\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("claims  : 1") && stdout.contains("authors: 1"),
+        "cli.graph_query.weight_inputs_shown: expected the single-author cargo/nixpkgs pairings \
+         to show claims: 1 + authors: 1 (network disabled);\n--- stdout ---\n{stdout}"
+    );
+    for max_conf in ["0.91", "0.88", "0.55"] {
+        assert!(
+            stdout.contains(&format!("max-confidence {max_conf}")),
+            "cli.graph_query.weight_inputs_shown: expected the max-confidence {max_conf} displayed \
+             alongside its weight (network disabled);\n--- stdout ---\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("spans") && stdout.contains("did:plc:rachel-test"),
+        "cli.graph_query.weight_inputs_shown: expected the cross-project span line naming \
+         did:plc:rachel-test spanning two projects (network disabled);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. The transparent no-ML formula is printed (WD-71) — the auditable
+    //    formula contract survives the network-disabled local read.
+    assert!(
+        stdout.contains("no ML"),
+        "cli.graph_query.no_ml_stated: expected the output to state 'no ML' (WD-71 transparency, \
+         network disabled);\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. The never-stored footer renders: weights are a DISPLAY-ONLY aggregate
+    //    computed at query time, NOT stored/signed/published (WD-72) — the
+    //    local-first read carries the same honest framing as the networked path.
+    assert!(
+        stdout.contains("DISPLAY-ONLY") && stdout.contains("NOT stored"),
+        "cli.graph_query.never_stored_footer: expected the footer to state weights are a \
+         DISPLAY-ONLY aggregate view, NOT stored (WD-72, network disabled);\n--- stdout ---\n{stdout}"
+    );
+
+    // 6. Anti-merging (KPI-GRAPH-2): the ranking never collapses deno's two
+    //    authors into a faceless consensus — both stay individually nameable.
+    assert!(
+        stdout.contains("did:plc:tobias-test") && stdout.contains("did:plc:maria-test"),
+        "cli.graph_query.anti_merging: expected deno's two contributing authors (Tobias + Maria) \
+         to remain individually attributed in the network-disabled weighted view;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 7. I-GRAPH-7 local-first: NO outbound PDS call was attempted. The weighted
+    //    scoring read is a pure LOCAL read over the seeded DuckDB — the fake PDS
+    //    recorded zero create_record calls (port-exposed name
+    //    pds.create_record.call_count).
+    assert_no_pds_call_was_made(&env);
 }
 
 // =============================================================================
