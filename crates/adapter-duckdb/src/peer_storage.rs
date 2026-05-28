@@ -627,10 +627,55 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
 
     fn get_peer_claim_by_cid(
         &self,
-        _cid: &Cid,
+        cid: &Cid,
     ) -> Result<Option<(Did, SignedClaim)>, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::get_peer_claim_by_cid — driven by PP-* scenarios")
+        // Read the row's attribution + artifact path under the shared lock,
+        // then read the authoritative `SignedClaim` from the on-disk
+        // artifact (the same serde shape `write_peer_claim_artifact` wrote).
+        // Reading the artifact (rather than reconstructing from the
+        // denormalized side-tables) keeps the returned claim byte-faithful
+        // to what was cached — its CID + signature still round-trip.
+        //
+        // The (Did, SignedClaim) pair is returned together so a peer claim
+        // is NEVER separated from its attribution (anti-merging layer-1).
+        let row: Option<(String, String)> = {
+            let conn = self.lock_conn()?;
+            conn.query_row(
+                "SELECT author_did, signed_record_path FROM peer_claims WHERE cid = ?",
+                duckdb::params![cid.0],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .map(Some)
+            .or_else(|err| match err {
+                duckdb::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(PeerStorageError::DuckDb(format!(
+                    "query peer_claims by cid {}: {other}",
+                    cid.0
+                ))),
+            })?
+        };
+
+        let Some((author_did, signed_record_path)) = row else {
+            return Ok(None);
+        };
+
+        // `signed_record_path` is stored relative to the storage root
+        // (`peer_claims/<encoded_did>/<cid>.json`). The `peer_claims_root`
+        // already points at `<root>/peer_claims`, so strip that prefix to
+        // resolve the artifact under the held root.
+        let relative = signed_record_path
+            .strip_prefix("peer_claims/")
+            .unwrap_or(&signed_record_path);
+        let artifact = self.peer_claims_root.join(relative);
+        let bytes = std::fs::read(&artifact).map_err(PeerStorageError::Io)?;
+        let signed: SignedClaim = serde_json::from_slice(&bytes).map_err(|err| {
+            PeerStorageError::DuckDb(format!(
+                "deserialize peer claim artifact {}: {err}",
+                artifact.display()
+            ))
+        })?;
+
+        Ok(Some((Did(author_did), signed)))
     }
 
     fn list_peer_claims_by_subject(

@@ -1,5 +1,5 @@
 //! `claim counter <target_cid> --reason "..."` — author a counter-claim
-//! against another claim (slice-03; US-FED / ADR-015).
+//! against another claim (slice-03; US-FED-004 / ADR-013 / ADR-015).
 //!
 //! A counter-claim is the user's OWN signed claim that carries a
 //! `references[]` entry of type `counters` pointing at `target_cid`, plus
@@ -7,20 +7,40 @@
 //! counter-claims coexist with the claims they counter (the "never
 //! overwrite" UX contract; compose preview literal text).
 //!
-//! ## Single-publish-path (I-FED-5 / WD-22)
+//! ## Pipeline (architecture §5.2)
 //!
-//! The publish step of `claim counter` MUST reuse `VerbClaimPublish`
-//! internals — there is NO parallel publish code path (preserves ADR-003
-//! single-publish-path). This bootstrap step (01-04) declares the handler
-//! ONLY; it does NOT fork publish logic. The live wiring through
-//! `claim_domain::validate_counter_claim` → compose preview → sign →
-//! `claim_publish` internals lands with the CC-* acceptance scenarios in
-//! a later slice-03 phase.
+//! construct (mirror target body + Counters reference + reason)
+//!   → `claim_domain::normalize_reason` (NFC; WD-35)
+//!   → `claim_domain::validate_counter_claim` (pure core; self-counter +
+//!      missing-reason rejection BEFORE the preview)
+//!   → render compose preview (BOTH framing literals + reason verbatim +
+//!      `counters: <cid> (by <peer>)`)
+//!   → two-prompt (Enter to sign; Y to publish — ADR-003)
+//!   → canonicalize / compute_cid / sign (SAME pure-core path as
+//!      `claim_add`)
+//!   → `claim_publish::publish_signed_claim` internals (single publish
+//!      code path; NO parallel publish — I-FED-5 / WD-22 / WD-33).
 //!
-//! SCAFFOLD: true (slice-03)
+//! ## Single-publish-path (I-FED-5 / WD-22 / WD-33)
+//!
+//! The publish step funnels through `claim_publish::publish_signed_claim`,
+//! the SAME helper `claim_add`'s Y branch and `claim_retract` use. There
+//! is no parallel publish code path. The counter-claim is the user's OWN
+//! artifact: it is published to the user's OWN PDS and stored in the
+//! user's OWN `claims` table (NOT `peer_claims`), with `reason` in the
+//! signed payload (canonicalize folds it in — ADR-006 lex order).
 
-use anyhow::Result;
+use std::io::Write;
 
+use anyhow::{anyhow, Context, Result};
+use claim_domain::{
+    canonicalize, compute_cid, normalize_reason, validate_counter_claim, Cid, ClaimLookup,
+    ClaimReference, Did, ReferenceType, SignedClaim, UnsignedClaim,
+};
+use ports::{PeerStoragePort, StoragePort};
+
+use crate::io::prompt_line;
+use crate::render::{render_counter_compose_preview, ComposedCounterClaim};
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim counter` verb (mirrors the clap
@@ -42,16 +62,237 @@ pub struct ClaimCounterOutcome {
 }
 
 /// Run the `claim counter` verb.
-///
-/// SCAFFOLD: true (slice-03) — the body is a `todo!()` stub at this
-/// bootstrap step. The CC-* acceptance scenarios drive the real
-/// implementation (validate_counter_claim → compose preview → sign →
-/// VerbClaimPublish internals) in a later slice-03 phase.
-pub fn run(_wiring: &Wiring, _args: &ClaimCounterArgs) -> Result<ClaimCounterOutcome> {
-    // SCAFFOLD: true (slice-03)
-    todo!(
-        "VerbClaimCounter — wire claim_domain::normalize_reason + \
-         validate_counter_claim → compose preview → sign → VerbClaimPublish \
-         internals (I-FED-5 single-publish-path). Driven by CC-* scenarios."
-    )
+pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutcome> {
+    // Step 1: NFC-normalize the reason (WD-35). The normalized bytes are
+    // what get displayed AND signed, so a copy-pasted decomposed accent
+    // and a precomposed one land on the same CID.
+    let reason = normalize_reason(&args.reason);
+
+    // Step 2: resolve the target across BOTH stores (own `claims` first,
+    // then the peer cache). We need the target's author DID for the
+    // `counters: <cid> (by <peer>)` preview line AND a `ClaimLookup` for
+    // the pure-core self-counter check. Resolving the target also gives us
+    // the body we mirror (subject/predicate/object) — a counter-claim is a
+    // meta-claim ABOUT the original assertion.
+    let target_cid = Cid(args.cid.clone());
+    let resolved = resolve_target(wiring, &target_cid)?.ok_or_else(|| {
+        anyhow!(
+            "no claim with cid {} found in your own store or your peer cache. \
+             Pull the peer first (`openlore peer pull`) or check the CID.",
+            args.cid
+        )
+    })?;
+
+    // Step 3: build the unsigned counter-claim. Body mirrors the target
+    // (the counter is ABOUT that assertion); confidence = 1.0 (you ARE
+    // certain you disagree); evidence = [] (the `reason` + the Counters
+    // pointer ARE the body); composed_at from the clock port for a fresh
+    // timestamp distinct from the target.
+    let confidence: claim_domain::Confidence = serde_json::from_value(serde_json::json!(1.0))
+        .map_err(|e| anyhow!("encoding confidence 1.0 for counter-claim: {e}"))?;
+    let unsigned = UnsignedClaim {
+        subject: resolved.claim.unsigned.subject.clone(),
+        predicate: resolved.claim.unsigned.predicate.clone(),
+        object: resolved.claim.unsigned.object.clone(),
+        evidence: Vec::new(),
+        confidence,
+        author_did: wiring.identity.author_did().clone(),
+        composed_at: wiring.clock.now_utc().to_rfc3339(),
+        references: vec![ClaimReference {
+            ref_type: ReferenceType::Counters,
+            cid: target_cid.clone(),
+        }],
+        reason: Some(reason.clone()),
+    };
+
+    // Step 4: pure-core validation BEFORE the preview (WD-34). Catches the
+    // missing-reason + self-counter rejections so the user sees a clear
+    // error instead of a useless preview. The lookup spans BOTH stores so
+    // countering one's OWN claim (in `claims`) is rejected too.
+    let lookup = CombinedClaimLookup {
+        storage: wiring.storage.as_ref(),
+        peer_storage: wiring.peer_storage.as_ref(),
+    };
+    let current_user = wiring.identity.author_did().clone();
+    validate_counter_claim(&unsigned, &lookup, &current_user).map_err(|e| anyhow!("{e}"))?;
+
+    // Step 5: render the compose preview (BOTH framing literals + the
+    // `counters: <cid> (by <peer>)` line + the reason verbatim, wrapped at
+    // 78 cols). Print to stdout BEFORE the prompts so the user reviews
+    // before confirming.
+    let preview = render_counter_compose_preview(&ComposedCounterClaim {
+        target_cid: target_cid.0.clone(),
+        target_author_did: bare_did(&resolved.author_did.0),
+        reason,
+        author_did: unsigned.author_did.0.clone(),
+        composed_at: unsigned.composed_at.clone(),
+    });
+    {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(preview.as_bytes())?;
+        stdout.flush()?;
+    }
+
+    // Step 6: two-prompt (ADR-003). Enter to sign; EOF before any input is
+    // a clean cancel (no side effects, exit 0).
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    let sign_prompt = "\nPress Enter to sign this counter-claim locally (or Ctrl-C to cancel): ";
+    let confirmation = prompt_line(&mut stdout, &mut stdin, sign_prompt)?;
+    if confirmation.is_none() {
+        return Ok(ClaimCounterOutcome {
+            exit_code: 0,
+            stdout: String::new(),
+        });
+    }
+
+    // Step 7: canonicalize → compute_cid → sign → persist. SAME pure-core
+    // path `claim_add` uses; canonicalize folds the `reason` into the
+    // bytes so the CID + signature cover it (ADR-006 lex order).
+    let canonical_bytes =
+        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing counter-claim: {e}"))?;
+    let unsigned_cid = compute_cid(&canonical_bytes);
+    writeln!(stdout, "Computing claim CID {}", unsigned_cid.0)?;
+    stdout.flush()?;
+
+    let signature = wiring
+        .identity
+        .sign(&unsigned_cid)
+        .map_err(|e| anyhow!("signing counter-claim: {e}"))?;
+    let signed = SignedClaim {
+        unsigned,
+        signature,
+    };
+
+    // The counter-claim is the user's OWN artifact — it lands in the user's
+    // OWN `claims` table + `claims/<cid>.json` (NOT peer_claims).
+    wiring
+        .storage
+        .write_signed_claim(&signed)
+        .with_context(|| {
+            format!(
+                "persisting counter-claim {} to local store",
+                signed.signature.signed_cid.0
+            )
+        })?;
+    let artifact_path = wiring
+        .paths
+        .claims_dir()
+        .join(format!("{}.json", signed.signature.signed_cid.0));
+    writeln!(
+        stdout,
+        "Written to local store: {}",
+        artifact_path.display()
+    )?;
+    stdout.flush()?;
+
+    // Step 8: SEPARATE publish prompt (ADR-003 two-prompt contract). Y/y
+    // publishes; anything else (n/N/Enter/EOF) is a clean decline (local
+    // artifact stays put, no PDS call, exit 0).
+    let publish_prompt = "\nPublish this counter-claim to your PDS now? (y/N): ";
+    let publish_answer = prompt_line(&mut stdout, &mut stdin, publish_prompt)?;
+    let confirmed_publish = matches!(
+        publish_answer.as_deref().map(str::trim),
+        Some("y") | Some("Y") | Some("yes") | Some("YES")
+    );
+    if confirmed_publish {
+        drop(stdout);
+        drop(stdin);
+        // Single publish code path (I-FED-5 / WD-22 / WD-33): the SAME
+        // helper the standalone `claim publish`, `claim add` Y branch, and
+        // `claim retract` use. Published to the user's OWN PDS.
+        match crate::verbs::claim_publish::publish_signed_claim(wiring, &signed) {
+            Ok(publish_outcome) => {
+                let rendered =
+                    crate::verbs::claim_publish::render_publish_success(&publish_outcome);
+                print!("{rendered}");
+            }
+            Err(err) => {
+                // The local artifact is already on disk (local-first
+                // invariant — the sign + write path ran BEFORE this
+                // publish and is NOT rolled back). Route through the shared
+                // renderer so the retry guidance matches the other verbs.
+                eprint!(
+                    "{}",
+                    crate::verbs::claim_publish::render_publish_error(&err)
+                );
+                return Ok(ClaimCounterOutcome {
+                    exit_code: 1,
+                    stdout: String::new(),
+                });
+            }
+        }
+    }
+
+    Ok(ClaimCounterOutcome {
+        exit_code: 0,
+        stdout: String::new(),
+    })
+}
+
+/// The target of a counter, resolved from either store, paired with its
+/// author DID. Carrying the author alongside the claim is the anti-merging
+/// discipline: a peer claim is never separated from its attribution.
+struct ResolvedTarget {
+    claim: SignedClaim,
+    author_did: Did,
+}
+
+/// Resolve `target_cid` across BOTH stores: the user's OWN `claims` table
+/// first, then the peer cache. Returns the claim + its author DID, or
+/// `None` if neither store knows it.
+fn resolve_target(wiring: &Wiring, target_cid: &Cid) -> Result<Option<ResolvedTarget>> {
+    // Own store: the author is the local user.
+    if let Some(own) = wiring
+        .storage
+        .read_signed_claim(target_cid)
+        .with_context(|| format!("looking up own claim for cid {}", target_cid.0))?
+    {
+        let author_did = own.unsigned.author_did.clone();
+        return Ok(Some(ResolvedTarget {
+            claim: own,
+            author_did,
+        }));
+    }
+    // Peer cache: `get_peer_claim_by_cid` returns the attribution pair so
+    // we never get a claim without its author DID (anti-merging layer-1).
+    if let Some((author_did, claim)) = wiring
+        .peer_storage
+        .get_peer_claim_by_cid(target_cid)
+        .map_err(|e| anyhow!("looking up peer claim for cid {}: {e}", target_cid.0))?
+    {
+        return Ok(Some(ResolvedTarget { claim, author_did }));
+    }
+    Ok(None)
+}
+
+/// Strip a `#fragment` from a DID, returning the bare DID for display.
+fn bare_did(did: &str) -> String {
+    did.split('#').next().unwrap_or(did).to_string()
+}
+
+/// A `ClaimLookup` spanning BOTH the author store AND the peer cache. The
+/// pure-core `validate_counter_claim` self-counter check resolves the
+/// target through this so countering one's OWN claim (in `claims`) is
+/// rejected even though the target may equally live in `peer_claims`.
+struct CombinedClaimLookup<'a> {
+    storage: &'a dyn StoragePort,
+    peer_storage: &'a dyn PeerStoragePort,
+}
+
+impl<'a> ClaimLookup for CombinedClaimLookup<'a> {
+    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
+        if let Ok(Some(own)) = self.storage.read_signed_claim(cid) {
+            return Some(own);
+        }
+        // The peer-store lookup returns (author_did, claim); the claim
+        // already carries `author_did` inside `unsigned`, so the
+        // self-counter check (which inspects `resolved.unsigned.author_did`)
+        // sees the right attribution.
+        self.peer_storage
+            .get_peer_claim_by_cid(cid)
+            .ok()
+            .flatten()
+            .map(|(_author, claim)| claim)
+    }
 }

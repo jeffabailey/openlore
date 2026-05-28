@@ -45,7 +45,240 @@ use support::*;
 /// @us-fed-004 @real-io @driving_port @j-003b @j-001 @kpi-fed-3 @happy
 #[test]
 fn counter_claim_compose_signs_and_publishes_via_slice_01_pipeline_with_required_framing() {
-    todo!("DELIVER (slice-03): wire VerbClaimCounter → claim_domain::normalize_reason + validate_counter_claim → TtyIO compose preview (assert literals 'not as truth', 'counter-claims coexist, never overwrite', 'counters: <cid> (by <peer_did>)', and the --reason text verbatim) → on Enter call SAME canonicalize/compute_cid/sign as VerbClaimAdd → on Y call VerbClaimPublish internals (single-publish-path; NOT a parallel code path; ADR-003 + I-FED-5). Assert: counter-claim file at claims/<cid>.json, peer_claims UNCHANGED (the counter is the user's OWN), subsequent graph query --federated annotates both rows with bidirectional counters / countered-by. Drives integration gate 3 (counter_target_cid_round_trip).")
+    let env = TestEnv::initialized();
+
+    // GIVEN: Rachel (a peer) publishes three honest, REAL-signed claims;
+    // the user subscribes and pulls them into `peer_claims`. The pull
+    // pipeline (PP-1) recomputes + verifies each CID, so the target CID we
+    // counter is the genuine on-disk peer-claim CID — exactly what the
+    // round-trip gate (integration gate 3) needs.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(records.len(), 3, "Rachel publishes exactly three claims");
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Subscribe + pull through the real verbs so peer_claims is populated
+    // exactly as a user would create it.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    // The target we counter is the first of Rachel's three peer claims.
+    // We recompute its CID locally exactly the way the pull pipeline did,
+    // so the test owns the round-trip oracle (integration gate 3).
+    let target_cid = first_peer_claim_cid(peer_did, rachel_seed);
+
+    // Universe BEFORE the counter: the peer cache holds Rachel's three
+    // claims; the user's own author `claims` table is at its post-pull
+    // count; the user's own PDS has accepted zero records.
+    let author_claims_before = author_claim_count_now(&env);
+    assert_no_pds_call_was_made(&env);
+
+    // WHEN: the user composes a counter-claim against Rachel's claim with a
+    // free-text reason, then confirms BOTH prompts (Enter to sign, Y to
+    // publish). The reason carries a decomposed accent so the NFC
+    // normalization beat (WD-35) is exercised end-to-end.
+    let reason = "The cited cafe\u{0301} benchmark was retracted by upstream maintainers.";
+    let outcome = run_openlore_with_peer_resolver_stdin(
+        &env,
+        &["claim", "counter", &target_cid, "--reason", reason],
+        peer_did,
+        peer.endpoint_url(),
+        "\nY\n",
+    );
+
+    // THEN (criterion 1): exit 0.
+    assert_eq!(
+        outcome.status, 0,
+        "claim counter must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN (criterion 2): the compose preview carries BOTH framing literals
+    // — the inherited "not as truth" (I-7) AND the slice-03 content-frozen
+    // "counter-claims coexist, never overwrite".
+    assert_compose_preview_contains_not_as_truth(&outcome);
+    assert!(
+        outcome
+            .stdout
+            .contains("counter-claims coexist, never overwrite"),
+        "compose preview must contain the slice-03 content-frozen literal \
+         \"counter-claims coexist, never overwrite\";\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN (criterion 3): the preview names the target + its peer author —
+    // "counters: <target_cid> (by <peer_did>)".
+    assert!(
+        outcome
+            .stdout
+            .contains(&format!("counters: {target_cid} (by {peer_did})")),
+        "compose preview must name the countered target + its peer author as \
+         \"counters: {target_cid} (by {peer_did})\";\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN (criterion 4): the --reason text appears verbatim in the preview,
+    // NFC-normalized (the decomposed accent composes to the precomposed
+    // form before display + sign).
+    let normalized_reason: String = claim_domain::normalize_reason(reason);
+    assert!(
+        outcome.stdout.contains(&normalized_reason),
+        "compose preview must contain the NFC-normalized --reason verbatim;\n\
+         expected: {normalized_reason:?}\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN (criterion 5 — integration gate 3 `counter_target_cid_round_trip`):
+    // the published counter-claim lands in the user's OWN author `claims`
+    // table (NOT peer_claims), and its signed payload carries a
+    // references[] entry { type: Counters, cid: target_cid } — the target
+    // CID in the preview == the references[].cid in the signed artifact.
+    assert_eq!(
+        author_claim_count_now(&env),
+        author_claims_before + 1,
+        "the counter-claim must add exactly ONE row to the user's OWN author \
+         `claims` table (it is the user's own published artifact, not a peer claim)"
+    );
+    let counter_cid = parse_counter_claim_cid(&outcome.stdout);
+    assert_counter_claim_references(&env, &counter_cid, &target_cid, &normalized_reason);
+
+    // THEN (criterion 6 — anti-merging): peer_claims is UNCHANGED — the
+    // counter is the user's own artifact, never written into the peer cache.
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    // THEN (criterion 7 — single-publish-path / WD-44): the counter-claim
+    // was published to the user's OWN PDS exactly once, and NO write was
+    // made against the peer's PDS (only the prior pull's reads). The user's
+    // own fake PDS now holds the one counter-claim record.
+    let counter_at_uri = format!(
+        "at://{}/org.openlore.claim/{counter_cid}",
+        env.identity.author_did()
+    );
+    assert_pds_contains_record_at(&env, &counter_at_uri);
+    assert_eq!(
+        env.pds.records().len(),
+        1,
+        "single-publish-path (I-FED-5): the user's OWN PDS must hold exactly ONE \
+         record (the counter-claim) — no parallel publish path;\n actual: {:?}",
+        env.pds.records()
+    );
+}
+
+/// Recompute the CID of the FIRST of Rachel's three honest peer claims.
+/// Mirrors `build_verifiable_peer_records` byte-for-byte so the test owns
+/// the round-trip oracle (integration gate 3) — the value MUST equal the
+/// `rkey` the peer published and the CID `peer pull` stored.
+fn first_peer_claim_cid(peer_did: &str, peer_seed: [u8; 32]) -> String {
+    use claim_domain::{canonicalize, compute_cid, Confidence, Did, UnsignedClaim};
+
+    let confidence: Confidence =
+        serde_json::from_value(serde_json::json!(0.42)).expect("confidence value is well-formed");
+    let unsigned = UnsignedClaim {
+        subject: "github:rust-lang/cargo".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.dependency-pinning".to_string(),
+        evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+        confidence,
+        author_did: Did(format!("{peer_did}#org.openlore.application")),
+        composed_at: "2026-05-22T09:18:44Z".to_string(),
+        references: Vec::new(),
+        reason: None,
+    };
+    let _ = peer_seed; // CID is content-derived; the seed only signs.
+    let canonical = canonicalize(&unsigned).expect("canonicalize first peer claim");
+    compute_cid(&canonical).0
+}
+
+/// Parse the `Computing claim CID <cid>` marker the sign step emits to
+/// recover the counter-claim's own CID (mirrors the slice-01 WS-6 parser).
+/// Uses a substring search rather than a line-prefix match because the
+/// marker may share a line with the (newline-free) sign prompt.
+fn parse_counter_claim_cid(stdout: &str) -> String {
+    const MARKER: &str = "Computing claim CID ";
+    let start = stdout
+        .find(MARKER)
+        .map(|i| i + MARKER.len())
+        .unwrap_or_else(|| {
+            panic!("expected a `Computing claim CID <cid>` marker in stdout;\n--- stdout ---\n{stdout}")
+        });
+    stdout[start..]
+        .split_whitespace()
+        .next()
+        .expect("CID token after the marker")
+        .to_string()
+}
+
+/// Universe-bound: count rows in the user's OWN author `claims` table.
+/// Port-exposed name: `author_claims.row_count`. Raw SQL is acceptable in
+/// test-support; production goes through StoragePort.
+fn author_claim_count_now(env: &TestEnv) -> usize {
+    let conn =
+        duckdb::Connection::open(env.duckdb_path()).expect("open DuckDB for author-claims count");
+    let total: i64 = conn
+        .query_row("SELECT count(*) FROM claims", [], |r| r.get(0))
+        .expect("count author claims");
+    total.max(0) as usize
+}
+
+/// Universe-bound: "the on-disk counter-claim artifact at
+/// `claims/<counter_cid>.json` deserializes to a SignedClaim whose
+/// references[] contains { type: Counters, cid: target_cid } AND whose
+/// signed payload carries the NFC-normalized reason verbatim (so the CID
+/// and signature cover the reason — ADR-006 lex order)."
+fn assert_counter_claim_references(
+    env: &TestEnv,
+    counter_cid: &str,
+    target_cid: &str,
+    normalized_reason: &str,
+) {
+    let artifact = env.claims_dir().join(format!("{counter_cid}.json"));
+    let bytes = std::fs::read(&artifact).unwrap_or_else(|e| {
+        panic!(
+            "expected counter-claim file at {}; got {e}",
+            artifact.display()
+        )
+    });
+    let signed: claim_domain::SignedClaim = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("deserialize counter-claim at {}: {e}", artifact.display()));
+
+    let has_counters = signed.unsigned.references.iter().any(|r| {
+        matches!(r.ref_type, claim_domain::ReferenceType::Counters) && r.cid.0 == target_cid
+    });
+    assert!(
+        has_counters,
+        "the counter-claim must carry references[] {{type=Counters, cid={target_cid}}} \
+         (integration gate 3 round-trip); actual references={:?}",
+        signed.unsigned.references
+    );
+    assert_eq!(
+        signed.unsigned.reason.as_deref(),
+        Some(normalized_reason),
+        "the signed payload MUST carry the NFC-normalized reason verbatim so the \
+         CID + signature cover it (ADR-006 lex order)"
+    );
 }
 
 // =============================================================================
@@ -104,7 +337,8 @@ fn counter_claim_rejects_self_counter_with_retract_hint() {
 ///
 /// @us-fed-004 @real-io @driving_port @j-003b @habit @wd-43
 #[test]
-fn counter_claim_first_invocation_renders_one_time_framing_block_then_omits_on_subsequent_invocations() {
+fn counter_claim_first_invocation_renders_one_time_framing_block_then_omits_on_subsequent_invocations(
+) {
     todo!("DELIVER (slice-03): wire OrientationState.first_counter_claim_completed_at check in VerbClaimCounter; assert framing block present in first invocation stdout AND absent in second invocation stdout AND identity.toml gains the timestamp key after success. Confirms WD-43 once-per-user (not first-3-times) lock.")
 }
 

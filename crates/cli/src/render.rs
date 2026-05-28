@@ -59,6 +59,88 @@
 
 use claim_domain::{Cid, SignedClaim};
 
+/// Inherited slice-01 framing literal (I-7 / WD-6): a claim is asserted by
+/// you, NOT as truth. Content-frozen; do NOT paraphrase.
+pub const NOT_AS_TRUTH_LITERAL: &str = "not as truth";
+
+/// Slice-03 content-frozen framing literal for counter-claims: a counter
+/// NEVER overwrites its target — both coexist. Pinned by US-FED-004 AC;
+/// do NOT paraphrase. The compose preview MUST carry it verbatim.
+pub const COUNTER_COEXIST_LITERAL: &str = "counter-claims coexist, never overwrite";
+
+/// Pure data shape the counter-claim compose preview renders. Mirrors the
+/// fields the user composed plus the countered target + its author DID, so
+/// the render layer stays decoupled from the canonical `UnsignedClaim`.
+#[derive(Debug, Clone)]
+pub struct ComposedCounterClaim {
+    /// The countered target's CID.
+    pub target_cid: String,
+    /// The bare DID of the target's author (the "peer" being countered).
+    pub target_author_did: String,
+    /// The NFC-normalized free-text reason (WD-35) — shown verbatim.
+    pub reason: String,
+    /// The user's own author DID (composing the counter).
+    pub author_did: String,
+    /// RFC3339 UTC compose timestamp (ClockPort::now_utc()).
+    pub composed_at: String,
+}
+
+/// Pure function: render the counter-claim compose preview. Three
+/// load-bearing contracts (US-FED-004 AC):
+///
+/// 1. BOTH framing literals appear: the inherited [`NOT_AS_TRUTH_LITERAL`]
+///    (I-7) AND the slice-03 [`COUNTER_COEXIST_LITERAL`].
+/// 2. The countered target + its author are named on one line:
+///    `counters: <target_cid> (by <peer_did>)`.
+/// 3. The `--reason` text appears verbatim (NFC-normalized upstream),
+///    word-wrapped at 78 columns so the preview stays terminal-friendly.
+pub fn render_counter_compose_preview(counter: &ComposedCounterClaim) -> String {
+    let mut out = String::new();
+    // Framing line 1 — inherited "not as truth" (I-7).
+    out.push_str(&format!(
+        "Compose preview (a counter-claim is asserted by you, {NOT_AS_TRUTH_LITERAL})\n"
+    ));
+    // Framing line 2 — slice-03 "counter-claims coexist, never overwrite".
+    out.push_str(&format!("  ({COUNTER_COEXIST_LITERAL})\n"));
+    // The countered target + its peer author.
+    out.push_str(&format!(
+        "  counters: {} (by {})\n",
+        counter.target_cid, counter.target_author_did
+    ));
+    out.push_str(&format!("  author:     {}\n", counter.author_did));
+    out.push_str(&format!("  composedAt: {}\n", counter.composed_at));
+    // The reason, wrapped at 78 cols, shown verbatim under a labeled block.
+    out.push_str("  reason:\n");
+    for line in wrap_at(&counter.reason, 78) {
+        out.push_str(&format!("    {line}\n"));
+    }
+    out
+}
+
+/// Word-wrap `text` to at most `width` columns per line, breaking on ASCII
+/// spaces. A single word longer than `width` is emitted on its own line
+/// uncut (we never split inside a word — that could corrupt a URL or CID).
+/// Pure helper; the reason text is shown verbatim, only line-broken.
+fn wrap_at(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split(' ') {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// One claim plus the set of CIDs that reference it back-pointer-style.
 /// Built by the verb (graph_query) from
 /// `StoragePort::query_referencing(claim.signature.signed_cid)` and
@@ -225,6 +307,72 @@ mod tests {
             rendered.contains("confidence:  0.86"),
             "expected confidence rendered as 0.86; got:\n{rendered}"
         );
+    }
+
+    /// US-FED-004 AC: the counter-claim compose preview carries BOTH
+    /// framing literals, names the countered target + its peer author, and
+    /// shows the reason verbatim. Pins the load-bearing compose UX copy
+    /// without spawning a subprocess.
+    #[test]
+    fn render_counter_compose_preview_contains_both_framing_literals_and_target() {
+        let counter = ComposedCounterClaim {
+            target_cid: "bafytargetcid001".to_string(),
+            target_author_did: "did:plc:rachel-test".to_string(),
+            reason: "The cited benchmark was retracted by upstream.".to_string(),
+            author_did: "did:plc:test-jeff#org.openlore.application".to_string(),
+            composed_at: "2026-05-28T09:42:11+00:00".to_string(),
+        };
+        let preview = render_counter_compose_preview(&counter);
+        assert!(
+            preview.contains(NOT_AS_TRUTH_LITERAL),
+            "preview must contain the inherited 'not as truth' literal (I-7); got:\n{preview}"
+        );
+        assert!(
+            preview.contains(COUNTER_COEXIST_LITERAL),
+            "preview must contain the slice-03 'counter-claims coexist, never overwrite' \
+             literal; got:\n{preview}"
+        );
+        assert!(
+            preview.contains("counters: bafytargetcid001 (by did:plc:rachel-test)"),
+            "preview must name the countered target + its peer author; got:\n{preview}"
+        );
+        assert!(
+            preview.contains("The cited benchmark was retracted by upstream."),
+            "preview must show the reason verbatim; got:\n{preview}"
+        );
+    }
+
+    /// The reason is word-wrapped at 78 columns: no rendered line of the
+    /// reason block exceeds 78 chars (plus the 4-space indent), and the
+    /// full reason survives concatenation (verbatim, only line-broken).
+    #[test]
+    fn render_counter_compose_preview_wraps_reason_at_78_cols() {
+        let long_reason = "word ".repeat(40);
+        let long_reason = long_reason.trim().to_string();
+        let counter = ComposedCounterClaim {
+            target_cid: "bafytargetcid".to_string(),
+            target_author_did: "did:plc:rachel-test".to_string(),
+            reason: long_reason.clone(),
+            author_did: "did:plc:test-jeff".to_string(),
+            composed_at: "2026-05-28T09:42:11+00:00".to_string(),
+        };
+        let preview = render_counter_compose_preview(&counter);
+        // Each reason line (the 4-space-indented ones) <= 78 cols of content.
+        for line in preview.lines() {
+            if let Some(content) = line.strip_prefix("    ") {
+                assert!(
+                    content.chars().count() <= 78,
+                    "reason line exceeds 78 cols: {content:?}"
+                );
+            }
+        }
+        // The reason words survive verbatim (rejoined across wrap breaks).
+        let rejoined: String = preview
+            .lines()
+            .filter_map(|l| l.strip_prefix("    "))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(rejoined, long_reason, "reason must survive wrap verbatim");
     }
 
     /// Every compose-time field appears in the output byte-for-byte.

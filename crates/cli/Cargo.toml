@@ -112,3 +112,12 @@ harness = true
 name = "peer_pull"
 path = "../../tests/acceptance/peer_pull.rs"
 harness = true
+
+# Slice-03 subprocess acceptance (counter-claim authoring — US-FED-004).
+# Drives the real `openlore` binary via `assert_cmd` + `FakePeerPds` +
+# `FakePds`. Step 05-01 activates the CC-1 scenario (LOAD-BEARING J-003b
+# authoring beat; KPI-FED-3 north star); CC-2..CC-6 stay RED (`todo!()`).
+[[test]]
+name = "counter_claim"
+path = "../../tests/acceptance/counter_claim.rs"
+harness = true

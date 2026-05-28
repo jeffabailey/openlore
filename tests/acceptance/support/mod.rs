@@ -546,6 +546,53 @@ pub fn run_openlore_with_peer_resolver(
     }
 }
 
+/// Like [`run_openlore_with_peer_resolver`] but feeds `stdin_lines` on
+/// stdin so the two-prompt counter-claim flow (sign + publish) can be
+/// confirmed. The peer-resolver seam lets the counter verb resolve the
+/// target peer's DID for the `counters: <cid> (by <peer_did>)` preview
+/// line. Used by CC-1: pass "\nY\n" to confirm Enter (sign) then Y (publish).
+pub fn run_openlore_with_peer_resolver_stdin(
+    env: &TestEnv,
+    args: &[&str],
+    peer_did: &str,
+    peer_endpoint: &str,
+    stdin_lines: &str,
+) -> CliOutcome {
+    use std::io::Write;
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env(peer_resolver_env_var(peer_did), peer_endpoint)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 /// The per-peer resolver env-var NAME for a DID. Encoding: uppercase the
 /// DID and replace every non-`[A-Z0-9]` character with `_` so the result
 /// is a legal POSIX environment-variable name. This MUST agree with the

@@ -33,7 +33,7 @@ pub fn canonicalize(claim: &UnsignedClaim) -> Result<Vec<u8>, ClaimError> {
 
     // 1. Build (Lexicon-key, CBOR-value) pairs. Lexicon names — NOT
     //    Rust field names — are what other implementations will read.
-    let pairs: Vec<(&'static str, Value)> = vec![
+    let mut pairs: Vec<(&'static str, Value)> = vec![
         ("subject", Value::Text(claim.subject.clone())),
         ("predicate", Value::Text(claim.predicate.clone())),
         ("object", Value::Text(claim.object.clone())),
@@ -80,6 +80,19 @@ pub fn canonicalize(claim: &UnsignedClaim) -> Result<Vec<u8>, ClaimError> {
             ),
         ),
     ];
+
+    // 1b. OPTIONAL `reason` (ADR-015 / WD-34): present ONLY on
+    //     counter-claims. When absent it contributes ZERO bytes — that is
+    //     what preserves CID stability across the slice-01 → slice-03
+    //     upgrade (I-FED-7 / LCC-2): a slice-01 reason=None claim
+    //     canonicalizes to the SAME bytes a slice-01 binary produced.
+    //     When present it is folded into the canonical bytes so the CID +
+    //     signature cover it. Under the length-first lex sort below,
+    //     "reason" (length 6) lands among the other length-6 keys,
+    //     ordering as `author` < `object` < `reason`.
+    if let Some(reason) = &claim.reason {
+        pairs.push(("reason", Value::Text(reason.clone())));
+    }
 
     // 2. RFC 8949 §4.2.1: length-first, then lexicographic on UTF-8
     //    bytes. Equivalent to lex on encoded CBOR key bytes for short
@@ -151,5 +164,94 @@ mod tests {
             first, second,
             "canonical CBOR must be byte-equal across runs"
         );
+    }
+
+    /// CID stability (LCC-2 / I-FED-7): a `reason: None` claim canonicalizes
+    /// to EXACTLY the slice-01-era byte sequence — adding the optional
+    /// `reason` field to the model contributes ZERO bytes when absent. This
+    /// is the unit-level guard mirroring the LCC-2 acceptance gate: a
+    /// regression that unconditionally emitted a `reason` key (even as CBOR
+    /// null) would drift every previously-published author claim's CID.
+    #[test]
+    fn canonicalize_omits_reason_entirely_when_none() {
+        // A counter-style claim (carries a Counters reference) but with NO
+        // reason. The canonical bytes MUST NOT contain the UTF-8 key
+        // "reason" anywhere.
+        let mut claim = sample_claim();
+        claim.references = vec![ClaimReference {
+            ref_type: ReferenceType::Counters,
+            cid: crate::Cid("bafytargetcidxxxxxxxxxxxxxxxxxxxx".into()),
+        }];
+        claim.reason = None;
+
+        let bytes = canonicalize(&claim).expect("canonicalize reason=None claim");
+        assert!(
+            !contains_subslice(&bytes, b"reason"),
+            "a reason=None claim must contribute ZERO bytes for the `reason` key \
+             (CID stability across slice-01 → slice-03; I-FED-7)"
+        );
+    }
+
+    /// The signed payload (and thus the CID) MUST cover the reason when
+    /// present (ADR-006 lex order). Property: for any non-empty reason, the
+    /// reason=Some canonical bytes (a) DIFFER from the reason=None bytes —
+    /// proving the reason is included — and (b) contain the UTF-8 key
+    /// "reason" placed in length-first lexicographic order among the other
+    /// length-6 keys (`author`, `object`, `reason`), i.e. AFTER `object`.
+    #[test]
+    fn canonicalize_includes_reason_in_canonical_bytes_when_present() {
+        use proptest::prelude::*;
+        use proptest::test_runner::TestRunner;
+
+        let base = {
+            let mut c = sample_claim();
+            c.references = vec![ClaimReference {
+                ref_type: ReferenceType::Counters,
+                cid: crate::Cid("bafytargetcidxxxxxxxxxxxxxxxxxxxx".into()),
+            }];
+            c.reason = None;
+            c
+        };
+        let none_bytes = canonicalize(&base).expect("canonicalize reason=None");
+
+        let mut runner = TestRunner::default();
+        runner
+            .run(&"[a-zA-Z0-9 .,!?]{1,80}", |reason_text| {
+                let mut with_reason = base.clone();
+                with_reason.reason = Some(reason_text.clone());
+                let some_bytes = canonicalize(&with_reason).expect("canonicalize reason=Some");
+
+                // (a) The reason is actually folded into the canonical bytes,
+                //     so the CID + signature cover it.
+                prop_assert_ne!(
+                    &some_bytes,
+                    &none_bytes,
+                    "a present reason must change the canonical bytes (else the CID \
+                     would not cover the reason — ADR-006)"
+                );
+                // (b) The "reason" key appears, AND it sorts AFTER "object"
+                //     under the length-first lex rule (both are length 6;
+                //     "object" < "reason" lexicographically).
+                let reason_at = find_subslice(&some_bytes, b"reason")
+                    .expect("canonical bytes must contain the `reason` key");
+                let object_at = find_subslice(&some_bytes, b"object")
+                    .expect("canonical bytes must contain the `object` key");
+                prop_assert!(
+                    object_at < reason_at,
+                    "`reason` must sort after `object` (length-first lex; ADR-006)"
+                );
+                Ok(())
+            })
+            .expect("reason-inclusion property must hold for all generated reasons");
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+        find_subslice(haystack, needle).is_some()
     }
 }
