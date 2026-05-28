@@ -34,13 +34,20 @@
 //! write, PDS publish — live in `run` (and, for `--sign`, in the reused
 //! slice-01 verb internals).
 
-use anyhow::Result;
-use ports::TargetKind;
+use std::io::Write;
+
+use anyhow::{anyhow, Result};
+use ports::{CandidateClaim, TargetKind};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 
+use crate::io::prompt_line;
 use crate::render::{render_auth_report, render_candidate_list, render_public_data_banner};
-use crate::verbs::claim_publish::build_tokio_runtime;
+use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
+use crate::verbs::claim_publish::{
+    build_tokio_runtime, publish_signed_claim, render_publish_success,
+};
 use crate::wiring::Wiring;
+use claim_domain::{canonicalize, compute_cid, SignedClaim};
 
 /// Argument struct for the `scrape github` verb (mirrors the clap subcommand).
 ///
@@ -144,10 +151,243 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         out.push_str(&render_candidate_list(&subject, &candidates));
     }
 
+    // (6) WITHOUT --sign: derive + render only, ZERO writes (the human-gate;
+    // scraper_never_persists_unsigned, I-SCR-1 / WD-49). Return now.
+    let Some(raw_selection) = args.sign.as_deref() else {
+        return Ok(ScrapeGithubOutcome {
+            exit_code: 0,
+            stdout: out,
+        });
+    };
+
+    // (7) --sign N[,N...]: validate the selection BEFORE any compose begins
+    // (out-of-range / duplicate rejected up front; SS-4 / SS-9), then walk
+    // each selected candidate through its OWN slice-01 compose-sign-publish
+    // pipeline — the SINGLE publish path (no parallel publish; WD-66 /
+    // I-SCR-6). The candidate-list block already accumulated in `out` is
+    // emitted to stdout NOW so the user reviews it before composing.
+    let selection = parse_selection(raw_selection, candidates.len()).map_err(|e| anyhow!(e))?;
+    print!("{out}");
+    std::io::stdout().flush()?;
+
+    for index in selection {
+        // 1-based selection -> 0-based slice access (validated above).
+        let candidate = &candidates[index - 1];
+        sign_candidate_via_slice01(wiring, candidate)?;
+    }
+
     Ok(ScrapeGithubOutcome {
         exit_code: 0,
-        stdout: out,
+        stdout: String::new(),
     })
+}
+
+/// Parse + validate the raw `--sign N[,N...]` selection against the derived
+/// candidate count. Returns the 1-based indices in input order, or a
+/// domain-shaped error naming the offending value(s). Pure — no I/O — so the
+/// rejection happens BEFORE any compose preview (SS-4 / SS-9 pre-compose
+/// ordering). SS-1 exercises the single-index happy path; the multi-index +
+/// duplicate-rejection paths are pinned by SS-7 / SS-9.
+fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, String> {
+    let mut indices = Vec::new();
+    for token in raw.split(',') {
+        let token = token.trim();
+        let index: usize = token.parse().map_err(|_| {
+            format!("invalid --sign selection {token:?}; expected 1-based candidate indices")
+        })?;
+        if index == 0 || index > candidate_count {
+            return Err(format!(
+                "candidate {index} does not exist; valid range 1..{candidate_count}"
+            ));
+        }
+        indices.push(index);
+    }
+    Ok(indices)
+}
+
+/// Carry ONE selected candidate through the SAME slice-01 compose-sign-publish
+/// pipeline a hand-authored `claim add` uses (WD-66 / I-SCR-6 — the single
+/// publish path). The candidate pre-fills the editable compose fields; the
+/// human accepts each (Enter) or overrides, then performs the two-prompt sign
+/// (Enter) + publish (Y) gesture. The `derived-from` provenance line is
+/// DISPLAY-ONLY (WD-62 / I-SCR-7) — it appears in the preview but is NEVER a
+/// signed-payload field, so the signed CID is byte-identical to a
+/// hand-authored claim's.
+fn sign_candidate_via_slice01(wiring: &Wiring, candidate: &CandidateClaim) -> Result<()> {
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+
+    // Pre-fill the editable compose fields from the candidate; the human
+    // accepts each default (Enter) or overrides it.
+    let subject = prompt_field(&mut stdout, &mut stdin, "subject", &candidate.subject)?;
+    let predicate = prompt_field(&mut stdout, &mut stdin, "predicate", &candidate.predicate)?;
+    let object = prompt_field(&mut stdout, &mut stdin, "object", &candidate.object)?;
+    let evidence_default = candidate.evidence.join(", ");
+    let evidence_raw = prompt_field(&mut stdout, &mut stdin, "evidence", &evidence_default)?;
+    let evidence: Vec<String> = evidence_raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    let confidence = prompt_confidence(&mut stdout, &mut stdin, candidate.confidence)?;
+
+    // Assemble the composed claim — SAME shape `claim add` builds. composed_at
+    // from the clock port for testable determinism.
+    let composed = ComposedClaim {
+        subject,
+        predicate,
+        object,
+        evidence,
+        confidence,
+        author_did: wiring.identity.author_did().0.clone(),
+        composed_at: wiring.clock.now_utc().to_rfc3339(),
+    };
+
+    // Render the slice-01 compose preview (carries the "not as truth" framing
+    // + the WD-10 bucket label) PLUS the DISPLAY-ONLY derived-from provenance
+    // line naming the candidate's source signal (WD-62 / I-SCR-7).
+    let preview = render_compose_preview(&composed);
+    stdout.write_all(preview.as_bytes())?;
+    stdout.write_all(render_derived_from_line(candidate).as_bytes())?;
+    stdout.flush()?;
+
+    // Two-prompt (ADR-003). Enter to sign; EOF/skip before any input is a
+    // clean cancel (no side effects).
+    let sign_prompt = "\nPress Enter to sign this candidate locally (or Ctrl-C to cancel): ";
+    let confirmation = prompt_line(&mut stdout, &mut stdin, sign_prompt)?;
+    if confirmation.is_none() {
+        return Ok(());
+    }
+
+    // Canonicalize -> compute_cid -> sign -> persist. SAME pure-core path
+    // `claim add` uses; the derived-from line is NOT folded in (display-only),
+    // so the CID is byte-identical to a hand-authored claim's.
+    let unsigned = build_unsigned_claim(&composed)?;
+    let canonical_bytes =
+        canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing candidate claim: {e}"))?;
+    let unsigned_cid = compute_cid(&canonical_bytes);
+    writeln!(stdout, "Computing claim CID {}", unsigned_cid.0)?;
+    stdout.flush()?;
+
+    let signature = wiring
+        .identity
+        .sign(&unsigned_cid)
+        .map_err(|e| anyhow!("signing candidate claim: {e}"))?;
+    let signed = SignedClaim {
+        unsigned,
+        signature,
+    };
+
+    // The signed-from-scraper claim is the user's OWN artifact — own `claims`
+    // table + own `claims/<cid>.json`.
+    wiring.storage.write_signed_claim(&signed).map_err(|e| {
+        anyhow!(
+            "persisting signed candidate claim {} to local store: {e:#}",
+            signed.signature.signed_cid.0
+        )
+    })?;
+    let artifact_path = wiring
+        .paths
+        .claims_dir()
+        .join(format!("{}.json", signed.signature.signed_cid.0));
+    writeln!(
+        stdout,
+        "Written to local store: {}",
+        artifact_path.display()
+    )?;
+    stdout.flush()?;
+
+    // Second prompt — publish? Y/y publishes via the SINGLE publish path
+    // (WD-66 / I-SCR-6); anything else is a clean decline (local artifact
+    // stays, no PDS call).
+    let publish_prompt = "\nPublish this claim to your PDS now? (y/N): ";
+    let publish_answer = prompt_line(&mut stdout, &mut stdin, publish_prompt)?;
+    let confirmed_publish = matches!(
+        publish_answer.as_deref().map(str::trim),
+        Some("y") | Some("Y") | Some("yes") | Some("YES")
+    );
+    if confirmed_publish {
+        drop(stdout);
+        drop(stdin);
+        // SINGLE publish code path (WD-66 / I-SCR-6) — the SAME helper
+        // `claim add`'s Y branch, `claim counter`, and `claim retract` use.
+        match publish_signed_claim(wiring, &signed) {
+            Ok(publish_outcome) => {
+                // The publish prompt above ends without a newline (the user's
+                // y/N answer follows it inline). Start the success block on a
+                // fresh line so its first line — `Published claim <cid>.` —
+                // is recoverable line-by-line (the SS-1 oracle keys off it).
+                println!();
+                print!("{}", render_publish_success(&publish_outcome));
+            }
+            Err(err) => {
+                eprint!(
+                    "{}",
+                    crate::verbs::claim_publish::render_publish_error(&err)
+                );
+                return Err(anyhow!("publishing signed candidate claim failed"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Prompt the user to accept (Enter) or override a pre-filled compose field.
+/// An empty line keeps the candidate's pre-filled value; a non-empty line
+/// replaces it. The slice-02 compose editor is "pre-fill + edit", so the
+/// no-edit path signs the proposal byte-for-byte (SS-2).
+fn prompt_field<W: Write, R: std::io::Read>(
+    writer: &mut W,
+    reader: &mut R,
+    label: &str,
+    default: &str,
+) -> Result<String> {
+    let prompt = format!("{label} [{default}]: ");
+    match prompt_line(writer, reader, &prompt)? {
+        Some(line) if !line.trim().is_empty() => Ok(line.trim().to_string()),
+        _ => Ok(default.to_string()),
+    }
+}
+
+/// Prompt for the confidence field, re-prompting on an out-of-range value
+/// (SS-5). An empty line keeps the candidate's conservative default; a valid
+/// `[0.0, 1.0]` value overrides it. No claim is written until a valid value is
+/// entered (the re-prompt loop runs BEFORE the compose preview).
+fn prompt_confidence<W: Write, R: std::io::Read>(
+    writer: &mut W,
+    reader: &mut R,
+    default: f64,
+) -> Result<f64> {
+    loop {
+        let prompt = format!("confidence [{default}]: ");
+        match prompt_line(writer, reader, &prompt)? {
+            Some(line) if !line.trim().is_empty() => match line.trim().parse::<f64>() {
+                Ok(value) if (0.0..=1.0).contains(&value) => return Ok(value),
+                _ => {
+                    writeln!(writer, "confidence must be between 0.0 and 1.0")?;
+                    writer.flush()?;
+                }
+            },
+            _ => return Ok(default),
+        }
+    }
+}
+
+/// Render the DISPLAY-ONLY `derived-from` provenance line (WD-62 / I-SCR-7).
+/// Names the scraper tool + the candidate's source signal(s). This line
+/// appears in the compose/publish output but is NEVER part of the signed
+/// payload — the signed claim is byte-identical to a hand-authored one, so the
+/// CID is unchanged. Pure function of the candidate.
+fn render_derived_from_line(candidate: &CandidateClaim) -> String {
+    let signals = candidate
+        .source_signals()
+        .iter()
+        .map(|s| s.value.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("  derived-from: openlore-github-scraper (signal: {signals})\n")
 }
 
 /// Harvest the bounded public signal set for the resolved target kind.

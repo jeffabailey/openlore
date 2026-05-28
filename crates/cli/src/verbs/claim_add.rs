@@ -263,7 +263,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
 /// this slice (the wrapper exists for type-safety, not value validation
 /// at this slice — phase 03 hardens that). Mirrors the same trick used
 /// in `test-support::fixtures::confidence`.
-fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
+pub(crate) fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedClaim> {
     let confidence: claim_domain::Confidence =
         serde_json::from_value(serde_json::json!(composed.confidence))
             .map_err(|e| anyhow!("encoding confidence {}: {e}", composed.confidence))?;

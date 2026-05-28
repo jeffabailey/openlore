@@ -65,21 +65,82 @@ use support::*;
 /// @j-004 @j-004c @j-001 @kpi-scr-1 @i-scr-6 @happy @release-gate
 #[test]
 fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-1 — scraper_reuses_slice01_publish_path gate (I-SCR-6) + \
-         KPI-SCR-1. GIVEN FakeGithub::for_public_repo(\"rust-lang/cargo\", \
-         fixture_cargo_five_signals()); WHEN run_openlore_scrape_with_stdin(&env, \
-         &[\"scrape\",\"github\",\"rust-lang/cargo\",\"--sign\",\"1\"], \
-         \"\\n\\n\\n\\n0.55\\n\\nY\\n\") (accept subject/predicate/object/evidence, type 0.55 \
-         for confidence, Enter to sign, Y to publish); THEN exit 0, \
-         assert_compose_preview_contains_not_as_truth(&outcome), stdout shows '0.55 \
-         (weighted)' AND a display-only 'derived-from: openlore-github-scraper (signal: \
-         Cargo.lock committed)' line, assert_scraper_reuses_slice01_publish_path(&env, \
-         &cid) (exactly ONE record on the user's OWN PDS via the slice-01 path; no parallel \
-         path), the signed payload records confidence 0.55, and the success message mentions \
-         `openlore claim retract`."
-    )
+    // GIVEN Maria has an initialized env + a public repo serving the five
+    // canonical cargo signals → five derived candidates. Candidate 1 is the
+    // dependency-pinning proposal derived from "Cargo.lock committed".
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she runs `--sign 1` and walks the slice-01 compose editor: accept
+    // subject / predicate / object / evidence (four Enters), raise confidence
+    // 0.25 -> 0.55, press Enter to sign, then Y to publish (the two-prompt
+    // contract; ADR-017 inherits the slice-01 sign/publish pipeline).
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1"],
+        github.base_url(),
+        "\n\n\n\n0.55\n\nY\n",
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 1 must exit 0 on the happy path; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the compose preview carried the inherited "not as truth" framing
+    // (I-7) before the sign gesture.
+    assert_compose_preview_contains_not_as_truth(&outcome);
+
+    // AND the preview showed the edited confidence as "0.55 (weighted)" (WD-10
+    // display bucket; the numeric is what gets signed) ...
+    assert!(
+        outcome.stdout.contains("0.55 (weighted)"),
+        "expected the compose preview to display the edited confidence as \
+         '0.55 (weighted)'; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // ... AND a DISPLAY-ONLY `derived-from` provenance line naming the source
+    // signal (WD-62 / I-SCR-7 — shown, never a signed-payload field).
+    assert!(
+        outcome
+            .stdout
+            .contains("derived-from: openlore-github-scraper (signal: Cargo.lock committed"),
+        "expected a display-only 'derived-from: openlore-github-scraper (signal: \
+         Cargo.lock committed ...)' line in the compose/publish output (WD-62 / I-SCR-7); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND the success message mentions the retract command (I-8 retract hint).
+    assert!(
+        outcome.stdout.contains("openlore claim retract"),
+        "expected the publish success message to mention `openlore claim retract` \
+         (I-8 retract hint); \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // Recover the CID from the success block ("Published claim <cid>.") so the
+    // universe-bound assertions below can target the exact record.
+    let cid = published_cid_from_stdout(&outcome.stdout);
+
+    // AND the signed claim was published via the SAME slice-01 VerbClaimPublish
+    // path: exactly ONE record on the user's OWN PDS under the user's OWN
+    // author DID at-uri — no parallel publish path (I-SCR-6 / WD-66, gate
+    // scraper_reuses_slice01_publish_path).
+    assert_scraper_reuses_slice01_publish_path(&env, &cid);
+
+    // AND the signed payload records the edited confidence 0.55 (the human's
+    // conscious raise; no auto-inflation between proposal and sign).
+    assert_candidate_confidence_unchanged(&env, &cid, 0.55);
 }
 
 /// SS-2 (gate `candidate_confidence_no_autoinflate`, sign-time half; I-SCR-3

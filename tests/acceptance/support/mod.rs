@@ -2248,16 +2248,73 @@ pub fn run_openlore_scrape(env: &TestEnv, args: &[&str], github_base_url: &str) 
 /// HTTP double, feeding `stdin_lines` (newline-joined) at the chained
 /// compose/sign/publish prompts. Used by the SS-* sign scenarios.
 ///
-/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+/// Mirrors [`run_openlore_scrape`] (clean env + the slice-01 stub seams +
+/// the in-process FakePds endpoint + the `OPENLORE_GITHUB_API_BASE` seam)
+/// and additionally pipes `stdin_lines` so the `--sign` compose editor +
+/// the two-prompt sign/publish flow can be driven byte-for-byte. The
+/// unbuffered byte-at-a-time stdin reader in `crate::io` keeps each prompt
+/// in lockstep with the wire (same pattern the slice-01 two-prompt flow uses).
 pub fn run_openlore_scrape_with_stdin(
     env: &TestEnv,
     args: &[&str],
     github_base_url: &str,
     stdin_lines: &str,
 ) -> CliOutcome {
-    // SCAFFOLD: true
-    let _ = (env, args, github_base_url, stdin_lines);
-    todo!("DELIVER (slice-02): run openlore scrape --sign with GitHub seam + stdin")
+    use std::io::Write;
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_GITHUB_API_BASE", github_base_url)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// Recover the published claim's CID from a publish success block. The
+/// renderer emits `Published claim <cid>.` (or `Claim <cid> already
+/// published.`); this parses the CID token so universe-bound assertions can
+/// target the exact record without the test hard-coding a CID.
+pub fn published_cid_from_stdout(stdout: &str) -> String {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Published claim ") {
+            return rest.trim_end_matches('.').trim().to_string();
+        }
+        if let Some(rest) = trimmed.strip_prefix("Claim ") {
+            if let Some(cid) = rest.strip_suffix(" already published.") {
+                return cid.trim().to_string();
+            }
+        }
+    }
+    panic!(
+        "could not find a 'Published claim <cid>.' line in stdout to recover the CID; \
+         \n--- stdout ---\n{stdout}"
+    );
 }
 
 /// Run `openlore scrape github <target> ...` with a `GITHUB_TOKEN` PAT set
@@ -2437,12 +2494,38 @@ pub fn assert_candidate_confidence(outcome: &CliOutcome, expected: f64, bucket_l
 ///
 /// SCAFFOLD: true — DELIVER materializes this in step 07-01.
 pub fn assert_candidate_confidence_unchanged(env: &TestEnv, cid: &str, expected: f64) {
-    // SCAFFOLD: true
-    let _ = (env, cid, expected);
-    todo!(
-        "DELIVER (slice-02): assert claims/<cid>.json signed payload records confidence == \
-         expected (sign-time half of candidate_confidence_no_autoinflate)"
-    )
+    let artifact_path = env.claims_dir().join(format!("{cid}.json"));
+    let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "expected signed-from-scraper claim file at {}; got {e}",
+            artifact_path.display()
+        )
+    });
+    let signed: claim_domain::SignedClaim =
+        serde_json::from_slice(&json_bytes).unwrap_or_else(|e| {
+            panic!(
+                "could not deserialize signed claim at {}: {e}\n--- file ---\n{}",
+                artifact_path.display(),
+                String::from_utf8_lossy(&json_bytes)
+            )
+        });
+
+    // Confidence is a crate-private-wrapped f64; round-trip through serde to
+    // read its numeric value (the same trick test-support uses to build it).
+    let actual: f64 = serde_json::to_value(&signed.unsigned.confidence)
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(|| {
+            panic!(
+                "could not read numeric confidence from signed claim at {}",
+                artifact_path.display()
+            )
+        });
+    assert!(
+        (actual - expected).abs() < f64::EPSILON,
+        "expected signed claim {cid} to record confidence {expected} \
+         (sign-time half of candidate_confidence_no_autoinflate); got {actual}"
+    );
 }
 
 /// Universe-bound (gate `scraper_reuses_slice01_publish_path`, I-SCR-6):
@@ -2454,13 +2537,46 @@ pub fn assert_candidate_confidence_unchanged(env: &TestEnv, cid: &str, expected:
 ///
 /// SCAFFOLD: true — DELIVER materializes this in step 07-01.
 pub fn assert_scraper_reuses_slice01_publish_path(env: &TestEnv, cid: &str) {
-    // SCAFFOLD: true
-    let _ = (env, cid);
-    todo!(
-        "DELIVER (slice-02): assert the user's OWN PDS holds exactly the one counter/scraper \
-         claim at at://<author_did>/org.openlore.claim/<cid>, published via the slice-01 \
-         path (no parallel publish path; scraper_reuses_slice01_publish_path gate)"
-    )
+    // The signed-from-scraper claim is the user's OWN artifact: it lands on
+    // the user's OWN PDS under the user's OWN bare author DID at-uri, exactly
+    // as a hand-authored `claim add` claim would. The bare DID (no
+    // `#fragment` signing-key locator) is what the publish path records.
+    let bare_author_did = env
+        .identity
+        .author_did()
+        .split('#')
+        .next()
+        .unwrap_or_else(|| env.identity.author_did())
+        .to_string();
+    let expected_at_uri = format!("at://{bare_author_did}/org.openlore.claim/{cid}");
+
+    // Exactly ONE record on the user's OWN PDS — proving the single-publish
+    // path ran once (no parallel/forked publish that would double-post or
+    // post under a different author DID).
+    let records = env.pds.records();
+    assert_eq!(
+        records.len(),
+        1,
+        "scraper_reuses_slice01_publish_path (I-SCR-6 / WD-66): the user's OWN PDS must \
+         hold EXACTLY ONE record after `--sign` (no parallel publish path); got {}: {:?}",
+        records.len(),
+        records
+    );
+
+    // ... and that one record is the signed claim, at the user's own at-uri,
+    // published via the slice-01 VerbClaimPublish path (rkey == CID; FR-2/FR-3).
+    let record = &records[0];
+    assert_eq!(
+        record.at_uri, expected_at_uri,
+        "the published record must live at the user's OWN at-uri {expected_at_uri} \
+         (published via the slice-01 path); got {}",
+        record.at_uri
+    );
+    assert_eq!(
+        record.collection, "org.openlore.claim",
+        "the published record must be in the org.openlore.claim collection; got {}",
+        record.collection
+    );
 }
 
 /// Universe-bound (gate `scraper_only_reads_public_data`, KPI-SCR-4 —
