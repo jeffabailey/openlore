@@ -35,7 +35,11 @@
 //! slice-01 verb internals).
 
 use anyhow::Result;
+use ports::TargetKind;
+use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 
+use crate::render::{render_candidate_list, render_public_data_banner};
+use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `scrape github` verb (mirrors the clap subcommand).
@@ -61,15 +65,111 @@ pub struct ScrapeGithubOutcome {
     pub stdout: String,
 }
 
-/// Run the `scrape github` verb.
+/// Run the `scrape github` verb (Step 03-01: harvest -> derive -> render;
+/// NO `--sign` path here — that lands in a later step).
 ///
-/// SCAFFOLD: true (slice-02)
+/// The pipeline (architecture-design §5 / journey step 1-2):
 ///
-/// Bodied `todo!()` at step 01-04 — the live harvest -> derive -> render ->
-/// [--sign] pipeline lands per the SCR-* acceptance scenarios in Phase 03/05.
-/// The dispatch routing + the `GithubPort` wiring + the probe-gauntlet slot
-/// are in place at this step; only this handler body is deferred.
-pub fn run(_wiring: &Wiring, _args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutcome> {
-    // SCAFFOLD: true (slice-02)
-    todo!("scrape github pipeline lands per SCR-* scenarios in Phase 03/05")
+/// 1. print the public-data-only banner (BEFORE any harvest — WD-51);
+/// 2. resolve the target via `GithubPort::resolve_target` (refusing
+///    private / non-existent targets);
+/// 3. harvest the bounded public signal set via `GithubPort::harvest_repo`
+///    / `harvest_user`, reporting the count;
+/// 4. derive candidates via the PURE `scraper-domain::derive_candidates`
+///    (confidence 0.25 speculative; each candidate names its source signal);
+/// 5. render the numbered candidate list (or "No candidate claims could be
+///    derived" when nothing matched the mapping — not an error).
+///
+/// WITHOUT `--sign` this verb performs ZERO writes (the human-gate at the
+/// storage layer; `scraper_never_persists_unsigned`, I-SCR-1 / WD-49).
+pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutcome> {
+    // (1) Public-data-only banner — printed BEFORE any harvest (WD-51). It
+    // goes to stdout NOW (not into the returned chunk) so the user is
+    // reassured BEFORE any network beat even when the resolve / harvest
+    // later refuses. A refusal returns `Err(..)` so the dispatcher surfaces
+    // the cause on stderr with a non-zero exit and renders NO partial
+    // candidate list; the banner has already landed on stdout above.
+    print!("{}", render_public_data_banner());
+
+    // The rest of the verb's stdout is accumulated and returned to the
+    // dispatcher (which prints it after a successful run).
+    let mut out = String::new();
+
+    // (2) Resolve the target (refuses private / non-existent). The harvest
+    // is the only network step; both run on one tokio runtime.
+    let runtime = build_tokio_runtime();
+    let kind = runtime
+        .block_on(wiring.github.resolve_target(&args.target))
+        .map_err(anyhow::Error::from)?;
+    out.push_str(&format!(
+        "Resolving target {} ... ok ({})\n",
+        args.target,
+        target_kind_label(&kind)
+    ));
+
+    // (3) Harvest the bounded public signal set + report the count.
+    let signals = runtime
+        .block_on(harvest(wiring, &kind))
+        .map_err(anyhow::Error::from)?;
+    out.push_str(&format!(
+        "Harvesting public signals ... {} signal{}\n",
+        signals.len(),
+        if signals.len() == 1 { "" } else { "s" }
+    ));
+
+    // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
+    // each candidate names its source signal). The mapping is the embedded
+    // SSOT snapshot — a parse failure is a build-time-verified impossibility,
+    // surfaced as an error rather than a panic for railway discipline.
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
+        .map_err(|e| anyhow::anyhow!("embedded signal->predicate mapping failed to parse: {e}"))?;
+    let subject = subject_for(&kind);
+    let candidates = derive_candidates(&subject, &signals, &mapping);
+
+    // (5) Render the candidate list (or the no-candidates message).
+    if candidates.is_empty() {
+        out.push_str(
+            "No candidate claims could be derived from the harvested signals \
+             (nothing to propose).\n",
+        );
+    } else {
+        out.push_str(&render_candidate_list(&subject, &candidates));
+    }
+
+    Ok(ScrapeGithubOutcome {
+        exit_code: 0,
+        stdout: out,
+    })
+}
+
+/// Harvest the bounded public signal set for the resolved target kind.
+/// `Repo` harvests the repo's signals; `User` harvests a bounded cross-repo
+/// aggregate (deep triangulation deferred to slice-04 per WD-64).
+async fn harvest(
+    wiring: &Wiring,
+    kind: &TargetKind,
+) -> Result<Vec<ports::Signal>, ports::GithubError> {
+    match kind {
+        TargetKind::Repo { owner, repo } => wiring.github.harvest_repo(owner, repo).await,
+        TargetKind::User { user } => wiring.github.harvest_user(user).await,
+    }
+}
+
+/// The `github:<owner>/<repo>` or `github:<user>` subject string the
+/// candidate list + any future signed claim carry (the `github_target`
+/// shared artifact).
+fn subject_for(kind: &TargetKind) -> String {
+    match kind {
+        TargetKind::Repo { owner, repo } => format!("github:{owner}/{repo}"),
+        TargetKind::User { user } => format!("github:{user}"),
+    }
+}
+
+/// The human-readable resolution label for the "Resolving target ... ok"
+/// line (journey step 1: "ok (repository)" / "ok (user)").
+fn target_kind_label(kind: &TargetKind) -> &'static str {
+    match kind {
+        TargetKind::Repo { .. } => "repository",
+        TargetKind::User { .. } => "user",
+    }
 }

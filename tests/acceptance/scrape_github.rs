@@ -63,17 +63,86 @@ use support::*;
 /// @real-io @j-004 @j-004a @kpi-scr-2 @happy
 #[test]
 fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-1 walking skeleton. GIVEN FakeGithub::for_public_repo(\
-         \"rust-lang/cargo\", fixture_cargo_five_signals()).serve_http() wired via \
-         OPENLORE_GITHUB_API_BASE; WHEN run_openlore_scrape(&env, &[\"scrape\",\"github\",\
-         \"rust-lang/cargo\"]); THEN exit 0, stdout contains the public-data-only banner \
-         BEFORE the harvest line, the '5 signals' count, a numbered candidate list (1..5) \
-         and the 'nothing is a claim until you sign it' footer; AND \
-         assert_no_claim_persisted(&env) (zero `claims` rows + zero PDS writes + zero \
-         claims/<cid>.json files) — the scraper_never_persists_unsigned gate."
-    )
+    // GIVEN an initialized env + a public repo serving 5 public signals.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN the public-data-only banner is printed BEFORE any harvest line
+    // (ordering, not just presence — the user is reassured before any network
+    // beat begins).
+    let banner_idx = outcome
+        .stdout
+        .find("PUBLIC")
+        .expect("public-data-only banner must be present in stdout");
+    let harvest_idx = outcome
+        .stdout
+        .find("Harvesting public signals")
+        .expect("the harvest line must be present in stdout");
+    assert!(
+        banner_idx < harvest_idx,
+        "the public-data-only banner must precede the harvest line; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the harvested signal count is reported (5 signals).
+    assert!(
+        outcome.stdout.contains("5 signals"),
+        "the harvested signal count (5 signals) must be reported; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND a numbered candidate list (1..5) is rendered (one per mapping entry).
+    for index in 1..=5 {
+        assert!(
+            outcome.stdout.contains(&format!("[{index}]")),
+            "expected a numbered candidate [{index}] in the list; \n--- stdout ---\n{}",
+            outcome.stdout
+        );
+    }
+
+    // AND the subject of every candidate is the resolved github_target.
+    assert!(
+        outcome.stdout.contains("github:rust-lang/cargo"),
+        "the candidate list must name the resolved subject github:rust-lang/cargo; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the "nothing is a claim until you sign it" footer is rendered.
+    assert!(
+        outcome.stdout.contains("nothing is a claim until you sign it"),
+        "the candidate-list footer must reassure that nothing is a claim until signed; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND every candidate is the conservative speculative default (0.25).
+    assert!(
+        outcome.stdout.contains("0.25"),
+        "every candidate must display the conservative default confidence 0.25; \
+         \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND the human-gate held at the storage layer: zero `claims` rows, zero
+    // PDS writes, zero claim artifact files (scraper_never_persists_unsigned).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-2: the public-data-only banner appears BEFORE the first harvest line

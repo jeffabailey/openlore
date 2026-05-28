@@ -58,7 +58,102 @@
 //! the renderer stays pure (no I/O, no storage access).
 
 use claim_domain::{Cid, SignedClaim};
-use ports::{AuthorRelationship, FederatedRow, SourceTable};
+use ports::{AuthorRelationship, CandidateClaim, FederatedRow, SourceTable};
+
+// -----------------------------------------------------------------------------
+// Slice-02 (github scraper) — public-data banner + candidate-list renderer
+// -----------------------------------------------------------------------------
+
+/// Content-frozen public-data-only banner (WD-51 / I-SCR-2; journey
+/// `scrape-propose-sign.yaml` step 1 tui_mockup). Printed BEFORE any harvest
+/// so the user is reassured no private data is read before any network beat
+/// begins (emotional arc: skeptical -> reassured). Names BOTH "only PUBLIC
+/// GitHub data is read" AND "Nothing published". Do NOT paraphrase.
+pub const PUBLIC_DATA_BANNER: &str = "Only PUBLIC GitHub data is read. The target is the SUBJECT \
+of any claim you may later sign — never a controller. Nothing published.";
+
+/// Content-frozen candidate-list footer (journey step 2 tui_mockup): nothing
+/// the scraper proposes is a claim until the human signs it (the human-gate,
+/// I-SCR-1). Do NOT paraphrase — the exact string is the user-visible
+/// reassurance contract.
+pub const NOTHING_IS_A_CLAIM_FOOTER: &str =
+    "Remember: nothing is a claim until you sign it. Select one to sign: `--sign N`.";
+
+/// Render the public-data-only banner block (WD-51). Pure function — no I/O.
+/// The verb prints this BEFORE invoking the harvest so the ordering AC
+/// (SG-2: banner precedes harvest) holds structurally.
+pub fn render_public_data_banner() -> String {
+    format!("{PUBLIC_DATA_BANNER}\n")
+}
+
+/// Render the numbered candidate list (journey step 2 tui_mockup). Pure
+/// function of the derived candidates — no I/O, no clock.
+///
+/// Each candidate renders as:
+///
+/// ```text
+///  [1] embodiesPhilosophy  org.openlore.philosophy.dependency-pinning
+///      from signal : Cargo.lock committed (exact pins)
+///      confidence  : 0.25 (speculative)
+/// ```
+///
+/// Every candidate NAMES its source signal(s) verbatim (auditability,
+/// I-SCR-4 / KPI-SCR-3) and displays the conservative default confidence
+/// `0.25` with the `speculative` bucket label (compose-time display only;
+/// WD-10). Multiple contributing signals each get their own `from signal :`
+/// line (US-SCR-002 Ex 4 collapse). A footer reassures nothing is a claim
+/// until signed.
+pub fn render_candidate_list(subject: &str, candidates: &[CandidateClaim]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Candidate claims for subject {subject}\n"));
+    out.push_str(&format!(
+        "({} derived — NOTHING is signed or published; you choose)\n",
+        candidates.len()
+    ));
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let number = idx + 1;
+        out.push_str(&format!(
+            " [{number}] {}  {}\n",
+            candidate.predicate, candidate.object
+        ));
+        for signal in candidate.source_signals() {
+            out.push_str(&format!("     from signal : {}\n", signal.value));
+        }
+        out.push_str(&format!(
+            "     confidence  : {} ({})\n",
+            render_candidate_confidence(candidate.confidence),
+            confidence_bucket_label(candidate.confidence),
+        ));
+    }
+    out.push_str(&format!("{NOTHING_IS_A_CLAIM_FOOTER}\n"));
+    out
+}
+
+/// Render a candidate's confidence as the minimal decimal matching the
+/// original `f64` (e.g. `0.25`) via serde — never `{:.2}` (that would be
+/// normalization). Mirrors the read-path `render_confidence` rule.
+fn render_candidate_confidence(confidence: f64) -> String {
+    serde_json::to_value(confidence)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| "(unrenderable)".to_string())
+}
+
+/// The compose-time display bucket label for a confidence value (WD-10).
+/// Slice-02 candidates are always the conservative `0.25` default
+/// (speculative); the full bucket scale is a slice-01 concern. This label is
+/// DISPLAY-ONLY — it never enters a signed payload (the signed claim records
+/// the numeric `f64`).
+fn confidence_bucket_label(confidence: f64) -> &'static str {
+    if confidence < 0.4 {
+        "speculative"
+    } else if confidence < 0.7 {
+        "weighted"
+    } else if confidence < 0.9 {
+        "well-evidenced"
+    } else {
+        "triangulated"
+    }
+}
 
 /// Inherited slice-01 framing literal (I-7 / WD-6): a claim is asserted by
 /// you, NOT as truth. Content-frozen; do NOT paraphrase.

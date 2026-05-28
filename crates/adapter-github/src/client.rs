@@ -103,6 +103,50 @@ pub fn strip_trailing_slashes(mut s: String) -> String {
     s
 }
 
+/// Resolve a FakeGithub/GitHub `kind` string into the typed
+/// [`SignalKind`](ports::SignalKind). The wire `kind` is the exact
+/// `SignalKind` variant name (the SSOT-bounded set the harvest recognizes);
+/// an unrecognized kind yields `None` so the caller can drop it (a signal
+/// the mapping cannot use is silently ignored, never an error — mirrors
+/// `scraper-domain`'s drop-unmapped-signals rule).
+pub fn signal_kind_from_wire(kind: &str) -> Option<ports::SignalKind> {
+    use ports::SignalKind;
+    match kind {
+        "DependencyManifestPinned" => Some(SignalKind::DependencyManifestPinned),
+        "DocsPresentAndSubstantial" => Some(SignalKind::DocsPresentAndSubstantial),
+        "TestRatioOrCiMatrix" => Some(SignalKind::TestRatioOrCiMatrix),
+        "SemverAndChangelog" => Some(SignalKind::SemverAndChangelog),
+        "MemorySafetyLanguage" => Some(SignalKind::MemorySafetyLanguage),
+        _ => None,
+    }
+}
+
+/// Parse the `signals` array of a harvest response body into typed
+/// [`Signal`](ports::Signal)s. PURE: a value-in / value-out reshape of the
+/// already-fetched JSON (the network I/O lives in `lib.rs`). Signals whose
+/// `kind` is not in the recognized set are dropped; malformed entries
+/// (missing `kind`/`value`/`source_url`) are dropped too — the public API
+/// shape is the contract, and a partial entry simply yields no signal.
+pub fn parse_signals(body: &serde_json::Value) -> Vec<ports::Signal> {
+    let Some(signals) = body.get("signals").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    signals.iter().filter_map(parse_one_signal).collect()
+}
+
+/// Parse one `signals[]` entry into a [`Signal`](ports::Signal), or `None`
+/// when the kind is unrecognized or a required field is absent.
+fn parse_one_signal(entry: &serde_json::Value) -> Option<ports::Signal> {
+    let kind = signal_kind_from_wire(entry.get("kind")?.as_str()?)?;
+    let value = entry.get("value")?.as_str()?.to_string();
+    let source_url = entry.get("source_url")?.as_str()?.to_string();
+    Some(ports::Signal {
+        kind,
+        value,
+        source_url,
+    })
+}
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -169,5 +213,87 @@ mod tests {
         // compiles ONLY because we never format the mode — a future
         // `#[derive(Debug)]` regression would make the leak possible, which
         // is why the derive is deliberately absent.
+    }
+
+    /// `parse_signals` reshapes the harvest body's `signals[]` into typed
+    /// `Signal`s in order, mapping each wire `kind` to its `SignalKind`
+    /// variant and carrying `value` + `source_url` verbatim. This is the
+    /// pure decomposition of `harvest_repo`'s GREEN body — the live HTTP
+    /// fetch in lib.rs feeds this its already-parsed JSON.
+    #[test]
+    fn parse_signals_reshapes_every_recognized_signal_in_order() {
+        use ports::SignalKind;
+        let body = serde_json::json!({
+            "target": { "kind": "repo", "full_name": "rust-lang/cargo" },
+            "signals": [
+                {
+                    "kind": "DependencyManifestPinned",
+                    "value": "Cargo.lock committed (exact pins)",
+                    "source_url": "https://github.com/rust-lang/cargo/blob/master/Cargo.lock"
+                },
+                {
+                    "kind": "MemorySafetyLanguage",
+                    "value": "Rust + no unsafe blocks",
+                    "source_url": "https://github.com/rust-lang/cargo"
+                }
+            ]
+        });
+        let signals = parse_signals(&body);
+        assert_eq!(signals.len(), 2, "every recognized signal must be parsed");
+        assert_eq!(signals[0].kind, SignalKind::DependencyManifestPinned);
+        assert_eq!(signals[0].value, "Cargo.lock committed (exact pins)");
+        assert_eq!(
+            signals[0].source_url,
+            "https://github.com/rust-lang/cargo/blob/master/Cargo.lock"
+        );
+        assert_eq!(signals[1].kind, SignalKind::MemorySafetyLanguage);
+    }
+
+    /// An unrecognized `kind` (not in the SSOT-bounded set) is dropped, not
+    /// an error — mirrors `scraper-domain`'s drop-unmapped-signals rule.
+    #[test]
+    fn parse_signals_drops_unrecognized_kinds() {
+        let body = serde_json::json!({
+            "signals": [
+                { "kind": "TotallyUnknownKind", "value": "x", "source_url": "https://x.test/1" },
+                {
+                    "kind": "TestRatioOrCiMatrix",
+                    "value": "test/source ratio 0.61",
+                    "source_url": "https://x.test/2"
+                }
+            ]
+        });
+        let signals = parse_signals(&body);
+        assert_eq!(
+            signals.len(),
+            1,
+            "an unrecognized kind is dropped; only the recognized one survives"
+        );
+        assert_eq!(signals[0].kind, ports::SignalKind::TestRatioOrCiMatrix);
+    }
+
+    /// A body with no `signals` array (e.g. a resolve-only response) parses
+    /// to an empty vec rather than panicking.
+    #[test]
+    fn parse_signals_returns_empty_when_no_signals_array() {
+        let body = serde_json::json!({ "target": { "kind": "user", "login": "torvalds" } });
+        assert!(parse_signals(&body).is_empty());
+    }
+
+    /// `signal_kind_from_wire` round-trips each recognized variant name and
+    /// rejects anything else.
+    #[test]
+    fn signal_kind_from_wire_maps_the_bounded_set() {
+        use ports::SignalKind;
+        for (wire, expected) in [
+            ("DependencyManifestPinned", SignalKind::DependencyManifestPinned),
+            ("DocsPresentAndSubstantial", SignalKind::DocsPresentAndSubstantial),
+            ("TestRatioOrCiMatrix", SignalKind::TestRatioOrCiMatrix),
+            ("SemverAndChangelog", SignalKind::SemverAndChangelog),
+            ("MemorySafetyLanguage", SignalKind::MemorySafetyLanguage),
+        ] {
+            assert_eq!(signal_kind_from_wire(wire), Some(expected));
+        }
+        assert_eq!(signal_kind_from_wire("nope"), None);
     }
 }

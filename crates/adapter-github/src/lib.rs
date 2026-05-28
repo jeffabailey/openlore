@@ -163,39 +163,126 @@ impl GithubPort for GithubAdapter {
     /// targets with `GithubError::NotPublic` / `GithubError::NotFound`
     /// (public-data-only; WD-51 / I-SCR-2).
     ///
-    /// SCAFFOLD: true (slice-02)
-    ///
-    /// Bodied `todo!()` at step 01-03; the live `GET /repos/{owner}/{repo}` +
-    /// `GET /users/{user}` disambiguation lands per the SCR-* scenarios in
-    /// Phase 03/04.
-    async fn resolve_target(&self, _target: &str) -> Result<TargetKind, GithubError> {
-        // SCAFFOLD: true (slice-02)
-        todo!("resolve_target lands per SCR-* scenarios in Phase 03/04")
+    /// `GET {base}/repos/{owner}/{repo}` for an `owner/repo` target, else
+    /// `GET {base}/users/{user}`. Only PUBLIC read paths are ever hit
+    /// (allowlist: `/repos/...`, `/users/...`) — there is no private
+    /// surface (I-SCR-2). The HTTP status classifies the refusal.
+    async fn resolve_target(&self, target: &str) -> Result<TargetKind, GithubError> {
+        match split_target(target) {
+            ResolvedTarget::Repo { owner, repo } => {
+                let path = format!("/repos/{owner}/{repo}");
+                self.get_public(&path, target).await?;
+                Ok(TargetKind::Repo { owner, repo })
+            }
+            ResolvedTarget::User { user } => {
+                let path = format!("/users/{user}");
+                self.get_public(&path, target).await?;
+                Ok(TargetKind::User { user })
+            }
+        }
     }
 
     /// Harvest the bounded public-signal set for a repo. Returns
     /// already-fetched `Signal`s ready for `scraper-domain::derive_candidates`.
     ///
-    /// SCAFFOLD: true (slice-02)
-    ///
-    /// Bodied `todo!()` at step 01-03; the live signal harvest (manifest,
-    /// docs, test-ratio/CI, semver/changelog, language) lands per the SCR-*
-    /// scenarios in Phase 03/04.
-    async fn harvest_repo(&self, _owner: &str, _repo: &str) -> Result<Vec<Signal>, GithubError> {
-        // SCAFFOLD: true (slice-02)
-        todo!("harvest_repo lands per SCR-* scenarios in Phase 03/04")
+    /// `GET {base}/repos/{owner}/{repo}` and reshape the response's
+    /// `signals[]` into typed `Signal`s (the derivation is the pure
+    /// `scraper-domain`'s job — the adapter only fetches + reshapes).
+    async fn harvest_repo(&self, owner: &str, repo: &str) -> Result<Vec<Signal>, GithubError> {
+        let target = format!("{owner}/{repo}");
+        let path = format!("/repos/{owner}/{repo}");
+        let body = self.get_public(&path, &target).await?;
+        Ok(client::parse_signals(&body))
     }
 
     /// Harvest a BOUNDED cross-repo aggregate for a user / contributor target
     /// (deep triangulation deferred to slice-04 per WD-64).
     ///
-    /// SCAFFOLD: true (slice-02)
+    /// `GET {base}/users/{user}` and reshape the response's `signals[]`.
+    async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
+        let path = format!("/users/{user}");
+        let body = self.get_public(&path, user).await?;
+        Ok(client::parse_signals(&body))
+    }
+}
+
+impl GithubAdapter {
+    /// Issue one PUBLIC GET against `{api_base}{path}`, attaching the
+    /// optional `Authorization: token <PAT>` header (the ONLY path the PAT
+    /// bytes leave the adapter — never logged/echoed; US-SCR-004). The HTTP
+    /// status classifies refusals into the railway-oriented [`GithubError`]
+    /// surface; a 2xx body is returned as parsed JSON for the caller to
+    /// reshape.
     ///
-    /// Bodied `todo!()` at step 01-03; the live bounded user harvest lands per
-    /// the SCR-* scenarios in Phase 03/04.
-    async fn harvest_user(&self, _user: &str) -> Result<Vec<Signal>, GithubError> {
-        // SCAFFOLD: true (slice-02)
-        todo!("harvest_user lands per SCR-* scenarios in Phase 03/04")
+    /// `path` is always on the public allowlist (`/repos/...` or
+    /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
+    async fn get_public(
+        &self,
+        path: &str,
+        target: &str,
+    ) -> Result<serde_json::Value, GithubError> {
+        let client = client::build_client()
+            .map_err(|e| GithubError::Network(format!("could not build HTTP client: {e}")))?;
+        let url = format!("{}{}", self.api_base, path);
+
+        let mut request = client.get(&url);
+        if let Some(header) = self.auth.authorization_header() {
+            request = request.header(reqwest::header::AUTHORIZATION, header);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")));
+        }
+
+        Err(classify_status(status.as_u16(), target))
+    }
+}
+
+/// A `<target>` split into the kind the resolve/harvest paths need.
+enum ResolvedTarget {
+    Repo { owner: String, repo: String },
+    User { user: String },
+}
+
+/// Split an `owner/repo` target into [`ResolvedTarget::Repo`]; a bare token
+/// (no `/`) into [`ResolvedTarget::User`]. Mirrors `FakeGithub::resolve_kind`
+/// so the adapter + the double agree on the disambiguation rule.
+fn split_target(target: &str) -> ResolvedTarget {
+    match target.split_once('/') {
+        Some((owner, repo)) => ResolvedTarget::Repo {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        },
+        None => ResolvedTarget::User {
+            user: target.to_string(),
+        },
+    }
+}
+
+/// Classify a non-2xx HTTP status into the railway-oriented [`GithubError`].
+/// A 404 is the not-found cause; 403 is rate-budget exhaustion; 401 is a
+/// rejected token (the value is NEVER echoed — US-SCR-004). The NotPublic
+/// distinction (a private repo the public API also 404s) lands with the
+/// SG-5 scenario; at this step a 404 is surfaced as `NotFound`.
+fn classify_status(status: u16, target: &str) -> GithubError {
+    match status {
+        404 => GithubError::NotFound {
+            target: target.to_string(),
+        },
+        403 => GithubError::RateLimited {
+            authenticated: false,
+        },
+        401 => GithubError::TokenRejected,
+        other => GithubError::ApiShape(format!("unexpected HTTP status {other} for {target}")),
     }
 }
 
@@ -268,30 +355,43 @@ mod tests {
         }
     }
 
-    /// SCAFFOLD pin: `resolve_target` is bodied `todo!()` at step 01-03 — the
-    /// live disambiguation lands per the SCR-* scenarios in Phase 03/04.
-    /// `#[should_panic]` proves the scaffold is present (RED for the right
-    /// reason: the body is a deferred-scenario stub, not a silent success).
-    #[tokio::test]
-    #[should_panic(expected = "Phase 03/04")]
-    async fn resolve_target_is_scaffold_todo_until_phase_03_04() {
-        let adapter = GithubAdapter::for_api_base("https://fake.test");
-        let _ = adapter.resolve_target("rust-lang/rust").await;
+    /// `split_target` disambiguates `owner/repo` (Repo) from a bare token
+    /// (User), mirroring `FakeGithub::resolve_kind` so the adapter + double
+    /// agree on the resolve path. Pure decomposition of `resolve_target`'s
+    /// GREEN body — the live HTTP disambiguation in SG-1 / SG-3 relies on it.
+    #[test]
+    fn split_target_disambiguates_repo_from_user() {
+        match split_target("rust-lang/cargo") {
+            ResolvedTarget::Repo { owner, repo } => {
+                assert_eq!(owner, "rust-lang");
+                assert_eq!(repo, "cargo");
+            }
+            ResolvedTarget::User { .. } => panic!("owner/repo must resolve as Repo"),
+        }
+        match split_target("torvalds") {
+            ResolvedTarget::User { user } => assert_eq!(user, "torvalds"),
+            ResolvedTarget::Repo { .. } => panic!("a bare token must resolve as User"),
+        }
     }
 
-    /// SCAFFOLD pin: `harvest_repo` is bodied `todo!()` at step 01-03.
-    #[tokio::test]
-    #[should_panic(expected = "Phase 03/04")]
-    async fn harvest_repo_is_scaffold_todo_until_phase_03_04() {
-        let adapter = GithubAdapter::for_api_base("https://fake.test");
-        let _ = adapter.harvest_repo("rust-lang", "rust").await;
-    }
-
-    /// SCAFFOLD pin: `harvest_user` is bodied `todo!()` at step 01-03.
-    #[tokio::test]
-    #[should_panic(expected = "Phase 03/04")]
-    async fn harvest_user_is_scaffold_todo_until_phase_03_04() {
-        let adapter = GithubAdapter::for_api_base("https://fake.test");
-        let _ = adapter.harvest_user("rust-lang").await;
+    /// `classify_status` maps HTTP refusal statuses onto the railway-oriented
+    /// `GithubError` surface; the 401 path NEVER echoes a token value
+    /// (US-SCR-004 no-token-leak).
+    #[test]
+    fn classify_status_maps_refusals_without_leaking_a_token() {
+        assert!(matches!(
+            classify_status(404, "ghost-org/ghost-repo"),
+            GithubError::NotFound { .. }
+        ));
+        assert!(matches!(
+            classify_status(403, "torvalds"),
+            GithubError::RateLimited { authenticated: false }
+        ));
+        let rejected = classify_status(401, "rust-lang/cargo");
+        assert!(matches!(rejected, GithubError::TokenRejected));
+        assert!(
+            !rejected.to_string().contains("ghp_"),
+            "TokenRejected must never echo a token value"
+        );
     }
 }

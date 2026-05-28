@@ -2148,17 +2148,100 @@ pub use openlore_test_support::{
     fixture_torvalds_user_aggregate_signals,
 };
 
+/// A running `FakeGithub` in-process HTTP server, owning its own tokio
+/// runtime so the synchronous acceptance tests can stand it up + read its
+/// base URL without an `async` test body.
+///
+/// Mirrors the [`FakePds`] / [`PeerPds`] wrappers exactly: a dedicated
+/// multi-threaded runtime block-ons [`FakeGithub::serve_http`], and the
+/// runtime is released on a background thread at drop so the test thread
+/// never blocks on a parked `accept()` (the macOS shutdown hazard the other
+/// two wrappers already work around).
+///
+/// Step 03-01 materializes this for SG-1 (the slice-02 walking skeleton).
+pub struct GithubServer {
+    fake: FakeGithub,
+    http_handle: FakeGithubHttpHandle,
+    runtime: std::mem::ManuallyDrop<tokio::runtime::Runtime>,
+}
+
+impl GithubServer {
+    /// Start the supplied `FakeGithub` posture on an in-process HTTP server
+    /// bound to a random `127.0.0.1` port.
+    pub fn start(fake: FakeGithub) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_io()
+            .enable_time()
+            .thread_name("fake-github-rt")
+            .build()
+            .expect("GithubServer::start: build tokio multi_thread runtime");
+        let http_handle = runtime.block_on(fake.serve_http());
+        Self {
+            fake,
+            http_handle,
+            runtime: std::mem::ManuallyDrop::new(runtime),
+        }
+    }
+
+    /// The `http://127.0.0.1:<port>` base URL to feed the `openlore`
+    /// subprocess via `OPENLORE_GITHUB_API_BASE`.
+    pub fn base_url(&self) -> &str {
+        self.http_handle.base_url()
+    }
+
+    /// The underlying `FakeGithub` (for `seen_paths` / `saw_token`
+    /// observation in the sad-path scenarios).
+    pub fn fake(&self) -> &FakeGithub {
+        &self.fake
+    }
+}
+
+impl Drop for GithubServer {
+    fn drop(&mut self) {
+        // SAFETY: ManuallyDrop::take is sound because we only call it here in
+        // the Drop impl and never again. Releasing the runtime on a
+        // background thread keeps the test thread from blocking on a parked
+        // accept() during teardown (same pattern as FakePds / PeerPds).
+        let rt = unsafe { std::mem::ManuallyDrop::take(&mut self.runtime) };
+        let _ = std::thread::Builder::new()
+            .name("fake-github-shutdown".to_string())
+            .spawn(move || drop(rt));
+    }
+}
+
 /// Run `openlore scrape github <target> ...` against a `FakeGithub` HTTP
 /// double, injecting its base URL via `OPENLORE_GITHUB_API_BASE` (the
 /// test-only seam). No stdin; for `--sign` flows that need to drive the
 /// chained compose/sign/publish prompts use
 /// [`run_openlore_scrape_with_stdin`].
 ///
-/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+/// Mirrors [`run_openlore`] (clean env + the slice-01 stub seams + the
+/// in-process FakePds endpoint) and adds the `OPENLORE_GITHUB_API_BASE`
+/// seam pointing at the FakeGithub server. Step 03-01 materializes this for
+/// SG-1.
 pub fn run_openlore_scrape(env: &TestEnv, args: &[&str], github_base_url: &str) -> CliOutcome {
-    // SCAFFOLD: true
-    let _ = (env, args, github_base_url);
-    todo!("DELIVER (slice-02): run openlore scrape with OPENLORE_GITHUB_API_BASE set")
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_GITHUB_API_BASE", github_base_url)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 /// Run `openlore scrape github <target> --sign ...` against a `FakeGithub`
@@ -2203,12 +2286,34 @@ pub fn run_openlore_scrape_with_token(
 /// explicit `assert_state_delta(before, after, universe, expected)` form per
 /// DD-SCR-10, mirroring slice-03's `assert_purge_state_delta`).
 pub fn assert_no_claim_persisted(env: &TestEnv) {
-    // SCAFFOLD: true
-    let _ = env;
-    todo!(
-        "DELIVER (slice-02): assert author_claims.row_count == 0 AND pds.records().is_empty() \
-         AND claims_dir.artifact_count == 0 (scraper_never_persists_unsigned gate)"
-    )
+    // (1) Zero `claims` rows in DuckDB. The DB file may not exist at all when
+    // the scrape ran without `--sign` (no write path ever opened it) — that
+    // is the strongest possible form of "zero rows", so treat absence as 0.
+    let db_path = env.duckdb_path();
+    if db_path.exists() {
+        let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+            panic!(
+                "open DuckDB at {} for no-claim-persisted assertion: {err}",
+                db_path.display()
+            )
+        });
+        // The `claims` table itself may not exist if no migration ran; a
+        // failed query is therefore also "zero rows".
+        let row_count: i64 = conn
+            .query_row("SELECT count(*) FROM claims", [], |r| r.get(0))
+            .unwrap_or(0);
+        assert_eq!(
+            row_count, 0,
+            "scraper_never_persists_unsigned (KPI-SCR-2): running `scrape github` without \
+             --sign must write ZERO rows to the `claims` table; got {row_count}"
+        );
+    }
+
+    // (2) Zero PDS create_record calls (the publish-layer half of the gate).
+    assert_no_pds_call_was_made(env);
+
+    // (3) Zero claim artifact files under claims_dir.
+    assert_no_local_claim_files_exist(env);
 }
 
 /// Universe-bound (gate `candidate_names_source_signal`, KPI-SCR-3): assert
