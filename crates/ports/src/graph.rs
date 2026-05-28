@@ -285,7 +285,11 @@ mod tests {
     /// to the default depth is caught.
     #[test]
     fn traversal_bound_default_is_wd76_depth_two() {
-        assert_eq!(TraversalBound::default().max_depth, 2, "WD-76 default traversal depth");
+        assert_eq!(
+            TraversalBound::default().max_depth,
+            2,
+            "WD-76 default traversal depth"
+        );
         assert_eq!(TraversalBound::DEFAULT_MAX_DEPTH, 2);
     }
 }

@@ -161,10 +161,7 @@ pub trait StoragePort {
     /// Every claim authored by this DID, across all subjects, own + peer
     /// stores. Drives `--contributor`: "one developer's reasoning trail, not a
     /// community consensus".
-    fn query_by_contributor(
-        &self,
-        author_did: &Did,
-    ) -> Result<Vec<AttributedClaim>, StorageError>;
+    fn query_by_contributor(&self, author_did: &Did) -> Result<Vec<AttributedClaim>, StorageError>;
 
     /// The attributed-claim feed for the pure `scoring::score` core. Returns
     /// per-claim rows (the `UNION ALL` of [`Self::query_by_object`]'s shape),

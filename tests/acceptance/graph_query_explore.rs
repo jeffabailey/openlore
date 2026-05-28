@@ -2095,12 +2095,10 @@ fn graph_query_explain_attributes_triangulation_bonus_to_the_contributor_who_ear
         "cli.graph_query.bonus_attributed_to_earner: expected the explicit '+0.5 cross-project \
          triangulation' line in cargo's breakdown;\n--- stdout ---\n{stdout}"
     );
-    let rachel_block_carries_bonus = stdout
-        .split("Contribution: ")
-        .any(|block| {
-            block.starts_with("did:plc:rachel-test")
-                && block.contains("+0.5 cross-project triangulation")
-        });
+    let rachel_block_carries_bonus = stdout.split("Contribution: ").any(|block| {
+        block.starts_with("did:plc:rachel-test")
+            && block.contains("+0.5 cross-project triangulation")
+    });
     assert!(
         rachel_block_carries_bonus,
         "cli.graph_query.bonus_attributed_to_earner (Gate 1): the +0.5 cross-project triangulation \

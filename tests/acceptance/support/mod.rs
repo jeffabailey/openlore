@@ -3594,7 +3594,13 @@ pub fn assert_weight_not_persisted(env: &TestEnv) {
     // persisted position (a table name, a column name, a stored cell, or an
     // on-disk artifact). Matched case-INSENSITIVELY so a `STRONG`/`Strong`/
     // `strong` leak in any casing is still caught.
-    const FORBIDDEN: &[&str] = &["adherence_weight", "weight_bucket", "strong", "moderate", "sparse"];
+    const FORBIDDEN: &[&str] = &[
+        "adherence_weight",
+        "weight_bucket",
+        "strong",
+        "moderate",
+        "sparse",
+    ];
 
     // -- 1. DuckDB scan: enumerate EVERY table dynamically (robust to schema
     // drift), then scan each table's COLUMN NAMES and every ROW's serialized
@@ -3635,7 +3641,9 @@ pub fn assert_weight_not_persisted(env: &TestEnv) {
         assert_forbidden_token_absent(
             table,
             FORBIDDEN,
-            &format!("storage.duckdb.no_weight_or_bucket_column: a DuckDB table is named {table:?}"),
+            &format!(
+                "storage.duckdb.no_weight_or_bucket_column: a DuckDB table is named {table:?}"
+            ),
         );
 
         // Cast EVERY column of EVERY row to text and concatenate, so the scan
@@ -3698,7 +3706,10 @@ pub fn assert_weight_not_persisted(env: &TestEnv) {
     // authoritative claim store; none may carry a persisted weight/bucket. --
     for artifact in collect_claim_artifacts(env) {
         let contents = std::fs::read_to_string(&artifact).unwrap_or_else(|err| {
-            panic!("read claim artifact {} for weight scan: {err}", artifact.display())
+            panic!(
+                "read claim artifact {} for weight scan: {err}",
+                artifact.display()
+            )
         });
         assert_forbidden_token_absent(
             &contents,
@@ -3731,11 +3742,7 @@ fn assert_forbidden_token_absent(haystack: &str, forbidden: &[&str], context: &s
 /// (`claims/`) AND every peer-claims partition (`peer_claims/<encoded_did>/`).
 /// Used by [`assert_weight_not_persisted`] for the on-disk half of the scan.
 fn collect_claim_artifacts(env: &TestEnv) -> Vec<PathBuf> {
-    let share_root = env
-        .home
-        .join(".local")
-        .join("share")
-        .join("openlore");
+    let share_root = env.home.join(".local").join("share").join("openlore");
     let mut out = Vec::new();
     collect_json_files(&share_root, &mut out);
     out

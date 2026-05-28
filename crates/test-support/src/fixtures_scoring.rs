@@ -78,10 +78,10 @@ pub const EXPECTED_CROSS_PROJECT_TRIANGULATION_BONUS: f64 = 0.50;
 /// Example 1 + data-models.md §"Worked example".
 ///
 /// dependency-pinning across three projects:
-///   - cargo:   Rachel 0.91 (Rachel ALSO asserts dependency-pinning on nixpkgs
-///              -> cross-project triangulation; the SCORE-1 breadth case)
+///   - cargo: Rachel 0.91 (Rachel ALSO asserts dependency-pinning on nixpkgs,
+///     so cross-project triangulation applies; the SCORE-1 breadth case)
 ///   - nixpkgs: Rachel 0.88
-///   - deno:    Tobias 0.55 + Maria 0.40 (two distinct authors)
+///   - deno: Tobias 0.55 + Maria 0.40 (two distinct authors)
 ///
 /// Worked arithmetic the `--explain` output must reproduce by hand:
 ///   deno  = 0.55 (Tobias, first author) + 0.40*1.25 (Maria, +0.25 2nd-author)
