@@ -193,8 +193,6 @@ fn arbitrary_attributed_claims() -> impl Strategy<Value = Vec<AttributedClaim>> 
 /// @property @us-graph-006 @j-002 @i-graph-1
 #[test]
 fn scoring_score_is_deterministic_property() {
-    // SCAFFOLD: true
-    //
     // Layer-2 @property (Mandate 9; DD-GRAPH): pure-core direct invocation. The
     // driving port IS the pure `scoring::score` signature. Determinism is
     // structural in a pure core (no clock, no I/O, no HashMap iteration-order
@@ -203,11 +201,42 @@ fn scoring_score_is_deterministic_property() {
     // introduces a HashMap-ordered ranking (or any nondeterministic tiebreak)
     // fails LOUDLY here, mirroring slice-02's
     // `scraper_domain_derive_candidates_is_deterministic_property`.
-    todo!(
-        "DELIVER (slice-04): proptest over arbitrary Vec<AttributedClaim>; assert \
-         score(claims, ScoringConfig::DEFAULT) == score(claims, ScoringConfig::DEFAULT) \
-         (determinism — the by-hand reproducibility precondition)"
-    )
+    //
+    //     forall claims:
+    //         score(claims, ScoringConfig::DEFAULT) == score(claims, ScoringConfig::DEFAULT)
+    //
+    // `WeightedView` derives `PartialEq` (over its ranked `WeightedPairing`s,
+    // their `f64` weights, buckets, and contribution lists), so this byte-for-
+    // byte equality covers ranking ORDER, weights, buckets, AND the per-claim
+    // decomposition. Symmetric-property style (Hebert ch.3 Tier 1): applying the
+    // same pure transformation twice yields the same value. The generator
+    // `arbitrary_attributed_claims()` (reused from SC-1) draws over the bounded
+    // {3 subjects x 2 objects x 3 authors} universe, so the generated sets
+    // exercise single-author, multi-author, AND cross-project-triangulation
+    // pairings — the determinism invariant must hold across every grouping
+    // shape. 02-01 grouped via `BTreeMap` (stable iteration) with a stable
+    // weight-desc / subject / object tiebreak sort; this property pins that
+    // there is no nondeterministic ordering or NaN-driven tiebreak left.
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_attributed_claims(), |claims| {
+            let first = scoring::score(&claims, &ScoringConfig::DEFAULT);
+            let second = scoring::score(&claims, &ScoringConfig::DEFAULT);
+            prop_assert_eq!(
+                first,
+                second,
+                "scoring::score must be DETERMINISTIC: the same attributed claims + config must \
+                 yield a byte-identical WeightedView (same ranking ORDER, same weights, same \
+                 buckets, same contribution lists) — the by-hand reproducibility precondition \
+                 (US-GRAPH-006). A weight a user reproduces by hand must be the SAME weight a \
+                 re-run displays."
+            );
+            Ok(())
+        })
+        .expect(
+            "determinism invariant: score(claims, ScoringConfig::DEFAULT) must equal a second \
+             call with the SAME inputs for all generated attributed-claim sets",
+        );
 }
 
 // =============================================================================
