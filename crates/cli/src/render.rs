@@ -455,9 +455,7 @@ fn render_counter_template(row: &FederatedRow) -> String {
 /// Render the federation footer: the distinct-author count plus the
 /// content-frozen no-merge guarantee. Pure helper.
 fn render_federation_footer(author_count: usize) -> String {
-    format!(
-        "{author_count} author(s). {NO_MERGE_FOOTER_LITERAL}\n"
-    )
+    format!("{author_count} author(s). {NO_MERGE_FOOTER_LITERAL}\n")
 }
 
 /// Render the zero-peers degraded-path footer (FQ-4 / US-FED-003 AC #7):
@@ -894,9 +892,9 @@ mod tests {
 
     /// FQ-7 (WD-42 — habit-bridging affordance, KPI-FED-3): every PEER row
     /// in the federated render carries an inline copy-pasteable counter
-    /// template pre-filled with the target claim's CID + subject + predicate
-    /// + object, shown BY DEFAULT (no `--verbose` gate at the render layer —
-    /// the renderer always emits it). OWN rows do NOT get a template (you
+    /// template pre-filled with the target claim's CID, subject, predicate,
+    /// and object, shown BY DEFAULT (no `--verbose` gate at the render layer
+    /// — the renderer always emits it). OWN rows do NOT get a template (you
     /// don't counter your own claim). The template count equals the peer-row
     /// count. The exact template prefix is content-frozen UX copy, so an
     /// example-based test pins the literal — property-framing would not add

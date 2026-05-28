@@ -24,3 +24,14 @@ pub mod init;
 pub mod peer_add;
 pub mod peer_pull;
 pub mod peer_remove;
+
+/// Strip a `#fragment` from a DID, returning the bare DID. A signed
+/// claim's `author` carries the verification-method fragment
+/// (`did:plc:rachel-test#org.openlore.application`); the bare DID is what
+/// the self-/cross-attribution comparisons and the display lines use.
+/// Shared by [`peer_pull`] (the pure SelfAttribution pre-check) and
+/// [`claim_counter`] (the `counters: <cid> (by <peer>)` preview line) so the
+/// fragment-stripping rule lives in exactly one place.
+pub(crate) fn bare_did(did: &str) -> String {
+    did.split('#').next().unwrap_or(did).to_string()
+}

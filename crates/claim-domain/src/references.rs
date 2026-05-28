@@ -42,12 +42,12 @@
 //!    "body CID" of `claim` (call it `A_body`).
 //! 3. Iterate the ORIGINAL claim's `references[]`:
 //!    a. If any entry's `cid` equals `A_body`, return
-//!       `Err(SelfReference)` (the 03-03 arm).
+//!    `Err(SelfReference)` (the 03-03 arm).
 //!    b. If a `lookup` was supplied, fetch the referenced signed claim
-//!       B. Compute B's body CID the same way (clear B's references,
-//!       canonicalize, hash). If any of B's references targets
-//!       `A_body`, return `Err(CycleDetected { cid: A_body })` (the
-//!       03-04 arm).
+//!    B. Compute B's body CID the same way (clear B's references,
+//!    canonicalize, hash). If any of B's references targets
+//!    `A_body`, return `Err(CycleDetected { cid: A_body })` (the
+//!    03-04 arm).
 //!
 //! The detection runs at **sign time** (before signature bytes are
 //! produced), making the rejection a domain-validation outcome rather

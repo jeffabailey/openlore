@@ -254,10 +254,10 @@ mod tests {
         );
     }
 
-    /// Property: for ANY whitespace-only reason on a counter-claim, the
-    /// validator rejects with `CounterReasonMissing`. Generalizes the
-    /// single empty-string example over the equivalence class of
-    /// "reason that normalizes to empty".
+    // Property: for ANY whitespace-only reason on a counter-claim, the
+    // validator rejects with `CounterReasonMissing`. Generalizes the
+    // single empty-string example over the equivalence class of
+    // "reason that normalizes to empty".
     proptest! {
         #[test]
         fn rejects_counter_claim_with_blank_reason(ws in "[ \t\n\r]{0,12}") {
@@ -295,10 +295,10 @@ mod tests {
         );
     }
 
-    /// Self-counter check fires regardless of which store backs the
-    /// lookup: the cross-store span is the lookup's concern, so any
-    /// resolution to the current user is rejected. Property over an
-    /// arbitrary current-user DID.
+    // Self-counter check fires regardless of which store backs the
+    // lookup: the cross-store span is the lookup's concern, so any
+    // resolution to the current user is rejected. Property over an
+    // arbitrary current-user DID.
     proptest! {
         #[test]
         fn self_counter_rejected_for_any_user_did(
@@ -358,10 +358,10 @@ mod tests {
     // Behavior 4: NON-counter claim needs no reason → Ok.
     // -------------------------------------------------------------------
 
-    /// A plain claim (no `Counters` reference) with `reason: None` is
-    /// fine — reason is required ONLY for counter-claims. Property over
-    /// arbitrary non-counter reference sets (Retracts / Corrects /
-    /// Supersedes) proves the reason rule keys on `Counters` alone.
+    // A plain claim (no `Counters` reference) with `reason: None` is
+    // fine — reason is required ONLY for counter-claims. Property over
+    // arbitrary non-counter reference sets (Retracts / Corrects /
+    // Supersedes) proves the reason rule keys on `Counters` alone.
     proptest! {
         #[test]
         fn non_counter_claim_needs_no_reason(

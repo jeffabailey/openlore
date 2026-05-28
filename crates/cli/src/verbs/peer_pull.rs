@@ -240,7 +240,7 @@ fn evaluate_record(
 ) -> RecordVerdict {
     // SelfAttribution (WD-40): a peer record claiming the LOCAL user's DID
     // is rejected before any storage write.
-    if bare_did(&record.signed_claim.unsigned.author_did.0) == local_did.0 {
+    if crate::verbs::bare_did(&record.signed_claim.unsigned.author_did.0) == local_did.0 {
         return RecordVerdict::rejected("self attribution");
     }
 
@@ -330,11 +330,6 @@ fn hex_nibble(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
-}
-
-/// Strip a `#fragment` from a DID, returning the bare DID.
-fn bare_did(did: &str) -> String {
-    did.split('#').next().unwrap_or(did).to_string()
 }
 
 /// Emit the first-pull orientation block exactly once per install (WD-39).

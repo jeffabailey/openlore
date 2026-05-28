@@ -256,14 +256,14 @@ impl FakePeerPds {
     /// OS-assigned port. Endpoints served (read-only):
     ///
     /// - `GET /xrpc/com.atproto.repo.listRecords?repo=&collection=&cursor=`
-    ///     → 200 + `{records: [{uri, cid, value}], cursor?}`
+    ///   → 200 + `{records: [{uri, cid, value}], cursor?}`
     /// - `GET /xrpc/com.atproto.repo.getRecord?repo=&collection=&rkey=`
-    ///     → 200 + `{uri, cid, value}` or 404 if absent.
+    ///   → 200 + `{uri, cid, value}` or 404 if absent.
     /// - `GET /xrpc/com.atproto.identity.resolveDid?did=`
-    ///     → 200 + a minimal DID document whose `service[].serviceEndpoint`
-    ///       points back at THIS server (so the peer's PDS endpoint
-    ///       resolves to the same base URL — one server per peer keeps
-    ///       wiring simple).
+    ///   → 200 + a minimal DID document whose `service[].serviceEndpoint`
+    ///   points back at THIS server (so the peer's PDS endpoint
+    ///   resolves to the same base URL — one server per peer keeps
+    ///   wiring simple).
     ///
     /// Any other route (including any write path like `createRecord`)
     /// returns 405 to surface accidental writes to a peer endpoint.

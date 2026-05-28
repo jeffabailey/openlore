@@ -147,7 +147,7 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
     // emitted first, ahead of the standard preview framing.
     let preview = render_counter_compose_preview(&ComposedCounterClaim {
         target_cid: target_cid.0.clone(),
-        target_author_did: bare_did(&resolved.author_did.0),
+        target_author_did: crate::verbs::bare_did(&resolved.author_did.0),
         reason,
         author_did: unsigned.author_did.0.clone(),
         composed_at: unsigned.composed_at.clone(),
@@ -290,11 +290,6 @@ fn resolve_target(wiring: &Wiring, target_cid: &Cid) -> Result<Option<ResolvedTa
         return Ok(Some(ResolvedTarget { claim, author_did }));
     }
     Ok(None)
-}
-
-/// Strip a `#fragment` from a DID, returning the bare DID for display.
-fn bare_did(did: &str) -> String {
-    did.split('#').next().unwrap_or(did).to_string()
 }
 
 /// Pure CLI-layer pre-compose validation of the (already NFC-normalized)

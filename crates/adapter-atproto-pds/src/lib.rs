@@ -298,7 +298,7 @@ impl PdsPort for AtProtoPdsAdapter {
             .json(&request_body)
             .send()
             .await
-            .map_err(|err| classify_network_error(err))?;
+            .map_err(classify_network_error)?;
 
         let status = response.status();
         if status.is_success() {

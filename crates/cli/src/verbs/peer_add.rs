@@ -95,8 +95,12 @@ pub fn run(wiring: &Wiring, args: &PeerAddArgs) -> Result<PeerAddOutcome> {
     })
 }
 
-/// Pure render for a fresh subscription (journey step 1 / ADR-013).
-fn render_added(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
+/// The shared "Resolving DID … ok" header block both render paths open
+/// with (US-FED-001 / ADR-013): the resolved handle, PDS endpoint, and the
+/// confirmed claim collection, followed by a blank line. Pure helper — the
+/// fresh-subscribe and idempotent-re-subscribe renders diverge only AFTER
+/// this header, so it lives in one place.
+fn render_resolve_header(peer: &PeerInfo) -> String {
     let mut out = String::new();
     out.push_str(&format!("Resolving DID {} ... ok\n", peer.did.0));
     out.push_str(&format!("  handle           : {}\n", peer.handle));
@@ -106,6 +110,12 @@ fn render_added(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
         lexicon::CLAIM_NSID
     ));
     out.push('\n');
+    out
+}
+
+/// Pure render for a fresh subscription (journey step 1 / ADR-013).
+fn render_added(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
+    let mut out = render_resolve_header(peer);
     out.push_str("Adding peer to subscription list ... ok\n");
     out.push_str(&format!(
         "  subscribed_at    : {}\n",
@@ -125,15 +135,7 @@ fn render_added(peer: &PeerInfo, subscribed_at: DateTime<Utc>) -> String {
 /// Pure render for an idempotent re-subscribe (PS-2 / US-FED-001 AC #3).
 /// Still emits the unsubscribe hint so the user always sees the exit path.
 fn render_already(peer: &PeerInfo, since: DateTime<Utc>) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("Resolving DID {} ... ok\n", peer.did.0));
-    out.push_str(&format!("  handle           : {}\n", peer.handle));
-    out.push_str(&format!("  PDS              : {}\n", peer.pds_endpoint));
-    out.push_str(&format!(
-        "  claim collection : {}  (lexicon ok)\n",
-        lexicon::CLAIM_NSID
-    ));
-    out.push('\n');
+    let mut out = render_resolve_header(peer);
     out.push_str(&format!(
         "already subscribed since {}\n",
         since.to_rfc3339()

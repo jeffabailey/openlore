@@ -186,11 +186,11 @@ impl FakePds {
     ///
     /// Endpoints served (slice-01 subset):
     /// - `POST /xrpc/com.atproto.repo.createRecord`
-    ///     body: `{collection, rkey, record, repo}`
-    ///     response: 200 + `{uri: "at://<did>/<collection>/<rkey>"}`
-    ///     409 on rkey collision (idempotent — record body preserved)
+    ///   body: `{collection, rkey, record, repo}`
+    ///   response: 200 + `{uri: "at://<did>/<collection>/<rkey>"}`
+    ///   409 on rkey collision (idempotent — record body preserved)
     /// - `GET /xrpc/com.atproto.repo.getRecord?collection=&rkey=`
-    ///     response: 200 + `{value: <record body>}` or 404 if absent.
+    ///   response: 200 + `{value: <record body>}` or 404 if absent.
     ///
     /// `simulate_unreachable()` causes the HTTP server to close the
     /// connection without sending any bytes; reqwest classifies this as

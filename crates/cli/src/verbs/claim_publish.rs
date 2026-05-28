@@ -33,7 +33,7 @@
 //! see a clean, non-alarming message — the lifecycle is "the claim is
 //! at this at-uri", not "we just wrote it".
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context};
 use claim_domain::{Cid, SignedClaim};
 use ports::PdsError;
 
@@ -54,7 +54,7 @@ pub enum PublishError {
     /// classifies the network/TLS/rejection root cause; the renderer in
     /// `crate::errors::render_pds_error` shapes the user-facing line
     /// AND the actionable retry hint with the CID baked in. Per US-003
-    /// + KPI-5 the local `<cid>.json` artefact remains intact whenever
+    /// and KPI-5 the local `<cid>.json` artefact remains intact whenever
     /// this variant is returned — the verb does NOT roll back the
     /// preceding local write on a publish-side failure.
     PdsFailed { source: PdsError, cid: Cid },
