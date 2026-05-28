@@ -700,11 +700,80 @@ fn graph_query_by_contributor_own_did_is_a_valid_self_review_annotated_you() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert querying one's OWN DID lists the own claims annotated '(you)' \
-         (not '(subscribed peer)') — a valid self-review — and exit 0 (US-GRAPH-002 Example 2);\n\
+    // Querying one's OWN DID is a valid self-review: every row lists the local
+    // user's own claim annotated "(you)" (the source_table-"Own" relationship),
+    // NEVER "(subscribed peer)"/"(unsubscribed cache)" — those label peers, and
+    // there are no peers here. The honest-trail framing still applies: this is
+    // ONE developer's reasoning trail (the local user's own), not a consensus.
+    //
+    // Universe (port-exposed observable surface of the OWN-DID `--contributor`
+    // trail view): cli.graph_query.contributor_did_present (the local DID heads
+    // the trail), cli.graph_query.self_annotation_you (the header carries
+    // "(you)", NOT a peer relationship), cli.graph_query.subjects_in_trail (all
+    // 3 of the local user's own subjects), cli.graph_query.cid_rows (3 — one per
+    // seeded own claim, none merged/dropped), cli.graph_query.honest_trail_footer
+    // (the content-frozen J-002 framing). Asserted against stdout (the CLI
+    // driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The trail is headed by the local user's OWN DID, annotated "(you)" — a
+    //    self-review. The "(you)" relationship (source_table "Own") is what
+    //    distinguishes this from querying a peer's DID.
+    assert!(
+        stdout.contains(&format!("author_did: {own_did} (you)")),
+        "expected the OWN-DID trail header annotated '(you)' (a valid self-review, \
+         US-GRAPH-002 Example 2); got own_did={own_did};\n--- stdout ---\n{stdout}\n\
          --- graph ---\n{graph:?}"
-    )
+    );
+
+    // 2. The self-review is NEVER mislabeled as a peer relationship — "(you)" is
+    //    the only annotation present (no "(subscribed peer)"/"(unsubscribed
+    //    cache)"; those label OTHER authors, of which there are none here).
+    for peer_label in ["(subscribed peer)", "(unsubscribed cache)"] {
+        assert!(
+            !stdout.contains(peer_label),
+            "the OWN-DID self-review must NOT carry the peer annotation {peer_label:?} — \
+             the local user's own claims are '(you)', never a peer;\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 3. All 3 of the local user's OWN subjects appear in the trail (each own
+    //    claim is independently listed under the self DID; anti-merging WD-73).
+    let distinct_subjects: std::collections::HashSet<&str> =
+        graph.seeded.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(
+        distinct_subjects.len(),
+        3,
+        "fixture precondition: the self-review trail spans 3 distinct own subjects; \
+         got {distinct_subjects:?}"
+    );
+    for subject in &distinct_subjects {
+        assert!(
+            stdout.contains(&format!("subject:    {subject}")),
+            "expected the self-review trail to list own subject {subject};\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 4. Exactly 3 cid-bearing rows — one per seeded own claim, none merged or
+    //    dropped (each own claim is independently attributable).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 3,
+        "expected exactly 3 cid-bearing rows (one per seeded own claim, none merged); \
+         got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. The honest-trail footer still frames the self-review verbatim: even
+    //    one's OWN trail is one developer's reasoning trail, not a consensus
+    //    (J-002 content-frozen).
+    assert!(
+        stdout.contains("one developer's reasoning trail, not a community consensus"),
+        "expected the footer to carry the content-frozen honest-trail framing on the \
+         self-review path;\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-8 (US-GRAPH-002 edge): Aanya queries a DID she has never subscribed to

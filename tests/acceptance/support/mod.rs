@@ -2926,8 +2926,41 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 }],
             )
         }
+        FederatedGraphFixture::OwnClaimsOnlyThree => {
+            // US-GRAPH-002 Example 2 (GQE-7 self-review): three of the LOCAL
+            // user's OWN claims, no peers. Seeded via the real `claim add` verb
+            // (source_table "Own" -> AuthorRelationship::You), so a
+            // `--contributor <own_did>` query lists them annotated "(you)" — a
+            // valid self-review, never "(subscribed peer)". Three DISTINCT
+            // (subject, object) triples so their canonical CIDs differ (the
+            // store keys on cid; identical triples would collide into one row).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let repro = "org.openlore.philosophy.reproducible-builds";
+            let memory = "org.openlore.philosophy.memory-safety";
+            seed_own_plus_peer_graph(
+                env,
+                &[
+                    OwnClaim {
+                        subject: "github:rust-lang/cargo",
+                        object: dep,
+                        confidence: 0.91,
+                    },
+                    OwnClaim {
+                        subject: "github:NixOS/nixpkgs",
+                        object: repro,
+                        confidence: 0.74,
+                    },
+                    OwnClaim {
+                        subject: "github:rust-lang/rust",
+                        object: memory,
+                        confidence: 0.86,
+                    },
+                ],
+                &[],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
-        // steps (GQE-7..27 stay RED until then).
+        // steps (GQE-8..27 stay RED until then).
         other => {
             let _ = env;
             todo!(
