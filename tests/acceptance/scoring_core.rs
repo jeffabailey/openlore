@@ -257,8 +257,6 @@ fn scoring_score_is_deterministic_property() {
 /// @property @us-graph-003 @j-002 @i-graph-4 @kpi-graph-4 @gate-3 @wd-90
 #[test]
 fn scoring_single_author_single_claim_is_sparse_at_any_confidence_property() {
-    // SCAFFOLD: true
-    //
     // Layer-2 @property (Mandate 9; DD-GRAPH): pure-core direct invocation. The
     // driving port IS `scoring::score` (+ the `weight_bucket` it annotates each
     // pairing with). The breadth-guard invariant (WD-74 / WD-90 / I-GRAPH-4):
@@ -276,11 +274,57 @@ fn scoring_single_author_single_claim_is_sparse_at_any_confidence_property() {
     // would flip the bucket. The single-claim fixture has ONE author on ONE
     // subject (no second subject for the same author => no triangulation
     // breadth, per the Q-DELIVER-SCORE-1 rule pinned in SC-6).
-    todo!(
-        "DELIVER (slice-04): proptest confidence in [0.0,1.0]; assert a single-author \
-         single-claim pairing with no cross-project span buckets WeightBucket::Sparse \
-         at EVERY confidence (Gate 3 sparse_renders_sparse; WD-74/WD-90; KPI-GRAPH-4)"
-    )
+    let mut runner = TestRunner::default();
+    runner
+        .run(&(0.0_f64..=1.0), |confidence| {
+            // A SINGLE claim: one author, one subject, one object — no co-author,
+            // no second subject for the same author (no cross-project span). The
+            // ONLY varying input is the confidence magnitude.
+            let claims = vec![AttributedClaim {
+                author_did: Did("did:plc:tobias".to_string()),
+                cid: Cid("bafy-sparse-single".to_string()),
+                subject: "deno".to_string(),
+                predicate: "adheres-to".to_string(),
+                object: "dependency-pinning".to_string(),
+                confidence,
+                composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                relationship: AuthorRelationship::You,
+            }];
+
+            let view = scoring::score(&claims, &ScoringConfig::DEFAULT);
+
+            // Non-vacuity: the single claim yields exactly one ranked pairing, so
+            // the bucket assertion below is never asserted vacuously.
+            prop_assert_eq!(
+                view.ranked.len(),
+                1,
+                "a single attributed claim must produce exactly one ranked pairing"
+            );
+
+            let pairing = &view.ranked[0];
+
+            // The single-author single-claim no-span pairing has NO evidence
+            // breadth, so it MUST bucket Sparse regardless of how high the
+            // confidence (hence the weight) climbs — even at 0.99 the breadth
+            // guard keeps thin evidence thin (Gate 3 sparse_renders_sparse;
+            // WD-74 / WD-90). Manufacturing [STRONG] from a lone high-confidence
+            // opinion is the exact J-002 failure this guard prevents.
+            prop_assert_eq!(
+                pairing.bucket,
+                scoring::WeightBucket::Sparse,
+                "a single-author single-claim pairing with no cross-project span must bucket \
+                 Sparse at confidence {} (weight {}); breadth — not raw confidence — lifts a \
+                 pairing out of Sparse (WD-74/WD-90; Gate 3)",
+                confidence,
+                pairing.weight
+            );
+            Ok(())
+        })
+        .expect(
+            "sparse-renders-sparse invariant: a single-author single-claim pairing with no \
+             cross-project span must bucket WeightBucket::Sparse for every confidence in \
+             [0.0, 1.0] (Gate 3 sparse_renders_sparse; WD-74/WD-90; KPI-GRAPH-4)",
+        );
 }
 
 // =============================================================================
