@@ -1145,15 +1145,78 @@ fn graph_query_weighted_single_claim_single_author_renders_sparse_with_honesty_l
 
     // The single project is labeled [SPARSE]; the output states "based on 1
     // claim by 1 author", advises treating it as a lead not a conclusion, and
-    // manufactures NO confidence. DELIVER materializes
-    // `assert_sparse_rendered_as_sparse` (universe: cli.graph_query.bucket[subject],
-    // cli.graph_query.sparse_honesty_line_present, cli.graph_query.no_manufactured_confidence).
-    todo!(
-        "DELIVER (slice-04): assert the single-claim single-author tokio pairing renders [SPARSE] \
-         with the 'based on 1 claim by 1 author' honesty line + lead-not-conclusion advice, and no \
-         confidence is manufactured (US-GRAPH-003 Example 2; Gate 3 sparse_renders_sparse; \
-         KPI-GRAPH-4 release-gate);\n--- graph ---\n{graph:?}"
-    )
+    // manufactures NO confidence.
+    //
+    // Universe (port-exposed observable surface of the `--weighted` view, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.bucket[tokio]                    — labeled [SPARSE]
+    //   cli.graph_query.sparse_honesty_line_present      — "based on 1 claim by 1 author"
+    //   cli.graph_query.sparse_lead_not_conclusion       — "treat as a lead, not a
+    //                                                       defensible conclusion"
+    //   cli.graph_query.no_manufactured_confidence       — only the real 0.50 appears;
+    //                                                       no dressed-up Strong/Moderate
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: exactly the 1-claim single-project sparse subgraph.
+    assert_eq!(
+        graph.seeded.len(),
+        1,
+        "fixture precondition: the sparse fixture seeds exactly 1 claim; got {}",
+        graph.seeded.len()
+    );
+
+    // 1. The single tokio pairing is bucketed [SPARSE] — a single high-confidence
+    //    opinion is NOT dressed up as Strong/Moderate (Gate 3; WD-74 breadth guard).
+    let tokio_pos = stdout
+        .find("github:tokio-rs/tokio")
+        .expect("the weighted view must rank github:tokio-rs/tokio");
+    assert!(
+        stdout[tokio_pos..].contains("[SPARSE]"),
+        "cli.graph_query.bucket[tokio]: expected the single-claim single-author tokio pairing to \
+         be labeled [SPARSE] (Gate 3 sparse_renders_sparse);\n--- stdout ---\n{stdout}\n\
+         --- graph ---\n{graph:?}"
+    );
+
+    // 2. The epistemic-honesty SENTENCE names the ACTUAL evidence base verbatim
+    //    (WD-74): "based on 1 claim by 1 author". This is the 05-02 addition on
+    //    top of the [SPARSE] label already printed by 05-01.
+    assert!(
+        stdout.contains("based on 1 claim by 1 author"),
+        "cli.graph_query.sparse_honesty_line_present: expected the verbatim honesty line \
+         'based on 1 claim by 1 author' naming the real evidence base (WD-74);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. The lead-not-conclusion framing: a thin pairing is a lead to investigate,
+    //    NEVER a settled verdict (WD-74 epistemic honesty; J-002 mitigation).
+    assert!(
+        stdout.contains("treat as a lead, not a defensible conclusion"),
+        "cli.graph_query.sparse_lead_not_conclusion: expected the lead-not-conclusion advice \
+         'treat as a lead, not a defensible conclusion' (WD-74);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. NO confidence is manufactured from the thin evidence: only the real
+    //    compose-time 0.50 surfaces — never the false-confident STRONG/MODERATE
+    //    labels (a single opinion is not aggregated into community endorsement).
+    assert!(
+        stdout.contains("max-confidence 0.5"),
+        "cli.graph_query.no_manufactured_confidence: expected the real compose-time confidence \
+         0.50 surfaced honestly;\n--- stdout ---\n{stdout}"
+    );
+    // Scope the no-false-confidence check to the tokio PAIRING line (the rank
+    // line carrying its bucket), NOT the whole stdout — the formula legend
+    // always lists all three labels ("bucket labels [STRONG]/[MODERATE]/[SPARSE]
+    // are DISPLAY-ONLY"), which is documentation, not a per-pairing bucket.
+    let tokio_bucket_line = stdout[tokio_pos..]
+        .lines()
+        .next()
+        .expect("the tokio pairing must render a bucket line");
+    assert!(
+        !tokio_bucket_line.contains("[STRONG]") && !tokio_bucket_line.contains("[MODERATE]"),
+        "cli.graph_query.no_manufactured_confidence: a single-claim single-author opinion must \
+         NEVER be dressed up as [STRONG]/[MODERATE] on its pairing line;\n--- tokio line ---\n\
+         {tokio_bucket_line}\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-12 (US-GRAPH-003 edge): Aanya runs `--object reproducible-builds

@@ -1274,8 +1274,60 @@ fn render_weighted_pairing(rank: usize, pairing: &scoring::WeightedPairing) -> S
         max_conf = render_candidate_confidence(pairing.max_confidence),
     ));
     out.push_str(&render_pairing_breadth_line(pairing));
+    // WD-74 (Gate 3 sparse_renders_sparse): a thin (single-claim single-author
+    // no-span) pairing carries an epistemic-honesty block naming its ACTUAL
+    // evidence base + lead-not-conclusion advice, so a single high-confidence
+    // opinion is NEVER presented as a settled verdict (mitigates J-002).
+    out.push_str(&render_sparse_honesty_block(pairing));
     out.push('\n');
     out
+}
+
+/// Content-frozen sparse-honesty line template (WD-74; GQE-11 docstring). Names
+/// the actual evidence base verbatim — "based on N claim(s) by M author(s)" —
+/// with `{claims}` / `{authors}` filled by [`render_sparse_honesty_block`]. Do
+/// NOT paraphrase; the exact wording is the user-visible epistemic-honesty
+/// contract (Gate 3 sparse_renders_sparse).
+const SPARSE_HONESTY_LINE_TEMPLATE: &str = "(!) based on {claims} by {authors}";
+
+/// Content-frozen lead-not-conclusion advice (WD-74; GQE-11 docstring). Thin
+/// evidence is a LEAD to investigate, never a defensible conclusion. Do NOT
+/// paraphrase — the exact phrasing is the user-visible contract.
+const SPARSE_LEAD_NOT_CONCLUSION_ADVICE: &str =
+    "treat as a lead, not a defensible conclusion — investigate before relying on it";
+
+/// Render the WD-74 epistemic-honesty block for a [`WeightBucket::Sparse`]
+/// pairing: a line naming the real evidence base ("(!) based on N claim(s) by
+/// M author(s)") plus the lead-not-conclusion advice. Returns the empty string
+/// for a non-sparse pairing (Strong/Moderate already cleared the breadth guard,
+/// so they need no honesty caveat). Pure helper.
+///
+/// The counts come straight off the pairing's `claim_count` /
+/// `distinct_author_count` — the SAME inputs that drove the
+/// [`scoring::weight_bucket`] breadth guard (WD-74/WD-90) — so the sentence
+/// can never disagree with the `[SPARSE]` label it accompanies.
+fn render_sparse_honesty_block(pairing: &scoring::WeightedPairing) -> String {
+    if !matches!(pairing.bucket, scoring::WeightBucket::Sparse) {
+        return String::new();
+    }
+    let honesty_line = SPARSE_HONESTY_LINE_TEMPLATE
+        .replace("{claims}", &pluralize(pairing.claim_count, "claim"))
+        .replace(
+            "{authors}",
+            &pluralize(pairing.distinct_author_count, "author"),
+        );
+    format!("       {honesty_line}\n       {SPARSE_LEAD_NOT_CONCLUSION_ADVICE}\n")
+}
+
+/// Pluralize a count + singular noun for the honesty line: `1 claim`, `2
+/// claims`, `0 authors`. English `-s` plural suffices for the domain nouns
+/// (claim/author). Pure helper.
+fn pluralize(count: u32, singular: &str) -> String {
+    if count == 1 {
+        format!("{count} {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
 }
 
 /// The breadth line surfaced under a pairing's inputs: the cross-project span
