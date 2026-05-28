@@ -1248,12 +1248,76 @@ fn graph_query_weighted_multi_author_support_raises_triangulation_weight() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert deno's weight includes the per-additional-distinct-author \
-         bonus, the breakdown states 'multi-author: 2 distinct authors raise triangulation', deno \
-         ranks above the single-author comparator at similar max confidence, and both authors \
-         remain individually attributed (US-GRAPH-003 Example 3; KPI-GRAPH-1/2);\n--- graph ---\n{graph:?}"
-    )
+    // deno's two distinct authors (Tobias 0.55 + Aanya 0.40) earn the
+    // per-additional-distinct-author bonus, so deno's weight exceeds the
+    // single-author cargo comparator at the SAME max confidence (0.55) — the
+    // multi-author lift is observable in the ranking. The breakdown states the
+    // content-frozen multi-author line, and BOTH deno authors stay individually
+    // attributed (the aggregate decomposes; anti-merging WD-73 / ADR-022).
+    //
+    // Universe (port-exposed observable surface of the `--weighted` view, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.multi_author_breadth_line — "multi-author: 2 distinct
+    //                                                authors raise triangulation"
+    //   cli.graph_query.ranking_order             — deno (multi-author) before
+    //                                                cargo (single-author) at
+    //                                                similar max confidence
+    //   cli.graph_query.deno_authors_attributed   — both Tobias + Aanya named in
+    //                                                the decomposition (no merge)
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: deno (2 authors) + cargo (1 author), 3 claims total.
+    assert_eq!(
+        graph.seeded.len(),
+        3,
+        "fixture precondition: the multi-author example seeds 3 claims (deno x2 + cargo x1); got {}",
+        graph.seeded.len()
+    );
+
+    // 1. MULTI-AUTHOR breadth line: deno's two distinct authors raise
+    //    triangulation — the content-frozen wording the renderer surfaces when
+    //    distinct_author_count > 1 (the per-additional-author bonus is visible).
+    assert!(
+        stdout.contains("multi-author: 2 distinct authors raise triangulation"),
+        "cli.graph_query.multi_author_breadth_line: expected the breakdown to state \
+         'multi-author: 2 distinct authors raise triangulation' for deno's two-author pairing;\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. The multi-author lift is OBSERVABLE in the ranking: deno (2 authors,
+    //    weight ≈ 1.05) ranks ABOVE the single-author comparator cargo (weight
+    //    0.55) even though both share the same max confidence (0.55). The bonus
+    //    — not raw confidence — is what lifts deno above cargo.
+    let deno_pos = stdout
+        .find("github:denoland/deno")
+        .expect("the weighted view must rank github:denoland/deno");
+    let cargo_pos = stdout
+        .find("github:rust-lang/cargo")
+        .expect("the weighted view must rank github:rust-lang/cargo (single-author comparator)");
+    assert!(
+        deno_pos < cargo_pos,
+        "cli.graph_query.ranking_order: expected deno (2 distinct authors, multi-author bonus) to \
+         rank ABOVE the single-author cargo comparator at the SAME max confidence (0.55) — the \
+         per-additional-distinct-author bonus is the lift;\n--- stdout ---\n{stdout}\n\
+         --- graph ---\n{graph:?}"
+    );
+    // Both pairings display the SAME max confidence (0.55), so the ranking gap is
+    // attributable to the multi-author bonus, not to a confidence difference.
+    assert!(
+        stdout.contains("max-confidence 0.55"),
+        "cli.graph_query.weight_inputs_shown: expected the shared max-confidence 0.55 displayed \
+         (so the lift is the multi-author bonus, not a confidence gap);\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. Both deno authors remain individually attributed in the decomposition —
+    //    the multi-author aggregate NEVER collapses into a faceless consensus
+    //    (anti-merging, WD-73 / ADR-022). Each contributing author is nameable.
+    assert!(
+        stdout.contains("did:plc:tobias-test") && stdout.contains("did:plc:aanya-test"),
+        "cli.graph_query.deno_authors_attributed: expected BOTH deno authors (Tobias + Aanya) to \
+         remain individually attributed in the weighted breakdown (anti-merging);\n\
+         --- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-13 (US-GRAPH-003 edge): two authors disagree sharply on the same
@@ -1282,12 +1346,75 @@ fn graph_query_weighted_conflicting_claims_both_contribute_nothing_dropped() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert both conflicting claims (0.85 and 0.20) contribute to the \
-         weight per their confidence, the breakdown shows both authors + both confidences, and NO \
-         claim is dropped or collapsed into a single averaged value (US-GRAPH-003 Example 4; \
-         KPI-GRAPH-2);\n--- graph ---\n{graph:?}"
-    )
+    // The two sharply-disagreeing claims (Rachel 0.85, Tobias 0.20) on ONE deno
+    // pairing BOTH contribute per their own confidence — never averaged into a
+    // single 0.525 value, never dropped. The breakdown shows BOTH authors AND
+    // BOTH confidences (the aggregate decomposes honestly; anti-merging WD-73 /
+    // ADR-022 — conflict is surfaced, not smoothed away).
+    //
+    // Universe (port-exposed observable surface of the `--weighted` view, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.both_authors_attributed   — Rachel + Tobias both named
+    //   cli.graph_query.both_confidences_shown     — 0.85 AND 0.2 both visible in
+    //                                                the decomposition
+    //   cli.graph_query.claim_and_author_counts    — claims: 2 + authors: 2 (the
+    //                                                conflicting pair is intact)
+    //   cli.graph_query.no_averaged_collapse       — the smoothed-away average
+    //                                                (0.525) NEVER appears
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: exactly the two-author conflicting pair on one project.
+    assert_eq!(
+        graph.seeded.len(),
+        2,
+        "fixture precondition: the conflicting example seeds 2 claims on one project; got {}",
+        graph.seeded.len()
+    );
+
+    // 1. Nothing dropped/merged: the pairing keeps BOTH claims by BOTH authors —
+    //    claims: 2, authors: 2 (a dropped/averaged claim would shrink either count).
+    assert!(
+        stdout.contains("claims  : 2") && stdout.contains("authors: 2"),
+        "cli.graph_query.claim_and_author_counts: expected the conflicting deno pairing to keep \
+         claims: 2 + authors: 2 (neither claim dropped nor collapsed);\n--- stdout ---\n{stdout}\n\
+         --- graph ---\n{graph:?}"
+    );
+
+    // 2. BOTH authors stay individually attributed in the decomposition — the
+    //    conflict is shown, never smoothed into a faceless aggregate (WD-73).
+    assert!(
+        stdout.contains("did:plc:rachel-test") && stdout.contains("did:plc:tobias-test"),
+        "cli.graph_query.both_authors_attributed: expected BOTH conflicting authors (Rachel + \
+         Tobias) named in the weighted breakdown;\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. BOTH confidences appear VERBATIM in the breakdown — each claim
+    //    contributes per its OWN confidence (0.85 and 0.20, rendered as the
+    //    minimal decimals 0.85 and 0.2). The high-confidence claim does NOT erase
+    //    the low one, nor vice versa.
+    assert!(
+        stdout.contains("0.85"),
+        "cli.graph_query.both_confidences_shown: expected Rachel's confidence 0.85 shown verbatim \
+         in the conflicting-claims breakdown;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.2"),
+        "cli.graph_query.both_confidences_shown: expected Tobias's confidence 0.2 (0.20) shown \
+         verbatim in the conflicting-claims breakdown — the low-confidence claim is NOT dropped;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 4. NO averaged-into-oblivion collapse: the arithmetic mean of the two
+    //    conflicting confidences (0.525, displayed 0.52) must NEVER appear — the
+    //    view surfaces the spread honestly, never a single smoothed value (the
+    //    anti-merging crux: aggregates decompose to per-author contributions per
+    //    their own confidence, NOT an averaged consensus; ADR-022 / WD-73).
+    assert!(
+        !stdout.contains("0.52"),
+        "cli.graph_query.no_averaged_collapse: the conflicting pair (0.85, 0.20) must NEVER be \
+         collapsed into the arithmetic mean 0.525/0.52 — each claim contributes per its OWN \
+         confidence (anti-merging, ADR-022);\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-14 (US-GRAPH-003 edge; Gate 4 release-gate): after running a weighted

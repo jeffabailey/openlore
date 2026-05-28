@@ -3139,6 +3139,71 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 ],
             )
         }
+        FederatedGraphFixture::ReproducibleBuildsMultiAuthor => {
+            // US-GRAPH-003 Example 3 (GQE-12 multi-author triangulation;
+            // KPI-GRAPH-1/2): github:denoland/deno carries reproducible-builds
+            // claims from TWO distinct authors (Tobias 0.55 + Aanya 0.40), so the
+            // pairing earns the per-ADDITIONAL-distinct-author bonus (+0.25 on the
+            // second author) and the multi-author breadth line fires. A
+            // single-author comparator (Rachel on github:rust-lang/cargo at 0.55 —
+            // similar MAX confidence to deno) anchors the ranking so the
+            // triangulation lift is OBSERVABLE: deno (2 authors, weight ≈ 1.05+)
+            // ranks above cargo (1 author, weight 0.55). All PEER claims, REAL
+            // Ed25519 crypto + CID recompute so the production pull pipeline
+            // verifies them; both deno authors stay individually attributed in the
+            // decomposition (anti-merging, WD-73). No author spans two projects for
+            // THIS object, so the lift is multi-author, not cross-project.
+            let repro = "org.openlore.philosophy.reproducible-builds";
+            let deno = "github:denoland/deno";
+            let cargo = "github:rust-lang/cargo";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[(deno, repro, 0.55)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:aanya-test",
+                        seed: [13u8; 32],
+                        triples: &[(deno, repro, 0.40)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[(cargo, repro, 0.55)],
+                    },
+                ],
+            )
+        }
+        FederatedGraphFixture::ConflictingConfidencesOneProject => {
+            // US-GRAPH-003 Example 4 (GQE-13 anti-merging; KPI-GRAPH-2): ONE project
+            // (github:denoland/deno) on dependency-pinning carries two sharply
+            // DISAGREEING confidences by two distinct authors (Rachel 0.85, Tobias
+            // 0.20). BOTH must contribute per their OWN confidence — never averaged
+            // into a single 0.525 value, never dropped. The decomposition keeps both
+            // authors AND both confidences visible (anti-merging, WD-73 / ADR-022).
+            // All PEER claims, REAL Ed25519 crypto + CID recompute so the production
+            // pull pipeline verifies them.
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let deno = "github:denoland/deno";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[(deno, dep, 0.85)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[(deno, dep, 0.20)],
+                    },
+                ],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
         // steps (GQE-10..27 stay RED until then).
         other => {

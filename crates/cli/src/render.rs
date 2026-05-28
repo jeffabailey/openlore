@@ -1357,10 +1357,18 @@ fn render_pairing_breadth_line(pairing: &scoring::WeightedPairing) -> String {
             "       multi-author: {} distinct authors raise triangulation\n",
             pairing.distinct_author_count,
         ));
-        // List the contributing authors by DID so the multi-author aggregate
-        // decomposes to its attributed claims (anti-merging, WD-73).
+        // List the contributing authors by DID *with each claim's own
+        // confidence* so the multi-author aggregate decomposes to its attributed
+        // claims (anti-merging, WD-73). Surfacing every contribution's confidence
+        // is what keeps a CONFLICTING pair (e.g. 0.85 vs 0.20) honest: both
+        // claims stay visible per their OWN confidence, never averaged away
+        // (GQE-13; ADR-022 anti-merging-in-aggregates).
         for contribution in pairing.contributions() {
-            out.push_str(&format!("         - {}\n", contribution.author_did.0));
+            out.push_str(&format!(
+                "         - {} (confidence {})\n",
+                contribution.author_did.0,
+                render_candidate_confidence(contribution.base),
+            ));
         }
     }
     out
