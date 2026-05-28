@@ -147,13 +147,63 @@ fn scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget() {
 /// @us-scr-004 @driving_port @real-io @j-004a @error
 #[test]
 fn scrape_auth_anonymous_rate_limit_exhausted_suggests_token_no_partial_list() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SA-3. GIVEN FakeGithub::rate_limited_anon(\"torvalds\") + NO \
-         GITHUB_TOKEN; WHEN scrape github torvalds; THEN exit non-zero, stderr suggests \
-         setting GITHUB_TOKEN for higher limits (5000/hour), and stdout renders NO partial \
-         numbered candidate list, assert_no_claim_persisted(&env)."
-    )
+    let env = TestEnv::initialized();
+
+    // GIVEN an UNAUTHENTICATED posture whose harvest exhausts the anonymous
+    // rate budget: `rate_limited_anon` serves a 403 + rate-limit body (no
+    // `GITHUB_TOKEN` is set by `run_openlore_scrape`). The adapter classifies
+    // the 403 as `GithubError::RateLimited { authenticated: false }` (03-05).
+    let github = GithubServer::start(FakeGithub::rate_limited_anon("torvalds"));
+
+    // WHEN Aanya scrapes the rate-limited target with NO GITHUB_TOKEN.
+    let outcome = run_openlore_scrape(&env, &["scrape", "github", "torvalds"], github.base_url());
+
+    // THEN the run exits NON-ZERO (an exhausted budget is an error, not a
+    // partial harvest — US-SCR-004 Ex 3).
+    assert_ne!(
+        outcome.status, 0,
+        "an exhausted anonymous rate budget must exit non-zero; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the error on stderr NAMES the rate-limit cause (the railway-oriented
+    // `GithubError::RateLimited` Display: "github rate limit exhausted ...").
+    assert!(
+        outcome.stderr.contains("rate limit"),
+        "stderr must name the rate-limit cause; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND it SUGGESTS setting GITHUB_TOKEN for a higher limit — the remediation
+    // an unauthenticated user needs (US-SCR-004 Ex 3). The token env-var name is
+    // surfaced verbatim so the remediation is actionable.
+    assert!(
+        outcome.stderr.contains("GITHUB_TOKEN"),
+        "stderr must suggest setting GITHUB_TOKEN for a higher limit; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND NO partial candidate list is rendered: a rate-limited harvest could
+    // produce a MISLEADINGLY incomplete proposal set, so the refusal
+    // short-circuits BEFORE any candidate-list output (no `[1]` line, no
+    // candidate-list footer).
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "a rate-limited scrape must render NO partial numbered candidate list; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "a rate-limited scrape must render NO candidate-list footer; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND nothing was persisted: zero `claims` rows, zero PDS writes, zero
+    // claim artifact files (scraper_never_persists_unsigned holds on the
+    // error path too — a refused scrape is never a mutation).
+    assert_no_claim_persisted(&env);
 }
 
 /// SA-4 / Sad (US-SCR-004 Ex 4): a stale/invalid `GITHUB_TOKEN` is rejected
