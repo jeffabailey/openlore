@@ -45,15 +45,79 @@ use support::*;
 /// @us-scr-002 @real-io @driving_port @j-004b @kpi-scr-3 @happy @release-gate
 #[test]
 fn scrape_candidates_each_names_its_exact_source_signal() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SC-1 — candidate_names_source_signal gate (KPI-SCR-3). GIVEN \
-         FakeGithub::for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); WHEN \
-         scrape github rust-lang/cargo; THEN \
-         assert_candidate_names_signal(&outcome, &[(1,\"Cargo.lock committed\"), \
-         (2,\"docs/\"), (3,\"test ratio 0.61\"), (4,\"CHANGELOG\"), (5,\"Rust\")]) — each \
-         numbered candidate's source-signal line names its originating signal."
-    )
+    // GIVEN an initialized env + a public repo serving the 5 canonical public
+    // signals (one per jobs.yaml mapping entry → 5 derived candidates).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN Maria scrapes the public repo (no --sign — this is a pure read).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN each of the 5 numbered candidates NAMES the exact public signal that
+    // produced it (auditability — gate candidate_names_source_signal, KPI-SCR-3
+    // / I-SCR-4). The renderer emits, per candidate:
+    //
+    //   [N] <predicate>  <object>
+    //       from signal : <signal value>
+    //       confidence  : ...
+    //
+    // so the originating signal substring MUST appear on a `from signal :` line
+    // WITHIN candidate N's block (between the `[N]` marker and the `[N+1]`
+    // marker). Each expected substring is a distinct fragment of its fixture
+    // signal's detail string — a candidate the user cannot trace back to its
+    // signal is unauditable and breaks J-004b.
+    let expected: &[(usize, &str)] = &[
+        (1, "Cargo.lock committed"),
+        (2, "docs/"),
+        (3, "test/source ratio 0.61"),
+        (4, "CHANGELOG"),
+        (5, "Rust"),
+    ];
+
+    let stdout = &outcome.stdout;
+    for &(number, signal_substring) in expected {
+        // Slice candidate N's block: from its `[N]` marker up to the next
+        // candidate's `[N+1]` marker (or end of output for the last one).
+        let start = stdout.find(&format!("[{number}]")).unwrap_or_else(|| {
+            panic!(
+                "expected a numbered candidate [{number}] in the candidate list; \
+                 \n--- stdout ---\n{stdout}"
+            )
+        });
+        let rest = &stdout[start..];
+        let block_end = rest[1..]
+            .find(&format!("[{}]", number + 1))
+            .map(|i| i + 1)
+            .unwrap_or(rest.len());
+        let block = &rest[..block_end];
+
+        // The originating signal substring appears on a `from signal :` line
+        // INSIDE this candidate's block — the auditability contract.
+        let names_signal = block
+            .lines()
+            .filter(|line| line.contains("from signal :"))
+            .any(|line| line.contains(signal_substring));
+        assert!(
+            names_signal,
+            "candidate [{number}] must name its exact source signal on a \
+             `from signal :` line containing {signal_substring:?} (auditability — \
+             candidate_names_source_signal, KPI-SCR-3); \
+             \n--- candidate [{number}] block ---\n{block}\n--- full stdout ---\n{stdout}"
+        );
+    }
 }
 
 /// SC-2: the candidate-list footer states that NOTHING is a claim until the
