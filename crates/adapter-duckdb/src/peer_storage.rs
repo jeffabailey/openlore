@@ -763,4 +763,70 @@ mod tests {
             "a self-attributed write must leave ZERO peer_claims rows (I-FED-2); got {rows}"
         );
     }
+
+    /// WD-41 (step 04-06): `write_peer_claim` rejects a record whose
+    /// `author_did` references a THIRD PARTY — a DID that is NEITHER the
+    /// local user NOR the subscribed peer — with
+    /// `PeerStorageError::CrossAttribution` at the STORAGE write boundary.
+    /// This is the anti-back-door guard: a peer's PDS serving a record
+    /// authored by someone else must NOT silently file that third party under
+    /// `peer_claims`. The returned error names BOTH the subscribed peer
+    /// (`expected`) and the offending author (`actual`), and ZERO rows land —
+    /// the third party gets no foothold (no "follow Rachel → auto-follow
+    /// Tobias").
+    #[test]
+    fn write_peer_claim_rejects_cross_attributed_record_at_storage_boundary() {
+        let local_did = "did:plc:test-jeff";
+        let peer_did = "did:plc:rachel-test";
+        let third_party_did = "did:plc:trusted-third-party-test";
+        let (_dir, storage, peer) = open_peer_adapter(local_did);
+
+        // The offending record is authored by a third party — NOT the local
+        // user (so the SelfAttribution arm can NOT fire) and NOT the
+        // subscribed peer we pass as `peer_did` (so ONLY the CrossAttribution
+        // guard can reject it). This isolates the author-vs-subscribed-peer
+        // comparison as the thing under test.
+        let signed = signed_claim_authored_by(
+            third_party_did,
+            "bafycrossattrtest00000000000000000000000000",
+        );
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+
+        let result =
+            peer.write_peer_claim(&Did(peer_did.to_string()), &signed, &endpoint, Utc::now());
+
+        match result {
+            Err(PeerStorageError::CrossAttribution { expected, actual }) => {
+                assert_eq!(
+                    expected.0, peer_did,
+                    "CrossAttribution must name the SUBSCRIBED peer as `expected`"
+                );
+                assert_eq!(
+                    actual.0, third_party_did,
+                    "CrossAttribution must name the offending third-party author as `actual`"
+                );
+            }
+            other => panic!(
+                "write_peer_claim MUST reject a record cross-attributed to a third party \
+                 with PeerStorageError::CrossAttribution (WD-41 write-time guard); got {other:?}"
+            ),
+        }
+
+        // No row leaked into peer_claims under ANY author_did — crucially the
+        // third party gets ZERO rows (anti-back-door, WD-41). Asserted through
+        // the shared connection the author adapter holds open.
+        let conn = storage
+            .peer_adapter(&Did(local_did.to_string()))
+            .shared_connection()
+            .clone();
+        let conn = conn.lock().expect("lock conn");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM peer_claims", [], |r| r.get(0))
+            .expect("count peer_claims");
+        assert_eq!(
+            rows, 0,
+            "a cross-attributed write must leave ZERO peer_claims rows (the third party \
+             gets no foothold — WD-41 anti-back-door); got {rows}"
+        );
+    }
 }

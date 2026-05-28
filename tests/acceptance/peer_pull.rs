@@ -763,7 +763,154 @@ fn peer_pull_rejects_self_attribution_at_write_time() {
 /// @us-fed-002 @real-io @driving_port @j-003a @error @wd-41
 #[test]
 fn peer_pull_rejects_cross_attribution_to_third_party_did_at_write_time() {
-    todo!("DELIVER (slice-03): wire DuckDbPeerStorageAdapter::write_peer_claim → if signed.author != subscribed_peer.did → reject with PeerStorageError::CrossAttribution. Use FakePeerPds::with_cross_attribution + fixture_adversarial_peer_cross_attribution. Assert: NO peer_claims row attributed to ANY DID for the cross-attributed record (anti-merging holds at reject path too), other honest records stored, exit nonzero")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes THREE genuinely-signed honest claims PLUS one
+    // adversarial record whose `author` field references a THIRD PARTY
+    // (`did:plc:trusted-third-party-test`), NOT Rachel. Crucially the
+    // cross-attributed record is signed by RACHEL's OWN key and is
+    // CID-consistent (rkey == compute_cid(body)), so it PASSES the pure
+    // layer-1 pre-check (`evaluate_record`: CID round-trip + signature verify
+    // against Rachel's DID-doc key). It is therefore NOT caught at layer 1 —
+    // it reaches `PeerStoragePort::write_peer_claim`, whose WRITE-TIME guard
+    // (WD-41) rejects it with `PeerStorageError::CrossAttribution` because the
+    // record's author (the third party) does NOT equal the SUBSCRIBED peer's
+    // DID. This isolates the write-time author-vs-subscribed-peer guard as the
+    // ONLY thing that can reject this record. The trust model: "subscribing to
+    // a peer means accepting THEIR claims; cross-attributed records are out of
+    // scope." No back-door "follow Rachel → auto-follow Tobias."
+    let peer_did = "did:plc:rachel-test";
+    let third_party_did = "did:plc:trusted-third-party-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex, cross_rkey) =
+        build_verifiable_cross_attribution_peer_records(peer_did, third_party_did, rachel_seed);
+    assert_eq!(
+        records.len(),
+        4,
+        "3 honest + 1 cross-attributed = 4 records hosted"
+    );
+
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Precondition: ONE active subscription via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // DD-FED-10 universe BEFORE the pull: the author `claims` table count.
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Action: `openlore peer pull`. The cross-attributed record verifies +
+    // round-trips at layer 1, reaches `write_peer_claim`, and is rejected by
+    // the WRITE-TIME CrossAttribution guard; the 3 honest records verify +
+    // store (per-record fault isolation, WD-37).
+    let outcome = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Non-zero exit overall — a rejected record flags the pull (WD-37 +
+    //    ADR-013 exit-code table: pull exits non-zero on ANY rejection).
+    assert_ne!(
+        outcome.status, 0,
+        "a cross-attributed record must drive a NON-ZERO exit code (WD-41 / WD-37 / ADR-013);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The progress block reports exactly one rejection WITH the
+    //    cross-attribution reason. The pull renderer surfaces per-record
+    //    reject reasons on stdout (WD-37 + ADR-013) so the user sees WHY the
+    //    record was dropped, not just a count.
+    assert!(
+        outcome.stdout.contains("rejected  : 1"),
+        "the progress block must report exactly one rejected record;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("cross attribution"),
+        "the rejection reason must name the cross-attribution failure (WD-41);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. The 3 honest records still verify + store: the `verified : 3/4` line
+    //    (3 of 4 fetched valid) + the per-peer progress names Rachel.
+    assert!(
+        outcome.stdout.contains(peer_did),
+        "the progress block must name the peer DID {peer_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("3/4"),
+        "expected 3 of 4 fetched records valid (1 cross-attributed rejected);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("Pulled 3 new peer claims"),
+        "the 3 honest records must be stored as NEW;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_claims rows == 3 (honest only); every row attributed to
+    //      Rachel, none to any other DID (anti-merging, I-FED-1).
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    //    - the cross-attributed record's CID is ABSENT from peer_claims (under
+    //      ANY author — crucially the third party gets ZERO rows: no back-door
+    //      "follow Rachel → auto-follow Tobias") AND has NO on-disk artifact
+    //      (the WD-41 write-time guard holds at the reject path).
+    assert_peer_claim_cid_absent(&env, &cross_rkey);
+
+    //    - the third-party DID has ZERO rows attributed to it (the explicit
+    //      anti-back-door invariant of WD-41 — subscribing to Rachel never
+    //      silently follows a third party Rachel cross-publishes for).
+    assert_no_peer_claims_attributed_to(&env, third_party_did);
+
+    //    - author_claims UNCHANGED (a peer pull never touches own claims; the
+    //      cross-attributed record did NOT leak into the user's own table).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull, even when a \
+         record cross-attributes to a third party (DD-FED-10)"
+    );
+
+    //    - exactly 3 `<cid>.json` artifacts under the peer partition (the 3
+    //      honest records only — the cross-attributed record wrote nothing).
+    let partition = peer_claims_dir_for(&env, peer_did);
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        3,
+        "expected exactly 3 `<cid>.json` artifacts (honest only) under {} after the cross-\
+         attribution pull; got {artifact_count}",
+        partition.display()
+    );
 }
 
 /// PP-7 / Sad: One of three subscribed peers' PDSes is currently

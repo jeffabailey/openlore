@@ -1057,6 +1057,38 @@ pub fn assert_peer_claims_attributed_to(env: &TestEnv, peer_did: &str, count: us
     );
 }
 
+/// Universe-bound: "the `peer_claims` store holds ZERO rows attributed to
+/// `did`". Port-exposed name: `peer_storage.claims.row_count_by_author[did]`.
+///
+/// DD-FED-10 (WD-41 anti-back-door, PP-6): the cross-attributed third party
+/// must have ZERO rows — subscribing to Rachel never silently follows a third
+/// party Rachel cross-publishes for. Unlike [`assert_peer_claims_attributed_to`]
+/// this asserts ONLY the per-author count (NOT the total), so it composes with
+/// the honest rows attributed to the subscribed peer. Test-support is the only
+/// place raw SQL is acceptable; production goes through `PeerStoragePort`.
+pub fn assert_no_peer_claims_attributed_to(env: &TestEnv, did: &str) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for zero-attribution assertion: {err}",
+            db_path.display()
+        )
+    });
+    let attributed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_claims WHERE author_did = ?",
+            duckdb::params![did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_claims for {did}: {err}"));
+    assert_eq!(
+        attributed, 0,
+        "anti-back-door (WD-41): the third party {did} must have ZERO peer_claims \
+         rows — subscribing to a peer never silently follows a cross-attributed \
+         third party; got {attributed}"
+    );
+}
+
 /// Build a verifiable peer record set for the PP-1 happy path.
 ///
 /// The slice-03 peer fixtures (`fixture_other_developer_three_claims`)
@@ -1261,6 +1293,121 @@ pub fn build_tampered_signature_peer_records(
     records.push(tampered_record);
 
     (records, pubkey_hex, tampered_rkey)
+}
+
+/// Build a verifiable cross-attribution peer record set for the PP-6 sad
+/// path (WD-41) that exercises the WRITE-TIME `CrossAttribution` guard.
+///
+/// Like [`build_verifiable_peer_records`] this materializes REAL crypto so
+/// EVERY record — honest AND the cross-attributed one — passes the pull
+/// pipeline's pure layer-1 pre-check (`evaluate_record`: CID round-trip +
+/// signature verify against the SUBSCRIBED peer's key). The cross-attributed
+/// record is therefore NOT caught by layer 1; it reaches
+/// `PeerStoragePort::write_peer_claim`, which rejects it with
+/// `PeerStorageError::CrossAttribution` because its `author` field names
+/// `third_party_did` rather than the subscribed `peer_did` (WD-41).
+///
+/// This is the realistic adversarial vector WD-41 describes: the SUBSCRIBED
+/// peer's PDS serves a record signed by the peer's OWN key (so it verifies)
+/// but whose `author` field references a DIFFERENT DID. Storing it would be
+/// the "follow Rachel → auto-follow whoever Rachel cross-publishes for"
+/// back-door the trust model forbids.
+///
+/// Returns `(records, peer_pubkey_hex, cross_rkey)`:
+///   - `records`: three honest peer-attributed claims + one cross-attributed
+///     claim = four wire records to host on `PeerPds::for_peer`.
+///   - `peer_pubkey_hex`: the subscribed peer's Ed25519 pubkey hex for the
+///     verify seam (the SAME key signs every record — the cross-attributed
+///     record's signature verifies, isolating the WRITE-TIME guard as the
+///     ONLY thing that can reject it).
+///   - `cross_rkey`: the CID/rkey of the cross-attributed record so the
+///     caller can assert it was NEVER stored (DD-FED-10 anti-merging at the
+///     reject path — zero rows under ANY author, including the third party).
+///
+/// Test-support is the only place this construction is acceptable; the
+/// production populate path is `peer pull` itself.
+pub fn build_verifiable_cross_attribution_peer_records(
+    peer_did: &str,
+    third_party_did: &str,
+    peer_seed: [u8; 32],
+) -> (Vec<FakePeerRecord>, String, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    // One verifiable record builder: signs `author`'s body with the
+    // SUBSCRIBED peer's key (so it always verifies) and re-keys it so
+    // `rkey == compute_cid(canonical(unsigned))` (so it always passes the
+    // CID round-trip). The `author` field is what varies — honest records
+    // name the peer, the cross-attributed record names the third party.
+    let build = |author_did: &str, object: &str, confidence: f64| -> FakePeerRecord {
+        let confidence_wrapper: claim_domain::Confidence =
+            serde_json::from_value(serde_json::json!(confidence))
+                .expect("confidence value is well-formed");
+        let unsigned = claim_domain::UnsignedClaim {
+            subject: "github:rust-lang/cargo".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+            evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+            confidence: confidence_wrapper,
+            author_did: claim_domain::Did(format!("{author_did}#org.openlore.application")),
+            composed_at: "2026-05-22T09:18:44Z".to_string(),
+            references: Vec::new(),
+            reason: None,
+        };
+
+        let canonical = canonicalize(&unsigned).expect("canonicalize claim");
+        let cid = compute_cid(&canonical);
+        // Always signed by the SUBSCRIBED peer's key — even the
+        // cross-attributed record. This is the WD-41 vector: a peer-signed
+        // record whose `author` names someone else. The signature verifies;
+        // only the write-time author-vs-peer guard catches it.
+        let signature = sign(&cid, &signing_key).expect("sign claim");
+        let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+        let body = serde_json::json!({
+            "subject": "github:rust-lang/cargo",
+            "predicate": "embodiesPhilosophy",
+            "object": object,
+            "evidence": ["https://github.com/rust-lang/cargo"],
+            "confidence": confidence,
+            "author": format!("{author_did}#org.openlore.application"),
+            "composedAt": "2026-05-22T09:18:44Z",
+            "references": [],
+            "signature": {
+                "kid": format!("{peer_did}#org.openlore.application"),
+                "alg": "EdDSA",
+                "sig": sig_b64,
+            }
+        });
+        FakePeerRecord::claim(cid.0, body)
+    };
+
+    // Three honest peer-attributed claims (distinct objects so CIDs cannot
+    // alias) + one cross-attributed claim authored by the third party.
+    let mut records = vec![
+        build(peer_did, "org.openlore.philosophy.dependency-pinning", 0.42),
+        build(
+            peer_did,
+            "org.openlore.philosophy.reproducible-builds",
+            0.71,
+        ),
+        build(peer_did, "org.openlore.philosophy.workspace-cohesion", 0.88),
+    ];
+
+    let cross_record = build(
+        third_party_did,
+        "org.openlore.philosophy.cross-attributed-claim",
+        0.55,
+    );
+    let cross_rkey = cross_record.rkey.clone();
+    records.push(cross_record);
+
+    (records, pubkey_hex, cross_rkey)
 }
 
 /// Universe-bound: "the `peer_claims` store holds NO row for `cid`, under
