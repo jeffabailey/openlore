@@ -1,0 +1,1149 @@
+{
+  "roadmap": {
+    "project_id": "openlore-github-scraper",
+    "created_at": "2026-05-28T12:24:45Z",
+    "total_steps": 39,
+    "feature": "openlore-github-scraper (slice-02 walking skeleton for GitHub scrape -> propose -> sign)",
+    "wave": "DELIVER",
+    "architect": "Morgan (nw-solution-architect)",
+    "paradigm": "functional-rust (ADR-007 \u2014 pure core + effect shell)",
+    "style": "Hexagonal + Modular Monolith (ADR-009; inherited from slice-01)",
+    "inherits": "slice-01 ADR-001..ADR-012 + WD-1..WD-13 + DD-1..DD-13 + I-1..I-12; slice-03 DISCUSS WD-14..WD-25 + DESIGN WD-26..WD-45 + DISTILL DD-FED-1..DD-FED-14 + DEVOPS D-D14..D-D21 + ADR-013..ADR-016; slice-02 DISCUSS WD-46..WD-58 + OD-SCR-1..4 + DESIGN WD-59..WD-68 + ADR-017..019 + DISTILL DD-SCR-1..DD-SCR-14 + DEVOPS D-D22..D-D29 + I-SCR-1..7",
+    "default_agent": "nw-functional-software-crafter",
+    "scenario_coverage": {
+      "total_distill_scenarios": 34,
+      "covered_in_roadmap": 34,
+      "scrape_github": 9,
+      "scrape_candidates": 5,
+      "scrape_sign": 9,
+      "scrape_auth": 5,
+      "scraper_domain": 6
+    },
+    "crate_scope": {
+      "production_crates": 10,
+      "test_support_crates": 1,
+      "xtask_crates": 1,
+      "new_crates": 2,
+      "new_crate_names": [
+        "scraper-domain (PURE)",
+        "adapter-github (EFFECT)"
+      ],
+      "language": "rust",
+      "framework": "cargo workspace + cargo nextest + proptest + wiremock",
+      "paradigm": "functional-rust (pure core + effect shell)",
+      "constraint": "WD-59: slice-02 adds EXACTLY two new crates (scraper-domain PURE + adapter-github EFFECT) and extends ports + cli + xtask in place; count 8 -> 10. A third crate during DELIVER requires returning to DESIGN."
+    },
+    "external_integrations_contract_tested": [
+      {
+        "service": "GitHub Public API (REST and/or GraphQL over HTTPS; READ paths only)",
+        "protocol": "HTTPS public-endpoint allowlist (GET /repos/{owner}/{repo}, /contents/{path}, tags/releases, languages, GET /users/{user}, /users/{user}/repos, or GraphQL public equivalents)",
+        "tool": "Pact-style consumer-driven contract (contract-pact-github sub-job; extends slice-01/03 suite)",
+        "owner": "platform-architect (DEVOPS) per D-D22 + D-D24",
+        "test_location": "tests/contracts/pact/github/",
+        "note": "Out of DELIVER scope as a contract test; DEVOPS owns the public-endpoint allowlist assertion (KPI-SCR-4 release-gate) + recorded real-GitHub fixture. DELIVER consumes FakeGithub (wiremock HTTP stub in test-support) for acceptance scenarios and lands the 5 tests/fixtures/github/ wiremock stubs (D-D25)."
+      }
+    ],
+    "validation": {
+      "status": "approved",
+      "gate": "des-roadmap validate (this file) + des-verify-integrity --roadmap-only + reviewer (nw-acceptance-designer-reviewer) 34/34 scenarios mapped",
+      "approved_at": "2026-05-28",
+      "approved_by": "orchestrator (automated gates: validate+integrity+quality-gate PASS, 34/34 coverage)"
+    },
+    "notes": [
+      "Phase 01 is the DD-SCR-13 fail-for-right-reason gate per acceptance-tests.md \u00a712: extends ports with GithubPort + TargetKind + GithubError + slice-02 ProbeRefusalReason variants; creates the PURE scraper-domain crate + the EFFECT adapter-github crate; wires the cli scrape github [--sign] dispatch; materializes FakeGithub + fixtures_github bodies; extends xtask check-arch/check-probes; writes tests/fixtures/github/ wiremock stubs (D-D25); and registers all 5 [[test]] targets at once (NOT deferred per-file like slice-03 \u2014 register all 5 in 01-05 so the RED gate covers all 34). After this phase all 34 ATs classify RED (panic at todo!()), not BROKEN. Workspace cargo build already passes today (scaffolds self-contained); bootstrap makes the registered test targets reach todo!() RED.",
+      "Phase 02 ships the layer-2 (in-memory) scraper-domain @property + example scenarios FIRST (SD-1..SD-6): derive_candidates + load_mapping + mapping_matches_ssot. These unblock the layer-3 candidate-rendering (SC-*) and harvest (SG-*) phases \u2014 the CLI renders the already-proven pure derivation.",
+      "Phase 03 (scrape_github) ships SG-1..9: resolve target, public-data banner, harvest repo/user signals, public-only refusal, not-found, offline, persist-nothing. SG-1 is the slice-02 walking skeleton (scrape->propose half; the sign half is SS-1). SG-5 is the scraper_only_reads_public_data release-gate (KPI-SCR-4). SG-1/8/9 drive scraper_never_persists_unsigned (KPI-SCR-2).",
+      "Phase 04 ships SC-1..5 (candidate rendering + auditability; SC-1 candidate_names_source_signal release-gate KPI-SCR-3; SC-3 candidate_confidence_no_autoinflate proposal half) + SA-1..5 (optional PAT, rate limits, token-never-leaks; WD-63).",
+      "Phase 05 ships SS-1..9 (review->edit->sign via the slice-01 pipeline; batch --sign N,N,...). SS-1 is the walking-skeleton sign half + scraper_reuses_slice01_publish_path release-gate (I-SCR-6); SS-2 is candidate_confidence_no_autoinflate sign half (KPI-SCR-2 release-gate); SS-3 is provenance display-only / CID stability (WD-62/I-SCR-7).",
+      "Sizing: 39 steps for 34 ATs (5 bootstrap + 34 one-per-scenario) = 1.15 steps/AT. No scenario step is combined this slice \u2014 all 34 are 1:1 with a step (the 5-bootstrap front-load absorbs the per-file [[test]] registration that slice-03 spread out). Combined steps would be permitted (<=3 scenarios sharing files_to_modify + notes) but the 1:1 mapping is cleaner here and keeps each integration gate isolated.",
+      "DD-SCR-10 state-delta migration: load-bearing human-gate scenarios (SG-1, SG-8, SG-9) carry an implementation_notes call-out to migrate assert_no_claim_persisted from the named-helper form to assert_state_delta(before, after, universe, expected) \u2014 universe {author_claims.row_count, pds.records.len, claims_dir.artifact_count} all set_to(\"0\"), modeled on slice-03's assert_purge_state_delta. The Rust state_delta port at tests/common/state_delta.rs was bootstrapped by slice-01; slice-02 INHERITS it.",
+      "Q-DELIVER resolutions baked into implementation_notes: Q-DELIVER-1 (pure YAML parser pin: pick the actively-maintained serde_yaml drop-in fork, pin MAJOR.MINOR; whitelist in check-arch pure-core allowlist WD-65; OR xtask-codegen a Rust table \u2014 SSOT stays jobs.yaml, mapping_matches_ssot guards drift) at 01-02 + 02-06; Q-DELIVER-2 (REST vs GraphQL per signal: GraphQL one-POST default where it covers a signal, REST where simpler to fixture; both public-only) at 01-03 + SG steps; Q-DELIVER-3 (Signal/CandidateClaim placement: scraper-domain default, ports references them for GithubPort signatures; both stay pure) at 01-01 + 01-02; Q-DELIVER-4 (harvest_user page cap: small fixed cap by recency, documented in candidate-list footer) at SG-3 + SA-1; Q-DELIVER-5 (batch-skip gesture: whichever satisfies 'skip one without aborting the rest'; AT asserts behavior not keystroke) at SS-8; Q-DELIVER-6 (wiremock version pin + recorded-vs-live GitHub fixture split; recorded for CI, real public for release per D-D24) at 01-04; Q-DELIVER-7 (candidate-list + progress-block line format per data-models.md \u00a7scrape verb output format) at SG-1 + SC-* + SS-* steps.",
+      "External-integration annotation: the GitHub public-endpoint allowlist Pact contract (KPI-SCR-4 release-gate) is owned by the DEVOPS contract-pact-github sub-job (D-D22); DELIVER consumes FakeGithub + tests/fixtures/github/ (D-D25) and lands the wiremock stubs + the in-process seen_paths allowlist assertion (SG-5). The recorded real-GitHub fixture is DEVOPS's one-time capture (D-D24 Q-DELIVER-6).",
+      "Mutation testing scope (per D-D8 + D-D23): slice-02 adds scraper-domain to the nightly cargo-mutants --package list, kill-rate target >=95% (matches claim-domain Earned Trust \u2014 the signal->predicate derivation is the load-bearing pure-core trust primitive). adapter-github is NOT mutated (effect shell; covered by probe gold-tests + the contract test).",
+      "Human-gate (WD-49/I-SCR-1): the sign path reuses slice-01 VerbClaimAdd + VerbClaimPublish internals via CandidatePrefill \u2014 NO parallel publish path. adapter-github holds NO StoragePort/IdentityPort/PdsPort reference by construction (human-gate at the architecture layer). Public-data-only (WD-51/KPI-SCR-4): adapter-github calls only public endpoints; private targets are refused; probe step 2 asserts it. Confidence 0.25 numeric never auto-inflated (WD-52/WD-10). Pure/effect (WD-56/ADR-007): scraper-domain PURE (check-arch), adapter-github effect with probe() within 250ms (I-4/I-5). Provenance display-only, no CID change (WD-62/I-SCR-7)."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Bootstrap \u2014 DD-SCR-13 fail-for-right-reason gate (slice-02)",
+      "description": "Extend ports with GithubPort; create PURE scraper-domain + EFFECT adapter-github crates; wire cli scrape github [--sign] dispatch; materialize FakeGithub + fixtures_github + tests/fixtures/github/; extend xtask; register all 5 [[test]] targets. After this phase all 34 slice-02 ATs classify RED (panic at todo!()), not BROKEN.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Bootstrap GithubPort + TargetKind + GithubError in ports",
+          "criteria": [
+            "ports crate exposes a GithubPort trait with probe + resolve_target + harvest_repo + harvest_user (async via #[async_trait], public-data-only)",
+            "ports declares TargetKind (Repo{owner,repo} | User{user}) + GithubError (NotFound | NotPublic | RateLimited{authenticated} | TokenRejected | Network | ApiShape)",
+            "ProbeRefusalReason gains GithubPublicApiUnreachable + GithubPrivateNotRefused + GithubTokenRejected + GithubRateLimitHeadersMissing variants",
+            "GithubPort signatures reference scraper-domain Signal (Q-DELIVER-3 default placement); cargo build -p ports succeeds"
+          ],
+          "test_file": "crates/ports/src/lib.rs",
+          "scenario_name": "bootstrap_github_port_trait_surface",
+          "implementation_scope": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/github.rs",
+            "crates/ports/src/probe.rs"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/github.rs",
+            "crates/ports/src/probe.rs"
+          ],
+          "deps": [],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/ports slice-02 extension + ADR-019 + WD-61 (GithubPort is a NEW port, NOT a PdsPort extension \u2014 GitHub shares no method shape/auth model/rate-limit semantics/failure surface with ATProto). GithubPort is async (network) so #[async_trait] is permitted (same justification as PdsPort). TargetKind disambiguates owner/repo (Repo) vs user (User); GithubError::NotPublic carries the 'scraper only reads public data' message (KPI-SCR-4); TokenRejected NEVER carries the token value. Q-DELIVER-3: Signal/CandidateClaim live in scraper-domain by default and ports references them for GithubPort signatures (ports depends on scraper-domain; both pure so I-1/I-2 hold) \u2014 DELIVER may instead place Signal in ports if that direction reads cleaner. Method bodies are trait declarations only; the adapter impl lands in 01-03. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: trait-surface step has no runtime behavior; proptest applies only if a helper combinator type is introduced \u2014 otherwise document the // bypass: (trait declaration, no logic)."
+        },
+        {
+          "id": "01-02",
+          "name": "Create PURE scraper-domain crate (ADTs + derive_candidates + load_mapping stubs)",
+          "criteria": [
+            "New crate crates/scraper-domain (PURE) declares Signal + SignalKind (5 arms) + CandidateClaim + MappingEntry + SignalPredicateMapping + MappingError",
+            "derive_candidates(&[Signal], &SignalPredicateMapping) -> Vec<CandidateClaim> + load_mapping(&str) -> Result<SignalPredicateMapping, MappingError> present with todo!() bodies + SCAFFOLD markers",
+            "The jobs.yaml J-004.signal_predicate_mapping snapshot is embedded via include_str!; a mapping_matches_ssot build-time #[cfg(test)] test asserts the embedded snapshot equals docs/product/jobs.yaml (body todo!() to be filled by SD-6)",
+            "proptest_strategies::arb_signal_set() generator stub is declared (referenced by SD-1/2/3)",
+            "Crate depends ONLY on claim-domain + lexicon (pure) + serde + a pure YAML parser; cargo build -p scraper-domain succeeds"
+          ],
+          "test_file": "crates/scraper-domain/src/lib.rs",
+          "scenario_name": "bootstrap_scraper_domain_pure_crate_surface",
+          "implementation_scope": [
+            "crates/scraper-domain/Cargo.toml",
+            "crates/scraper-domain/src/lib.rs",
+            "crates/scraper-domain/src/signal.rs",
+            "crates/scraper-domain/src/candidate.rs",
+            "crates/scraper-domain/src/mapping.rs",
+            "crates/scraper-domain/src/derive.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs",
+            "crates/scraper-domain/src/jobs_mapping_snapshot.yaml",
+            "Cargo.toml"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/Cargo.toml",
+            "crates/scraper-domain/src/lib.rs",
+            "crates/scraper-domain/src/signal.rs",
+            "crates/scraper-domain/src/candidate.rs",
+            "crates/scraper-domain/src/mapping.rs",
+            "crates/scraper-domain/src/derive.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs",
+            "crates/scraper-domain/src/jobs_mapping_snapshot.yaml",
+            "Cargo.toml"
+          ],
+          "deps": [
+            "01-01"
+          ],
+          "estimated_minutes": 55,
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/scraper-domain + data-models.md \u00a7Signal/\u00a7CandidateClaim/\u00a7mapping + ADR-018 + WD-56/57/59/65/67. This is the FIRST crate addition since slice-01 (WD-59; count 8 -> 10). PURE: no I/O, no tokio/reqwest/duckdb/keyring/std::fs/std::net/std::env/std::time::SystemTime/no adapter-* (I-2). CandidateClaim.confidence is LOAD-BEARING always 0.25 (never auto-inflated, WD-52); CandidateClaim.source_signals is LOAD-BEARING non-empty (auditability, I-SCR-4/KPI-SCR-3). SSOT field-name mapping (data-models.md NOTE): the jobs.yaml entry field `predicate` carries a philosophy NSID -> becomes CandidateClaim.object; the relation verb (embodiesPhilosophy) -> CandidateClaim.predicate. Q-DELIVER-1: embed jobs.yaml mapping at BUILD time via include_str! (pure compile-time include \u2014 does NOT make the crate do filesystem I/O; I-2 holds); pick the actively-maintained serde_yaml drop-in fork and pin MAJOR.MINOR per slice-01 policy (or xtask-codegen a Rust table \u2014 SSOT stays jobs.yaml either way; mapping_matches_ssot guards drift). cargo deny check for the new YAML dep (I-11). This crate is the mutation-test target of the slice (D-D23, >=95% kill-rate). Register in workspace Cargo.toml [workspace.members]. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this bootstrap step lands ADTs + stubbed pure functions; the real derive_candidates/load_mapping bodies + their exhaustive per-arm layer-1 unit tests (out of DISTILL scope per DD-SCR-7) land in Phase 02 driven by SD-*."
+        },
+        {
+          "id": "01-03",
+          "name": "Create EFFECT adapter-github crate (GithubPort impl stub + probe + env seams)",
+          "criteria": [
+            "New crate crates/adapter-github (EFFECT) declares pub struct AdapterGithub; #[async_trait] impl GithubPort for AdapterGithub with every method bodied todo!() + SCAFFOLD markers",
+            "AdapterGithub reads the optional GITHUB_TOKEN env-var (WD-63) and the OPENLORE_GITHUB_API_BASE test-seam base-URL on construction",
+            "probe() signature present (todo!() body; real probe steps land per-scenario) covering the 5 ADR-019 probe responsibilities: public reachability, private refusal, auth-mode, rate-limit-header presence, no-token-leak",
+            "Crate depends on ports + scraper-domain (for Signal) + workspace reqwest (rustls) + tokio + async-trait + serde/serde_json + thiserror + tracing; holds NO StoragePort/IdentityPort/PdsPort reference",
+            "cargo build -p adapter-github succeeds; cargo deny check passes (no new license surface \u2014 reqwest already in workspace, I-11)"
+          ],
+          "test_file": "crates/adapter-github/src/lib.rs",
+          "scenario_name": "bootstrap_adapter_github_effect_crate_stub",
+          "implementation_scope": [
+            "crates/adapter-github/Cargo.toml",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/adapter-github/src/probe.rs",
+            "Cargo.toml"
+          ],
+          "files_to_modify": [
+            "crates/adapter-github/Cargo.toml",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/adapter-github/src/probe.rs",
+            "Cargo.toml"
+          ],
+          "deps": [
+            "01-01",
+            "01-02"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per component-boundaries.md \u00a7crates/adapter-github + architecture-design \u00a76.3 + ADR-019 + WD-63. EFFECT shell: implements GithubPort over the GitHub PUBLIC REST/GraphQL API using the workspace reqwest (rustls). The PAT is an effect-shell credential held ONLY here (never reaches scraper-domain or the signed payload \u2014 SA-5 enforces). adapter-github holds NO StoragePort/IdentityPort/PdsPort reference BY CONSTRUCTION (the human-gate at the architecture layer, I-SCR-1) \u2014 it CANNOT sign or publish. Forbidden deps (I-1): no other adapter-* crate. Q-DELIVER-2: REST vs GraphQL per signal is DELIVER's call \u2014 GraphQL (one POST; fewer round-trips, friendlier to the anon rate budget) where it cleanly covers a signal, REST where simpler to fixture; ADR-019 permits either (both public-only). OPENLORE_GITHUB_API_BASE is the DISTILL-added test-only base-URL seam so the adapter resolves against FakeGithub instead of api.github.com (mirrors the slice-03 OPENLORE_PEER_PDS_ENDPOINT_<did> seam). probe() MUST run within the 250ms budget (I-5). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: trait-impl-skeleton step; live impls land driven by SG-* / SC-* / SA-* scenarios. proptest applies to the no-token-leak invariant once probe bodies land (any output line MUST NOT contain the token value)."
+        },
+        {
+          "id": "01-04",
+          "name": "Wire cli scrape github [--sign] dispatch + CandidatePrefill + SelectionParser + Wiring + ProbeGauntlet",
+          "criteria": [
+            "clap subcommand: openlore scrape github <target> [--sign N[,N...]] parses target + an optional comma-separated index list",
+            "Verb handlers VerbScrapeGithub + CandidateRenderer + CandidatePrefill + SelectionParser present with todo!() bodies + SCAFFOLD markers",
+            "Wiring constructs AdapterGithub (reading GITHUB_TOKEN from env) alongside the slice-01 adapters; ProbeGauntlet runs GithubPort.probe() (skipped under --offline, incompatible with scrape)",
+            "CandidatePrefill is the ONLY bridge from a CandidateClaim to a signed claim; it reuses VerbClaimAdd + VerbClaimPublish internals UNCHANGED (no parallel publish path, WD-66/I-SCR-6)",
+            "cargo build -p cli + cargo build --release -p cli succeed"
+          ],
+          "test_file": "crates/cli/src/lib.rs",
+          "scenario_name": "bootstrap_cli_scrape_github_verb_dispatch",
+          "implementation_scope": [
+            "crates/cli/src/main.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/probe_gauntlet.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/cli/src/candidate_prefill.rs",
+            "crates/cli/src/selection_parser.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/main.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/probe_gauntlet.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/cli/src/candidate_prefill.rs",
+            "crates/cli/src/selection_parser.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "deps": [
+            "01-01",
+            "01-02",
+            "01-03"
+          ],
+          "estimated_minutes": 60,
+          "implementation_notes": "Per ADR-017 verb shape + component-boundaries.md \u00a7cli slice-02 extension + WD-60/66. cli is the composition root \u2014 the ONLY crate that may wire adapter-github into GithubPort (I-3). CandidatePrefill maps CandidateClaim fields into the slice-01 UnsignedClaim pre-filled compose editor per data-models.md table (subject/predicate/object/evidence/confidence pre-filled + editable; author_did/composed_at from slice-01 ports at sign time; references empty). source_signals is NOT a claim field \u2014 rendered as the display-only derived-from line + the audit source-signal line (WD-62). SelectionParser rejects duplicate/out-of-range indices BEFORE compose (SS-4/SS-9). Q-DELIVER-7: candidate-list + progress-block line format per data-models.md \u00a7scrape verb output format. The display-only derived-from line NEVER reaches claim-domain::canonicalize (CID stability, I-SCR-7). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: verb dispatch covered by clap-derive snapshot tests (single-example fallback acceptable \u2014 clap parsing is itself a substrate; document // bypass:); SelectionParser duplicate/out-of-range rejection covered by proptest (forall list with a dup or index>len: reject)."
+        },
+        {
+          "id": "01-05",
+          "name": "Materialize FakeGithub + fixtures_github + xtask + tests/fixtures/github/ + 5 [[test]] targets (RED gate)",
+          "criteria": [
+            "openlore_test_support::FakeGithub constructors materialized: for_public_repo, for_public_user, for_not_found, for_private_target, offline, rate_limited_anon, with_rejected_token, with_no_matching_signals, with_multi_signal_single_predicate, authenticated, serve_http, saw_token, seen_paths, auth_mode (wiremock-driven; constructor-pinned postures per DD-SCR-3; no private surface; holds no storage/identity/pds ref per DD-SCR-12)",
+            "Fixtures fixture_cargo_five_signals + fixture_torvalds_user_aggregate_signals + fixture_three_docs_signals_one_predicate materialized in crates/test-support/src/fixtures_github.rs",
+            "tests/acceptance/support/mod.rs extended with run_openlore_scrape + run_openlore_scrape_with_stdin + run_openlore_scrape_with_token + assert_no_claim_persisted + assert_candidate_names_signal + assert_candidate_confidence + assert_candidate_confidence_unchanged + assert_scraper_reuses_slice01_publish_path + assert_only_public_endpoints_called + assert_token_value_absent (DD-SCR-5)",
+            "tests/fixtures/github/ contains the 5 wiremock stubs: public_repo, public_user, private_refusal, rate_limited, token_rejected (D-D25)",
+            "xtask check-arch adds scraper-domain to the pure-core allowlist (whitelist its pure YAML-parse dep, WD-65) + registers adapter-github as an effect adapter wired only by cli; xtask check-probes adds the impl GithubPort for <Adapter> non-stub probe() rule",
+            "All 5 [[test]] targets (scrape_github, scrape_candidates, scrape_sign, scrape_auth, scraper_domain) registered in crates/cli/Cargo.toml AT ONCE (DD-SCR-14, NOT deferred per-file)",
+            "cargo build --tests succeeds; cargo nextest run --tests classifies all 34 slice-02 ATs as RED (panic at todo!()), not BROKEN"
+          ],
+          "test_file": "tests/acceptance/support/mod.rs",
+          "scenario_name": "bootstrap_fake_github_fixtures_and_red_gate",
+          "implementation_scope": [
+            "crates/test-support/src/fake_github.rs",
+            "crates/test-support/src/fixtures_github.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/src/check_probes.rs",
+            "crates/cli/Cargo.toml",
+            "tests/fixtures/github/public_repo.json",
+            "tests/fixtures/github/public_user.json",
+            "tests/fixtures/github/private_refusal.json",
+            "tests/fixtures/github/rate_limited.json",
+            "tests/fixtures/github/token_rejected.json"
+          ],
+          "files_to_modify": [
+            "crates/test-support/src/fake_github.rs",
+            "crates/test-support/src/fixtures_github.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/src/check_probes.rs",
+            "crates/cli/Cargo.toml",
+            "tests/fixtures/github/public_repo.json",
+            "tests/fixtures/github/public_user.json",
+            "tests/fixtures/github/private_refusal.json",
+            "tests/fixtures/github/rate_limited.json",
+            "tests/fixtures/github/token_rejected.json"
+          ],
+          "deps": [
+            "01-04"
+          ],
+          "estimated_minutes": 70,
+          "implementation_notes": "Per acceptance-tests.md \u00a711 + \u00a712 + DD-SCR-5/12/13/14 + D-D24/D-D25 + Q-DELIVER-6. FakeGithub is the test seam for GitHub public reads; DD-SCR-12 STRUCTURAL guarantees: (a) no constructor exposes a private surface, so scraper_only_reads_public_data is enforced by the double's shape + a seen_paths allowlist assertion; (b) the double holds NO storage/identity/pds reference (CANNOT sign or publish); (c) the token lives only in the fake's auth state, observable via saw_token(token)->bool but never echoed in Debug/output, so assert_token_value_absent + saw_token together prove auth happened WITHOUT leaking the value. Q-DELIVER-6: pin wiremock MAJOR.MINOR; recorded fixtures for CI, real public GitHub for the release variant (D-D24). Same tokio::spawn + AbortOnDrop runtime as FakePds/FakePeerPds (Q-DELIVER-2 in DISTILL). Register ALL 5 [[test]] targets here AT ONCE (NOT per-file like slice-03) so the RED gate covers all 34. SS-* scenarios reuse the slice-01 helpers assert_compose_preview_contains_not_as_truth + assert_no_pds_call_was_made + assert_pds_contains_record_at UNCHANGED. After this step: cargo nextest run --tests --no-fail-fast 2>&1 | grep -c 'not yet implemented' equals 34 (DD-SCR-13 gate \u2014 any BROKEN AT blocks the outside-in loop). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: test-support bodies are test infrastructure; proptest applies to the structural posture invariants (any path not on the public allowlist => seen_paths assertion fails; the token value never appears in any captured output)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "scraper-domain pure core \u2014 layer-2 derivation properties + mapping SSOT (6 scenarios)",
+      "description": "Ship SD-1..SD-6: the LOAD-BEARING auditability (SD-1 @property), no-auto-inflation (SD-2 @property), and determinism (SD-3 @property) invariants; the collapse (SD-4) + empty-on-no-match (SD-5) examples; and the mapping_matches_ssot drift gate (SD-6). Layer 2 in-memory direct against scraper_domain \u2014 the pure derivation the CLI layers render in Phases 03-05.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "SD-1 every candidate names at least one source signal (@property)",
+          "criteria": [
+            "derive_candidates produces candidates whose source_signals is NON-EMPTY for every candidate (auditability invariant, I-SCR-4/KPI-SCR-3)",
+            "Property: forall (signals, mapping): derive_candidates(signals, mapping).all(|c| !c.source_signals.is_empty())",
+            "The property is non-vacuous \u2014 arb_signal_set() yields at-least-one mapping-matching signal in the positive arm (Hebert ch.6)",
+            "SD-1 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_every_candidate_names_at_least_one_source_signal_property",
+          "implementation_scope": [
+            "crates/scraper-domain/src/derive.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/derive.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs"
+          ],
+          "deps": [
+            "01-05"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per component-boundaries.md \u00a7scraper-domain probe responsibilities + WD-53 + I-SCR-4 + KPI-SCR-3. LAYER-2 @property scenario (DD-SCR-6 / Mandate 9 PBT-full at layer 2). Drives proptest over scraper_domain::proptest_strategies::arb_signal_set() x the embedded SSOT mapping; asserts EVERY produced CandidateClaim.source_signals is non-empty. A candidate with zero source signals is a bug, not a proposal \u2014 the negative is load-bearing. arb_signal_set() generates signals whose kinds span the 5 mapping entries AND signals whose kinds match NO entry (so the negative arm is non-vacuous per Hebert ch.6). Reuse the slice-01/03 proptest.toml seed-pin convention. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 and THIS IS ONE OF THEM (proptest IS the implementation strategy here). Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this layer-2 step IS proptest per Mandate 9 \u2014 the @property auditability invariant runs over arb_signal_set(); PROPTEST_CASES default 256, nightly 4096."
+        },
+        {
+          "id": "02-02",
+          "name": "SD-2 every candidate confidence is the quarter default (@property)",
+          "criteria": [
+            "derive_candidates produces candidates with confidence == 0.25 (the mapping default); NONE above 0.3 (no auto-inflation, WD-52/WD-10)",
+            "Property: forall (signals, mapping): derive_candidates(signals, mapping).all(|c| c.confidence == 0.25)",
+            "This is the proposal-time half of candidate_confidence_no_autoinflate, proven generatively",
+            "SD-2 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_every_candidate_confidence_is_the_quarter_default_property",
+          "implementation_scope": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per WD-52 + WD-10 + I-SCR-3 + KPI-SCR-2 + data-models.md \u00a7CandidateClaim invariants. LAYER-2 @property scenario. Drives proptest over arb_signal_set() x the SSOT mapping; asserts EVERY produced CandidateClaim.confidence == 0.25 AND none > 0.3. The scraper has weak evidence (one public signal) so the conservative default forces the human to consciously raise confidence \u2014 only the human may raise it (WD-52). Confidence is numeric-only in the signed payload (WD-10); the 'speculative' bucket is display-only (rendered at the CLI layer, SC-3). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 and THIS IS ONE OF THEM. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: this layer-2 step IS proptest per Mandate 9 \u2014 confidence is an f64 so the assertion is exact-equality to 0.25 (the mapping default is a literal, not a computed value, so == is safe here)."
+        },
+        {
+          "id": "02-03",
+          "name": "SD-3 derive_candidates is deterministic (@property)",
+          "criteria": [
+            "derive_candidates is DETERMINISTIC \u2014 same signals + mapping produce the same candidates in the same order",
+            "Property: forall (signals, mapping): derive_candidates(signals, mapping) == derive_candidates(signals, mapping)",
+            "Determinism backs auditability (a re-run shows the SAME proposals) + SG-9's pure-read contract at the CLI layer",
+            "SD-3 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_derive_candidates_is_deterministic_property",
+          "implementation_scope": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "deps": [
+            "02-02"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per component-boundaries.md \u00a7scraper-domain property 1 + ADR-007 + ADR-018. LAYER-2 @property scenario. Drives proptest over arb_signal_set(); asserts two calls to derive_candidates with the SAME inputs yield byte-equal Vec<CandidateClaim> (same candidates, same order). Determinism is load-bearing for auditability (a re-run shows the user the SAME proposals they reviewed) and for SG-9's pure-read contract (a scrape never mutates state no matter how many times it runs). A pure function over ordered inputs MUST be order-stable: use a deterministic iteration order over the mapping (do NOT iterate a HashMap; use a Vec or BTreeMap). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 and THIS IS ONE OF THEM. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: derive PartialEq on CandidateClaim + Signal so the byte-equal Vec comparison compiles; the determinism property catches any accidental HashMap iteration order leak."
+        },
+        {
+          "id": "02-04",
+          "name": "SD-4 multiple signals for one predicate collapse into one candidate",
+          "criteria": [
+            "Three distinct signals whose kinds all map to org.openlore.philosophy.documentation-first produce exactly ONE candidate",
+            "That candidate's source_signals has length 3 (all contributing signals listed; no near-duplicates)",
+            "The evidence vector carries each contributing signal's source_url",
+            "SD-4 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_multiple_signals_for_one_predicate_collapse_into_one_candidate",
+          "implementation_scope": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "deps": [
+            "02-03"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-002 Example 4 + I-SCR-4 + data-models.md \u00a7CandidateClaim invariants. EXAMPLE-PINNED layer-2 scenario (not @property). GIVEN three Signals whose kinds all map to documentation-first; WHEN derive_candidates(signals, mapping); THEN result.len() == 1 AND result[0].source_signals.len() == 3 (collapse, not three near-duplicates). The collapse is the PURE derivation's job; SC-4 in Phase 04 pins its user-visible rendering. The evidence vector then carries each contributing signal's source_url. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 SD-4 is example-pinned (a fixed three-signal fixture). Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the collapse groups signals by their mapped predicate (a Vec/BTreeMap fold, NOT HashMap, to preserve SD-3 determinism); the inner-loop layer-1 unit tests exhaustively cover each per-arm collapse (out of DISTILL scope per DD-SCR-7)."
+        },
+        {
+          "id": "02-05",
+          "name": "SD-5 zero matching signals derive an empty candidate list",
+          "criteria": [
+            "A signal set whose kinds match NO mapping entry derives an EMPTY candidate list (Vec::new())",
+            "Empty is a valid outcome (not an Err, not a panic) \u2014 nothing-to-propose is not an error",
+            "The CLI layer (SG-7) renders the 'no candidates derived' message + exit 0 from this empty Vec",
+            "SD-5 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_zero_matching_signals_derive_an_empty_candidate_list",
+          "implementation_scope": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/derive.rs"
+          ],
+          "deps": [
+            "02-03"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-SCR-002 Example 2 + data-models.md. EXAMPLE-PINNED layer-2 edge scenario. GIVEN signals whose kinds match NO mapping entry; WHEN derive_candidates(signals, mapping); THEN result.is_empty() (empty Vec, not Err \u2014 nothing-to-propose is not an error). This is the non-vacuity counterpart to SD-1's positive arm. The CLI layer's SG-7 renders 'No candidate claims could be derived' + exit 0 from this empty Vec. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 SD-5 is example-pinned (a fixed no-match fixture). Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: derive_candidates returns Vec<CandidateClaim> (NOT Result) \u2014 an empty harvest is a valid empty Vec, distinct from load_mapping's Result<_, MappingError> for a malformed mapping."
+        },
+        {
+          "id": "02-06",
+          "name": "SD-6 embedded mapping matches jobs.yaml SSOT (mapping_matches_ssot drift gate)",
+          "criteria": [
+            "load_mapping(EMBEDDED_JOBS_YAML_MAPPING) parses to exactly 5 entries",
+            "Every predicate is an org.openlore.philosophy.* NSID; every default_confidence == 0.25",
+            "The parsed set equals the live docs/product/jobs.yaml J-004.signal_predicate_mapping read from disk in the test (drift fails LOUD)",
+            "The production crate enforces the same via a build-time mapping_matches_ssot #[cfg(test)] test (WD-67); this layer-2 acceptance pins the SSOT-conformance contract",
+            "SD-6 passes"
+          ],
+          "test_file": "tests/acceptance/scraper_domain.rs",
+          "scenario_name": "scraper_domain_embedded_mapping_matches_jobs_yaml_ssot",
+          "implementation_scope": [
+            "crates/scraper-domain/src/mapping.rs",
+            "crates/scraper-domain/src/jobs_mapping_snapshot.yaml"
+          ],
+          "files_to_modify": [
+            "crates/scraper-domain/src/mapping.rs",
+            "crates/scraper-domain/src/jobs_mapping_snapshot.yaml"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per WD-53 + WD-67 + I-SCR-5 + ADR-018 + data-models.md \u00a7mapping SSOT. EXAMPLE-PINNED layer-2 scenario; the mapping drift guardrail (gate-equivalent mapping_matches_ssot). load_mapping parses the include_str!-embedded jobs.yaml mapping snapshot (Q-DELIVER-1: pure YAML parser, MAJOR.MINOR pin; OR xtask-codegen). The test reads docs/product/jobs.yaml :: J-004.signal_predicate_mapping from disk and asserts byte/semantic equality with the embedded snapshot \u2014 divergent hardcode fails LOUD. SSOT field-name mapping per data-models.md NOTE: jobs.yaml entry field `predicate` carries the philosophy NSID -> CandidateClaim.object; the relation verb -> CandidateClaim.predicate. This drift gate is the forward-defense against the mapping diverging from product's auditable SSOT. The production crate's build-time mapping_matches_ssot test (stubbed in 01-02) is filled here. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property \u2014 SD-6 is example-pinned (the SSOT is a fixed 5-entry table). Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the build-time test reads jobs.yaml via env!(\"CARGO_MANIFEST_DIR\")-relative path AT TEST TIME (allowed \u2014 it is a #[cfg(test)] read, NOT runtime I/O; the runtime path uses the include_str! snapshot so the crate stays pure per I-2)."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "scrape_github \u2014 harvest + public-data-only + persist-nothing (9 scenarios)",
+      "description": "Ship SG-1..9: the scrape->propose walking skeleton (SG-1), the public-data banner ordering (SG-2), user-target bounded aggregate (SG-3), the harvest sad paths (SG-4 404, SG-5 private-refusal release-gate, SG-6 offline), no-match (SG-7), and the persist-nothing reinforcements (SG-8 PDS, SG-9 repeated-run). SG-1/8/9 drive scraper_never_persists_unsigned (KPI-SCR-2); SG-5 drives scraper_only_reads_public_data (KPI-SCR-4).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "SG-1 walking skeleton \u2014 harvest public repo, propose, persist nothing",
+          "criteria": [
+            "openlore scrape github rust-lang/cargo (no --sign) prints the public-data-only banner BEFORE any harvest, reports the harvested signal count, renders a numbered candidate list with the 'nothing is a claim until you sign it' footer",
+            "Persists NOTHING: zero author_claims rows, zero PDS writes, zero claims/<cid>.json files (gate scraper_never_persists_unsigned, KPI-SCR-2)",
+            "Exit code 0",
+            "SG-1 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "deps": [
+            "01-05",
+            "02-01",
+            "02-02",
+            "02-03"
+          ],
+          "estimated_minutes": 55,
+          "implementation_notes": "Per ADR-017 + WD-50/60 + WD-49/55 + I-SCR-1 + KPI-SCR-2 + data-models.md \u00a7scrape verb output format. SLICE-02 WALKING SKELETON (scrape->propose half; the sign half is SS-1). GIVEN FakeGithub::for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()).serve_http() wired via OPENLORE_GITHUB_API_BASE; WHEN run_openlore_scrape(&env, &[\"scrape\",\"github\",\"rust-lang/cargo\"]); THEN exit 0, stdout has the public-data-only banner BEFORE the harvest line, the '5 signals' count, a numbered candidate list (1..5), the 'nothing is a claim until you sign it' footer; AND assert_no_claim_persisted(&env) (zero claims rows + zero PDS writes + zero claims/<cid>.json files) \u2014 the load-bearing scraper_never_persists_unsigned gate. Q-DELIVER-7: line format per data-models.md sketch. DD-SCR-10 STATE-DELTA MIGRATION (load-bearing): once assert_no_claim_persisted's body is real, migrate THIS scenario to assert_state_delta(before, after, universe, expected) with universe {author_claims.row_count, pds.records.len, claims_dir.artifact_count} all set_to(\"0\"), modeled on slice-03's assert_purge_state_delta; universe entries MUST be port-exposed names, never internal struct fields (Mandate 8). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the harvest is the ONLY network beat; the candidate render runs the pure scraper_domain::derive_candidates (already proven in Phase 02), so this step is mostly the cli orchestration + the banner-before-harvest ordering."
+        },
+        {
+          "id": "03-02",
+          "name": "SG-2 public-data banner precedes any harvest",
+          "criteria": [
+            "The banner's 'only PUBLIC GitHub data is read ... Nothing published' text precedes the 'Harvesting public signals' line in stdout (ordering, not just presence)",
+            "The banner names BOTH 'only public data' and 'nothing is published'",
+            "SG-2 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_prints_public_data_banner_before_any_harvest",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-51 + KPI-SCR-4 (trust affordance) + data-models.md \u00a7scrape verb output format banner line. Assert the banner substring index < the harvest-line substring index in stdout (ORDERING), AND the banner names BOTH 'only public data' and 'nothing is published'. The emotional arc is skeptical -> reassured: the user is reassured no private data is read before any network beat begins. This is a reassurance contract, not a guardrail gate (the load-bearing public-data guardrail is SG-5). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the ordering assertion uses str::find on the captured stdout to compare byte offsets; the banner is emitted unconditionally before the harvest future is awaited."
+        },
+        {
+          "id": "03-03",
+          "name": "SG-3 user target resolves and harvests a bounded aggregate",
+          "criteria": [
+            "openlore scrape github torvalds resolves the target as a USER (not a repo)",
+            "A bounded aggregate signal count is reported (deep triangulation deferred to slice-04, WD-64)",
+            "Candidates render normally; exit 0",
+            "SG-3 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_resolves_user_target_and_harvests_bounded_aggregate",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-SCR-001 Example 2 + WD-64 + Q-DELIVER-4. GIVEN FakeGithub::for_public_user(\"torvalds\", fixture_torvalds_user_aggregate_signals()); WHEN scrape github torvalds; THEN exit 0, stdout reports the target resolved as a USER (not a repo) and a bounded aggregate signal count; candidates render normally. Q-DELIVER-4: harvest_user implements a small fixed page cap (e.g. first N public repos by recency) documented in the candidate-list footer; the exact cap is an empirical tuning call against the anon/PAT rate budget. resolve_target disambiguates owner/repo (Repo) vs user (User) via TargetKind. Deep cross-repo triangulation is slice-04 (scoring-graph). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: harvest_user walks all bounded pages (cap enforced in the adapter); the inner-loop proptest covers the page-cap boundary (a target with > cap repos still returns exactly cap-bounded signals)."
+        },
+        {
+          "id": "03-04",
+          "name": "SG-4 rejects nonexistent target with zero candidates",
+          "criteria": [
+            "openlore scrape github ghost-org/ghost-repo (404) exits non-zero",
+            "stderr names the target AND the not-found cause; no numbered candidate list is rendered",
+            "Nothing persisted (assert_no_claim_persisted)",
+            "SG-4 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_rejects_nonexistent_target_with_zero_candidates",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-001 Example 3 + ADR-019 \u00a7GithubError::NotFound. SAD PATH example-only (Mandate 11). GIVEN FakeGithub::for_not_found(\"ghost-org/ghost-repo\"); WHEN scrape github ghost-org/ghost-repo; THEN exit non-zero, stderr names the target AND the not-found cause, no numbered candidate list is rendered, assert_no_claim_persisted(&env). GithubError::NotFound{target} carries the target name. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only \u2014 THIS sad path is example-enumerated, never PBT-generated); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: map the 404 to GithubError::NotFound in the adapter; the cli renders the structured error to stderr + a non-zero ExitCode."
+        },
+        {
+          "id": "03-05",
+          "name": "SG-5 refuses private target, calls no private endpoint (release-gate)",
+          "criteria": [
+            "openlore scrape github acme-corp/secret-repo (private) exits non-zero; stderr contains 'scraper only reads public data'",
+            "assert_only_public_endpoints_called(&github): every FakeGithub::seen_paths entry is on the public allowlist; no private path",
+            "Zero candidates; nothing persisted (gate scraper_only_reads_public_data, KPI-SCR-4 release-blocking)",
+            "SG-5 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_refuses_private_target_and_calls_no_private_endpoint",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/adapter-github/src/probe.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/adapter-github/src/probe.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-SCR-001 Example 4 + WD-51 + I-SCR-2 + KPI-SCR-4 (release-blocking) + ADR-019 \u00a7GithubError::NotPublic + probe step 2. LOAD-BEARING no-surveillance guardrail (gate scraper_only_reads_public_data). Public-data-only is STRUCTURAL: FakeGithub::for_private_target has no private surface to serve, and the production code's request paths (asserted via FakeGithub::seen_paths) MUST all be on the public allowlist. GIVEN FakeGithub::for_private_target(\"acme-corp/secret-repo\"); WHEN scrape github acme-corp/secret-repo; THEN exit non-zero, stderr contains 'scraper only reads public data', assert_only_public_endpoints_called(&github) (every seen_paths entry on the public allowlist; no private path), no candidates, assert_no_claim_persisted(&env). The DEVOPS contract-pact-github sub-job extends this with the real-HTTP public-endpoint allowlist Pact (D-D22, out of DELIVER scope); DELIVER ships the in-process seen_paths assertion + probe step 2 (GithubPrivateNotRefused refusal). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the probe's step-2 (private refusal) emits health.startup.refused with ProbeRefusalReason::GithubPrivateNotRefused if a private target is NOT refused; the adapter's request layer records every path into seen_paths so the test can assert the allowlist invariant generatively at the adapter unit layer (forall request path: path on public allowlist)."
+        },
+        {
+          "id": "03-06",
+          "name": "SG-6 offline exits with requires-network and no partial list",
+          "criteria": [
+            "With no network connectivity, openlore scrape github rust-lang/cargo exits non-zero; stderr contains 'requires network'",
+            "stdout renders NO partial numbered candidate list",
+            "Nothing persisted (assert_no_claim_persisted)",
+            "SG-6 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_offline_exits_with_requires_network_and_no_partial_list",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/adapter-github/src/harvest.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-001 offline UAT + ADR-019 \u00a7GithubError::Network. SAD PATH example-only (Mandate 11). GIVEN FakeGithub::offline() (base URL points at a dead port); WHEN scrape github rust-lang/cargo; THEN exit non-zero, stderr contains 'requires network', stdout renders NO partial numbered candidate list, assert_no_claim_persisted(&env). Harvest is the ONLY network step for scrape (unlike slice-01 compose+sign which must work offline, I-9 \u2014 scrape is the documented scoped exception, KPI-SCR-5 note). A transport failure maps to GithubError::Network. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: no-partial-list means the candidate render happens AFTER a fully-successful harvest (atomic: harvest-then-derive-then-render); a mid-harvest network failure aborts before any candidate prints."
+        },
+        {
+          "id": "03-07",
+          "name": "SG-7 no matching signals proposes nothing and exits zero",
+          "criteria": [
+            "A public target whose harvest yields zero mapping-usable signals prints 'No candidate claims could be derived'",
+            "Exit code 0 (nothing to propose is NOT an error)",
+            "Zero rows are written to author_claims",
+            "SG-7 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_with_no_matching_signals_proposes_nothing_and_exits_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "deps": [
+            "03-01",
+            "02-05"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-002 Example 2 + WD-53 + US-SCR-002 AC 6 + SD-5 (the pure empty-Vec behavior). EDGE scenario. GIVEN FakeGithub::with_no_matching_signals(\"some-user/empty-experiment\"); WHEN scrape github some-user/empty-experiment; THEN exit 0, stdout contains 'No candidate claims could be derived', assert_no_claim_persisted(&env). The CLI renders this message + exit 0 from the empty Vec that scraper_domain::derive_candidates returns (proven by SD-5). Nothing-to-propose is a valid outcome, not an error. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer branches on candidates.is_empty() -> the no-candidates message + ExitCode::SUCCESS (exit 0); depends on SD-5's proven empty-Vec path."
+        },
+        {
+          "id": "03-08",
+          "name": "SG-8 scrape without sign makes zero PDS writes",
+          "criteria": [
+            "openlore scrape github rust-lang/cargo without --sign makes exactly zero records on the user's own PDS and zero publish calls",
+            "assert_no_pds_call_was_made(&env) AND env.pds.records().is_empty() (human-gate at the publish layer, WD-55)",
+            "Reinforces gate scraper_never_persists_unsigned from the PDS side",
+            "SG-8 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_without_sign_makes_zero_pds_writes",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-49 + WD-55 + KPI-SCR-2 + J-004/J-004c. EDGE scenario reinforcing scraper_never_persists_unsigned from the PDS side. WHEN scrape github rust-lang/cargo (no --sign); THEN assert_no_pds_call_was_made(&env) AND env.pds.records().is_empty() \u2014 the human-gate holds at the publish layer too, not only at the storage layer. adapter-github holds NO PdsPort reference by construction (I-SCR-1) so it CANNOT publish; the scrape verb has no publish code path. DD-SCR-10: this is a load-bearing human-gate scenario \u2014 carry the state-delta migration call-out (universe pds.records.len set_to(\"0\")). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: reuses the slice-01 assert_no_pds_call_was_made + FakePds.records() helpers UNCHANGED."
+        },
+        {
+          "id": "03-09",
+          "name": "SG-9 pure read persists nothing across repeated runs",
+          "criteria": [
+            "openlore scrape github rust-lang/cargo runs TWICE; both exit 0 with the same candidate count",
+            "After both runs assert_no_claim_persisted(&env) holds (zero rows / zero PDS / zero claim files)",
+            "A scrape never mutates state no matter how many times it runs (idempotent no-side-effect, backed by SD-3 determinism)",
+            "SG-9 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_github.rs",
+          "scenario_name": "scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "03-01",
+            "02-03"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per WD-55 + KPI-SCR-2 + SD-3 (the pure determinism property). EDGE scenario (drives Gate 1). WHEN scrape github rust-lang/cargo runs TWICE; THEN both exit 0 with the SAME candidate count, and assert_no_claim_persisted(&env) holds after both runs (a scrape never mutates state). The same candidate list across runs rests on SD-3's determinism property (same signals + mapping -> same candidates, same order). DD-SCR-10: load-bearing human-gate scenario \u2014 carry the state-delta migration call-out (universe all set_to(\"0\") after both runs). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the test runs run_openlore_scrape twice against the same TestEnv + FakeGithub posture; the candidate-count parse compares the two stdout renders; the no-persist assertion runs after the SECOND run."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "scrape_candidates + scrape_auth \u2014 auditable rendering + optional PAT (9 scenarios)",
+      "description": "Ship SC-1..5 (candidate-list rendering + auditability; SC-1 candidate_names_source_signal release-gate KPI-SCR-3; SC-3 candidate_confidence_no_autoinflate proposal half KPI-SCR-2) and SA-1..4 (optional GITHUB_TOKEN PAT; rate-limit remediation; token-never-leaks both ways; WD-63). SA-5 (token-never-reaches-signed-claim) ships in Phase 05 because it depends on the sign path (SS-1).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "SC-1 each candidate names its exact source signal (release-gate)",
+          "criteria": [
+            "Every rendered candidate names the EXACT public signal that produced it (5 distinct source-signal lines for 5 candidates)",
+            "assert_candidate_names_signal(&outcome, [(1,'Cargo.lock committed'),(2,'docs/'),(3,'test ratio 0.61'),(4,'CHANGELOG'),(5,'Rust')])",
+            "Gate candidate_names_source_signal (KPI-SCR-3 release-blocking)",
+            "SC-1 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_candidates.rs",
+          "scenario_name": "scrape_candidates_each_names_its_exact_source_signal",
+          "implementation_scope": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "deps": [
+            "03-01",
+            "02-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-SCR-002 + WD-53 + I-SCR-4 + KPI-SCR-3 (release-blocking) + data-models.md \u00a7scrape verb output format. LOAD-BEARING auditability gate (candidate_names_source_signal). A candidate the user cannot trace to a signal is unauditable and breaks J-004b. GIVEN FakeGithub::for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); WHEN scrape github rust-lang/cargo; THEN assert_candidate_names_signal(&outcome, &[(1,\"Cargo.lock committed\"),(2,\"docs/\"),(3,\"test ratio 0.61\"),(4,\"CHANGELOG\"),(5,\"Rust\")]) \u2014 each numbered candidate's source-signal line names its originating signal. D-D28: the renderer-review checklist gains 'candidate renderer lists ALL source signals (no truncation)'; the runtime counter scraper_candidate_missing_source_total target=0 forever. The pure non-emptiness is proven by SD-1; this step pins the user-visible RENDERING. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer prints each Signal.value verbatim in the candidate's source-signal line; no truncation of multi-signal candidates (SC-4 backstops the collapse rendering)."
+        },
+        {
+          "id": "04-02",
+          "name": "SC-2 footer states nothing is signed until user signs",
+          "criteria": [
+            "The candidate-list footer states nothing is a claim until the user signs it",
+            "The footer names --sign N as the next step",
+            "The footer is rendered whenever >=1 candidate is shown",
+            "SC-2 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_candidates.rs",
+          "scenario_name": "scrape_candidates_footer_states_nothing_is_signed_until_user_signs",
+          "implementation_scope": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 20,
+          "implementation_notes": "Per US-SCR-002 AC 7 + WD-49 (human-gate footer) + data-models.md \u00a7scrape verb output format ('These are PROPOSALS. None is a claim until YOU sign it.' + the --sign tip). The in-control reassurance beat. WHEN scrape github rust-lang/cargo; THEN stdout footer states nothing is a claim until the user signs it AND names `--sign N` as the next step. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the footer is appended by the renderer when candidates.len() >= 1 (SG-7 covers the empty case)."
+        },
+        {
+          "id": "04-03",
+          "name": "SC-3 all candidates default to speculative quarter confidence",
+          "criteria": [
+            "Every rendered candidate's confidence is 0.25, displayed as 'speculative'",
+            "No candidate is proposed with a confidence above 0.3",
+            "assert_candidate_confidence(&outcome, 0.25, 'speculative') for EVERY candidate (gate candidate_confidence_no_autoinflate, proposal half, KPI-SCR-2)",
+            "SC-3 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_candidates.rs",
+          "scenario_name": "scrape_candidates_all_default_to_speculative_quarter_confidence",
+          "implementation_scope": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "deps": [
+            "04-01",
+            "02-02"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-002 + WD-52 + WD-10 + I-SCR-3 + KPI-SCR-2 (release-blocking, proposal half) + data-models.md \u00a7confidence buckets stay UNPERSISTED. PROPOSAL-TIME half of candidate_confidence_no_autoinflate (the sign-time half is SS-2). WHEN scrape github rust-lang/cargo; THEN assert_candidate_confidence(&outcome, 0.25, \"speculative\") for EVERY candidate AND assert no candidate displays a confidence above 0.3. The numeric 0.25 is proven generatively by SD-2; this step pins the display ('speculative' bucket, render-only \u2014 the persisted/signed value is numeric 0.25 per WD-10). Reuse the slice-01 confidence_bucket render helper. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the 'speculative' label comes from the slice-01 confidence_bucket(0.25) helper (display-only); the numeric 0.25 is never converted to a bucket string in any persisted path."
+        },
+        {
+          "id": "04-04",
+          "name": "SC-4 collapse multiple signals for one predicate into one",
+          "criteria": [
+            "When three distinct signals all map to documentation-first, exactly ONE candidate is rendered",
+            "Its source-signal line lists all three contributing signals (no near-duplicate candidates)",
+            "SC-4 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_candidates.rs",
+          "scenario_name": "scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one",
+          "implementation_scope": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_renderer.rs"
+          ],
+          "deps": [
+            "04-01",
+            "02-04"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-002 Example 4 + I-SCR-4 + data-models.md. EDGE scenario; pins the user-visible rendering of SD-4's pure collapse. GIVEN FakeGithub::with_multi_signal_single_predicate(\"some-org/well-documented\") backed by fixture_three_docs_signals_one_predicate(); WHEN scrape github some-org/well-documented; THEN exactly ONE documentation-first candidate is rendered and its source-signal line lists all THREE contributing signals. The collapse is the PURE derivation's job (proven by SD-4); the renderer MUST list ALL three signals (no truncation \u2014 D-D28 renderer-review checklist line). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the renderer iterates candidate.source_signals (len 3 for the collapsed candidate) and prints each value; the 'no truncation' contract means no .take(N) on the source-signal list."
+        },
+        {
+          "id": "04-05",
+          "name": "SC-5 disagreed candidate is auditable and persists nothing unsigned",
+          "criteria": [
+            "A dependency-pinning candidate's source-signal line names 'Cargo.lock committed' (the user can audit the derivation)",
+            "With no --sign, assert_no_claim_persisted(&env) \u2014 a reviewed-and-rejected proposal is never asserted",
+            "Proves the human-in-the-loop is real: a proposal can be reviewed and dropped, never auto-asserted",
+            "SC-5 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_candidates.rs",
+          "scenario_name": "scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_unsigned",
+          "implementation_scope": [
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_renderer.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-002 Example 3 + WD-53 + WD-55 + KPI-SCR-3 + KPI-SCR-2 (drives Gates 1+2). EDGE scenario. WHEN scrape github <repo> with a dependency-pinning candidate; THEN that candidate's source-signal line names 'Cargo.lock committed' (the user can audit the derivation) AND, with no --sign, assert_no_claim_persisted(&env) \u2014 a reviewed-and-rejected proposal is never asserted. Because the candidate named its source signal, the user can see WHY it was proposed and simply not select it; not selecting persists nothing. This is the human-in-the-loop reality check (auditability + human-gate in one scenario). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: no new code path \u2014 this scenario combines SC-1's source-signal rendering + SG-8/SG-1's no-persist assertion; it exists to prove the auditability-enables-rejection contract end-to-end."
+        },
+        {
+          "id": "04-06",
+          "name": "SA-1 authenticated harvest reports budget and never leaks token",
+          "criteria": [
+            "With a valid GITHUB_TOKEN, harvest reports authenticated status + remaining rate budget; completes for a target that would exhaust the anon budget",
+            "github.saw_token(FIXTURE_VALID_PAT) is TRUE (auth genuinely happened)",
+            "assert_token_value_absent(&outcome, FIXTURE_VALID_PAT) \u2014 the token value never appears in stdout/stderr (no-token-leak)",
+            "SA-1 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_auth.rs",
+          "scenario_name": "scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token",
+          "implementation_scope": [
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-SCR-004 Example 1 + WD-54 + WD-63 + ADR-019. HAPPY + load-bearing no-token-leak. GIVEN FakeGithub::for_public_user(\"torvalds\", fixture_torvalds_user_aggregate_signals()).authenticated(4982, 5000) + GITHUB_TOKEN=FIXTURE_VALID_PAT in env (via run_openlore_scrape_with_token); WHEN scrape github torvalds; THEN exit 0, stdout reports 'authenticated (4982/5000 rate budget)', the harvest completes, github.saw_token(FIXTURE_VALID_PAT) is TRUE (auth happened), AND assert_token_value_absent(&outcome, FIXTURE_VALID_PAT) (the token never appears in stdout/stderr). The token is an effect-shell credential held ONLY in adapter-github (WD-63); it is read from GITHUB_TOKEN env and sent in the Authorization header but never echoed. Asserted BOTH ways (DD-SCR-12): saw_token confirms the production code SENT it; assert_token_value_absent confirms it is ABSENT from output. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the adapter parses the X-RateLimit-Remaining/Limit headers for the budget report; the no-token-leak invariant is reinforced by an adapter-level proptest (forall token value: no tracing event or output line contains it \u2014 the token is never put into a Display/Debug field)."
+        },
+        {
+          "id": "04-07",
+          "name": "SA-2 unauthenticated small target succeeds within anonymous budget",
+          "criteria": [
+            "With no GITHUB_TOKEN, harvest of a small target completes within the anonymous budget; reports unauthenticated status",
+            "Candidates render normally; exit 0",
+            "SA-2 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_auth.rs",
+          "scenario_name": "scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget",
+          "implementation_scope": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "04-06"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-004 Example 2 + WD-54 + WD-63 + US-SCR-004 AC 3. EDGE scenario (unauth default). GIVEN FakeGithub::for_public_repo(\"small-org/tiny-lib\", fixture_cargo_five_signals()) (anonymous posture) + NO GITHUB_TOKEN in env; WHEN scrape github small-org/tiny-lib; THEN exit 0, stdout reports 'unauthenticated', the harvest completes, and a candidate list renders. Unauthenticated is the default; small targets fit the anonymous rate budget. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the adapter's auth_mode is None when GITHUB_TOKEN is unset; the harvest sends no Authorization header; the budget line reports the anonymous limit."
+        },
+        {
+          "id": "04-08",
+          "name": "SA-3 anonymous rate-limit exhausted suggests token, no partial list",
+          "criteria": [
+            "An unauthenticated harvest that exhausts the anonymous budget exits non-zero",
+            "The error suggests setting GITHUB_TOKEN for higher limits (5000/hour)",
+            "stdout renders NO partial numbered candidate list; nothing persisted",
+            "SA-3 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_auth.rs",
+          "scenario_name": "scrape_auth_anonymous_rate_limit_exhausted_suggests_token_no_partial_list",
+          "implementation_scope": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "04-06"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-004 Example 3 + WD-54 + US-SCR-004 AC 4 + ADR-019 \u00a7GithubError::RateLimited. SAD PATH example-only (Mandate 11). GIVEN FakeGithub::rate_limited_anon(\"torvalds\") + NO GITHUB_TOKEN; WHEN scrape github torvalds; THEN exit non-zero, stderr suggests setting GITHUB_TOKEN for higher limits (5000/hour), and stdout renders NO partial numbered candidate list, assert_no_claim_persisted(&env). No-partial-list avoids a misleadingly incomplete proposal set. GithubError::RateLimited{authenticated:false} carries the remediation. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the 403 + rate-limit headers map to GithubError::RateLimited; the cli's remediation message differs by authenticated flag (anon -> 'set GITHUB_TOKEN'; authed -> 'wait for reset')."
+        },
+        {
+          "id": "04-09",
+          "name": "SA-4 rejected token exits with 401 without echoing value",
+          "criteria": [
+            "A stale/invalid GITHUB_TOKEN (401) exits non-zero with an HTTP-401 explanation + a remediation hint (unset or replace the token)",
+            "assert_token_value_absent(&outcome, FIXTURE_REJECTED_PAT) \u2014 the token value is never echoed anywhere",
+            "Nothing persisted",
+            "SA-4 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_auth.rs",
+          "scenario_name": "scrape_auth_rejected_token_exits_with_401_without_echoing_value",
+          "implementation_scope": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-github/src/harvest.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "04-06"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-004 Example 4 + WD-63 + US-SCR-004 AC 5 + ADR-019 \u00a7GithubError::TokenRejected. SAD PATH example-only (Mandate 11). GIVEN FakeGithub::with_rejected_token(\"rust-lang/cargo\") + GITHUB_TOKEN=FIXTURE_REJECTED_PAT; WHEN scrape github rust-lang/cargo; THEN exit non-zero, stderr explains the HTTP 401 AND hints unset-or-replace the token, assert_token_value_absent(&outcome, FIXTURE_REJECTED_PAT) (value never echoed), assert_no_claim_persisted(&env). GithubError::TokenRejected carries NO token value (security). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the 401 maps to GithubError::TokenRejected (a unit variant \u2014 it CANNOT carry the token); the probe's auth-mode step (ProbeRefusalReason::GithubTokenRejected) backstops this at startup if the token is rejected."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "scrape_sign \u2014 review, edit, sign via the slice-01 pipeline + batch (10 scenarios)",
+      "description": "Ship SS-1..9 + SA-5: the single-candidate sign walking skeleton (SS-1; scraper_reuses_slice01_publish_path release-gate, I-SCR-6), the no-inflation sign half (SS-2; candidate_confidence_no_autoinflate release-gate KPI-SCR-2), provenance display-only/CID stability (SS-3; WD-62/I-SCR-7), the sad/edge sign paths (SS-4 out-of-range, SS-5 bad confidence, SS-6 decline publish), batch (SS-7 walk-each, SS-8 skip-mid-batch, SS-9 invalid list), and SA-5 (token never reaches the signed claim on an authenticated sign; lives here because it depends on SS-1's sign path).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "SS-1 walking skeleton \u2014 sign one candidate via slice-01 pipeline (release-gate)",
+          "criteria": [
+            "scrape github rust-lang/cargo --sign 1 pre-fills the slice-01 compose editor with candidate 1's fields, lets the user raise confidence 0.25->0.55, shows the preview with 'not as truth' (I-7) and a display-only 'derived-from: openlore-github-scraper (signal: Cargo.lock committed)' line",
+            "On sign the claim is signed via the SAME VerbClaimAdd path; on Y it is published via the SAME VerbClaimPublish path; success message mentions the retract command (I-8)",
+            "assert_scraper_reuses_slice01_publish_path(&env, &cid): exactly ONE record on the user's OWN PDS via the slice-01 path (no parallel path); signed payload records confidence 0.55 (gate scraper_reuses_slice01_publish_path, I-SCR-6 release-blocking)",
+            "SS-1 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "01-05",
+            "03-01",
+            "04-01"
+          ],
+          "estimated_minutes": 55,
+          "implementation_notes": "Per ADR-017 + WD-66 + I-SCR-6 + KPI-SCR-1 + WD-62 + I-7/I-8 + data-models.md \u00a7CandidatePrefill table + \u00a7scrape verb output format with --sign. WALKING-SKELETON SIGN HALF + load-bearing scraper_reuses_slice01_publish_path gate. GIVEN FakeGithub::for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); WHEN run_openlore_scrape_with_stdin(&env, &[\"scrape\",\"github\",\"rust-lang/cargo\",\"--sign\",\"1\"], \"\\n\\n\\n\\n0.55\\n\\nY\\n\") (accept subject/predicate/object/evidence, type 0.55, Enter to sign, Y to publish); THEN exit 0, assert_compose_preview_contains_not_as_truth(&outcome), stdout shows '0.55 (weighted)' AND the display-only 'derived-from: openlore-github-scraper (signal: Cargo.lock committed)' line, assert_scraper_reuses_slice01_publish_path(&env, &cid) (exactly ONE record on the user's OWN PDS via the slice-01 path; no parallel path), the signed payload records confidence 0.55 (numeric only, WD-10), and the success message mentions `openlore claim retract`. CandidatePrefill is the ONLY bridge (WD-66); it reuses VerbClaimAdd + VerbClaimPublish UNCHANGED \u2014 NO parallel publish path. The derived-from line is display-only (NEVER reaches canonicalize, I-SCR-7). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: CandidatePrefill builds the slice-01 UnsignedClaim from the CandidateClaim and calls VerbClaimAdd::run + VerbClaimPublish::run by FUNCTION CALL (not a reimplemented path); the single-publish-path is enforced by code review + cli probe #6 + this gate."
+        },
+        {
+          "id": "05-02",
+          "name": "SS-2 accepting all defaults signs byte-for-byte, no inflation (release-gate)",
+          "criteria": [
+            "Selecting candidate 3 and pressing Enter through every field including 0.25 confidence signs exactly what was proposed",
+            "assert_candidate_confidence_unchanged(&env, &cid, 0.25) AND the signed payload's subject/predicate/object/evidence equal candidate 3's PROPOSED values byte-for-byte",
+            "Gate candidate_confidence_no_autoinflate (sign half, KPI-SCR-2 release-blocking); KPI-SCR-5 zero-edit baseline",
+            "SS-2 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation",
+          "implementation_scope": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "05-01",
+            "02-02"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-SCR-003 + WD-52 + I-SCR-3 + KPI-SCR-2 (release-blocking, sign half) + KPI-SCR-5. LOAD-BEARING candidate_confidence_no_autoinflate (sign-time half; the proposal half is SC-3). WHEN --sign 3 with stdin accepting every field (Enter x5, Enter sign, Y publish); THEN assert_candidate_confidence_unchanged(&env, &cid, 0.25) AND the signed payload's subject/predicate/object/evidence equal candidate 3's PROPOSED values byte-for-byte (no auto-inflation, KPI-SCR-5 zero-edit sign). The pre-fill carries the proposal verbatim; sign-time confidence equals the proposal UNLESS the human edits. This proves the byte-for-byte contract the edit-rate telemetry measures against (KPI-SCR-5). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: an Enter on a pre-filled field keeps the default (no mutation); the byte-for-byte assertion compares the on-disk claims/<cid>.json fields against the rendered candidate 3 values."
+        },
+        {
+          "id": "05-03",
+          "name": "SS-3 provenance is display-only and does not alter signed CID",
+          "criteria": [
+            "Signing a scraper candidate with fields F (provenance line shown) and hand-authoring a claim with the SAME fields F produce the SAME CID",
+            "The scraper claim's on-disk claims/<cid>.json carries NO derived-from / derivedFrom key",
+            "Provenance is display-only; the signed shape is byte-identical to a hand-authored claim (WD-62 / I-SCR-7; ADR-018; no Lexicon change)",
+            "SS-3 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid",
+          "implementation_scope": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-SCR-003 + WD-62 + WD-58 + I-SCR-7 + ADR-005 + ADR-018 + data-models.md \u00a7derived-from provenance handling. CID-STABILITY scenario. Sign a scraper candidate with fields F (provenance line shown), AND hand-author a claim via `claim add` with the SAME fields F; THEN the two CIDs are EQUAL, and the scraper claim's on-disk claims/<cid>.json contains NO `derived-from`/`derivedFrom` key (provenance is display-only; the signed shape is byte-identical to a hand-authored claim). The provenance string NEVER reaches claim-domain::canonicalize; the canonical CBOR that is CID'd is byte-identical to a hand-authored claim. CID stability holds with zero new CID path (I-6/I-10/I-SCR-7); CID-stable-when-absent is trivially satisfied (the field is never present). NO Lexicon change ships (lexicon crate UNCHANGED). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the test signs via --sign then runs `claim add` with identical fields and compares the two CIDs; the on-disk JSON is grepped for the absence of any provenance key \u2014 the slice-01 CID gold test already guarantees byte-shape identity because the field set IS the slice-01 field set."
+        },
+        {
+          "id": "05-04",
+          "name": "SS-4 out-of-range index is rejected before compose",
+          "criteria": [
+            "With a 5-candidate list, --sign 9 exits non-zero with 'candidate 9 does not exist; valid range 1..5'",
+            "NO compose preview reached stdout (assert the 'not as truth' literal is ABSENT)",
+            "Nothing composed, signed, or published (assert_no_claim_persisted)",
+            "SS-4 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_out_of_range_index_is_rejected_before_compose",
+          "implementation_scope": [
+            "crates/cli/src/selection_parser.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/selection_parser.rs",
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-003 Example 3 + US-SCR-003 AC 7 (reject before compose) + ADR-017. SAD PATH example-only (Mandate 11). GIVEN a 5-candidate list; WHEN --sign 9; THEN exit non-zero, stderr contains 'candidate 9 does not exist; valid range 1..5', NO compose preview reached stdout (assert the 'not as truth' literal is ABSENT), assert_no_claim_persisted(&env). SelectionParser validates the index against the candidate count BEFORE any compose begins. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: SelectionParser::parse(list, candidate_count) -> Result returns Err for any index > count BEFORE compose; the inner-loop proptest covers forall index > count: reject."
+        },
+        {
+          "id": "05-05",
+          "name": "SS-5 out-of-range confidence reprompts without writing",
+          "criteria": [
+            "Entering 1.5 for confidence re-prompts 'confidence must be between 0.0 and 1.0'; no claim is written until a valid value (0.55) is entered",
+            "The eventual signed claim records 0.55; no claim file existed at the moment of the re-prompt",
+            "SS-5 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_out_of_range_confidence_reprompts_without_writing",
+          "implementation_scope": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-003 Example 4 + WD-52 ([0.0,1.0] constraint) + WD-10 + ADR-017/ADR-018. SAD PATH example-only (Mandate 11). WHEN --sign 1 with stdin '...\\n1.5\\n0.55\\n\\nY\\n' (accept fields, type 1.5 then 0.55 for confidence); THEN stdout re-prompts 'confidence must be between 0.0 and 1.0', and the claim is only written after the valid 0.55 \u2014 assert the eventual signed claim records 0.55 and that no claim file existed at the moment of the re-prompt. The [0.0,1.0] range is enforced at the editable pre-fill field; the re-prompt loops until a valid numeric value is entered. This reuses the slice-01 compose confidence-validation UNCHANGED. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the confidence prompt reuses the slice-01 [0.0,1.0] validator; the inner-loop proptest covers forall conf outside [0.0,1.0]: reprompt; forall conf in [0.0,1.0]: accept."
+        },
+        {
+          "id": "05-06",
+          "name": "SS-6 declining publish retains local claim with publish hint",
+          "criteria": [
+            "--sign 2, sign locally, answer N to publish: the claim is persisted locally and NOT published",
+            "The claim file exists under claims_dir (local sign succeeded); assert_no_pds_call_was_made(&env) (NOT published)",
+            "stdout hints `openlore claim publish <cid>`; exit 0",
+            "SS-6 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_declining_publish_retains_local_claim_with_publish_hint",
+          "implementation_scope": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-003 Example 5 + WD-66 (slice-01 two-prompt contract) + US-SCR-003 AC 8 + I-SCR-6. EDGE scenario (drives Gate 5 \u2014 the local sign path). WHEN --sign 2 with stdin '\\nn\\n' (Enter sign, n decline publish); THEN exit 0, the claim file exists under claims_dir (local sign succeeded), assert_no_pds_call_was_made(&env) (NOT published), and stdout hints `openlore claim publish <cid>`. The two-prompt contract (compose+sign, then SEPARATE publish [Y/n]) is the slice-01 behavior UNCHANGED; declining publish retains the LOCALLY signed claim. KPI-SCR-1: sign succeeds offline. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the publish prompt is the slice-01 VerbClaimPublish [Y/n]; 'n' returns before the PdsPort call; the local claims/<cid>.json + DuckDB row land from the sign step (VerbClaimAdd) regardless."
+        },
+        {
+          "id": "05-07",
+          "name": "SS-7 batch walks each candidate through individual compose and sign",
+          "criteria": [
+            "--sign 1,3,4 presents candidate 1's compose preview requiring a signing gesture, then '(1 of 3 signed)' + candidate 3, then '(2 of 3 signed)' + candidate 4",
+            "Three SEPARATE compose previews (each with 'not as truth'); each signed individually via the slice-01 pipeline; three records on the user's own PDS",
+            "NO 'sign all without review' affordance anywhere in output (WD-49 \u2014 batch is a convenience OVER the human-gate, never a bypass)",
+            "SS-7 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "05-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-SCR-005 + WD-49 + J-004c + US-SCR-005 AC 2-4 + ADR-017 + data-models.md \u00a7scrape verb output format ((k of M signed) progress line). HAPPY batch path (drives Gate 5 per candidate). WHEN --sign 1,3,4 with stdin signing each of the three previews in turn; THEN stdout shows three SEPARATE compose previews (each with 'not as truth'), the progress lines '(1 of 3 signed)' and '(2 of 3 signed)', three records on the user's own PDS, and NO 'sign all' affordance anywhere in output. Batch is a convenience OVER the human-gate (each candidate requires its OWN individual signing gesture), never a bypass. Each candidate goes through CandidatePrefill -> VerbClaimAdd -> VerbClaimPublish individually. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the batch loop iterates the SelectionParser-validated index list, calling the SS-1 single-sign path per candidate and incrementing the (k of M signed) counter; there is no batch-sign shortcut code path."
+        },
+        {
+          "id": "05-08",
+          "name": "SS-8 batch skip one candidate does not abort the rest",
+          "criteria": [
+            "--sign 1,2,5: sign candidate 1, cancel candidate 2's compose, sign candidate 5",
+            "stdout contains 'skipped candidate 2'; the flow proceeds to candidate 5; the summary reports '2 signed, 1 skipped'",
+            "Exactly TWO records exist on the user's own PDS",
+            "SS-8 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs"
+          ],
+          "deps": [
+            "05-07"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-SCR-005 Example 2 + Q-DELIVER-5 (skip gesture \u2014 behavior asserted, not the keystroke) + US-SCR-005 AC 5. EDGE scenario. WHEN --sign 1,2,5, sign 1, cancel 2's compose, sign 5; THEN stdout contains 'skipped candidate 2', the flow proceeds to candidate 5, the summary reports '2 signed, 1 skipped', and exactly TWO records exist on the user's own PDS. Q-DELIVER-5: DELIVER picks the gesture (Ctrl-C-per-candidate vs explicit 'skip' input) \u2014 whichever cleanly satisfies 'skip one without aborting the rest'; the AT asserts the BEHAVIOR, not the keystroke. Wire run_openlore_scrape_with_stdin to drive the chosen gesture. A skipped candidate produces NO record; the batch continues. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: the batch loop catches the per-candidate skip/cancel and continues to the next index; the summary tallies signed-vs-skipped (a fold over the loop result, not an early return)."
+        },
+        {
+          "id": "05-09",
+          "name": "SS-9 batch invalid selection list is rejected before compose",
+          "criteria": [
+            "With a 5-candidate list, --sign 1,1,9 exits non-zero naming BOTH the duplicate index 1 AND the out-of-range index 9 (valid 1..5)",
+            "No compose preview reached stdout; nothing composed, signed, or published (assert_no_claim_persisted)",
+            "SS-9 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_sign.rs",
+          "scenario_name": "scrape_sign_batch_invalid_selection_list_is_rejected_before_compose",
+          "implementation_scope": [
+            "crates/cli/src/selection_parser.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/selection_parser.rs"
+          ],
+          "deps": [
+            "05-04"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-SCR-005 Example 3 + US-SCR-005 AC 6 (reject before compose) + ADR-017. SAD PATH example-only (Mandate 11). GIVEN a 5-candidate list; WHEN --sign 1,1,9; THEN exit non-zero, stderr names BOTH the duplicate index 1 AND the out-of-range index 9 (valid 1..5), no compose preview reached stdout, assert_no_claim_persisted(&env). SelectionParser rejects BOTH duplicate indices AND out-of-range indices BEFORE any compose begins, naming the offending indices. (A single index --sign 2 behaving identically to SS-1's single sign is covered by SS-1's contract; batch is a superset.) TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: SelectionParser::parse collects ALL offending indices (both duplicate AND out-of-range) into one error rather than failing on the first; the inner-loop proptest covers forall list with a dup OR an out-of-range index: reject naming every offender."
+        },
+        {
+          "id": "05-10",
+          "name": "SA-5 token never reaches signed claim or output on authenticated sign",
+          "criteria": [
+            "On the authenticated happy path with a subsequent sign, the on-disk claims/<cid>.json contains NO occurrence of FIXTURE_VALID_PAT",
+            "assert_token_value_absent(&outcome, FIXTURE_VALID_PAT) \u2014 the captured output never echoes it",
+            "Defense-in-depth: the token is an effect-shell credential that never reaches the pure derivation or the signed payload",
+            "SA-5 passes"
+          ],
+          "test_file": "tests/acceptance/scrape_auth.rs",
+          "scenario_name": "scrape_auth_token_never_reaches_signed_claim_or_output_on_authenticated_sign",
+          "implementation_scope": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/candidate_prefill.rs"
+          ],
+          "deps": [
+            "04-06",
+            "05-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-SCR-004 + WD-63 + WD-56 (pure core never sees it) + ADR-007 + ADR-019. EDGE/defense-in-depth scenario; ships in Phase 05 because it depends on the sign path (SS-1 / 05-01) AND the authenticated harvest (SA-1 / 04-06). GIVEN authenticated posture + GITHUB_TOKEN=FIXTURE_VALID_PAT; WHEN scrape github rust-lang/cargo --sign 1 (sign + publish); THEN exit 0, the on-disk claims/<cid>.json contains NO occurrence of FIXTURE_VALID_PAT, and assert_token_value_absent(&outcome, FIXTURE_VALID_PAT). The token is an effect-shell credential held ONLY in adapter-github; it NEVER reaches scraper-domain (pure, WD-56) or the CandidatePrefill bridge or the signed payload. A signed-from-authenticated-scrape claim is byte-identical in shape to any other \u2014 no token field, no token in the payload. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are PINNED examples per slice-02 DD-SCR-6 + Mandate 11 (subprocess layer 3 is example-only); the only generative tests are layer-2 scraper_domain.rs SD-1/SD-2/SD-3 which carry @property. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: CandidatePrefill maps only CandidateClaim fields (which never contain the token) into the UnsignedClaim; the token lives only in adapter-github's request layer \u2014 the type system enforces the boundary (the prefill function has no access to the token)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/",
+      "crates/ports/src/",
+      "crates/cli/src/",
+      "crates/test-support/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "tests/fixtures/github/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "pending",
+    "reviewer": "nw-acceptance-designer-reviewer",
+    "approved_at": "TODO"
+  }
+}
