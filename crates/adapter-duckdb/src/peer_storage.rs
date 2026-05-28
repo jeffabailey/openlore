@@ -231,6 +231,23 @@ fn ref_type_str(ref_type: ReferenceType) -> &'static str {
     }
 }
 
+/// Inverse of [`ref_type_str`]: parse the wire string back into a
+/// `ReferenceType`. The migration-v3 CHECK constraint guarantees only the
+/// four known variants ever land in the column, so an unknown string is a
+/// data-corruption signal surfaced as a `DuckDb` error rather than silently
+/// dropped.
+fn ref_type_from_str(s: &str) -> Result<ReferenceType, PeerStorageError> {
+    match s {
+        "retracts" => Ok(ReferenceType::Retracts),
+        "corrects" => Ok(ReferenceType::Corrects),
+        "counters" => Ok(ReferenceType::Counters),
+        "supersedes" => Ok(ReferenceType::Supersedes),
+        other => Err(PeerStorageError::DuckDb(format!(
+            "unknown ref_type {other:?} in peer_claim_references"
+        ))),
+    }
+}
+
 /// Write the on-disk `peer_claims/<encoded_did>/<cid>.json` artifact
 /// atomically (tmp + fsync + rename, the same POSIX-atomic pattern the
 /// slice-01 author-claim write uses). Content is the domain `SignedClaim`
@@ -688,10 +705,50 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
 
     fn query_peer_referencing(
         &self,
-        _target_cid: &Cid,
+        target_cid: &Cid,
     ) -> Result<Vec<(Did, Cid, ReferenceType)>, PeerStorageError> {
-        // SCAFFOLD: true (slice-03)
-        todo!("PeerStoragePort::query_peer_referencing — driven by PP-* scenarios")
+        // The BACKWARD half of the bidirectional counter annotation (FQ-5):
+        // find every PEER claim that references `target_cid` via a typed
+        // reference. Join `peer_claim_references` (the denormalized reference
+        // graph) to `peer_claims` so each triple carries the REFERENCING
+        // claim's `author_did` — a peer counter is never separated from its
+        // attribution (anti-merging layer-1). Both tables are `peer_*`, so the
+        // join touches NO author (`claims`) table — the own-vs-peer separation
+        // stays structural.
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT pc.author_did, r.referencing_cid, r.ref_type \
+                 FROM peer_claim_references r \
+                 JOIN peer_claims pc ON pc.cid = r.referencing_cid \
+                 WHERE r.referenced_cid = ? \
+                 ORDER BY r.referencing_cid",
+            )
+            .map_err(|err| {
+                PeerStorageError::DuckDb(format!("prepare query_peer_referencing: {err}"))
+            })?;
+
+        let rows = stmt
+            .query_map(duckdb::params![target_cid.0], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|err| {
+                PeerStorageError::DuckDb(format!("query_map query_peer_referencing: {err}"))
+            })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let (author_did, referencing_cid, ref_type_str) = row.map_err(|err| {
+                PeerStorageError::DuckDb(format!("read query_peer_referencing row: {err}"))
+            })?;
+            let ref_type = ref_type_from_str(&ref_type_str)?;
+            results.push((Did(author_did), Cid(referencing_cid), ref_type));
+        }
+        Ok(results)
     }
 }
 
@@ -743,6 +800,19 @@ mod tests {
                 verification_method: format!("{author_did}#org.openlore.application"),
             },
         }
+    }
+
+    /// Build a `SignedClaim` authored by `author_did` carrying a single
+    /// `Counters` reference to `target_cid`. Used to drive
+    /// `query_peer_referencing`: a peer's counter-claim that references
+    /// another claim's CID.
+    fn signed_counter_authored_by(author_did: &str, cid: &str, target_cid: &str) -> SignedClaim {
+        let mut signed = signed_claim_authored_by(author_did, cid);
+        signed.unsigned.references = vec![claim_domain::ClaimReference {
+            ref_type: ReferenceType::Counters,
+            cid: Cid(target_cid.to_string()),
+        }];
+        signed
     }
 
     /// Open a fresh adapter on a tmp DB and hand back the peer adapter bound
@@ -872,6 +942,62 @@ mod tests {
             rows, 0,
             "a cross-attributed write must leave ZERO peer_claims rows (the third party \
              gets no foothold — WD-41 anti-back-door); got {rows}"
+        );
+    }
+
+    /// FQ-5 (step 05-10): `query_peer_referencing` returns the `(author_did,
+    /// source_cid, ref_type)` triple for every peer claim that references a
+    /// given target CID. Drives the BACKWARD direction of the bidirectional
+    /// counter annotation when the COUNTERING claim lives in the peer cache.
+    /// A peer counter-claim referencing the target is written through the
+    /// real adapter (real DuckDB + on-disk artifact, Mandate 6), then the
+    /// reference graph is queried back — the triple carries the peer's
+    /// attribution so the renderer never separates a counter from its author.
+    #[test]
+    fn query_peer_referencing_returns_attributed_counter_triples_for_target() {
+        let local_did = "did:plc:test-jeff";
+        let peer_did = "did:plc:rachel-test";
+        let (_dir, _storage, peer) = open_peer_adapter(local_did);
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+
+        let target_cid = "bafytargetclaim0000000000000000000000000000";
+        let counter_cid = "bafypeercounter000000000000000000000000000";
+
+        // The peer authors a counter-claim referencing the target.
+        let counter = signed_counter_authored_by(peer_did, counter_cid, target_cid);
+        let written = peer
+            .write_peer_claim(&Did(peer_did.to_string()), &counter, &endpoint, Utc::now())
+            .expect("write peer counter-claim");
+        assert!(
+            written.written,
+            "the peer counter-claim must be newly written"
+        );
+
+        // Querying who references the target returns the peer's counter,
+        // carrying the peer's attribution + the Counters ref type.
+        let referencing = peer
+            .query_peer_referencing(&Cid(target_cid.to_string()))
+            .expect("query_peer_referencing");
+
+        assert_eq!(
+            referencing,
+            vec![(
+                Did(peer_did.to_string()),
+                Cid(counter_cid.to_string()),
+                ReferenceType::Counters,
+            )],
+            "expected exactly one attributed (peer_did, counter_cid, Counters) triple; \
+             got {referencing:?}"
+        );
+
+        // A CID nobody references yields an empty result (no phantom rows).
+        let unreferenced = Cid("bafyunreferenced00000000000000000000000000".to_string());
+        let none = peer
+            .query_peer_referencing(&unreferenced)
+            .expect("query_peer_referencing for unreferenced cid");
+        assert!(
+            none.is_empty(),
+            "expected no triples for an unreferenced CID; got {none:?}"
         );
     }
 }

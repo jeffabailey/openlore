@@ -236,6 +236,12 @@ pub fn render_annotated_graph_query_result(annotated: &[AnnotatedClaim]) -> Stri
 pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
     let groups = group_by_author(rows);
 
+    // FQ-5 (US-FED-003 AC #8): the bidirectional counter relationships over
+    // the row set. Computed once, up front, as a pure projection of the
+    // reference graph so each row's annotation is an O(1) lookup. The
+    // annotation is per-row METADATA — it NEVER merges two rows.
+    let counters = counter_relationships(rows);
+
     let mut out = String::new();
     for (author_did, relationship, author_rows) in &groups {
         out.push_str(&format!(
@@ -247,7 +253,7 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
             if idx > 0 {
                 out.push('\n');
             }
-            out.push_str(&render_one_federated_row(author_did, row));
+            out.push_str(&render_one_federated_row(author_did, row, &counters));
         }
         out.push('\n');
     }
@@ -262,7 +268,105 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
     } else {
         out.push_str(&render_federation_footer(groups.len()));
     }
+
+    // FQ-5 summary line (US-FED-003 AC #8): state the count of counter
+    // relationships explicitly so an operator sees the bidirectional links at
+    // a glance. Omitted entirely when there are none (keeps the happy-path
+    // FQ-1..4 output byte-stable).
+    if !counters.is_empty() {
+        out.push_str(&render_counter_relationship_summary(counters.len()));
+    }
     out
+}
+
+/// One bidirectional counter relationship discovered in the federated row
+/// set: a `counter_cid` (authored by `counter_author`) that `counters` a
+/// `target_cid` (authored by `target_author`). Both endpoints' authors are
+/// captured so the renderer can draw BOTH arrows (forward + backward)
+/// without ever separating a claim from its attribution (anti-merging).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CounterRelationship {
+    counter_cid: String,
+    counter_author: String,
+    target_cid: String,
+    target_author: String,
+}
+
+/// Pure projection: every counter relationship visible in `rows`. A row is a
+/// counter when its claim carries a `ReferenceType::Counters` reference whose
+/// target CID is ALSO present in the row set (so both endpoints are
+/// attributable). Cross-subject / cross-store counters whose target is not in
+/// this result are skipped — they cannot be annotated bidirectionally here
+/// (the renderer is pure; it only knows the rows it was handed). The author
+/// DIDs are taken from each endpoint row's `author_did` (already bare).
+fn counter_relationships(rows: &[FederatedRow]) -> Vec<CounterRelationship> {
+    use std::collections::HashMap;
+    let author_by_cid: HashMap<&str, &str> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.signed_claim.signature.signed_cid.0.as_str(),
+                row.author_did.0.as_str(),
+            )
+        })
+        .collect();
+
+    let mut relationships = Vec::new();
+    for row in rows {
+        let counter_cid = row.signed_claim.signature.signed_cid.0.as_str();
+        let counter_author = row.author_did.0.as_str();
+        for reference in &row.signed_claim.unsigned.references {
+            if !matches!(reference.ref_type, claim_domain::ReferenceType::Counters) {
+                continue;
+            }
+            let target_cid = reference.cid.0.as_str();
+            // Only annotate when the target is in the row set (both endpoints
+            // attributable). Otherwise the backward arrow has no row to land on.
+            if let Some(target_author) = author_by_cid.get(target_cid) {
+                relationships.push(CounterRelationship {
+                    counter_cid: counter_cid.to_string(),
+                    counter_author: counter_author.to_string(),
+                    target_cid: target_cid.to_string(),
+                    target_author: (*target_author).to_string(),
+                });
+            }
+        }
+    }
+    relationships
+}
+
+/// The annotation lines for one row given the full relationship set. A row
+/// may be BOTH a counter (forward) AND countered (backward), so both arrow
+/// kinds are emitted. Pure helper over the precomputed relationships.
+fn counter_annotations_for(cid: &str, counters: &[CounterRelationship]) -> Vec<String> {
+    let mut lines = Vec::new();
+    // Forward: this row counters something.
+    for rel in counters.iter().filter(|r| r.counter_cid == cid) {
+        lines.push(format!(
+            "counters {} by {}",
+            rel.target_cid, rel.target_author
+        ));
+    }
+    // Backward: this row is countered by something.
+    for rel in counters.iter().filter(|r| r.target_cid == cid) {
+        lines.push(format!(
+            "countered-by {} by {}",
+            rel.counter_cid, rel.counter_author
+        ));
+    }
+    lines
+}
+
+/// Render the FQ-5 summary line stating the counter-relationship count.
+/// Pluralized so a single relationship reads naturally ("1 counter
+/// relationship"). Pure helper.
+fn render_counter_relationship_summary(count: usize) -> String {
+    let noun = if count == 1 {
+        "counter relationship"
+    } else {
+        "counter relationships"
+    };
+    format!("{count} {noun}.\n")
 }
 
 /// Group federated rows by author DID, preserving first-seen author order
@@ -300,11 +404,24 @@ fn relationship_annotation(relationship: AuthorRelationship) -> &'static str {
 /// (subject/predicate/object/evidence/confidence/author/composedAt/cid)
 /// and additionally pins the row's `author_did` on its own line so every
 /// row is independently attributable (anti-merging behavioral layer).
-fn render_one_federated_row(author_did: &str, row: &FederatedRow) -> String {
+///
+/// FQ-5 (US-FED-003 AC #8): when this row participates in a counter
+/// relationship visible in the row set, its bidirectional annotation lines
+/// (`counters <cid> by <did>` and/or `countered-by <cid> by <did>`) are
+/// appended at the end of the block. The annotation is per-row metadata
+/// derived from `counters`; it never merges rows.
+fn render_one_federated_row(
+    author_did: &str,
+    row: &FederatedRow,
+    counters: &[CounterRelationship],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("  author_did:  {author_did}\n"));
     for line in render_one_claim(&row.signed_claim).lines() {
         out.push_str(&format!("  {line}\n"));
+    }
+    for annotation in counter_annotations_for(&row.signed_claim.signature.signed_cid.0, counters) {
+        out.push_str(&format!("  {annotation}\n"));
     }
     out
 }
@@ -440,6 +557,85 @@ mod tests {
             },
             source_table,
         }
+    }
+
+    /// Build a `FederatedRow` whose claim carries a single `Counters`
+    /// reference to `counters_target`. Used to exercise the bidirectional
+    /// counter annotation (FQ-5): the row is a counter-claim pointing at
+    /// another row's CID.
+    fn federated_counter_row(
+        author_did: &str,
+        cid: &str,
+        relationship: AuthorRelationship,
+        source_table: SourceTable,
+        counters_target: &str,
+    ) -> FederatedRow {
+        let mut row = federated_row(author_did, cid, relationship, source_table);
+        row.signed_claim.unsigned.references = vec![ClaimReference {
+            ref_type: claim_domain::ReferenceType::Counters,
+            cid: Cid(counters_target.to_string()),
+        }];
+        row
+    }
+
+    /// FQ-5 (US-FED-003 AC #8): when one federated row counters another, the
+    /// renderer annotates BOTH rows bidirectionally — the counter-claim row
+    /// shows `counters <target_cid> by <peer_did>` and the countered row shows
+    /// `countered-by <counter_cid> by <author_did>` — and the summary line
+    /// states the counter-relationship count. The annotation is per-row
+    /// METADATA computed from the reference graph over the row set; it never
+    /// merges the two rows (both authors keep their own headers).
+    #[test]
+    fn render_federated_query_result_annotates_counter_relationships_bidirectionally() {
+        // Rachel's target claim + the local user's counter pointing at it.
+        let rows = vec![
+            federated_counter_row(
+                "did:plc:test-jeff",
+                "bafycounter1",
+                AuthorRelationship::You,
+                SourceTable::Own,
+                "bafytarget1",
+            ),
+            federated_row(
+                "did:plc:rachel-test",
+                "bafytarget1",
+                AuthorRelationship::SubscribedPeer,
+                SourceTable::Peer,
+            ),
+        ];
+
+        let rendered = render_federated_query_result(&rows);
+
+        // Forward: the counter-claim row names what it counters + the target's
+        // author DID.
+        assert!(
+            rendered.contains("counters bafytarget1 by did:plc:rachel-test"),
+            "expected the counter-claim row annotated \
+             'counters bafytarget1 by did:plc:rachel-test' (forward); got:\n{rendered}"
+        );
+
+        // Backward: the countered row names what counters it + that counter's
+        // author DID.
+        assert!(
+            rendered.contains("countered-by bafycounter1 by did:plc:test-jeff"),
+            "expected the countered row annotated \
+             'countered-by bafycounter1 by did:plc:test-jeff' (backward); got:\n{rendered}"
+        );
+
+        // The summary line states the counter-relationship count (exactly 1).
+        assert!(
+            rendered.contains("1 counter relationship"),
+            "expected the summary line to state the counter-relationship count \
+             (1 counter relationship); got:\n{rendered}"
+        );
+
+        // Anti-merging: both authors keep their own per-author header — the
+        // annotation is metadata, never a merge.
+        assert!(
+            rendered.contains("author: did:plc:test-jeff (you)")
+                && rendered.contains("author: did:plc:rachel-test (subscribed peer)"),
+            "expected BOTH authors to keep their own headers (no merge); got:\n{rendered}"
+        );
     }
 
     fn fixture_signed() -> SignedClaim {

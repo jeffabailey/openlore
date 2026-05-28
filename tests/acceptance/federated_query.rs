@@ -677,7 +677,175 @@ fn federated_query_with_zero_peers_subscribed_degrades_with_hint() {
 /// @us-fed-003 @us-fed-004 @real-io @driving_port @j-003a @j-003b @happy
 #[test]
 fn federated_query_annotates_counter_relationships_bidirectionally() {
-    todo!("DELIVER (slice-03): chained scenario — Maria pulls Rachel's records (state set up by reusing peer_pull step-method invocation), runs claim counter, then graph query --federated. Assert bidirectional annotations on both rows + summary line names the count. Uses StoragePort.query_federated_by_subject + peer_claim_references / claim_references join per data-models.md § Cross-store query examples.")
+    let env = TestEnv::initialized();
+    let subject = "github:rust-lang/cargo";
+
+    // -- Precondition: subscribe to + pull a peer (Rachel). Her FIRST
+    // verifiable record (object `dependency-pinning`, confidence 0.42) is the
+    // claim the user will counter. The pull populates `peer_claims` with all
+    // three of her claims, each attributed to her DID (anti-merging held). --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer_claim_count = records.len();
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
+
+    // The target the user counters is Rachel's FIRST peer claim. Its CID is
+    // content-derived, so the test recomputes it locally exactly the way the
+    // pull pipeline did (owning the round-trip oracle, shared gate 3).
+    let target_cid = first_peer_claim_cid(peer_did);
+
+    // -- CC-1 flow: the user authors a counter-claim against Rachel's claim,
+    // confirming BOTH prompts (Enter to sign, Y to publish). This writes the
+    // user's OWN signed counter into the author `claims` table with a
+    // references[] entry { type: Counters, cid: target_cid } — the chained
+    // narrative's publish half. The peer-resolver seam lets the counter verb
+    // name `counters: <cid> (by <peer_did>)` in the compose preview. --
+    let counter = run_openlore_with_peer_resolver_stdin(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &target_cid,
+            "--reason",
+            "The cited benchmark was retracted by upstream maintainers.",
+        ],
+        peer_did,
+        peer.endpoint_url(),
+        "\nY\n",
+    );
+    assert_eq!(
+        counter.status, 0,
+        "claim counter precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        counter.stdout, counter.stderr
+    );
+    // Recover the counter-claim's own CID from the sign step's marker.
+    let counter_cid = parse_counter_claim_cid(&counter.stdout);
+
+    // -- Action: the federated read through the driving port. This is the
+    // OBSERVE half of the chained narrative — CC-1 published the counter, FQ-5
+    // sees the bidirectional annotation in a single query. --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr,
+    );
+
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+
+    // 1. FORWARD direction — the user's counter-claim row shows what it
+    //    counters AND who authored the target: "counters <peer_cid> by <peer_did>".
+    assert!(
+        stdout.contains(&format!("counters {target_cid} by {peer_did}")),
+        "expected the user's counter-claim row to be annotated \
+         \"counters {target_cid} by {peer_did}\" (forward direction);\n--- stdout ---\n{stdout}"
+    );
+
+    // 2. BACKWARD direction — the peer's countered claim row shows what
+    //    counters it AND who authored that counter:
+    //    "countered-by <counter_cid> by <local_did>".
+    assert!(
+        stdout.contains(&format!("countered-by {counter_cid} by {local_did}")),
+        "expected the peer's countered claim row to be annotated \
+         \"countered-by {counter_cid} by {local_did}\" (backward direction);\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. BOTH directions are visible in ONE query — the chained narrative
+    //    closes (the annotation is bidirectional, not one-way).
+    assert!(
+        stdout.contains("counters ") && stdout.contains("countered-by "),
+        "expected BOTH counter relationship directions visible in one query;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 4. The summary line states the count of counter-relationships explicitly
+    //    (exactly one counter relationship in this fixture).
+    assert!(
+        stdout.contains("1 counter relationship"),
+        "expected the summary line to state the counter-relationship count \
+         (1 counter relationship);\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. Anti-merging preserved: the annotation adds relationship METADATA per
+    //    row, it is NOT a merge. Both authors keep their own headers, and NO
+    //    row is labeled merged / consensus / aggregate.
+    assert!(
+        stdout.contains(local_did) && stdout.contains(peer_did),
+        "expected BOTH authors to keep their own per-author headers (anti-merging \
+         — the annotation is metadata, not a merge);\n--- stdout ---\n{stdout}"
+    );
+    assert_no_merged_rows_in_federated_output(&outcome);
+}
+
+/// Recompute the CID of Rachel's FIRST verifiable peer claim (object
+/// `dependency-pinning`, confidence 0.42) the exact way the pull pipeline
+/// does — content-derived, so no seed is needed (the seed only signs).
+/// Owns the round-trip oracle so the test can name the countered target.
+fn first_peer_claim_cid(peer_did: &str) -> String {
+    use claim_domain::{canonicalize, compute_cid, Confidence, Did, UnsignedClaim};
+
+    let confidence: Confidence =
+        serde_json::from_value(serde_json::json!(0.42)).expect("confidence value is well-formed");
+    let unsigned = UnsignedClaim {
+        subject: "github:rust-lang/cargo".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.dependency-pinning".to_string(),
+        evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+        confidence,
+        author_did: Did(format!("{peer_did}#org.openlore.application")),
+        composed_at: "2026-05-22T09:18:44Z".to_string(),
+        references: Vec::new(),
+        reason: None,
+    };
+    let canonical = canonicalize(&unsigned).expect("canonicalize first peer claim");
+    compute_cid(&canonical).0
+}
+
+/// Parse the `Computing claim CID <cid>` marker the counter verb's sign step
+/// emits to recover the counter-claim's own CID. Substring search (not a
+/// line-prefix match) because the marker may share a line with the
+/// newline-free sign prompt.
+fn parse_counter_claim_cid(stdout: &str) -> String {
+    const MARKER: &str = "Computing claim CID ";
+    let start = stdout
+        .find(MARKER)
+        .map(|i| i + MARKER.len())
+        .unwrap_or_else(|| {
+            panic!("expected a `Computing claim CID <cid>` marker in stdout;\n--- stdout ---\n{stdout}")
+        });
+    stdout[start..]
+        .split_whitespace()
+        .next()
+        .expect("CID token after the marker")
+        .to_string()
 }
 
 // =============================================================================
