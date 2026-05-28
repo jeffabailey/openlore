@@ -923,7 +923,183 @@ fn peer_pull_rejects_cross_attribution_to_third_party_did_at_write_time() {
 /// @us-fed-002 @real-io @driving_port @j-003 @error
 #[test]
 fn peer_pull_skips_unreachable_peer_and_proceeds_with_others() {
-    todo!("DELIVER (slice-03): wire VerbPeerPull → iterate subscriptions sequentially per WD-37 → each peer's PdsError::Unreachable becomes a skip-with-message, not a process abort. Use three FakePeerPds doubles, one with simulate_unreachable(). Assert per-peer summary lines + total peer_claims row count = sum(non-skipped peers' records) + exit code != 0")
+    let env = TestEnv::initialized();
+
+    // THREE subscribed peers, each on its own in-process PeerPds. Rachel and
+    // Sam are honest + reachable (real crypto via `build_verifiable_peer_records`
+    // so their records pass BOTH the CID round-trip AND the signature verify).
+    // The third peer (Dana) is the one we knock offline. Each peer DID is baked
+    // into its records' `author` field, so the three DIDs produce three disjoint
+    // CID sets — no aliasing across peers.
+    let rachel_did = "did:plc:rachel-test";
+    let sam_did = "did:plc:sam-test";
+    let dana_did = "did:plc:dana-test";
+
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records(rachel_did, [7u8; 32]);
+    let (sam_records, sam_pubkey_hex) = build_verifiable_peer_records(sam_did, [9u8; 32]);
+    let (dana_records, dana_pubkey_hex) = build_verifiable_peer_records(dana_did, [11u8; 32]);
+    assert_eq!(rachel_records.len(), 3, "Rachel publishes three claims");
+    assert_eq!(sam_records.len(), 3, "Sam publishes three claims");
+    assert_eq!(dana_records.len(), 3, "Dana publishes three claims");
+
+    let rachel = PeerPds::for_peer(rachel_did, rachel_records);
+    let sam = PeerPds::for_peer(sam_did, sam_records);
+    let dana = PeerPds::for_peer(dana_did, dana_records);
+
+    // Precondition: THREE active subscriptions, created through the real
+    // `peer add` verb WHILE every peer is still reachable (the `peer add`
+    // resolveDid round-trip needs the peer's PDS up). Dana goes offline
+    // only AFTER she is subscribed, so the pull-time fault is genuinely a
+    // per-peer transport failure, not a missing subscription.
+    for (peer_did, peer) in [(rachel_did, &rachel), (sam_did, &sam), (dana_did, &dana)] {
+        let added = run_openlore_with_peer_resolver(
+            &env,
+            &["peer", "add", peer_did],
+            peer_did,
+            peer.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "peer add precondition for {peer_did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+
+    // DD-FED-10 universe BEFORE the pull: the author `claims` table count
+    // (a peer pull must never touch the user's own claims, even partially).
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Knock Dana's PDS offline: subsequent resolveDid / listRecords HTTP
+    // calls drop the connection without responding, which the in-binary
+    // adapter lifts into a per-peer transport failure (WD-37). Rachel and
+    // Sam stay reachable.
+    dana.simulate_unreachable();
+
+    // Action: ONE `openlore peer pull` across all three subscriptions. The
+    // sequential per-peer loop (ADR-016 — no concurrency) verifies + stores
+    // Rachel's and Sam's records and records Dana as a skip; Dana's failure
+    // does NOT abort the loop (WD-37 per-peer fault isolation).
+    let outcome = run_openlore_pull_multi(
+        &env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: rachel_did,
+                peer_endpoint: rachel.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: sam_did,
+                peer_endpoint: sam.endpoint_url(),
+                peer_pubkey_hex: &sam_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: dana_did,
+                peer_endpoint: dana.endpoint_url(),
+                peer_pubkey_hex: &dana_pubkey_hex,
+            },
+        ],
+    );
+
+    // 1. NON-ZERO exit overall — a skipped peer flags the partial failure
+    //    (WD-37 fault isolation + ADR-013 exit-code table: pull exits
+    //    non-zero on ANY peer skip).
+    assert_ne!(
+        outcome.status, 0,
+        "an unreachable peer must drive a NON-ZERO exit code (WD-37 / ADR-013);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The progress block names the unreachable peer AND marks it skipped
+    //    (the user sees WHICH peer was dropped + that the pull continued —
+    //    the defining observable of per-peer fault isolation, WD-37). The
+    //    EXACT skip reason wording is an implementation detail of which seam
+    //    trips first (DID resolution vs listRecords); the load-bearing
+    //    contract is "Dana is named under a `skipped` line".
+    assert!(
+        outcome.stdout.contains(dana_did),
+        "the progress block must name the unreachable peer {dana_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("skipped"),
+        "the progress block must mark the unreachable peer as skipped (WD-37);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. The TWO reachable peers proceed NORMALLY: each is named, each
+    //    reports its fetched/verified counts, and the run stored their
+    //    records as new (Dana's failure isolated to Dana — WD-37).
+    for reachable_did in [rachel_did, sam_did] {
+        assert!(
+            outcome.stdout.contains(reachable_did),
+            "the progress block must name the reachable peer {reachable_did};\n\
+             --- stdout ---\n{}",
+            outcome.stdout
+        );
+    }
+    assert!(
+        outcome.stdout.contains("Pulled 6 new peer claims"),
+        "the two reachable peers' 3+3 records must all store as new \
+         (the unreachable peer contributes ZERO, never aborts the others);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_claims rows attributed to Rachel : 0 → 3 (every row hers).
+    //    - peer_claims rows attributed to Sam    : 0 → 3 (every row his).
+    //    The per-author helper composes (it asserts only the per-DID count),
+    //    so the two reachable peers' partitions coexist.
+    assert_peer_claims_row_count_for(&env, rachel_did, 3);
+    assert_peer_claims_row_count_for(&env, sam_did, 3);
+
+    //    - peer_claims rows attributed to Dana : STILL 0 — the unreachable
+    //      peer stored NOTHING (anti-merging at the skip path; the sum of
+    //      non-skipped peers' records == total).
+    assert_no_peer_claims_attributed_to(&env, dana_did);
+
+    //    - author_claims UNCHANGED (a peer pull never touches own claims,
+    //      not even partially when one peer is skipped — DD-FED-10).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull, even when \
+         one of several peers is skipped (DD-FED-10)"
+    );
+
+    //    - the on-disk partitions for the two reachable peers each hold
+    //      exactly 3 `<cid>.json` artifacts; Dana's partition was never
+    //      created (no records fetched).
+    for reachable_did in [rachel_did, sam_did] {
+        let partition = peer_claims_dir_for(&env, reachable_did);
+        let artifact_count = std::fs::read_dir(&partition)
+            .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|e| e.path().extension().map(|x| x == "json"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            artifact_count,
+            3,
+            "expected exactly 3 `<cid>.json` artifacts under {} for the reachable \
+             peer {reachable_did}; got {artifact_count}",
+            partition.display()
+        );
+    }
+    assert!(
+        !peer_claims_dir_for(&env, dana_did).exists(),
+        "the unreachable peer {dana_did} must have NO on-disk partition (nothing \
+         was fetched or stored — WD-37 skip path leaves zero residue)"
+    );
 }
 
 /// PP-8: `openlore peer pull` against ZERO subscribed peers exits 0

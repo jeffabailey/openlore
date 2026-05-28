@@ -1521,6 +1521,64 @@ pub fn run_openlore_pull(
     }
 }
 
+/// One peer's resolver + pubkey seam wiring for a multi-peer pull.
+///
+/// PP-7 fault isolation needs MORE than one subscribed peer in a single
+/// `peer pull` invocation, so the per-peer env-var seams ([`peer_resolver_env_var`]
+/// + [`peer_pubkey_env_var`]) must be threaded for EACH peer at once.
+/// [`run_openlore_pull`] only wires a single peer; this struct is the
+/// per-peer tuple [`run_openlore_pull_multi`] consumes.
+pub struct PeerSeam<'a> {
+    /// The peer DID (e.g. `did:plc:rachel-test`).
+    pub peer_did: &'a str,
+    /// The peer's in-process `PeerPds` HTTP base URL.
+    pub peer_endpoint: &'a str,
+    /// The peer's Ed25519 public key as 64-char lowercase hex (the verify
+    /// seam). For an unreachable peer this is still wired (resolution +
+    /// listRecords drop the connection before the key is ever used).
+    pub peer_pubkey_hex: &'a str,
+}
+
+/// Run `openlore <args>` with the resolver + pubkey seams wired for EVERY
+/// supplied peer at once. The multi-peer sibling of [`run_openlore_pull`]:
+/// PP-7 subscribes to ≥2 peers and pulls them in ONE invocation so the
+/// per-peer fault-isolation loop (WD-37, sequential per ADR-016) is
+/// exercised end-to-end. Each `PeerSeam` contributes its
+/// `OPENLORE_PEER_PDS_ENDPOINT_<did>` + `OPENLORE_PEER_PUBKEY_HEX_<did>`
+/// env vars; an unreachable peer simply has its `PeerPds` toggled to
+/// `simulate_unreachable()` by the caller BEFORE this runs, so its
+/// resolveDid / listRecords HTTP calls drop the connection and the
+/// in-binary pull records the peer as a skip.
+pub fn run_openlore_pull_multi(env: &TestEnv, args: &[&str], peers: &[PeerSeam<'_>]) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("PATH", std::env::var("PATH").unwrap_or_default());
+
+    for peer in peers {
+        cmd.env(peer_resolver_env_var(peer.peer_did), peer.peer_endpoint);
+        cmd.env(peer_pubkey_env_var(peer.peer_did), peer.peer_pubkey_hex);
+    }
+
+    let output = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 /// base64url-no-pad encode raw bytes (the lexicon `signature.sig` wire
 /// encoding per ADR-006). Hand-rolled to avoid pulling a base64 crate into
 /// the acceptance-support dev-deps; the production decoder in
