@@ -293,12 +293,87 @@ fn scraper_domain_every_candidate_confidence_is_the_quarter_default_property() {
 /// @property @us-scr-002 @j-004b
 #[test]
 fn scraper_domain_derive_candidates_is_deterministic_property() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-3 @property. Drive proptest over arb_signal_set(); assert two \
-         calls to derive_candidates with the SAME inputs yield byte-equal Vec<CandidateClaim> \
-         (same candidates, same order)."
-    )
+    use ports::{Signal, SignalKind};
+    use proptest::prelude::*;
+    use proptest::test_runner::TestRunner;
+    use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+
+    // Layer-2 @property (Mandate 9; DD-SCR): pure-core direct invocation, NO
+    // CLI subprocess. The driving port IS the pure `derive_candidates`
+    // signature; we drive it over an arbitrary signal set x the embedded SSOT
+    // mapping and assert the determinism invariant (component-boundaries.md):
+    //
+    //     forall (signals, mapping):
+    //         derive_candidates(signals, mapping) == derive_candidates(signals, mapping)
+    //
+    // Determinism is load-bearing for auditability (a re-run shows the user the
+    // SAME proposals they reviewed) and for reproducible candidate-list
+    // rendering across invocations (SG-9's pure-read contract at the CLI layer).
+    // It is structural here: grouping preserves first-appearance order via a
+    // Vec (no HashMap iteration-order leak) and confidence is the verbatim
+    // mapping default (no float arithmetic / NaN). This layer-2 property PINS
+    // that contract so a future refactor that introduces a HashMap-ordered (or
+    // otherwise nondeterministic) grouping fails LOUDLY at the derivation
+    // boundary.
+    //
+    // Generators are inlined (not shared from a proptest_strategies module)
+    // because that module is #[cfg(test)]-gated for the crate's own inner loop;
+    // same approach as SD-1 (02-01) and SD-2 (02-02).
+    const SUBJECT: &str = "github:rust-lang/cargo";
+
+    // Any one of the five bounded SignalKind variants the SSOT mapping uses.
+    fn arb_signal_kind() -> impl Strategy<Value = SignalKind> {
+        prop_oneof![
+            Just(SignalKind::DependencyManifestPinned),
+            Just(SignalKind::DocsPresentAndSubstantial),
+            Just(SignalKind::TestRatioOrCiMatrix),
+            Just(SignalKind::SemverAndChangelog),
+            Just(SignalKind::MemorySafetyLanguage),
+        ]
+    }
+
+    // A single Signal with an arbitrary kind, printable value, and a
+    // GitHub-shaped public URL.
+    fn arb_signal() -> impl Strategy<Value = Signal> {
+        (
+            arb_signal_kind(),
+            "[ -~]{0,64}",
+            "https://github\\.com/[a-z0-9-]{1,16}/[a-z0-9-]{1,16}",
+        )
+            .prop_map(|(kind, value, source_url)| Signal {
+                kind,
+                value,
+                source_url,
+            })
+    }
+
+    // Arbitrary signal set (0..7 signals) exercising collapse, drop, and order
+    // shapes. No forced head here: determinism must hold for EVERY input,
+    // including the empty-candidate case (Vec::new() == Vec::new()).
+    fn arb_signal_set() -> impl Strategy<Value = Vec<Signal>> {
+        proptest::collection::vec(arb_signal(), 0..7)
+    }
+
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping must parse");
+
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arb_signal_set(), |signals| {
+            let first = derive_candidates(SUBJECT, &signals, &mapping);
+            let second = derive_candidates(SUBJECT, &signals, &mapping);
+            prop_assert_eq!(
+                first,
+                second,
+                "derive_candidates must be DETERMINISTIC: the same signals + mapping must yield \
+                 the same candidates in the same order (a re-run shows the user the SAME \
+                 proposals they reviewed)"
+            );
+            Ok(())
+        })
+        .expect(
+            "determinism invariant: derive_candidates(signals, mapping) must equal a second call \
+             with the SAME inputs for all generated signal sets",
+        );
 }
 
 // =============================================================================
