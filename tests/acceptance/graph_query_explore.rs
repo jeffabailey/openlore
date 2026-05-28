@@ -2033,12 +2033,101 @@ fn graph_query_explain_attributes_triangulation_bonus_to_the_contributor_who_ear
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert cargo's --explain breakdown shows the base claim PLUS a \
-         '+0.5 cross-project triangulation' line attributed to did:plc:rachel-test (who spans \
-         cargo+nixpkgs), and the running sum equals cargo's displayed weight (US-GRAPH-005 \
-         Example 4; Gate 1 attribution-of-bonus);\n--- graph ---\n{graph:?}"
-    )
+    // Gate 1 (aggregate preserves attribution): cargo's weight was raised by
+    // Rachel's cross-project span (cargo+nixpkgs). The --explain breakdown must
+    // show the base claim PLUS the explicit "+0.5 cross-project triangulation"
+    // line attributed to the contributor who earned it (did:plc:rachel-test),
+    // NOT a faceless aggregate. The running sum equals cargo's displayed weight.
+    //
+    // The cargo arithmetic (data-models.md §"Worked example (cargo)"; constant
+    // cross_project_triangulation_bonus 0.50): Rachel is the sole cargo author
+    // (first author, x1.0) AND spans two projects (cargo+nixpkgs), so her
+    // contribution carries the +0.5 triangulation addend:
+    //   Rachel  0.91 (x1.0) + 0.50 triangulation -> subtotal 1.41
+    //   running sum 1.41 == displayed adherence weight 1.41
+    //
+    // Universe (port-exposed observable surface of cargo's `--explain` breakdown,
+    // all asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.bonus_attributed_to_earner — the "+0.5 cross-project
+    //                                                 triangulation" line appears
+    //                                                 under Rachel's contribution
+    //                                                 (the DID that earned it)
+    //   cli.graph_query.base_claim_shown           — Rachel's base confidence 0.91
+    //   cli.graph_query.running_sum_equals_weight  — 0.91 + 0.50 = 1.41 == weight
+    //   cli.graph_query.no_faceless_aggregate      — no merged/consensus row
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition (the cross-project span that EARNS the bonus): Rachel
+    // asserts dependency-pinning on BOTH cargo and nixpkgs.
+    let rachel_subjects: std::collections::HashSet<&str> = graph
+        .seeded
+        .iter()
+        .filter(|c| c.author_did == "did:plc:rachel-test")
+        .map(|c| c.subject.as_str())
+        .collect();
+    assert!(
+        rachel_subjects.contains("github:rust-lang/cargo")
+            && rachel_subjects.contains("github:NixOS/nixpkgs"),
+        "fixture precondition: Rachel must span cargo+nixpkgs (the >= 2-subject reach that earns \
+         the +0.5 triangulation bonus on cargo); got {rachel_subjects:?}"
+    );
+
+    // 1. Gate 1 — the base claim is enumerated under its OWN author DID (Rachel),
+    //    showing her base confidence verbatim (0.91; KPI-4 zero-normalization).
+    assert!(
+        stdout.contains("Contribution: did:plc:rachel-test"),
+        "cli.graph_query.base_claim_shown: expected cargo's contribution headed by Rachel's DID;\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+    assert!(
+        stdout.contains("confidence: 0.91 (base)"),
+        "cli.graph_query.base_claim_shown: expected Rachel's base confidence 0.91 shown verbatim;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 2. Gate 1 (attribution-of-bonus) — the +0.5 cross-project triangulation
+    //    line appears, AND it is attributed to the contributor who earned it
+    //    (Rachel). Maria sees exactly WHY the bonus applied and TO WHOM: the
+    //    addend line falls within Rachel's contribution block, so the breakdown
+    //    never reads as a faceless aggregate bonus.
+    assert!(
+        stdout.contains("+0.5 cross-project triangulation"),
+        "cli.graph_query.bonus_attributed_to_earner: expected the explicit '+0.5 cross-project \
+         triangulation' line in cargo's breakdown;\n--- stdout ---\n{stdout}"
+    );
+    let rachel_block_carries_bonus = stdout
+        .split("Contribution: ")
+        .any(|block| {
+            block.starts_with("did:plc:rachel-test")
+                && block.contains("+0.5 cross-project triangulation")
+        });
+    assert!(
+        rachel_block_carries_bonus,
+        "cli.graph_query.bonus_attributed_to_earner (Gate 1): the +0.5 cross-project triangulation \
+         addend must fall within RACHEL's contribution block (the contributor who earned it by \
+         spanning cargo+nixpkgs), so Maria sees who + why — not a faceless aggregate bonus;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. Gate 1 — the running sum EQUALS cargo's displayed weight: Rachel's base
+    //    (0.91) plus the +0.5 triangulation reproduces 1.41 by hand.
+    assert!(
+        stdout.contains("Running sum 1.41 = displayed adherence weight 1.41"),
+        "cli.graph_query.running_sum_equals_weight: expected the running sum (0.91 + 0.50 = 1.41) \
+         to EQUAL cargo's displayed adherence weight 1.41 (the triangulation bonus folded in);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 4. Gate 1 — the contributor stays individually nameable: no merged/
+    //    consensus/aggregate row swallows the bonus.
+    for label in ["merged", "consensus", "aggregate"] {
+        assert!(
+            !stdout.to_lowercase().contains(label),
+            "cli.graph_query.no_faceless_aggregate (Gate 1): cargo's --explain breakdown must \
+             contain NO {label:?} row — the triangulation bonus stays attributed to Rachel;\n\
+             --- stdout ---\n{stdout}"
+        );
+    }
 }
 
 // =============================================================================
