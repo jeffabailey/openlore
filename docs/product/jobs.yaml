@@ -246,16 +246,85 @@ jobs:
         view must layer onto that habit, not replace it.
 
     opportunity_score:
-      importance: 6
+      importance: 7                  # raised from 6: scraper is the cost-lowering lever
       satisfaction: 1
-      score: 11
-      verdict: underserved-tertiary
+      score: 13                      # 7 + max(7-1, 0) = 13
+      verdict: underserved-primary-for-slice   # primary for slice-02 (github-scraper)
 
     success_signals:
       - User identifies a non-obvious collaborator candidate via the lens within 60 days.
       - Lens output is shareable as a link to a query, not just a static dump.
+      - User produces an evidence-backed claim about a contributor/repo in
+        under 2 minutes by reviewing scraper candidates instead of authoring
+        from scratch (slice-02 cost-lowering signal).
+      - User edits at least one scraper-proposed candidate before signing it
+        (proves the human-in-the-loop is real, not rubber-stamped).
 
     related_jobs: [J-001, J-002, J-003]
+
+    # Sub-jobs surfaced during slice-02 (github-scraper) DISCUSS — each is an
+    # aspect of J-004, NOT a separate primary job, but each merits an Elevator
+    # Pitch in the corresponding user story.
+    sub_jobs:
+      - id: J-004a
+        name: Harvest a contributor's/repo's public GitHub signals
+        story: >
+          When I want to evaluate a repo or contributor through a philosophy
+          lens, I want the tool to gather their PUBLIC GitHub artifacts (READMEs,
+          docs, dependency manifests, commit/PR/issue patterns) for me, so I do
+          not have to manually open twenty browser tabs to form an impression.
+        load_bearing: true
+        rationale: >
+          This is the cost-lowering lever. Without harvest, J-004 stays a
+          manual-research job and the scraper has no reason to exist. ONLY public
+          data; the contributor is the SUBJECT of a claim, never a controller.
+
+      - id: J-004b
+        name: Derive editable candidate claims from harvested signals
+        story: >
+          When the tool has harvested a target's signals, I want it to PROPOSE
+          a small set of candidate claims (each with a suggested predicate,
+          evidence URL, and a conservative confidence), so I have a strong
+          starting point I can edit rather than a blank compose prompt.
+        load_bearing: true
+        rationale: >
+          The derivation is PURE (scraper-domain) and must be auditable: every
+          candidate names the exact signal that produced it. The mapping from
+          signal to philosophy predicate is small and human-editable.
+
+      - id: J-004c
+        name: The human always signs — the scraper never asserts
+        story: >
+          When I review scraper-proposed candidates, I want to select, edit, and
+          sign them through the SAME compose-sign-publish pipeline I already use
+          for hand-authored claims, so the scraper lowers cost without ever
+          turning my reasoning into a machine's assertion.
+        load_bearing: true
+        rationale: >
+          Preserves the slice-01 "claims are signed human assertions" invariant.
+          NO candidate is ever persisted as a signed claim or auto-published.
+          Candidates are conservative-confidence (default <0.3 speculative)
+          until the human reviews and adjusts.
+
+    # The signal->predicate default mapping for slice-02. SMALL and auditable by
+    # design; the human edits any candidate before signing. DESIGN owns the
+    # exact serde shape; this is the product-level default set.
+    signal_predicate_mapping:
+      - signal: "Dependency manifest pins exact versions (Cargo.lock committed, == pins)"
+        predicate: org.openlore.philosophy.dependency-pinning
+        default_confidence: 0.25      # speculative; human adjusts before signing
+      - signal: "Docs directory present + README > 200 lines + doc-comment density high"
+        predicate: org.openlore.philosophy.documentation-first
+        default_confidence: 0.25
+      - signal: "Test-to-source file ratio > 0.5 OR CI runs a test matrix"
+        predicate: org.openlore.philosophy.test-driven
+        default_confidence: 0.25
+      - signal: "Tags follow semver + CHANGELOG present"
+        predicate: org.openlore.philosophy.semantic-versioning
+        default_confidence: 0.25
+      - signal: "Primary language is Rust OR memory-safety language + no unsafe blocks"
+        predicate: org.openlore.philosophy.memory-safety
+        default_confidence: 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +394,16 @@ changelog:
       reprisal); sub-jobs J-003a (anti-merging), J-003b (counter-claim
       first-class), J-003c (revocability) added. J-003 retains primary=false at
       umbrella scope but is the walking-skeleton job for openlore-federated-read.
+  - date: "2026-05-28"
+    feature: openlore-github-scraper
+    change: >
+      J-004 deepened for slice-02 DISCUSS — opportunity score raised 11->13 with
+      promotion to underserved-primary-for-slice (scraper is the cost-lowering
+      lever for J-004 and bridges into J-001 authoring). Sub-jobs J-004a (harvest
+      public GitHub signals), J-004b (derive editable candidate claims), J-004c
+      (human always signs — scraper never asserts) added. Two cost-lowering
+      success signals added. A small auditable signal->predicate default mapping
+      recorded under J-004.signal_predicate_mapping (human edits before signing;
+      candidates default to 0.25 speculative confidence). J-004 retains
+      primary=false at umbrella scope but is the walking-skeleton job for
+      openlore-github-scraper.

@@ -1,0 +1,200 @@
+//! Slice-02 layer-2 acceptance — `scraper-domain` pure derivation
+//! properties + signal->predicate mapping SSOT conformance.
+//!
+//! Layer 2 (in-memory acceptance — pure-core direct invocation, NO CLI
+//! subprocess) per nw-tdd-methodology Layered Test Discipline matrix +
+//! DD-SCR-6. Sibling to slice-03's `lexicon_counter_claim.rs`; same shape,
+//! same file role. The driving port here is the PURE function signature
+//! (`scraper_domain::derive_candidates` / `load_mapping`) — calling it
+//! directly IS port-to-port testing at the domain layer.
+//!
+//! Per Mandate 9 (layer-dependent PBT mode): layers 1-2 may use PBT full.
+//! The auditability invariant (every candidate names a source signal), the
+//! no-auto-inflation invariant (every candidate confidence == 0.25), and
+//! the determinism invariant are `@property` scenarios runnable via
+//! proptest. The mapping-SSOT conformance + the collapse + the
+//! empty-on-no-match scenarios are example-pinned (single fixture each).
+//!
+//! These are the LOAD-BEARING auditability + human-gate properties the
+//! whole feature thesis rests on (KPI-SCR-2 + KPI-SCR-3); pinning them as
+//! generative properties at the cheap layer-2 boundary means the
+//! example-only layer-3 subprocess tests (`scrape_candidates.rs`) only need
+//! to verify the user-visible RENDERING of these already-proven invariants.
+//!
+//! The EXHAUSTIVE per-arm unit coverage (each `SignalKind` -> predicate,
+//! malformed-mapping errors, boundary parsing) is DELIVER's inner TDD loop
+//! in `crates/scraper-domain/src/`'s `#[cfg(test)] mod tests` block (out of
+//! DISTILL scope per DD-SCR-7, symmetric with slice-03 DD-FED-7).
+//!
+//! Covers:
+//! - US-SCR-002: pure candidate derivation (auditability + no-inflation +
+//!   collapse + empty-on-no-match)
+//! - US-SCR-006: signal->predicate mapping SSOT conformance
+//! - WD-52 / I-SCR-3: confidence 0.25, never above 0.3 (property)
+//! - WD-53 / I-SCR-4: every candidate names its source signal (property)
+//! - WD-53 / WD-67 / I-SCR-5: mapping embedded from jobs.yaml SSOT,
+//!   `mapping_matches_ssot` (no divergent hardcode)
+//
+// SCAFFOLD: true
+
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
+// NOTE — unlike the subprocess-driven scrape_* tests, this file invokes
+// `scraper_domain` directly (layer 2). It does NOT use `support/mod.rs`'s
+// TestEnv (no subprocess). Same pattern as slice-03's
+// `lexicon_counter_claim.rs`.
+
+// =============================================================================
+// US-SCR-002 — auditability invariant (PROPERTY; KPI-SCR-3 / I-SCR-4)
+// =============================================================================
+
+/// SD-1 / Property (Mandate 9 layer 2 PBT full): EVERY candidate
+/// `derive_candidates` produces has a NON-EMPTY `source_signals`. This is
+/// the auditability invariant (I-SCR-4 / KPI-SCR-3): a candidate the user
+/// cannot trace to a signal is unauditable and must not exist. The negative
+/// is load-bearing — a candidate with zero source signals is a bug, not a
+/// proposal.
+///
+///     forall (signals, mapping):
+///         derive_candidates(signals, mapping).all(|c| !c.source_signals.is_empty())
+///
+/// @property @us-scr-002 @j-004b @i-scr-4 @kpi-scr-3
+#[test]
+fn scraper_domain_every_candidate_names_at_least_one_source_signal_property() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-1 @property. Drive proptest over \
+         scraper_domain::proptest_strategies::arb_signal_set() x the embedded SSOT mapping; \
+         assert EVERY produced CandidateClaim.source_signals is NON-EMPTY (auditability \
+         invariant; the property is non-vacuous because the generator yields at-least-one \
+         mapping-matching signal in the positive arm)."
+    )
+}
+
+// =============================================================================
+// US-SCR-002 — no-auto-inflation invariant (PROPERTY; KPI-SCR-2 / I-SCR-3)
+// =============================================================================
+
+/// SD-2 / Property: EVERY candidate `derive_candidates` produces has
+/// `confidence == 0.25` (the mapping default), and NONE is above 0.3. The
+/// scraper has weak evidence; only the human may raise confidence (WD-52 /
+/// WD-10). This is the proposal-time half of the
+/// `candidate_confidence_no_autoinflate` guardrail, proven generatively.
+///
+///     forall (signals, mapping):
+///         derive_candidates(signals, mapping).all(|c| c.confidence == 0.25)
+///
+/// @property @us-scr-002 @j-004b @wd-52 @i-scr-3 @kpi-scr-2
+#[test]
+fn scraper_domain_every_candidate_confidence_is_the_quarter_default_property() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-2 @property. Drive proptest over arb_signal_set() x the SSOT \
+         mapping; assert EVERY produced CandidateClaim.confidence == 0.25 AND none > 0.3 (no \
+         auto-inflation; the conservative default forces the human to consciously raise it)."
+    )
+}
+
+// =============================================================================
+// US-SCR-002 — determinism invariant (PROPERTY)
+// =============================================================================
+
+/// SD-3 / Property: `derive_candidates` is DETERMINISTIC — the same signals
+/// + mapping produce the same candidates in the same order. Determinism is
+/// load-bearing for auditability (a re-run shows the user the SAME proposals
+/// they reviewed) and for reproducible candidate-list rendering across
+/// invocations (SG-9's pure-read contract at the CLI layer).
+///
+///     forall (signals, mapping):
+///         derive_candidates(signals, mapping) == derive_candidates(signals, mapping)
+///
+/// @property @us-scr-002 @j-004b
+#[test]
+fn scraper_domain_derive_candidates_is_deterministic_property() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-3 @property. Drive proptest over arb_signal_set(); assert two \
+         calls to derive_candidates with the SAME inputs yield byte-equal Vec<CandidateClaim> \
+         (same candidates, same order)."
+    )
+}
+
+// =============================================================================
+// US-SCR-002 — collapse + empty-on-no-match (example-pinned)
+// =============================================================================
+
+/// SD-4 (US-SCR-002 Ex 4; I-SCR-4): multiple signals mapping to ONE
+/// predicate collapse into a SINGLE candidate whose `source_signals` lists
+/// all contributing signals (no near-duplicate candidates). Example-pinned:
+/// three docs-signals -> one `documentation-first` candidate with three
+/// source signals.
+///
+/// Given three distinct signals (docs/ dir, long README, high doc-comment
+/// density) that all map to documentation-first; When derive_candidates
+/// runs; Then exactly ONE candidate is produced and its source_signals has
+/// length 3.
+///
+/// @us-scr-002 @j-004b @i-scr-4
+#[test]
+fn scraper_domain_multiple_signals_for_one_predicate_collapse_into_one_candidate() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-4. GIVEN three Signals whose kinds all map to \
+         org.openlore.philosophy.documentation-first; WHEN derive_candidates(signals, \
+         mapping); THEN result.len() == 1 AND result[0].source_signals.len() == 3 (collapse, \
+         not three near-duplicates)."
+    )
+}
+
+/// SD-5 (US-SCR-002 Ex 2): a signal set with ZERO mapping-matching entries
+/// derives an EMPTY candidate list (NOT an error). Nothing to propose is a
+/// valid outcome the pure core returns as `Vec::new()`; the CLI layer (SG-7)
+/// renders the "no candidates derived" message + exit 0 from this empty Vec.
+///
+/// Given a signal set with no entries the mapping can use; When
+/// derive_candidates runs; Then the result is an empty Vec (not an error,
+/// not a panic).
+///
+/// @us-scr-002 @j-004b @edge
+#[test]
+fn scraper_domain_zero_matching_signals_derive_an_empty_candidate_list() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-5. GIVEN signals whose kinds match NO mapping entry; WHEN \
+         derive_candidates(signals, mapping); THEN result.is_empty() (empty Vec, not Err — \
+         nothing-to-propose is not an error)."
+    )
+}
+
+// =============================================================================
+// US-SCR-006 — mapping SSOT conformance (WD-53 / WD-67 / I-SCR-5)
+// =============================================================================
+
+/// SD-6 (gate-equivalent `mapping_matches_ssot`, I-SCR-5): the
+/// signal->predicate mapping `scraper-domain` consumes is the EMBEDDED
+/// snapshot of `docs/product/jobs.yaml :: J-004.signal_predicate_mapping`
+/// (the SSOT) — no divergent hardcode. The loaded mapping has exactly the 5
+/// slice-02 entries, each predicate is an `org.openlore.philosophy.*` NSID,
+/// and each default_confidence is 0.25. This is the forward-defense against
+/// the mapping drifting from product's auditable SSOT (WD-53 / WD-67).
+///
+/// Given the embedded jobs.yaml mapping snapshot; When load_mapping parses
+/// it; Then it has 5 entries, every predicate is org.openlore.philosophy.*,
+/// every default_confidence is 0.25, and the parsed entries equal the
+/// jobs.yaml SSOT (no drift).
+///
+/// @us-scr-006 @j-004b @wd-53 @wd-67 @i-scr-5
+#[test]
+fn scraper_domain_embedded_mapping_matches_jobs_yaml_ssot() {
+    // SCAFFOLD: true
+    todo!(
+        "DELIVER (slice-02): SD-6 — mapping_matches_ssot (I-SCR-5). WHEN \
+         load_mapping(EMBEDDED_JOBS_YAML_MAPPING); THEN it parses to exactly 5 entries, every \
+         predicate is an org.openlore.philosophy.* NSID, every default_confidence == 0.25, \
+         AND the parsed set equals the live docs/product/jobs.yaml \
+         J-004.signal_predicate_mapping read from disk in the test (drift fails LOUD). The \
+         production crate enforces the same via a build-time mapping_matches_ssot test (WD-67) \
+         — this layer-2 acceptance pins the SSOT-conformance contract."
+    )
+}

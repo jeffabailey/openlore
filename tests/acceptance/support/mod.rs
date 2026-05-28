@@ -2125,3 +2125,183 @@ pub fn assert_purge_state_delta(before: &HashMap<String, String>, after: &HashMa
 
     state_delta::assert_state_delta(before, after, &universe, &expected);
 }
+
+// =============================================================================
+// Slice-02 (github-scraper) support extensions — SCAFFOLD: true
+// =============================================================================
+//
+// DISTILL slice-02 declares the assertion-helper SIGNATURES the scrape_*
+// scenarios need; DELIVER materializes the bodies (todo!() until then). The
+// scrape verb is driven through the `OPENLORE_GITHUB_API_BASE` seam (the
+// FakeGithub base URL) + the optional `GITHUB_TOKEN` env-var (WD-63),
+// mirroring how the slice-03 peer verbs use `OPENLORE_PEER_PDS_ENDPOINT_<did>`.
+//
+// Re-export the FakeGithub double + fixtures flat so the scrape_* files name
+// them via `use support::*` (matching how the slice-03 peer doubles surface).
+pub use openlore_test_support::fake_github::{
+    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeSignal,
+    FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET,
+    FIXTURE_VALID_PAT,
+};
+pub use openlore_test_support::{
+    fixture_cargo_five_signals, fixture_three_docs_signals_one_predicate,
+    fixture_torvalds_user_aggregate_signals,
+};
+
+/// Run `openlore scrape github <target> ...` against a `FakeGithub` HTTP
+/// double, injecting its base URL via `OPENLORE_GITHUB_API_BASE` (the
+/// test-only seam). No stdin; for `--sign` flows that need to drive the
+/// chained compose/sign/publish prompts use
+/// [`run_openlore_scrape_with_stdin`].
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn run_openlore_scrape(env: &TestEnv, args: &[&str], github_base_url: &str) -> CliOutcome {
+    // SCAFFOLD: true
+    let _ = (env, args, github_base_url);
+    todo!("DELIVER (slice-02): run openlore scrape with OPENLORE_GITHUB_API_BASE set")
+}
+
+/// Run `openlore scrape github <target> --sign ...` against a `FakeGithub`
+/// HTTP double, feeding `stdin_lines` (newline-joined) at the chained
+/// compose/sign/publish prompts. Used by the SS-* sign scenarios.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn run_openlore_scrape_with_stdin(
+    env: &TestEnv,
+    args: &[&str],
+    github_base_url: &str,
+    stdin_lines: &str,
+) -> CliOutcome {
+    // SCAFFOLD: true
+    let _ = (env, args, github_base_url, stdin_lines);
+    todo!("DELIVER (slice-02): run openlore scrape --sign with GitHub seam + stdin")
+}
+
+/// Run `openlore scrape github <target> ...` with a `GITHUB_TOKEN` PAT set
+/// in the child env (WD-63 env-var seam) alongside the FakeGithub base URL.
+/// Used by the SA-* auth scenarios.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn run_openlore_scrape_with_token(
+    env: &TestEnv,
+    args: &[&str],
+    github_base_url: &str,
+    github_token: &str,
+) -> CliOutcome {
+    // SCAFFOLD: true
+    let _ = (env, args, github_base_url, github_token);
+    todo!("DELIVER (slice-02): run openlore scrape with GITHUB_TOKEN + GitHub seam set")
+}
+
+/// Universe-bound (gate `scraper_never_persists_unsigned`, KPI-SCR-2):
+/// assert the human-gate held at the storage layer — running `scrape github`
+/// without `--sign` produced ZERO observable persistence. Port-exposed
+/// universe: `author_claims.row_count == 0`, `pds.records.len == 0`,
+/// `claims_dir.artifact_count == 0`. The load-bearing human-gate proof.
+///
+/// SCAFFOLD: true — DELIVER materializes this (and MAY migrate it to an
+/// explicit `assert_state_delta(before, after, universe, expected)` form per
+/// DD-SCR-10, mirroring slice-03's `assert_purge_state_delta`).
+pub fn assert_no_claim_persisted(env: &TestEnv) {
+    // SCAFFOLD: true
+    let _ = env;
+    todo!(
+        "DELIVER (slice-02): assert author_claims.row_count == 0 AND pds.records().is_empty() \
+         AND claims_dir.artifact_count == 0 (scraper_never_persists_unsigned gate)"
+    )
+}
+
+/// Universe-bound (gate `candidate_names_source_signal`, KPI-SCR-3): assert
+/// each numbered candidate's source-signal line names the expected signal.
+/// `expected` pairs each candidate index (1-based) with a substring that
+/// MUST appear on its source-signal line (auditability; I-SCR-4).
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_candidate_names_signal(outcome: &CliOutcome, expected: &[(usize, &str)]) {
+    // SCAFFOLD: true
+    let _ = (outcome, expected);
+    todo!(
+        "DELIVER (slice-02): assert each numbered candidate's source-signal line names its \
+         originating signal substring (candidate_names_source_signal gate)"
+    )
+}
+
+/// Universe-bound (gate `candidate_confidence_no_autoinflate`, KPI-SCR-2,
+/// proposal half): assert EVERY rendered candidate displays the expected
+/// numeric confidence + bucket label, and no candidate displays a confidence
+/// above 0.3 (WD-52 / I-SCR-3).
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_candidate_confidence(outcome: &CliOutcome, expected: f64, bucket_label: &str) {
+    // SCAFFOLD: true
+    let _ = (outcome, expected, bucket_label);
+    todo!(
+        "DELIVER (slice-02): assert every candidate displays confidence==expected as \
+         bucket_label AND none > 0.3 (candidate_confidence_no_autoinflate, proposal half)"
+    )
+}
+
+/// Universe-bound (gate `candidate_confidence_no_autoinflate`, sign half):
+/// assert the signed-from-scraper claim at `cid` recorded EXACTLY the
+/// expected numeric confidence (no auto-inflation between proposal and sign
+/// unless the human edited it). Port-exposed name:
+/// `claims/<cid>.json::confidence`.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_candidate_confidence_unchanged(env: &TestEnv, cid: &str, expected: f64) {
+    // SCAFFOLD: true
+    let _ = (env, cid, expected);
+    todo!(
+        "DELIVER (slice-02): assert claims/<cid>.json signed payload records confidence == \
+         expected (sign-time half of candidate_confidence_no_autoinflate)"
+    )
+}
+
+/// Universe-bound (gate `scraper_reuses_slice01_publish_path`, I-SCR-6):
+/// assert the signed-from-scraper claim at `cid` was published via the SAME
+/// `VerbClaimPublish` path as a hand-authored claim — exactly ONE record on
+/// the user's OWN PDS under the user's OWN author DID at-uri, no parallel
+/// publish path. Port-exposed names: `pds.records.len`,
+/// `pds.records[at_uri].author_did`.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_scraper_reuses_slice01_publish_path(env: &TestEnv, cid: &str) {
+    // SCAFFOLD: true
+    let _ = (env, cid);
+    todo!(
+        "DELIVER (slice-02): assert the user's OWN PDS holds exactly the one counter/scraper \
+         claim at at://<author_did>/org.openlore.claim/<cid>, published via the slice-01 \
+         path (no parallel publish path; scraper_reuses_slice01_publish_path gate)"
+    )
+}
+
+/// Universe-bound (gate `scraper_only_reads_public_data`, KPI-SCR-4 —
+/// release-blocking): assert the production code hit ONLY public-endpoint
+/// allowlist paths against the FakeGithub double — NO private/authenticated-
+/// private endpoint was reached. Reads `FakeGithub::seen_paths()`.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_only_public_endpoints_called(github: &FakeGithub) {
+    // SCAFFOLD: true
+    let _ = github;
+    todo!(
+        "DELIVER (slice-02): assert every FakeGithub::seen_paths() entry is on the public \
+         GitHub endpoint allowlist — no private path was ever called \
+         (scraper_only_reads_public_data gate, KPI-SCR-4 release-blocking)"
+    )
+}
+
+/// Assert the token VALUE never appears in any captured output line
+/// (US-SCR-004 no-token-leak). Pairs with `FakeGithub::saw_token(token)`
+/// returning true (the production code DID send it) so the test proves auth
+/// happened WITHOUT the value ever surfacing to stdout/stderr.
+///
+/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+pub fn assert_token_value_absent(outcome: &CliOutcome, token: &str) {
+    // SCAFFOLD: true
+    let _ = (outcome, token);
+    todo!(
+        "DELIVER (slice-02): assert the token VALUE appears in neither stdout nor stderr \
+         (no-token-leak; US-SCR-004)"
+    )
+}

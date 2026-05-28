@@ -1,0 +1,247 @@
+schema_version: 1
+
+journey:
+  name: "Scrape GitHub, propose candidate claims, human signs"
+  goal: >
+    Lower the cost of producing well-evidenced claims about a contributor or
+    repo by harvesting public GitHub signals and deriving editable candidate
+    claims the human reviews and signs through the existing slice-01 pipeline.
+  persona: "P-002 Researcher / Tech Lead (contributor-evaluator hat); P-001 also wears this hat"
+  job: "J-004 (sub-jobs J-004a harvest, J-004b derive, J-004c human-always-signs)"
+  feature: openlore-github-scraper
+
+  emotional_arc:
+    start: "Curious-but-skeptical (is this surveillance? will it auto-publish junk?)"
+    middle: "In-control (signals harvested, candidates proposed, NOTHING signed yet)"
+    end: "Confident-authorship (I signed exactly what I reviewed; the tool never spoke for me)"
+
+steps:
+  - id: 1
+    name: "Scrape GitHub target"
+    command: "openlore scrape github <owner/repo | user>"
+
+    tui_mockup: |
+      +-- Step 1: scrape github -------------------------------------------+
+      | $ openlore scrape github rust-lang/cargo                           |
+      | Only PUBLIC GitHub data is read. The target is the SUBJECT of any  |
+      | claim you may later sign — never a controller. Nothing published.  |
+      | Resolving target rust-lang/cargo ... ok (repository)              |
+      |   auth: authenticated (GITHUB_TOKEN found; 4982/5000 budget)       |
+      | Harvesting public signals ... 5 signals in 2.1s                    |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "github_target"
+        source: "the <target> CLI argument, resolved against GitHub API"
+        displayed_as: "${github_target}"
+        consumers: ["step 2 candidate subject", "step 3 compose subject", "step 4 signed claim subject"]
+      - name: "harvested_signal"
+        source: "adapter-github harvest of public artifacts (READMEs, manifests, ratios)"
+        displayed_as: "${harvested_signal}"
+        consumers: ["step 2 (each candidate names its source signal)"]
+
+    emotional_state:
+      entry: "Curious-but-skeptical"
+      exit: "Curious-and-reassured"
+
+    integration_checkpoint: |
+      Target MUST resolve to a PUBLIC GitHub repo or user before any harvest.
+      A private/non-existent target produces zero candidates and a non-zero exit.
+      No private data is ever read.
+
+    failure_modes:
+      - "Target does not exist (HTTP 404) — name the target, exit non-zero, no candidates"
+      - "Rate limit exhausted unauthenticated — suggest GITHUB_TOKEN, exit non-zero"
+      - "Target is private / not accessible — 'scraper only reads public data', exit non-zero"
+      - "Network offline — 'scrape requires network', exit non-zero (harvest is the only network step)"
+
+    gherkin: |
+      Scenario: Harvest public signals from a public GitHub repo
+        Given the GitHub repo rust-lang/cargo is public
+        When Maria runs `openlore scrape github rust-lang/cargo`
+        Then the CLI prints the public-data-only banner before any harvest
+        And the CLI reports the count of public signals harvested
+        And no claim is signed and no PDS write occurs at this step
+
+      Scenario: Scraping a non-existent target produces no candidates
+        Given the target ghost-org/ghost-repo does not exist on GitHub
+        When Aanya runs `openlore scrape github ghost-org/ghost-repo`
+        Then the CLI exits non-zero
+        And the error names the target and the not-found cause
+        And zero candidate claims are produced
+
+  - id: 2
+    name: "Review derived candidate claims"
+    command: "(rendered automatically after step 1; no separate command)"
+
+    tui_mockup: |
+      +-- Step 2: candidate list -----------------------------------------+
+      | Candidate claims for subject github:rust-lang/cargo               |
+      | (5 derived — NOTHING is signed or published; you choose)         |
+      |  [1] embodiesPhilosophy  ...dependency-pinning                    |
+      |      from signal : Cargo.lock committed (exact pins)              |
+      |      confidence  : 0.25 (speculative)  <- conservative default   |
+      |  ... [2]..[5] ...                                                 |
+      | Select one to sign: `... --sign 1`  No selection = nothing.       |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "candidate_claim"
+        source: "scraper-domain pure derivation from harvested_signal + signal_predicate_mapping"
+        displayed_as: "${candidate_claim}"
+        consumers: ["step 3 (editable)", "step 4 (signed)"]
+      - name: "signal_predicate_mapping"
+        source: "docs/product/jobs.yaml :: J-004.signal_predicate_mapping"
+        displayed_as: "${signal_predicate_mapping}"
+        consumers: ["step 2 derivation"]
+      - name: "confidence"
+        source: "default 0.25 from signal_predicate_mapping; human-editable in step 3"
+        displayed_as: "${confidence}"
+        consumers: ["step 3 (editable)", "step 4 (signed payload, numeric only per WD-10)"]
+
+    emotional_state:
+      entry: "Curious-and-reassured"
+      exit: "In-control"
+
+    integration_checkpoint: |
+      Every candidate MUST name the exact harvested signal that produced it
+      (auditability). Every candidate's confidence defaults to 0.25 (speculative
+      bucket per WD-10). NO candidate is written to author_claims or published.
+
+    failure_modes:
+      - "Zero signals matched the mapping — 'no candidates derived', exit 0 (not an error)"
+
+    gherkin: |
+      Scenario: Derived candidates are proposals with traceable signals
+        Given Maria has run `openlore scrape github rust-lang/cargo`
+        And the harvest produced 5 public signals matching the predicate mapping
+        When the CLI renders the candidate list
+        Then exactly 5 candidate claims are shown
+        And each candidate names the exact public signal that produced it
+        And each candidate's confidence is 0.25 displayed as "speculative"
+        And no candidate has been signed, persisted as a claim, or published
+
+      Scenario: A target with no matching signals proposes nothing
+        Given the target some-user/empty-repo has no signals matching the mapping
+        When the CLI finishes harvesting
+        Then the CLI prints "No candidate claims could be derived"
+        And exit code is 0
+        And zero rows are written to author_claims
+
+  - id: 3
+    name: "Select and edit a candidate"
+    command: "openlore scrape github <target> --sign <N[,N...]>"
+
+    tui_mockup: |
+      +-- Step 3: edit before signing ------------------------------------+
+      | Editing candidate [1] before signing (slice-01 compose) ...      |
+      |   subject     [github:rust-lang/cargo] :                          |
+      |   predicate   [embodiesPhilosophy] :                             |
+      |   object      [...dependency-pinning] :                           |
+      |   evidence    [https://.../Cargo.lock] :                          |
+      |   confidence  [0.25] : 0.55                                       |
+      |   reason/note (optional) : Cargo.lock is deliberate repo policy.  |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "candidate_claim"
+        source: "carried from step 2; pre-fills the compose fields"
+        displayed_as: "${candidate_claim}"
+        consumers: ["step 4 compose preview"]
+
+    emotional_state:
+      entry: "In-control"
+      exit: "Authoring (this is MY reasoning now)"
+
+    integration_checkpoint: |
+      The pre-filled candidate fields MUST round-trip into compose unchanged
+      unless the user edits them. Editing confidence MUST enforce the [0.0,1.0]
+      constraint (WD-10). An out-of-range --sign index is rejected before any
+      compose begins.
+
+    failure_modes:
+      - "--sign N out of range — 'candidate N does not exist; valid 1..M', no claim written"
+      - "edited confidence out of [0.0,1.0] — re-prompt with the constraint, no claim written"
+
+    gherkin: |
+      Scenario: Selecting a candidate pre-fills the compose preview
+        Given the candidate list shows 5 candidates for github:rust-lang/cargo
+        When Maria runs `openlore scrape github rust-lang/cargo --sign 1`
+        Then the compose editor pre-fills subject, predicate, object, and evidence from candidate 1
+        And Maria can accept each field or type a replacement
+        And Maria can raise the confidence from 0.25 to 0.55
+
+      Scenario: An out-of-range selection is rejected before composing
+        Given the candidate list shows 5 candidates
+        When Tobias runs `openlore scrape github rust-lang/cargo --sign 9`
+        Then the CLI exits non-zero with "candidate 9 does not exist; valid range 1..5"
+        And no claim is composed, signed, or published
+
+  - id: 4
+    name: "Sign and publish (slice-01 pipeline, unchanged)"
+    command: "(continuation of --sign; reuses claim add compose-sign-publish)"
+
+    tui_mockup: |
+      +-- Step 4: sign + publish (slice-01) ------------------------------+
+      | Compose preview (claim is asserted by you, not as truth)         |
+      |   subject:    github:rust-lang/cargo                              |
+      |   confidence: 0.55 (weighted)                                     |
+      |   derived-from: openlore-github-scraper (signal: Cargo.lock ...)  |
+      | Press Enter to sign locally: CID bafyrei...cargo-pin             |
+      | Publish to your PDS now? (y/N): y                                 |
+      | Published. at-uri: at://did:plc:maria-test/.../bafyrei...        |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "claim_cid"
+        source: "claim-domain::compute_cid (pure) — computed only at sign time"
+        displayed_as: "${claim_cid}"
+        consumers: ["local store filename", "publish at-uri", "future graph query"]
+
+    emotional_state:
+      entry: "Authoring"
+      exit: "Confident-authorship"
+
+    integration_checkpoint: |
+      Sign and publish MUST reuse the slice-01 VerbClaimAdd / VerbClaimPublish
+      internals (no scraper-specific publish path). The compose preview MUST
+      contain the literal "not as truth" (I-7 / inherited). The only addition is
+      an informational `derived-from` provenance line; it does NOT alter the
+      signed payload's confidence or change federation behavior.
+
+    failure_modes:
+      - "PDS unreachable at publish — local claim file intact; retry hint (slice-01 behavior, unchanged)"
+
+    gherkin: |
+      Scenario: A reviewed candidate signs and publishes via the slice-01 pipeline
+        Given Maria has edited candidate 1 and set confidence to 0.55
+        When Maria presses Enter to sign and then confirms the publish prompt
+        Then the claim is signed with Maria's DID via the slice-01 VerbClaimAdd path
+        And the compose preview contained the literal text "not as truth"
+        And the claim is published via the SAME VerbClaimPublish path as a hand-authored claim
+        And the signed claim records a confidence of 0.55 (numeric only, per WD-10)
+        And the publish success message mentions the retract command
+
+      Scenario: Running scrape without --sign signs nothing
+        Given Maria runs `openlore scrape github rust-lang/cargo` with no --sign flag
+        When the candidate list is rendered
+        Then zero rows are written to author_claims
+        And zero PDS writes occur
+        And exit code is 0
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "github_target"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "Candidate or signed claim subject does not match the scraped target — attribution corruption."
+    - artifact: "candidate_claim"
+      must_match_across: [2, 3, 4]
+      failure_message: "A candidate field changed between proposal and compose without a user edit — the human-gate is leaking."
+    - artifact: "confidence"
+      must_match_across: [2, 3, 4]
+      failure_message: "Confidence auto-inflated between proposal and sign — only the human may raise it."
+
+changelog:
+  - date: "2026-05-28"
+    feature: "openlore-github-scraper"
+    change: "Initial journey for slice-02 scrape->propose->sign flow with skeptical-to-confident-authorship emotional arc and human-gate cross-cutting invariant."

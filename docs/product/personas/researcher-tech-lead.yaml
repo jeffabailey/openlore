@@ -88,3 +88,43 @@ persona:
         - `peer add` is acknowledged with a clear message naming the DID added and the timestamp of next pull.
         - `peer remove` defaults to soft (removes subscription but keeps claims cached) — `--purge` is explicit and irreversible. (Both behaviors discoverable from `peer remove --help`.)
         - Counter-claim CLI is `openlore claim counter <peer_cid> --reason ...`; the underlying record uses the existing `references[]` mechanism from ADR-008 with `type: counters`.
+
+    # -------------------------------------------------------------------------
+    # Contributor-evaluator hat (slice-02 / openlore-github-scraper)
+    # Added 2026-05-28 by Luna during DISCUSS for openlore-github-scraper.
+    # -------------------------------------------------------------------------
+    - id: contributor-evaluator
+      activated_in_slice: slice-02 / openlore-github-scraper
+      one_liner: >
+        P-002 wearing the contributor-evaluator hat is sizing up a contributor
+        or repo through a philosophy lens (for hiring, collaboration, or
+        dependency vetting) and wants the tool to lower the cost of producing
+        well-evidenced claims WITHOUT ever asserting anything on their behalf.
+
+      typical_session:
+        - "Evaluating whether to adopt rust-lang/cargo patterns for the team"
+        - "Run `openlore scrape github rust-lang/cargo`"
+        - "Read the public-data-only banner; see 5 candidate claims, each naming its source signal, all at 0.25 speculative"
+        - "Run `openlore scrape github rust-lang/cargo --sign 1` to carry one candidate into the slice-01 compose preview"
+        - "Edit the predicate/evidence, raise confidence from 0.25 to 0.55, add a note, sign, publish"
+        - "Optional: `--sign 1,3,4` to capture several claims in one pass, signing each individually"
+        - "Optional later: set GITHUB_TOKEN to scrape a busy contributor (torvalds) without hitting the anon rate limit"
+
+      load_bearing_anxieties:
+        - "Is this a surveillance tool? Will it read private data or build a blacklist?"
+        - "Will the tool put words in my mouth by signing claims on my behalf?"
+        - "Will the candidates be over-confident, tempting me to rubber-stamp machine proposals?"
+
+      load_bearing_signals_of_success:
+        - "A banner up front states only PUBLIC data is read and nothing is published; private/non-existent targets are refused."
+        - "NOTHING is signed until I carry a candidate through the slice-01 compose preview I already know (with 'not as truth') and sign it myself."
+        - "Every candidate names the exact public signal that produced it, so I can audit and reject any derivation."
+        - "I produce an evidence-backed claim in under 2 minutes instead of 20 minutes of tab-juggling."
+
+      ux_guardrails_specific_to_scraper:
+        - The public-data-only banner is printed BEFORE any harvest begins.
+        - Candidates render with the source signal FIRST and a conservative 0.25 (speculative) confidence; the tool never proposes above 0.3.
+        - There is NO auto-sign and NO "sign all without review"; `--sign` walks each candidate through an individual compose preview requiring the human's signing gesture.
+        - `scrape github` without `--sign` writes zero claims and makes zero PDS writes (the human-gate is observable).
+        - The signal->predicate mapping is small and auditable (SSOT in jobs.yaml); no ML inference that would make candidates unauditable.
+        - The optional GITHUB_TOKEN is never logged, never written to a claim, never published.

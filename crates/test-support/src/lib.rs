@@ -60,6 +60,35 @@ pub use fixtures_peer::{
     fixture_other_developer_three_claims,
 };
 
+// Slice-02 step 07-01 (DD-SCR-2 + DD-SCR-3): test double for the PUBLIC
+// GitHub API backing the new `GithubPort`. SEPARATE module from `FakePds` /
+// `FakePeerPds` because GitHub is a wholly different external system
+// (WD-61 / ADR-019) — no shared method shape, auth model, or failure
+// surface. Postures (public repo/user, not-found, private, offline,
+// rate-limited, token-rejected, authenticated, no-matching-signals,
+// multi-signal-one-predicate) are constructor-time-pinned (DD-SCR-3) and
+// drive the `scraper_only_reads_public_data` + `candidate_*` +
+// `scraper_never_persists_unsigned` acceptance gates. Public-data-only +
+// human-gate are STRUCTURAL: the double has no private surface and holds no
+// storage/identity/pds reference.
+pub mod fake_github;
+pub use fake_github::{
+    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeSignal,
+    FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET,
+    FIXTURE_VALID_PAT,
+};
+
+// Slice-02 step 07-01: canonical GitHub-harvest fixtures. Symmetric with
+// `fixtures_peer.rs`; one free function per well-known signal set used
+// across US-SCR-001..005 acceptance scenarios. The fixtures supply raw
+// harvested EFFECT signals only; the candidate derivation (predicate, 0.25
+// default) is the PURE `scraper-domain`'s job downstream (WD-56).
+pub mod fixtures_github;
+pub use fixtures_github::{
+    fixture_cargo_five_signals, fixture_three_docs_signals_one_predicate,
+    fixture_torvalds_user_aggregate_signals,
+};
+
 use claim_domain::{Cid, ClaimLookup, SignedClaim};
 use ports::{ClockPort, ProbeOutcome, StorageError, StoragePort};
 
