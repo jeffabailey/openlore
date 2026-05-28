@@ -25,9 +25,14 @@ mod score;
 
 pub use config::ScoringConfig;
 pub use explain::Contribution;
-pub use score::{
-    score, AttributedClaim, EmptyContributions, WeightBucket, WeightedPairing, WeightedView,
-};
+pub use score::{score, EmptyContributions, WeightBucket, WeightedPairing, WeightedView};
+
+// `AttributedClaim` is hoisted to `ports` (step 01-02) so the single
+// definition is shared by the `cli` composition root, the extended
+// `StoragePort` read methods, and this pure core. Re-exported here so existing
+// `scoring::AttributedClaim` call-sites keep working (`scoring -> ports`, the
+// non-cyclic placement).
+pub use ports::AttributedClaim;
 
 #[cfg(test)]
 mod tests {

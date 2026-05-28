@@ -47,11 +47,31 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason};
 
 mod federated_row;
 mod github;
+mod graph;
 mod peer_storage;
 
 pub use federated_row::{
     AuthorRelationship, FederatedRow, PeerInfo, PeerRecordPage, PeerSubscription, SignedRecord,
     SourceTable, VerificationMethod,
+};
+
+// -----------------------------------------------------------------------------
+// Slice-04 (scoring + graph) — attributed-claim feed + bounded-traversal ADTs
+// -----------------------------------------------------------------------------
+//
+// `graph` declares the slice-04 in-memory value types returned by the four new
+// `StoragePort` read methods (`query_by_object`, `query_by_contributor`,
+// `query_attributed_for_scoring`, `traverse_graph`). Defined HERE (not in
+// `scoring`) because BOTH the pure `scoring` core AND the `cli` composition
+// root consume them, and `scoring -> ports` (never the reverse) — the
+// non-cyclic home (component-boundaries.md §`crates/ports`; data-models.md
+// §"In-memory value types"). `AttributedClaim` is hoisted from `scoring` (step
+// 01-01) to here; `scoring` re-exports it. The non-`Option` `author_did` on
+// `AttributedClaim` + `GraphEdge`, and the non-`Option` `claim_cid` on
+// `GraphEdge`, are the I-GRAPH-2 / I-GRAPH-5 type-level anti-merging defenses.
+
+pub use graph::{
+    AttributedClaim, GraphEdge, GraphNode, ScoringFilter, TraversalBound, TraversalResult,
 };
 pub use peer_storage::{
     AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, SoftRemoveOutcome,
@@ -119,6 +139,53 @@ pub trait StoragePort {
     /// `JOIN` that could elide the column. `xtask check-arch`
     /// enforces this structurally.
     fn query_federated_by_subject(&self, subject: &str) -> Result<Vec<FederatedRow>, StorageError>;
+
+    // -------- slice-04 (scoring + graph) --------
+    //
+    // Four read methods, all SYNC local reads over the SAME single-file
+    // DuckDB store (NO new table; NO store swap — `adapter-duckdb` AUGMENT,
+    // WD-8). Each returns PER-CLAIM / PER-EDGE rows carrying a non-`Option`
+    // `author_did`: aggregation (the weight) happens later in the pure
+    // `scoring` core in Rust, NEVER in SQL (WD-73 anti-merging-in-aggregates).
+    // The cross-store SQL uses `UNION ALL` with explicit `author_did`, NEVER a
+    // merging `JOIN`/`GROUP BY` — `xtask check-arch`'s extended
+    // `no_cross_table_join_elides_author` enforces it structurally. Adapter
+    // impls land in step 01-03; these are declarations only.
+
+    /// Which claims assert this `object` (philosophy), across own + peer
+    /// stores. Every row carries its non-`Option` `author_did`; the renderer
+    /// groups by subject. Two identical-content claims from different authors
+    /// stay TWO rows (never merged — I-GRAPH-2).
+    fn query_by_object(&self, object: &str) -> Result<Vec<AttributedClaim>, StorageError>;
+
+    /// Every claim authored by this DID, across all subjects, own + peer
+    /// stores. Drives `--contributor`: "one developer's reasoning trail, not a
+    /// community consensus".
+    fn query_by_contributor(
+        &self,
+        author_did: &Did,
+    ) -> Result<Vec<AttributedClaim>, StorageError>;
+
+    /// The attributed-claim feed for the pure `scoring::score` core. Returns
+    /// per-claim rows (the `UNION ALL` of [`Self::query_by_object`]'s shape),
+    /// NEVER a SQL aggregate — so the weight the pure core computes always
+    /// decomposes into these rows (Gate 1 / I-GRAPH-2).
+    fn query_attributed_for_scoring(
+        &self,
+        filter: &ScoringFilter,
+    ) -> Result<Vec<AttributedClaim>, StorageError>;
+
+    /// Bounded, cycle-safe traversal of contributor↔project↔philosophy edges
+    /// from `start`, capped at `bound.max_depth` (WD-76). Each [`GraphEdge`]
+    /// maps to exactly ONE signed claim (`claim_cid` non-`Option`, Gate 5 /
+    /// I-GRAPH-5); the recursive CTE selects FROM existing rows only and is
+    /// depth-bounded + visited-set-guarded (ADR-021) — it never fabricates an
+    /// edge nor loops on a cyclic graph.
+    fn traverse_graph(
+        &self,
+        start: &GraphNode,
+        bound: &TraversalBound,
+    ) -> Result<TraversalResult, StorageError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

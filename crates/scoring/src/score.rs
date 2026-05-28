@@ -6,33 +6,15 @@
 //! rows (I-GRAPH-2). The body is intentionally minimal for the 01-01
 //! bootstrap; the Phase 02 SC scenarios drive the formula fully (Gate 2/3/6).
 
-use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did};
-use ports::AuthorRelationship;
+// `AttributedClaim` is the boundary value the pure scoring core consumes. It
+// lives in `ports` (hoisted from here in step 01-02) because BOTH this pure
+// core AND the `cli` composition root consume it, and `scoring -> ports`
+// (never the reverse) — `ports` is the non-cyclic home. Re-exported via
+// `crate::AttributedClaim` (see `lib.rs`) so existing call-sites are unchanged.
+use ports::AttributedClaim;
 
 use crate::config::ScoringConfig;
 use crate::explain::Contribution;
-
-/// A fully-attributed claim — the boundary value the pure scoring core
-/// consumes. Mirrors the slice-03 `FederatedRow` non-`Option<Did>` discipline
-/// that makes attribution unviolatable (Gate 1).
-///
-/// `PartialEq` (not `Eq`) because `confidence: f64` cannot derive `Eq` (NaN).
-#[derive(Debug, Clone, PartialEq)]
-pub struct AttributedClaim {
-    /// LOAD-BEARING: non-`Option` (anti-merging, I-GRAPH-2).
-    pub author_did: Did,
-    pub cid: Cid,
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
-    /// Numeric `[0.0, 1.0]` — the scoring input; the value shown equals the
-    /// value scored (Gate 6).
-    pub confidence: f64,
-    pub composed_at: DateTime<Utc>,
-    /// `You | SubscribedPeer | UnsubscribedCache` (slice-03 reuse).
-    pub relationship: AuthorRelationship,
-}
 
 /// The display-only weight bucket (WD-72: never persisted). Driven by
 /// `(weight, claim_count, distinct_author_count)` with the WD-74 breadth
