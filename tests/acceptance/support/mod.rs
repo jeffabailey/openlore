@@ -3487,12 +3487,136 @@ pub fn assert_explain_sums_to_weight(outcome: &CliOutcome, subject: &str) {
 /// SCAFFOLD: true (slice-04) — the auditability gate (WD-76/WD-91); the
 /// traversal counterpart of the federated anti-merging assertion.
 pub fn assert_every_edge_has_backing_claim(env: &TestEnv, traversal: &CliOutcome) {
-    // SCAFFOLD: true (slice-04)
-    let _ = (env, traversal);
-    todo!(
-        "DELIVER (slice-04): parse the traversal edge cids from stdout; for each, run `graph query \
-         --subject <project>` and assert the cid resolves to an existing signed claim, and the edge \
-         carries that claim's author DID — no edge is fabricated (Gate 5 traversal_invents_no_edges; \
-         WD-76/WD-91)"
-    )
+    // Parse the `--object --traverse` tree into its edges. The renderer groups
+    // edges under a `  project: <subject>` header; under each header every edge
+    // is a `    author_did: <did>` line immediately followed by a
+    // `    claim_cid:  <cid>` line (render.rs `render_one_traversal_edge`). We
+    // recover (project_subject, author_did, claim_cid) for each edge so the
+    // resolution probe knows which `--subject` lookup to run.
+    let edges = parse_traversal_edges(&traversal.stdout);
+
+    // Gate 5 is vacuously true over zero edges — but the rachel-spans-two-projects
+    // fixture genuinely seeds cross-project edges, so an empty parse means the
+    // tree did not render (or the format drifted), NOT "no edges to verify".
+    assert!(
+        !edges.is_empty(),
+        "cli.graph_query.traverse.edge_cids: expected the traversal to render at least one edge \
+         (the rachel-spans-two-projects fixture seeds cross-project edges); parsed none — the \
+         backing-claim check would be vacuous;\n--- traversal stdout ---\n{}",
+        traversal.stdout
+    );
+
+    // Resolve each project subject AT MOST ONCE. The fixture's claims are all
+    // subscribed-PEER claims, so the bare own-only `--subject` honestly returns
+    // empty (GQE-3 default-off) — the resolution probe must widen to the same
+    // federated scope the traverse walk read under (WD-87), matching the GQE-23
+    // depth-3 Gate-5 probe. The cache keeps the helper O(distinct projects)
+    // subprocess calls instead of O(edges).
+    let mut resolved: std::collections::HashMap<String, CliOutcome> =
+        std::collections::HashMap::new();
+
+    for edge in &edges {
+        let lookup = resolved
+            .entry(edge.project_subject.clone())
+            .or_insert_with(|| {
+                run_openlore(
+                    env,
+                    &[
+                        "graph",
+                        "query",
+                        "--subject",
+                        &edge.project_subject,
+                        "--federated",
+                    ],
+                )
+            });
+        assert_eq!(
+            lookup.status,
+            0,
+            "cli.graph_query.traverse.edge_cid_resolvable[{cid}]: the Gate-5 resolution probe \
+             `graph query --subject {subject} --federated` must exit 0;\n--- stdout ---\n{}\n\
+             --- stderr ---\n{}",
+            lookup.stdout,
+            lookup.stderr,
+            cid = edge.claim_cid,
+            subject = edge.project_subject,
+        );
+
+        // Gate 5 (traversal invents no edges): the rendered edge cid resolves to
+        // a real signed claim — its `claim_cid` appears as an existing row in the
+        // independent `--subject` lookup. A fabricated/interpolated edge would
+        // carry a cid no claim row backs, and this `contains` would fail.
+        assert!(
+            lookup.stdout.contains(edge.claim_cid.as_str()),
+            "cli.graph_query.traverse.edge_cid_resolvable[{cid}]: the traversal edge cid must \
+             resolve to a real signed claim via `graph query --subject {subject} --federated` — \
+             every displayed edge traces to a signed claim, none is fabricated (Gate 5 \
+             traversal_invents_no_edges; WD-76/WD-91);\n--- subject-lookup stdout ---\n{}\n\
+             --- traversal stdout ---\n{}",
+            lookup.stdout,
+            traversal.stdout,
+            cid = edge.claim_cid,
+            subject = edge.project_subject,
+        );
+
+        // Anti-merging (I-GRAPH-2 / WD-73): the edge carries the author DID of its
+        // backing claim, and that same author is attributed in the resolved
+        // subject lookup — the edge maps to THIS author's signed claim, never an
+        // authorless aggregate.
+        assert!(
+            lookup.stdout.contains(edge.author_did.as_str()),
+            "cli.graph_query.traverse.edge_cids: the traversal edge for cid {cid} carries author \
+             DID {did}, which must also be attributed in the backing `--subject {subject} \
+             --federated` lookup — the edge maps to that author's signed claim (anti-merging \
+             I-GRAPH-2/WD-73);\n--- subject-lookup stdout ---\n{}\n--- traversal stdout ---\n{}",
+            lookup.stdout,
+            traversal.stdout,
+            cid = edge.claim_cid,
+            did = edge.author_did,
+            subject = edge.project_subject,
+        );
+    }
+}
+
+/// One traversal edge recovered from a `--object --traverse` tree: the project
+/// subject it groups under, the author DID of its backing claim, and the
+/// backing signed-claim cid. The triple
+/// [`assert_every_edge_has_backing_claim`] resolves against the store.
+#[derive(Debug, Clone)]
+struct TraversalEdge {
+    project_subject: String,
+    author_did: String,
+    claim_cid: String,
+}
+
+/// Parse the edges out of a `graph query --object <philosophy> --traverse`
+/// rendering (render.rs `render_traversal_from_seed`). The tree groups edges
+/// under `  project: <subject>` headers; under each, every edge is an
+/// `    author_did: <did>` line immediately followed by a `    claim_cid: <cid>`
+/// line. Returns one [`TraversalEdge`] per rendered edge, in render order.
+fn parse_traversal_edges(stdout: &str) -> Vec<TraversalEdge> {
+    let mut edges = Vec::new();
+    let mut current_project: Option<String> = None;
+    let mut pending_author: Option<String> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if let Some(subject) = trimmed.strip_prefix("project:") {
+            current_project = Some(subject.trim().to_string());
+            pending_author = None;
+        } else if let Some(did) = trimmed.strip_prefix("author_did:") {
+            pending_author = Some(did.trim().to_string());
+        } else if let Some(cid) = trimmed.strip_prefix("claim_cid:") {
+            if let (Some(project_subject), Some(author_did)) =
+                (current_project.clone(), pending_author.take())
+            {
+                edges.push(TraversalEdge {
+                    project_subject,
+                    author_did,
+                    claim_cid: cid.trim().to_string(),
+                });
+            }
+        }
+    }
+    edges
 }

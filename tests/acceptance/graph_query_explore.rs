@@ -1924,15 +1924,13 @@ fn graph_query_traverse_every_edge_maps_to_a_verifiable_signed_claim() {
     );
 
     // For each edge in the traversal, the backing claim_cid resolves via a
-    // `--subject` lookup. DELIVER materializes `assert_every_edge_has_backing_claim`
-    // (universe: cli.graph_query.edge_cids, cli.graph_query.edge_cid_resolvable[cid]).
-    // Every edge also carries the author DID of its backing claim (anti-merging).
-    todo!(
-        "DELIVER (slice-04): for every traversal edge, assert its claim_cid is lookuppable via \
-         `graph query --subject <project>` (it traces to a real signed claim), and every edge \
-         carries the author DID of its backing claim — no edge lacks a backing signed claim \
-         (US-GRAPH-004 Example 4; Gate 5 + anti-merging);\n--- graph ---\n{graph:?}"
-    )
+    // `--subject` lookup (universe: cli.graph_query.traverse.edge_cids,
+    // cli.graph_query.traverse.edge_cid_resolvable[cid]). Every edge also carries
+    // the author DID of its backing claim, attributed in the same lookup
+    // (anti-merging). No edge lacks a backing signed claim — the traversal
+    // invents nothing (US-GRAPH-004 Example 4; Gate 5).
+    assert_every_edge_has_backing_claim(&env, &traversal);
+    let _ = &graph;
 }
 
 /// GQE-25 (US-GRAPH-004 / I-GRAPH-7): a traversal succeeds with the network
