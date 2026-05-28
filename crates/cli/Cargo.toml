@@ -137,3 +137,51 @@ harness = true
 name = "federated_query"
 path = "../../tests/acceptance/federated_query.rs"
 harness = true
+
+# Slice-02 subprocess acceptance (scrape github harvest + walking skeleton —
+# US-SCR-001/002). Drives the real `openlore` binary via `assert_cmd` +
+# `FakeGithub` (the public-GitHub double) + the slice-01 `FakePds`/`FakeIdentity`.
+# Step 01-05 registers the target + materializes FakeGithub/fixtures so the
+# 34 slice-02 scenarios classify RED (panic at `todo!()`); SG-1..SG-* stay
+# RED until DELIVER's per-scenario phases 02-05.
+[[test]]
+name = "scrape_github"
+path = "../../tests/acceptance/scrape_github.rs"
+harness = true
+
+# Slice-02 subprocess acceptance (candidate derivation render — US-SCR-002).
+# Same FakeGithub-driven shape as `scrape_github`. Step 01-05 registers +
+# RED gate; SC-* scenarios stay RED (`todo!()`).
+[[test]]
+name = "scrape_candidates"
+path = "../../tests/acceptance/scrape_candidates.rs"
+harness = true
+
+# Slice-02 subprocess acceptance (scrape -> propose -> sign — US-SCR-003).
+# Drives the real binary via `assert_cmd` + `FakeGithub` + the slice-01
+# `FakePds`/`FakeIdentity` sign/publish path. Step 01-05 registers + RED
+# gate; SS-* scenarios stay RED (`todo!()`).
+[[test]]
+name = "scrape_sign"
+path = "../../tests/acceptance/scrape_sign.rs"
+harness = true
+
+# Slice-02 subprocess acceptance (optional PAT for higher rate limits —
+# US-SCR-004). FakeGithub authenticated/rate-limited/token-rejected postures
+# + the no-token-leak gate. Step 01-05 registers + RED gate; SA-* scenarios
+# stay RED (`todo!()`).
+[[test]]
+name = "scrape_auth"
+path = "../../tests/acceptance/scrape_auth.rs"
+harness = true
+
+# Slice-02 layer-2 acceptance (pure `scraper-domain` derivation properties +
+# mapping-SSOT conformance — US-SCR-002/006). Exercises the PURE core
+# DIRECTLY (no CLI subprocess), so it lives under the cli package's test
+# targets purely for workspace co-location (symmetric with
+# `lexicon_counter_claim`). `@property` proptest scenarios (SD-1..SD-3) plus
+# example-pinned (SD-4..SD-6). Step 01-05 registers + RED gate; SD-* stay RED.
+[[test]]
+name = "scraper_domain"
+path = "../../tests/acceptance/scraper_domain.rs"
+harness = true

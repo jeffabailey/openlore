@@ -16,11 +16,6 @@
 //! raw harvested signal). This keeps the fixtures honest about the
 //! pure/effect split (WD-56): a fixture is harvested EFFECT data; the
 //! candidate is a PURE derivation downstream.
-//!
-//! RED scaffold (DISTILL slice-02): bodies are `todo!()`. DELIVER step
-//! 07-01 materializes them.
-//
-// SCAFFOLD: true
 
 #![allow(dead_code)]
 
@@ -39,8 +34,33 @@ use crate::fake_github::FakeSignal;
 /// evidence. Used by SG-1 (walking skeleton), SG-2 (5-candidate render),
 /// and SC-1 (auditability: each candidate names its source signal).
 pub fn fixture_cargo_five_signals() -> Vec<FakeSignal> {
-    // SCAFFOLD: true
-    todo!("DELIVER (slice-02): build the five rust-lang/cargo public signals (one per mapping entry)")
+    vec![
+        FakeSignal::new(
+            "DependencyManifestPinned",
+            "Cargo.lock committed (exact pins)",
+            "https://github.com/rust-lang/cargo/blob/master/Cargo.lock",
+        ),
+        FakeSignal::new(
+            "DocsPresentAndSubstantial",
+            "docs/ present + README 412 lines",
+            "https://github.com/rust-lang/cargo/tree/master/src/doc",
+        ),
+        FakeSignal::new(
+            "TestRatioOrCiMatrix",
+            "test/source ratio 0.61",
+            "https://github.com/rust-lang/cargo/tree/master/tests",
+        ),
+        FakeSignal::new(
+            "SemverAndChangelog",
+            "CHANGELOG present + semver tags",
+            "https://github.com/rust-lang/cargo/blob/master/CHANGELOG.md",
+        ),
+        FakeSignal::new(
+            "MemorySafetyLanguage",
+            "Rust + no unsafe blocks",
+            "https://github.com/rust-lang/cargo",
+        ),
+    ]
 }
 
 /// A bounded cross-repo aggregate signal set for the `torvalds` USER
@@ -48,8 +68,18 @@ pub fn fixture_cargo_five_signals() -> Vec<FakeSignal> {
 /// deferred to slice-04). Fewer, coarser signals than the repo fixture —
 /// the aggregate is intentionally shallow in slice-02.
 pub fn fixture_torvalds_user_aggregate_signals() -> Vec<FakeSignal> {
-    // SCAFFOLD: true
-    todo!("DELIVER (slice-02): build the bounded torvalds cross-repo aggregate signals")
+    vec![
+        FakeSignal::new(
+            "TestRatioOrCiMatrix",
+            "aggregate: CI test matrix across pinned repos",
+            "https://github.com/torvalds",
+        ),
+        FakeSignal::new(
+            "SemverAndChangelog",
+            "aggregate: tagged releases + changelogs",
+            "https://github.com/torvalds?tab=repositories",
+        ),
+    ]
 }
 
 /// Three DISTINCT signals that ALL map to the single `documentation-first`
@@ -59,6 +89,21 @@ pub fn fixture_torvalds_user_aggregate_signals() -> Vec<FakeSignal> {
 /// / I-SCR-4). The collapse is the PURE derivation's job; the fixture only
 /// supplies the three raw signals.
 pub fn fixture_three_docs_signals_one_predicate() -> Vec<FakeSignal> {
-    // SCAFFOLD: true
-    todo!("DELIVER (slice-02): build three distinct docs-signals that map to one predicate")
+    vec![
+        FakeSignal::new(
+            "DocsDirectoryPresent",
+            "docs/ directory present",
+            "https://github.com/some-org/well-documented/tree/main/docs",
+        ),
+        FakeSignal::new(
+            "ReadmeSubstantial",
+            "README 412 lines (> 200)",
+            "https://github.com/some-org/well-documented/blob/main/README.md",
+        ),
+        FakeSignal::new(
+            "DocCommentDensityHigh",
+            "doc-comment density high (0.34)",
+            "https://github.com/some-org/well-documented",
+        ),
+    ]
 }
