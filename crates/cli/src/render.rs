@@ -58,7 +58,7 @@
 //! the renderer stays pure (no I/O, no storage access).
 
 use claim_domain::{Cid, SignedClaim};
-use ports::{AuthorRelationship, FederatedRow};
+use ports::{AuthorRelationship, FederatedRow, SourceTable};
 
 /// Inherited slice-01 framing literal (I-7 / WD-6): a claim is asserted by
 /// you, NOT as truth. Content-frozen; do NOT paraphrase.
@@ -69,6 +69,15 @@ pub const NOT_AS_TRUTH_LITERAL: &str = "not as truth";
 /// the exact string is the KPI-FED-2 anti-merging user-visible contract.
 pub const NO_MERGE_FOOTER_LITERAL: &str =
     "Each claim is attributed to its author DID. No claims are merged.";
+
+/// Slice-03 content-frozen zero-peers degraded-path hint (US-FED-003 AC #7;
+/// user-stories.md Example 2 + UAT scenario #4). Emitted as the
+/// `graph query --federated` footer when ZERO peers contributed rows — the
+/// federated read gracefully degrades to own-only output and points the
+/// user at `peer add` so they know how to follow a peer's claim stream. Do
+/// NOT paraphrase — the exact string is the user-visible contract.
+pub const NO_PEERS_FOOTER_LITERAL: &str =
+    "No peers subscribed. Use `openlore peer add <did>` to follow a peer's claim stream.";
 
 /// Slice-03 content-frozen framing literal for counter-claims: a counter
 /// NEVER overwrites its target — both coexist. Pinned by US-FED-004 AC;
@@ -243,7 +252,16 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
         out.push('\n');
     }
 
-    out.push_str(&render_federation_footer(groups.len()));
+    // FQ-4 (US-FED-003 AC #7): when NO peer contributed a row, the federated
+    // read has gracefully degraded to own-only output. Emit the content-frozen
+    // zero-peers hint footer instead of the no-merge guarantee (which only
+    // makes sense once two-or-more authors' rows could merge). The own rows
+    // above are unchanged — degradation never swallows the local claims.
+    if has_no_peer_rows(rows) {
+        out.push_str(&render_no_peers_footer());
+    } else {
+        out.push_str(&render_federation_footer(groups.len()));
+    }
     out
 }
 
@@ -297,6 +315,23 @@ fn render_federation_footer(author_count: usize) -> String {
     format!(
         "{author_count} author(s). {NO_MERGE_FOOTER_LITERAL}\n"
     )
+}
+
+/// Render the zero-peers degraded-path footer (FQ-4 / US-FED-003 AC #7):
+/// the content-frozen hint pointing the user at `peer add`. Pure helper.
+fn render_no_peers_footer() -> String {
+    format!("{NO_PEERS_FOOTER_LITERAL}\n")
+}
+
+/// `true` when NO row in a federated result came from the peer table —
+/// i.e. zero peers contributed claims. Pure projection over the rows'
+/// `source_table` attribution (the type-level anti-merging field). This is
+/// the signal the renderer uses to switch from the no-merge footer to the
+/// zero-peers degraded hint (FQ-4). An empty result counts as no-peers too.
+fn has_no_peer_rows(rows: &[FederatedRow]) -> bool {
+    !rows
+        .iter()
+        .any(|row| matches!(row.source_table, SourceTable::Peer))
 }
 
 /// Compute the `is_retracted` flag for one CID given the back-reference
@@ -365,7 +400,6 @@ fn render_confidence(confidence: &claim_domain::Confidence) -> String {
 mod tests {
     use super::*;
     use claim_domain::{Cid, ClaimReference, Confidence, Did, SignatureBlock, UnsignedClaim};
-    use ports::SourceTable;
     use proptest::prelude::*;
 
     fn confidence(value: f64) -> Confidence {
@@ -587,6 +621,53 @@ mod tests {
                 "federated render must not label any row {banned:?}; got:\n{rendered}"
             );
         }
+    }
+
+    /// FQ-4 (US-FED-003 AC #7): when ONLY own rows are present (zero peers
+    /// contributed), the federated renderer degrades gracefully — the own
+    /// rows still render under the "(you)" header, but the footer is the
+    /// content-frozen zero-peers hint, NOT the no-merge guarantee. The hint
+    /// is an exact user-visible string (content-frozen), so an example-based
+    /// test pins it (golden-string contract — property-framing would not add
+    /// coverage over a single literal).
+    #[test]
+    fn render_federated_query_result_emits_zero_peers_hint_when_no_peer_rows() {
+        let rows = vec![federated_row(
+            "did:plc:test-jeff",
+            "bafyown1",
+            AuthorRelationship::You,
+            SourceTable::Own,
+        )];
+
+        let rendered = render_federated_query_result(&rows);
+
+        // The own claim still renders under its "(you)" header — degradation
+        // never swallows the local rows.
+        assert!(
+            rendered.contains("author: did:plc:test-jeff (you)"),
+            "expected the own claim to render under its '(you)' header; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("bafyown1"),
+            "expected the own claim cid to render; got:\n{rendered}"
+        );
+
+        // The footer is the content-frozen zero-peers hint VERBATIM.
+        assert!(
+            rendered.contains(NO_PEERS_FOOTER_LITERAL),
+            "expected the content-frozen zero-peers hint footer; got:\n{rendered}"
+        );
+
+        // And the no-merge guarantee footer is NOT emitted on the degraded
+        // path — the two footers are mutually exclusive.
+        assert!(
+            !rendered.contains(NO_MERGE_FOOTER_LITERAL),
+            "expected the no-merge footer to be ABSENT when zero peers contributed; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("author(s)."),
+            "expected NO distinct-author-count footer on the zero-peers degraded path; got:\n{rendered}"
+        );
     }
 
     proptest! {

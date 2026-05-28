@@ -572,7 +572,93 @@ fn federated_query_default_without_flag_is_byte_identical_to_slice_01_behavior()
 /// @us-fed-003 @real-io @driving_port @j-003 @edge
 #[test]
 fn federated_query_with_zero_peers_subscribed_degrades_with_hint() {
-    todo!("DELIVER (slice-03): assert --federated against zero subscriptions returns own-only rows + footer literal 'No peers subscribed. Use `openlore peer add <did>` to follow a peer's claim stream.' + exit 0")
+    let env = TestEnv::initialized();
+    let subject = "github:rust-lang/tokio";
+
+    // -- The LOCAL user adds ONE of their own claims about the subject. No
+    // `peer add`, no `peer pull` — the precise zero-subscriptions fixture
+    // (UAT scenario #4; US-FED-003 AC #7). `\n` confirms the sign prompt;
+    // `N\n` declines publishing (local-only — the federated READ path only
+    // needs the locally-signed claim). --
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.local-first",
+            "--evidence",
+            "https://github.com/tokio-rs/tokio",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // -- Action: the federated read through the driving port, with ZERO peers
+    // ever subscribed. The degraded path must NOT be an error — it is a
+    // graceful local-first fallback (architecture §8 "local-first latency"). --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+
+    // 1. Graceful degradation: exit 0, NOT an error. Zero subscriptions is a
+    //    normal not-yet-following state, not a failure.
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated with zero peers must exit 0 (graceful degrade, \
+         not an error);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr,
+    );
+
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+
+    // 2. The user's OWN claims are STILL shown — grouped under one author
+    //    header (you). The degraded path does not swallow the local claims.
+    assert!(
+        stdout.contains(local_did),
+        "expected the local user's own claim to render under a per-author header \
+         naming DID {local_did} even with zero peers;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(you)"),
+        "expected the local user's header annotated '(you)';\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.91") && stdout.contains("org.openlore.philosophy.local-first"),
+        "expected the user's OWN claim (confidence 0.91 + its object) to render;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. The footer is the content-frozen zero-peers hint VERBATIM (US-FED-003
+    //    AC #7; user-stories.md Example 2 + UAT scenario #4). It suggests
+    //    `peer add` so the user knows how to follow a peer's claim stream.
+    assert!(
+        stdout.contains(
+            "No peers subscribed. Use `openlore peer add <did>` to follow a peer's claim stream."
+        ),
+        "expected the content-frozen zero-peers hint footer VERBATIM;\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. No peer DID and no '(subscribed peer)' annotation leak in — there are
+    //    no peers, so no peer header may appear.
+    assert!(
+        !stdout.contains("(subscribed peer)"),
+        "expected NO '(subscribed peer)' header when zero peers are subscribed;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 5. KPI-FED-2 zero-merge gate still holds: no row labels itself merged /
+    //    consensus / aggregate even on the degraded path.
+    assert_no_merged_rows_in_federated_output(&outcome);
 }
 
 // =============================================================================

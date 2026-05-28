@@ -168,9 +168,14 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
 /// (you / subscribed-peer / unsubscribed-cache) is carried on each
 /// `FederatedRow.author_relationship` set by the adapter.
 ///
+/// The zero-peers degraded footer (FQ-4 / US-FED-003 AC #7) is handled
+/// purely inside `render_federated_query_result`: when no peer contributed a
+/// row, it swaps the no-merge footer for the content-frozen `peer add` hint.
+/// The verb stays a thin port-call + render — no branching here.
+///
 /// Out of FQ-1 scope (covered by later slice-03 scenarios, currently RED):
-/// the first-federated-query orientation (FQ-6 / WD-39), the zero-peers
-/// degraded footer (FQ-4), and the inline counter template (FQ-7 / WD-42).
+/// the first-federated-query orientation (FQ-6 / WD-39) and the inline
+/// counter template (FQ-7 / WD-42).
 fn run_federated(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
     let rows = wiring
         .storage
