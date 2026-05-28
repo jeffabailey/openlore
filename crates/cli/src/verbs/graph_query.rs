@@ -77,6 +77,12 @@ const FEDERATION_FOOTER: &str =
 pub struct GraphQueryArgs {
     /// The subject URI to filter by. Exact match (no fuzzy / prefix).
     pub subject: String,
+    /// `--federated` (slice-03): widen the query to subscribed peers via
+    /// `StoragePort::query_federated_by_subject`. Defaults to false
+    /// (local-only — the slice-01 behavior). The live federated branch is
+    /// driven by the FQ-* acceptance scenarios in a later slice-03 phase;
+    /// step 01-04 only routes the flag.
+    pub federated: bool,
 }
 
 /// Outcome of one `graph query` invocation. The exit code + stdout chunk
@@ -104,6 +110,25 @@ pub struct GraphQueryOutcome {
 /// (a future `--federated` pass might find the subject upstream). Exit
 /// code stays 0: empty is a normal not-found result, not an error.
 pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
+    if args.federated {
+        // SCAFFOLD: true (slice-03)
+        //
+        // The `--federated` branch widens the query across `claims` +
+        // `peer_claims` via `StoragePort::query_federated_by_subject`
+        // (UNION ALL with explicit author_did projection — never a JOIN;
+        // I-FED-1). It groups by author DID, annotates each row's
+        // relationship (you / subscribed-peer / unsubscribed-cache), and
+        // fires the once-per-install first-federated-query orientation
+        // (crate::orientation). Driven by the FQ-* acceptance scenarios in
+        // a later slice-03 phase; step 01-04 only routes the flag here.
+        let _ = wiring;
+        todo!(
+            "VerbGraphQuery --federated — query_federated_by_subject (UNION ALL, \
+             anti-merging) → group by author DID → first-federated-query \
+             orientation. Driven by FQ-* scenarios."
+        );
+    }
+
     let claims = wiring
         .storage
         .query_by_subject(&args.subject)

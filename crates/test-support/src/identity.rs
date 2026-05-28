@@ -27,7 +27,7 @@
 
 use claim_domain::{Cid, Did, SignedClaim, SigningKey, VerifyingKey};
 use ed25519_dalek::SigningKey as DalekSigningKey;
-use ports::{IdentityError, IdentityPort, ProbeOutcome};
+use ports::{IdentityError, IdentityPort, PeerInfo, ProbeOutcome};
 
 /// Deterministic `IdentityPort` test double.
 ///
@@ -116,6 +116,17 @@ impl IdentityPort for FakeIdentity {
     fn verify(&self, signed: &SignedClaim) -> Result<(), IdentityError> {
         claim_domain::verify(signed, &self.verifying_key)
             .map_err(|_| IdentityError::VerificationFailed)
+    }
+
+    /// Resolve a peer DID document (slice-03 extension).
+    ///
+    /// SCAFFOLD: true (slice-03) — `todo!()` stub. The PS-* / PP-*
+    /// acceptance scenarios drive a real fixture-backed `resolve_peer`
+    /// here in a later slice-03 phase (returning a deterministic
+    /// `PeerInfo` for known fixture peers like `did:plc:rachel-test`).
+    fn resolve_peer(&self, _peer_did: &Did) -> Result<PeerInfo, IdentityError> {
+        // SCAFFOLD: true (slice-03)
+        todo!("FakeIdentity::resolve_peer — fixture peer resolution lands with PS-* / PP-* scenarios")
     }
 }
 

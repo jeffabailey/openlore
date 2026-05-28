@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 
 pub mod errors;
 pub mod io;
+pub mod orientation;
 pub mod paths;
 pub mod render;
 pub mod verbs;
@@ -42,12 +43,15 @@ pub enum Command {
         #[arg(long = "app-password")]
         app_password: String,
     },
-    /// Claim operations (add / publish / retract).
+    /// Claim operations (add / publish / retract / counter).
     #[command(subcommand)]
     Claim(ClaimCommand),
     /// Graph operations (query).
     #[command(subcommand)]
     Graph(GraphCommand),
+    /// Peer subscription operations (add / pull / remove) — slice-03.
+    #[command(subcommand)]
+    Peer(PeerCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -69,6 +73,15 @@ pub enum ClaimCommand {
     Publish { cid: String },
     /// Retract a published claim by counter-claim referencing original CID.
     Retract { cid: String },
+    /// Author a counter-claim against a target CID (slice-03; ADR-015).
+    /// `--reason` is REQUIRED at the CLI level (WD-20).
+    Counter {
+        /// CID of the claim being countered (own or peer's).
+        cid: String,
+        /// Mandatory free-text explanation for the counter-claim.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -77,6 +90,32 @@ pub enum GraphCommand {
     Query {
         #[arg(long)]
         subject: String,
+        /// `--federated` (slice-03): include subscribed peers' claims in
+        /// the result. Defaults to local-only (the slice-01 behavior).
+        #[arg(long)]
+        federated: bool,
+    },
+}
+
+/// Peer subscription verbs (slice-03; US-FED-001 / US-FED-002 / US-FED-005).
+#[derive(Debug, Subcommand)]
+pub enum PeerCommand {
+    /// Subscribe to a peer's claim stream by DID.
+    Add {
+        /// The peer DID to subscribe to (e.g. `did:plc:rachel-test`).
+        did: String,
+    },
+    /// Pull + verify + cache claims from every subscribed peer.
+    Pull,
+    /// Unsubscribe from a peer. `--purge` additionally hard-deletes the
+    /// cached peer claims (gated by interactive confirmation).
+    Remove {
+        /// The peer DID to unsubscribe from.
+        did: String,
+        /// Hard-delete cached peer claims (WD-21: no `--yes`; the prompt
+        /// is interactive). Defaults to soft-remove (cache retained).
+        #[arg(long)]
+        purge: bool,
     },
 }
 
@@ -204,10 +243,10 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        Command::Graph(GraphCommand::Query { subject }) => {
+        Command::Graph(GraphCommand::Query { subject, federated }) => {
             match verbs::graph_query::run(
                 &wiring,
-                &verbs::graph_query::GraphQueryArgs { subject },
+                &verbs::graph_query::GraphQueryArgs { subject, federated },
             ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);
@@ -215,6 +254,60 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore graph query: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Claim(ClaimCommand::Counter { cid, reason }) => {
+            match verbs::claim_counter::run(
+                &wiring,
+                &verbs::claim_counter::ClaimCounterArgs { cid, reason },
+            ) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore claim counter: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Peer(PeerCommand::Add { did }) => {
+            match verbs::peer_add::run(&wiring, &verbs::peer_add::PeerAddArgs { did }) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore peer add: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Peer(PeerCommand::Pull) => {
+            match verbs::peer_pull::run(&wiring, &verbs::peer_pull::PeerPullArgs::default()) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore peer pull: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Peer(PeerCommand::Remove { did, purge }) => {
+            match verbs::peer_remove::run(
+                &wiring,
+                &verbs::peer_remove::PeerRemoveArgs { did, purge },
+            ) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore peer remove: {err:#}");
                     1
                 }
             }
@@ -255,4 +348,129 @@ fn emit_health_startup_refused(refusal: &wiring::ProbeRefusal) {
         "openlore: refusing to start — {} adapter: {}",
         refusal.adapter, refusal.detail
     );
+}
+
+#[cfg(test)]
+mod clap_dispatch_tests {
+    //! Parse-only unit tests for the slice-03 verb surface (step 01-04).
+    //!
+    //! These enter through the clap driving port (`Cli::try_parse_from`)
+    //! and assert ONLY that the argument vector routes to the correct
+    //! `Command` variant with the correct fields. No dispatch / execution
+    //! happens — the verb bodies are `todo!()` scaffolds at this step, so
+    //! these tests pin the ROUTING contract that Phase 03+ scenarios
+    //! depend on, without invoking the (panicking) handlers.
+    //!
+    //! Port-to-port at the parse scope: the driving port is the clap
+    //! parser; the observable outcome is the parsed `Command` ADT. This is
+    //! the right RED gate for a dispatch-bootstrap step.
+
+    use super::*;
+    use clap::Parser;
+
+    /// Parse helper: build the argv with the leading binary name and parse
+    /// through the real `Cli` derive surface. Returns the inner `Command`.
+    fn parse(args: &[&str]) -> Command {
+        let mut argv = vec!["openlore"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv)
+            .unwrap_or_else(|e| panic!("clap must parse {args:?}; got error:\n{e}"))
+            .command
+    }
+
+    #[test]
+    fn peer_add_routes_to_peer_add_with_did() {
+        let cmd = parse(&["peer", "add", "did:plc:rachel-test"]);
+        match cmd {
+            Command::Peer(PeerCommand::Add { did }) => {
+                assert_eq!(did, "did:plc:rachel-test");
+            }
+            other => panic!("expected Peer(Add), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_pull_routes_to_peer_pull() {
+        let cmd = parse(&["peer", "pull"]);
+        assert!(
+            matches!(cmd, Command::Peer(PeerCommand::Pull)),
+            "expected Peer(Pull), got {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn peer_remove_without_purge_defaults_purge_false() {
+        let cmd = parse(&["peer", "remove", "did:plc:rachel-test"]);
+        match cmd {
+            Command::Peer(PeerCommand::Remove { did, purge }) => {
+                assert_eq!(did, "did:plc:rachel-test");
+                assert!(!purge, "--purge must default to false when absent");
+            }
+            other => panic!("expected Peer(Remove), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_remove_with_purge_flag_sets_purge_true() {
+        let cmd = parse(&["peer", "remove", "did:plc:rachel-test", "--purge"]);
+        match cmd {
+            Command::Peer(PeerCommand::Remove { did, purge }) => {
+                assert_eq!(did, "did:plc:rachel-test");
+                assert!(purge, "--purge flag must set purge=true");
+            }
+            other => panic!("expected Peer(Remove --purge), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_counter_routes_with_cid_and_reason() {
+        let cmd = parse(&[
+            "claim", "counter", "bafytargetcid", "--reason", "I disagree because X",
+        ]);
+        match cmd {
+            Command::Claim(ClaimCommand::Counter { cid, reason }) => {
+                assert_eq!(cid, "bafytargetcid");
+                assert_eq!(reason, "I disagree because X");
+            }
+            other => panic!("expected Claim(Counter), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_counter_without_reason_is_a_parse_error() {
+        // WD-20 / data-models.md §reason: `--reason` is REQUIRED at the
+        // CLI verb level. clap must reject the invocation before any
+        // dispatch happens.
+        let parsed = Cli::try_parse_from(["openlore", "claim", "counter", "bafytargetcid"]);
+        assert!(
+            parsed.is_err(),
+            "claim counter without --reason must be a clap parse error (WD-20)"
+        );
+    }
+
+    #[test]
+    fn graph_query_without_federated_defaults_federated_false() {
+        let cmd = parse(&["graph", "query", "--subject", "github:rust-lang/cargo"]);
+        match cmd {
+            Command::Graph(GraphCommand::Query { subject, federated }) => {
+                assert_eq!(subject, "github:rust-lang/cargo");
+                assert!(!federated, "--federated must default to false when absent");
+            }
+            other => panic!("expected Graph(Query), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn graph_query_with_federated_flag_sets_federated_true() {
+        let cmd = parse(&[
+            "graph", "query", "--subject", "github:rust-lang/cargo", "--federated",
+        ]);
+        match cmd {
+            Command::Graph(GraphCommand::Query { subject, federated }) => {
+                assert_eq!(subject, "github:rust-lang/cargo");
+                assert!(federated, "--federated flag must set federated=true");
+            }
+            other => panic!("expected Graph(Query --federated), got {other:?}"),
+        }
+    }
 }

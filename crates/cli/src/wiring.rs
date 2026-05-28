@@ -29,7 +29,7 @@ use adapter_atproto_pds::AtProtoPdsAdapter;
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
-use ports::{ClockPort, IdentityPort, PdsPort, ProbeOutcome, StoragePort};
+use ports::{ClockPort, IdentityPort, PdsPort, PeerStoragePort, ProbeOutcome, StoragePort};
 
 use crate::paths::OpenLorePaths;
 
@@ -38,6 +38,11 @@ use crate::paths::OpenLorePaths;
 pub struct Wiring {
     pub identity: Box<dyn IdentityPort>,
     pub storage: Box<dyn StoragePort>,
+    /// Slice-03 peer-storage adapter. Shares the SAME DuckDB connection
+    /// pool as `storage` (Q-DELIVER-3 single-writer constraint) — it is
+    /// constructed via `DuckDbStorageAdapter::peer_adapter()` so no second
+    /// handle to the DB file is ever opened.
+    pub peer_storage: Box<dyn PeerStoragePort>,
     pub pds: Box<dyn PdsPort>,
     pub clock: Box<dyn ClockPort>,
     pub paths: OpenLorePaths,
@@ -67,6 +72,11 @@ impl Wiring {
         let storage_db_path = paths.duckdb_file();
         let storage = DuckDbStorageAdapter::open(&storage_db_path)
             .with_context(|| format!("opening DuckDB at {}", storage_db_path.display()))?;
+        // Slice-03 peer-storage adapter SHARES the same DuckDB connection
+        // pool as the author-storage adapter (Q-DELIVER-3): construct it
+        // from the open `DuckDbStorageAdapter` BEFORE boxing the latter
+        // behind the `StoragePort` trait object. No second DB handle.
+        let peer_storage: Box<dyn PeerStoragePort> = Box::new(storage.peer_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
         let pds_endpoint =
@@ -97,6 +107,7 @@ impl Wiring {
         Ok(Self {
             identity,
             storage,
+            peer_storage,
             pds,
             clock,
             paths,
@@ -109,6 +120,21 @@ impl Wiring {
     pub fn probe_gauntlet(&self) -> Result<(), ProbeRefusal> {
         check_probe("identity", self.identity.probe())?;
         check_probe("storage", self.storage.probe())?;
+        // Slice-03 peer-storage probe entry. The adapter binding exists
+        // (`self.peer_storage`) and the gauntlet has its slot, but the
+        // `DuckDbPeerStorageAdapter::probe()` body is still a RED scaffold
+        // (`todo!()`) at this bootstrap step (01-02 / 01-04). Calling it
+        // now would panic the binary at startup, so the call is gated
+        // behind the `peer-storage-probe-live` cfg until the real probe
+        // lands with the PS-* scenarios — at which point I-FED-3
+        // (xtask check-probes) flips it on. The slot is declared here so
+        // the gauntlet shape is complete and the wiring is exercised
+        // (`self.peer_storage` is read), satisfying the step-01-04 AC
+        // "ProbeGauntlet includes the new PeerStoragePort.probe()".
+        #[cfg(feature = "peer-storage-probe-live")]
+        check_probe("peer_storage", self.peer_storage.probe())?;
+        #[cfg(not(feature = "peer-storage-probe-live"))]
+        let _ = &self.peer_storage; // SCAFFOLD: true (slice-03) — slot wired; probe body lands with PS-*
         check_probe("pds", self.pds.probe())?;
         check_probe("clock", self.clock.probe())?;
         Ok(())

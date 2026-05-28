@@ -26,6 +26,10 @@ tempfile = { workspace = true }
 # `default-features = false` keeps OS-randomness out of the test
 # double; seeded keys are deterministic per RFC 8032.
 ed25519-dalek = { version = "2", default-features = false }
+# Slice-03: `url::Url` is named in the slice-03 `PdsPort::list_peer_records`
+# / `get_peer_record` signatures the fakes implement. Pure parser (no I/O);
+# `ports` uses it but does not re-export it, so the fake needs it directly.
+url = { workspace = true }
 
 # Step 04-06: tokio for the FakePds module's async-trait impl + unit
 # tests. The fake's read/write methods are `async fn` because the

@@ -15,6 +15,21 @@ path = "src/lib.rs"
 name = "openlore"
 path = "src/main.rs"
 
+[features]
+# D-D20 / WD-21: build-time test escape hatch for the `peer remove --purge`
+# interactive confirmation. When enabled (CI acceptance builds), the
+# `OPENLORE_TEST_AUTOCONFIRM=1` env var bypasses the prompt. MUST NOT be
+# enabled in release builds — `verbs::peer_remove::autoconfirm_purge` then
+# compiles to a `const false` with no env-var read, so a shipped binary has
+# provably no auto-confirm path. `cargo xtask` (step 01-06) verifies this.
+test-autoconfirm = []
+# Slice-03 peer-storage probe gate. OFF at this bootstrap step because the
+# `DuckDbPeerStorageAdapter::probe()` body is still a RED `todo!()` scaffold
+# (01-02); enabling the gauntlet entry would panic the binary. Flipped on
+# once the real probe lands with the PS-* scenarios (I-FED-3 enforces a
+# non-stub body via xtask check-probes at that point).
+peer-storage-probe-live = []
+
 # DRIVER / composition root. Only crate allowed to depend on adapter-*.
 [dependencies]
 ports = { path = "../ports" }

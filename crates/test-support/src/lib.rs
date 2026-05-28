@@ -194,4 +194,17 @@ impl StoragePort for InMemoryStorage {
     ) -> Result<(), StorageError> {
         panic!("Not yet implemented -- RED scaffold");
     }
+
+    /// Cross-store federated query (slice-03 extension).
+    ///
+    /// SCAFFOLD: true (slice-03) — RED scaffold. The FQ-* acceptance
+    /// scenarios drive a real in-memory federated read (own + peer rows,
+    /// each carrying non-Option `author_did`) in a later slice-03 phase.
+    fn query_federated_by_subject(
+        &self,
+        _subject: &str,
+    ) -> Result<Vec<ports::FederatedRow>, StorageError> {
+        // SCAFFOLD: true (slice-03)
+        panic!("Not yet implemented -- RED scaffold (slice-03 query_federated_by_subject)");
+    }
 }

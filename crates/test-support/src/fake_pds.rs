@@ -561,6 +561,36 @@ impl PdsPort for FakePds {
             .map(|r| r.body.clone())
             .collect())
     }
+
+    /// List a peer's published `org.openlore.claim` records (slice-03
+    /// extension).
+    ///
+    /// SCAFFOLD: true (slice-03) — `todo!()` stub. The PP-* acceptance
+    /// scenarios drive a fixture-backed paged listing (with cursor) here
+    /// in a later slice-03 phase.
+    async fn list_peer_records(
+        &self,
+        _peer_did: &claim_domain::Did,
+        _peer_pds_endpoint: &url::Url,
+        _cursor: Option<String>,
+    ) -> Result<ports::PeerRecordPage, PdsError> {
+        // SCAFFOLD: true (slice-03)
+        todo!("FakePds::list_peer_records — fixture-backed peer listing lands with PP-* scenarios")
+    }
+
+    /// Fetch a single peer record by rkey (slice-03 extension).
+    ///
+    /// SCAFFOLD: true (slice-03) — `todo!()` stub. Driven by PP-*
+    /// scenarios alongside `list_peer_records`.
+    async fn get_peer_record(
+        &self,
+        _peer_did: &claim_domain::Did,
+        _peer_pds_endpoint: &url::Url,
+        _rkey: &str,
+    ) -> Result<ports::SignedRecord, PdsError> {
+        // SCAFFOLD: true (slice-03)
+        todo!("FakePds::get_peer_record — fixture-backed targeted fetch lands with PP-* scenarios")
+    }
 }
 
 // -----------------------------------------------------------------------------
