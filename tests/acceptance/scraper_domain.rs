@@ -477,12 +477,55 @@ fn scraper_domain_multiple_signals_for_one_predicate_collapse_into_one_candidate
 /// @us-scr-002 @j-004b @edge
 #[test]
 fn scraper_domain_zero_matching_signals_derive_an_empty_candidate_list() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-5. GIVEN signals whose kinds match NO mapping entry; WHEN \
-         derive_candidates(signals, mapping); THEN result.is_empty() (empty Vec, not Err — \
-         nothing-to-propose is not an error)."
-    )
+    use ports::{Signal, SignalKind};
+    use scraper_domain::{derive_candidates, SignalPredicateMapping};
+
+    // Layer-2 example (Mandate 9; DD-SCR): pure-core direct invocation, NO CLI
+    // subprocess. The driving port IS the pure `derive_candidates` signature.
+    // Example-pinned (not a property) per the file header: the empty-on-no-match
+    // rule is documented by a single representative fixture.
+    //
+    // GIVEN a non-empty set of real harvested signals whose kinds match NO entry
+    // in the mapping (here an EMPTY mapping, so every kind misses); WHEN
+    // derive_candidates runs; THEN the result is an EMPTY Vec — not an Err, not a
+    // panic, and crucially NOT a spurious placeholder candidate (US-SCR-002 Ex 2 /
+    // I-SCR-4). Nothing-to-propose is a valid outcome the pure core returns as
+    // `Vec::new()`; the CLI layer (SG-7) renders the "no candidates derived"
+    // message + exit 0 from this empty Vec.
+    //
+    // Using a non-empty signal set against an empty mapping (rather than an empty
+    // signal set) makes this exercise the DROP path in group_signals_by_predicate
+    // — the only place a signal can vanish — so a future regression that emits a
+    // placeholder candidate for an unmapped signal fails LOUDLY here.
+    const SUBJECT: &str = "github:rust-lang/cargo";
+
+    let signals = vec![
+        Signal {
+            kind: SignalKind::DependencyManifestPinned,
+            value: "Cargo.lock committed".to_string(),
+            source_url: "https://github.com/rust-lang/cargo/blob/master/Cargo.lock".to_string(),
+        },
+        Signal {
+            kind: SignalKind::MemorySafetyLanguage,
+            value: "primary language Rust".to_string(),
+            source_url: "https://github.com/rust-lang/cargo".to_string(),
+        },
+    ];
+
+    // An EMPTY mapping: no entry matches any signal kind, so every signal is
+    // dropped by group_signals_by_predicate (entry_for -> None).
+    let mapping = SignalPredicateMapping {
+        entries: Vec::new(),
+    };
+
+    let candidates = derive_candidates(SUBJECT, &signals, &mapping);
+
+    assert!(
+        candidates.is_empty(),
+        "zero mapping-matching signals must derive an EMPTY candidate list (US-SCR-002 Ex 2): \
+         nothing-to-propose is a valid outcome returned as Vec::new(), not a spurious \
+         placeholder candidate and not an error"
+    );
 }
 
 // =============================================================================
