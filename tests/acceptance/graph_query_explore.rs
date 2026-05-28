@@ -404,11 +404,51 @@ fn graph_query_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_z
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert the misspelled object yields a no-claims-found message + a \
-         near-match suggestion naming the correctly-spelled philosophy, and exit 0 \
-         (US-GRAPH-001 Example 4);\n--- graph ---\n{graph:?}"
-    )
+    // The misspelled object yields a no-claims-found message naming the queried
+    // (misspelled) object, plus a near-match suggestion naming the correctly-
+    // spelled philosophy that IS seeded (US-GRAPH-001 Example 4 / UAT scenario 4).
+    //
+    // Universe (port-exposed observable surface of the empty `--object` view):
+    // cli.graph_query.no_claims_message_present (the no-claims-found line names
+    // the MISSPELLED object), cli.graph_query.suggestion_present (a "Did you
+    // mean ...?" line names the SEEDED correctly-spelled philosophy),
+    // cli.graph_query.rows (0 — no per-claim row). Asserted against stdout (the
+    // CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // The seeded fixture asserts the correctly-spelled philosophy; the
+    // near-match suggestion must propose it (the closest existing object string).
+    let seeded_object = graph
+        .seeded
+        .iter()
+        .map(|c| c.object.as_str())
+        .find(|o| *o == "org.openlore.philosophy.dependency-pinning")
+        .expect("fixture seeds the correctly-spelled dependency-pinning philosophy");
+
+    // 1. No-claims-found message NAMES the misspelled object the user queried.
+    assert!(
+        stdout.contains("No claims found for object org.openlore.philosophy.dependancy-pinning"),
+        "expected a no-claims-found message naming the misspelled object the user queried;\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. A near-match suggestion proposes the correctly-spelled seeded philosophy.
+    assert!(
+        stdout.contains(&format!("Did you mean {seeded_object}?")),
+        "expected a near-match suggestion ('Did you mean {seeded_object}?') naming the \
+         correctly-spelled philosophy that IS seeded;\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. Empty is HONEST — no per-claim cid row is manufactured.
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 0,
+        "expected ZERO per-claim cid rows for an unknown object (clean empty, not a fabricated \
+         result); got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-5 (US-GRAPH-001 / I-GRAPH-7): every explorer command succeeds with the

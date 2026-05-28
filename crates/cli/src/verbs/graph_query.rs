@@ -321,12 +321,50 @@ fn run_object_dimension(wiring: &Wiring, object: &str) -> Result<GraphQueryOutco
         .query_by_object(object)
         .with_context(|| format!("querying claims by object {object}"))?;
 
-    let stdout = crate::render::render_object_query_grouped_by_subject(object, &claims);
+    // GQE-4 (US-GRAPH-001 Example 4): when the object matched nothing, probe the
+    // store for the nearest existing philosophy URI so the empty result carries
+    // a "Did you mean ...?" near-match suggestion. The probe reuses ONLY the
+    // existing `query_by_object` exact-match read (no new port surface): the
+    // FIRST single-edit neighbour that has claims IS the closest existing object
+    // string (a typo is one edit from the correct URI). Skipped entirely on the
+    // happy path (claims found) so it costs nothing there.
+    let suggestion = if claims.is_empty() {
+        nearest_existing_object(wiring, object)?
+    } else {
+        None
+    };
+
+    let stdout = crate::render::render_object_query_grouped_by_subject(
+        object,
+        &claims,
+        suggestion.as_deref(),
+    );
 
     Ok(GraphQueryOutcome {
         exit_code: 0,
         stdout,
     })
+}
+
+/// Probe the store for the nearest EXISTING object to a `missed` (unmatched)
+/// philosophy URI: the first single-edit-distance neighbour that itself has
+/// claims (GQE-4 / US-GRAPH-001 Example 4). Returns `None` when no neighbour
+/// matches (no near-match to suggest — the renderer then prints the bare
+/// no-claims line). The candidate set is the pure
+/// `render::single_edit_neighbours`; the existence check is the existing
+/// `StoragePort::query_by_object` exact-match read — the suggestion is therefore
+/// always a real object in the local graph, never a fabricated string.
+fn nearest_existing_object(wiring: &Wiring, missed: &str) -> Result<Option<String>> {
+    for candidate in crate::render::single_edit_neighbours(missed) {
+        let matches = wiring
+            .storage
+            .query_by_object(&candidate)
+            .with_context(|| format!("probing near-match object {candidate}"))?;
+        if !matches.is_empty() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 /// Emit the first-federated-query orientation block exactly once per install

@@ -406,6 +406,70 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
 pub const OBJECT_QUERY_NO_MERGE_FOOTER: &str =
     "Each claim is attributed to its author DID. No claims are merged.";
 
+/// Generate the single-edit-distance neighbours of `object` confined to the
+/// philosophy-URI character class (`[a-z0-9.-]`). A typo'd philosophy URI is
+/// almost always one edit away from the correct one (a transposed / dropped /
+/// doubled / swapped character), so the near-miss suggestion engine (GQE-4 /
+/// US-GRAPH-001 Example 4) probes these candidates against the store and
+/// proposes the first that has claims — "the closest existing object string"
+/// (data-models.md §object near-miss suggestion). Pure function — no I/O.
+///
+/// Returns candidates in deterministic, dedup'd order so the verb's probe loop
+/// (and any property test) is reproducible. The original `object` is never
+/// emitted as its own neighbour (it already came back empty).
+pub fn single_edit_neighbours(object: &str) -> Vec<String> {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789.-";
+    let chars: Vec<char> = object.chars().collect();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |candidate: String, seen: &mut std::collections::HashSet<String>| {
+        if candidate != object && seen.insert(candidate.clone()) {
+            out.push(candidate);
+        }
+    };
+
+    // Transpositions (adjacent swap) — the commonest typo class; probe first.
+    for i in 0..chars.len().saturating_sub(1) {
+        let mut next = chars.clone();
+        next.swap(i, i + 1);
+        push(next.into_iter().collect(), &mut seen);
+    }
+    // Substitutions.
+    for i in 0..chars.len() {
+        for &byte in ALPHABET {
+            let mut next = chars.clone();
+            next[i] = byte as char;
+            push(next.into_iter().collect(), &mut seen);
+        }
+    }
+    // Deletions (a doubled / extra character).
+    for i in 0..chars.len() {
+        let mut next = chars.clone();
+        next.remove(i);
+        push(next.into_iter().collect(), &mut seen);
+    }
+    // Insertions (a dropped character).
+    for i in 0..=chars.len() {
+        for &byte in ALPHABET {
+            let mut next = chars.clone();
+            next.insert(i, byte as char);
+            push(next.into_iter().collect(), &mut seen);
+        }
+    }
+    out
+}
+
+/// Slice-04 content-frozen empty-`--object` explainer prefix (US-GRAPH-001
+/// Example 4 / UAT scenario 4). Names the queried object so the message is
+/// self-explanatory. Followed by an optional near-match suggestion. Do NOT
+/// paraphrase — the exact phrasing is the user-visible contract.
+fn render_no_claims_for_object(object: &str, suggestion: Option<&str>) -> String {
+    match suggestion {
+        Some(near) => format!("No claims found for object {object}. Did you mean {near}?\n"),
+        None => format!("No claims found for object {object}.\n"),
+    }
+}
+
 /// Render the `graph query --object <philosophy>` dimension result: the
 /// attributed per-claim rows GROUPED BY SUBJECT (project), each row carrying
 /// its `author_did` + numeric confidence + display-only bucket + cid. Pure
@@ -427,14 +491,26 @@ pub const OBJECT_QUERY_NO_MERGE_FOOTER: &str =
 ///   as TWO rows (never merged).
 /// - The footer states the distinct-SUBJECT count AND the distinct-AUTHOR
 ///   count AND the content-frozen [`OBJECT_QUERY_NO_MERGE_FOOTER`].
-pub fn render_object_query_grouped_by_subject(object: &str, claims: &[AttributedClaim]) -> String {
+///
+/// The `suggestion` argument carries the near-match the verb resolved by
+/// probing the store (GQE-4 / US-GRAPH-001 Example 4) when the dimension read
+/// came back empty. It is `None` when claims were found (the happy path) or when
+/// no near-match exists.
+pub fn render_object_query_grouped_by_subject(
+    object: &str,
+    claims: &[AttributedClaim],
+    suggestion: Option<&str>,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "Claims embodying {object} (grouped by subject):\n\n"
     ));
 
     if claims.is_empty() {
-        out.push_str(&format!("No claims found for object {object}.\n"));
+        // Empty is HONEST (US-GRAPH-001 Example 4): name the queried object and,
+        // if the store holds a near-match, suggest it. No per-claim row is
+        // manufactured; exit code stays 0 (a valid not-yet-found state).
+        out.push_str(&render_no_claims_for_object(object, suggestion));
         return out;
     }
 
@@ -1297,6 +1373,88 @@ mod tests {
             assert!(
                 rendered.contains(expected),
                 "expected rendered output to contain {expected:?}; got:\n{rendered}"
+            );
+        }
+    }
+
+    /// The empty-`--object` renderer (GQE-4 / US-GRAPH-001 Example 4) names the
+    /// queried object and, when a near-match is supplied, appends the
+    /// content-frozen "Did you mean ...?" suggestion — and NEVER manufactures a
+    /// per-claim row. Pins the user-visible empty-result copy without a
+    /// subprocess. Example-based: the message is an exact golden string.
+    #[test]
+    fn render_object_query_empty_with_suggestion_names_object_and_near_match() {
+        let missed = "org.openlore.philosophy.dependancy-pinning";
+        let near = "org.openlore.philosophy.dependency-pinning";
+
+        let rendered = render_object_query_grouped_by_subject(missed, &[], Some(near));
+        assert!(
+            rendered.contains(&format!("No claims found for object {missed}. Did you mean {near}?")),
+            "expected the no-claims line to name the queried object + the near-match; got:\n{rendered}"
+        );
+
+        // Without a near-match, the bare no-claims line is emitted (no dangling
+        // "Did you mean").
+        let bare = render_object_query_grouped_by_subject(missed, &[], None);
+        assert!(
+            bare.contains(&format!("No claims found for object {missed}.")),
+            "expected the bare no-claims line to name the queried object; got:\n{bare}"
+        );
+        assert!(
+            !bare.contains("Did you mean"),
+            "expected NO suggestion clause when no near-match exists; got:\n{bare}"
+        );
+
+        // Empty is honest: neither rendering manufactures a per-claim cid row.
+        for out in [&rendered, &bare] {
+            assert!(
+                !out.lines().any(|l| l.trim_start().starts_with("cid:")),
+                "empty --object render must NOT manufacture a cid row; got:\n{out}"
+            );
+        }
+    }
+
+    proptest! {
+        /// Property (Modeling / Generalizing, Hebert ch.3) — the suggestion
+        /// ranker's correctness contract: for ANY existing philosophy URI and
+        /// ANY single-edit typo of it (transposition / substitution / deletion /
+        /// insertion over the philosophy-URI alphabet), the correct URI is among
+        /// the candidate neighbours `single_edit_neighbours(typo)` enumerates.
+        /// That is the invariant the verb's probe loop relies on: the closest
+        /// EXISTING object is always reachable as a single-edit neighbour, so a
+        /// one-character typo always recovers its near-match. The original typo
+        /// is NEVER its own neighbour (it already came back empty).
+        #[test]
+        fn single_edit_neighbours_recovers_the_correct_object_from_any_one_char_typo(
+            // A realistic philosophy suffix over the URI alphabet, length 4..24.
+            suffix in "[a-z][a-z0-9-]{3,23}",
+            edit_pos in 0usize..24,
+        ) {
+            let correct = format!("org.openlore.philosophy.{suffix}");
+            let correct_chars: Vec<char> = correct.chars().collect();
+            // Build a single-substitution typo at a position inside the suffix
+            // (guaranteed in-range + a guaranteed-different replacement char).
+            let prefix_len = "org.openlore.philosophy.".chars().count();
+            let pos = prefix_len + (edit_pos % suffix.chars().count());
+            let original = correct_chars[pos];
+            let replacement = if original == 'x' { 'y' } else { 'x' };
+            let mut typo_chars = correct_chars.clone();
+            typo_chars[pos] = replacement;
+            let typo: String = typo_chars.into_iter().collect();
+
+            prop_assume!(typo != correct);
+
+            let neighbours = single_edit_neighbours(&typo);
+
+            // The correct URI is recoverable as a single-edit neighbour of the typo.
+            prop_assert!(
+                neighbours.iter().any(|n| n == &correct),
+                "expected single_edit_neighbours({typo:?}) to contain the correct URI {correct:?}"
+            );
+            // The typo itself is never emitted as its own neighbour.
+            prop_assert!(
+                !neighbours.iter().any(|n| n == &typo),
+                "single_edit_neighbours must never emit the original string as a neighbour"
             );
         }
     }
