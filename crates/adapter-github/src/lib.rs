@@ -49,6 +49,57 @@ pub mod probe;
 
 use client::AuthMode;
 
+/// The observed auth/rate-budget posture of a harvest (ADR-019 §5). Re-exported
+/// at the crate root so the composition root can name it alongside
+/// [`take_last_auth_report`] without reaching into the `client` module. Carries
+/// only the budget numbers — never a token (no-token-leak; US-SCR-004).
+pub use client::AuthReport;
+
+/// Process-global slot recording the auth/rate-budget posture the MOST RECENT
+/// harvest observed (ADR-019 §5). The `GithubPort` trait returns `Vec<Signal>`
+/// — by design the pure derivation never sees auth state — so the observed
+/// rate budget (which lives only on the harvest RESPONSE, not the configured
+/// `AuthMode`) is surfaced to the composition root through this effect-shell
+/// side channel rather than by widening the port. The CLI verb reads it via
+/// [`take_last_auth_report`] AFTER the harvest to render the auth-mode line.
+///
+/// This is the effect boundary: the parse (`client::parse_auth_report`) and
+/// the render (cli `render_auth_report`) are PURE and unit-tested; only the
+/// record/read of this slot is the side effect, and it lives in the effect
+/// shell where credentials and I/O already live (pure-core/effect-shell;
+/// ADR-007 / ADR-009). One scrape runs per process, so a process-global slot
+/// is unambiguous (no concurrent-scrape interleaving in the CLI).
+static LAST_AUTH_REPORT: std::sync::OnceLock<std::sync::Mutex<Option<AuthReport>>> =
+    std::sync::OnceLock::new();
+
+fn auth_report_slot() -> &'static std::sync::Mutex<Option<AuthReport>> {
+    LAST_AUTH_REPORT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Record the auth/rate-budget posture observed on a harvest response into the
+/// process-global slot (the effect-shell side channel; see
+/// [`LAST_AUTH_REPORT`]). Called from the harvest paths once the response body
+/// is in hand. The token bytes are NEVER stored here — an [`AuthReport`]
+/// carries only the budget numbers (no-token-leak; US-SCR-004).
+fn record_auth_report(report: AuthReport) {
+    if let Ok(mut slot) = auth_report_slot().lock() {
+        *slot = Some(report);
+    }
+}
+
+/// Take the auth/rate-budget posture the most recent harvest observed (ADR-019
+/// §5), clearing the slot. Returns [`AuthReport::Anonymous`] when no harvest
+/// has run (e.g. a resolve-only refusal). The CLI verb calls this AFTER the
+/// harvest to render the "authenticated (N/M rate budget)" line. Never
+/// surfaces a token value — an [`AuthReport`] has no token field.
+pub fn take_last_auth_report() -> AuthReport {
+    auth_report_slot()
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .unwrap_or(AuthReport::Anonymous)
+}
+
 /// `GithubPort` adapter over the public GitHub API. One value per process;
 /// immutable after construction. Binds the resolved API base (real public API,
 /// or the `OPENLORE_GITHUB_API_BASE` test seam) and the auth posture derived
@@ -192,6 +243,10 @@ impl GithubPort for GithubAdapter {
         let target = format!("{owner}/{repo}");
         let path = format!("/repos/{owner}/{repo}");
         let body = self.get_public(&path, &target).await?;
+        // Surface the observed auth/rate-budget posture (ADR-019 §5) through
+        // the effect-shell side channel so the verb can report it. The token
+        // is NEVER recorded — an AuthReport carries only the budget numbers.
+        record_auth_report(client::parse_auth_report(&body));
         Ok(client::parse_signals(&body))
     }
 
@@ -206,6 +261,9 @@ impl GithubPort for GithubAdapter {
     async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
         let path = format!("/users/{user}");
         let body = self.get_public(&path, user).await?;
+        // Surface the observed auth/rate-budget posture (ADR-019 §5); see
+        // `harvest_repo`. The token is NEVER recorded here.
+        record_auth_report(client::parse_auth_report(&body));
         Ok(bound_user_aggregate(client::parse_signals(&body)))
     }
 }

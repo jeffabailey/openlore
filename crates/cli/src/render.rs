@@ -57,6 +57,7 @@
 //! `StoragePort::query_referencing` and passed alongside each claim so
 //! the renderer stays pure (no I/O, no storage access).
 
+use adapter_github::AuthReport;
 use claim_domain::{Cid, SignedClaim};
 use ports::{AuthorRelationship, CandidateClaim, FederatedRow, SourceTable};
 
@@ -127,6 +128,25 @@ pub fn render_candidate_list(subject: &str, candidates: &[CandidateClaim]) -> St
     }
     out.push_str(&format!("{NOTHING_IS_A_CLAIM_FOOTER}\n"));
     out
+}
+
+/// Render the auth-mode / rate-budget report line for a harvest (ADR-019 §5;
+/// US-SCR-004; journey step 1 auth output). PURE function of the observed
+/// [`AuthReport`] — no I/O.
+///
+/// - [`AuthReport::Authenticated`] => `authenticated (N/M rate budget)` so the
+///   user sees the harvest ran on the higher PAT budget and how much remains.
+/// - [`AuthReport::Anonymous`] => `unauthenticated` (no budget to report).
+///
+/// By construction this can NEVER echo a token value: an `AuthReport` carries
+/// only the budget numbers, never the PAT bytes (no-token-leak; US-SCR-004).
+pub fn render_auth_report(report: &AuthReport) -> String {
+    match report {
+        AuthReport::Authenticated { remaining, limit } => {
+            format!("authenticated ({remaining}/{limit} rate budget)\n")
+        }
+        AuthReport::Anonymous => "unauthenticated\n".to_string(),
+    }
 }
 
 /// Render a candidate's confidence as the minimal decimal matching the

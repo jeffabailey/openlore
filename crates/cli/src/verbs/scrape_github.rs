@@ -38,7 +38,7 @@ use anyhow::Result;
 use ports::TargetKind;
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 
-use crate::render::{render_candidate_list, render_public_data_banner};
+use crate::render::{render_auth_report, render_candidate_list, render_public_data_banner};
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::wiring::Wiring;
 
@@ -116,6 +116,14 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         signals.len(),
         if signals.len() == 1 { "" } else { "s" }
     ));
+
+    // (3a) Report the auth-mode + rate budget the harvest observed (ADR-019
+    // §5; US-SCR-004; journey step 1). The adapter parsed the budget from the
+    // harvest response and recorded it in its effect-shell slot; we take it
+    // here and render the PURE auth-line ("authenticated (N/M rate budget)" /
+    // "unauthenticated"). The token value is NEVER part of this — an
+    // `AuthReport` carries only the budget numbers (no-token-leak).
+    out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
 
     // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
     // each candidate names its source signal). The mapping is the embedded

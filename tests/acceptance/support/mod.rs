@@ -2264,16 +2264,40 @@ pub fn run_openlore_scrape_with_stdin(
 /// in the child env (WD-63 env-var seam) alongside the FakeGithub base URL.
 /// Used by the SA-* auth scenarios.
 ///
-/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+/// Mirrors [`run_openlore_scrape`] exactly (clean env + the slice-01 stub
+/// seams + the in-process FakePds endpoint + the `OPENLORE_GITHUB_API_BASE`
+/// seam) and ADDITIONALLY sets `GITHUB_TOKEN` so `adapter-github` reads the
+/// authenticated posture (WD-63 env-var-only PAT). The token leaves the test
+/// ONLY into the child's env; the no-token-leak assertion verifies it never
+/// surfaces in the captured output.
 pub fn run_openlore_scrape_with_token(
     env: &TestEnv,
     args: &[&str],
     github_base_url: &str,
     github_token: &str,
 ) -> CliOutcome {
-    // SCAFFOLD: true
-    let _ = (env, args, github_base_url, github_token);
-    todo!("DELIVER (slice-02): run openlore scrape with GITHUB_TOKEN + GitHub seam set")
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_GITHUB_API_BASE", github_base_url)
+        .env("GITHUB_TOKEN", github_token)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 /// Universe-bound (gate `scraper_never_persists_unsigned`, KPI-SCR-2):
@@ -2460,12 +2484,18 @@ pub fn assert_only_public_endpoints_called(github: &FakeGithub) {
 /// returning true (the production code DID send it) so the test proves auth
 /// happened WITHOUT the value ever surfacing to stdout/stderr.
 ///
-/// SCAFFOLD: true — DELIVER materializes this in step 07-01.
+/// Materialized (step 04-06).
 pub fn assert_token_value_absent(outcome: &CliOutcome, token: &str) {
-    // SCAFFOLD: true
-    let _ = (outcome, token);
-    todo!(
-        "DELIVER (slice-02): assert the token VALUE appears in neither stdout nor stderr \
-         (no-token-leak; US-SCR-004)"
-    )
+    assert!(
+        !outcome.stdout.contains(token),
+        "no-token-leak (US-SCR-004): the PAT value must NEVER appear in stdout; \
+         \n--- offending token ---\n{token}\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome.stderr.contains(token),
+        "no-token-leak (US-SCR-004): the PAT value must NEVER appear in stderr; \
+         \n--- offending token ---\n{token}\n--- stderr ---\n{}",
+        outcome.stderr
+    );
 }

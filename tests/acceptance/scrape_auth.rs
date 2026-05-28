@@ -46,16 +46,41 @@ use support::*;
 /// @us-scr-004 @driving_port @real-io @j-004a @wd-63 @happy
 #[test]
 fn scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SA-1. GIVEN FakeGithub::for_public_user(\"torvalds\", \
-         fixture_torvalds_user_aggregate_signals()).authenticated(4982, 5000) + \
-         GITHUB_TOKEN=FIXTURE_VALID_PAT in env; WHEN scrape github torvalds; THEN exit 0, \
-         stdout reports 'authenticated (4982/5000 rate budget)', the harvest completes, \
-         github.saw_token(FIXTURE_VALID_PAT) is TRUE (auth happened), AND \
-         assert_token_value_absent(&outcome, FIXTURE_VALID_PAT) (the token never appears in \
-         stdout/stderr — no-token-leak)."
-    )
+    let env = TestEnv::initialized();
+
+    // GIVEN an authenticated GitHub posture for the `torvalds` USER target
+    // that would exhaust the anonymous budget, carrying a 4982/5000 rate
+    // budget; and a valid PAT in the child's `GITHUB_TOKEN`.
+    let github = FakeGithub::for_public_user("torvalds", fixture_torvalds_user_aggregate_signals())
+        .authenticated(4982, 5000);
+    let server = GithubServer::start(github);
+
+    // WHEN Maria runs `scrape github torvalds` with the PAT set.
+    let outcome = run_openlore_scrape_with_token(
+        &env,
+        &["scrape", "github", "torvalds"],
+        server.base_url(),
+        FIXTURE_VALID_PAT,
+    );
+
+    // THEN the run completes (exit 0) and reports the authenticated status +
+    // the remaining rate budget verbatim ("authenticated (4982/5000 rate
+    // budget)") — the harvest ran on the authenticated budget.
+    assert_exit_zero_and_stdout_contains(&outcome, "authenticated (4982/5000 rate budget)");
+
+    // AND the production code DID send the token to GitHub — auth genuinely
+    // happened (the PAT only ever leaves the adapter as an Authorization
+    // header).
+    assert!(
+        server.fake().saw_token(FIXTURE_VALID_PAT),
+        "the production code must send the PAT so authentication genuinely happens \
+         (the only place the token leaves the adapter is the Authorization header)"
+    );
+
+    // AND the token VALUE never appears in any captured output line — the
+    // load-bearing no-token-leak invariant (US-SCR-004 / WD-63), asserted the
+    // other way from `saw_token`: sent to GitHub, never echoed to the user.
+    assert_token_value_absent(&outcome, FIXTURE_VALID_PAT);
 }
 
 /// SA-2 (US-SCR-004 Ex 2): an UNAUTHENTICATED harvest of a small target
