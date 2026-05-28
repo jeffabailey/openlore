@@ -280,7 +280,10 @@ fn fresh_peer_adapter() -> (
     let tmp = TempDir::new().expect("create tempdir");
     let db_path = tmp.path().join("openlore.duckdb");
     let author = DuckDbStorageAdapter::open(&db_path).expect("open adapter on tempdir");
-    let peer = author.peer_adapter();
+    // Bind a LOCAL user DID distinct from every test peer DID so the
+    // WD-40 SelfAttribution guard (step 04-05) never fires for these
+    // peer-authored soft-remove/hard-purge fixtures.
+    let peer = author.peer_adapter(&Did("did:plc:local-user-test".to_string()));
     (peer, author, tmp)
 }
 

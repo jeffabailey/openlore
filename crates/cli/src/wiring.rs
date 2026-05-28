@@ -75,8 +75,11 @@ impl Wiring {
         // Slice-03 peer-storage adapter SHARES the same DuckDB connection
         // pool as the author-storage adapter (Q-DELIVER-3): construct it
         // from the open `DuckDbStorageAdapter` BEFORE boxing the latter
-        // behind the `StoragePort` trait object. No second DB handle.
-        let peer_storage: Box<dyn PeerStoragePort> = Box::new(storage.peer_adapter());
+        // behind the `StoragePort` trait object. No second DB handle. The
+        // local user's DID is threaded in so the adapter can enforce the
+        // WD-40 SelfAttribution guard at the storage write boundary (layer 2).
+        let peer_storage: Box<dyn PeerStoragePort> =
+            Box::new(storage.peer_adapter(identity.author_did()));
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
         let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();

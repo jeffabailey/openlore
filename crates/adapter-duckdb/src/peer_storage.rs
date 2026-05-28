@@ -55,20 +55,37 @@ use url::Url;
 pub struct DuckDbPeerStorageAdapter {
     conn: Arc<Mutex<Connection>>,
     peer_claims_root: PathBuf,
+    /// The LOCAL user's bare DID (fragment stripped). Held so
+    /// `write_peer_claim` can reject `author_did == local_did` with
+    /// `SelfAttribution` at the STORAGE write boundary — the WD-40
+    /// defense-in-depth layer-2 guard, independent of the cli's pure
+    /// pre-check (layer 1). Bound at construction from the composition
+    /// root's `IdentityPort::author_did()`.
+    local_did: Did,
 }
 
 impl DuckDbPeerStorageAdapter {
     /// Construct from a SHARED connection handle + the colocated
-    /// `peer_claims/` root. Called from `DuckDbStorageAdapter::peer_adapter`
-    /// so both adapters write through the same mutex.
+    /// `peer_claims/` root + the LOCAL user's DID. Called from
+    /// `DuckDbStorageAdapter::peer_adapter` so both adapters write through
+    /// the same mutex.
+    ///
+    /// The `local_did` is stored bare (fragment stripped) so the
+    /// `write_peer_claim` SelfAttribution guard (WD-40) compares like-for-like
+    /// against the record's bare author DID.
     ///
     /// This constructor does NOT open a second DuckDB handle and does NOT
     /// run migrations — migration v3 is run once at
     /// `DuckDbStorageAdapter::open` time (see `schema_v3::run_migration`).
-    pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>, peer_claims_root: PathBuf) -> Self {
+    pub(crate) fn from_shared(
+        conn: Arc<Mutex<Connection>>,
+        peer_claims_root: PathBuf,
+        local_did: &Did,
+    ) -> Self {
         Self {
             conn,
             peer_claims_root,
+            local_did: Did(bare_did(&local_did.0)),
         }
     }
 
@@ -483,20 +500,30 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         fetched_from_pds: &Url,
         fetched_at: DateTime<Utc>,
     ) -> Result<WritePeerClaimOutcome, PeerStorageError> {
-        // Step 04-01 ships the FULL PP-* write contract: anti-merging
-        // attribution check (CrossAttribution — WD-41), the DB core row +
-        // references/evidence side tables in one transaction, and the
+        // Step 04-01 shipped the CrossAttribution arm (WD-41); step 04-05
+        // adds the SelfAttribution arm (WD-40). The DB core row +
+        // references/evidence side tables write in one transaction, then the
         // on-disk `peer_claims/<encoded_did>/<cid>.json` artifact (atomic
-        // tmp+rename, Q-DELIVER-2 colon→underscore). SelfAttribution
-        // (WD-40, where author == the LOCAL user) is enforced by the cli
-        // BEFORE calling this method (the adapter has no identity handle);
-        // the CrossAttribution arm here also catches it as a side effect
-        // when the offending author differs from the subscribed peer.
+        // tmp+rename, Q-DELIVER-2 colon→underscore).
+
+        let record_author = bare_did(&signed.unsigned.author_did.0);
+
+        // SelfAttribution (WD-40 — LOAD-BEARING, layer-2 storage guard): a
+        // record whose author is the LOCAL user is rejected at the WRITE
+        // boundary, INDEPENDENTLY of the cli's pure pre-check (layer 1).
+        // This is the key-compromise defense: even if the offending record's
+        // signature verified against the user's own key, the storage layer
+        // refuses to file it under peer_claims (I-FED-2: peer_claims.author_did
+        // NEVER == local user). Checked BEFORE CrossAttribution so a record
+        // self-attributed to the local user reports SelfAttribution even when
+        // the local user is also (improbably) the subscribed peer.
+        if record_author == self.local_did.0 {
+            return Err(PeerStorageError::SelfAttribution);
+        }
 
         // Anti-merging (WD-41): the record's author (bare DID, fragment
         // stripped) MUST equal the subscribed peer. A mismatch is a
         // cross-attributed record — reject BEFORE any write.
-        let record_author = bare_did(&signed.unsigned.author_did.0);
         if record_author != peer_did.0 {
             return Err(PeerStorageError::CrossAttribution {
                 expected: peer_did.clone(),
@@ -620,5 +647,120 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
     ) -> Result<Vec<(Did, Cid, ReferenceType)>, PeerStorageError> {
         // SCAFFOLD: true (slice-03)
         todo!("PeerStoragePort::query_peer_referencing — driven by PP-* scenarios")
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Layer-2 SelfAttribution guard — adapter integration tests (Mandate 6: real
+// DuckDB through the public `DuckDbStorageAdapter::open` → `peer_adapter`
+// driving surface). These drive the WD-40 storage-boundary guard (step 04-05)
+// that is INDEPENDENT of the cli's pure pre-check (layer 1): even a record
+// that would pass signature + CID round-trip (the key-compromise vector) MUST
+// be rejected at the write boundary when its author is the local user.
+//
+// Behavior budget: 1 distinct behavior (write_peer_claim rejects a
+// self-attributed record + writes no row) → 1 test, within the 2×1=2 budget.
+// -----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DuckDbStorageAdapter;
+    use claim_domain::{Confidence, SignatureBlock, SignedClaim, UnsignedClaim};
+    use tempfile::tempdir;
+
+    /// Build a `SignedClaim` authored by `author_did` (bare DID; the
+    /// `#fragment` is appended so the guard's `bare_did` comparison is the
+    /// thing under test). `cid` becomes both the `signed_cid` and the row's
+    /// primary key. The signature bytes are a placeholder — the STORAGE guard
+    /// is upstream of any crypto, so the signature need not verify (the WD-40
+    /// contract is "reject even if the signature WOULD verify").
+    fn signed_claim_authored_by(author_did: &str, cid: &str) -> SignedClaim {
+        // `Confidence` is crate-private; route through serde (the pattern used
+        // across the workspace's adapter/test code).
+        let confidence: Confidence = serde_json::from_value(serde_json::json!(0.42))
+            .expect("0.42 is a well-formed confidence");
+        SignedClaim {
+            unsigned: UnsignedClaim {
+                subject: "github:rust-lang/cargo".to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: "org.openlore.philosophy.dependency-pinning".to_string(),
+                evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+                confidence,
+                author_did: Did(format!("{author_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            },
+            signature: SignatureBlock {
+                signed_cid: Cid(cid.to_string()),
+                signature_bytes: vec![0u8; 64],
+                verification_method: format!("{author_did}#org.openlore.application"),
+            },
+        }
+    }
+
+    /// Open a fresh adapter on a tmp DB and hand back the peer adapter bound
+    /// to `local_did`, plus the owning tempdir + author adapter (kept alive so
+    /// the shared connection + on-disk root outlive the test).
+    fn open_peer_adapter(
+        local_did: &str,
+    ) -> (
+        tempfile::TempDir,
+        DuckDbStorageAdapter,
+        DuckDbPeerStorageAdapter,
+    ) {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("openlore.duckdb");
+        let storage = DuckDbStorageAdapter::open(&db_path).expect("open adapter");
+        let peer = storage.peer_adapter(&Did(local_did.to_string()));
+        (dir, storage, peer)
+    }
+
+    /// WD-40 (step 04-05): `write_peer_claim` rejects a record whose
+    /// `author_did` equals the LOCAL user's DID with
+    /// `PeerStorageError::SelfAttribution` — at the STORAGE write boundary,
+    /// independently of the cli's pure pre-check. Crucially this holds for the
+    /// key-compromise vector: the local user is ALSO the subscribed peer here
+    /// (`peer_did == local_did`), so the CrossAttribution arm (author ≠ peer)
+    /// can NOT fire — only a dedicated SelfAttribution guard catches it. No
+    /// `peer_claims` row is written (I-FED-2: author_did NEVER == local user).
+    #[test]
+    fn write_peer_claim_rejects_self_attributed_record_at_storage_boundary() {
+        let local_did = "did:plc:test-jeff";
+        let (_dir, storage, peer) = open_peer_adapter(local_did);
+
+        // The offending record self-attributes to the local user. We pass the
+        // SAME DID as the `peer_did` argument so the existing CrossAttribution
+        // arm (author ≠ subscribed peer) does NOT fire — isolating the
+        // SelfAttribution guard as the ONLY thing that can reject this write.
+        let signed =
+            signed_claim_authored_by(local_did, "bafyselfattrtest000000000000000000000000000");
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+
+        let result =
+            peer.write_peer_claim(&Did(local_did.to_string()), &signed, &endpoint, Utc::now());
+
+        assert!(
+            matches!(result, Err(PeerStorageError::SelfAttribution)),
+            "write_peer_claim MUST reject a record self-attributed to the local user \
+             with PeerStorageError::SelfAttribution (WD-40 layer-2 guard); got {result:?}"
+        );
+
+        // No row leaked into peer_claims under ANY author_did (I-FED-2 +
+        // anti-merging at the reject path). Asserted through the shared
+        // connection the author adapter holds open.
+        let conn = storage
+            .peer_adapter(&Did(local_did.to_string()))
+            .shared_connection()
+            .clone();
+        let conn = conn.lock().expect("lock conn");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM peer_claims", [], |r| r.get(0))
+            .expect("count peer_claims");
+        assert_eq!(
+            rows, 0,
+            "a self-attributed write must leave ZERO peer_claims rows (I-FED-2); got {rows}"
+        );
     }
 }

@@ -610,7 +610,146 @@ fn peer_pull_rejects_cid_mismatch_per_record_and_stores_honest_records() {
 /// @us-fed-002 @real-io @driving_port @j-003a @error @wd-40
 #[test]
 fn peer_pull_rejects_self_attribution_at_write_time() {
-    todo!("DELIVER (slice-03): wire DuckDbPeerStorageAdapter::write_peer_claim → if author_did == identity.author_did() → reject with PeerStorageError::SelfAttribution. Use FakePeerPds::with_self_attribution + fixture_adversarial_peer_self_attribution. Assert: stderr contains 'self attribution' or equivalent message, peer_claims row count for the offending CID == 0, the OTHER honest records ARE stored (fault isolation per WD-37), exit nonzero")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes THREE genuinely-signed honest claims (real crypto via
+    // `build_verifiable_peer_records` — the same builder PP-1 uses, so each
+    // honest record passes BOTH the CID round-trip AND the signature verify).
+    // The `with_self_attribution` posture appends ONE adversarial record at
+    // `ADVERSARIAL_RKEY` whose `author` field is the LOCAL USER's DID — the
+    // WD-40 key-compromise vector. Even if that record's signature verified
+    // against the user's own key, the pull-time WRITE must reject it with
+    // `PeerStorageError::SelfAttribution`: the storage-layer guard (layer 2)
+    // is an INDEPENDENT defense from the pure pre-check in `evaluate_record`
+    // (layer 1). The local user here is `FakeIdentity::jeff` (the DID
+    // `TestEnv::initialized` binds), so the offending record's author is wired
+    // to exactly `env.identity.author_did()`.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (honest, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(honest.len(), 3, "Rachel publishes three honest claims");
+
+    let local_did = env.identity.author_did().to_string();
+    let peer = PeerPds::with_self_attribution(peer_did, &local_did, honest);
+    assert_eq!(
+        peer.records().len(),
+        4,
+        "3 honest + 1 self-attributed = 4 records hosted"
+    );
+
+    // Precondition: ONE active subscription via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // DD-FED-10 universe BEFORE the pull: the author `claims` table count.
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Action: `openlore peer pull`. The self-attributed record is rejected
+    // (the storage-layer SelfAttribution guard mirrors the pure pre-check);
+    // the 3 honest records verify + store (per-record fault isolation, WD-37).
+    let outcome = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Non-zero exit overall — a rejected record flags the pull (WD-37 +
+    //    ADR-013 exit-code table: pull exits non-zero on ANY rejection).
+    assert_ne!(
+        outcome.status, 0,
+        "a self-attributed record must drive a NON-ZERO exit code (WD-40 / WD-37 / ADR-013);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The progress block reports exactly one rejection WITH the
+    //    self-attribution reason. The pull renderer surfaces per-record reject
+    //    reasons on stdout (WD-37 + ADR-013) so the user sees WHY the record
+    //    was dropped, not just a count.
+    assert!(
+        outcome.stdout.contains("rejected  : 1"),
+        "the progress block must report exactly one rejected record;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("self attribution"),
+        "the rejection reason must name the self-attribution failure (WD-40);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. The 3 honest records still verify + store: the `verified : 3/4` line
+    //    (3 of 4 fetched valid) + the per-peer progress names Rachel.
+    assert!(
+        outcome.stdout.contains(peer_did),
+        "the progress block must name the peer DID {peer_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("3/4"),
+        "expected 3 of 4 fetched records valid (1 self-attributed rejected);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("Pulled 3 new peer claims"),
+        "the 3 honest records must be stored as NEW;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_claims rows == 3 (honest only); every row attributed to
+    //      Rachel, none to any other DID (anti-merging, I-FED-1). Crucially
+    //      NO row is attributed to the LOCAL user (I-FED-2: peer_claims.author_did
+    //      NEVER == local user).
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    //    - the self-attributed record's CID is ABSENT from peer_claims (under
+    //      ANY author — including the local user's DID) AND has NO on-disk
+    //      artifact (the WD-40 storage guard holds at the reject path).
+    assert_peer_claim_cid_absent(&env, ADVERSARIAL_RKEY);
+
+    //    - author_claims UNCHANGED (a peer pull never touches own claims; the
+    //      self-attributed record did NOT leak into the user's own table).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull, even when a \
+         record self-attributes to the local user (DD-FED-10 / I-FED-2)"
+    );
+
+    //    - exactly 3 `<cid>.json` artifacts under the peer partition (the 3
+    //      honest records only — the self-attributed record wrote nothing).
+    let partition = peer_claims_dir_for(&env, peer_did);
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        3,
+        "expected exactly 3 `<cid>.json` artifacts (honest only) under {}; got {artifact_count}",
+        partition.display()
+    );
 }
 
 /// PP-6 / Sad (WD-41 — RESOLVES `# DISTILL: confirm` anxiety scenario

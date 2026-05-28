@@ -134,8 +134,16 @@ impl DuckDbStorageAdapter {
     /// connection handle (Q-DELIVER-3 single-writer constraint). Both
     /// adapters then serialize all writes through one mutex; no second
     /// DuckDB handle to the file is ever opened.
-    pub fn peer_adapter(&self) -> DuckDbPeerStorageAdapter {
-        DuckDbPeerStorageAdapter::from_shared(Arc::clone(&self.conn), self.peer_claims_root.clone())
+    ///
+    /// `local_did` is the composition root's `IdentityPort::author_did()` —
+    /// the peer adapter holds it so `write_peer_claim` can reject a record
+    /// self-attributed to the local user (WD-40 layer-2 storage guard).
+    pub fn peer_adapter(&self, local_did: &claim_domain::Did) -> DuckDbPeerStorageAdapter {
+        DuckDbPeerStorageAdapter::from_shared(
+            Arc::clone(&self.conn),
+            self.peer_claims_root.clone(),
+            local_did,
+        )
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
