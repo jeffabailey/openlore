@@ -121,3 +121,13 @@ harness = true
 name = "counter_claim"
 path = "../../tests/acceptance/counter_claim.rs"
 harness = true
+
+# Slice-03 subprocess acceptance (federated read — US-FED-003). Drives the
+# real `openlore` binary via `assert_cmd` + `FakePeerPds`. Step 05-06
+# activates the FQ-1 scenario (LOAD-BEARING J-003a anti-merging reader beat;
+# integration gate 1 `federation_attribution_preserved` + KPI-FED-1/2
+# release-blocking); FQ-2..8 stay RED (`todo!()`).
+[[test]]
+name = "federated_query"
+path = "../../tests/acceptance/federated_query.rs"
+harness = true

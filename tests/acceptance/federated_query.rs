@@ -42,7 +42,159 @@ use support::*;
 /// @us-fed-003 @real-io @driving_port @j-003a @kpi-fed-1 @kpi-fed-2 @happy
 #[test]
 fn federated_query_returns_author_and_peer_claims_grouped_by_author_did() {
-    todo!("DELIVER (slice-03): wire VerbGraphQuery::federated branch → StoragePort.query_federated_by_subject (UNION ALL with explicit author_did projection per ADR-014 § Cross-store query examples) → renderer.group_by_author. Assert: exit 0, exactly 3 claim rows, two distinct author headers ('(you)' + '(subscribed peer)'), every row has author_did + confidence + cid, footer contains 'Each claim is attributed to its author DID. No claims are merged.' AND distinct-author-count = 2. Drives gate federation_attribution_preserved.")
+    let env = TestEnv::initialized();
+
+    // The shared subject both authors make claims about. The verifiable
+    // peer-record builder publishes its claims under this exact subject,
+    // so the user's own claim must use it too for the federated query to
+    // group both authors under one subject.
+    let subject = "github:rust-lang/cargo";
+
+    // -- Author 1: the LOCAL user adds ONE of their own claims --
+    // Routed through the real `claim add` verb (no PDS publish — the
+    // first two-prompt step signs + persists locally, which is all the
+    // federated READ path needs). `\n` confirms the sign prompt; the
+    // empty publish answer declines publishing (local-only).
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.local-first",
+            "--evidence",
+            "https://github.com/rust-lang/cargo",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // -- Author 2: a subscribed PEER (Rachel) publishes claims about the
+    // SAME subject. `build_verifiable_peer_records` materializes real
+    // Ed25519 signatures over `github:rust-lang/cargo` so the pull
+    // pipeline's per-record verify + CID-recompute pass. --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer_claim_count = records.len();
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Precondition: subscribe via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // Precondition: pull Rachel's claims into `peer_claims` via the real
+    // `peer pull` verb (each row attributed to Rachel; anti-merging held).
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    // Confirm the cache is populated as expected before the read.
+    assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
+
+    // -- Action: the federated read through the driving port --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status,
+        outcome.stdout,
+    );
+
+    let stdout = &outcome.stdout;
+
+    // 1. BOTH authors appear, grouped under per-author headers. The local
+    //    user's bare DID carries the "(you)" annotation; Rachel's the
+    //    "(subscribed peer)" annotation (ADR-013 header convention).
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+    assert!(
+        stdout.contains(local_did),
+        "expected a per-author header naming the local user's DID {local_did};\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains(peer_did),
+        "expected a per-author header naming the peer DID {peer_did};\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(you)"),
+        "expected the local user's header annotated '(you)';\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(subscribed peer)"),
+        "expected the peer's header annotated '(subscribed peer)';\n--- stdout ---\n{stdout}"
+    );
+
+    // 2. Every row carries author_did + confidence + cid. The own claim's
+    //    confidence (0.91) and each peer claim's CID must surface verbatim.
+    assert!(
+        stdout.contains("0.91"),
+        "expected the own claim's confidence 0.91 rendered verbatim;\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("org.openlore.philosophy.local-first"),
+        "expected the own claim's object rendered;\n--- stdout ---\n{stdout}"
+    );
+    // Every peer record's CID (== its rkey) appears as a row CID.
+    for record in peer.records() {
+        assert!(
+            stdout.contains(&record.rkey),
+            "expected the peer claim cid {} to appear as a row cid;\n--- stdout ---\n{stdout}",
+            record.rkey
+        );
+    }
+    // The "cid:" / "confidence:" / "author_did" labels frame every row.
+    for label in ["confidence", "cid"] {
+        assert!(
+            stdout.contains(label),
+            "expected each row to carry a `{label}` field;\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 3. Footer states the count of distinct authors (2) AND the literal
+    //    no-merge guarantee (ADR-013 footer convention; content-frozen).
+    assert!(
+        stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "expected the content-frozen no-merge footer guarantee;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains('2'),
+        "expected the footer to state the distinct-author count (2);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. KPI-FED-2 zero-merge gate: NO row labels itself merged / consensus
+    //    / aggregate.
+    assert_no_merged_rows_in_federated_output(&outcome);
 }
 
 /// FQ-2: Maria + Rachel publish two DIFFERENT claims with the SAME

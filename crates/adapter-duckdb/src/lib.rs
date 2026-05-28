@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use claim_domain::{Cid, ReferenceType, SignedClaim};
 use duckdb::Connection;
-use ports::{FederatedRow, ProbeOutcome, StorageError, StoragePort};
+use ports::{AuthorRelationship, FederatedRow, ProbeOutcome, SourceTable, StorageError, StoragePort};
 
 mod peer_storage;
 mod probe;
@@ -150,6 +150,63 @@ impl DuckDbStorageAdapter {
     fn artifact_path(&self, cid: &Cid) -> PathBuf {
         self.claims_dir.join(format!("{}.json", cid.0))
     }
+
+    /// The set of DIDs with a currently-ACTIVE subscription
+    /// (`removed_at IS NULL`). Used by `query_federated_by_subject` to
+    /// classify each `Peer`-sourced row as `SubscribedPeer` (DID present)
+    /// vs `UnsubscribedCache` (soft-removed residue, DID absent). Reads the
+    /// shared connection once per federated query.
+    fn active_subscription_dids(&self) -> Result<std::collections::HashSet<String>, StorageError> {
+        let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
+            message: "connection mutex poisoned".to_string(),
+        })?;
+        let mut stmt = conn
+            .prepare("SELECT peer_did FROM peer_subscriptions WHERE removed_at IS NULL")
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("prepare active_subscription_dids: {err}"),
+            })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| StorageError::QueryFailed {
+                message: format!("query active_subscription_dids: {err}"),
+            })?;
+        let mut dids = std::collections::HashSet::new();
+        for row in rows {
+            dids.insert(row.map_err(|err| StorageError::QueryFailed {
+                message: format!("row decode active_subscription_dids: {err}"),
+            })?);
+        }
+        Ok(dids)
+    }
+
+    /// Read the authoritative `SignedClaim` from an on-disk artifact path.
+    /// Own-claim rows store an ABSOLUTE path under `claims/`; peer-claim
+    /// rows store a path RELATIVE to the storage root
+    /// (`peer_claims/<encoded_did>/<cid>.json`). A relative `peer_claims/`
+    /// path is resolved under `peer_claims_root` (which already points at
+    /// `<root>/peer_claims`), matching `DuckDbPeerStorageAdapter`'s own
+    /// `get_peer_claim_by_cid` resolution.
+    fn read_artifact_at(&self, artifact_path: &str) -> Result<SignedClaim, StorageError> {
+        let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
+            Some(relative) => self.peer_claims_root.join(relative),
+            None => PathBuf::from(artifact_path),
+        };
+        let bytes = fs::read(&resolved).map_err(|err| StorageError::QueryFailed {
+            message: format!("read federated artifact {}: {err}", resolved.display()),
+        })?;
+        serde_json::from_slice(&bytes).map_err(|err| StorageError::QueryFailed {
+            message: format!("deserialize federated artifact {}: {err}", resolved.display()),
+        })
+    }
+}
+
+/// Lightweight projection from the federated UNION-ALL query — just the
+/// attribution + the artifact pointer. The full `SignedClaim` is read from
+/// the artifact afterward so the returned row is byte-faithful.
+struct FederatedProjection {
+    author_did: String,
+    source_table: String,
+    artifact_path: String,
 }
 
 // -----------------------------------------------------------------------------
@@ -431,18 +488,118 @@ impl StoragePort for DuckDbStorageAdapter {
         Ok(())
     }
 
-    fn query_federated_by_subject(
-        &self,
-        _subject: &str,
-    ) -> Result<Vec<FederatedRow>, StorageError> {
-        // SCAFFOLD: true (slice-03)
+    fn query_federated_by_subject(&self, subject: &str) -> Result<Vec<FederatedRow>, StorageError> {
+        // SAFE cross-store read (data-models.md §"Cross-store query
+        // examples"): a SQL `UNION ALL` that projects `author_did`
+        // EXPLICITLY from BOTH `claims` and `peer_claims`. This is the
+        // structural anti-merging defense (I-FED-1 layer 2): because the
+        // literal names both tables AND projects `author_did`, it passes
+        // `xtask check-arch::no_cross_table_join_elides_author`. It is
+        // NEVER a JOIN (which would risk eliding attribution).
         //
-        // Real impl is a SQL `UNION ALL` with explicit `author_did`
-        // projection across `claims` + `peer_claims` (data-models.md
-        // §"Cross-store query examples"; NEVER a `JOIN` — I-FED-1 /
-        // xtask check-arch `no_cross_table_join_elides_author`). Driven
-        // by the federated-read acceptance scenarios in Phase 03/04.
-        todo!("StoragePort::query_federated_by_subject — UNION ALL cross-store read lands in a later slice-03 step")
+        // The query yields only the lightweight projection
+        // `(author_did, cid, source_table, signed_record_path)`; the
+        // authoritative `SignedClaim` is then read from the on-disk
+        // artifact per row so the returned claim is byte-faithful
+        // (its CID + signature still round-trip), matching the slice-01
+        // `query_by_subject` strategy.
+        let projections: Vec<FederatedProjection> = {
+            let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
+                message: "connection mutex poisoned".to_string(),
+            })?;
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT author_did, cid, source_table, artifact_path FROM ( \
+                       SELECT c.author_did AS author_did, \
+                              c.cid AS cid, \
+                              'Own' AS source_table, \
+                              c.artifact_path AS artifact_path \
+                       FROM claims c \
+                       WHERE c.subject = ? \
+                       UNION ALL \
+                       SELECT pc.author_did AS author_did, \
+                              pc.cid AS cid, \
+                              'Peer' AS source_table, \
+                              pc.signed_record_path AS artifact_path \
+                       FROM peer_claims pc \
+                       WHERE pc.subject = ? \
+                     ) ORDER BY source_table, cid",
+                )
+                .map_err(|err| StorageError::QueryFailed {
+                    message: format!("prepare query_federated_by_subject: {err}"),
+                })?;
+
+            let rows = stmt
+                .query_map(duckdb::params![subject, subject], |row| {
+                    Ok(FederatedProjection {
+                        author_did: row.get::<_, String>(0)?,
+                        source_table: row.get::<_, String>(2)?,
+                        artifact_path: row.get::<_, String>(3)?,
+                    })
+                })
+                .map_err(|err| StorageError::QueryFailed {
+                    message: format!("query_map federated: {err}"),
+                })?;
+
+            let mut collected = Vec::new();
+            for row in rows {
+                collected.push(row.map_err(|err| StorageError::QueryFailed {
+                    message: format!("row decode federated: {err}"),
+                })?);
+            }
+            collected
+        };
+
+        // The set of currently-ACTIVE peer subscriptions (removed_at IS
+        // NULL). A `Peer`-sourced row whose author is in this set is a
+        // `SubscribedPeer`; one whose subscription was soft-removed (or
+        // never present) is an `UnsubscribedCache` (ADR-014 soft-remove
+        // residue). Read once, up front, so the per-row classification is
+        // an O(1) set membership test.
+        let active_peers = self.active_subscription_dids()?;
+
+        let mut results = Vec::with_capacity(projections.len());
+        for projection in projections {
+            let source_table = match projection.source_table.as_str() {
+                "Own" => SourceTable::Own,
+                "Peer" => SourceTable::Peer,
+                other => {
+                    return Err(StorageError::QueryFailed {
+                        message: format!("unknown source_table {other:?} in federated read"),
+                    })
+                }
+            };
+
+            // Normalize attribution to the BARE DID (fragment stripped) so
+            // own rows (`claims.author_did` carries the `#org.openlore.application`
+            // signing-key fragment) and peer rows (already bare) group under
+            // ONE header per author. The signing-key fragment is a locator,
+            // not an attribution distinction.
+            let author_did = bare_did(&projection.author_did);
+
+            let author_relationship = match source_table {
+                SourceTable::Own => AuthorRelationship::You,
+                SourceTable::Peer => {
+                    if active_peers.contains(&author_did) {
+                        AuthorRelationship::SubscribedPeer
+                    } else {
+                        AuthorRelationship::UnsubscribedCache
+                    }
+                }
+            };
+
+            let signed_claim = self.read_artifact_at(&projection.artifact_path)?;
+
+            results.push(FederatedRow {
+                author_did: claim_domain::Did(author_did),
+                author_relationship,
+                signed_claim,
+                source_table,
+            });
+        }
+
+        Ok(results)
     }
 }
 
@@ -450,6 +607,15 @@ impl StoragePort for DuckDbStorageAdapter {
 // Small named helpers (nw-fp-usable-design — never inline a one-liner that
 // has a domain name)
 // -----------------------------------------------------------------------------
+
+/// Strip the `#fragment` from a DID, returning the bare DID. The author
+/// `claims` table stores the full `did:...#org.openlore.application` signing
+/// locator; the federated read normalizes to the bare form so own + peer
+/// rows attribute under one author header (matches the peer adapter's
+/// `bare_did`).
+fn bare_did(did: &str) -> String {
+    did.split('#').next().unwrap_or(did).to_string()
+}
 
 /// `ReferenceType` → wire string used in the SQL `CHECK` constraint.
 fn reference_type_to_sql(rt: ReferenceType) -> &'static str {
@@ -531,7 +697,10 @@ impl<T> OptionalExtension<T> for Result<T, duckdb::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claim_domain::{Confidence, Did, SignatureBlock, UnsignedClaim};
+    use ports::{AuthorRelationship, PeerStoragePort, SourceTable};
     use tempfile::tempdir;
+    use url::Url;
 
     /// Open a fresh adapter on a tmp DB file and hand back both the
     /// adapter (to keep the shared connection alive) and a clone of the
@@ -541,6 +710,33 @@ mod tests {
         let db_path = dir.path().join("openlore.duckdb");
         let adapter = DuckDbStorageAdapter::open(&db_path).expect("open adapter");
         (dir, adapter)
+    }
+
+    /// Build a `SignedClaim` authored by `author_did` (bare DID; the
+    /// `#fragment` is appended) about `subject`. `cid` is both the
+    /// `signed_cid` and the row primary key. Confidence routes through
+    /// serde (the wrapper is crate-private).
+    fn signed_claim(author_did: &str, subject: &str, object: &str, cid: &str) -> SignedClaim {
+        let confidence: Confidence = serde_json::from_value(serde_json::json!(0.5))
+            .expect("0.5 is a well-formed confidence");
+        SignedClaim {
+            unsigned: UnsignedClaim {
+                subject: subject.to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: object.to_string(),
+                evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+                confidence,
+                author_did: Did(format!("{author_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            },
+            signature: SignatureBlock {
+                signed_cid: Cid(cid.to_string()),
+                signature_bytes: vec![0u8; 64],
+                verification_method: format!("{author_did}#org.openlore.application"),
+            },
+        }
     }
 
     /// Behavior: migration v3 creates all four peer-storage tables.
@@ -639,5 +835,120 @@ mod tests {
             result.is_err(),
             "INSERT with empty author_did must be rejected by the CHECK (author_did <> '') constraint"
         );
+    }
+
+    /// FQ-1 (step 05-06): `query_federated_by_subject` returns rows from
+    /// both the user's own author store AND the cached peer store for the
+    /// subject — each row carrying its OWN author_did (anti-merging,
+    /// I-FED-1), the correct `source_table`, and the correct
+    /// `author_relationship` (You for own; SubscribedPeer for an active
+    /// peer subscription). The UNION-ALL never merges: distinct authors
+    /// stay distinct rows.
+    #[test]
+    fn query_federated_by_subject_returns_own_and_peer_rows_attributed_per_row() {
+        let local_did = "did:plc:test-jeff";
+        let peer_did = "did:plc:rachel-test";
+        let subject = "github:rust-lang/cargo";
+
+        let (_dir, storage) = open_tmp();
+        let peer = storage.peer_adapter(&Did(local_did.to_string()));
+
+        // Own claim → `claims` table via the slice-01 write path.
+        let own = signed_claim(
+            local_did,
+            subject,
+            "org.openlore.philosophy.local-first",
+            "bafyowncid0000000000000000000000000000000000",
+        );
+        storage.write_signed_claim(&own).expect("write own claim");
+
+        // An ACTIVE subscription to Rachel so the row is annotated
+        // SubscribedPeer (not UnsubscribedCache).
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+        peer.add_subscription(ports::PeerSubscription {
+            peer_did: Did(peer_did.to_string()),
+            peer_handle: "rachel.test".to_string(),
+            peer_pds_endpoint: endpoint.clone(),
+            subscribed_at: Utc::now(),
+            removed_at: None,
+        })
+        .expect("add subscription");
+
+        // Two peer claims → `peer_claims` table via the pull write path.
+        for (object, cid) in [
+            (
+                "org.openlore.philosophy.dependency-pinning",
+                "bafypeercid001000000000000000000000000000000",
+            ),
+            (
+                "org.openlore.philosophy.reproducible-builds",
+                "bafypeercid002000000000000000000000000000000",
+            ),
+        ] {
+            let peer_claim = signed_claim(peer_did, subject, object, cid);
+            peer.write_peer_claim(&Did(peer_did.to_string()), &peer_claim, &endpoint, Utc::now())
+                .expect("write peer claim");
+        }
+
+        let rows = storage
+            .query_federated_by_subject(subject)
+            .expect("query_federated_by_subject");
+
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected 1 own + 2 peer rows from the UNION ALL; got {}",
+            rows.len()
+        );
+
+        // Anti-merging: exactly two DISTINCT author DIDs, each row carrying
+        // a non-empty author_did (the field is non-Option at the type level;
+        // this asserts the adapter populated it from the right column).
+        let own_rows: Vec<&FederatedRow> = rows
+            .iter()
+            .filter(|r| r.author_did.0 == local_did)
+            .collect();
+        let peer_rows: Vec<&FederatedRow> = rows
+            .iter()
+            .filter(|r| r.author_did.0 == peer_did)
+            .collect();
+        assert_eq!(own_rows.len(), 1, "exactly one own-authored row");
+        assert_eq!(peer_rows.len(), 2, "exactly two peer-authored rows");
+
+        // source_table + author_relationship are correct per provenance.
+        assert_eq!(own_rows[0].source_table, SourceTable::Own);
+        assert_eq!(own_rows[0].author_relationship, AuthorRelationship::You);
+        for row in &peer_rows {
+            assert_eq!(row.source_table, SourceTable::Peer);
+            assert_eq!(row.author_relationship, AuthorRelationship::SubscribedPeer);
+            assert!(
+                !row.author_did.0.is_empty(),
+                "every federated row carries a non-empty author_did (I-FED-1)"
+            );
+        }
+
+        // The signed claims round-trip: the own row's CID matches, and each
+        // peer row's CID is one of the two we wrote (no CID drift).
+        assert_eq!(
+            own_rows[0].signed_claim.signature.signed_cid.0,
+            own.signature.signed_cid.0
+        );
+        let peer_cids: std::collections::HashSet<String> = peer_rows
+            .iter()
+            .map(|r| r.signed_claim.signature.signed_cid.0.clone())
+            .collect();
+        assert_eq!(peer_cids.len(), 2, "two distinct peer CIDs preserved");
+    }
+
+    /// A subject with no matching rows in EITHER table returns an empty
+    /// vec (not an error). Pins the empty-federation degenerate case the
+    /// renderer's footer-only path relies on.
+    #[test]
+    fn query_federated_by_subject_empty_when_no_rows_match() {
+        let (_dir, storage) = open_tmp();
+        let rows = storage
+            .query_federated_by_subject("github:does/not-exist")
+            .expect("query_federated_by_subject");
+        assert!(rows.is_empty(), "expected no rows; got {}", rows.len());
     }
 }

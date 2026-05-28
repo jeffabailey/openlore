@@ -57,7 +57,10 @@
 
 use anyhow::{Context, Result};
 
-use crate::render::{is_retracted_by, render_annotated_graph_query_result, AnnotatedClaim};
+use crate::render::{
+    is_retracted_by, render_annotated_graph_query_result, render_federated_query_result,
+    AnnotatedClaim,
+};
 use crate::wiring::Wiring;
 
 /// Header line printed before the per-claim render. US-004 AC #2 content-
@@ -109,22 +112,7 @@ pub struct GraphQueryOutcome {
 /// code stays 0: empty is a normal not-found result, not an error.
 pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
     if args.federated {
-        // SCAFFOLD: true (slice-03)
-        //
-        // The `--federated` branch widens the query across `claims` +
-        // `peer_claims` via `StoragePort::query_federated_by_subject`
-        // (UNION ALL with explicit author_did projection — never a JOIN;
-        // I-FED-1). It groups by author DID, annotates each row's
-        // relationship (you / subscribed-peer / unsubscribed-cache), and
-        // fires the once-per-install first-federated-query orientation
-        // (crate::orientation). Driven by the FQ-* acceptance scenarios in
-        // a later slice-03 phase; step 01-04 only routes the flag here.
-        let _ = wiring;
-        todo!(
-            "VerbGraphQuery --federated — query_federated_by_subject (UNION ALL, \
-             anti-merging) → group by author DID → first-federated-query \
-             orientation. Driven by FQ-* scenarios."
-        );
+        return run_federated(wiring, args);
     }
 
     let claims = wiring
@@ -162,6 +150,34 @@ pub fn run(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> 
     stdout.push('\n');
     stdout.push_str(FEDERATION_FOOTER);
     stdout.push('\n');
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// Run the `--federated` branch (FQ-1): widen the query across `claims` +
+/// `peer_claims` via `StoragePort::query_federated_by_subject` (UNION ALL
+/// with explicit `author_did` projection — never a JOIN; I-FED-1), then
+/// render the rows GROUPED BY author DID with the content-frozen no-merge
+/// footer (ADR-013).
+///
+/// The federated read is a single port call; the grouping + footer are a
+/// pure projection (`render_federated_query_result`). Per-row attribution
+/// (you / subscribed-peer / unsubscribed-cache) is carried on each
+/// `FederatedRow.author_relationship` set by the adapter.
+///
+/// Out of FQ-1 scope (covered by later slice-03 scenarios, currently RED):
+/// the first-federated-query orientation (FQ-6 / WD-39), the zero-peers
+/// degraded footer (FQ-4), and the inline counter template (FQ-7 / WD-42).
+fn run_federated(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutcome> {
+    let rows = wiring
+        .storage
+        .query_federated_by_subject(&args.subject)
+        .with_context(|| format!("federated query by subject {}", args.subject))?;
+
+    let stdout = render_federated_query_result(&rows);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

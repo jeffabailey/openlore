@@ -58,10 +58,17 @@
 //! the renderer stays pure (no I/O, no storage access).
 
 use claim_domain::{Cid, SignedClaim};
+use ports::{AuthorRelationship, FederatedRow};
 
 /// Inherited slice-01 framing literal (I-7 / WD-6): a claim is asserted by
 /// you, NOT as truth. Content-frozen; do NOT paraphrase.
 pub const NOT_AS_TRUTH_LITERAL: &str = "not as truth";
+
+/// Slice-03 content-frozen no-merge guarantee (ADR-013 footer convention).
+/// Printed in the `graph query --federated` footer. Do NOT paraphrase —
+/// the exact string is the KPI-FED-2 anti-merging user-visible contract.
+pub const NO_MERGE_FOOTER_LITERAL: &str =
+    "Each claim is attributed to its author DID. No claims are merged.";
 
 /// Slice-03 content-frozen framing literal for counter-claims: a counter
 /// NEVER overwrites its target — both coexist. Pinned by US-FED-004 AC;
@@ -198,6 +205,100 @@ pub fn render_annotated_graph_query_result(annotated: &[AnnotatedClaim]) -> Stri
     out
 }
 
+/// Render the `graph query --subject <S> --federated` result block: rows
+/// from BOTH the user's own `claims` AND `peer_claims`, GROUPED BY author
+/// DID. Pure function — no I/O, no storage access.
+///
+/// ## Anti-merging contract (I-FED-1 layer 3, behavioral — WD-30)
+///
+/// Each `FederatedRow` carries its `author_did` at the type level
+/// (non-Option). This renderer surfaces that attribution per row and
+/// NEVER collapses two authors' rows into one aggregate:
+///
+/// - Rows are grouped under a per-author header (first-seen author order),
+///   one header per distinct DID. The header annotates the author's
+///   relationship to the local user: `(you)` / `(subscribed peer)` /
+///   `(unsubscribed cache)`.
+/// - Every claim row prints `author_did`, `confidence`, and `cid` so an
+///   operator can attribute any single row to exactly one author.
+/// - The footer states the count of distinct authors AND the
+///   content-frozen [`NO_MERGE_FOOTER_LITERAL`] (ADR-013). No row is ever
+///   labeled "merged" / "consensus" / "aggregate".
+pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
+    let groups = group_by_author(rows);
+
+    let mut out = String::new();
+    for (author_did, relationship, author_rows) in &groups {
+        out.push_str(&format!(
+            "author: {} {}\n",
+            author_did,
+            relationship_annotation(*relationship)
+        ));
+        for (idx, row) in author_rows.iter().enumerate() {
+            if idx > 0 {
+                out.push('\n');
+            }
+            out.push_str(&render_one_federated_row(author_did, row));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&render_federation_footer(groups.len()));
+    out
+}
+
+/// Group federated rows by author DID, preserving first-seen author order
+/// (so the local user's "(you)" block — typically the `Own` source — keeps
+/// a stable position rather than hash-randomized). Returns one entry per
+/// distinct DID carrying its `AuthorRelationship` and the rows attributed
+/// to it. Pure helper.
+fn group_by_author(rows: &[FederatedRow]) -> Vec<(String, AuthorRelationship, Vec<&FederatedRow>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: Vec<(String, AuthorRelationship, Vec<&FederatedRow>)> = Vec::new();
+    for row in rows {
+        let did = row.author_did.0.clone();
+        match order.iter().position(|d| d == &did) {
+            Some(pos) => grouped[pos].2.push(row),
+            None => {
+                order.push(did.clone());
+                grouped.push((did, row.author_relationship, vec![row]));
+            }
+        }
+    }
+    grouped
+}
+
+/// The human-readable relationship annotation appended to a per-author
+/// header. Content-frozen per ADR-013 header convention.
+fn relationship_annotation(relationship: AuthorRelationship) -> &'static str {
+    match relationship {
+        AuthorRelationship::You => "(you)",
+        AuthorRelationship::SubscribedPeer => "(subscribed peer)",
+        AuthorRelationship::UnsubscribedCache => "(unsubscribed cache)",
+    }
+}
+
+/// Render one federated row. Reuses the slice-01 per-claim field block
+/// (subject/predicate/object/evidence/confidence/author/composedAt/cid)
+/// and additionally pins the row's `author_did` on its own line so every
+/// row is independently attributable (anti-merging behavioral layer).
+fn render_one_federated_row(author_did: &str, row: &FederatedRow) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("  author_did:  {author_did}\n"));
+    for line in render_one_claim(&row.signed_claim).lines() {
+        out.push_str(&format!("  {line}\n"));
+    }
+    out
+}
+
+/// Render the federation footer: the distinct-author count plus the
+/// content-frozen no-merge guarantee. Pure helper.
+fn render_federation_footer(author_count: usize) -> String {
+    format!(
+        "{author_count} author(s). {NO_MERGE_FOOTER_LITERAL}\n"
+    )
+}
+
 /// Compute the `is_retracted` flag for one CID given the back-reference
 /// list `StoragePort::query_referencing` returns. Pure helper kept here
 /// (next to the renderer that consumes it) so the projection rule lives
@@ -264,10 +365,47 @@ fn render_confidence(confidence: &claim_domain::Confidence) -> String {
 mod tests {
     use super::*;
     use claim_domain::{Cid, ClaimReference, Confidence, Did, SignatureBlock, UnsignedClaim};
+    use ports::SourceTable;
+    use proptest::prelude::*;
 
     fn confidence(value: f64) -> Confidence {
         serde_json::from_value(serde_json::json!(value))
             .expect("test confidence value is well-formed")
+    }
+
+    /// Build a `FederatedRow` for a given author DID + cid + relationship +
+    /// source table. The claim body fields are deterministic stand-ins; the
+    /// federated renderer's contract is about attribution + grouping, not
+    /// the (already-tested) per-claim field rendering.
+    fn federated_row(
+        author_did: &str,
+        cid: &str,
+        relationship: AuthorRelationship,
+        source_table: SourceTable,
+    ) -> FederatedRow {
+        FederatedRow {
+            author_did: Did(author_did.to_string()),
+            author_relationship: relationship,
+            signed_claim: SignedClaim {
+                unsigned: UnsignedClaim {
+                    subject: "github:rust-lang/cargo".to_string(),
+                    predicate: "embodiesPhilosophy".to_string(),
+                    object: "org.openlore.philosophy.memory-safety".to_string(),
+                    evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+                    confidence: confidence(0.5),
+                    author_did: Did(format!("{author_did}#org.openlore.application")),
+                    composed_at: "2026-05-22T09:18:44Z".to_string(),
+                    references: Vec::<ClaimReference>::new(),
+                    reason: None,
+                },
+                signature: SignatureBlock {
+                    signed_cid: Cid(cid.to_string()),
+                    signature_bytes: vec![0u8; 64],
+                    verification_method: format!("{author_did}#org.openlore.application"),
+                },
+            },
+            source_table,
+        }
     }
 
     fn fixture_signed() -> SignedClaim {
@@ -373,6 +511,159 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(rejoined, long_reason, "reason must survive wrap verbatim");
+    }
+
+    /// FQ-1 (behavioral anti-merging, I-FED-1 layer 3): the federated
+    /// renderer groups rows under ONE header per distinct author DID and
+    /// emits a footer that states the distinct-author count AND the
+    /// content-frozen no-merge guarantee, with NO merged/consensus row.
+    #[test]
+    fn render_federated_query_result_groups_by_author_with_no_merge_footer() {
+        let rows = vec![
+            federated_row(
+                "did:plc:test-jeff",
+                "bafyown1",
+                AuthorRelationship::You,
+                SourceTable::Own,
+            ),
+            federated_row(
+                "did:plc:rachel-test",
+                "bafypeer1",
+                AuthorRelationship::SubscribedPeer,
+                SourceTable::Peer,
+            ),
+            federated_row(
+                "did:plc:rachel-test",
+                "bafypeer2",
+                AuthorRelationship::SubscribedPeer,
+                SourceTable::Peer,
+            ),
+        ];
+
+        let rendered = render_federated_query_result(&rows);
+
+        // Two distinct author headers, each annotated with its relationship.
+        assert!(
+            rendered.contains("author: did:plc:test-jeff (you)"),
+            "expected the local user's per-author header annotated '(you)'; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("author: did:plc:rachel-test (subscribed peer)"),
+            "expected the peer's per-author header annotated '(subscribed peer)'; got:\n{rendered}"
+        );
+
+        // Each row carries author_did + confidence + cid (independently
+        // attributable — anti-merging behavioral layer).
+        for cid in ["bafyown1", "bafypeer1", "bafypeer2"] {
+            assert!(
+                rendered.contains(cid),
+                "expected each row cid {cid} to appear; got:\n{rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("author_did:"),
+            "expected each row to pin author_did on its own line; got:\n{rendered}"
+        );
+
+        // Footer: distinct-author count (2) + content-frozen no-merge text.
+        assert!(
+            rendered.contains("2 author(s)."),
+            "expected the footer to state the distinct-author count (2); got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(NO_MERGE_FOOTER_LITERAL),
+            "expected the content-frozen no-merge footer; got:\n{rendered}"
+        );
+
+        // KPI-FED-2 zero-merge gate: no merged/consensus/aggregate label.
+        let lower = rendered.to_lowercase();
+        for banned in ["merged", "consensus", "aggregate"] {
+            // The no-merge footer contains "merged" inside "are merged" —
+            // exclude that one legitimate occurrence by checking it does not
+            // appear OUTSIDE the footer literal.
+            let without_footer = lower.replace(&NO_MERGE_FOOTER_LITERAL.to_lowercase(), "");
+            assert!(
+                !without_footer.contains(banned),
+                "federated render must not label any row {banned:?}; got:\n{rendered}"
+            );
+        }
+    }
+
+    proptest! {
+        /// Property (Modeling / Generalizing, Hebert ch.3): for ANY set of
+        /// federated rows over an arbitrary author-DID alphabet, the number
+        /// of per-author headers the renderer emits equals the number of
+        /// DISTINCT author DIDs in the input, and the footer count agrees.
+        /// This is the anti-merging invariant generalized: rows never
+        /// collapse across authors, and authors never split into phantom
+        /// extra headers.
+        #[test]
+        fn render_federated_groups_exactly_one_header_per_distinct_author(
+            author_indices in prop::collection::vec(0usize..4, 1..12),
+        ) {
+            // Map the generated indices onto a small DID alphabet so the
+            // distinct-author count is controllable + verifiable.
+            let alphabet = [
+                "did:plc:author-a",
+                "did:plc:author-b",
+                "did:plc:author-c",
+                "did:plc:author-d",
+            ];
+            let rows: Vec<FederatedRow> = author_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &idx)| {
+                    federated_row(
+                        alphabet[idx],
+                        &format!("bafycid{i:03}"),
+                        AuthorRelationship::SubscribedPeer,
+                        SourceTable::Peer,
+                    )
+                })
+                .collect();
+
+            let distinct: std::collections::HashSet<usize> =
+                author_indices.iter().copied().collect();
+            let expected_authors = distinct.len();
+
+            let rendered = render_federated_query_result(&rows);
+
+            // One header line per distinct author.
+            let header_count = rendered
+                .lines()
+                .filter(|l| l.starts_with("author: "))
+                .count();
+            prop_assert_eq!(
+                header_count,
+                expected_authors,
+                "expected exactly {} author headers; got {}\n{}",
+                expected_authors,
+                header_count,
+                rendered
+            );
+
+            // Footer count agrees with the distinct-author cardinality.
+            prop_assert!(
+                rendered.contains(&format!("{expected_authors} author(s).")),
+                "footer must state distinct-author count {}; got:\n{}",
+                expected_authors,
+                rendered
+            );
+
+            // Every row's cid is present exactly once (no row dropped, no
+            // row duplicated by the grouping).
+            for i in 0..author_indices.len() {
+                let cid = format!("bafycid{i:03}");
+                let occurrences = rendered.matches(&cid).count();
+                prop_assert_eq!(
+                    occurrences,
+                    1,
+                    "cid {} must appear exactly once (no merge / no drop); got {}",
+                    cid,
+                    occurrences
+                );
+            }
+        }
     }
 
     /// Every compose-time field appears in the output byte-for-byte.

@@ -1670,9 +1670,17 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// expected per-author sum) materializes per scenario in DELIVER's FQ-2 /
 /// FQ-8 once the renderer exists.
 pub fn assert_no_merged_rows_in_federated_output(outcome: &CliOutcome) {
+    // The ADR-013 no-merge FOOTER guarantee legitimately contains the word
+    // "merged" ("...No claims are merged."). That sentence is the
+    // anti-merging promise itself, not a merged ROW — exclude it before the
+    // banned-substring scan so the footer text does not trip its own gate.
+    // (Any other occurrence of these substrings would be a real merged-row
+    // label, which is what KPI-FED-2 forbids.)
+    const NO_MERGE_FOOTER: &str = "No claims are merged.";
+    let scanned = outcome.stdout.replace(NO_MERGE_FOOTER, "");
     for banned in &["merged", "consensus", "aggregate"] {
         assert!(
-            !outcome.stdout.to_lowercase().contains(banned),
+            !scanned.to_lowercase().contains(banned),
             "graph query --federated stdout must contain NO {:?} row \
              (KPI-FED-2 zero-merge gate); \n--- stdout ---\n{}\n--- stderr ---\n{}",
             banned,
