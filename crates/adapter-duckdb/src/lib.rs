@@ -41,23 +41,31 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use claim_domain::{Cid, ReferenceType, SignedClaim};
 use duckdb::Connection;
-use ports::{ProbeOutcome, StorageError, StoragePort};
+use ports::{FederatedRow, ProbeOutcome, StorageError, StoragePort};
 
+mod peer_storage;
 mod probe;
 mod schema;
+mod schema_v3;
+
+pub use peer_storage::DuckDbPeerStorageAdapter;
 
 /// Embedded-DuckDB `StoragePort` adapter.
 ///
-/// Holds the open DB handle (behind a `Mutex` because `Connection` is
-/// `!Sync`) plus the path to the colocated `claims/` directory.
+/// Holds the open DB handle (behind an `Arc<Mutex<_>>` because
+/// `Connection` is `!Sync` AND the slice-03 `DuckDbPeerStorageAdapter`
+/// SHARES this exact handle to honor DuckDB's single-writer constraint —
+/// Q-DELIVER-3) plus the path to the colocated `claims/` directory and
+/// the `peer_claims/` root.
 pub struct DuckDbStorageAdapter {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     claims_dir: PathBuf,
+    peer_claims_root: PathBuf,
 }
 
 impl DuckDbStorageAdapter {
@@ -80,6 +88,11 @@ impl DuckDbStorageAdapter {
             })?;
 
         schema::run_migrations(&mut conn)?;
+        // Slice-03 migration v3: idempotent forward-only follow-on. On a
+        // slice-01 DB (version=1) this jumps to version=3 (version=2 is
+        // reserved for slice-02 if installed separately; safe to skip).
+        // See `schema_v3` + data-models.md §"Migration policy".
+        schema_v3::run_migration(&mut conn)?;
 
         // Colocate `claims/` next to the DB file. data-models.md
         // §"DuckDB schema" defines the canonical layout
@@ -93,10 +106,36 @@ impl DuckDbStorageAdapter {
             message: format!("create claims dir {}: {err}", claims_dir.display()),
         })?;
 
+        // Colocate `peer_claims/` next to the DB file (data-models.md
+        // §"On-disk artifact format — slice-03 additions"). Per-peer
+        // subtrees `<peer_did>/<cid>.json` land at write time; we only
+        // ensure the root exists here.
+        let peer_claims_root = db_path
+            .parent()
+            .map(|p| p.join("peer_claims"))
+            .unwrap_or_else(|| PathBuf::from("peer_claims"));
+        fs::create_dir_all(&peer_claims_root).map_err(|err| {
+            StorageError::SchemaMigrationFailed {
+                message: format!(
+                    "create peer_claims root {}: {err}",
+                    peer_claims_root.display()
+                ),
+            }
+        })?;
+
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             claims_dir,
+            peer_claims_root,
         })
+    }
+
+    /// Construct a `DuckDbPeerStorageAdapter` SHARING this adapter's
+    /// connection handle (Q-DELIVER-3 single-writer constraint). Both
+    /// adapters then serialize all writes through one mutex; no second
+    /// DuckDB handle to the file is ever opened.
+    pub fn peer_adapter(&self) -> DuckDbPeerStorageAdapter {
+        DuckDbPeerStorageAdapter::from_shared(Arc::clone(&self.conn), self.peer_claims_root.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
@@ -383,6 +422,20 @@ impl StoragePort for DuckDbStorageAdapter {
 
         Ok(())
     }
+
+    fn query_federated_by_subject(
+        &self,
+        _subject: &str,
+    ) -> Result<Vec<FederatedRow>, StorageError> {
+        // SCAFFOLD: true (slice-03)
+        //
+        // Real impl is a SQL `UNION ALL` with explicit `author_did`
+        // projection across `claims` + `peer_claims` (data-models.md
+        // §"Cross-store query examples"; NEVER a `JOIN` — I-FED-1 /
+        // xtask check-arch `no_cross_table_join_elides_author`). Driven
+        // by the federated-read acceptance scenarios in Phase 03/04.
+        todo!("StoragePort::query_federated_by_subject — UNION ALL cross-store read lands in a later slice-03 step")
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -452,5 +505,131 @@ impl<T> OptionalExtension<T> for Result<T, duckdb::Error> {
             Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Migration-v3 integration tests (Mandate 6: adapter tests use REAL DuckDB).
+//
+// These enter through the public driving surface (`DuckDbStorageAdapter::open`,
+// which runs migration v3) and assert at the DB boundary — the observable
+// schema state. They are RED before `schema_v3` lands and the v3 runner is
+// wired into `open`; GREEN after.
+//
+// Behavior budget: 3 distinct behaviors (table creation; version
+// registration; CHECK enforcement) → 3 tests, within the 2×3=6 budget.
+// -----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Open a fresh adapter on a tmp DB file and hand back both the
+    /// adapter (to keep the shared connection alive) and a clone of the
+    /// Arc<Mutex<Connection>> for direct schema introspection.
+    fn open_tmp() -> (tempfile::TempDir, DuckDbStorageAdapter) {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("openlore.duckdb");
+        let adapter = DuckDbStorageAdapter::open(&db_path).expect("open adapter");
+        (dir, adapter)
+    }
+
+    /// Behavior: migration v3 creates all four peer-storage tables.
+    ///
+    /// Observable check: `SELECT * FROM <table> LIMIT 0` succeeds for
+    /// each table (it errors with "table does not exist" if the table is
+    /// absent). LIMIT 0 returns no rows but still validates the table +
+    /// every column reference resolves.
+    #[test]
+    fn migration_v3_creates_all_four_peer_tables() {
+        let (_dir, adapter) = open_tmp();
+        let conn = adapter.conn.lock().expect("lock conn");
+
+        for table in [
+            "peer_subscriptions",
+            "peer_claims",
+            "peer_claim_references",
+            "peer_claim_evidence",
+        ] {
+            let sql = format!("SELECT * FROM {table} LIMIT 0");
+            conn.execute_batch(&sql)
+                .unwrap_or_else(|err| panic!("table {table} must exist after migration v3: {err}"));
+        }
+    }
+
+    /// Behavior: migration v3 registers schema_version (version=3,
+    /// description='slice-03 peer storage'), and re-opening is idempotent
+    /// (still exactly one v3 row).
+    #[test]
+    fn migration_v3_registers_schema_version_three_idempotently() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("openlore.duckdb");
+
+        // First open applies migration v3.
+        {
+            let adapter = DuckDbStorageAdapter::open(&db_path).expect("first open");
+            let conn = adapter.conn.lock().expect("lock conn");
+            let description: String = conn
+                .query_row(
+                    "SELECT description FROM schema_version WHERE version = 3",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("schema_version v3 row must exist");
+            assert_eq!(
+                description, "slice-03 peer storage",
+                "schema_version v3 description must match the acceptance criterion"
+            );
+        }
+
+        // Second open must be a no-op for v3 (idempotent forward-only).
+        {
+            let adapter = DuckDbStorageAdapter::open(&db_path).expect("re-open");
+            let conn = adapter.conn.lock().expect("lock conn");
+            let v3_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM schema_version WHERE version = 3",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("count v3 rows");
+            assert_eq!(
+                v3_count, 1,
+                "re-opening must NOT insert a duplicate schema_version v3 row (idempotent migration)"
+            );
+        }
+    }
+
+    /// Behavior: the `CHECK (author_did <> '')` constraint on
+    /// `peer_claims` rejects an empty-author_did insert (I-FED-2
+    /// defense-in-depth). The insert MUST error; we assert the adapter's
+    /// shared connection refuses it.
+    #[test]
+    fn peer_claims_check_rejects_empty_author_did() {
+        let (_dir, adapter) = open_tmp();
+        let conn = adapter.conn.lock().expect("lock conn");
+
+        let result = conn.execute(
+            "INSERT INTO peer_claims \
+             (cid, author_did, subject, predicate, object, confidence, \
+              composed_at, fetched_at, fetched_from_pds, signed_record_path) \
+             VALUES (?, ?, ?, ?, ?, ?, now(), now(), ?, ?)",
+            duckdb::params![
+                "bafytestcid",
+                "", // empty author_did — MUST be rejected by CHECK
+                "github:rust-lang/cargo",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.x",
+                0.5_f64,
+                "https://pds.example.test",
+                "/tmp/peer_claims/x/bafytestcid.json",
+            ],
+        );
+
+        assert!(
+            result.is_err(),
+            "INSERT with empty author_did must be rejected by the CHECK (author_did <> '') constraint"
+        );
     }
 }

@@ -21,6 +21,9 @@ lexicon = { path = "../lexicon" }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
+# `url` is a pure parser (no I/O); needed to name `Url` in the
+# `PeerStoragePort::write_peer_claim` signature (slice-03, step 01-02).
+url = { workspace = true }
 duckdb = { version = "1.3", features = ["bundled", "chrono"] }
 
 [dev-dependencies]

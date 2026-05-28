@@ -31,6 +31,24 @@ use ports::{ProbeOutcome, ProbeRefusalReason};
 use serde_json::json;
 
 use crate::schema;
+use crate::schema_v3;
+
+/// The highest schema version THIS binary knows how to read. Slice-03
+/// teaches the adapter migration v3, so the forward-incompatibility
+/// refusal must compare against v3 — not the slice-01-only
+/// `schema::LATEST_VERSION` (=1), which would make the probe refuse its
+/// own freshly-applied v3 schema. Computed as the max of the two
+/// migration heads so adding future slices only requires bumping their
+/// own version constant.
+const fn supported_version() -> i32 {
+    let v1 = schema::LATEST_VERSION;
+    let v3 = schema_v3::PEER_STORAGE_VERSION;
+    if v3 > v1 {
+        v3
+    } else {
+        v1
+    }
+}
 
 /// One probe step's failure, paired with the externally-visible
 /// refusal reason and a structured JSON detail blob.
@@ -69,22 +87,22 @@ pub fn run_probe(conn: &Connection, claims_dir: &Path) -> ProbeOutcome {
 /// Probe 1: refuse if the DB file's schema version is HIGHER than
 /// what this binary knows about.
 fn probe_schema_version(conn: &Connection) -> Result<(), ProbeFailure> {
+    let max_supported = supported_version();
     let observed = schema::read_version(conn).map_err(|err| ProbeFailure {
         reason: ProbeRefusalReason::StorageSchemaMismatch,
         detail: format!("could not read schema_version: {err}"),
-        structured: json!({"observed": null, "expected_max": schema::LATEST_VERSION}),
+        structured: json!({"observed": null, "expected_max": max_supported}),
     })?;
 
-    if observed > schema::LATEST_VERSION {
+    if observed > max_supported {
         return Err(ProbeFailure {
             reason: ProbeRefusalReason::StorageSchemaMismatch,
             detail: format!(
-                "DB schema version {observed} is newer than binary-supported {}",
-                schema::LATEST_VERSION
+                "DB schema version {observed} is newer than binary-supported {max_supported}"
             ),
             structured: json!({
                 "observed": observed,
-                "expected_max": schema::LATEST_VERSION,
+                "expected_max": max_supported,
             }),
         });
     }
