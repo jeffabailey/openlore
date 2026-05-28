@@ -53,6 +53,12 @@ struct PeerProgress {
     stored: usize,
     skipped_existing: usize,
     rejected: usize,
+    /// One human-readable reason per rejected record (WD-37 per-record fault
+    /// isolation): e.g. "signature invalid", "CID mismatch (possible
+    /// adversarial input)", "self attribution". The render surfaces these so
+    /// the user sees WHY a record was dropped, not just a count. Always the
+    /// same length as `rejected`.
+    rejection_reasons: Vec<String>,
     /// `None` ⇔ the peer's PDS was reachable; `Some(reason)` ⇔ the whole
     /// peer was skipped (PP-7 fault isolation).
     peer_skip_reason: Option<String>,
@@ -67,8 +73,16 @@ impl PeerProgress {
             stored: 0,
             skipped_existing: 0,
             rejected: 0,
+            rejection_reasons: Vec::new(),
             peer_skip_reason: None,
         }
+    }
+
+    /// Record one rejected record + the human-readable reason it was
+    /// dropped. Keeps `rejected` and `rejection_reasons` in lock-step.
+    fn reject(&mut self, reason: String) {
+        self.rejected += 1;
+        self.rejection_reasons.push(reason);
     }
 
     /// The number of records this peer presented for verification (fetched
@@ -189,14 +203,28 @@ fn pull_one_peer(
                     Ok(_) => block.skipped_existing += 1,
                     // Anti-merging rejection (Self/Cross) or storage error
                     // ⇒ reject this record only, continue with others.
-                    Err(_) => block.rejected += 1,
+                    Err(err) => block.reject(write_rejection_reason(&err)),
                 }
             }
-            RecordVerdict::Rejected => block.rejected += 1,
+            // Per-record fault isolation (WD-37): a rejected record never
+            // aborts the others — record the reason + continue.
+            RecordVerdict::Rejected { reason } => block.reject(reason),
         }
     }
 
     block
+}
+
+/// Map a `PeerStorageError` from `write_peer_claim` into the user-facing
+/// rejection reason surfaced in the per-peer progress block. Self/Cross
+/// attribution (WD-40 / WD-41) carry their own message; any other storage
+/// error is surfaced verbatim.
+fn write_rejection_reason(err: &ports::PeerStorageError) -> String {
+    match err {
+        ports::PeerStorageError::SelfAttribution => "self attribution".to_string(),
+        ports::PeerStorageError::CrossAttribution { .. } => "cross attribution".to_string(),
+        other => format!("storage rejected ({other})"),
+    }
 }
 
 /// PURE per-record decision: a record is `Verified` iff BOTH (a) its
@@ -213,23 +241,25 @@ fn evaluate_record(
     // SelfAttribution (WD-40): a peer record claiming the LOCAL user's DID
     // is rejected before any storage write.
     if bare_did(&record.signed_claim.unsigned.author_did.0) == local_did.0 {
-        return RecordVerdict::Rejected;
+        return RecordVerdict::rejected("self attribution");
     }
 
     // CID round-trip (WD-24): recompute locally; reject on mismatch with
     // the peer-published rkey (canonicalization disagreement → "possible
     // adversarial input").
     let Ok(canonical) = canonicalize(&record.signed_claim.unsigned) else {
-        return RecordVerdict::Rejected;
+        return RecordVerdict::rejected("canonicalization failed");
     };
     let recomputed = compute_cid(&canonical);
     if recomputed.0 != record.rkey {
-        return RecordVerdict::Rejected;
+        return RecordVerdict::rejected("CID mismatch (possible adversarial input)");
     }
 
     // Signature verify (WD-24) against the peer's DID-doc key. The parsed
     // SignedClaim already carries `signed_cid = recomputed`, so `verify`
-    // checks the signature over the recomputed CID.
+    // checks the signature over the recomputed CID. A failure here is the
+    // KPI-FED-6 path — a tampered or wrong-key signature is dropped with a
+    // "signature invalid" reason, never stored.
     let to_verify = SignedClaim {
         unsigned: record.signed_claim.unsigned.clone(),
         signature: claim_domain::SignatureBlock {
@@ -238,16 +268,26 @@ fn evaluate_record(
         },
     };
     if verify(&to_verify, verifying_key).is_err() {
-        return RecordVerdict::Rejected;
+        return RecordVerdict::rejected("signature invalid");
     }
 
     RecordVerdict::Verified
 }
 
-/// Outcome of the pure per-record evaluation.
+/// Outcome of the pure per-record evaluation. A `Rejected` verdict carries
+/// the human-readable reason so the render surfaces WHY (WD-37 + ADR-013).
 enum RecordVerdict {
     Verified,
-    Rejected,
+    Rejected { reason: String },
+}
+
+impl RecordVerdict {
+    /// Construct a `Rejected` verdict with a borrowed reason.
+    fn rejected(reason: &str) -> Self {
+        RecordVerdict::Rejected {
+            reason: reason.to_string(),
+        }
+    }
 }
 
 /// Decode the peer's Ed25519 verifying key from the resolved DID-doc
@@ -369,6 +409,11 @@ fn render_report(
                 ));
                 if block.rejected > 0 {
                     out.push_str(&format!("    rejected  : {}\n", block.rejected));
+                    // Surface the per-record reason (WD-37 + ADR-013): the
+                    // user sees WHY each record was dropped, not just a count.
+                    for reason in &block.rejection_reasons {
+                        out.push_str(&format!("      - {reason}\n"));
+                    }
                 }
                 out.push_str("    stored    : peer_claims (attribution preserved per record)\n");
             }
@@ -402,6 +447,7 @@ mod tests {
             stored: 3,
             skipped_existing: 0,
             rejected: 0,
+            rejection_reasons: Vec::new(),
             peer_skip_reason: None,
         };
         let rendered = render_report(&[block], 3, "");
@@ -415,6 +461,37 @@ mod tests {
         assert!(
             rendered.contains("None merged with your own claims"),
             "content-frozen anti-merging line (ADR-013)"
+        );
+    }
+
+    /// PP-3: a peer with one rejected record renders a `rejected : 1` line
+    /// plus the per-record reason verbatim, while still reporting the stored
+    /// honest records. Pins the WD-37 + ADR-013 reject-reason render contract
+    /// (the KPI-FED-6 "signature invalid" wording) without spawning a runtime.
+    #[test]
+    fn render_report_emits_rejected_count_and_reason_for_tampered_record() {
+        let block = PeerProgress {
+            peer_did: "did:plc:rachel-test".to_string(),
+            peer_handle: "rachel.test".to_string(),
+            fetched: 5,
+            stored: 4,
+            skipped_existing: 0,
+            rejected: 1,
+            rejection_reasons: vec!["signature invalid".to_string()],
+            peer_skip_reason: None,
+        };
+        let rendered = render_report(&[block], 4, "");
+        assert!(
+            rendered.contains("rejected  : 1"),
+            "must report the rejected count;\n{rendered}"
+        );
+        assert!(
+            rendered.contains("signature invalid"),
+            "must surface the per-record reject reason verbatim (KPI-FED-6);\n{rendered}"
+        );
+        assert!(
+            rendered.contains("4/5"),
+            "4 of 5 fetched records verify (1 rejected); verified/verifiable = 4/5;\n{rendered}"
         );
     }
 

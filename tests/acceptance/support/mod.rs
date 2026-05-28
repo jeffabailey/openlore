@@ -1157,6 +1157,166 @@ pub fn build_verifiable_peer_records(
     (records, pubkey_hex)
 }
 
+/// Build a tampered-signature peer record set for the PP-3 sad path
+/// (KPI-FED-6).
+///
+/// Like [`build_verifiable_peer_records`] this materializes REAL crypto so
+/// the honest records pass the pull pipeline's verify + CID round-trip. It
+/// returns `honest_count` genuinely-signed records PLUS one record whose
+/// `rkey == compute_cid(canonical(body))` (so it PASSES the CID round-trip,
+/// WD-24) but whose `signature.sig` last byte is flipped (so
+/// `claim_domain::verify` REJECTS it). This is the isolating fixture that
+/// drives the SIGNATURE-rejection branch specifically — distinct from the
+/// `with_cid_mismatch` posture which trips the earlier CID-round-trip gate.
+///
+/// Returns `(records, peer_pubkey_hex, tampered_rkey)`:
+///   - `records`: `honest_count` honest + 1 tampered = `honest_count + 1`
+///     wire records to host on `PeerPds::for_peer`.
+///   - `peer_pubkey_hex`: the peer's real Ed25519 pubkey hex for the verify
+///     seam (same key signs the honest records; the tampered record's sig is
+///     a corrupted signature OVER THE SAME key, so it fails to verify).
+///   - `tampered_rkey`: the CID/rkey of the tampered record so the caller can
+///     assert it was NEVER stored (DD-FED-10 anti-merging at the reject path).
+///
+/// Test-support is the only place this construction is acceptable; the
+/// production populate path is `peer pull` itself.
+pub fn build_tampered_signature_peer_records(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    honest_count: usize,
+) -> (Vec<FakePeerRecord>, String, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    // One honest claim builder: a distinct object per index so CIDs cannot
+    // alias. Returns the wire record AND its CID (so the tampered record can
+    // reuse the construction and keep its rkey CID-consistent).
+    let build = |object: &str, confidence: f64, flip_sig: bool| -> (FakePeerRecord, String) {
+        let confidence_wrapper: claim_domain::Confidence =
+            serde_json::from_value(serde_json::json!(confidence))
+                .expect("confidence value is well-formed");
+        let unsigned = claim_domain::UnsignedClaim {
+            subject: "github:rust-lang/cargo".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+            evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+            confidence: confidence_wrapper,
+            author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+            composed_at: "2026-05-22T09:18:44Z".to_string(),
+            references: Vec::new(),
+            reason: None,
+        };
+
+        let canonical = canonicalize(&unsigned).expect("canonicalize claim");
+        let cid = compute_cid(&canonical);
+        let signature = sign(&cid, &signing_key).expect("sign claim");
+        let mut sig_bytes = signature.signature_bytes.clone();
+        if flip_sig {
+            // Flip the LAST signature byte AFTER the nominal sign step — the
+            // CID/rkey stays valid, only the Ed25519 signature no longer
+            // verifies (the tampered-signature posture, KPI-FED-6).
+            if let Some(last) = sig_bytes.last_mut() {
+                *last ^= 0x01;
+            }
+        }
+        let sig_b64 = base64url_no_pad(&sig_bytes);
+
+        let body = serde_json::json!({
+            "subject": "github:rust-lang/cargo",
+            "predicate": "embodiesPhilosophy",
+            "object": object,
+            "evidence": ["https://github.com/rust-lang/cargo"],
+            "confidence": confidence,
+            "author": format!("{peer_did}#org.openlore.application"),
+            "composedAt": "2026-05-22T09:18:44Z",
+            "references": [],
+            "signature": {
+                "kid": format!("{peer_did}#org.openlore.application"),
+                "alg": "EdDSA",
+                "sig": sig_b64,
+            }
+        });
+        (FakePeerRecord::claim(cid.0.clone(), body), cid.0)
+    };
+
+    let mut records: Vec<FakePeerRecord> = (0..honest_count)
+        .map(|i| {
+            let (record, _cid) = build(
+                &format!("org.openlore.philosophy.honest-claim-{i}"),
+                0.50 + (i as f64) * 0.05,
+                false,
+            );
+            record
+        })
+        .collect();
+
+    // The tampered record: CID-consistent rkey, corrupted signature.
+    let (tampered_record, tampered_rkey) =
+        build("org.openlore.philosophy.tampered-claim", 0.42, true);
+    records.push(tampered_record);
+
+    (records, pubkey_hex, tampered_rkey)
+}
+
+/// Universe-bound: "the `peer_claims` store holds NO row for `cid`, under
+/// ANY author_did, AND no on-disk `<cid>.json` artifact exists for it".
+/// Port-exposed name:
+/// `peer_storage.claims.row_count_for_cid[cid] == 0 && filesystem.artifact_for_cid.absent`.
+///
+/// DD-FED-10 (PP-3 reject path): the rejected record's CID must be absent
+/// from `peer_claims` (anti-merging holds even on the reject path — no
+/// leak under any author) AND must have no artifact file in any peer
+/// partition. Opens a raw `duckdb::Connection` (test-support is the only
+/// place raw SQL is acceptable) and walks the on-disk `peer_claims/` tree.
+pub fn assert_peer_claim_cid_absent(env: &TestEnv, cid: &str) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for cid-absence assertion: {err}",
+            db_path.display()
+        )
+    });
+    let rows: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_claims WHERE cid = ?",
+            duckdb::params![cid],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query peer_claims for cid {cid}: {err}"));
+    assert_eq!(
+        rows, 0,
+        "anti-merging at the reject path: the rejected CID {cid} must have \
+         ZERO peer_claims rows under ANY author_did; got {rows}"
+    );
+
+    // No artifact file for the rejected CID under any peer partition.
+    let peer_claims_root = env
+        .home
+        .join(".local")
+        .join("share")
+        .join("openlore")
+        .join("peer_claims");
+    if peer_claims_root.exists() {
+        let artifact_name = format!("{cid}.json");
+        for partition in std::fs::read_dir(&peer_claims_root)
+            .unwrap_or_else(|e| panic!("read peer_claims root {}: {e}", peer_claims_root.display()))
+            .filter_map(|e| e.ok())
+        {
+            let candidate = partition.path().join(&artifact_name);
+            assert!(
+                !candidate.exists(),
+                "the rejected CID {cid} must have NO on-disk artifact; found {}",
+                candidate.display()
+            );
+        }
+    }
+}
+
 /// The per-peer pubkey env-var NAME for a DID, carrying the peer's Ed25519
 /// public key as 64-char lowercase hex. The in-binary peer resolver reads
 /// this so `claim_domain::verify` has the REAL key (the `FakePeerPds`

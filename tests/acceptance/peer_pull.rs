@@ -333,7 +333,127 @@ fn peer_pull_is_idempotent_skipping_already_stored_claims_by_cid() {
 /// @us-fed-002 @real-io @driving_port @j-003a @error @kpi-fed-6
 #[test]
 fn peer_pull_rejects_tampered_signature_per_record_and_stores_honest_records() {
-    todo!("DELIVER (slice-03): wire VerbPeerPull → claim_domain::verify failure path → reject this record only, continue with others. Use FakePeerPds::with_tampered_signature + fixture_adversarial_peer_tampered_signature. Assert: peer_claims row count = 4 (NOT 5), stderr/stdout contains 'signature invalid' + per-claim reject line, exit code != 0 per WD-37, no row attributed to ANY DID for the tampered record (anti-merging holds even at the reject path)")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes FIVE records: FOUR genuinely-signed honest claims +
+    // ONE record whose rkey IS the real CID (so it PASSES the CID round-trip,
+    // WD-24) but whose `signature.sig` last byte was flipped after the sign
+    // step (so `claim_domain::verify` REJECTS it). This isolates the
+    // SIGNATURE-rejection branch — the only defect is the signature.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex, tampered_rkey) =
+        build_tampered_signature_peer_records(peer_did, rachel_seed, 4);
+    assert_eq!(records.len(), 5, "4 honest + 1 tampered = 5 records");
+
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    // Precondition: ONE active subscription via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // DD-FED-10 universe BEFORE the pull: the author `claims` table count.
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Action: `openlore peer pull`. Per-record verify → the tampered record's
+    // signature fails → reject ONLY that record → continue with the other 4.
+    let outcome = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Non-zero exit overall — a rejected record flags the pull (WD-37 +
+    //    ADR-013 exit-code table: pull exits non-zero on ANY rejection).
+    assert_ne!(
+        outcome.status, 0,
+        "a tampered record must drive a NON-ZERO exit code (WD-37 / ADR-013);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The progress block reports the rejection (rejected count ≥ 1) WITH a
+    //    reason. KPI-FED-6 wording: "signature invalid".
+    assert!(
+        outcome.stdout.contains("rejected  : 1"),
+        "the progress block must report exactly one rejected record;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("signature invalid"),
+        "the rejection reason must name the signature failure (KPI-FED-6);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. The 4 honest records still verify + store: the `verified : 4/5`
+    //    line (4 of 5 fetched valid) + the per-peer progress names Rachel.
+    assert!(
+        outcome.stdout.contains(peer_did),
+        "the progress block must name the peer DID {peer_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("4/5"),
+        "expected 4 of 5 fetched signatures valid (1 tampered rejected);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("Pulled 4 new peer claims"),
+        "the 4 honest records must be stored as NEW;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_claims rows == 4 (honest only); every row attributed to
+    //      Rachel, none to any other DID (anti-merging, I-FED-1).
+    assert_peer_claims_attributed_to(&env, peer_did, 4);
+
+    //    - the tampered record's CID is ABSENT from peer_claims (under ANY
+    //      author) AND has NO on-disk artifact (anti-merging holds even at
+    //      the reject path — KPI-FED-6: zero invalid signatures stored).
+    assert_peer_claim_cid_absent(&env, &tampered_rkey);
+
+    //    - author_claims UNCHANGED (a peer pull never touches own claims).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull (DD-FED-10)"
+    );
+
+    //    - exactly 4 `<cid>.json` artifacts under the peer partition (the 4
+    //      honest records only — the tampered one wrote nothing).
+    let partition = peer_claims_dir_for(&env, peer_did);
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        4,
+        "expected exactly 4 `<cid>.json` artifacts (honest only) under {}; got {artifact_count}",
+        partition.display()
+    );
 }
 
 /// PP-4 / Sad: A peer publishes a record whose published rkey does NOT
