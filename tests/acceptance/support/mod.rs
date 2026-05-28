@@ -3002,6 +3002,42 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
 
             graph
         }
+        FederatedGraphFixture::DependencyPinningWeightedWorkedExample => {
+            // US-GRAPH-003 Example 1 / data-models.md worked examples (GQE-10
+            // weighted; Gate 2): the canonical weighted fixture — cargo (Rachel
+            // 0.91, ALSO claims nixpkgs so Rachel spans two projects → +0.50
+            // cross-project triangulation), nixpkgs (Rachel 0.88, same span),
+            // deno (Tobias 0.55 + Maria 0.40 → second-author +0.25 bonus). The
+            // SAME peer-authored shape as DependencyPinningThreeAuthors (all PEER
+            // claims, REAL Ed25519 crypto + CID recompute so the production pull
+            // pipeline verifies them), recorded so the per-author breakdown rows
+            // can be pinned. The pure scoring core aggregates these per-claim
+            // rows into the ranked weights (Rust, NEVER SQL — I-GRAPH-2/WD-73).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            seed_peer_authored_graph(
+                env,
+                &[
+                    SeedPeer {
+                        peer_did: "did:plc:rachel-test",
+                        seed: [7u8; 32],
+                        triples: &[
+                            ("github:rust-lang/cargo", dep, 0.91),
+                            ("github:NixOS/nixpkgs", dep, 0.88),
+                        ],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:tobias-test",
+                        seed: [9u8; 32],
+                        triples: &[("github:denoland/deno", dep, 0.55)],
+                    },
+                    SeedPeer {
+                        peer_did: "did:plc:maria-test",
+                        seed: [11u8; 32],
+                        triples: &[("github:denoland/deno", dep, 0.40)],
+                    },
+                ],
+            )
+        }
         FederatedGraphFixture::DependencyPinningRachelSpansTwoProjects => {
             // US-GRAPH-004 Example 1 (GQE-20 / KPI-GRAPH-1 north star): the
             // cross-project span the traversal must surface. Rachel asserts

@@ -987,20 +987,133 @@ fn graph_query_weighted_ranks_projects_with_transparent_no_ml_formula() {
         outcome.stdout, outcome.stderr
     );
 
-    // 1. Projects ranked by adherence weight (desc).
-    // 2. Each weight shown WITH its inputs: claim count, distinct author count,
-    //    max confidence, cross-project span.
-    // 3. The formula is printed AND the output states "no ML".
-    // 4. A footer states weights are a display-only aggregate view, never stored.
-    // DELIVER materializes `assert_weighted_view_transparent` pinning the
-    // universe: cli.graph_query.ranking_order, cli.graph_query.formula_printed,
-    // cli.graph_query.no_ml_stated, cli.graph_query.never_stored_footer.
-    todo!(
-        "DELIVER (slice-04): assert `--weighted` ranks projects by weight, shows each weight with \
-         its inputs (claim count, distinct authors, max confidence, span), prints the formula and \
-         states 'no ML', and footers the never-stored display-only notice (US-GRAPH-003 Example 1; \
-         Gate 2; KPI-GRAPH-3);\n--- graph ---\n{graph:?}"
-    )
+    // The `--weighted` view ranks the three projects by adherence weight (desc),
+    // shows each weight WITH its inputs, prints the transparent no-ML formula,
+    // and footers the never-stored display-only notice.
+    //
+    // Universe (port-exposed observable surface of the `--weighted` view, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.ranking_order        — cargo > nixpkgs > deno (weight desc)
+    //   cli.graph_query.weight_inputs_shown  — each pairing prints claims +
+    //                                           authors + max-confidence + span
+    //   cli.graph_query.formula_printed       — the auditable formula block
+    //   cli.graph_query.no_ml_stated          — the output states "no ML"
+    //   cli.graph_query.never_stored_footer   — the display-only / never-stored notice
+    //
+    // The expected weights are the documented WD-77 formula applied by hand to
+    // the seeded claims (data-models.md §"The scoring formula" worked examples;
+    // constants author_distinct_bonus 0.25, cross_project_triangulation_bonus
+    // 0.50):
+    //   cargo   : Rachel 0.91, spans cargo+nixpkgs -> +0.50 triangulation
+    //             -> 0.91 * 1.0 + 0.50 = 1.41   (1 claim, 1 author)
+    //   nixpkgs : Rachel 0.88, spans cargo+nixpkgs -> +0.50 triangulation
+    //             -> 0.88 * 1.0 + 0.50 = 1.38   (1 claim, 1 author)
+    //   deno    : Tobias 0.55 (x1.0) + Maria 0.40 (x1.25 second author)
+    //             -> 0.55 + 0.50 = 1.05         (2 claims, 2 authors)
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: exactly the 4-claim / 3-project worked example.
+    assert_eq!(
+        graph.seeded.len(),
+        4,
+        "fixture precondition: the weighted worked example seeds 4 claims; got {}",
+        graph.seeded.len()
+    );
+
+    // 1. RANKING ORDER — the three projects appear ranked by weight descending:
+    //    cargo (1.41) > nixpkgs (1.38) > deno (1.05). Derive each project's
+    //    first appearance position in stdout and assert the strict ordering
+    //    (the port-exposed ranking surface).
+    let cargo_pos = stdout
+        .find("github:rust-lang/cargo")
+        .expect("the weighted view must rank github:rust-lang/cargo");
+    let nixpkgs_pos = stdout
+        .find("github:NixOS/nixpkgs")
+        .expect("the weighted view must rank github:NixOS/nixpkgs");
+    let deno_pos = stdout
+        .find("github:denoland/deno")
+        .expect("the weighted view must rank github:denoland/deno");
+    assert!(
+        cargo_pos < nixpkgs_pos && nixpkgs_pos < deno_pos,
+        "cli.graph_query.ranking_order: expected cargo (1.41) before nixpkgs (1.38) before \
+         deno (1.05) — ranked by adherence weight descending;\n--- stdout ---\n{stdout}\n\
+         --- graph ---\n{graph:?}"
+    );
+
+    // 2. Each project's weight is displayed (the closed-form formula applied to
+    //    the seeded claims — reproducible by hand; Gate 2 / KPI-GRAPH-3).
+    for (project, weight) in [
+        ("github:rust-lang/cargo", "1.41"),
+        ("github:NixOS/nixpkgs", "1.38"),
+        ("github:denoland/deno", "1.05"),
+    ] {
+        assert!(
+            stdout.contains(&format!("weight {weight}")),
+            "cli.graph_query.weight_shown: expected {project} to display the documented \
+             adherence weight {weight} (WD-77 formula by hand);\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 3. Each weight is shown WITH its inputs: claim count, distinct author
+    //    count, and max confidence (the transparency contract — a weight is
+    //    never shown as a bare number). deno carries 2 claims / 2 authors; the
+    //    triangulated cargo + nixpkgs carry 1 claim / 1 author each.
+    assert!(
+        stdout.contains("claims  : 2") && stdout.contains("authors: 2"),
+        "cli.graph_query.weight_inputs_shown: expected deno's weight inputs to show \
+         claims: 2 + authors: 2;\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("claims  : 1") && stdout.contains("authors: 1"),
+        "cli.graph_query.weight_inputs_shown: expected the single-author cargo/nixpkgs \
+         pairings to show claims: 1 + authors: 1;\n--- stdout ---\n{stdout}"
+    );
+    for max_conf in ["0.91", "0.88", "0.55"] {
+        assert!(
+            stdout.contains(&format!("max-confidence {max_conf}")),
+            "cli.graph_query.weight_inputs_shown: expected the max-confidence {max_conf} to \
+             be displayed alongside its weight;\n--- stdout ---\n{stdout}"
+        );
+    }
+    // Cross-project span: Rachel spans cargo + nixpkgs — surfaced as breadth.
+    assert!(
+        stdout.contains("spans") && stdout.contains("did:plc:rachel-test"),
+        "cli.graph_query.weight_inputs_shown: expected the cross-project span line naming \
+         did:plc:rachel-test spanning two projects;\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. The FORMULA is printed AND the output states "no ML" (WD-71; the
+    //    auditable-no-ML transparency contract). The formula names its inputs.
+    assert!(
+        stdout.contains("no ML"),
+        "cli.graph_query.no_ml_stated: expected the output to state 'no ML' \
+         (WD-71 transparency);\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("author_distinct_bonus")
+            && stdout.contains("cross_project_triangulation")
+            && stdout.contains("confidence"),
+        "cli.graph_query.formula_printed: expected the printed formula to name its inputs \
+         (confidence x author_distinct_bonus x cross_project_triangulation);\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 5. The never-stored footer: weights are a DISPLAY-ONLY aggregate view
+    //    computed at query time, NOT stored / signed / published (WD-72).
+    assert!(
+        stdout.contains("DISPLAY-ONLY") && stdout.contains("NOT stored"),
+        "cli.graph_query.never_stored_footer: expected the footer to state weights are a \
+         DISPLAY-ONLY aggregate view, NOT stored (WD-72);\n--- stdout ---\n{stdout}"
+    );
+
+    // 6. Anti-merging: the view ranks projects but NEVER collapses the two deno
+    //    authors into a faceless consensus — both contributing authors remain
+    //    nameable in the breakdown (the decomposition survives the aggregate).
+    assert!(
+        stdout.contains("did:plc:tobias-test") && stdout.contains("did:plc:maria-test"),
+        "cli.graph_query.anti_merging: expected deno's two contributing authors (Tobias + \
+         Maria) to remain individually attributed in the weighted view;\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-11 (US-GRAPH-003 boundary; Gate 3; KPI-GRAPH-4 release-gate): Tobias

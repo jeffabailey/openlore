@@ -1193,6 +1193,163 @@ fn render_confidence(confidence: &claim_domain::Confidence) -> String {
         .unwrap_or_else(|_| "(unrenderable)".to_string())
 }
 
+// -----------------------------------------------------------------------------
+// Slice-04 (ADR-020) — `graph query --object <philosophy> --weighted` renderer
+// -----------------------------------------------------------------------------
+
+/// Content-frozen never-stored notice for the `--weighted` view (WD-72; journey
+/// `journey-explore-the-graph-visual.md` step 4 tui_mockup). Weights are a
+/// DERIVED, DISPLAY-ONLY aggregate VIEW computed at query time — they are NOT
+/// stored, NOT signed, and NOT published; a re-run after a `peer pull` may
+/// change them; and (anti-merging, I-GRAPH-2) each weight decomposes to the
+/// exact claims that produced it. Do NOT paraphrase — the exact phrasing is the
+/// user-visible contract.
+const WEIGHTED_NEVER_STORED_FOOTER: &str =
+    "Note: weights are a DISPLAY-ONLY aggregate VIEW computed at query time from the claims \
+above. They are NOT stored, NOT signed, and NOT published. Re-running after a `peer pull` may \
+change them. Each weight decomposes to the exact claims that produced it; nothing is merged or \
+invented.";
+
+/// Render the `graph query --object <philosophy> --weighted` result: the
+/// projects ranked by adherence weight (descending), each weight shown WITH its
+/// inputs, the transparent NO-ML formula, and the never-stored display-only
+/// footer. Pure function — no I/O, no storage access.
+///
+/// ## Transparency contract (WD-71 / KPI-GRAPH-3; US-GRAPH-003)
+///
+/// `view.ranked` is already sorted weight-descending by the pure `scoring::score`
+/// core. A weight is NEVER shown as a bare number: each carries its claim count,
+/// distinct-author count, and max confidence (the formula inputs), so a user can
+/// reproduce it by hand against the printed formula. The formula block states
+/// "no ML" verbatim (WD-71). Cross-project triangulation by the SAME author and
+/// multi-author support are surfaced as the breadth that lifts a weight.
+///
+/// ## Anti-merging (I-GRAPH-2 / WD-73)
+///
+/// A weight is an AGGREGATE VIEW, never a merge that loses attribution. The
+/// breakdown surfaces the contributing authors by DID (from the pairing's
+/// non-empty `contributions`), so the aggregate always decomposes to its claims.
+///
+/// ## Sparse honesty (WD-74; Gate 3) — RED for GQE-11
+///
+/// The `[SPARSE]` honesty line for a thin (1-claim 1-author) pairing lands with
+/// GQE-11 (step 05-02). This renderer prints the bucket label for every pairing;
+/// the sparse-specific "(!) based on N claims by M authors" advice is added then.
+pub fn render_weighted_view(object: &str, view: &scoring::WeightedView) -> String {
+    let mut out = String::new();
+    let heading = format!("Weighted view: {object}");
+    out.push_str(&heading);
+    out.push('\n');
+    out.push_str(&"=".repeat(heading.len()));
+    out.push_str("\n\n");
+    out.push_str("Projects ranked by adherence weight (transparent formula below):\n\n");
+
+    for (index, pairing) in view.ranked.iter().enumerate() {
+        out.push_str(&render_weighted_pairing(index + 1, pairing));
+    }
+
+    out.push_str(&render_weight_formula_block());
+    out.push('\n');
+    out.push_str(WEIGHTED_NEVER_STORED_FOOTER);
+    out.push('\n');
+    out
+}
+
+/// Render one ranked `(subject, object)` pairing: its rank, subject, weight, and
+/// display-only bucket, then the weight inputs (claims / authors / max
+/// confidence) and the breadth line (cross-project span and/or multi-author
+/// support) naming the contributing authors. Pure helper.
+fn render_weighted_pairing(rank: usize, pairing: &scoring::WeightedPairing) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "  {rank}. {subject}   weight {weight:.2}   [{bucket}]\n",
+        subject = pairing.subject,
+        weight = pairing.weight,
+        bucket = weight_bucket_label(pairing.bucket),
+    ));
+    out.push_str(&format!(
+        "       claims  : {claims}   authors: {authors}   max-confidence {max_conf}\n",
+        claims = pairing.claim_count,
+        authors = pairing.distinct_author_count,
+        max_conf = render_candidate_confidence(pairing.max_confidence),
+    ));
+    out.push_str(&render_pairing_breadth_line(pairing));
+    out.push('\n');
+    out
+}
+
+/// The breadth line surfaced under a pairing's inputs: the cross-project span
+/// (the SAME author asserting this philosophy on >= 2 distinct subjects, which
+/// the formula rewards with the triangulation bonus) and/or multi-author support
+/// (distinct authors raising triangulation). Both name the contributing authors
+/// so the aggregate stays attributed (anti-merging). Returns the empty string
+/// for a thin single-author single-project pairing. Pure helper.
+fn render_pairing_breadth_line(pairing: &scoring::WeightedPairing) -> String {
+    let mut out = String::new();
+    if pairing.cross_project_span > 1 {
+        // Name the author whose cross-project span earned the triangulation
+        // bonus (the contribution carrying a non-zero triangulation bonus).
+        if let Some(spanning) = pairing
+            .contributions()
+            .iter()
+            .find(|c| c.cross_project_triangulation_bonus > 0.0)
+        {
+            out.push_str(&format!(
+                "       also-claimed-by: {} spans {} projects\n",
+                spanning.author_did.0, pairing.cross_project_span,
+            ));
+        }
+    }
+    if pairing.distinct_author_count > 1 {
+        out.push_str(&format!(
+            "       multi-author: {} distinct authors raise triangulation\n",
+            pairing.distinct_author_count,
+        ));
+        // List the contributing authors by DID so the multi-author aggregate
+        // decomposes to its attributed claims (anti-merging, WD-73).
+        for contribution in pairing.contributions() {
+            out.push_str(&format!("         - {}\n", contribution.author_did.0));
+        }
+    }
+    out
+}
+
+/// The display-only bucket label for a `WeightBucket` (WD-72; never persisted).
+/// Pure helper.
+fn weight_bucket_label(bucket: scoring::WeightBucket) -> &'static str {
+    match bucket {
+        scoring::WeightBucket::Strong => "STRONG",
+        scoring::WeightBucket::Moderate => "MODERATE",
+        scoring::WeightBucket::Sparse => "SPARSE",
+    }
+}
+
+/// The auditable NO-ML formula block (WD-71 / WD-77 SSOT; journey step 4
+/// tui_mockup). Names every formula input and the constants, and states
+/// "no ML" verbatim so the weight is reproducible by hand (Gate 2). The
+/// bucket labels are flagged DISPLAY-ONLY (WD-72). Pure helper.
+fn render_weight_formula_block() -> String {
+    let mut out = String::new();
+    out.push_str("How weight is computed (auditable, no ML):\n");
+    out.push_str(
+        "  weight = sum over claims of [ confidence\n\
+\x20                               x author_distinct_bonus\n\
+\x20                               x cross_project_triangulation_bonus ]\n",
+    );
+    out.push_str(
+        "  - author_distinct_bonus        : 1.0 for the first author, \
++0.25 per add'l distinct author on the SAME (subject,object)\n",
+    );
+    out.push_str(
+        "  - cross_project_triangulation  : +0.5 if the SAME author asserts \
+this philosophy on >=2 distinct subjects\n",
+    );
+    out.push_str(
+        "  - bucket labels [STRONG]/[MODERATE]/[SPARSE] are DISPLAY-ONLY; never persisted.\n",
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

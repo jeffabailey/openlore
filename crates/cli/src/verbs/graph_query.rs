@@ -307,6 +307,18 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
         }
     }
 
+    // GQE-10 (US-GRAPH-003 happy; Gate 2): the `--weighted` view (WITHOUT
+    // `--explain`) over a philosophy. Feeds the attributed scoring feed
+    // (`StoragePort::query_attributed_for_scoring`, per-claim UNION ALL — no SQL
+    // aggregation) into the PURE `scoring::score` core, then renders the ranked
+    // WeightedView with the transparent no-ML formula + the never-stored footer.
+    // The `--explain` leg stays RED for GQE-16.
+    if args.weighted && !args.traverse && args.explain.is_none() {
+        if let Some(object) = args.object.as_deref() {
+            return run_weighted_object(wiring, object);
+        }
+    }
+
     if !args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_object_dimension(wiring, object);
@@ -393,6 +405,46 @@ fn run_contributor_dimension(wiring: &Wiring, contributor: &str) -> Result<Graph
         .with_context(|| format!("querying claims by contributor {contributor}"))?;
 
     let stdout = crate::render::render_contributor_query_trail(contributor, &claims);
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// GQE-10 (US-GRAPH-003 happy; Gate 2 / KPI-GRAPH-3): the `--object <philosophy>
+/// --weighted` branch — the transparent display-only adherence-weight ranking.
+///
+/// The flow is a thin port-call → PURE score → pure render:
+///   1. Read the attributed scoring feed via
+///      `StoragePort::query_attributed_for_scoring(ByObject)` — per-claim
+///      `UNION ALL` rows, NO SQL aggregation (anti-merging, I-GRAPH-2 / WD-73).
+///   2. Aggregate in PURE Rust: `scoring::score(&feed, &ScoringConfig::DEFAULT)`
+///      — the small closed-form, NO-ML formula (WD-71 / WD-77). The weight is
+///      the SUM of the per-claim contributions, so it decomposes exactly (Gate
+///      2). Computing it here (Rust) rather than in SQL is what keeps the
+///      aggregate auditable.
+///   3. Render the ranked `WeightedView` with each weight + its inputs (claim
+///      count, distinct authors, max confidence, cross-project span), the
+///      printed formula stating "no ML", and the never-stored display-only
+///      footer (WD-72) — a pure projection (`render::render_weighted_view`).
+///
+/// Explorer flags imply federated scope (WD-87) — the feed already spans own +
+/// peers. Weights are DERIVED + DISPLAY-ONLY: computed at query time, NEVER
+/// persisted/signed/published (WD-72).
+fn run_weighted_object(wiring: &Wiring, object: &str) -> Result<GraphQueryOutcome> {
+    let filter = ports::ScoringFilter::ByObject {
+        object: object.to_string(),
+    };
+    let feed = wiring
+        .storage
+        .query_attributed_for_scoring(&filter)
+        .with_context(|| format!("reading the scoring feed for object {object}"))?;
+
+    // The aggregation happens HERE, in the pure core — never in SQL.
+    let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+
+    let stdout = crate::render::render_weighted_view(object, &view);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

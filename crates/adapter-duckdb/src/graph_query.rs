@@ -69,6 +69,7 @@ pub(crate) fn query_by_object(
 /// parameterized query rather than two near-identical SQL literals.
 enum DimensionFilter {
     Object(String),
+    Subject(String),
     Contributor(Did),
 }
 
@@ -80,6 +81,7 @@ impl DimensionFilter {
     fn where_clause(&self) -> (&'static str, &'static str) {
         match self {
             DimensionFilter::Object(_) => ("c.object = ?", "pc.object = ?"),
+            DimensionFilter::Subject(_) => ("c.subject = ?", "pc.subject = ?"),
             DimensionFilter::Contributor(_) => ("c.author_did LIKE ?", "pc.author_did LIKE ?"),
         }
     }
@@ -88,6 +90,7 @@ impl DimensionFilter {
     fn param(&self) -> String {
         match self {
             DimensionFilter::Object(object) => object.clone(),
+            DimensionFilter::Subject(subject) => subject.clone(),
             DimensionFilter::Contributor(did) => format!("{}%", bare_did(&did.0)),
         }
     }
@@ -267,16 +270,34 @@ pub(crate) fn query_by_contributor(
 /// SQL aggregate — so the weight the pure core computes always decomposes into
 /// these rows (Gate 1 / I-GRAPH-2 / WD-73).
 ///
-/// SCAFFOLD: true (slice-04) — live SQL lands with the `--weighted` scoring
-/// acceptance scenario (Phase 04).
+/// The feed reuses the SAME SAFE cross-store `UNION ALL` projection the
+/// dimension reads use ([`query_attributed_dimension`]): the only difference is
+/// which `WHERE` column the [`ScoringFilter`] selects on. Aggregation (the
+/// weight) is the PURE `scoring::score` core's job in Rust over the returned
+/// `Vec<AttributedClaim>`, NEVER in SQL — that is what keeps the aggregate
+/// decomposable into these per-claim rows (the literal names BOTH `claims` AND
+/// `peer_claims` AND projects `author_did`, so it passes
+/// `xtask check-arch::no_cross_table_join_elides_author`).
 pub(crate) fn query_attributed_for_scoring(
-    _conn: &Arc<Mutex<Connection>>,
-    _filter: &ScoringFilter,
+    conn: &Arc<Mutex<Connection>>,
+    filter: &ScoringFilter,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
-    todo!(
-        "slice-04 Phase 04: per-claim UNION ALL by filter (Object/Subject/Contributor), \
-         NO SQL aggregation — the pure scoring core aggregates"
-    )
+    query_attributed_dimension(conn, &scoring_filter_to_dimension(filter))
+}
+
+/// Map a [`ScoringFilter`] onto the shared [`DimensionFilter`] the cross-store
+/// UNION-ALL projection consumes. `BySubject` filters on the `subject` column;
+/// `ByObject` / `ByContributor` reuse the existing dimension predicates so the
+/// scoring feed and the `--object`/`--contributor` dimension reads share ONE
+/// query shape (no near-duplicate SQL literal).
+fn scoring_filter_to_dimension(filter: &ScoringFilter) -> DimensionFilter {
+    match filter {
+        ScoringFilter::ByObject { object } => DimensionFilter::Object(object.clone()),
+        ScoringFilter::BySubject { subject } => DimensionFilter::Subject(subject.clone()),
+        ScoringFilter::ByContributor { author_did } => {
+            DimensionFilter::Contributor(author_did.clone())
+        }
+    }
 }
 
 /// Bounded, cycle-safe traversal of contributor↔project↔philosophy edges from
