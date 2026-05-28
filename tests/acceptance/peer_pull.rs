@@ -466,7 +466,138 @@ fn peer_pull_rejects_tampered_signature_per_record_and_stores_honest_records() {
 /// @us-fed-002 @real-io @driving_port @j-003a @error
 #[test]
 fn peer_pull_rejects_cid_mismatch_per_record_and_stores_honest_records() {
-    todo!("DELIVER (slice-03): wire VerbPeerPull → claim_domain::compute_cid recompute → byte-match against peer rkey → reject on mismatch. Use FakePeerPds::with_cid_mismatch + fixture_adversarial_peer_cid_mismatch. Assert rejection-reason text 'CID mismatch (possible adversarial input)' per US-FED-002 UAT scenario #3 + exit nonzero + zero peer_claims row written for the mismatched CID")
+    let env = TestEnv::initialized();
+
+    // Rachel publishes THREE genuinely-signed honest claims (real crypto via
+    // `build_verifiable_peer_records` — same builder PP-1 uses, so each honest
+    // record passes BOTH the CID round-trip AND the signature verify). The
+    // `with_cid_mismatch` posture appends ONE adversarial record at
+    // `ADVERSARIAL_RKEY`: its body is well-formed and its signature field is
+    // intact, but the published rkey does NOT equal the locally-recomputed
+    // CID (canonicalization disagreement — "possible adversarial input").
+    // This isolates the CID-ROUND-TRIP rejection branch (WD-24), which fires
+    // BEFORE the signature verify in `evaluate_record`.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (honest, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(honest.len(), 3, "Rachel publishes three honest claims");
+
+    let peer = PeerPds::with_cid_mismatch(peer_did, honest);
+    assert_eq!(
+        peer.records().len(),
+        4,
+        "3 honest + 1 cid-mismatch = 4 records hosted"
+    );
+
+    // Precondition: ONE active subscription via the real `peer add` verb.
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // DD-FED-10 universe BEFORE the pull: the author `claims` table count.
+    let author_claims_before = user_author_claim_count_now(&env);
+
+    // Action: `openlore peer pull`. Per-record verify recomputes each CID and
+    // byte-matches it against the peer-published rkey → the mismatch record is
+    // rejected → the other 3 verify + store (per-record fault isolation, WD-37).
+    let outcome = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+
+    // 1. Non-zero exit overall — a rejected record flags the pull (WD-37 +
+    //    ADR-013 exit-code table: pull exits non-zero on ANY rejection).
+    assert_ne!(
+        outcome.status, 0,
+        "a CID-mismatch record must drive a NON-ZERO exit code (WD-37 / ADR-013);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The progress block reports exactly one rejection WITH the verbatim
+    //    reason (US-FED-002 UAT scenario #3 wording).
+    assert!(
+        outcome.stdout.contains("rejected  : 1"),
+        "the progress block must report exactly one rejected record;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("CID mismatch (possible adversarial input)"),
+        "the rejection reason must name the CID-mismatch failure verbatim \
+         (US-FED-002 UAT scenario #3);\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 3. The 3 honest records still verify + store: the `verified : 3/4` line
+    //    (3 of 4 fetched valid) + the per-peer progress names Rachel.
+    assert!(
+        outcome.stdout.contains(peer_did),
+        "the progress block must name the peer DID {peer_did};\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("3/4"),
+        "expected 3 of 4 fetched records valid (1 CID-mismatch rejected);\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("Pulled 3 new peer claims"),
+        "the 3 honest records must be stored as NEW;\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // 4. DD-FED-10 (LOAD-BEARING) — the storage state-delta:
+    //    - peer_claims rows == 3 (honest only); every row attributed to
+    //      Rachel, none to any other DID (anti-merging, I-FED-1).
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    //    - the CID-mismatch record's published rkey is ABSENT from peer_claims
+    //      (under ANY author) AND has NO on-disk artifact (anti-merging holds
+    //      at the reject path — zero adversarial records stored).
+    assert_peer_claim_cid_absent(&env, ADVERSARIAL_RKEY);
+
+    //    - author_claims UNCHANGED (a peer pull never touches own claims).
+    assert_eq!(
+        user_author_claim_count_now(&env),
+        author_claims_before,
+        "the author `claims` table must be UNCHANGED by a peer pull (DD-FED-10)"
+    );
+
+    //    - exactly 3 `<cid>.json` artifacts under the peer partition (the 3
+    //      honest records only — the mismatch record wrote nothing).
+    let partition = peer_claims_dir_for(&env, peer_did);
+    let artifact_count = std::fs::read_dir(&partition)
+        .unwrap_or_else(|e| panic!("read peer_claims partition {}: {e}", partition.display()))
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.path().extension().map(|x| x == "json"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        artifact_count,
+        3,
+        "expected exactly 3 `<cid>.json` artifacts (honest only) under {}; got {artifact_count}",
+        partition.display()
+    );
 }
 
 /// PP-5 / Sad (WD-40): A peer publishes a record whose `author` field
