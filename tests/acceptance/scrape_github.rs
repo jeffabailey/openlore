@@ -327,13 +327,62 @@ fn scrape_github_resolves_user_target_and_harvests_bounded_aggregate() {
 /// @us-scr-001 @real-io @driving_port @j-004a @error
 #[test]
 fn scrape_github_rejects_nonexistent_target_with_zero_candidates() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SG-4. GIVEN FakeGithub::for_not_found(\"ghost-org/ghost-repo\"); \
-         WHEN scrape github ghost-org/ghost-repo; THEN exit non-zero, stderr names the target \
-         AND the not-found cause, no numbered candidate list is rendered, \
-         assert_no_claim_persisted(&env)."
-    )
+    // GIVEN an initialized env + a target that does not exist on GitHub
+    // (FakeGithub::for_not_found serves a 404; the adapter classifies that as
+    // GithubError::NotFound, 03-01).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_not_found("ghost-org/ghost-repo"));
+
+    // WHEN Maria scrapes the non-existent target (no --sign).
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "ghost-org/ghost-repo"],
+        github.base_url(),
+    );
+
+    // THEN the run exits NON-ZERO (a 404 is an error, not an empty harvest).
+    assert_ne!(
+        outcome.status, 0,
+        "a non-existent target must exit non-zero; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the error on stderr NAMES the target so zero-candidates is
+    // explainable (US-SCR-001 Ex 3 — the user must know WHICH target failed).
+    assert!(
+        outcome.stderr.contains("ghost-org/ghost-repo"),
+        "stderr must name the failing target ghost-org/ghost-repo; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND the error names the NOT-FOUND cause (the railway-oriented
+    // GithubError::NotFound Display: "github target not found: {target}").
+    assert!(
+        outcome.stderr.contains("not found"),
+        "stderr must name the not-found cause; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND ZERO candidates are produced — no numbered candidate list is
+    // rendered (the resolve refusal short-circuits BEFORE any harvest /
+    // derivation, so no `[1]` line and no candidate-list footer can appear).
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "a refused target must render NO numbered candidate list; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
+            .contains("nothing is a claim until you sign it"),
+        "a refused target must render NO candidate-list footer; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND nothing was persisted: zero `claims` rows, zero PDS writes, zero
+    // claim artifact files (scraper_never_persists_unsigned holds on the
+    // error path too — a refused scrape is never a mutation).
+    assert_no_claim_persisted(&env);
 }
 
 /// SG-5 / Sad (US-SCR-001 Ex 4; WD-51 / I-SCR-2 — gate
