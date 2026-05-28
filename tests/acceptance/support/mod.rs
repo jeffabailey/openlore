@@ -2897,8 +2897,37 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 }],
             )
         }
+        FederatedGraphFixture::RachelFiveClaimsFourSubjects => {
+            // US-GRAPH-002 Example 1 (GQE-6): did:plc:rachel-test authors 5
+            // claims across 4 subjects (cargo x2, nixpkgs, tokio, serde) — the
+            // contributor's full reasoning trail. All PEER claims (Rachel is a
+            // subscribed peer; the local user makes no claim here). Materialized
+            // with REAL Ed25519 crypto + CID recompute so the production pull
+            // pipeline verifies them. The two cargo claims assert DISTINCT
+            // philosophies so their canonical CIDs differ (the store keys on cid;
+            // two identical triples would collide into one row).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let repro = "org.openlore.philosophy.reproducible-builds";
+            let workspace = "org.openlore.philosophy.workspace-cohesion";
+            let actor = "org.openlore.philosophy.actor-model";
+            let ergonomics = "org.openlore.philosophy.ergonomic-api";
+            seed_peer_authored_graph(
+                env,
+                &[SeedPeer {
+                    peer_did: "did:plc:rachel-test",
+                    seed: [7u8; 32],
+                    triples: &[
+                        ("github:rust-lang/cargo", dep, 0.91),
+                        ("github:rust-lang/cargo", repro, 0.74),
+                        ("github:NixOS/nixpkgs", workspace, 0.88),
+                        ("github:tokio-rs/tokio", actor, 0.62),
+                        ("github:serde-rs/serde", ergonomics, 0.80),
+                    ],
+                }],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
-        // steps (GQE-4..27 stay RED until then).
+        // steps (GQE-7..27 stay RED until then).
         other => {
             let _ = env;
             todo!(

@@ -595,6 +595,93 @@ fn render_object_query_footer(subject_count: usize, author_count: usize) -> Stri
     )
 }
 
+// -----------------------------------------------------------------------------
+// Slice-04 (ADR-020) — `graph query --contributor <did>` dimension renderer
+// -----------------------------------------------------------------------------
+
+/// Slice-04 content-frozen honest-framing footer for the `--contributor`
+/// dimension view (US-GRAPH-002 / J-002 "published reasoning trail, not
+/// surveillance"). The contributor view shows ONE developer's RAW trail — each
+/// claim's compose-time confidence verbatim, NEVER an aggregate/community
+/// score. Do NOT paraphrase — the exact string is the user-visible contract.
+pub const CONTRIBUTOR_TRAIL_FOOTER: &str =
+    "This is one developer's reasoning trail, not a community consensus.";
+
+/// Render the `graph query --contributor <did>` dimension result: every claim
+/// that DID authored, across all subjects, listed under the contributor's DID
+/// with subject/object/confidence/cid. Pure function — no I/O, no storage
+/// access.
+///
+/// ## Honest-trail contract (US-GRAPH-002 / J-002; anti-merging WD-73)
+///
+/// Each [`AttributedClaim`] carries its `author_did` at the type level
+/// (non-`Option`). For a contributor query every row is by the SAME author, so
+/// the listing reads as that one developer's published reasoning trail:
+///
+/// - A header names the contributor DID, annotated with its relationship to the
+///   local user (`(you)` for a self-review / `(subscribed peer)` /
+///   `(unsubscribed cache)`).
+/// - Every claim row prints `subject`, `object`, the numeric `confidence` shown
+///   HONESTLY (the raw compose-time `f64` + its display-only bucket — NOT a
+///   manufactured aggregate weight), and the `cid` — so every claim in the
+///   trail is independently attributable to exactly one signed claim.
+/// - The footer states the claim count AND the content-frozen
+///   [`CONTRIBUTOR_TRAIL_FOOTER`] ("one developer's reasoning trail, not a
+///   community consensus") so the view never reads as community endorsement.
+///
+/// The empty branch (an absent contributor / soft-removed-peer relationship
+/// labelling) is a later slice-04 scenario; this happy-path renderer lists the
+/// found trail.
+pub fn render_contributor_query_trail(contributor: &str, claims: &[AttributedClaim]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Reasoning trail for contributor {contributor}:\n\n"
+    ));
+
+    // The contributor's relationship to the local user is uniform across the
+    // trail (every row is by the same author). Read it from the first row so the
+    // header annotation (you / subscribed peer / unsubscribed cache) is honest.
+    if let Some(first) = claims.first() {
+        out.push_str(&format!(
+            "author_did: {} {}\n",
+            first.author_did.0,
+            relationship_annotation(first.relationship)
+        ));
+    }
+
+    for claim in claims {
+        out.push_str(&render_one_contributor_claim(claim));
+    }
+    out.push('\n');
+
+    out.push_str(&render_contributor_trail_footer(claims.len()));
+    out
+}
+
+/// Render one claim row of a contributor's trail: its subject, object, the
+/// numeric confidence + display-only bucket (shown honestly — the raw
+/// compose-time value, never an aggregate), and the cid. Every row is
+/// independently attributable to one signed claim (anti-merging behavioral
+/// layer). Pure helper.
+fn render_one_contributor_claim(claim: &AttributedClaim) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("  subject:    {}\n", claim.subject));
+    out.push_str(&format!("  object:     {}\n", claim.object));
+    out.push_str(&format!(
+        "  confidence: {} ({})\n",
+        render_candidate_confidence(claim.confidence),
+        confidence_bucket_label(claim.confidence)
+    ));
+    out.push_str(&format!("  cid:        {}\n", claim.cid.0));
+    out
+}
+
+/// Render the `--contributor` dimension footer: the claim count plus the
+/// content-frozen honest-trail framing (US-GRAPH-002). Pure helper.
+fn render_contributor_trail_footer(claim_count: usize) -> String {
+    format!("{claim_count} claim(s). {CONTRIBUTOR_TRAIL_FOOTER}\n")
+}
+
 /// One bidirectional counter relationship discovered in the federated row
 /// set: a `counter_cid` (authored by `counter_author`) that `counters` a
 /// `target_cid` (authored by `target_author`). Both endpoints' authors are

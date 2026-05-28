@@ -593,12 +593,89 @@ fn graph_query_by_contributor_lists_full_reasoning_trail_with_honest_framing() {
     // subject + object + confidence + cid. Footer: "one developer's reasoning
     // trail, not a community consensus". Every row carries Rachel's DID (no
     // row without an author; anti-merging).
-    todo!(
-        "DELIVER (slice-04): assert `graph query --contributor` lists all 5 of Rachel's claims \
-         across 4 subjects with subject/object/confidence/cid, and the footer states 'one \
-         developer's reasoning trail, not a community consensus' (US-GRAPH-002 Example 1);\n\
-         --- graph ---\n{graph:?}"
-    )
+    //
+    // Universe (port-exposed observable surface of the `--contributor` trail
+    // view): cli.graph_query.contributor_did_present (Rachel's DID heads the
+    // trail), cli.graph_query.subjects_in_trail (all 4 of Rachel's subjects),
+    // cli.graph_query.objects_in_trail + confidences_in_trail (each claim's
+    // compose-time value verbatim — honest, not aggregated),
+    // cli.graph_query.cid_rows (5 — one per seeded claim, none merged/dropped),
+    // cli.graph_query.honest_trail_footer (the content-frozen J-002 framing).
+    // Asserted against stdout (the CLI driving-port observable).
+    let stdout = &outcome.stdout;
+
+    // 1. The trail is headed by Rachel's DID — every claim is attributed to the
+    //    queried contributor (no row without its author; anti-merging WD-73).
+    assert!(
+        stdout.contains(&format!("author_did: {rachel_did}")),
+        "expected the trail to be headed by the contributor DID {rachel_did};\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. All 4 of Rachel's distinct subjects appear in the trail (cargo,
+    //    nixpkgs, tokio, serde) — the trail spans every project she's claimed on.
+    let distinct_subjects: std::collections::HashSet<&str> =
+        graph.seeded.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(
+        distinct_subjects.len(),
+        4,
+        "fixture precondition: Rachel's trail spans 4 distinct subjects; got {distinct_subjects:?}"
+    );
+    for subject in &distinct_subjects {
+        assert!(
+            stdout.contains(&format!("subject:    {subject}")),
+            "expected the contributor trail to list subject {subject};\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 3. Each of the 5 seeded claims renders with its object + numeric
+    //    confidence VERBATIM (honest — the raw compose-time value, never an
+    //    aggregate score; J-002 published-trail-not-surveillance).
+    assert_eq!(
+        graph.seeded.len(),
+        5,
+        "fixture precondition: Rachel authors exactly 5 claims; got {}",
+        graph.seeded.len()
+    );
+    for claim in &graph.seeded {
+        assert!(
+            stdout.contains(&format!("object:     {}", claim.object)),
+            "expected the trail to list object {} for one of Rachel's claims;\n\
+             --- stdout ---\n{stdout}",
+            claim.object
+        );
+        // serde renders the f64 as its minimal decimal (e.g. 0.8 not 0.80) —
+        // serialize the seeded value the same way the renderer does so the
+        // assertion pins the HONEST numeric, not a re-bucketed label.
+        let confidence = serde_json::to_value(claim.confidence)
+            .map(|v| v.to_string())
+            .expect("seeded confidence serializes");
+        assert!(
+            stdout.contains(&format!("confidence: {confidence}")),
+            "expected the trail to show the honest compose-time confidence {confidence} \
+             for one of Rachel's claims (raw value, not an aggregate);\n--- stdout ---\n{stdout}"
+        );
+    }
+
+    // 4. Exactly 5 cid-bearing rows — one per seeded claim, none merged or
+    //    dropped (each claim in the trail is independently attributable).
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 5,
+        "expected exactly 5 cid-bearing rows (one per seeded claim, none merged); \
+         got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. The footer states the honest framing VERBATIM: this is one developer's
+    //    reasoning trail, NOT a community consensus (J-002 content-frozen).
+    assert!(
+        stdout.contains("one developer's reasoning trail, not a community consensus"),
+        "expected the footer to carry the content-frozen honest-trail framing \
+         ('one developer's reasoning trail, not a community consensus');\n--- stdout ---\n{stdout}"
+    );
 }
 
 /// GQE-7 (US-GRAPH-002 edge): Tobias runs `--contributor did:plc:tobias-test`

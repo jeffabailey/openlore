@@ -284,13 +284,18 @@ fn run_explorer(wiring: &Wiring, args: &GraphQueryArgs) -> Result<GraphQueryOutc
     //   query_by_object / query_by_contributor / query_attributed_for_scoring
     //   (federated UNION ALL, explicit author_did projection — anti-merging).
 
-    // GQE-1 (US-GRAPH-001): the plain `--object` dimension listing grouped by
-    // subject. Only this branch is GREEN at step 03-01; the --weighted /
-    // --traverse / --explain / --contributor branches stay RED (todo!()) so
-    // GQE-2..27 fail for the right reason.
+    // The plain dimension listings (no --weighted/--traverse/--explain):
+    //   - GQE-1 (US-GRAPH-001): `--object` grouped by subject (step 03-01).
+    //   - GQE-6 (US-GRAPH-002): `--contributor` — one developer's reasoning
+    //     trail, listed under the DID (step 03-06).
+    // The --weighted / --traverse / --explain branches stay RED (todo!()) so
+    // GQE-10.. fail for the right reason.
     if !args.weighted && !args.traverse && args.explain.is_none() {
         if let Some(object) = args.object.as_deref() {
             return run_object_dimension(wiring, object);
+        }
+        if let Some(contributor) = args.contributor.as_deref() {
+            return run_contributor_dimension(wiring, contributor);
         }
     }
 
@@ -339,6 +344,38 @@ fn run_object_dimension(wiring: &Wiring, object: &str) -> Result<GraphQueryOutco
         &claims,
         suggestion.as_deref(),
     );
+
+    Ok(GraphQueryOutcome {
+        exit_code: 0,
+        stdout,
+    })
+}
+
+/// GQE-6 (US-GRAPH-002 happy): the `--contributor <did>` dimension read — one
+/// developer's reasoning trail. Calls the extended
+/// `StoragePort::query_by_contributor` (own + peer stores via the SAME SAFE
+/// `UNION ALL` projecting `author_did` as `query_by_object` — anti-merging) and
+/// renders every claim that DID authored, across all subjects, under the
+/// contributor's DID with subject/object/confidence/cid. Explorer flags imply
+/// federated scope (WD-87) — the read already spans own + peers, so there is no
+/// `--federated` branch here.
+///
+/// The honest framing (J-002 "published reasoning trail, not surveillance"):
+/// this is the contributor's RAW trail (each claim's compose-time confidence
+/// shown verbatim), NOT an aggregate score — the footer states "one developer's
+/// reasoning trail, not a community consensus".
+///
+/// The verb stays a thin port-call + pure render: the read is one port call;
+/// the listing + footer are a pure projection
+/// (`render_contributor_query_trail`).
+fn run_contributor_dimension(wiring: &Wiring, contributor: &str) -> Result<GraphQueryOutcome> {
+    let did = claim_domain::Did(contributor.to_string());
+    let claims = wiring
+        .storage
+        .query_by_contributor(&did)
+        .with_context(|| format!("querying claims by contributor {contributor}"))?;
+
+    let stdout = crate::render::render_contributor_query_trail(contributor, &claims);
 
     Ok(GraphQueryOutcome {
         exit_code: 0,

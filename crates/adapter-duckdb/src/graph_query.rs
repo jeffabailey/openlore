@@ -245,13 +245,21 @@ fn active_subscription_dids(
 /// Every claim authored by this DID, across all subjects, own + peer stores.
 /// Drives `--contributor` (one developer's reasoning trail).
 ///
-/// SCAFFOLD: true (slice-04) — live SQL lands with the `--contributor`
-/// dimension acceptance scenario (Phase 03).
+/// Decomposes to the SAME SAFE cross-store `UNION ALL` projection
+/// [`query_by_object`] uses (via [`query_attributed_dimension`]) — only the
+/// `WHERE` column differs ([`DimensionFilter::Contributor`] matches
+/// `author_did LIKE '<bare>%'` so a query by the bare contributor DID also
+/// finds the `#fragment`-suffixed own rows). `author_did` is projected per
+/// claim (NEVER a merging `JOIN`/`GROUP BY`): two claims by this author about
+/// the same `(subject, object)` stay TWO rows, and no row leaks under any
+/// OTHER DID — `xtask check-arch::no_cross_table_join_elides_author` enforces
+/// it (I-GRAPH-2 / WD-73). Aggregation (the weight) is the pure `scoring`
+/// core's job later, NEVER SQL.
 pub(crate) fn query_by_contributor(
-    _conn: &Arc<Mutex<Connection>>,
-    _author_did: &Did,
+    conn: &Arc<Mutex<Connection>>,
+    author_did: &Did,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
-    todo!("slice-04 Phase 03: UNION ALL claims+peer_claims WHERE author_did=?, project author_did")
+    query_attributed_dimension(conn, &DimensionFilter::Contributor(author_did.clone()))
 }
 
 /// The attributed-claim feed for the pure `scoring::score` core. Returns
