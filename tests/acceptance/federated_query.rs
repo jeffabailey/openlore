@@ -367,11 +367,21 @@ fn federated_query_renders_identical_content_from_different_authors_as_two_separ
     );
 
     // Slot: both cids present AND distinct. The local own claim's cid and the
-    // identical-content peer claim's cid each appear EXACTLY ONCE — no row
-    // collapse (rows_collapsed == 0), no row duplication.
+    // identical-content peer claim's cid each appear EXACTLY ONCE as a row —
+    // no row collapse (rows_collapsed == 0), no row duplication. We count the
+    // canonical `cid:` FIELD LINE (the row-identity surface), NOT a raw
+    // substring: WD-42's inline counter template (FQ-7) legitimately names the
+    // peer cid a SECOND time on the per-peer-row `openlore claim counter <cid>`
+    // hint, so a raw-substring count is 2 per peer row by design. The
+    // zero-merge invariant is "exactly one `cid:` field line per distinct row".
+    let peer_cid_row_occurrences = stdout
+        .lines()
+        .filter(|l| {
+            l.trim_start().starts_with("cid:") && l.trim_end().ends_with(&shared_content_peer_cid)
+        })
+        .count();
     assert_eq!(
-        stdout.matches(&shared_content_peer_cid).count(),
-        1,
+        peer_cid_row_occurrences, 1,
         "DD-FED-10: the identical-content peer claim cid {shared_content_peer_cid} must \
          appear EXACTLY ONCE as its own distinct row (no merge / no drop / no dup);\n\
          --- stdout ---\n{stdout}"
@@ -990,7 +1000,146 @@ fn federated_query_first_invocation_emits_orientation_then_omits_on_subsequent_i
 /// @us-fed-003 @real-io @driving_port @j-003b @habit @wd-42
 #[test]
 fn federated_query_renders_inline_counter_template_per_peer_row_by_default() {
-    todo!("DELIVER (slice-03): pull one peer claim; run graph query --federated; assert stdout contains the literal 'openlore claim counter <peer_cid>' line per peer row with subject/predicate/object pre-filled from the target claim. WD-42 LOCKS this on by default; assert template appears WITHOUT --verbose. Habit-bridging affordance for KPI-FED-3.")
+    let env = TestEnv::initialized();
+    let subject = "github:rust-lang/cargo";
+
+    // -- Author 1: the LOCAL user adds ONE of their OWN claims. Its row must
+    // NOT carry a counter template — you do not counter your own claim
+    // (WD-42; own rows are excluded). `\n` confirms the sign prompt; `N\n`
+    // declines publishing (local-only). --
+    let own = run_openlore_with_stdin(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            subject,
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.local-first",
+            "--evidence",
+            "https://github.com/rust-lang/cargo",
+            "--confidence",
+            "0.91",
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own.status, 0,
+        "claim add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        own.stdout, own.stderr
+    );
+
+    // -- Author 2: a subscribed PEER (Rachel) publishes verifiable claims
+    // about the SAME subject. Each peer row is a counter target — its row
+    // gets the inline copy-pasteable template (WD-42 habit affordance). --
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer_claim_count = records.len();
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "peer pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(&env, peer_did, peer_claim_count);
+
+    // -- Action: the federated read through the driving port. WD-42 LOCKS the
+    // inline template ON by default — NO `--verbose` flag is passed. --
+    let outcome = run_openlore(&env, &["graph", "query", "--subject", subject, "--federated"]);
+    assert_eq!(
+        outcome.status, 0,
+        "graph query --federated must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr,
+    );
+
+    let stdout = &outcome.stdout;
+    let local_did = env.identity.author_did(); // bare DID, no key fragment
+
+    // 1. PER PEER ROW: a copy-pasteable counter template names the peer
+    //    claim's CID and pre-fills subject + predicate + object from the
+    //    target claim (the user fills in --reason / --evidence / --confidence).
+    //    The template is shown WITHOUT `--verbose` — WD-42 default-on.
+    for record in peer.records() {
+        // The wire record's lexicon body carries the object the template must
+        // pre-fill; recover it from the hosted record so the assertion pins
+        // the exact per-row object (the three peer claims have distinct
+        // objects, so the template's --object differs per row).
+        let object = record
+            .body
+            .get("object")
+            .and_then(|o| o.as_str())
+            .expect("peer record body carries an object");
+        let expected_template = format!(
+            "openlore claim counter {} --reason \"...\" \
+             --subject {subject} --predicate embodiesPhilosophy --object {object}",
+            record.rkey
+        );
+        assert!(
+            stdout.contains(&expected_template),
+            "expected an inline counter template for peer claim {} pre-filled \
+             with subject/predicate/object (WD-42 default-on);\n\
+             --- expected substring ---\n{expected_template}\n--- stdout ---\n{stdout}",
+            record.rkey
+        );
+    }
+
+    // 2. The template count equals the peer-row count: every peer row has
+    //    exactly one template, no more, no fewer.
+    let template_count = stdout.matches("openlore claim counter ").count();
+    assert_eq!(
+        template_count, peer_claim_count,
+        "expected exactly one inline counter template per peer row \
+         ({peer_claim_count} peer rows);\n--- stdout ---\n{stdout}"
+    );
+
+    // 3. OWN rows are EXCLUDED: the local user's own claim CID never appears
+    //    in a counter template (you don't counter your own claim). The
+    //    template target after `counter ` is never the local user's own
+    //    claim — the own claim's object is unique to the local user, so no
+    //    template line pre-fills it.
+    assert!(
+        !stdout.contains("openlore claim counter")
+            || !stdout
+                .lines()
+                .filter(|l| l.contains("openlore claim counter"))
+                .any(|l| l.contains("org.openlore.philosophy.local-first")),
+        "own claim must NOT get a counter template (you don't counter your own \
+         claim; WD-42 own-rows-excluded);\n--- stdout ---\n{stdout}"
+    );
+    // The local user keeps their own (you) header — the exclusion is about the
+    // template, not about hiding the own row.
+    assert!(
+        stdout.contains(local_did) && stdout.contains("(you)"),
+        "expected the local user's own '(you)' row to still render (only the \
+         template is excluded for own rows);\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. Anti-merging preserved: the inline template is per-row metadata, not
+    //    a merge. No row labels itself merged / consensus / aggregate.
+    assert_no_merged_rows_in_federated_output(&outcome);
 }
 
 // =============================================================================

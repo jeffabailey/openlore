@@ -410,6 +410,11 @@ fn relationship_annotation(relationship: AuthorRelationship) -> &'static str {
 /// (`counters <cid> by <did>` and/or `countered-by <cid> by <did>`) are
 /// appended at the end of the block. The annotation is per-row metadata
 /// derived from `counters`; it never merges rows.
+///
+/// FQ-7 (WD-42 — habit-bridging affordance, KPI-FED-3): every PEER row
+/// (`source_table == SourceTable::Peer`) gets an inline copy-pasteable
+/// counter template appended at the end of the block, shown BY DEFAULT.
+/// OWN rows are excluded — you don't counter your own claim.
 fn render_one_federated_row(
     author_did: &str,
     row: &FederatedRow,
@@ -423,7 +428,28 @@ fn render_one_federated_row(
     for annotation in counter_annotations_for(&row.signed_claim.signature.signed_cid.0, counters) {
         out.push_str(&format!("  {annotation}\n"));
     }
+    // FQ-7 / WD-42: peer rows carry the inline counter template (default-on).
+    if matches!(row.source_table, SourceTable::Peer) {
+        out.push_str(&format!("  {}\n", render_counter_template(row)));
+    }
     out
+}
+
+/// Render the FQ-7 inline counter template for a peer row (WD-42). A single
+/// copy-pasteable line: `openlore claim counter <peer_cid> --reason "..."`
+/// pre-filled with the target claim's `--subject` / `--predicate` /
+/// `--object`. The user fills in `--reason` / `--evidence` / `--confidence`
+/// (the `"..."` reason placeholder and the omitted evidence/confidence flags
+/// are the fill-in slots). Pure helper — the habit-bridging affordance that
+/// turns "I see a peer claim I disagree with" into one keystroke-away action
+/// (KPI-FED-3 friction reduction).
+fn render_counter_template(row: &FederatedRow) -> String {
+    let claim = &row.signed_claim.unsigned;
+    format!(
+        "openlore claim counter {} --reason \"...\" \
+         --subject {} --predicate {} --object {} --evidence ... --confidence ...",
+        row.signed_claim.signature.signed_cid.0, claim.subject, claim.predicate, claim.object,
+    )
 }
 
 /// Render the federation footer: the distinct-author count plus the
@@ -866,6 +892,70 @@ mod tests {
         );
     }
 
+    /// FQ-7 (WD-42 — habit-bridging affordance, KPI-FED-3): every PEER row
+    /// in the federated render carries an inline copy-pasteable counter
+    /// template pre-filled with the target claim's CID + subject + predicate
+    /// + object, shown BY DEFAULT (no `--verbose` gate at the render layer —
+    /// the renderer always emits it). OWN rows do NOT get a template (you
+    /// don't counter your own claim). The template count equals the peer-row
+    /// count. The exact template prefix is content-frozen UX copy, so an
+    /// example-based test pins the literal — property-framing would not add
+    /// coverage over a fixed string.
+    #[test]
+    fn render_federated_query_result_emits_inline_counter_template_per_peer_row_only() {
+        let rows = vec![
+            federated_row(
+                "did:plc:test-jeff",
+                "bafyown1",
+                AuthorRelationship::You,
+                SourceTable::Own,
+            ),
+            federated_row(
+                "did:plc:rachel-test",
+                "bafypeer1",
+                AuthorRelationship::SubscribedPeer,
+                SourceTable::Peer,
+            ),
+            federated_row(
+                "did:plc:rachel-test",
+                "bafypeer2",
+                AuthorRelationship::SubscribedPeer,
+                SourceTable::Peer,
+            ),
+        ];
+
+        let rendered = render_federated_query_result(&rows);
+
+        // Each PEER row carries an inline template naming its CID + pre-filled
+        // subject/predicate/object from the target claim (the `federated_row`
+        // fixture uses subject github:rust-lang/cargo, predicate
+        // embodiesPhilosophy, object org.openlore.philosophy.memory-safety).
+        for cid in ["bafypeer1", "bafypeer2"] {
+            let expected = format!(
+                "openlore claim counter {cid} --reason \"...\" \
+                 --subject github:rust-lang/cargo --predicate embodiesPhilosophy \
+                 --object org.openlore.philosophy.memory-safety"
+            );
+            assert!(
+                rendered.contains(&expected),
+                "expected an inline counter template for peer row {cid}; got:\n{rendered}"
+            );
+        }
+
+        // The OWN row gets NO template — its CID never follows `counter `.
+        assert!(
+            !rendered.contains("openlore claim counter bafyown1"),
+            "own row must NOT get a counter template (WD-42 own-rows-excluded); got:\n{rendered}"
+        );
+
+        // Exactly one template per peer row (2 peers → 2 templates).
+        assert_eq!(
+            rendered.matches("openlore claim counter ").count(),
+            2,
+            "expected exactly one template per peer row (2 peer rows); got:\n{rendered}"
+        );
+    }
+
     proptest! {
         /// Property (Modeling / Generalizing, Hebert ch.3): for ANY set of
         /// federated rows over an arbitrary author-DID alphabet, the number
@@ -927,17 +1017,26 @@ mod tests {
                 rendered
             );
 
-            // Every row's cid is present exactly once (no row dropped, no
-            // row duplicated by the grouping).
+            // Every row's cid appears as exactly ONE `cid:` field line (no
+            // row dropped, no row duplicated by the grouping). We count the
+            // canonical `cid:` field line — NOT raw substring — because each
+            // PEER row now also names its cid inside the FQ-7 inline counter
+            // template (WD-42), so a raw substring count is 2 per peer row by
+            // design. The row-identity invariant is "one cid: field per row".
             for i in 0..author_indices.len() {
                 let cid = format!("bafycid{i:03}");
-                let occurrences = rendered.matches(&cid).count();
+                let cid_field_occurrences = rendered
+                    .lines()
+                    .filter(|l| {
+                        l.trim_start().starts_with("cid:") && l.trim_end().ends_with(&cid)
+                    })
+                    .count();
                 prop_assert_eq!(
-                    occurrences,
+                    cid_field_occurrences,
                     1,
-                    "cid {} must appear exactly once (no merge / no drop); got {}",
+                    "cid {} must appear as exactly one `cid:` field line (no merge / no drop); got {}",
                     cid,
-                    occurrences
+                    cid_field_occurrences
                 );
             }
         }
