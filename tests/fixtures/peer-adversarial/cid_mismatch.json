@@ -1,0 +1,19 @@
+{
+  "_fixture": "peer-adversarial/cid_mismatch",
+  "_posture": "The peer-published rkey does NOT recompute byte-equal to compute_cid(canonical(body)) (canonicalization disagreement; 'possible adversarial input'). The signature field is intact; only the rkey<->body CID relationship is broken. Pull MUST recompute the CID locally, detect the mismatch, reject this record, store the honest records, and exit non-zero. Drives integration gate peer_cid_round_trip.",
+  "_rkey": "bafyadversarialrecord000000000000000000000000000000000000",
+  "_note": "The _rkey above is intentionally NOT the canonical CID of this body — the production pull pipeline must compute the real CID and compare.",
+  "subject": "github:rust-lang/cargo",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.dependency-pinning",
+  "evidence": ["https://github.com/rust-lang/cargo/issues/5359"],
+  "confidence": 0.42,
+  "author": "did:plc:rachel-test#org.openlore.application",
+  "composedAt": "2026-05-22T09:18:44Z",
+  "references": [],
+  "signature": {
+    "kid": "did:plc:rachel-test#org.openlore.application",
+    "alg": "EdDSA",
+    "sig": "MEUCIQDzCidMismatchSignatureBytesBase64Url0000000000000000"
+  }
+}

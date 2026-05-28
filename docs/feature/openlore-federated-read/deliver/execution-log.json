@@ -1,6 +1,7 @@
 {
   "schema_version": "3.0",
   "feature_id": "openlore-federated-read",
+  "project_id": "openlore-federated-read",
   "events": [
     {
       "sid": "01-01",
@@ -29,6 +30,153 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-28T02:52:36Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T02:53:20Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:28:13Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: trait-impl-skeleton bootstrap; slice-03 acceptance compile-gate lands after 01-05 materializes test-support (workspace-wide build still RED on test-support + adapter-atproto-pds missing slice-03 method impls, which is the intended fail-for-right-reason gate)",
+      "t": "2026-05-28T03:28:21Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:28:21Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:28:21Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:28:50Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:36:58Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:37:08Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:39:15Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:41:14Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:42:02Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:44:38Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: stub bootstrap; verb dispatch is the compile/route target for Phase 03+ scenarios.",
+      "t": "2026-05-28T03:44:51Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:51:28Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T03:59:39Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T04:00:25Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T04:04:10Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS: FakePeerPds + fixtures_peer bodies panic with RED scaffold; tests/fixtures/peer-adversarial absent; support peer helpers absent",
+      "t": "2026-05-28T04:04:10Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS: 6 FakePeerPds+fixtures self-tests (listRecords/getRecord/resolveDid/adversarial-postures/unreachable) drive real HTTP server; failed until bodies materialized",
+      "t": "2026-05-28T04:34:04Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS: test-support 16/16 green; all 35 slice-03 AT scenarios compile + classify RED (todo!() panic, not BROKEN) verified via transient [[test]] registration (reverted); check-arch OK; slice-01 acceptance no regression",
+      "t": "2026-05-28T04:34:04Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-28T04:34:19Z"
     }
   ]
 }

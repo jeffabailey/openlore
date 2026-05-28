@@ -1,0 +1,20 @@
+{
+  "_fixture": "peer-adversarial/cross_attribution",
+  "_posture": "WD-41 (resolves DISTILL anxiety 1.2) — Rachel's PDS serves a record whose author field is did:plc:trusted-third-party-test, a DID OTHER than the subscribed peer (did:plc:rachel-test). Slice-03 does NOT silently follow cross-attributed records: the pull-time write MUST reject with PeerStorageError::CrossAttribution. Trust model: subscribing to a peer means accepting THEIR claims.",
+  "_rkey": "bafyadversarialrecord000000000000000000000000000000000000",
+  "_subscribed_peer_did": "did:plc:rachel-test",
+  "_claimed_author_did": "did:plc:trusted-third-party-test",
+  "subject": "github:rust-lang/cargo",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.dependency-pinning",
+  "evidence": ["https://github.com/rust-lang/cargo/issues/5359"],
+  "confidence": 0.42,
+  "author": "did:plc:trusted-third-party-test#org.openlore.application",
+  "composedAt": "2026-05-22T09:18:44Z",
+  "references": [],
+  "signature": {
+    "kid": "did:plc:trusted-third-party-test#org.openlore.application",
+    "alg": "EdDSA",
+    "sig": "MEUCIQDzCrossAttributionSignatureBytesBase64Url0000000000"
+  }
+}

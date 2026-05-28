@@ -1,0 +1,19 @@
+{
+  "_fixture": "peer-adversarial/self_attribution",
+  "_posture": "WD-40 — the record's author field is the LOCAL USER's DID (did:plc:test-maria), even though it is served by Rachel's PDS. Even if the signature verified against the victim's key (which would indicate key compromise — an orthogonal failure mode), the pull-time write MUST reject with PeerStorageError::SelfAttribution.",
+  "_rkey": "bafyadversarialrecord000000000000000000000000000000000000",
+  "_victim_did": "did:plc:test-maria",
+  "subject": "github:rust-lang/cargo",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.dependency-pinning",
+  "evidence": ["https://github.com/rust-lang/cargo/issues/5359"],
+  "confidence": 0.42,
+  "author": "did:plc:test-maria#org.openlore.application",
+  "composedAt": "2026-05-22T09:18:44Z",
+  "references": [],
+  "signature": {
+    "kid": "did:plc:test-maria#org.openlore.application",
+    "alg": "EdDSA",
+    "sig": "MEUCIQDzSelfAttributionSignatureBytesBase64Url00000000000"
+  }
+}

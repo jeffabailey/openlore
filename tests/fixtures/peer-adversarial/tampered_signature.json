@@ -1,0 +1,19 @@
+{
+  "_fixture": "peer-adversarial/tampered_signature",
+  "_posture": "KPI-FED-6 — signature byte flipped AFTER the peer's nominal sign step; record body is otherwise well-formed and Rachel-attributed. Pull MUST verify, reject this one record, store the honest records, and exit non-zero (WD-24 + WD-37).",
+  "_rkey": "bafyadversarialrecord000000000000000000000000000000000000",
+  "subject": "github:rust-lang/cargo",
+  "predicate": "embodiesPhilosophy",
+  "object": "org.openlore.philosophy.dependency-pinning",
+  "evidence": ["https://github.com/rust-lang/cargo/issues/5359"],
+  "confidence": 0.42,
+  "author": "did:plc:rachel-test#org.openlore.application",
+  "composedAt": "2026-05-22T09:18:44Z",
+  "references": [],
+  "reason": "Disagree that this is philosophical; pinning is a tool, evidence above.",
+  "signature": {
+    "kid": "did:plc:rachel-test#org.openlore.application",
+    "alg": "EdDSA",
+    "sig": "MEUCIQDzTamperedSignatureBytesBase64Url000000000000000001"
+  }
+}

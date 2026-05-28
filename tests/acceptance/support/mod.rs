@@ -34,6 +34,22 @@ use openlore_test_support::fake_pds::FakePdsHttpHandle;
 use ports::IdentityPort;
 use tempfile::TempDir;
 
+// Slice-03 (step 01-05): the peer-PDS double + canonical peer fixtures are
+// re-exported flat so the `peer_*`, `counter_claim`, and `federated_query`
+// acceptance files can name them via `use support::*` (matching how the
+// slice-01 fixtures already surface). The `FakePeerPds` HTTP runtime is
+// wrapped below in [`PeerPds`] so it owns its own tokio runtime the same
+// way [`FakePds`] does.
+pub use openlore_test_support::fake_peer_pds::{
+    FakePeerPds as SharedFakePeerPds, FakePeerPdsHttpHandle, FakePeerRecord, ADVERSARIAL_RKEY,
+    PEER_CLAIM_COLLECTION,
+};
+pub use openlore_test_support::{
+    fixture_adversarial_peer_cid_mismatch, fixture_adversarial_peer_cross_attribution,
+    fixture_adversarial_peer_self_attribution, fixture_adversarial_peer_tampered_signature,
+    fixture_other_developer_three_claims,
+};
+
 /// A sealed test environment.
 ///
 /// Holds an isolated `HOME` so XDG paths (`~/.config/openlore`,
@@ -761,5 +777,259 @@ pub fn assert_claim_references_retract(env: &TestEnv, retract_cid: &str, origina
          {{type=Retracts, cid={original_cid}}}; actual references={:?}",
         artifact_path.display(),
         signed.unsigned.references,
+    );
+}
+
+// =============================================================================
+// Slice-03 — peer-PDS double + peer-claim assertion helpers (step 01-05)
+// =============================================================================
+//
+// Symmetric with the `FakePds` wrapper above. The four subprocess slice-03
+// acceptance files (`peer_subscribe`, `peer_pull`, `counter_claim`,
+// `federated_query`) construct a `PeerPds` per subscribed peer, point the
+// `openlore` subprocess at its endpoint, and assert on the observable
+// post-pull surface via the helpers below.
+//
+// Per DD-FED-10, the helpers whose load-bearing body materializes per
+// scenario in DELIVER phases 03-05 carry a `todo!()` body with a precise
+// contract docstring; the SIGNATURES are correct NOW so every test file
+// compiles and reaches its own `todo!()` (RED, not BROKEN). The helpers
+// that are cheap + deterministic (DID→filesystem encoding, directory
+// removal, output substring scan) are implemented in full now because the
+// peer_pull / peer_subscribe / federated_query scaffolds reference them
+// directly and they have no dependency on unimplemented production code.
+
+/// A test double for a PEER's `adapter-atproto-pds` (read-only).
+///
+/// Mirrors [`FakePds`] (the user's-own-PDS wrapper): owns a multi-threaded
+/// tokio runtime + an in-process read-only HTTP XRPC server bound to a
+/// random `127.0.0.1` port. The server hosts the peer's record set AND a
+/// `com.atproto.identity.resolveDid` handler on the SAME base URL (one
+/// server per peer keeps wiring simple — open-question #2). Dropping
+/// `PeerPds` releases the runtime on a background thread (the same
+/// `ManuallyDrop` shutdown pattern `FakePds` uses) so the test thread never
+/// blocks on a parked accept().
+pub struct PeerPds {
+    inner: SharedFakePeerPds,
+    http_handle: FakePeerPdsHttpHandle,
+    runtime: std::mem::ManuallyDrop<tokio::runtime::Runtime>,
+}
+
+impl PeerPds {
+    /// Start a peer PDS hosting `records` for `peer_did` and spin up its
+    /// in-process HTTP server (records + resolveDid on one base URL).
+    pub fn for_peer(peer_did: &str, records: Vec<FakePeerRecord>) -> Self {
+        Self::from_fake(SharedFakePeerPds::for_peer(peer_did, records))
+    }
+
+    /// Start a peer PDS preconfigured with the tampered-signature posture
+    /// (KPI-FED-6). Pair with [`fixture_adversarial_peer_tampered_signature`].
+    pub fn with_tampered_signature(peer_did: &str, honest: Vec<FakePeerRecord>) -> Self {
+        Self::from_fake(SharedFakePeerPds::with_tampered_signature(peer_did, honest))
+    }
+
+    /// Start a peer PDS preconfigured with the CID-mismatch posture.
+    /// Pair with [`fixture_adversarial_peer_cid_mismatch`].
+    pub fn with_cid_mismatch(peer_did: &str, honest: Vec<FakePeerRecord>) -> Self {
+        Self::from_fake(SharedFakePeerPds::with_cid_mismatch(peer_did, honest))
+    }
+
+    /// Start a peer PDS preconfigured with the self-attribution posture
+    /// (WD-40). Pair with [`fixture_adversarial_peer_self_attribution`].
+    pub fn with_self_attribution(
+        peer_did: &str,
+        victim_did: &str,
+        honest: Vec<FakePeerRecord>,
+    ) -> Self {
+        Self::from_fake(SharedFakePeerPds::with_self_attribution(
+            peer_did, victim_did, honest,
+        ))
+    }
+
+    /// Start a peer PDS preconfigured with the cross-attribution posture
+    /// (WD-41). Pair with [`fixture_adversarial_peer_cross_attribution`].
+    pub fn with_cross_attribution(
+        peer_did: &str,
+        claimed_author_did: &str,
+        honest: Vec<FakePeerRecord>,
+    ) -> Self {
+        Self::from_fake(SharedFakePeerPds::with_cross_attribution(
+            peer_did,
+            claimed_author_did,
+            honest,
+        ))
+    }
+
+    fn from_fake(inner: SharedFakePeerPds) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_io()
+            .enable_time()
+            .thread_name("fake-peer-pds-rt")
+            .build()
+            .expect("PeerPds: build tokio multi_thread runtime");
+        let http_handle = runtime.block_on(inner.serve_http());
+        Self {
+            inner,
+            http_handle,
+            runtime: std::mem::ManuallyDrop::new(runtime),
+        }
+    }
+
+    /// Base URL of the peer's in-process HTTP XRPC server (records +
+    /// resolveDid). Thread into the `openlore` subprocess via the per-peer
+    /// endpoint env var so the in-binary peer adapter talks to this fake.
+    pub fn endpoint_url(&self) -> &str {
+        &self.http_handle.base_url
+    }
+
+    /// The peer DID this fake hosts records for.
+    pub fn peer_did(&self) -> &str {
+        self.inner.peer_did()
+    }
+
+    /// All records the fake would return on a `listRecords` call (honest +
+    /// any one adversarial record). Cross-check the production code stored
+    /// only the verified subset.
+    pub fn records(&self) -> Vec<FakePeerRecord> {
+        self.inner.records()
+    }
+
+    /// Engage the "unreachable" failure mode (PP-7): the HTTP server drops
+    /// connections without responding.
+    pub fn simulate_unreachable(&self) {
+        self.inner.simulate_unreachable();
+    }
+
+    /// Inverse of [`simulate_unreachable`](Self::simulate_unreachable).
+    pub fn restore(&self) {
+        self.inner.restore();
+    }
+}
+
+impl Drop for PeerPds {
+    fn drop(&mut self) {
+        // Same background-thread shutdown as `FakePds` — moving the runtime
+        // off the test thread avoids blocking on a parked accept() during
+        // teardown on macOS.
+        let rt = unsafe { std::mem::ManuallyDrop::take(&mut self.runtime) };
+        let _ = std::thread::Builder::new()
+            .name("fake-peer-pds-shutdown".to_string())
+            .spawn(move || drop(rt));
+    }
+}
+
+/// Encode a DID into the filesystem-safe partition segment used under
+/// `peer_claims/<encoded_did>/` (Q-DELIVER-2): colons become underscores.
+///
+/// `did:plc:rachel-test` → `did_plc_rachel-test`. Round-trippable + safe on
+/// macOS APFS, Linux ext4, and WSL2 DrvFs (per data-models.md §"On-disk
+/// artifact format"). This is the single source of truth the assertion
+/// helpers and DELIVER's production adapter must agree on.
+pub fn did_to_fs_segment(did: &str) -> String {
+    did.replace(':', "_")
+}
+
+/// Absolute path to a peer's on-disk claim partition:
+/// `{home}/.local/share/openlore/peer_claims/<encoded_did>/`.
+pub fn peer_claims_dir_for(env: &TestEnv, peer_did: &str) -> PathBuf {
+    env.home
+        .join(".local")
+        .join("share")
+        .join("openlore")
+        .join("peer_claims")
+        .join(did_to_fs_segment(peer_did))
+}
+
+/// Universe-bound: "the `peer_claims` store holds exactly `count` rows
+/// attributed to `peer_did`, and EVERY such row carries `peer_did` as its
+/// author — never any other DID (anti-merging, I-FED-1)". Port-exposed
+/// name: `peer_storage.claims.row_count_by_author[did]`.
+///
+/// DD-FED-10: the load-bearing body (open a raw `duckdb::Connection` to
+/// `env.duckdb_path()`, `SELECT count(*) FROM peer_claims WHERE author_did = ?`
+/// AND assert no row exists under any OTHER did for these CIDs) materializes
+/// in DELIVER's PP-1 / FQ-1 scenarios once migration v3 + the peer_claims
+/// table land. Signature is final now so the peer_pull / federated_query
+/// scaffolds compile.
+pub fn assert_peer_claims_attributed_to(env: &TestEnv, peer_did: &str, count: usize) {
+    let _ = (env, peer_did, count);
+    todo!(
+        "DELIVER (slice-03): open duckdb at env.duckdb_path(); assert \
+         SELECT count(*) FROM peer_claims WHERE author_did = peer_did == count \
+         AND assert these CIDs appear under NO other author_did (anti-merging, I-FED-1)"
+    )
+}
+
+/// Universe-bound: "the `graph query --federated` stdout contains NO merged
+/// / consensus / aggregate row — every output row is attributed to exactly
+/// one author DID (KPI-FED-2 zero-merge release gate)". Port-exposed name:
+/// `cli.graph_query.merged_row_count == 0`.
+///
+/// The banned-substring half is cheap + final NOW (no production dependency)
+/// so the federated_query scaffolds can call it directly. The
+/// distinct-(author,cid)-tuple half (counting rows, matching against the
+/// expected per-author sum) materializes per scenario in DELIVER's FQ-2 /
+/// FQ-8 once the renderer exists.
+pub fn assert_no_merged_rows_in_federated_output(outcome: &CliOutcome) {
+    for banned in &["merged", "consensus", "aggregate"] {
+        assert!(
+            !outcome.stdout.to_lowercase().contains(banned),
+            "graph query --federated stdout must contain NO {:?} row \
+             (KPI-FED-2 zero-merge gate); \n--- stdout ---\n{}\n--- stderr ---\n{}",
+            banned,
+            outcome.stdout,
+            outcome.stderr
+        );
+    }
+}
+
+/// Universe-bound: "the on-disk partition `peer_claims/<encoded_did>/` does
+/// NOT exist (hard-purge removed it)". Port-exposed name:
+/// `storage.peer_claims_fs.dir_exists_for[did] == false`.
+///
+/// Implemented in full NOW: directory absence is observable without any
+/// unimplemented production code (the purge scenario writes the directory
+/// via the real adapter, then this helper asserts its removal). Uses the
+/// DID→fs encoding (`did_to_fs_segment`) as the single source of truth.
+pub fn assert_peer_claims_dir_removed_for(env: &TestEnv, peer_did: &str) {
+    let dir = peer_claims_dir_for(env, peer_did);
+    assert!(
+        !dir.exists(),
+        "expected peer_claims partition for {peer_did} to be removed after \
+         hard-purge, but it still exists at {} (KPI-FED-4 zero purge residue)",
+        dir.display()
+    );
+}
+
+/// Universe-bound: "the one-time orientation/framing block (named by
+/// `marker`) appears EXACTLY ONCE across the two supplied invocation
+/// outputs — present in `first`, absent in `second`". Port-exposed name:
+/// `cli.orientation.emitted_count[marker] == 1`.
+///
+/// Covers the WD-39 (first federated query), WD-43 (first counter-claim),
+/// and the once-per-user orientation gates. The body is final NOW: it scans
+/// observable stdout for `marker` across the two outcomes — no dependency on
+/// unimplemented production code beyond the orientation text itself, which
+/// each scenario passes in as `marker`.
+pub fn assert_orientation_emitted_exactly_once(
+    first: &CliOutcome,
+    second: &CliOutcome,
+    marker: &str,
+) {
+    assert!(
+        first.stdout.contains(marker),
+        "expected the one-time orientation marker {marker:?} on the FIRST \
+         invocation; \n--- first stdout ---\n{}\n--- first stderr ---\n{}",
+        first.stdout,
+        first.stderr
+    );
+    assert!(
+        !second.stdout.contains(marker),
+        "expected the one-time orientation marker {marker:?} to be ABSENT on \
+         the SECOND invocation (once-per-user gate; WD-39 / WD-43); \
+         \n--- second stdout ---\n{}\n--- second stderr ---\n{}",
+        second.stdout,
+        second.stderr
     );
 }

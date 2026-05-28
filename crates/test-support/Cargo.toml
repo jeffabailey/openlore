@@ -50,7 +50,13 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 bytes = "1"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
+# Slice-03 (step 01-05): the FakePeerPds self-tests act as an in-process
+# HTTP *client* against the fake's read-only XRPC server to prove
+# listRecords / getRecord / resolveDid return the fixture record set. The
+# production `[dependencies].hyper` only enables `server`; the client
+# feature is needed for the tests only, so it lives here.
+hyper = { version = "1", features = ["client", "http1"] }
 
 # Step 04-05: the universe-bound state-delta module (DD-3 bootstrap)
 # lives at `tests/common/state_delta.rs` so future acceptance tests
