@@ -61,12 +61,26 @@ pub struct ClaimCounterOutcome {
     pub stdout: String,
 }
 
+/// The inclusive upper bound on a counter-claim `--reason`, in Unicode
+/// scalar values (WD-20: `1..=1000`; ADR-015 `maxLength` on the Lexicon
+/// `reason` field). Length is measured on the NFC-normalized reason so the
+/// CLI pre-compose guard agrees with the lexicon layer (LCC-5).
+const MAX_REASON_CHARS: usize = 1000;
+
 /// Run the `claim counter` verb.
 pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutcome> {
     // Step 1: NFC-normalize the reason (WD-35). The normalized bytes are
     // what get displayed AND signed, so a copy-pasted decomposed accent
     // and a precomposed one land on the same CID.
     let reason = normalize_reason(&args.reason);
+
+    // Step 1b: CLI-layer pre-compose guard on `--reason` (WD-20). A missing
+    // FLAG is a clap error; an empty or over-length VALUE reaches here and
+    // must be rejected BEFORE any target resolution, preview, sign, or
+    // publish — the user gets a clear, actionable message instead of a
+    // useless compose preview. The lexicon-layer length check (LCC-5) is the
+    // defense-in-depth net at sign-time; this is the early, friendly gate.
+    check_reason_pre_compose(&reason).map_err(|e| anyhow!(e))?;
 
     // Step 2: resolve the target across BOTH stores (own `claims` first,
     // then the peer cache). We need the target's author DID for the
@@ -269,6 +283,33 @@ fn resolve_target(wiring: &Wiring, target_cid: &Cid) -> Result<Option<ResolvedTa
 /// Strip a `#fragment` from a DID, returning the bare DID for display.
 fn bare_did(did: &str) -> String {
     did.split('#').next().unwrap_or(did).to_string()
+}
+
+/// Pure CLI-layer pre-compose validation of the (already NFC-normalized)
+/// `--reason` (WD-20). Two railway-style failures, in order:
+///
+/// 1. **Empty** — a reason that is blank (or only whitespace) after
+///    normalization fails with the content-frozen requirement literal. A
+///    counter MUST explain itself (ADR-015); the message tells the user
+///    exactly what to do.
+/// 2. **Too long** — more than [`MAX_REASON_CHARS`] Unicode scalar values
+///    fails with a message naming the upper bound, so the user knows how
+///    far over they are.
+///
+/// Returns `Ok(())` for a valid reason. Pure — no I/O — so the guard runs
+/// before any target resolution or preview rendering (the pre-compose
+/// ordering CC-2/CC-3 assert).
+fn check_reason_pre_compose(reason: &str) -> Result<(), String> {
+    if reason.trim().is_empty() {
+        return Err("counter-claims require --reason; explain your disagreement".to_string());
+    }
+    let chars = reason.chars().count();
+    if chars > MAX_REASON_CHARS {
+        return Err(format!(
+            "--reason is too long: {chars} characters exceeds the {MAX_REASON_CHARS}-character maximum"
+        ));
+    }
+    Ok(())
 }
 
 /// A `ClaimLookup` spanning BOTH the author store AND the peer cache. The

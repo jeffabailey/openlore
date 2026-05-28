@@ -294,7 +294,92 @@ fn assert_counter_claim_references(
 /// @us-fed-004 @real-io @driving_port @j-003b @error @wd-20
 #[test]
 fn counter_claim_rejects_missing_reason_pre_compose() {
-    todo!("DELIVER (slice-03): wire VerbClaimCounter → reject if --reason is None/empty BEFORE any compose preview / pure-core call. Assert: exit nonzero, stderr literal 'counter-claims require --reason; explain your disagreement', zero files under claims_dir, zero PDS calls (assert_no_pds_call_was_made)")
+    let env = TestEnv::initialized();
+
+    // GIVEN: a peer publishes claims and the user pulls them, so a valid
+    // counter target genuinely exists in the peer cache. The reason — not
+    // the target — is what must trip the pre-compose guard.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer = PeerPds::for_peer(peer_did, records);
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(added.status, 0, "peer add precondition must succeed");
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(pulled.status, 0, "peer pull precondition must succeed");
+    let target_cid = first_peer_claim_cid(peer_did, rachel_seed);
+
+    // WHEN: the user counters that valid target but supplies an EMPTY
+    // `--reason` (a totally-absent flag is a clap parse error; the empty
+    // string reaches the verb, which must reject it pre-compose — WD-20).
+    let outcome = run_openlore_with_peer_resolver(
+        &env,
+        &["claim", "counter", &target_cid, "--reason", ""],
+        peer_did,
+        peer.endpoint_url(),
+    );
+
+    // THEN: non-zero exit.
+    assert_ne!(
+        outcome.status, 0,
+        "missing-reason counter-claim must exit non-zero;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN: stderr names the requirement with the content-frozen literal.
+    assert!(
+        outcome
+            .stderr
+            .contains("counter-claims require --reason; explain your disagreement"),
+        "stderr must carry the CC-2 literal \"counter-claims require --reason; explain your \
+         disagreement\";\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // THEN (pre-compose ordering): NO compose preview was rendered — the
+    // guard fired BEFORE any preview reached stdout.
+    assert!(
+        !outcome
+            .stdout
+            .contains("counter-claims coexist, never overwrite"),
+        "the rejection must happen PRE-COMPOSE — no compose preview may be rendered;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN: nothing signed (no artifact under claims_dir) and nothing
+    // published (zero PDS calls).
+    assert!(
+        !claims_dir_has_any_artifact(&env),
+        "no counter-claim artifact may be written when --reason is empty"
+    );
+    assert_no_pds_call_was_made(&env);
+}
+
+/// Universe-bound: "the on-disk claims directory holds zero `*.json`
+/// counter-claim artifacts." Port-exposed name: `claims_dir.artifact_count
+/// == 0`. Used by the sad-path scenarios (CC-2 / CC-3) to assert nothing
+/// was signed when the pre-compose guard rejects.
+fn claims_dir_has_any_artifact(env: &TestEnv) -> bool {
+    let dir = env.claims_dir();
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json")),
+        // No directory at all == no artifacts.
+        Err(_) => false,
+    }
 }
 
 /// CC-3 / Edge (WD-20): `--reason` longer than 1000 chars is rejected
@@ -304,7 +389,79 @@ fn counter_claim_rejects_missing_reason_pre_compose() {
 /// @us-fed-004 @real-io @driving_port @j-003b @error @wd-20
 #[test]
 fn counter_claim_rejects_reason_exceeding_one_thousand_chars() {
-    todo!("DELIVER (slice-03): wire VerbClaimCounter → length validation in claim_domain::validate_counter_claim (or pre-cli arg validator). Assert: exit nonzero, stderr names '1000' upper bound, no file written")
+    let env = TestEnv::initialized();
+
+    // GIVEN: a peer publishes claims and the user pulls them, so the target
+    // is genuinely valid. Only the reason LENGTH is out of bounds — proving
+    // the upper-bound guard, not an unknown-target error, is what rejects.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    let peer = PeerPds::for_peer(peer_did, records);
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(added.status, 0, "peer add precondition must succeed");
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(pulled.status, 0, "peer pull precondition must succeed");
+    let target_cid = first_peer_claim_cid(peer_did, rachel_seed);
+
+    // WHEN: the reason is 1001 chars — one past the WD-20 upper bound of
+    // 1..=1000 (ADR-015 maxLength on the Lexicon `reason` field).
+    let over_limit_reason = "a".repeat(1001);
+    let outcome = run_openlore_with_peer_resolver(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &target_cid,
+            "--reason",
+            &over_limit_reason,
+        ],
+        peer_did,
+        peer.endpoint_url(),
+    );
+
+    // THEN: non-zero exit.
+    assert_ne!(
+        outcome.status, 0,
+        "over-length counter-claim reason must exit non-zero;\n--- stdout ---\n{}\n\
+         --- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN: stderr names the 1000-char upper bound.
+    assert!(
+        outcome.stderr.contains("1000"),
+        "stderr must name the 1000-character upper bound;\n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // THEN (pre-compose ordering): no compose preview was rendered.
+    assert!(
+        !outcome
+            .stdout
+            .contains("counter-claims coexist, never overwrite"),
+        "the rejection must happen PRE-COMPOSE — no compose preview may be rendered;\n\
+         --- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // THEN: nothing signed and nothing published.
+    assert!(
+        !claims_dir_has_any_artifact(&env),
+        "no counter-claim artifact may be written when --reason exceeds 1000 chars"
+    );
+    assert_no_pds_call_was_made(&env);
 }
 
 /// CC-4 / Sad (WD-34): Countering one's OWN claim is rejected
