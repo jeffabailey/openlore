@@ -2959,14 +2959,101 @@ fn graph_query_weighted_end_to_end_wires_scoring_feed_without_persisting_outputs
         outcome.stdout, outcome.stderr
     );
 
-    // Gate 4: nothing persisted. Gate 1: the rendered aggregate decomposes to
-    // per-author contributions (no faceless consensus row).
+    // Gate 4 (weight_and_bucket_never_persisted): the @infrastructure wiring ran a
+    // full weighted query end-to-end (production StoragePort scoring-feed
+    // `query_attributed_for_scoring` -> pure `scoring::score` core ->
+    // `render::render_weighted_view`, all bound through the real
+    // `DuckDbStorageAdapter` in the production composition root — no test double in
+    // the path), yet NOTHING was persisted: this scans every DuckDB table/column/
+    // cell AND every on-disk `<cid>.json` artifact for the forbidden weight/bucket
+    // vocabulary. The aggregate weight is display-only, recomputed at query time
+    // (WD-72/WD-89). Materialized at 05-04.
     assert_weight_not_persisted(&env);
 
-    todo!(
-        "DELIVER (slice-04): assert a weighted query runs end-to-end through the extended \
-         StoragePort scoring-feed -> pure scoring core -> renderer (the @infrastructure wiring), no \
-         scoring output is persisted (Gate 4), and the rendered aggregate decomposes to per-author \
-         contributions (Gate 1) (US-GRAPH-006 UAT scenario 2);\n--- graph ---\n{graph:?}"
-    )
+    // Gate 1 (scoring_aggregate_preserves_attribution): the rendered aggregate
+    // decomposes to per-author contributions — NO faceless consensus row. The
+    // worked-example deno pairing (Tobias 0.55 + Maria 0.40) is the multi-author
+    // case whose `--weighted` breadth line lists each contributing author under its
+    // OWN DID with its OWN confidence; the aggregate never collapses into a single
+    // averaged/merged value (anti-merging, WD-73 / ADR-022 / I-GRAPH-2).
+    //
+    // Universe (port-exposed observable surface of the `--weighted` view, all
+    // asserted against stdout — the CLI driving-port observable):
+    //   cli.graph_query.deno_contributions_per_author — Tobias + Maria each named
+    //                                                    by their OWN DID (Gate 1)
+    //   cli.graph_query.deno_confidences_shown         — each contribution's OWN
+    //                                                    confidence (0.55, 0.4)
+    //   cli.graph_query.no_faceless_aggregate          — no merged/consensus/
+    //                                                    aggregate row in the view
+    let stdout = &outcome.stdout;
+
+    // Fixture precondition: the deno pairing has exactly 2 distinct authors (the
+    // multi-author case that exercises the per-author decomposition path). Derive
+    // the authors + their confidences from the LIVE fixture (not hardcoded
+    // literals) so the assertion proves the SYSTEM surfaces the stored attribution.
+    let deno_contributions: Vec<&SeededClaim> = graph
+        .seeded
+        .iter()
+        .filter(|c| c.subject == "github:denoland/deno")
+        .collect();
+    assert_eq!(
+        deno_contributions.len(),
+        2,
+        "fixture precondition: the deno pairing has exactly 2 contributing claims (Tobias + Maria) \
+         so the aggregate must decompose to 2 per-author contributions; got {deno_contributions:?}"
+    );
+
+    // 1. Gate 1 — EVERY contributing author is individually nameable under its OWN
+    //    DID in the rendered aggregate (the decomposition the WeightedPairing
+    //    carries is rendered verbatim — no faceless consensus row swallows them).
+    for contribution in &deno_contributions {
+        assert!(
+            stdout.contains(&contribution.author_did),
+            "cli.graph_query.deno_contributions_per_author (Gate 1): the weighted aggregate must \
+             name contributing author {:?} under its OWN DID — the multi-author aggregate decomposes \
+             to per-author contributions, never a faceless consensus;\n--- stdout ---\n{stdout}\n\
+             --- graph ---\n{graph:?}",
+            contribution.author_did
+        );
+    }
+
+    // 2. Each contribution surfaces its OWN confidence VERBATIM (the minimal
+    //    decimal the renderer prints, e.g. 0.40 -> `0.4`), so the aggregate is the
+    //    SUM of attributed per-claim contributions — never an averaged-away
+    //    consensus value (Gate 1 anti-merging; the per-author confidences stay
+    //    visible).
+    for contribution in &deno_contributions {
+        let token = serde_json::to_value(contribution.confidence)
+            .map(|v| v.to_string())
+            .expect("the seeded confidence serializes to its minimal decimal token");
+        assert!(
+            stdout.contains(&format!("confidence {token}")),
+            "cli.graph_query.deno_confidences_shown (Gate 1): the weighted aggregate must show \
+             author {:?}'s OWN confidence {token:?} in its per-author contribution line — each \
+             claim contributes per its own confidence, never an averaged consensus;\n\
+             --- stdout ---\n{stdout}",
+            contribution.author_did
+        );
+    }
+
+    // 3. Gate 1 — NO faceless aggregate row: the per-author decomposition is the
+    //    ONLY representation; the contributing claims are never collapsed into a
+    //    merged/consensus/aggregate DATA row (anti-merging, WD-73 / ADR-022). The
+    //    content-frozen never-stored footer legitimately USES "aggregate" and
+    //    "merged" as an anti-merging GUARANTEE ("DISPLAY-ONLY aggregate VIEW ...
+    //    nothing is merged or invented"); that explanatory note is not a data row,
+    //    so strip the footer block before scanning the rendered rows (the SAME
+    //    strip-the-guarantee pattern GQE-10 uses for the no-merge footer).
+    let rows_only = stdout
+        .split("Note: weights are a DISPLAY-ONLY aggregate VIEW")
+        .next()
+        .unwrap_or(stdout);
+    for label in ["merged", "consensus", "aggregate"] {
+        assert!(
+            !rows_only.to_lowercase().contains(label),
+            "cli.graph_query.no_faceless_aggregate (Gate 1): the end-to-end weighted view rows must \
+             contain NO {label:?} row — the aggregate decomposes to per-author contributions, each \
+             contributing claim stays attributed;\n--- stdout ---\n{stdout}"
+        );
+    }
 }
