@@ -170,7 +170,20 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     print!("{out}");
     std::io::stdout().flush()?;
 
-    for index in selection {
+    // Batch is a SEQUENCE of individual human-gates (US-SCR-005; WD-49 /
+    // J-004c) — never a "sign all" bypass. Each selected candidate is carried
+    // through its OWN slice-01 compose-sign-publish gesture; between them we
+    // surface a running "(k of M signed)" progress line so the human sees the
+    // batch advancing one conscious signature at a time.
+    let total_selected = selection.len();
+    for (signed_so_far, index) in selection.into_iter().enumerate() {
+        // After the first candidate is signed, announce progress BEFORE the
+        // next candidate's compose preview: "(1 of 3 signed)" precedes the
+        // second preview, "(2 of 3 signed)" the third, and so on.
+        if signed_so_far > 0 {
+            println!("\n({signed_so_far} of {total_selected} signed)");
+            std::io::stdout().flush()?;
+        }
         // 1-based selection -> 0-based slice access (validated above).
         let candidate = &candidates[index - 1];
         sign_candidate_via_slice01(wiring, candidate)?;

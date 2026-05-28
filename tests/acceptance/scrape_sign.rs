@@ -671,13 +671,110 @@ fn local_store_cid_from_stdout(stdout: &str) -> String {
 /// @us-scr-005 @driving_port @real-io @j-004c @kpi-scr-1 @kpi-scr-2 @happy
 #[test]
 fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-7. WHEN --sign 1,3,4 with stdin signing each of the three \
-         previews in turn; THEN stdout shows three SEPARATE compose previews (each with 'not \
-         as truth'), the progress lines '(1 of 3 signed)' and '(2 of 3 signed)', three \
-         records on the user's own PDS, and NO 'sign all' affordance anywhere in output."
-    )
+    // GIVEN Maria has an initialized env + the public repo serving the five
+    // canonical cargo signals → a candidate list of exactly five entries. She
+    // will batch-sign three of them (1, 3, 4) — each carried through its OWN
+    // slice-01 compose-sign-publish gesture (US-SCR-005; the human-gate holds
+    // PER candidate, batch is convenience never a bypass; WD-49 / J-004c).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she runs `--sign 1,3,4` and walks EACH of the three compose editors
+    // in turn, accepting every pre-filled field unchanged (four field Enters +
+    // a fifth Enter for the conservative confidence default), pressing Enter to
+    // sign, then Y to publish — the SAME zero-edit slice-01 gesture SS-2 uses,
+    // repeated once per selected candidate. Three previews, three individual
+    // signing gestures: there is NO single "sign all" shortcut.
+    let one_sign = "\n\n\n\n\n\nY\n";
+    let stdin = one_sign.repeat(3);
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "1,3,4"],
+        github.base_url(),
+        &stdin,
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "scrape --sign 1,3,4 must exit 0 once all three candidates are signed + published; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // THEN stdout shows THREE SEPARATE compose previews — each carrying the
+    // inherited "not as truth" framing (I-7). Counting the literal occurrences
+    // proves each selected candidate was composed individually (one preview per
+    // candidate), not a single batched preview.
+    let preview_count = outcome.stdout.matches("not as truth").count();
+    assert_eq!(
+        preview_count, 3,
+        "expected THREE separate compose previews (one per selected candidate, each with \
+         'not as truth'); found {preview_count}; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND a running per-candidate progress line appears between the signs: after
+    // the first candidate is signed the CLI shows "(1 of 3 signed)" before the
+    // second candidate's preview, and "(2 of 3 signed)" before the third. Batch
+    // is a sequence of individual human-gates, surfaced as progress.
+    assert!(
+        outcome.stdout.contains("(1 of 3 signed)"),
+        "expected the running progress line '(1 of 3 signed)' after the first candidate is \
+         signed; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome.stdout.contains("(2 of 3 signed)"),
+        "expected the running progress line '(2 of 3 signed)' after the second candidate is \
+         signed; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND there is NO "sign all without review" affordance anywhere in output —
+    // batch never bypasses the per-candidate human-gate (WD-49 / J-004c).
+    assert!(
+        !outcome.stdout.to_lowercase().contains("sign all"),
+        "batch must offer NO 'sign all' affordance (the human signs each candidate \
+         individually; WD-49 / J-004c); \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND exactly THREE records landed on the user's OWN PDS — one per signed
+    // candidate, each published via the SAME slice-01 VerbClaimPublish path
+    // (single-publish-path per claim; WD-66 / I-SCR-6). The bare author DID
+    // at-uri proves each is the user's OWN artifact (no parallel publish path).
+    let bare_author_did = env
+        .identity
+        .author_did()
+        .split('#')
+        .next()
+        .unwrap_or_else(|| env.identity.author_did())
+        .to_string();
+    let records = env.pds.records();
+    assert_eq!(
+        records.len(),
+        3,
+        "batch --sign 1,3,4 must publish EXACTLY THREE records on the user's OWN PDS \
+         (one per signed candidate, each via the single slice-01 publish path); got {}: {:?}",
+        records.len(),
+        records
+    );
+    for record in &records {
+        assert_eq!(
+            record.collection, "org.openlore.claim",
+            "each batched record must be in the org.openlore.claim collection; got {}",
+            record.collection
+        );
+        assert!(
+            record.at_uri.starts_with(&format!("at://{bare_author_did}/org.openlore.claim/")),
+            "each batched record must live at the user's OWN at-uri (bare author DID, \
+             slice-01 publish path); got {}",
+            record.at_uri
+        );
+    }
 }
 
 /// SS-8 / Edge (US-SCR-005 Ex 2): a candidate can be SKIPPED mid-batch
