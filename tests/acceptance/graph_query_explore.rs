@@ -325,11 +325,46 @@ fn graph_query_bare_subject_is_unchanged_from_prior_slice_behavior() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert bare `graph query --subject` (no explorer flag) shows ONLY \
-         the own claim — the seeded peer DID + its cid never appear — preserving the slice-01/03 \
-         own-claims-only default (WD-87 bare-subject-unchanged regression);\n--- graph ---\n{graph:?}"
-    )
+    let stdout = &outcome.stdout;
+
+    // The seeded fixture mixes the local user's OWN cargo claim with one
+    // subscribed PEER's cargo claim about the SAME subject. The peer row is the
+    // load-bearing precondition: if the bare `--subject` path EVER widened to
+    // peers, the peer's DID would surface. Derive the peer's bare DID from the
+    // recorded seeding shape (the row whose author is NOT the local user).
+    let local_did = env.identity.author_did();
+    let peer_did = graph
+        .seeded
+        .iter()
+        .map(|c| c.author_did.as_str())
+        .find(|did| *did != local_did)
+        .expect("fixture seeds at least one PEER claim distinct from the local user");
+
+    // 1. The OWN claim renders: the bare `--subject` path still surfaces the
+    //    local user's cargo claim verbatim (subject + numeric confidence 0.91 +
+    //    its object) — the slice-01/03 own-claims-only contract holds.
+    assert!(
+        stdout.contains(subject),
+        "bare --subject output must render the queried subject {subject};\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("0.91") && stdout.contains("org.openlore.philosophy.dependency-pinning"),
+        "bare --subject output must render the local user's OWN claim verbatim \
+         (confidence 0.91 + its object) — the slice-01/03 own-claims-only default;\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 2. DEFAULT-OFF REGRESSION (WD-87): the seeded peer's DID never appears on
+    //    the bare `--subject` path. The explorer surface is strictly opt-in —
+    //    bare `--subject` (no --object/--contributor/--traverse/--weighted/
+    //    --explain, no --federated) does NOT widen to peers.
+    assert!(
+        !stdout.contains(peer_did),
+        "bare --subject output (no explorer flag) must NOT name the seeded peer DID {peer_did} — \
+         the explorer surface is additive/opt-in and the bare --subject path stays \
+         own-claims-only (WD-87 bare-subject-unchanged regression);\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
 }
 
 /// GQE-4 (US-GRAPH-001 error/edge): Maria typos the philosophy URI

@@ -2873,8 +2873,32 @@ pub fn seed_federated_graph(env: &TestEnv, fixture: FederatedGraphFixture) -> Se
                 }],
             )
         }
+        FederatedGraphFixture::CargoOwnPlusOnePeer => {
+            // GQE-3 (WD-87 bare-`--subject` default-off regression): the SAME
+            // subject (github:rust-lang/cargo) asserted by BOTH the local user
+            // (own `claim add`) AND one subscribed peer (`peer add` + `peer
+            // pull`). The peer row is the load-bearing precondition: if the bare
+            // `--subject` path EVER widened to peers under the explorer changes,
+            // the peer's DID + cid WOULD surface. It must not — the bare path
+            // stays own-claims-only (slice-01/03 contract preserved).
+            let dep = "org.openlore.philosophy.dependency-pinning";
+            let cargo = "github:rust-lang/cargo";
+            seed_own_plus_peer_graph(
+                env,
+                &[OwnClaim {
+                    subject: cargo,
+                    object: dep,
+                    confidence: 0.91,
+                }],
+                &[SeedPeer {
+                    peer_did: "did:plc:rachel-test",
+                    seed: [7u8; 32],
+                    triples: &[(cargo, dep, 0.42)],
+                }],
+            )
+        }
         // The remaining variants materialize per-scenario in later slice-04
-        // steps (GQE-3..27 stay RED until then).
+        // steps (GQE-4..27 stay RED until then).
         other => {
             let _ = env;
             todo!(
