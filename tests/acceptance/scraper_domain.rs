@@ -548,14 +548,102 @@ fn scraper_domain_zero_matching_signals_derive_an_empty_candidate_list() {
 /// @us-scr-006 @j-004b @wd-53 @wd-67 @i-scr-5
 #[test]
 fn scraper_domain_embedded_mapping_matches_jobs_yaml_ssot() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SD-6 — mapping_matches_ssot (I-SCR-5). WHEN \
-         load_mapping(EMBEDDED_JOBS_YAML_MAPPING); THEN it parses to exactly 5 entries, every \
-         predicate is an org.openlore.philosophy.* NSID, every default_confidence == 0.25, \
-         AND the parsed set equals the live docs/product/jobs.yaml \
-         J-004.signal_predicate_mapping read from disk in the test (drift fails LOUD). The \
-         production crate enforces the same via a build-time mapping_matches_ssot test (WD-67) \
-         — this layer-2 acceptance pins the SSOT-conformance contract."
-    )
+    use scraper_domain::{load_mapping, EMBEDDED_MAPPING_YAML};
+
+    // Layer-2 example (Mandate 9; DD-SCR): pure-core direct invocation, NO CLI
+    // subprocess. The driving port IS the pure `load_mapping` signature. This is
+    // the acceptance-layer pin of the SSOT-conformance gate (I-SCR-5 / WD-53 /
+    // WD-67): the signal->predicate mapping `scraper-domain` consumes must be the
+    // EMBEDDED snapshot of `docs/product/jobs.yaml :: J-004.signal_predicate_mapping`
+    // (the SSOT) — never a divergent hardcode.
+    //
+    // The crate's own build-time `mapping_matches_ssot` (01-02) enforces the same
+    // invariant inside scraper-domain; reading the live jobs.yaml HERE (the test
+    // is the effect shell, so filesystem I/O is fine — the crate itself never
+    // reads the file) makes the drift gate visible at the acceptance boundary too,
+    // so a future SSOT edit that is NOT mirrored into the embedded snapshot fails
+    // LOUDLY in this slice's acceptance suite.
+
+    // --- (a) structural invariants on the embedded snapshot ---------------------
+    let embedded =
+        load_mapping(EMBEDDED_MAPPING_YAML).expect("embedded SSOT mapping snapshot must parse");
+
+    assert_eq!(
+        embedded.entries.len(),
+        5,
+        "slice-02 SSOT has exactly 5 signal->predicate entries"
+    );
+    for entry in &embedded.entries {
+        assert!(
+            entry.object.starts_with("org.openlore.philosophy."),
+            "every mapped predicate must be an org.openlore.philosophy.* NSID, got {}",
+            entry.object
+        );
+        assert_eq!(
+            entry.default_confidence, 0.25_f64,
+            "every SSOT entry's default confidence is the conservative 0.25 (WD-52)"
+        );
+    }
+
+    // --- (b) no-drift gate: embedded == live jobs.yaml J-004 SSOT ---------------
+    // Read the authoritative block straight from disk and assert the embedded
+    // snapshot parses to the IDENTICAL typed mapping. jobs.yaml lives at the
+    // workspace root; this test target is owned by the `cli` crate, so the path
+    // is relative to that crate's manifest dir (symmetric with the crate's own
+    // mapping_matches_ssot unit test).
+    let jobs_yaml_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/product/jobs.yaml");
+    let jobs_yaml = std::fs::read_to_string(jobs_yaml_path)
+        .unwrap_or_else(|e| panic!("read SSOT jobs.yaml at {jobs_yaml_path}: {e}"));
+
+    let ssot_block = extract_ssot_mapping_block(&jobs_yaml);
+    assert!(
+        ssot_block.contains("org.openlore.philosophy.dependency-pinning"),
+        "the extractor must capture the J-004 signal_predicate_mapping block; got:\n{ssot_block}"
+    );
+
+    let from_ssot = load_mapping(&ssot_block).expect("the live jobs.yaml SSOT block must parse");
+    assert_eq!(
+        embedded, from_ssot,
+        "embedded signal->predicate mapping snapshot diverged from the live \
+         docs/product/jobs.yaml J-004 SSOT (drift; WD-53 / WD-67 / I-SCR-5): re-sync \
+         crates/scraper-domain/src/signal_predicate_mapping.yaml from the \
+         signal_predicate_mapping block (the embedded copy must match jobs.yaml)"
+    );
+}
+
+/// Extract the `signal_predicate_mapping:` block from the full jobs.yaml text,
+/// dedent it to column 0, and strip inline `#` comments — yielding the canonical
+/// form `load_mapping` parses. Mirrors the crate's own `extract_ssot_block`
+/// (scraper-domain `mapping_matches_ssot`); duplicated here because that helper
+/// is `#[cfg(test)]`-gated inside the crate and unreachable from this separate
+/// acceptance compilation unit.
+fn extract_ssot_mapping_block(jobs_yaml: &str) -> String {
+    let mut out = String::new();
+    let mut in_block = false;
+    let mut base_indent = 0usize;
+    for line in jobs_yaml.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim_start();
+        if !in_block {
+            if trimmed.starts_with("signal_predicate_mapping:") {
+                in_block = true;
+                base_indent = indent;
+                out.push_str("signal_predicate_mapping:\n");
+            }
+            continue;
+        }
+        // A blank line or a line dedented to/under the block key ends it.
+        if trimmed.is_empty() || indent <= base_indent {
+            break;
+        }
+        let dedented = &line[base_indent..];
+        // Strip a trailing inline comment (the SSOT's first entry has one).
+        let no_comment = match dedented.find(" #") {
+            Some(pos) => dedented[..pos].trim_end(),
+            None => dedented.trim_end(),
+        };
+        out.push_str(no_comment);
+        out.push('\n');
+    }
+    out
 }
