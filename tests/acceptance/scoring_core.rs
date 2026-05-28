@@ -345,8 +345,6 @@ fn scoring_single_author_single_claim_is_sparse_at_any_confidence_property() {
 /// @property @us-graph-003 @j-002 @kpi-graph-1 @wd-77
 #[test]
 fn scoring_multi_author_outweighs_single_author_at_equal_confidence_property() {
-    // SCAFFOLD: true
-    //
     // Layer-2 @property (Mandate 9; DD-GRAPH): pure-core direct invocation. The
     // driving port IS `scoring::score`. The triangulation-monotonicity
     // invariant (WD-77 author_distinct_bonus):
@@ -364,13 +362,87 @@ fn scoring_multi_author_outweighs_single_author_at_equal_confidence_property() {
     // discovery: better-triangulated support ranks higher). Generator:
     // confidence in (0.0, 1.0] (a strictly-positive base so the bonus is
     // observable; at confidence 0 both weights are 0 and the strict inequality
-    // does not hold — the generator excludes the degenerate 0.0 case or the
-    // assertion uses >= with a documented note).
-    todo!(
-        "DELIVER (slice-04): proptest confidence in (0.0,1.0]; assert a 2-distinct-author \
-         pairing scores strictly higher than a 1-author pairing at equal max confidence \
-         (triangulation monotonicity; WD-77; KPI-GRAPH-1)"
-    )
+    // does not hold — the generator excludes the degenerate 0.0 case via a
+    // strictly-positive lower bound).
+    //
+    // Both pairings share ONE subject + ONE object, so neither author spans a
+    // second subject => NO cross-project triangulation bonus muddies the
+    // comparison. The ONLY difference is the second distinct author, which
+    // lifts the weight by exactly its `confidence * author_distinct_bonus`
+    // share (WD-77): single-author weight == confidence; two-author weight ==
+    // confidence + confidence * (1 + author_distinct_bonus) == 2.25 * confidence
+    // at the DEFAULT 0.25 bonus. The strict inequality isolates the breadth-
+    // raises-weight invariant.
+    const SUBJECT: &str = "deno";
+    const OBJECT: &str = "dependency-pinning";
+
+    fn one_claim(author: &str, confidence: f64) -> AttributedClaim {
+        AttributedClaim {
+            author_did: Did(author.to_string()),
+            cid: Cid(format!("bafy-{author}")),
+            subject: SUBJECT.to_string(),
+            predicate: "adheres-to".to_string(),
+            object: OBJECT.to_string(),
+            confidence,
+            composed_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            relationship: AuthorRelationship::You,
+        }
+    }
+
+    let mut runner = TestRunner::default();
+    runner
+        .run(&(f64::MIN_POSITIVE..=1.0_f64), |confidence| {
+            // One author on (SUBJECT, OBJECT) at `confidence`.
+            let single = scoring::score(
+                &[one_claim("did:plc:tobias", confidence)],
+                &ScoringConfig::DEFAULT,
+            );
+            // TWO DISTINCT authors on the SAME (SUBJECT, OBJECT) at the SAME
+            // `confidence` — the only delta is the second independent author.
+            let multi = scoring::score(
+                &[
+                    one_claim("did:plc:tobias", confidence),
+                    one_claim("did:plc:maria", confidence),
+                ],
+                &ScoringConfig::DEFAULT,
+            );
+
+            // Non-vacuity: each set yields exactly one ranked pairing, so the
+            // weight comparison below is never asserted vacuously.
+            prop_assert_eq!(
+                single.ranked.len(),
+                1,
+                "a single-author claim must produce exactly one ranked pairing"
+            );
+            prop_assert_eq!(
+                multi.ranked.len(),
+                1,
+                "two claims on one pairing must produce exactly one ranked pairing"
+            );
+
+            let single_weight = single.ranked[0].weight;
+            let multi_weight = multi.ranked[0].weight;
+
+            // Breadth raises weight: triangulation (a 2nd distinct author)
+            // STRICTLY increases the adherence weight at equal confidence
+            // (WD-77 author_distinct_bonus). More independent support => higher
+            // rank — the monotonicity that makes the ranking meaningful.
+            prop_assert!(
+                multi_weight > single_weight,
+                "a 2-distinct-author pairing (weight {}) must score STRICTLY higher than the \
+                 same pairing by 1 author (weight {}) at equal confidence {} — the \
+                 author_distinct_bonus lifts the multi-author weight (WD-77; KPI-GRAPH-1)",
+                multi_weight,
+                single_weight,
+                confidence
+            );
+            Ok(())
+        })
+        .expect(
+            "triangulation-monotonicity invariant: a 2-distinct-author pairing must score \
+             strictly higher than a 1-author pairing at equal max confidence for every \
+             confidence in (0.0, 1.0] (WD-77 author_distinct_bonus; KPI-GRAPH-1)",
+        );
 }
 
 // =============================================================================
