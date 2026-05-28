@@ -16,7 +16,9 @@
 //!    (`tokio`, `reqwest`, `duckdb`, `keyring`, any `atrium-*`).
 //! 2. `lexicon` — same ban list. `scraper-domain` (slice-02 pure derivation,
 //!    WD-56/WD-65) — same ban list; its only non-`ports` dep is the pure
-//!    `serde_yaml_ng` parser (allowlisted).
+//!    `serde_yaml_ng` parser (allowlisted). `scoring` (slice-04 pure
+//!    closed-form weight, WD-71/WD-82/ADR-022) — same ban list; its only
+//!    non-pure-core deps are `ports` + `claim-domain` + pure `chrono`/`serde`.
 //! 3. `ports` MAY depend on `async-trait` (the `PdsPort` trait is
 //!    inherently async per ADR-004) but MUST NOT depend on a tokio
 //!    runtime or any other I/O crate.
@@ -439,6 +441,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "scraper-domain",
         "scraper-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-56/I-2)",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "scoring",
+        "scoring MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-71/WD-82/ADR-022/I-GRAPH-1)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -717,6 +724,37 @@ mod tests {
             v.iter()
                 .any(|x| x.package == "scraper-domain" && x.forbidden == "reqwest"),
             "expected scraper-domain→reqwest violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn scoring_with_pure_deps_is_allowed() {
+        // WD-71/WD-82/ADR-022: `scoring` is the slice-04 PURE closed-form
+        // weight core. Its dep surface is `ports` + `claim-domain` + pure
+        // `chrono`/`serde` — no I/O, no ML. The pure-core ban list must pass.
+        let w = ws(&[
+            ("scoring", &["ports", "claim-domain", "serde", "chrono"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "scoring with pure deps must pass the pure-core allowlist (WD-82), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn scoring_depending_on_duckdb_is_violation() {
+        // The pure-core ban list is in force for scoring (I-GRAPH-1): a
+        // scoring crate reaching duckdb would mean the weight was computed in
+        // the substrate, not the pure core.
+        let w = ws(&[("scoring", &["duckdb"])]);
+        let v = check_workspace(&w);
+        assert!(
+            v.iter()
+                .any(|x| x.package == "scoring" && x.forbidden == "duckdb"),
+            "expected scoring→duckdb violation, got: {v:?}"
         );
     }
 

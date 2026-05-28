@@ -1,0 +1,33 @@
+[package]
+name = "scoring"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure scoring core: the transparent closed-form adherence weight + display-only buckets. NO I/O, NO ML, NO persistence (WD-71/WD-72, ADR-022)."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE: depends ONLY on the pure value types from `claim-domain` (Did/Cid),
+# the slice-03 `AuthorRelationship` enum from `ports`, and `chrono` (pure
+# time types). The formula constants are compile-time `const` (WD-71 / WD-77
+# SSOT — no runtime config, no ML).
+#
+# Forbidden (xtask check-arch pure-core allowlist enforces): tokio, reqwest,
+# duckdb, keyring, atrium-*, std::fs, std::net, std::time::SystemTime, any
+# adapter-* crate, any ML/inference crate.
+#
+# `proptest` is pinned crate-locally as a dev-dependency for the Gate 2
+# `weight == sum(contributions.subtotal)` property test (the canonical Rust
+# PBT crate per the nw-distill polyglot matrix), mirroring claim-domain.
+[dependencies]
+serde = { workspace = true }
+chrono = { workspace = true }
+claim-domain = { path = "../claim-domain" }
+ports = { path = "../ports" }
+
+[dev-dependencies]
+proptest = { workspace = true }
