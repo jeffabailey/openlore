@@ -219,14 +219,69 @@ fn scrape_auth_anonymous_rate_limit_exhausted_suggests_token_no_partial_list() {
 /// @us-scr-004 @driving_port @real-io @j-004a @wd-63 @error
 #[test]
 fn scrape_auth_rejected_token_exits_with_401_without_echoing_value() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SA-4. GIVEN FakeGithub::with_rejected_token(\"rust-lang/cargo\") \
-         + GITHUB_TOKEN=FIXTURE_REJECTED_PAT; WHEN scrape github rust-lang/cargo; THEN exit \
-         non-zero, stderr explains the HTTP 401 AND hints unset-or-replace the token, \
-         assert_token_value_absent(&outcome, FIXTURE_REJECTED_PAT) (value never echoed), \
-         assert_no_claim_persisted(&env)."
-    )
+    let env = TestEnv::initialized();
+
+    // GIVEN a GitHub posture that REJECTS the configured token with HTTP 401
+    // ("Bad credentials") — the stale/invalid-PAT case. The fake fails the
+    // auth check FIRST (before any resolution), exactly as the real API does;
+    // the adapter classifies the 401 as `GithubError::TokenRejected` (03-05),
+    // whose Display carries NO token value (01-01 ports invariant).
+    let server = GithubServer::start(FakeGithub::with_rejected_token("rust-lang/cargo"));
+
+    // WHEN Maria runs `scrape github rust-lang/cargo` with a stale/invalid PAT
+    // in the child's `GITHUB_TOKEN` (the token-carrying harvest helper).
+    let outcome = run_openlore_scrape_with_token(
+        &env,
+        &["scrape", "github", "rust-lang/cargo"],
+        server.base_url(),
+        FIXTURE_REJECTED_PAT,
+    );
+
+    // THEN the run exits NON-ZERO (a rejected credential is an error, not a
+    // partial harvest — US-SCR-004 Ex 4).
+    assert_ne!(
+        outcome.status, 0,
+        "a rejected token must exit non-zero; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND the production code DID send the rejected token to GitHub — auth was
+    // genuinely attempted (the PAT only ever leaves the adapter as an
+    // Authorization header; that attempt is what earned the 401).
+    assert!(
+        server.fake().saw_token(FIXTURE_REJECTED_PAT),
+        "the production code must send the PAT so the 401 genuinely came from an \
+         auth attempt (the only place the token leaves the adapter is the \
+         Authorization header)"
+    );
+
+    // AND stderr EXPLAINS the HTTP 401 (the railway-oriented
+    // `GithubError::TokenRejected` Display: "github token rejected (401) ...").
+    assert!(
+        outcome.stderr.contains("401"),
+        "stderr must explain the HTTP 401 cause; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND it HINTS the remediation — unset the stale token or provide a valid
+    // one. The Display names the `GITHUB_TOKEN` env-var as stale/invalid so the
+    // remediation is actionable (US-SCR-004 Ex 4).
+    assert!(
+        outcome.stderr.contains("GITHUB_TOKEN")
+            && (outcome.stderr.contains("stale") || outcome.stderr.contains("invalid")),
+        "stderr must hint unsetting/replacing the stale-or-invalid GITHUB_TOKEN; \n--- stderr ---\n{}",
+        outcome.stderr
+    );
+
+    // AND the rejected token VALUE never appears in any captured output line —
+    // the load-bearing no-token-leak invariant (US-SCR-004 / WD-63): the value
+    // was sent to GitHub (saw_token above) but is NEVER echoed back to the user
+    // in the 401 explanation or anywhere else.
+    assert_token_value_absent(&outcome, FIXTURE_REJECTED_PAT);
+
+    // AND nothing was persisted: a refused scrape is never a mutation
+    // (`scraper_never_persists_unsigned` holds on the error path too).
+    assert_no_claim_persisted(&env);
 }
 
 /// SA-5: the token never reaches the PURE `scraper-domain` derivation and is
