@@ -629,7 +629,187 @@ fn claims_dir_artifact_count(env: &TestEnv) -> usize {
 #[test]
 fn counter_claim_first_invocation_renders_one_time_framing_block_then_omits_on_subsequent_invocations(
 ) {
-    todo!("DELIVER (slice-03): wire OrientationState.first_counter_claim_completed_at check in VerbClaimCounter; assert framing block present in first invocation stdout AND absent in second invocation stdout AND identity.toml gains the timestamp key after success. Confirms WD-43 once-per-user (not first-3-times) lock.")
+    let env = TestEnv::initialized();
+
+    // GIVEN: Rachel (a peer) publishes three honest, REAL-signed claims; the
+    // user subscribes and pulls them so two genuine, distinct counter targets
+    // live in `peer_claims` — one per invocation, so the SECOND counter is a
+    // real successful counter (NOT a no-op), proving the framing block is
+    // suppressed by the orientation key, not by an early bail-out.
+    let peer_did = "did:plc:rachel-test";
+    let rachel_seed = [7u8; 32];
+    let (records, rachel_pubkey_hex) = build_verifiable_peer_records(peer_did, rachel_seed);
+    assert_eq!(records.len(), 3, "Rachel publishes exactly three claims");
+    let peer = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", peer_did],
+        peer_did,
+        peer.endpoint_url(),
+    );
+    assert_eq!(added.status, 0, "peer add precondition must succeed");
+    let pulled = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        peer_did,
+        peer.endpoint_url(),
+        &rachel_pubkey_hex,
+    );
+    assert_eq!(pulled.status, 0, "peer pull precondition must succeed");
+    assert_peer_claims_attributed_to(&env, peer_did, 3);
+
+    // The first counter targets Rachel's first peer claim. (A `peer pull`
+    // is NOT a `claim counter`, so the FirstPull orientation does not arm or
+    // disarm the FirstCounterClaim milestone — they are independent keys.)
+    let target_cid = first_peer_claim_cid(peer_did, rachel_seed);
+
+    // The on-disk orientation key MUST be absent before the first counter —
+    // a fresh install has never authored a counter-claim (should_fire).
+    let identity_before =
+        std::fs::read_to_string(env.identity_toml_path()).expect("identity.toml exists after init");
+    assert!(
+        !identity_before.contains("first_counter_claim_completed_at"),
+        "the first-counter-claim orientation key must be ABSENT before the first \
+         counter (a fresh install has never authored one);\n--- identity.toml ---\n{identity_before}"
+    );
+
+    // WHEN (1): the user authors + publishes their FIRST EVER counter-claim
+    // (Enter to sign, Y to publish).
+    let first = run_openlore_with_peer_resolver_stdin(
+        &env,
+        &["claim", "counter", &target_cid, "--reason", "I disagree."],
+        peer_did,
+        peer.endpoint_url(),
+        "\nY\n",
+    );
+    assert_eq!(
+        first.status, 0,
+        "the first counter-claim must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        first.stdout, first.stderr
+    );
+
+    // THEN (1 — framing block present): the first invocation renders the
+    // one-time WD-43 framing block — the heading + all four enumerated
+    // points (gherkin habit scenario 2, content-frozen).
+    assert!(
+        first.stdout.contains("First counter-claim! Some context:"),
+        "the FIRST counter-claim must render the one-time framing heading;\n\
+         --- stdout ---\n{}",
+        first.stdout
+    );
+    for point in [
+        "A counter-claim is a SIGNED public artifact attributed to YOU.",
+        "It does NOT delete or hide the target claim; both coexist.",
+        "You can retract it later via `openlore claim retract",
+        "The target peer is NOT auto-notified",
+    ] {
+        assert!(
+            first.stdout.contains(point),
+            "the framing block must include the point {point:?};\n--- stdout ---\n{}",
+            first.stdout
+        );
+    }
+
+    // THEN (1 — framing precedes, never replaces, the standard framing): the
+    // one-time block does NOT delay or modify the standard "coexist, never
+    // overwrite" framing (gherkin line 241) — the heading appears BEFORE it.
+    let heading_at = first
+        .stdout
+        .find("First counter-claim! Some context:")
+        .expect("framing heading present");
+    let coexist_at = first
+        .stdout
+        .find("counter-claims coexist, never overwrite")
+        .expect("standard compose-preview framing still present on first invocation");
+    assert!(
+        heading_at < coexist_at,
+        "the one-time framing block must precede (not replace) the standard \
+         compose-preview framing;\n--- stdout ---\n{}",
+        first.stdout
+    );
+
+    // THEN (1 — key recorded): identity.toml now carries the
+    // first_counter_claim_completed_at timestamp (the milestone is recorded
+    // on success — WD-39 OrientationState mechanism).
+    let identity_after_first =
+        std::fs::read_to_string(env.identity_toml_path()).expect("read identity.toml after first");
+    assert!(
+        identity_after_first.contains("first_counter_claim_completed_at"),
+        "identity.toml must gain first_counter_claim_completed_at after the first \
+         counter succeeds;\n--- identity.toml ---\n{identity_after_first}"
+    );
+
+    // WHEN (2): the user authors a SECOND counter-claim (a different target,
+    // so it is a genuine successful counter, not a no-op).
+    let second_target_cid = second_peer_claim_cid(peer_did, rachel_seed);
+    assert_ne!(
+        second_target_cid, target_cid,
+        "the second target must be a DISTINCT peer claim so the second counter genuinely succeeds"
+    );
+    let second = run_openlore_with_peer_resolver_stdin(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &second_target_cid,
+            "--reason",
+            "I also disagree with this one.",
+        ],
+        peer_did,
+        peer.endpoint_url(),
+        "\nY\n",
+    );
+    assert_eq!(
+        second.status, 0,
+        "the second counter-claim must also exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        second.stdout, second.stderr
+    );
+
+    // THEN (2 — framing block OMITTED): the second invocation does NOT render
+    // the one-time framing block (WD-43 once-per-user lock, NOT first-3-times).
+    assert!(
+        !second.stdout.contains("First counter-claim! Some context:"),
+        "the framing block must be OMITTED on the second counter-claim (WD-43 \
+         once-per-user, not first-3-times);\n--- stdout ---\n{}",
+        second.stdout
+    );
+    // The standard compose framing still renders on the second invocation —
+    // the suppressed block is ONLY the one-time orientation, not the preview.
+    assert!(
+        second
+            .stdout
+            .contains("counter-claims coexist, never overwrite"),
+        "the standard compose-preview framing must STILL render on the second \
+         counter-claim;\n--- stdout ---\n{}",
+        second.stdout
+    );
+}
+
+/// Recompute the CID of the SECOND of Rachel's three honest peer claims —
+/// a DISTINCT, genuinely-publishable counter target for the second
+/// invocation in CC-5. Mirrors `build_verifiable_peer_records`'s second
+/// triple byte-for-byte (same subject + evidence + composed_at; the object
+/// + confidence differ from the first, so the CID is distinct).
+fn second_peer_claim_cid(peer_did: &str, peer_seed: [u8; 32]) -> String {
+    use claim_domain::{canonicalize, compute_cid, Confidence, Did, UnsignedClaim};
+
+    let confidence: Confidence =
+        serde_json::from_value(serde_json::json!(0.71)).expect("confidence value is well-formed");
+    let unsigned = UnsignedClaim {
+        subject: "github:rust-lang/cargo".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.reproducible-builds".to_string(),
+        evidence: vec!["https://github.com/rust-lang/cargo".to_string()],
+        confidence,
+        author_did: Did(format!("{peer_did}#org.openlore.application")),
+        composed_at: "2026-05-22T09:18:44Z".to_string(),
+        references: Vec::new(),
+        reason: None,
+    };
+    let _ = peer_seed; // CID is content-derived; the seed only signs.
+    let canonical = canonicalize(&unsigned).expect("canonicalize second peer claim");
+    compute_cid(&canonical).0
 }
 
 /// CC-6 (WD-44 — RESOLVES `# DISTILL: confirm` anxiety scenario 4):

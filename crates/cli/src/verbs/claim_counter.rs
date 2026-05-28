@@ -40,6 +40,7 @@ use claim_domain::{
 use ports::{PeerStoragePort, StoragePort};
 
 use crate::io::prompt_line;
+use crate::orientation::{self, OrientationMilestone};
 use crate::render::{render_counter_compose_preview, ComposedCounterClaim};
 use crate::wiring::Wiring;
 
@@ -130,10 +131,20 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
     let current_user = wiring.identity.author_did().clone();
     validate_counter_claim(&unsigned, &lookup, &current_user).map_err(|e| anyhow!("{e}"))?;
 
+    // Step 4b: first-counter-claim orientation (WD-43 / WD-39). The FIRST
+    // EVER successful `claim counter` per install emits a one-time framing
+    // block BEFORE the compose preview (gherkin habit scenario 2); it does
+    // NOT delay or modify the standard framing — it precedes it. Gated by
+    // `[federation] first_counter_claim_completed_at` in identity.toml;
+    // once-per-user (NOT first-3-times). A failed orientation write is
+    // logged, never fatal (data-models.md §OrientationState).
+    let framing_block = maybe_emit_first_counter_claim_orientation(wiring);
+
     // Step 5: render the compose preview (BOTH framing literals + the
     // `counters: <cid> (by <peer>)` line + the reason verbatim, wrapped at
     // 78 cols). Print to stdout BEFORE the prompts so the user reviews
-    // before confirming.
+    // before confirming. The one-time framing block (when present) is
+    // emitted first, ahead of the standard preview framing.
     let preview = render_counter_compose_preview(&ComposedCounterClaim {
         target_cid: target_cid.0.clone(),
         target_author_did: bare_did(&resolved.author_did.0),
@@ -143,6 +154,7 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
     });
     {
         let mut stdout = std::io::stdout().lock();
+        stdout.write_all(framing_block.as_bytes())?;
         stdout.write_all(preview.as_bytes())?;
         stdout.flush()?;
     }
@@ -310,6 +322,53 @@ fn check_reason_pre_compose(reason: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Emit the first-counter-claim orientation block exactly once per install
+/// (WD-43 / WD-39). Returns the rendered framing text to prepend ahead of
+/// the compose preview, or the empty string if it has already fired.
+///
+/// Mirrors `peer_pull::maybe_emit_first_pull_orientation`: load the
+/// `[federation]` snapshot, consult the PURE `should_fire`, record the
+/// milestone on first fire, and return the block. A write failure is
+/// logged-and-ignored (the orientation may re-fire on the next counter, but
+/// the counter itself proceeds) — never fatal (data-models.md
+/// §OrientationState).
+fn maybe_emit_first_counter_claim_orientation(wiring: &Wiring) -> String {
+    let identity_path = wiring.paths.identity_toml();
+    let state = orientation::load(&identity_path).unwrap_or_default();
+    if !state.should_fire(OrientationMilestone::FirstCounterClaim) {
+        return String::new();
+    }
+
+    let now = wiring.clock.now_utc().to_rfc3339();
+    if let Err(err) =
+        orientation::mark_completed(&identity_path, OrientationMilestone::FirstCounterClaim, now)
+    {
+        // Non-fatal: the orientation may re-fire on the next counter, but the
+        // counter itself succeeds. Log to stderr, do not abort.
+        eprintln!(
+            "openlore claim counter: could not record first-counter-claim orientation: {err:#}"
+        );
+    }
+
+    first_counter_claim_framing_block()
+}
+
+/// PURE render of the one-time first-counter-claim framing block (WD-43;
+/// gherkin habit scenario 2, content-frozen). The heading plus four
+/// enumerated habit-bridging points, followed by a blank line so the
+/// standard compose preview that follows reads as a distinct section.
+fn first_counter_claim_framing_block() -> String {
+    let mut out = String::new();
+    out.push_str("First counter-claim! Some context:\n");
+    out.push_str("  - A counter-claim is a SIGNED public artifact attributed to YOU.\n");
+    out.push_str("  - It does NOT delete or hide the target claim; both coexist.\n");
+    out.push_str("  - You can retract it later via `openlore claim retract <your_cid>`.\n");
+    out.push_str("  - The target peer is NOT auto-notified; they will see it next time\n");
+    out.push_str("    they pull your claims (if they subscribe to you).\n");
+    out.push('\n');
+    out
 }
 
 /// A `ClaimLookup` spanning BOTH the author store AND the peer cache. The
