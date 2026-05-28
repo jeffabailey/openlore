@@ -28,6 +28,7 @@
 
 use proptest::collection::vec;
 use proptest::prelude::*;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::{Cid, ClaimReference, Confidence, Did, ReferenceType, UnsignedClaim};
 
@@ -112,6 +113,67 @@ fn arb_claim_reference() -> impl Strategy<Value = ClaimReference> {
 // -----------------------------------------------------------------------------
 // Top-level strategy — composes the components
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// `reason` text strategies — step 02-03 (WD-35 NFC normalization properties)
+// -----------------------------------------------------------------------------
+
+/// A domain-realistic `reason` text. Counter-claim reasons are
+/// free-form human prose: ASCII, accented Latin, CJK, and — crucially
+/// for the NFC properties — text that MAY arrive with combining marks
+/// (the way some editors / IMEs emit accented letters). The character
+/// class deliberately includes both precomposed accented letters
+/// (`é` U+00E9, `ñ` U+00F1) AND a bare combining acute (U+0301) so the
+/// generator naturally produces strings in mixed normalization forms,
+/// exercising the idempotency path on already-NFC and not-yet-NFC input
+/// alike. Length 0..=80 keeps the suite fast (LCC-3 needs ≥100 cases).
+pub fn arb_reason_text() -> impl Strategy<Value = String> {
+    // ASCII printable + a handful of precomposed Latin letters + a CJK
+    // sample + a standalone combining acute. proptest's regex strategy
+    // supports unicode escapes in the class.
+    "[ -~éñüçJosé漢字\u{0301}]{0,80}".prop_map(|s| s.to_string())
+}
+
+/// A pair `(r, s)` that is byte-DISTINCT but canonically equivalent
+/// (`NFC(r) == NFC(s)`), for the LCC-4 NFC-unification property.
+///
+/// Construction: generate a base text that is guaranteed to contain at
+/// least one decomposable character, take its precomposed (NFC) form as
+/// `r` and its decomposed (NFD) form as `s`. For every character with a
+/// canonical decomposition, NFC and NFD differ byte-wise, so the pair is
+/// distinct; NFC(NFD(x)) == NFC(x) by definition, so they are
+/// canonically equivalent. We prepend a mandatory decomposable letter so
+/// the pair is NEVER vacuously equal (a pure-ASCII base has identical
+/// NFC and NFD forms).
+pub fn arb_nfc_equivalent_pair() -> impl Strategy<Value = (String, String)> {
+    // A non-empty pool of precomposed letters that each have a canonical
+    // decomposition into base + COMBINING mark, so NFC != NFD byte-wise.
+    // Letters whose glyph uses a STROKE/overlay (e.g. 'ø' U+00F8) have NO
+    // canonical decomposition and would make the pair vacuously equal —
+    // they are deliberately excluded, and the `prop_filter` below is a
+    // belt-and-suspenders guard against any future pool regression.
+    let decomposable = prop_oneof![
+        Just('é'), // U+00E9 -> e + ◌́ (U+0301)
+        Just('ñ'), // U+00F1 -> n + ◌̃ (U+0303)
+        Just('ü'), // U+00FC -> u + ◌̈ (U+0308)
+        Just('ç'), // U+00E7 -> c + ◌̧ (U+0327)
+        Just('å'), // U+00E5 -> a + ◌̊ (U+030A)
+        Just('ô'), // U+00F4 -> o + ◌̂ (U+0302)
+    ];
+    // An optional free-form prefix/suffix of ordinary text so the
+    // property isn't only exercised on single-character inputs.
+    let affix = "[ -~]{0,16}".prop_map(|s: String| s);
+    (affix.clone(), decomposable, affix)
+        .prop_map(|(prefix, letter, suffix)| {
+            let base: String = format!("{prefix}{letter}{suffix}");
+            let precomposed: String = base.nfc().collect();
+            let decomposed: String = base.nfd().collect();
+            (precomposed, decomposed)
+        })
+        // Guarantee the contract the property relies on: the pair is
+        // byte-DISTINCT (otherwise NFC-unification would be vacuous).
+        .prop_filter("pair must be byte-distinct", |(r, s)| r != s)
+}
 
 /// Strategy generating an arbitrary VALID `UnsignedClaim`.
 ///

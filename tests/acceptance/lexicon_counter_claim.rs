@@ -225,7 +225,38 @@ fn lexicon_counter_claim_reason_none_preserves_cid_stability_with_slice_01() {
 /// @property @us-fed-004 @j-003b @wd-35
 #[test]
 fn lexicon_counter_claim_normalize_reason_is_idempotent_property() {
-    todo!("DELIVER (slice-03): proptest harness over arbitrary UTF-8 strings (bounded to a domain-realistic generator: ASCII + Latin + CJK with combining marks); assert normalize_reason(normalize_reason(s)) == normalize_reason(s) for N=100+ generated examples. Pin proptest seed in proptest.toml per slice-01 DD-3 convention. Layer 2 — pure-core direct invocation, NO subprocess.")
+    use claim_domain::normalize_reason;
+    use claim_domain::proptest_strategies::arb_reason_text;
+    use proptest::prelude::*;
+    use proptest::test_runner::TestRunner;
+
+    // Layer-2 @property (DD-FED-12): pure-core direct invocation, NO
+    // subprocess. The harness drives `normalize_reason` (the driving
+    // port IS the pure function signature) over a domain-realistic
+    // generator — ASCII + Latin-with-combining-marks + CJK — and asserts
+    // the idempotency invariant from data-models.md property 2 / WD-35:
+    //
+    //     forall reason text R:
+    //         normalize_reason(R) == normalize_reason(normalize_reason(R))
+    //
+    // Idempotency is load-bearing because NFC normalization happens once
+    // at compose time; if a second pass over already-normalized text
+    // changed the bytes, re-normalizing a stored reason (e.g. on display
+    // or re-sign) would silently drift the signed CID.
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arb_reason_text(), |reason| {
+            let once = normalize_reason(&reason);
+            let twice = normalize_reason(&once);
+            prop_assert_eq!(
+                &twice,
+                &once,
+                "normalize_reason must be idempotent: applying it to already-NFC text \
+                 must be a no-op, else re-normalizing a stored reason drifts the signed CID"
+            );
+            Ok(())
+        })
+        .expect("normalize_reason idempotency property must hold for all generated reason texts");
 }
 
 /// LCC-4 / Property: `normalize_reason` UNIFIES strings with identical
@@ -236,7 +267,43 @@ fn lexicon_counter_claim_normalize_reason_is_idempotent_property() {
 /// @property @us-fed-004 @j-003b @wd-35
 #[test]
 fn lexicon_counter_claim_normalize_reason_unifies_canonically_equivalent_strings_property() {
-    todo!("DELIVER (slice-03): proptest generates pairs (r, s) where r and s are byte-distinct but NFC-equivalent (use unicode-normalization to construct them) ; assert normalize_reason(r) == normalize_reason(s) for N=100+ pairs. This is the load-bearing property that copy-paste workflows behave deterministically.")
+    use claim_domain::normalize_reason;
+    use claim_domain::proptest_strategies::arb_nfc_equivalent_pair;
+    use proptest::prelude::*;
+    use proptest::test_runner::TestRunner;
+
+    // Layer-2 @property (DD-FED-12): the NFC-unification invariant from
+    // data-models.md property 3 / WD-35:
+    //
+    //     forall R, S where R != S byte-wise and NFC(R) == NFC(S):
+    //         normalize_reason(R) == normalize_reason(S)
+    //
+    // The generator produces byte-DISTINCT but canonically-equivalent
+    // pairs — e.g. precomposed "é" (U+00E9) vs decomposed "e" + combining
+    // acute (U+0065 U+0301). This is the load-bearing property that makes
+    // copy-paste workflows deterministic: two users who paste the
+    // "same" accented reason from different editors sign byte-identical
+    // canonical CBOR and therefore land on the SAME CID.
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arb_nfc_equivalent_pair(), |(r, s)| {
+            // Precondition the generator guarantees, asserted so a
+            // future generator regression that stops producing distinct
+            // pairs fails LOUDLY instead of trivially passing.
+            prop_assert_ne!(
+                &r,
+                &s,
+                "generator must yield byte-DISTINCT pairs (else the property is vacuous)"
+            );
+            prop_assert_eq!(
+                normalize_reason(&r),
+                normalize_reason(&s),
+                "byte-distinct but NFC-equivalent reasons must normalize to the SAME string \
+                 so copy-paste workflows produce a stable signed CID"
+            );
+            Ok(())
+        })
+        .expect("normalize_reason NFC-unification property must hold for all generated pairs");
 }
 
 // =============================================================================

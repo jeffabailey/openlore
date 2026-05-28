@@ -33,6 +33,20 @@ use syn::visit::Visit;
 const BANNED_IO_CRATES: &[&str] = &["tokio", "reqwest", "duckdb", "keyring"];
 const BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 
+/// Pure-core allowlist (WD-35 / ADR-015): dependencies explicitly
+/// adjudicated as PURE — no I/O, no async runtime — and therefore
+/// permitted inside `claim-domain` / `lexicon`. The ban list above is a
+/// deny-list, so a non-I/O crate is permitted by default; this constant
+/// is the EXPLICIT record of that adjudication so a reviewer sees WD-35
+/// was honored and a future tightening of the rule (deny-by-default)
+/// keeps these names allowed. `is_banned` skips any allowlisted name
+/// even if a future prefix/name rule would otherwise match it. It does
+/// NOT loosen the rule for I/O crates — only these audited pure crates.
+///
+/// - `unicode-normalization`: NFC normalization of `--reason` text
+///   (`claim-domain::normalize_reason`); Servo's pure NFC crate.
+const PURE_CORE_ALLOWED_CRATES: &[&str] = &["unicode-normalization"];
+
 /// `ports` is async-shaped (PdsPort) so `async-trait` is the one allowed
 /// async dep; the runtime itself (tokio) and HTTP/DB I/O crates remain
 /// banned. Per component-boundaries.md §`crates/ports`.
@@ -106,8 +120,13 @@ impl Violation {
     }
 }
 
-/// True if `dep` matches any banned name or banned prefix.
+/// True if `dep` matches any banned name or banned prefix. Pure-core
+/// allowlisted crates (WD-35) are exempt: an explicitly-adjudicated pure
+/// dep is never reported as banned, even if a future rule would match it.
 fn is_banned(dep: &str, names: &[&str], prefixes: &[&str]) -> Option<String> {
+    if PURE_CORE_ALLOWED_CRATES.contains(&dep) {
+        return None;
+    }
     if names.contains(&dep) {
         return Some(dep.to_string());
     }
@@ -647,6 +666,19 @@ mod tests {
             v.iter()
                 .any(|x| x.package == "claim-domain" && x.forbidden == "reqwest"),
             "expected transitive claim-domain→reqwest violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn claim_domain_depending_on_unicode_normalization_is_allowed() {
+        // WD-35: `unicode-normalization` is a PURE dep (NFC, no I/O).
+        // The pure-core allowlist must permit it in claim-domain while
+        // the I/O ban list stays in force for everything else.
+        let w = ws(&[("claim-domain", &["serde", "unicode-normalization"])]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "unicode-normalization must be an allowed pure-core dep (WD-35), got: {:?}",
+            check_workspace(&w)
         );
     }
 

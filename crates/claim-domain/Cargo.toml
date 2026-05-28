@@ -39,6 +39,13 @@ multihash = { workspace = true }
 ciborium = "0.2"
 sha2 = "0.10"
 proptest = { workspace = true }
+# NFC normalization for the counter-claim `--reason` text (WD-35 /
+# ADR-015 / Q-DELIVER-1). PURE — no I/O; it is the Servo project's
+# focused NFC crate (rejected `icu_normalizer` as heavier per
+# technology-stack.md). Pinned crate-locally because only the pure core
+# normalizes reasons; `cargo xtask check-arch` explicitly permits it as
+# a pure-core dep (it is NOT on any I/O ban list).
+unicode-normalization = "0.1"
 # Ed25519 primitive for sign/verify (step 03-01). Pinned crate-locally
 # (not at the workspace root) so adapters that don't need Ed25519
 # don't compile it. `default-features = false` keeps OS-randomness out
