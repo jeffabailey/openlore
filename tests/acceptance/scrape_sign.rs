@@ -407,13 +407,63 @@ fn scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid() {
 /// @us-scr-003 @driving_port @real-io @j-004c @error
 #[test]
 fn scrape_sign_out_of_range_index_is_rejected_before_compose() {
-    // SCAFFOLD: true
-    todo!(
-        "DELIVER (slice-02): SS-4. GIVEN a 5-candidate list; WHEN --sign 9; THEN exit \
-         non-zero, stderr contains 'candidate 9 does not exist; valid range 1..5', NO compose \
-         preview reached stdout (assert the 'not as truth' literal is ABSENT), \
-         assert_no_claim_persisted(&env)."
-    )
+    // GIVEN Aanya has an initialized env + the public repo serving the five
+    // canonical cargo signals → a candidate list of exactly five entries
+    // (valid selection range 1..5). Candidate 9 does not exist.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // WHEN she runs `--sign 9` — an out-of-range index. No stdin is supplied:
+    // the rejection must happen BEFORE any compose prompt, so the run never
+    // blocks waiting for input.
+    let outcome = run_openlore_scrape_with_stdin(
+        &env,
+        &["scrape", "github", "rust-lang/cargo", "--sign", "9"],
+        github.base_url(),
+        "",
+    );
+
+    // THEN the CLI exits non-zero (the selection is rejected before compose).
+    assert_ne!(
+        outcome.status, 0,
+        "an out-of-range --sign index must exit non-zero; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // AND stderr names the invalid selection + the valid range (the
+    // domain-shaped error from `parse_selection`, carrying the candidate count
+    // for context).
+    assert!(
+        outcome
+            .stderr
+            .contains("candidate 9 does not exist; valid range 1..5"),
+        "expected stderr to name the out-of-range index + valid range \
+         ('candidate 9 does not exist; valid range 1..5'); \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND NO compose preview ever reached stdout — the rejection short-circuits
+    // BEFORE any candidate is composed, so the inherited "not as truth" framing
+    // (I-7), which only the compose preview emits, is ABSENT.
+    assert!(
+        !outcome.stdout.contains("not as truth"),
+        "an out-of-range --sign must be rejected BEFORE any compose begins; \
+         the 'not as truth' compose-preview literal must be ABSENT from stdout; \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout,
+        outcome.stderr
+    );
+
+    // AND nothing was composed, signed, or published: zero `claims` rows, zero
+    // PDS records, zero local claim artifacts (the human-gate held — no claim
+    // crossed the storage boundary).
+    assert_no_claim_persisted(&env);
 }
 
 /// SS-5 / Sad (US-SCR-003 Ex 4): editing confidence out of `[0.0,1.0]`
