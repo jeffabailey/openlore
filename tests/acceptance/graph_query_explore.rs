@@ -477,11 +477,84 @@ fn graph_query_by_object_succeeds_with_network_disabled() {
         outcome.stdout, outcome.stderr
     );
 
-    todo!(
-        "DELIVER (slice-04): assert the object query renders its full attributed result with the \
-         network disabled, and the assertion confirms NO network call was attempted (I-GRAPH-7 \
-         local-first);\n--- graph ---\n{graph:?}"
-    )
+    // The object dimension view renders its FULL attributed result from the
+    // LOCAL store alone — the same observable surface as the GQE-1 happy path,
+    // just with no reachable network. Asserting the SAME universe as GQE-1
+    // (port-exposed stdout slots) proves the read path is genuinely local-first,
+    // not merely "exits 0".
+    //
+    // Universe (port-exposed observable surface of the network-disabled
+    // `--object` dimension view): cli.graph_query.distinct_subjects_in_output
+    // (3), cli.graph_query.distinct_authors_in_output (3),
+    // cli.graph_query.cid_rows (4 — none merged), the no-merge footer, AND
+    // pds.create_record.call_count (0 — no outbound call attempted).
+    let stdout = &outcome.stdout;
+
+    // 1. Grouped BY SUBJECT: each of the 3 seeded subjects heads a group —
+    //    rendered from the local DuckDB with no network.
+    let subjects = [
+        "github:rust-lang/cargo",
+        "github:NixOS/nixpkgs",
+        "github:denoland/deno",
+    ];
+    let distinct_subjects_in_output = subjects
+        .iter()
+        .filter(|s| stdout.contains(&format!("subject: {s}")))
+        .count();
+    assert_eq!(
+        distinct_subjects_in_output, 3,
+        "cli.graph_query.distinct_subjects_in_output: expected all 3 subjects to head a group \
+         from the LOCAL store with the network disabled; got {distinct_subjects_in_output};\n\
+         --- stdout ---\n{stdout}\n--- graph ---\n{graph:?}"
+    );
+
+    // 2. Every claim row carries its author DID — full per-author attribution
+    //    survives the network-disabled local read (anti-merging, WD-73).
+    let authors = [
+        "did:plc:rachel-test",
+        "did:plc:tobias-test",
+        "did:plc:maria-test",
+    ];
+    let distinct_authors_in_output = authors
+        .iter()
+        .filter(|did| stdout.contains(&format!("author_did: {did}")))
+        .count();
+    assert_eq!(
+        distinct_authors_in_output, 3,
+        "cli.graph_query.distinct_authors_in_output: expected all 3 author DIDs on per-claim rows \
+         from the LOCAL store with the network disabled; got {distinct_authors_in_output};\n\
+         --- stdout ---\n{stdout}"
+    );
+
+    // 3. The full 4-claim attributed result renders (none merged) — the
+    //    network-disabled read is complete, not degraded.
+    let cid_rows = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cid:"))
+        .count();
+    assert_eq!(
+        cid_rows, 4,
+        "expected exactly 4 cid-bearing rows from the LOCAL store with the network disabled \
+         (full result, none merged); got {cid_rows};\n--- stdout ---\n{stdout}"
+    );
+
+    // 4. The content-frozen no-merge footer renders verbatim — the local-first
+    //    read carries the same honest framing as the networked path.
+    assert!(
+        stdout.contains("3 subject(s), 3 author(s)."),
+        "expected the footer to state 3 subjects + 3 authors (network disabled);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Each claim is attributed to its author DID. No claims are merged."),
+        "expected the footer to carry the content-frozen no-merge guarantee verbatim \
+         (network disabled);\n--- stdout ---\n{stdout}"
+    );
+
+    // 5. I-GRAPH-7 local-first: NO outbound PDS call was attempted. The
+    //    explorer is a pure LOCAL read — the fake PDS recorded zero
+    //    create_record calls (port-exposed name pds.create_record.call_count).
+    assert_no_pds_call_was_made(&env);
 }
 
 // =============================================================================

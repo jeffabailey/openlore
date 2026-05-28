@@ -3138,18 +3138,44 @@ pub fn build_verifiable_peer_records_for_triples(
 /// slice-01 KPI-5 / I-9): scoring/traversal/dimension reads touch only the
 /// local store and open no socket.
 ///
-/// SCAFFOLD: true (slice-04) — DELIVER picks the network-disable seam (clear
-/// the PDS/peer endpoint env vars + assert via a no-network probe that no
-/// outbound connection was attempted), symmetric with the slice-01
-/// network-disabled WS scenario.
+/// Network-disable seam: mirror [`run_openlore`] (clean env + the slice-01
+/// stub seams `OPENLORE_HOME` / `OPENLORE_DID` / `OPENLORE_KEY_SEED_HEX`) but
+/// deliberately do NOT export `OPENLORE_PDS_ENDPOINT` nor any per-peer
+/// `OPENLORE_PEER_PDS_ENDPOINT_<did>` resolver var. With `OPENLORE_PDS_ENDPOINT`
+/// absent the composition root binds the no-network PdsPort adapter (see
+/// `wiring::Wiring::production`), and with no peer resolver endpoint there is no
+/// reachable peer either — there is genuinely NO network endpoint to dial.
+/// A read-only LOCAL explorer (`--object`/`--contributor`/`--traverse`/
+/// `--weighted`) reads only the seeded DuckDB and so still succeeds; any verb
+/// that DID need the network would fail to reach it, proving the read path
+/// opened no socket. Pair with [`assert_no_pds_call_was_made`] for the
+/// no-outbound-call half of the universe.
+///
+/// `env_clear()` plus the explicit allow-list is what makes the disable real:
+/// the parent's `OPENLORE_PDS_ENDPOINT` (if any) is dropped, so the subprocess
+/// cannot inherit a live endpoint behind the test's back.
 pub fn run_openlore_network_disabled(env: &TestEnv, args: &[&str]) -> CliOutcome {
-    // SCAFFOLD: true (slice-04)
-    let _ = (env, args);
-    todo!(
-        "DELIVER (slice-04): run `openlore <args>` with NO reachable PDS/peer endpoint (network \
-         disabled) and confirm the read-only explorer command succeeds without attempting any \
-         outbound connection (I-GRAPH-7 local-first)"
-    )
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        // Network disabled: OPENLORE_PDS_ENDPOINT and every per-peer resolver
+        // endpoint are intentionally OMITTED. No reachable PDS / peer.
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 /// Universe-bound (Gate 4 `weight_and_bucket_never_persisted`): assert that
