@@ -144,8 +144,7 @@ fn appview_ingest_gate_indexes_iff_verified_and_cid_matches_property() {
             let verifies = claim_domain::verify(&record.raw_payload, &pubkey).is_ok();
             let canonical = claim_domain::canonicalize(&record.raw_payload.unsigned)
                 .expect("a generated claim canonicalizes");
-            let cid_matches =
-                claim_domain::compute_cid(&canonical) == record.published_cid;
+            let cid_matches = claim_domain::compute_cid(&canonical) == record.published_cid;
             let should_index = verifies && cid_matches;
 
             let outcome = appview_domain::ingest_decision(&record, &key);
@@ -613,7 +612,11 @@ fn appview_two_identical_content_distinct_author_claims_compose_to_two_groups() 
     // payload) rather than hand-rolling the claims, and the per-author DID is
     // exactly what `compose_results` must keep separate.
     let specs = openlore_test_support::corpus_deno_dependency_pinning_two_authors();
-    assert_eq!(specs.len(), 2, "the canonical deno corpus is exactly two records");
+    assert_eq!(
+        specs.len(),
+        2,
+        "the canonical deno corpus is exactly two records"
+    );
 
     let claims: Vec<_> = specs
         .into_iter()
@@ -629,7 +632,9 @@ fn appview_two_identical_content_distinct_author_claims_compose_to_two_groups() 
             match appview_domain::ingest_decision(&record, &key) {
                 IngestOutcome::Index(claim) => claim,
                 IngestOutcome::Reject(reason) => {
-                    panic!("the canonical deno corpus must verify-and-index; got Reject({reason:?})")
+                    panic!(
+                        "the canonical deno corpus must verify-and-index; got Reject({reason:?})"
+                    )
                 }
             }
         })

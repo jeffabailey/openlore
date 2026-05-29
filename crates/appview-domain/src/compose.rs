@@ -40,7 +40,10 @@ pub fn compose_results(
     // down-weights any row (D-D40); the countered row is preserved and merely
     // carries a `counter_annotation`.
     let counters = annotate_counter_relationship(&rows);
-    let by_author = group_by_author(rows.into_iter().map(|claim| to_result_row(claim, &counters)));
+    let by_author = group_by_author(
+        rows.into_iter()
+            .map(|claim| to_result_row(claim, &counters)),
+    );
     let distinct_author_count = by_author.len() as u32;
     NetworkSearchResult {
         by_author,
@@ -206,10 +209,7 @@ mod tests {
 
     /// Find the single composed row whose `cid` matches `target` across all author
     /// groups (the flattened presence-universe the OD-AV-7 tests assert over).
-    fn row_for<'a>(
-        result: &'a NetworkSearchResult,
-        target: &Cid,
-    ) -> Option<&'a NetworkResultRow> {
+    fn row_for<'a>(result: &'a NetworkSearchResult, target: &Cid) -> Option<&'a NetworkResultRow> {
         result
             .by_author
             .iter()
@@ -371,7 +371,10 @@ mod tests {
         let result = compose_results(vec![c, k], SearchDimension::Object);
 
         // Presence: neither row removed/filtered/down-weighted.
-        assert_eq!(result.total_claims, 2, "the counter never drops a row (OD-AV-7)");
+        assert_eq!(
+            result.total_claims, 2,
+            "the counter never drops a row (OD-AV-7)"
+        );
         let countered = row_for(&result, &Cid("cidC".to_string()))
             .expect("the countered claim C is STILL present after annotation");
         assert_eq!(
