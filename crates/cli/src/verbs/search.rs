@@ -324,10 +324,23 @@ fn resolve_contributor_to_did(contributor: &str) -> String {
     }
 }
 
-/// `--subject <project>`: the project-dimension search (US-AV-004). SCAFFOLD.
-fn run_dimension_subject(_wiring: &Wiring, _subject: &str) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — query along the subject dimension; render per-author.
-    todo!("openlore search --subject — network subject-dimension search (Phase 03/04)")
+/// `--subject <project>`: the project-dimension search (US-AV-003 Ex2; AV-16).
+///
+/// The subject argument is a PROJECT URI (`github:bazelbuild/bazel`) matched
+/// against the indexed `subject` column EXACTLY — no handle→DID resolution (a
+/// subject is the project, not an author). The server routes `Subject` to
+/// `query_by_subject` (an EXPLICIT per-row `author_did` projection, never a
+/// subject-eliding aggregate), so a project surveyed by N distinct authors yields
+/// N attributed rows. The render layer surfaces those rows grouped BY AUTHOR (5
+/// distinct author groups), each with philosophy/confidence/cid/`[verified]`, and
+/// the dimension-aware footer reuses the OBJECT survey's distinct-author COUNT +
+/// no-merge guarantee — there is NO "bazel: the network thinks X" merged/consensus
+/// row (the subject-dimension anti-merging render, I-AV-2 / KPI-AV-2).
+///
+/// An unreachable indexer degrades GRACEFULLY to a clear local-only message
+/// pointing at `graph query --subject`, exiting 0 (the SOFT contract; WD-116).
+fn run_dimension_subject(wiring: &Wiring, subject: &str) -> Result<SearchOutcome> {
+    run_dimension(wiring, SearchDimension::Subject, subject)
 }
 
 /// `--show <cid>`: inspect one result — the full record + the verification line

@@ -923,11 +923,71 @@ fn search_by_subject_surfaces_every_authors_verified_claims_attributed() {
     // Universe (port-exposed): the count of distinct author groups (5, from
     // attributed rows, excluding any footer template); absence of a
     // merged/consensus row; every row [verified].
-    todo!(
-        "DELIVER (slice-05): seed bazel claims by 5 distinct authors; run \
-         `openlore search --subject github:bazelbuild/bazel`; assert grouped by \
-         author (5 distinct groups), each row [verified], NO merged consensus \
-         row (KPI-AV-2 subject-dimension render)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-003 Ex2 subject-survey corpus —
+    // github:bazelbuild/bazel surveyed by 5 DISTINCT network authors (priya,
+    // sven, tobias, aanya, lena), each asserting a distinct philosophy with its
+    // own confidence. The CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::BazelFiveDistinctAuthors);
+
+    // -- Action: the subject-dimension network read through the CLI driving port.
+    // `github:bazelbuild/bazel` is a PROJECT URI matched against the indexed
+    // `subject` column EXACTLY (no handle→DID resolution — a subject is the
+    // project, not an author). --
+    let outcome = run_openlore_search(
+        &env,
+        &["search", "--subject", "github:bazelbuild/bazel"],
+        &indexer,
+    );
+
+    // 1. exit 0 + the public-data banner PRECEDES the results.
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --subject` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+    assert_public_data_banner_precedes_results(&outcome.stdout);
+
+    // 2. claims grouped by author — 5 DISTINCT author groups, each attributed to
+    //    its own author DID, each with philosophy/confidence/cid/[verified], and
+    //    NO row collapses multiple authors into a "the network thinks X" merged
+    //    consensus entry (the subject-dimension anti-merging render, KPI-AV-2 /
+    //    I-AV-2; the pure composition is AVC-2). The helper counts ALL attributed
+    //    `author_did:` rows for the surveyed subject (5 — one per distinct author)
+    //    and asserts NO merged/consensus row anywhere; the footer's distinct-author
+    //    COUNT line is excluded by construction (it never starts with `author_did:`).
+    assert_network_result_preserves_attribution(
+        &outcome.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        5,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:sven-test#org.openlore.application",
+            "did:plc:tobias-test#org.openlore.application",
+            "did:plc:aanya-test#org.openlore.application",
+            "did:plc:lena-test#org.openlore.application",
+        ],
+    );
+
+    // 3. every row carries [verified] (verification is an ingest precondition;
+    //    I-AV-1) — the universal-marker guarantee holds on the subject survey too.
+    assert_verified_marker_is_universal(&outcome.stdout);
+
+    // 4. the footer states the distinct-author COUNT (5) + the no-merge guarantee
+    //    (a COUNT over attributed rows, NOT a merge) — the subject dimension reuses
+    //    the OBJECT survey's no-merge footer (dimension-aware render).
+    assert!(
+        outcome.stdout.contains("5 distinct author(s)."),
+        "expected the footer to state the distinct-author count (5):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("No claims are merged."),
+        "expected the footer's no-merge guarantee:\n{}",
+        outcome.stdout
     );
 }
 

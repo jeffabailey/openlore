@@ -4126,6 +4126,7 @@ fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::R
         NetworkIndexFixture::PriyaEightClaimsSixSubjects => {
             corpus_priya_eight_claims_six_subjects()
         }
+        NetworkIndexFixture::BazelFiveDistinctAuthors => corpus_bazel_five_distinct_authors(),
         other => panic!(
             "seed_network_index: corpus for fixture {other:?} not yet materialized (04-01 \
              wires only the AV-8 headline corpus; later steps add the rest)"
