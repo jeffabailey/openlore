@@ -4127,11 +4127,56 @@ fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::R
             corpus_priya_eight_claims_six_subjects()
         }
         NetworkIndexFixture::BazelFiveDistinctAuthors => corpus_bazel_five_distinct_authors(),
+        NetworkIndexFixture::IncludesAlreadyFollowedRachel => {
+            corpus_includes_already_followed_rachel()
+        }
         other => panic!(
             "seed_network_index: corpus for fixture {other:?} not yet materialized (04-01 \
              wires only the AV-8 headline corpus; later steps add the rest)"
         ),
     }
+}
+
+/// US-AV-003 Example 4 / US-AV-005 Ex2 corpus: did:plc:rachel-test authors
+/// several verified network claims across subjects. Used by AV-18 — Maria
+/// ALREADY follows Rachel (a slice-03 `peer add`), so a `--contributor
+/// github:rachel` search labels every one of Rachel's network rows
+/// "(subscribed peer)" (resolved CLI-side against Maria's peer_subscriptions —
+/// the index is per-user-neutral) and shows NO redundant follow affordance.
+///
+/// Built inline from the public `RawRecordSpec::valid` builder against
+/// `RACHEL_DID` (the contributor query matches the indexed
+/// `did:plc:rachel-test#org.openlore.application` author_did exactly), so the
+/// trail is a substantive multi-claim survey (the subscribed-peer label + the
+/// affordance-suppression must hold on EVERY row).
+fn corpus_includes_already_followed_rachel() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, RACHEL_DID};
+    let entries = [
+        (
+            "github:NixOS/nixpkgs",
+            "org.openlore.philosophy.reproducible-builds",
+            0.88,
+        ),
+        (
+            "github:NixOS/nixpkgs",
+            "org.openlore.philosophy.dependency-pinning",
+            0.81,
+        ),
+        (
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.91,
+        ),
+        (
+            "github:guix/guix",
+            "org.openlore.philosophy.reproducible-builds",
+            0.76,
+        ),
+    ];
+    entries
+        .iter()
+        .map(|(subject, object, conf)| RawRecordSpec::valid(RACHEL_DID, subject, object, *conf))
+        .collect()
 }
 
 /// The distinct author DIDs present in a corpus, each paired with its fixture

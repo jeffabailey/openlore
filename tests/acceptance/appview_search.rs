@@ -1065,11 +1065,85 @@ fn search_labels_a_followed_author_as_subscribed_peer() {
     //
     // Universe (port-exposed): Rachel's rows labeled "(subscribed peer)"; absence
     // of the "Follow this author" affordance for Rachel; every row [verified].
-    todo!(
-        "DELIVER (slice-05): with Maria subscribed to did:plc:rachel-test, run \
-         `openlore search --contributor github:rachel`; assert Rachel's rows \
-         labeled (subscribed peer) [not (not subscribed)], each [verified], and \
-         NO follow affordance for her (US-AV-003 Ex4)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (relationship): Maria SUBSCRIBES to Rachel
+    // (did:plc:rachel-test) via the slice-03 `peer add` (resolved against a
+    // PeerPds double), the SAME path AV-8 / slice-03 use. The subscription is
+    // persisted under OPENLORE_HOME, so the later `search` (sharing the same env
+    // home) resolves the relationship CLI-side against the real
+    // peer_subscriptions state — the index is per-user-neutral (data-models.md). --
+    let rachel_did = "did:plc:rachel-test";
+    let rachel_peer = PeerPds::for_peer(rachel_did, Vec::new());
+    let peer_add = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", rachel_did],
+        rachel_did,
+        rachel_peer.endpoint_url(),
+    );
+    assert_eq!(
+        peer_add.status, 0,
+        "precondition: `openlore peer add {rachel_did}` must exit 0. stdout: {} stderr: {}",
+        peer_add.stdout, peer_add.stderr
+    );
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with Rachel's verified network claims (US-AV-003 Ex4 /
+    // US-AV-005 Ex2). The index is per-user-neutral — it carries NO relationship
+    // state; the (subscribed peer) label is a CLI-side projection of Maria's own
+    // peer_subscriptions established above. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::IncludesAlreadyFollowedRachel);
+
+    // -- Action: the contributor-dimension network read through the CLI driving
+    // port. `github:rachel` resolves to did:plc:rachel-test (slice-02/04 handle→DID)
+    // → the rachel app identity the corpus author_did carries. --
+    let outcome = run_openlore_search(&env, &["search", "--contributor", "github:rachel"], &indexer);
+
+    // exit 0 (a valid network result, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --contributor github:rachel` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 1. Rachel's network claims are labeled "(subscribed peer)" — NOT
+    //    "(not subscribed)". The relationship resolves CLI-side against Maria's
+    //    peer_subscriptions (the subscription established above), proving the
+    //    slice-03 relationship labeling is preserved even in network search.
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:rachel-test#org.openlore.application (subscribed peer)"),
+        "expected the already-followed Rachel labeled (subscribed peer):\n{}",
+        outcome.stdout
+    );
+    // The cardinal AV-18 disprover: a genuinely-subscribed author is NEVER mislabeled
+    // "(not subscribed)" in network search (the relationship resolution must read the
+    // REAL peer_subscriptions, not default everyone to unfollowed).
+    assert!(
+        !outcome
+            .stdout
+            .contains("did:plc:rachel-test#org.openlore.application (not subscribed)"),
+        "AV-18: a subscribed author must NOT be mislabeled (not subscribed):\n{}",
+        outcome.stdout
+    );
+
+    // 2. Every claim retains its author DID + the [verified] marker (verification is
+    //    an ingest precondition; I-AV-1) — the universal-marker guarantee holds on a
+    //    subscribed author's trail too.
+    assert_verified_marker_is_universal(&outcome.stdout);
+
+    // 3. NO "Follow this author" affordance is shown for Rachel — she is ALREADY
+    //    followed, so the discovery→federation funnel affordance (which reuses the
+    //    slice-03 `peer add` verbatim, I-AV-7) is suppressed for her (chains into
+    //    AV-21). The affordance appears ONLY for unfollowed (NetworkUnfollowed)
+    //    authors; a subscribed peer would make it redundant.
+    assert!(
+        !outcome
+            .stdout
+            .contains("Follow this author: openlore peer add did:plc:rachel-test"),
+        "AV-18: NO redundant follow affordance for the already-followed Rachel:\n{}",
+        outcome.stdout
     );
 }
 
