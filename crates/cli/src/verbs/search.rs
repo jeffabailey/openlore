@@ -94,7 +94,7 @@ pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
         return run_share(args);
     }
     if let Some(cid) = &args.show {
-        return run_show(wiring, cid);
+        return run_show(wiring, args, cid);
     }
     if let Some(object) = &args.object {
         return run_dimension_object(wiring, object);
@@ -208,14 +208,100 @@ fn run_dimension_subject(_wiring: &Wiring, _subject: &str) -> Result<SearchOutco
 }
 
 /// `--show <cid>`: inspect one result — the full record + the verification line
-/// ("Signature: VERIFIED against <did>" / "CID recomputed, matches published
-/// record"). A CID not in any result is a usage error (non-zero exit), distinct
-/// from an empty dimension search (exit 0). SCAFFOLD.
-fn run_show(_wiring: &Wiring, _cid: &str) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — fetch the one result, render the full record + the
-    // `--show` verification line (the SAME pure-core verification result; no
-    // second path). Lands in Phase 03/04.
-    todo!("openlore search --show — inspect one result + verification line (Phase 03/04)")
+/// ("Signature: VERIFIED against <did>" / "CID: <cid> (recomputed, matches
+/// published record)"). A CID not in any result is a usage error (non-zero exit),
+/// distinct from an empty dimension search (exit 0).
+///
+/// ## get-by-cid mechanism (DESIGN §2 — reuse the search query, filter client-side)
+///
+/// `--show` reuses the SAME dimension search the result list ran (the supplied
+/// `--object`/`--contributor`/`--subject` value) and filters the returned FLAT
+/// attributed rows to the requested `cid` CLIENT-SIDE — no new XRPC endpoint, no
+/// server change. The cid the user `--show`s came from a prior search of the SAME
+/// dimension (US-AV-004 Ex1: "a prior search listed it"), so the row is in that
+/// dimension's result set. This keeps `--show` a READ-ONLY projection of the
+/// already-computed result set (no second verification path; US-AV-004 Technical
+/// Notes): the rendered "Signature: VERIFIED against <did>" + "CID recomputed,
+/// matches published record" lines surface the `verified_against` + `cid` the
+/// indexer ALREADY computed at ingest. The display creates/signs/mutates nothing.
+fn run_show(wiring: &Wiring, args: &SearchArgs, cid: &str) -> Result<SearchOutcome> {
+    // The dimension `--show` inspects within is the one the user listed results
+    // with (US-AV-004 Ex1: `search --object ... --show <cid>`). Resolve it from
+    // the supplied dimension flag.
+    let (dimension, value) = match show_dimension(args) {
+        Some(pair) => pair,
+        None => return Ok(show_usage_error_no_dimension()),
+    };
+
+    let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
+    if indexer_url.is_empty() {
+        return Ok(degrade_to_local_only(value));
+    }
+
+    let adapter = HttpIndexQueryAdapter::for_url(indexer_url);
+    let runtime = crate::verbs::claim_publish::build_tokio_runtime();
+    // Reuse the SAME dimension search the result list ran; the cid filter is
+    // applied CLIENT-SIDE below (DESIGN §2 — no new endpoint). Pass the cid hint
+    // along the existing port signature so a future server-side filter is a drop-in.
+    let queried_cid = claim_domain::Cid(cid.to_string());
+    let outcome = runtime.block_on(adapter.search(dimension, value, Some(&queried_cid)));
+
+    match outcome {
+        Ok(result) => Ok(render_show(wiring, result, cid)),
+        // SOFT, non-fatal: an unreachable indexer degrades to the local-only
+        // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
+        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(value)),
+        Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
+    }
+}
+
+/// Resolve the `--show` dimension + value from the supplied dimension flag. The
+/// user lists results with one dimension (`--object`/`--contributor`/`--subject`)
+/// then `--show`s a cid from that list, so `--show` re-runs the SAME dimension.
+fn show_dimension(args: &SearchArgs) -> Option<(SearchDimension, &str)> {
+    if let Some(object) = &args.object {
+        return Some((SearchDimension::Object, object));
+    }
+    if let Some(contributor) = &args.contributor {
+        return Some((SearchDimension::Contributor, contributor));
+    }
+    if let Some(subject) = &args.subject {
+        return Some((SearchDimension::Subject, subject));
+    }
+    None
+}
+
+/// Render the `--show` trust-inspection view: filter the dimension result set to
+/// the requested `cid` CLIENT-SIDE, then render the full record + the verification
+/// line via the PURE `render::render_show_verification_line` (the SAME stored
+/// `verified_against` + `cid` the indexer computed at ingest — no second path,
+/// US-AV-004 Technical Notes). A cid absent from the result set is a usage error
+/// (non-zero exit), distinct from an empty dimension search (exit 0). READ-ONLY.
+fn render_show(_wiring: &Wiring, result: NetworkSearchResultRaw, cid: &str) -> SearchOutcome {
+    match result.results.iter().find(|row| row.cid.0 == cid) {
+        Some(row) => SearchOutcome {
+            exit_code: 0,
+            stdout: render::render_show_verification_line(row),
+        },
+        None => SearchOutcome {
+            exit_code: 2,
+            stdout: format!(
+                "CID {cid} is not in this search result. Run the search without --show \
+                 to list results, then --show a listed CID.\n"
+            ),
+        },
+    }
+}
+
+/// `--show <cid>` without a dimension flag: a usage error (non-zero exit) — the
+/// user must list results along a dimension before inspecting one.
+fn show_usage_error_no_dimension() -> SearchOutcome {
+    SearchOutcome {
+        exit_code: 2,
+        stdout: "openlore search --show <cid> requires a dimension \
+                 (--object/--contributor/--subject) to list results from.\n"
+            .to_string(),
+    }
 }
 
 /// `--share`: emit a stable query-encoding link (WD-110 / I-AV-8) — encodes only

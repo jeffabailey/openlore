@@ -1748,16 +1748,67 @@ fn render_empty_network_result(_dimension: SearchDimension, result: &NetworkSear
     }
 }
 
-/// Render the `--show <cid>` verification line(s): the full record plus
-/// "Signature: VERIFIED against <did>" + "CID recomputed, matches published
-/// record" — the SAME pure-core verification result the ingest gate used (no
-/// second path; I-AV-1). PURE function — no I/O.
+/// Content-frozen `--show` signature-verified line prefix (US-AV-004 Ex1 /
+/// KPI-AV-3): the inspected record's signature was VERIFIED against the author's
+/// DID. The `<did>` is filled with the bare author DID. This renders the SAME
+/// verification result the indexer computed at ingest (the row's
+/// `verified_against`); `--show` does NOT re-verify (no second path; US-AV-004
+/// Technical Notes). Do NOT paraphrase — the exact phrasing is the user-visible
+/// trust contract.
+pub const SHOW_SIGNATURE_VERIFIED_PREFIX: &str = "Signature: VERIFIED against ";
+
+/// Content-frozen `--show` CID-match line suffix (US-AV-004 Ex1 / KPI-AV-3): the
+/// inspected record's CID was recomputed and matches the published record. The
+/// `CID: <cid>` is filled with the row's cid. This surfaces the cid the indexer
+/// ALREADY computed + verified at ingest (no second path). Do NOT paraphrase.
+pub const SHOW_CID_RECOMPUTED_SUFFIX: &str = " (recomputed, matches published record)";
+
+/// Render the `--show <cid>` trust-inspection view: the full record (subject /
+/// object / confidence / evidence / author DID) PLUS "Signature: VERIFIED against
+/// <did>" + "CID: <cid> (recomputed, matches published record)". PURE function —
+/// no I/O.
 ///
-/// SCAFFOLD: true — the verification line copy lands in Phase 03/04.
-pub fn render_show_verification_line(_row: &NetworkResultRowRaw) -> String {
-    // SCAFFOLD: true — full record + "Signature: VERIFIED against <did>" +
-    // "CID recomputed, matches published record". Lands in Phase 03/04.
-    todo!("render_show_verification_line — --show verification line (Phase 03/04, I-AV-1)")
+/// ## Same pure-core verification result, no second path (US-AV-004 Technical Notes)
+///
+/// The two verification lines render the verification result the indexer ALREADY
+/// computed at INGEST — the row's `verified_against` (the key the signature
+/// verified against, never empty per WD-104) and the row's `cid` (the CID the
+/// indexer recomputed + matched before indexing, WD-104 verified-before-index).
+/// `--show` does NOT re-verify nor re-sign; it reads the stored verified record
+/// and surfaces those already-computed facts. The display is READ-ONLY — it
+/// creates / signs / mutates nothing (US-AV-004; AV-23).
+///
+/// The `<did>` in the signature line is the BARE author DID (fragment stripped) so
+/// it reads as the human-recognizable identity, matching the result-list rows.
+pub fn render_show_verification_line(row: &NetworkResultRowRaw) -> String {
+    let mut out = String::new();
+    // The full record — the SAME fields the result-list row carries, surfaced in
+    // full for the trust inspection (subject / object / confidence / evidence /
+    // author DID). Read verbatim from the stored verified record.
+    out.push_str(&format!("subject:     {}\n", row.subject));
+    out.push_str(&format!("object:      {}\n", row.object));
+    out.push_str(&format!(
+        "confidence:  {} ({})\n",
+        render_candidate_confidence(row.confidence),
+        confidence_bucket_label(row.confidence)
+    ));
+    out.push_str(&format!(
+        "evidence:    {}\n",
+        render_evidence(&row.evidence)
+    ));
+    out.push_str(&format!("author:      {}\n", row.author_did.0));
+
+    // The trust lines — rendered from the verification result the indexer computed
+    // at ingest (the row's `verified_against` + `cid`). No re-verification here.
+    let bare_did = row
+        .verified_against
+        .0
+        .split('#')
+        .next()
+        .unwrap_or(&row.verified_against.0);
+    out.push_str(&format!("{SHOW_SIGNATURE_VERIFIED_PREFIX}{bare_did}\n"));
+    out.push_str(&format!("CID: {}{SHOW_CID_RECOMPUTED_SUFFIX}\n", row.cid.0));
+    out
 }
 
 /// Emit the `--share` query-encoding link (WD-110 / I-AV-8): encodes ONLY the
@@ -2633,6 +2684,81 @@ mod tests {
                     rendered
                 );
             }
+        }
+
+        /// AV-23 / US-AV-004 `--show` trust-inspection RENDER property (the
+        /// inner-loop decomposition of the AT's "full record + Signature-VERIFIED +
+        /// CID-recomputed lines"): for ANY verified attributed row, the `--show`
+        /// view (a) prints the full record fields verbatim (subject / object /
+        /// confidence / evidence / author DID), (b) prints
+        /// `Signature: VERIFIED against <bare-did>` rendered from the row's STORED
+        /// `verified_against` (the ingest verification result — no second path,
+        /// US-AV-004 Technical Notes), and (c) prints
+        /// `CID: <cid> (recomputed, matches published record)` naming the row's cid.
+        /// The author pool produces both followed-shape + bare DIDs so the
+        /// fragment-stripping in the signature line is exercised across inputs.
+        #[test]
+        fn render_show_surfaces_full_record_plus_stored_verification(
+            author_idx in 0usize..5,
+            cid_idx in 0usize..1000,
+            confidence in 0.0f64..=1.0,
+        ) {
+            let author_did = format!("did:plc:author{author_idx}");
+            let cid = format!("bafyshow{cid_idx}");
+            // `verified_against` carries the fragment form (the ingest-stored shape);
+            // the signature line must surface the BARE did.
+            let row = raw_network_row(
+                &format!("{author_did}#org.openlore.application"),
+                &cid,
+                confidence,
+            );
+
+            let rendered = render_show_verification_line(&row);
+
+            // (a) The full record fields appear (surfaced for the trust inspection).
+            prop_assert!(
+                rendered.contains(&format!("subject:     {}", row.subject)),
+                "--show must surface the full-record subject; rendered:\n{rendered}"
+            );
+            prop_assert!(
+                rendered.contains(&row.object),
+                "--show must surface the record object; rendered:\n{rendered}"
+            );
+            prop_assert!(
+                rendered.contains(&format!("author:      {}", row.author_did.0)),
+                "--show must surface the record author DID; rendered:\n{rendered}"
+            );
+            // The numeric confidence (rendered verbatim, never a bucket-only label).
+            prop_assert!(
+                rendered.contains(&render_candidate_confidence(confidence)),
+                "--show must surface the numeric confidence; rendered:\n{rendered}"
+            );
+
+            // (b) The Signature-VERIFIED line, rendered from the STORED
+            // `verified_against` (no second path), with the fragment stripped to the
+            // bare DID.
+            prop_assert!(
+                rendered.contains(&format!("Signature: VERIFIED against {author_did}")),
+                "--show must surface 'Signature: VERIFIED against {author_did}' from the \
+                 stored verified_against (no second path); rendered:\n{rendered}"
+            );
+            prop_assert!(
+                !rendered.contains("#org.openlore.application\nCID:")
+                    && rendered.contains(&format!(
+                        "Signature: VERIFIED against {author_did}\n"
+                    )),
+                "the signature line must show the BARE DID (fragment stripped); \
+                 rendered:\n{rendered}"
+            );
+
+            // (c) The CID-recomputed-matches line names the row's cid.
+            prop_assert!(
+                rendered.contains(&format!(
+                    "CID: {cid} (recomputed, matches published record)"
+                )),
+                "--show must surface 'CID: {cid} (recomputed, matches published record)'; \
+                 rendered:\n{rendered}"
+            );
         }
     }
 }

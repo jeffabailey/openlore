@@ -4474,6 +4474,102 @@ pub fn assert_transport_reached_serve_port(stdout: &str) {
     assert_verified_marker_is_universal(stdout);
 }
 
+/// Extract the `cid:` value rendered for the FIRST result row whose attribution
+/// block names `author_substr` (e.g. `did:plc:priya-test`) and whose `subject:`
+/// line names `subject_substr` (e.g. `github:bazelbuild/bazel`) in an AV-8-style
+/// `search --object` stdout. Used by AV-23 to capture a REAL cid the result list
+/// emitted, then `--show` it (chaining off the same search the user just ran).
+///
+/// The renderer emits each row as `author_did:` then `subject:` / `object:` /
+/// `confidence:` / `evidence:` / `cid:` lines (render::render_one_network_row), so
+/// the cid for the matched (author, subject) row is the next `cid:` line AFTER the
+/// matching `author_did:`+`subject:` pair. Port-exposed: parses only the rendered
+/// stdout (the CLI driving-port observable), never an internal struct.
+pub fn cid_from_search_row(stdout: &str, author_substr: &str, subject_substr: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let mut in_matching_author = false;
+    let mut subject_seen = false;
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("author_did:") {
+            in_matching_author = trimmed.contains(author_substr);
+            subject_seen = false;
+            continue;
+        }
+        if !in_matching_author {
+            continue;
+        }
+        if trimmed.starts_with("subject:") {
+            subject_seen = trimmed.contains(subject_substr);
+            continue;
+        }
+        if subject_seen && trimmed.starts_with("cid:") {
+            return trimmed
+                .trim_start_matches("cid:")
+                .trim()
+                .to_string();
+        }
+    }
+    panic!(
+        "cid_from_search_row: no rendered row found for author {author_substr:?} + \
+         subject {subject_substr:?} in search output:\n{stdout}"
+    );
+}
+
+/// Assert the AV-23 `--show <cid>` trust-inspection contract (US-AV-004 Ex1 /
+/// KPI-AV-3): the output prints the FULL record (subject / object / confidence /
+/// evidence / author DID) PLUS the content-frozen
+/// `Signature: VERIFIED against <author_did>` line AND the
+/// `CID: <cid> (recomputed, matches published record)` line — the SAME pure-core
+/// verification result the indexer computed at ingest (no second path). The
+/// caller separately asserts the read-only (no-local-mutation) property.
+///
+/// Universe (port-exposed, asserted against the `--show` stdout): the full record
+/// fields + the Signature-VERIFIED line + the CID-recomputed-matches line. Never
+/// an internal struct field.
+pub fn assert_show_inspects_verified_record(
+    stdout: &str,
+    cid: &str,
+    expected_subject: &str,
+    expected_object: &str,
+    expected_confidence: &str,
+    expected_author_did: &str,
+) {
+    // The full record fields — surfaced for the trust inspection.
+    assert!(
+        stdout.contains(&format!("subject:     {expected_subject}"))
+            || stdout.contains(&format!("subject: {expected_subject}")),
+        "--show must print the full record subject {expected_subject:?}:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(expected_object),
+        "--show must print the record object {expected_object:?}:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(expected_confidence),
+        "--show must print the record confidence {expected_confidence:?}:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(expected_author_did),
+        "--show must print the record author DID {expected_author_did:?}:\n{stdout}"
+    );
+
+    // The Signature-VERIFIED line names the author DID (the verification result the
+    // indexer computed at ingest — no second path).
+    assert!(
+        stdout.contains(&format!("Signature: VERIFIED against {expected_author_did}")),
+        "--show must print 'Signature: VERIFIED against {expected_author_did}' \
+         (the stored ingest verification result; no second path):\n{stdout}"
+    );
+
+    // The CID-recomputed-matches line names the inspected cid.
+    assert!(
+        stdout.contains(&format!("CID: {cid} (recomputed, matches published record)")),
+        "--show must print 'CID: {cid} (recomputed, matches published record)' \
+         (the cid the indexer recomputed + matched at ingest):\n{stdout}"
+    );
+}
+
 /// Assert that none of the `adversarial_cids` appears anywhere in the index
 /// (`index.duckdb` rows) NOR in any `search` result — the verified-before-index
 /// reject contract (I-AV-1 / KPI-AV-3; AV-3). `env` locates the index store; the

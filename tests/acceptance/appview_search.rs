@@ -1060,12 +1060,88 @@ fn show_inspects_a_verified_record_with_signature_and_cid_match_lines() {
     // Universe (port-exposed): the --show output contains the full record fields +
     // the "Signature: VERIFIED against did:plc:priya-test" line + the "CID ...
     // (recomputed, matches published record)" line; no local state mutated.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --object reproducible-builds \
-         --show bafy...k2` for Priya's verified claim; assert the full record + \
-         'Signature: VERIFIED against did:plc:priya-test' + 'CID ... (recomputed, \
-         matches published record)'; read-only (US-AV-004 Ex1; same pure-core \
-         result, no second path)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus (9 authors /
+    // 7 subjects), which includes Priya's verified bazel/reproducible-builds claim
+    // (did:plc:priya-test, UNFOLLOWED, 0.82) — the SAME corpus AV-8 lists. The
+    // CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Capture the LOCAL store baseline BEFORE any search/--show so the read-only
+    // property (search + --show mutate NO local state) is asserted as a delta. --
+    let local_before = local_claim_file_set(&env);
+
+    // === Step 1 (chain off AV-8): list the result set with the object dimension and
+    // capture Priya's bazel cid from the rendered result row (the cid the user
+    // "--show"s came from a prior search, US-AV-004 Ex1). ===
+    let listed = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+    assert_eq!(
+        listed.status, 0,
+        "precondition: the AV-8-style `search --object` must exit 0 to list a cid to \
+         --show. stdout: {} stderr: {}",
+        listed.stdout, listed.stderr
+    );
+    let priya_bazel_cid =
+        cid_from_search_row(&listed.stdout, "did:plc:priya-test", "github:bazelbuild/bazel");
+
+    // === Step 2 (the action under test): inspect that listed cid via `--show`. ===
+    let shown = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+            "--show",
+            &priya_bazel_cid,
+        ],
+        &indexer,
+    );
+
+    // exit 0 (a valid inspection of a listed record, never a fatal).
+    assert_eq!(
+        shown.status, 0,
+        "`openlore search --object ... --show <listed cid>` must exit 0. stdout: {} \
+         stderr: {}",
+        shown.stdout, shown.stderr
+    );
+
+    // The trust-inspection contract (US-AV-004 Ex1 / KPI-AV-3): the FULL record
+    // (subject github:bazelbuild/bazel, object reproducible-builds, confidence 0.82,
+    // evidence, author did:plc:priya-test) PLUS "Signature: VERIFIED against
+    // did:plc:priya-test" AND "CID: <cid> (recomputed, matches published record)".
+    // These lines render the SAME pure-core verification result the indexer computed
+    // at ingest (the row's verified_against + cid) — no second path, no re-verify.
+    assert_show_inspects_verified_record(
+        &shown.stdout,
+        &priya_bazel_cid,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        "0.82",
+        "did:plc:priya-test",
+    );
+
+    // === READ-ONLY (US-AV-004): the display creates/signs/mutates nothing — the
+    // LOCAL claim store is UNCHANGED across the search + --show invocations (search
+    // and --show are read-only DISCOVERY paths; they link no local store/ingest
+    // code and touch no local state). ===
+    let local_after = local_claim_file_set(&env);
+    assert_eq!(
+        local_after, local_before,
+        "US-AV-004: --show (and the listing search) must be READ-ONLY — the LOCAL \
+         claim store must be unchanged (before: {local_before:?}, after: {local_after:?})"
     );
 }
 
