@@ -136,7 +136,13 @@ fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> 
     // The OBJECT dimension queries + displays the SAME value, and an empty result
     // probes the index for a near-match suggestion (a typo'd philosophy URI is one
     // edit from the correct one — US-AV-002 Ex 4 / AV-12).
-    run_dimension(wiring, SearchDimension::Object, object, object, EmptyPolicy::SuggestNearMatch)
+    run_dimension(
+        wiring,
+        SearchDimension::Object,
+        object,
+        object,
+        EmptyPolicy::SuggestNearMatch,
+    )
 }
 
 /// How the empty-dimension-result branch behaves for a given dimension.

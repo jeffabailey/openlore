@@ -1003,6 +1003,538 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-29T07:35:33Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:46:44Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:46:52Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: ranker is AVC-8 (already PBT-covered in suggest.rs + appview_core.rs); new renderers are thin pure formatters fully driven by AV-12 AT; known_objects_near is I/O orchestration exercised by the real-subprocess AT",
+      "t": "2026-05-29T07:46:52Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:46:52Z"
+    },
+    {
+      "sid": "05-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:47:20Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:51:41Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:53:12Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:57:08Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:57:08Z"
+    },
+    {
+      "sid": "05-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:58:39Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T08:01:53Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T08:03:50Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: production change is a one-line dimension dispatch delegating to the already-tested run_dimension path; query_by_subject already real with sibling anti-merging unit coverage (query_by_object); AV-16 fully covers it end-to-end",
+      "t": "2026-05-29T08:03:51Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T08:05:10Z"
+    },
+    {
+      "sid": "05-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T08:05:49Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T08:08:08Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T11:48:40Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T11:50:02Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: AV-17 AT drives all new production logic (handle-vs-DID empty display + NoSuggestion contributor policy) end-to-end through the real subprocess path; the contributor-noun + None-suggestion render is already covered structurally by the AV-12 renderer + search_dimension_noun. A pure unit test would re-test the renderer (stub-asserting-stub).",
+      "t": "2026-05-29T11:51:28Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T11:52:18Z"
+    },
+    {
+      "sid": "05-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T11:52:37Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T11:57:24Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:00:05Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: no production change required \u2014 the dimension-agnostic resolve_relationship (search.rs) + render_network_search_result (render.rs) already wire subscribed-peer labeling + affordance suppression (proven by AV-8 object-dimension + the deletion test that RED-failed AV-18 when resolve_relationship was stubbed). No new production unit to decompose.",
+      "t": "2026-05-29T12:00:05Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:01:12Z"
+    },
+    {
+      "sid": "05-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:01:36Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:05:56Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:10:25Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: affordance render already correct from 04-01/05-02 (render_follow_affordance emits the exact slice-03 command); no production change made, so no render unit test required",
+      "t": "2026-05-29T12:10:25Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:11:40Z"
+    },
+    {
+      "sid": "05-06",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:12:16Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:15:23Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:21:21Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: search + --show are read-only by construction (only HTTP reads + renders + a lookup_subscription read; no subscription mutation). AV-20 is a characterization test; NO production change needed. Falsifiability confirmed: an injected auto-add subscription drove AV-20 RED (peer_subscriptions [] -> 9 rows), then reverted.",
+      "t": "2026-05-29T12:21:24Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:22:34Z"
+    },
+    {
+      "sid": "05-07",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:22:54Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:25:34Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:26:59Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: characterization \u2014 render_network_search_result already conditions the affordance per-row on relationship (NetworkUnfollowed only) from 04-01/05-05; mixed case needs no production change. Falsifiability proven: forcing affordance for all \u2192 AV-21 RED \u2192 reverted.",
+      "t": "2026-05-29T12:26:59Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:28:13Z"
+    },
+    {
+      "sid": "05-08",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:28:31Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:31:08Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:41:48Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: AV-22 is characterization of existing slice-03 verbs (search affordance + peer add/pull + peer remove --purge); no new unit-decomposable production code is authored by this step. GREEN is blocked by a defect outside files_to_modify (see report).",
+      "t": "2026-05-29T12:41:59Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:44:37Z"
+    },
+    {
+      "sid": "05-09",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:45:20Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:47:56Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:49:42Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: characterization step \u2014 the 04-07 --show absent-cid arm already returns exit 2 with the exact usage message + remediation hint; no production change to search.rs/render.rs was needed, so no new #[cfg(test)] unit is justified. Falsifiability check (absent-cid exit 0 -> AV-24 RED -> revert) confirmed the AT is not always-green.",
+      "t": "2026-05-29T12:49:42Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:50:23Z"
+    },
+    {
+      "sid": "05-10",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:50:38Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:56:05Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T12:59:48Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:07:35Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:08:00Z"
+    },
+    {
+      "sid": "05-11",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:08:36Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:10:40Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:12:20Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:13:22Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:14:45Z"
+    },
+    {
+      "sid": "05-12",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:15:02Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:17:45Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:22:19Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:22:19Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:23:41Z"
+    },
+    {
+      "sid": "05-13",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:24:11Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:28:18Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:32:35Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: characterization step \u2014 the 05-13 live resolver re-runs the encoded query against the current index by construction; no production change, falsifiability confirmed via temp resolver-freeze injection (AV-28 RED at 9/11) then reverted",
+      "t": "2026-05-29T13:32:36Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:33:15Z"
+    },
+    {
+      "sid": "05-14",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:33:42Z"
+    },
+    {
+      "sid": "05-15",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:36:35Z"
+    },
+    {
+      "sid": "05-15",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:38:41Z"
+    },
+    {
+      "sid": "05-15",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: AV-29 is a characterization step \u2014 no production change (the 05-12 emitter already encodes the resolved DID, the 05-13 resolver re-runs the contributor link, the 05-02 render carries the not-consensus framing). Falsifiability check (emit handle -> AV-29 RED -> revert) confirmed the AT binds the resolved-DID behavior. A passing AT requires no decomposing unit test.",
+      "t": "2026-05-29T13:38:41Z"
+    },
+    {
+      "sid": "05-15",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:40:39Z"
+    },
+    {
+      "sid": "05-15",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T13:41:00Z"
     }
   ]
 }

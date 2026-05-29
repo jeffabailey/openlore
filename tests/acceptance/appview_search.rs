@@ -1097,7 +1097,11 @@ fn search_labels_a_followed_author_as_subscribed_peer() {
     // -- Action: the contributor-dimension network read through the CLI driving
     // port. `github:rachel` resolves to did:plc:rachel-test (slice-02/04 handle→DID)
     // → the rachel app identity the corpus author_did carries. --
-    let outcome = run_openlore_search(&env, &["search", "--contributor", "github:rachel"], &indexer);
+    let outcome = run_openlore_search(
+        &env,
+        &["search", "--contributor", "github:rachel"],
+        &indexer,
+    );
 
     // exit 0 (a valid network result, never a fatal).
     assert_eq!(
@@ -2031,8 +2035,7 @@ fn share_emits_stable_query_encoding_link_for_object_search() {
     // 2. A line states the link encodes the QUERY, not a frozen snapshot (the
     //    sharing semantics, US-AV-006 Ex1).
     assert!(
-        outcome.stdout.contains("encodes the query, not a")
-            && outcome.stdout.contains("snapshot"),
+        outcome.stdout.contains("encodes the query, not a") && outcome.stdout.contains("snapshot"),
         "expected a line stating the link encodes the query, NOT a frozen snapshot:\n{}",
         outcome.stdout
     );
@@ -2322,11 +2325,8 @@ fn share_encodes_contributor_dimension_resolving_to_the_trail() {
     // `github:priya` resolves to did:plc:priya-test, the corpus author_did. Its 8
     // attributed per-author rows + the not-consensus footer are the SAME set the
     // shared link must re-derive. --
-    let original = run_openlore_search(
-        &env,
-        &["search", "--contributor", "github:priya"],
-        &indexer,
-    );
+    let original =
+        run_openlore_search(&env, &["search", "--contributor", "github:priya"], &indexer);
     assert_eq!(
         original.status, 0,
         "precondition: the original `openlore search --contributor github:priya` must \

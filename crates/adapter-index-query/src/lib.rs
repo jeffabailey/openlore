@@ -27,7 +27,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use claim_domain::{ClaimReference, Cid, Did, KeyId, ReferenceType};
+use claim_domain::{Cid, ClaimReference, Did, KeyId, ReferenceType};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse,
     SearchResultDto, SEARCH_CLAIMS_NSID,

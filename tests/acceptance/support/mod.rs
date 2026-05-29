@@ -4334,8 +4334,18 @@ pub fn av28_two_more_matching_claims() -> Vec<openlore_test_support::RawRecordSp
     use openlore_test_support::RawRecordSpec;
     let object = "org.openlore.philosophy.reproducible-builds";
     vec![
-        RawRecordSpec::valid("did:plc:author10-test", "github:void/voidlinux", object, 0.69),
-        RawRecordSpec::valid("did:plc:author11-test", "github:alpine/aports", object, 0.73),
+        RawRecordSpec::valid(
+            "did:plc:author10-test",
+            "github:void/voidlinux",
+            object,
+            0.69,
+        ),
+        RawRecordSpec::valid(
+            "did:plc:author11-test",
+            "github:alpine/aports",
+            object,
+            0.73,
+        ),
     ]
 }
 
@@ -4585,7 +4595,12 @@ pub fn assert_counter_annotation_shown_not_applied(
 
     // 3. The counter is SHOWN, NEVER applied: NO filtering/down-weighting language
     //    appears (the countered claim is not hidden, dimmed, or removed).
-    for banned in &["filtered out", "down-weighted", "suppressed", "hidden by counter"] {
+    for banned in &[
+        "filtered out",
+        "down-weighted",
+        "suppressed",
+        "hidden by counter",
+    ] {
         assert!(
             !stdout.to_ascii_lowercase().contains(banned),
             "AV-25: the counter must be SHOWN, never APPLIED — found {banned:?} in the \
@@ -4975,17 +4990,20 @@ pub fn assert_show_absent_cid_usage_error(outcome: &CliOutcome, absent_cid: &str
         "AV-24: the usage error must name the absent cid + state it is not in this \
          search result ('CID {absent_cid} is not in this search result'). \
          \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
+        outcome.stdout,
+        outcome.stderr
     );
 
     // 3. The remediation hint — re-run the search WITHOUT --show to list results,
     //    then --show a LISTED cid (the user-visible recovery path).
     assert!(
-        surfaces.contains("Run the search without --show to list results, then --show a listed CID."),
+        surfaces
+            .contains("Run the search without --show to list results, then --show a listed CID."),
         "AV-24: the usage error must carry the remediation hint ('Run the search \
          without --show to list results, then --show a listed CID.'). \
          \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
+        outcome.stdout,
+        outcome.stderr
     );
 }
 
@@ -5181,8 +5199,14 @@ const SHARE_LINK_PREFIX: &str = "openlore://search?";
 /// the link encodes the QUERY (dimension+value) only, never a frozen result
 /// snapshot (I-AV-8 / KPI-AV-6). If any of these leak into the link's
 /// query-string the share is a snapshot, not a query encoding.
-const SNAPSHOT_PAYLOAD_TOKENS: &[&str] =
-    &["author_did", "[verified]", "cid", "confidence", "results", "snapshot"];
+const SNAPSHOT_PAYLOAD_TOKENS: &[&str] = &[
+    "author_did",
+    "[verified]",
+    "cid",
+    "confidence",
+    "results",
+    "snapshot",
+];
 
 /// Parse the `openlore://search?<dimension>=<value>` link from a `--share`
 /// stdout, asserting it encodes ONLY the query dimension+value (NO result
@@ -6732,7 +6756,8 @@ pub fn funnel_follow_and_pull(env: &TestEnv, search_stdout: &str, priya_did: &st
         priya_peer.endpoint_url(),
     );
     assert_eq!(
-        added.status, 0,
+        added.status,
+        0,
         "AV-19: running the rendered slice-03 follow affordance `openlore {}` \
          verbatim must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
         affordance_args.join(" "),
@@ -6848,7 +6873,9 @@ pub fn peer_subscriptions_snapshot(env: &TestEnv) -> Vec<String> {
                 ))
             });
             match mapped {
-                Ok(iter) => iter.map(|r| r.expect("read peer_subscriptions row")).collect(),
+                Ok(iter) => iter
+                    .map(|r| r.expect("read peer_subscriptions row"))
+                    .collect(),
                 Err(_) => return Vec::new(),
             }
         }

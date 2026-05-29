@@ -1742,7 +1742,10 @@ fn render_contributor_network_trail_footer(rows: &[NetworkResultRowRaw]) -> Stri
 /// annotation is appended at the end of the block. The annotation is per-row
 /// METADATA derived from `counters`; it NEVER removes or down-weights the row —
 /// the countered claim is SHOWN with its counter, never filtered.
-fn render_one_network_row(row: &NetworkResultRowRaw, counters: &[NetworkCounterRelationship]) -> String {
+fn render_one_network_row(
+    row: &NetworkResultRowRaw,
+    counters: &[NetworkCounterRelationship],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("  author_did: {}\n", row.author_did.0));
     out.push_str(&format!("    subject:    {}\n", row.subject));
@@ -1817,7 +1820,12 @@ fn network_counter_annotations_for(
     matching.sort_by(|a, b| a.counter_cid.cmp(&b.counter_cid));
     matching
         .into_iter()
-        .map(|rel| format!("countered-by {} (by {})", rel.counter_cid, rel.counter_author))
+        .map(|rel| {
+            format!(
+                "countered-by {} (by {})",
+                rel.counter_cid, rel.counter_author
+            )
+        })
         .collect()
 }
 

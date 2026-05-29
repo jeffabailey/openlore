@@ -816,7 +816,11 @@ mod tests {
         let rows = store
             .query_by_object("org.openlore.philosophy.reproducible-builds")
             .expect("query by object");
-        assert_eq!(rows.len(), 2, "both C and K are returned (counter never drops a row)");
+        assert_eq!(
+            rows.len(),
+            2,
+            "both C and K are returned (counter never drops a row)"
+        );
 
         let k_row = rows
             .iter()
@@ -841,8 +845,14 @@ mod tests {
             "C counters nothing — it carries no references of its own"
         );
         // Anti-merging: each row keeps its OWN author_did.
-        assert_eq!(c_row.author_did.0, "did:plc:priya-test#org.openlore.application");
-        assert_eq!(k_row.author_did.0, "did:plc:sven-test#org.openlore.application");
+        assert_eq!(
+            c_row.author_did.0,
+            "did:plc:priya-test#org.openlore.application"
+        );
+        assert_eq!(
+            k_row.author_did.0,
+            "did:plc:sven-test#org.openlore.application"
+        );
     }
 
     /// De-dup at upsert is by CID only (ADR-025): upserting the same CID twice
