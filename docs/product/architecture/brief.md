@@ -39,15 +39,97 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/scraper-domain`      | pure core   | Derives candidate claims from harvested GitHub signals via the `jobs.yaml` signal->predicate SSOT mapping; no I/O | slice-02     |
 | `crates/adapter-github`      | effect      | Implements `GithubPort` over the GitHub public REST/HTTPS API; optional PAT; public-data-only probe | slice-02     |
 | `crates/scoring`             | pure core   | Transparent no-ML adherence-weight + `WeightBucket` over per-author `Contribution`s; the WD-77 formula SSOT (`ScoringConfig::DEFAULT`); aggregation in Rust, never SQL (anti-merging in aggregates) | slice-04     |
-| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub`, scoring fixtures — hermetic test doubles | slice-01/02/04 |
+| `crates/appview-domain`      | pure core   | PURE indexer logic: `ingest_decision` (verify-before-index gate), `compose_results` (anti-merging-at-network-scale composition), `annotate_counter_relationship` (shown-not-applied), `near_match_suggestion` (edit-distance ranker); no I/O | slice-05     |
+| `crates/adapter-atproto-ingest` | effect   | Implements `IngestSourcePort` over bounded public ATProto `listRecords` PULL (read-only; no write surface)               | slice-05     |
+| `crates/adapter-index-store` | effect      | Implements `IndexStorePort` over a SEPARATE `index.duckdb`; non-`Option` `author_did` rows; `verified_against NOT NULL`; no merged/consensus schema | slice-05     |
+| `crates/adapter-xrpc-query-server` | effect | `hyper` HTTP server of the `org.openlore.appview.searchClaims` XRPC query method (per-result `author_did` always present) | slice-05     |
+| `crates/adapter-index-query` | effect      | CLI-side `IndexQueryPort` XRPC client (bounded timeouts); treats indexer-unreachable as a SOFT non-fatal outcome (graceful degradation) | slice-05     |
+| `crates/openlore-indexer`    | driver (binary) | The SECOND composition root (`serve`/`ingest`/`stats`); self-hostable network service; signing-incapable; holds no local store | slice-05     |
+| `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub`, scoring fixtures, `FakeIngestSource`/`FakeIndexStore`/`FakeIndexQuery` + real-`z6Mk` DID-doc + adversarial ingest fixtures — hermetic test doubles | slice-01/02/04/05 |
 | `xtask`                      | dev tooling | `check-arch` (hexagonal invariants), `check-probes` (probe contracts)   | slice-01     |
 
 **Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.
 Slice-02 adds 2 production crates (`scraper-domain` + `adapter-github`); slice-04
-adds 1 (`scoring`), bringing the production count to 11 + 1 test-support + 1 xtask
-binary (13 workspace members total; `cargo xtask check-arch` reports 13).**
+adds 1 (`scoring`); slice-05 adds 6 (1 pure `appview-domain` + 4 effect adapters +
+1 binary `openlore-indexer` — the indexer subsystem / first network service),
+bringing the production count to 17 + 1 test-support + 1 xtask binary (19
+workspace members total; `cargo xtask check-arch` reports 19).**
 
 Shipped slice extensions:
+
+- **slice-05 (openlore-appview-search): SHIPPED 2026-05-29 — SIX-CRATE ADDITIVE
+  EXTENSION (the indexer subsystem; the FIRST network service + the SECOND shipped
+  binary).** The architecturally headline + FINAL umbrella slice (J-005 network
+  discoverability). It introduces the network INDEXER (the ATProto AppView
+  pattern): a self-hostable `openlore-indexer` binary that ingests PUBLIC signed
+  claims from across the network, verifies each signature + recomputes each CID
+  BEFORE indexing, and serves network-scale discovery — WITHOUT the AppView ever
+  becoming an authority over the CLI-first, local-first source of truth. Adds 6
+  crates (1 pure + 4 effect + 1 binary) + extends slice-01..04 crates in place. Per
+  WD-13 (federation -> scrapers -> scoring -> appview) slice-05 is the last in the
+  sequence.
+  - **NEW `crates/appview-domain` (PURE)**: the indexer's pure core (the symmetric
+    counterpart to `scraper-domain` + `scoring`). `ingest_decision(record,
+    resolved_key) -> IngestOutcome` is the verify-before-index gate — it reuses
+    `claim_domain::verify` + `compute_cid` (NO second verification path, WD-104);
+    `compose_results(rows, dimension) -> NetworkSearchResult` groups per-author and
+    NEVER merges (anti-merging at network scale, WD-103);
+    `annotate_counter_relationship` adds a counter annotation without filtering
+    (OD-AV-7); `near_match_suggestion` is the empty-result edit-distance ranker. No
+    I/O (`check-arch` pure-core allowlist).
+  - **NEW `crates/adapter-atproto-ingest` (EFFECT)**: implements `IngestSourcePort`
+    — bounded PULL of public `org.openlore.claim` records via ATProto `listRecords`
+    (ADR-024; Firehose deferred). Read-only by construction; reuses the workspace
+    `reqwest` (no new transport crate).
+  - **NEW `crates/adapter-index-store` (EFFECT)**: implements `IndexStorePort` over
+    a SEPARATE `index.duckdb` (ADR-025) — a 2nd DuckDB store, NOT a graph-DB swap
+    (re-affirming ADR-001/WD-8); non-`Option` `author_did` rows; `verified_against
+    NOT NULL`; anti-merging-preserving per-author queries (no `GROUP BY author`); NO
+    merged/consensus schema (the load-bearing absence).
+  - **NEW `crates/adapter-xrpc-query-server` (EFFECT)**: serves
+    `org.openlore.appview.searchClaims` over HTTP via a hand-rolled `hyper` handler
+    (`axum` is `deny.toml`-banned, DV-3); every response row carries `author_did`
+    (anti-merging across the transport).
+  - **NEW `crates/adapter-index-query` (EFFECT, CLI side)**: implements
+    `IndexQueryPort` as the CLI->indexer XRPC client with bounded timeouts; treats
+    indexer-unreachable as a SOFT non-fatal `IndexQueryError::Unreachable` (graceful
+    degradation, ADR-027 / KPI-5).
+  - **NEW `crates/openlore-indexer` (DRIVER, BINARY)**: the SECOND composition root
+    (ADR-023) — `serve` / `ingest` / `stats`. Wire -> probe -> use; signing-INCAPABLE
+    + holds no local-store handle by construction. Disjoint from the CLI root (the
+    CLI never wires the indexer's adapters; the indexer never wires the user's
+    signing identity / `openlore.duckdb`).
+  - `crates/ports`: adds `IndexQueryPort` (CLI) + `IngestSourcePort` /
+    `IndexStorePort` / `IdentityResolvePort` (indexer) + the `IndexedClaim` /
+    `RawRecord` / `SearchDimension` / `CounterRef` ADTs (non-`Option` `author_did`)
+    + the `AuthorRelationship::NetworkUnfollowed` variant.
+  - `crates/claim-domain`: adds the PURE `decode_ed25519_multibase` helper — the
+    REAL `z6Mk...` PLC multibase decode (ADR-026, resolving the slice-03 DV-4 seam);
+    `verify` / `compute_cid` UNCHANGED and reused by the indexer.
+  - `crates/cli`: the NEW `openlore search` verb (`--object` / `--contributor` /
+    `--subject` / `--show` / `--share` + the `openlore search <openlore://search?...>`
+    link re-run resolver) + `render.rs` network renderer; the discovery->federation
+    funnel reuses slice-03 `peer add` VERBATIM (render-only hint; no auto-follow).
+  - `crates/lexicon`: adds the `org.openlore.appview.searchClaims` XRPC query DTOs
+    (a READ query; no signed payload).
+  - `crates/adapter-atproto-did`: adds the verify-only `IdentityResolvePort` impl +
+    the release-gated pubkey seam (the slice-03 `OPENLORE_PEER_PUBKEY_HEX` env seam
+    retained but `cfg(debug_assertions)`-gated; release-forbidden, ADR-026).
+  - `xtask`: the anti-merging SQL rule extended to `adapter-index-store`; the new
+    `indexer_holds_no_signing_or_local_store` + `no_pubkey_seam_in_release_build`
+    rules; `appview-domain` added to the pure-core allowlist; I-3 (composition-root
+    rule) broadened to BOTH binaries.
+  - **Invariants I-AV-1..9** (verify-before-index; anti-merging at network scale
+    [3-layer TYPE/STRUCTURAL/BEHAVIORAL]; local-first / disjoint composition roots;
+    public-data-only; capability boundary [signing-incapable + no-local-store]; real
+    z6Mk decode; discovery-funnel reuses `peer add` verbatim; share encodes
+    query-not-snapshot; counter shown-not-applied) — slice-05-scoped (see below).
+  - **ADRs ADR-023..027** (self-hostable single-binary indexer; bounded PULL with
+    Firehose deferred; separate `index.duckdb` + anti-merging schema; production PLC
+    z6Mk decode + release-forbidden seam; `search` verb + CLI<->indexer XRPC +
+    graceful degradation).
+  - See ADR-023..ADR-027, `docs/evolution/openlore-appview-search-evolution.md`,
+    and `docs/feature/openlore-appview-search/design/`.
 
 - **slice-02 (openlore-github-scraper): SHIPPED 2026-05-28 — TWO-CRATE ADDITIVE
   EXTENSION (WD-59; the first crate addition since slice-01).** Per WD-13 the
@@ -142,17 +224,25 @@ Shipped slice extensions:
 
 Future slices extend this inventory (planned / in-progress):
 
-- slice-05 (appview-search): adds an indexer service (separate binary).
+- The four-slice umbrella (federation -> scrapers -> scoring -> appview, WD-13) is
+  COMPLETE as of slice-05. Documented additive future options (NOT yet built):
+  ATProto Firehose / real-time ingest (deferred, ADR-024 revisit trigger), a
+  hosted/community indexer (deferred, ADR-023 — the CLI talks to a configured URL),
+  cross-user / network-scale SCORING (deferred, WD-79), a retraction-aware search
+  FILTER (deferred, OD-AV-7 / I-AV-9), and a full presentational web AppView
+  (locked OUT, OD-AV-6 — the `--share` resolver is CLI re-run only).
 
-Deferred to a later slice (NOT addressed by slice-04): real PLC DID-document
-multibase pubkey decode (slice-03 shipped a test-only peer-pubkey seam per its
-DV-4) remains a documented TODO.
+The slice-04 "deferred to a later slice" item — real PLC DID-document multibase
+pubkey decode (the slice-03 DV-4 test-only peer-pubkey seam) — is RESOLVED by
+slice-05: `claim_domain::decode_ed25519_multibase` ships the real `z6Mk...` decode
+(ADR-026) and the seam is release-forbidden (`no_pubkey_seam_in_release_build`).
 
 **Crate count: slice-01 = 8 production + 1 test-support + 1 xtask. slice-02 added
 the first 2 production crates since slice-01 (`scraper-domain` + `adapter-github`,
 WD-59); slice-03 was EXTENSION ONLY (zero new crates, WD-26); slice-04 adds 1 pure
-crate (`scoring`). Cumulative: 11 production + 1 test-support + 1 xtask = 13
-workspace members.**
+crate (`scoring`); slice-05 adds 6 (1 pure `appview-domain` + 4 effect adapters + 1
+binary `openlore-indexer`, the indexer subsystem). Cumulative: 17 production + 1
+test-support + 1 xtask = 19 workspace members.**
 
 ## CLI surface (cumulative)
 
@@ -170,6 +260,9 @@ workspace members.**
 | **`openlore claim counter`** | slice-03 | **ADR-013 + ADR-015** |
 | **`openlore graph query --federated`** (flag, not verb) | slice-03 | **ADR-013 + ADR-014** |
 | **`openlore graph query --object\|--contributor\|--traverse\|--depth\|--weighted\|--explain`** (explorer flags, not verbs) | slice-04 | **ADR-020** |
+| **`openlore search --object\|--contributor\|--subject\|--show <cid>\|--share`** (NEW network verb; `graph query` stays unambiguously LOCAL) | slice-05 | **ADR-027** |
+| **`openlore search <openlore://search?...>`** (link re-run resolver — re-runs the shared query, current results not a snapshot) | slice-05 | **ADR-027** |
+| **`openlore-indexer serve\|ingest\|stats`** (the SECOND binary; the self-hostable network service; signing-incapable) | slice-05 | **ADR-023 + ADR-024 + ADR-027** |
 
 ## C4 reference
 
@@ -232,9 +325,27 @@ never-persisted weights (I-GRAPH-4, WD-72), sparse-renders-sparse epistemic hone
 (Gate 6), and local-first/no-network scoring + traversal (I-GRAPH-7). Detail lives
 in `docs/feature/openlore-scoring-graph/design/` + ADR-020/ADR-021/ADR-022.
 
-If a future slice needs one of these (I-FED-*, I-SCR-*, or I-GRAPH-*) enforced
-cross-feature, promote it to the table above in the same commit as the ADR that
-generalizes it.
+**Slice-05 invariants (I-AV-1..9) are likewise slice-05-scoped**, NOT promoted to
+I-1..I-12 (same handling as I-FED-*/I-SCR-*/I-GRAPH-*). They cover verified-before-
+index (I-AV-1: signature-verified against the REAL PLC key + CID-recomputed via the
+pure core BEFORE any record enters the index; no second verification path; every
+result `[verified]`; `verified_against NOT NULL`), anti-merging AT NETWORK SCALE
+(I-AV-2: non-`Option` author DID + no merged consensus schema/row anywhere; enforced
+at three layers — type + the `xtask check-arch` `no_cross_table_join_elides_author`
+rule extended to `adapter-index-store` SQL + behavioral
+`network_result_preserves_attribution`; the direct descendant of I-FED-1 / I-GRAPH-2),
+local-first preserved (I-AV-3: the CLI links no indexer code; `search` is the only
+network verb + degrades gracefully; disjoint composition roots; KPI-5), public-data-
+only (I-AV-4), the indexer capability boundary (I-AV-5: signing-incapable + holds no
+local store, mirroring slice-02 I-SCR-1, three-layer), real production pubkey decode
+(I-AV-6: the test seam release-forbidden), the discovery->federation funnel reusing
+`peer add` verbatim (I-AV-7, reuses I-FED-5), share-encodes-query-not-snapshot
+(I-AV-8), and counter-shown-not-applied (I-AV-9). Detail lives in
+`docs/feature/openlore-appview-search/design/` + ADR-023/ADR-024/ADR-025/ADR-026/ADR-027.
+
+If a future slice needs one of these (I-FED-*, I-SCR-*, I-GRAPH-*, or I-AV-*)
+enforced cross-feature, promote it to the table above in the same commit as the ADR
+that generalizes it.
 
 ## Production dependencies (notable additions)
 
@@ -248,6 +359,16 @@ generalizes it.
   (MIT/Apache-2.0) under the existing `deny.toml` allowlist; whitelisted in the
   `xtask check-arch` pure-core allowlist (WD-65). `adapter-github` (slice-02)
   adds NO new transport crate — it reuses the workspace `reqwest` (rustls).
+- `hyper` (slice-05): effect dependency in `crates/adapter-xrpc-query-server` for
+  serving the single `org.openlore.appview.searchClaims` XRPC route. `axum` was
+  considered and REJECTED (`deny.toml`-banned, DV-3); a hand-rolled `hyper` handler
+  serves one route with no banned dependency. License-clean (MIT) under the existing
+  allowlist. `adapter-atproto-ingest` + `adapter-index-query` (slice-05) add NO new
+  transport crate — they reuse the workspace `reqwest` (rustls), like `adapter-github`.
+- base58 multibase decode (slice-05): the PURE `decode_ed25519_multibase` helper in
+  `crates/claim-domain` (ADR-026). base58btc is a small pure decode (a `bs58`-style
+  dependency or hand-rolled inline, Q-DELIVER-AV-8); license-clean (MIT/Apache-2.0)
+  and within the pure-core allowlist (no I/O), like slice-02/03's pure deps.
 
 ## SSOT discipline
 
@@ -264,17 +385,25 @@ generalizes it.
 
 ## Pointers
 
-- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-019-*.md`
+- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-027-*.md`
   (ADR-013..016 accepted with openlore-federated-read; ADR-017..019 accepted/
-  shipped with openlore-github-scraper; both shipped 2026-05-28)
+  shipped with openlore-github-scraper, both shipped 2026-05-28; ADR-020..022
+  accepted/shipped with openlore-scoring-graph 2026-05-28; ADR-023..027 accepted/
+  shipped with openlore-appview-search 2026-05-29)
 - Slice-01 evolution: `docs/evolution/openlore-foundation-evolution.md`
 - Slice-02 evolution: `docs/evolution/openlore-github-scraper-evolution.md`
 - Slice-03 evolution: `docs/evolution/openlore-federated-read-evolution.md`
+- Slice-04 evolution: `docs/evolution/openlore-scoring-graph-evolution.md`
+- Slice-05 evolution: `docs/evolution/openlore-appview-search-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
 - Slice-02 architecture design:
   `docs/feature/openlore-github-scraper/design/architecture-design.md`
 - Slice-03 architecture design:
   `docs/feature/openlore-federated-read/design/architecture-design.md`
+- Slice-04 architecture design:
+  `docs/feature/openlore-scoring-graph/design/architecture-design.md`
+- Slice-05 architecture design:
+  `docs/feature/openlore-appview-search/design/architecture-design.md`
 - KPI contracts: `docs/product/kpi-contracts.yaml`
 - Jobs (JTBD): `docs/product/jobs.yaml`
 - CI policy: `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`

@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-05-28  # slice-02 (openlore-github-scraper) KPI-SCR-1..5 recorded at finalize
+last_updated: 2026-05-29  # slice-05 (openlore-appview-search) KPI-AV-1..6 recorded at finalize
 
 kpis:
   - id: KPI-1
@@ -259,6 +259,72 @@ kpis:
     baseline_at_ga: "per-user instrumented; local-first GREEN (GQE-15 + traversal network-disabled scenarios prove the full surface works with the network disabled — scoring/traversal read LOCAL stores only); cohort latency histogram pending telemetry endpoint"
     notes: "Leading indicator — friction kills exploration behavior. Inherits/reinforces KPI-5 (local-first)."
 
+  # --- slice-05 (openlore-appview-search), recorded at finalize 2026-05-29 ---
+  # Per WD-13 the umbrella sequence is federation -> scrapers -> scoring ->
+  # appview; slice-05 is the FINAL slice (the network indexer / AppView).
+  # Persona is P-002 (network-discovery hat) primary + P-001 (discovery hat)
+  # secondary; recorded as P-002 to match the slice-03/04 block convention.
+
+  - id: KPI-AV-1
+    name: "Non-obvious-author discovery (network-discovery north star)"
+    type: north-star
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: ">=60% of dogfood discovery sessions surface >=1 relevant signed claim by an author the user does NOT already subscribe to, within 30 days"
+    measurement_method: "author-side telemetry `search.discovery.unfollowed_author_hit{dimension, unfollowed_author_count}` when a result includes an unfollowed author the user inspects + 30-day think-aloud study; behaviorally exercised by AV-9/AV-15/AV-16 (network search returns unfollowed authors labeled '(not subscribed)') + AV-21 (the funnel affordance)"
+    baseline_at_ga: "per-user instrumented (the surfacing path is GREEN — network search via the live indexer returns authors beyond the local graph, labeled '(not subscribed)', with a `peer add` affordance); cohort = YELLOW pending opt-in telemetry endpoint (DEVOPS). Implicit baseline is 0 (no network-discovery surface existed before slice-05; local query saw only own + subscribed peers)."
+    notes: "North star. Behavioral validation of J-005 — the slice's value evaporates if users CAN search the network but never discover anything beyond what their local graph already showed. Disprover / kill criterion: < 20% unfollowed-author-discovery at day-30 forces an index-coverage / search-UX re-investigation before any web AppView."
+
+  - id: KPI-AV-2
+    name: "Anti-merging at network scale (zero attribution loss in any network search / aggregate / shared result)"
+    type: guardrail
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: "100% — every network search result row carries one author DID; identical-content-different-author renders as separate rows; zero faceless network-consensus rows anywhere"
+    measurement_method: "release-gate acceptance test `network_result_preserves_attribution` (AV-9; every result row carries exactly one author DID; two identical-(subject,object) claims by different authors render as two rows; the index has no merged/consensus row; the --share boundary re-composes per-author) + adversarial review of every search/share renderer + the pure-core property AVC-2/AVC-5 (`compose_results` preserves every author) + 5-user think-aloud at day-30; THREE-layer enforcement: non-Option author_did types + `xtask check-arch` `no_cross_table_join_elides_author` extended to adapter-index-store SQL + behavioral"
+    baseline_at_ga: "MET — AV-9 (release-gate) + AVC-2/AVC-5 GREEN as of slice-05 ship; aggregation (counts/groupings) happens in the PURE `appview-domain` core (Rust), NEVER SQL; the index has NO merged/consensus schema (the load-bearing absence, ADR-025)"
+    notes: "Guardrail / cardinal. Extends KPI-FED-1/2 (slice-03) + KPI-GRAPH-2 (slice-04) anti-merging into NETWORK aggregates — the trust guarantee that distinguishes the OpenLore AppView from the centralized aggregators the product exists to replace. Any faceless network-consensus row is UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-AV-3
+    name: "Signature-verified-before-index (zero unverified/unsigned/CID-mismatched claims indexed or returned)"
+    type: guardrail
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: "100% — no unverified / unsigned / CID-mismatched claim ever enters the index or is returned by a search; every result `[verified]` by construction"
+    measurement_method: "release-gate adversarial fixture acceptance test `indexer_rejects_unverified_claim` (AV-3; tampered-signature + CID-mismatch + unsigned fixtures REJECTED before indexing, none entering the index nor any search result) + the universal `[verified]` marker test (AV-11) + the pure-core property AVC-1 (`ingest_decision` returns Index iff verify + CID both pass) + the real-z6Mk-decode gold test (AV-4); indexer-side counters `indexer.ingest.verified` vs `indexer.ingest.rejected{reason: bad_signature|cid_mismatch|unsigned}`"
+    baseline_at_ga: "MET — AV-3 (release-gate) + AV-4 + AV-11 + AVC-1 GREEN as of slice-05 ship; the ingest gate reuses claim_domain::verify + compute_cid (NO second verification path, WD-104); `verified_against NOT NULL` makes 'every row verified' a schema invariant; production verification uses the REAL PLC z6Mk decode (the test seam is release-forbidden, ADR-026)"
+    notes: "Guardrail / cardinal / security. Extends KPI-FED-6 (slice-03 pull-time verification) to network-scale ingest. The slice-03 CAVEAT is RESOLVED: production multibase (z6Mk) decode from a real PLC DID document ships in claim_domain::decode_ed25519_multibase (ADR-026); the DV-4 test seam is release-forbidden. Any unverified claim indexed OR any legitimately-signed claim rejected is UNSHIPPABLE. CI alert if any run reports != 100% (release-blocking)."
+
+  - id: KPI-AV-4
+    name: "Discovery -> federation funnel (discovery grows the trusted local graph)"
+    type: leading
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: ">=30% of dogfood discovery cohort subscribes to >=1 newly-discovered (previously-unfollowed) author within 30 days, then sees those claims in their LOCAL graph"
+    measurement_method: "author-side telemetry `search.discovery.follow_funnel{discovered_did, time_from_search_to_add}` linking a search result to a subsequent `openlore peer add` of a previously-unfollowed author + 30-day survey; behaviorally exercised by AV-19 (the funnel reuses the slice-03 `peer add` path; after peer add + peer pull the author's claims appear in local graph query) + AV-20/AV-21 (read-only discovery; affordance suppressed for already-subscribed peers)"
+    baseline_at_ga: "per-user GREEN (AV-19 funnel reuses slice-03 peer add verbatim — render-only hint, no auto-follow, no parallel state; AV-22 proves the discovery-followed peer purges via slice-03 with zero residue); cohort = YELLOW pending opt-in telemetry endpoint. Implicit baseline is 0 (no discovery->follow path existed before slice-05)."
+    notes: "Leading indicator for KPI-AV-1 (proves discovery is decision-relevant enough to grow the trusted local graph, not idle curiosity — the AppView STRENGTHENS local-first instead of competing). Disprover / kill criterion: < 10% funnel rate at day-30 forces a follow-affordance friction re-investigation."
+
+  - id: KPI-AV-5
+    name: "Public-data framing comprehension (discovery indexes only PUBLIC signed claims)"
+    type: leading
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: ">=4/5 average on a one-shot post-search comprehension prompt ('what data does discovery index?') for the first 50 search sessions"
+    measurement_method: "one-time post-search CLI prompt (dismissible, opt-in) + the up-front public-data banner (exercised by AV-10: a banner states discovery indexes only PUBLIC signed claims, verified before indexing, nothing private read/aggregated)"
+    baseline_at_ga: "per-user instrumented (the public-data banner is GREEN — AV-10 asserts it shows before results; the indexer ingests only public `listRecords`, no auth-scoped read, I-AV-4); cohort comprehension score pending the post-search prompt (nw-product-owner owns copy). New framing metric; baseline n/a."
+    notes: "Leading indicator (proves the honesty framing landed — the J-004 surveillance-anxiety mitigation: the contributor is the SUBJECT of public claims, never a controller). No telemetry on claim CONTENTS — the public-data framing does not extend to user-behavior surveillance."
+
+  - id: KPI-AV-6
+    name: "Shareable discovery link (a discovery becomes a shareable decision artifact)"
+    type: leading
+    feature_origin: openlore-appview-search
+    persona: P-002
+    target: ">=1 shared discovery link per dogfood discovery cohort within 30 days (realizing the J-004 shareable-link signal deferred from slice-02/04)"
+    measurement_method: "author-side telemetry `search.share.link_emitted` / `search.share.link_opened` + 30-day survey ('did you share an openlore discovery with a teammate?'); behaviorally exercised by AV-26/AV-27/AV-28/AV-29 (--share emits a stable `openlore://search?...` query-encoding link; opening it re-runs the query -> current per-author-attributed verified results, never a stale merged snapshot; round-trips for object + contributor dimensions)"
+    baseline_at_ga: "per-user GREEN (AV-26..29 — `--share` emits a stable query-encoding link; `openlore search <link>` re-runs and re-composes CURRENT per-author-attributed verified results, AV-28 proves not-a-stale-snapshot); cohort share rate pending the day-30 survey. Implicit baseline is 0 (no shareable query link existed before slice-05)."
+    notes: "Leading indicator for KPI-AV-1 (proves a discovery became a decision artifact worth sharing). The link encodes the QUERY, not a snapshot (WD-110 / I-AV-8) — keeping the shared artifact attribution-preserving + always-current (anti-merging across the share boundary). web AppView is OUT of scope (CLI-re-run resolver only, OD-AV-6)."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -280,14 +346,26 @@ kpis:
 #   three are release-blocking per the slice-04 disprovers in
 #   docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md.
 #
+#   Slice-05 guardrails: KPI-AV-2 (anti-merging at NETWORK scale / zero
+#   attribution loss) and KPI-AV-3 (signature-verified-before-index / zero
+#   unverified claims indexed). Both MET at GA; both are release-blocking per the
+#   slice-05 disprovers in docs/feature/openlore-appview-search/discuss/outcome-kpis.md.
+#   Slice-05 also REINFORCES KPI-5 (local-first) as a guardrail with a tension:
+#   the AppView is a network service, yet offline compose/sign + local query still
+#   succeed and `search` degrades gracefully (any release breaking offline
+#   compose/sign is blocked). The slice-03 KPI-FED-6 production-z6Mk-decode CAVEAT
+#   is RESOLVED this slice (ADR-026; the test seam release-forbidden).
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-03): docs/feature/openlore-federated-read/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-04): docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-05): docs/feature/openlore-appview-search/discuss/outcome-kpis.md
 #   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Slice-04 evolution archive: docs/evolution/openlore-scoring-graph-evolution.md
+#   - Slice-05 evolution archive: docs/evolution/openlore-appview-search-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml
