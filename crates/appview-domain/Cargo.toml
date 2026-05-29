@@ -1,0 +1,37 @@
+[package]
+name = "appview-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure appview/indexer domain: the verify-before-index gate (ingest_decision) + the anti-merging search composition (compose_results) + near-match suggestion. NO I/O (WD-103/WD-104, ADR-026)."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE (slice-05): the symmetric counterpart to slice-02 `scraper-domain` +
+# slice-04 `scoring`. Holds the ingest-gate decision (verify-before-index) and
+# the anti-merging search/grouping/result-shaping logic. NO I/O, NO persistence,
+# NO knowledge of DuckDB/HTTP/the network.
+#
+# Depends ONLY on the pure value types: `Did`/`Cid`/`VerificationKey`/`KeyId`
+# from `claim-domain`, and `chrono` (pure time types). `ingest_decision` reuses
+# `claim_domain::verify` + `compute_cid` (the SAME pure core — NO second
+# verification path, WD-104).
+#
+# Forbidden (I-1/I-2; enforced by `cargo xtask check-arch` pure-core allowlist):
+# tokio, reqwest, duckdb, keyring, atrium-*, std::fs, std::net,
+# std::time::SystemTime, any adapter-* crate.
+#
+# `proptest` is pinned crate-locally as a dev-dependency for the Earned-Trust
+# property tests on `ingest_decision` + `compose_results` (the canonical Rust
+# PBT crate per the nw-distill polyglot matrix), mirroring claim-domain/scoring.
+[dependencies]
+serde = { workspace = true }
+chrono = { workspace = true }
+claim-domain = { path = "../claim-domain" }
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -17,6 +17,7 @@ members = [
     "crates/ports",
     "crates/scoring",
     "crates/scraper-domain",
+    "crates/appview-domain",
     "crates/adapter-duckdb",
     "crates/adapter-atproto-did",
     "crates/adapter-atproto-pds",

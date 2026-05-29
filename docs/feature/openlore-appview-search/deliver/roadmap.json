@@ -1,0 +1,1312 @@
+{
+  "roadmap": {
+    "project_id": "openlore-appview-search",
+    "created_at": "2026-05-28T19:10:00Z",
+    "total_steps": 43,
+    "feature": "openlore-appview-search (slice-05 — network discovery: the FIRST network service; verified, attributed, anti-merging search across the federated public claim graph)",
+    "wave": "DELIVER",
+    "architect": "Morgan (nw-solution-architect)",
+    "paradigm": "functional-rust (ADR-007 — pure core + effect shell)",
+    "style": "Hexagonal + Modular Monolith, now TWO single-purpose binaries in one workspace (ADR-009 inherited; ADR-023 extended)",
+    "inherits": "slice-01 ADR-001..012 + WD-1..13 + the 12 cross-feature invariants; slice-02 ADR-017..019 + WD-46..68 + I-SCR-1..7; slice-03 ADR-013..016 + WD-26..45 + I-FED-1..7 + KPI-FED-6 + the DV-4 pubkey seam (RESOLVED this slice); slice-04 ADR-020..022 + WD-80..93 + I-GRAPH-1..8; slice-05 DISCUSS WD-100..110 + OD-AV-1..7 + DESIGN WD-111..124 + ADR-023..027 + I-AV-1..9 + DISTILL DD-AV-1..14 + DEVOPS D-D35..D-D43",
+    "default_agent": "nw-functional-software-crafter",
+    "scenario_coverage": {
+      "total_distill_scenarios": 37,
+      "covered_in_roadmap": 37,
+      "indexer_ingest_layer3": 7,
+      "appview_search_layer3": 22,
+      "appview_core_layer2": 8,
+      "appview_core_property_count": 5,
+      "appview_core_example_count": 3,
+      "appview_core_distinct_test_fns": 9,
+      "note": "AVC-3 splits into AVC-3a (ingest determinism) + AVC-3b (compose determinism) -> appview_core.rs has 9 distinct #[test] fns for the 8 numbered scenarios. Both are mapped (02-02 + 02-05). 37 = 7 (AV-1..7) + 22 (AV-8..29) + 8 (AVC-1..8)."
+    },
+    "crate_scope": {
+      "production_crates": 17,
+      "test_support_crates": 1,
+      "xtask_crates": 1,
+      "new_crates": 6,
+      "new_crate_names": [
+        "appview-domain (PURE — ingest-gate decision + anti-merging search composition; NO I/O)",
+        "adapter-atproto-ingest (EFFECT — IngestSourcePort; bounded PULL of public records, ADR-024)",
+        "adapter-index-store (EFFECT — IndexStorePort over the SEPARATE index.duckdb, ADR-025)",
+        "adapter-xrpc-query-server (EFFECT — serves org.openlore.appview.searchClaims over HTTP, ADR-027)",
+        "adapter-index-query (EFFECT — CLI-side IndexQueryPort HTTP/XRPC client; graceful degradation, ADR-027)",
+        "openlore-indexer (DRIVER binary — the SECOND composition root; signing-incapable; holds no local store, ADR-023)"
+      ],
+      "language": "rust",
+      "framework": "cargo workspace + cargo nextest + proptest + assert_cmd (subprocess) + a localhost ephemeral-port serve fixture",
+      "paradigm": "functional-rust (pure core + effect shell)",
+      "constraint": "WD-111: slice-05 ADDS the indexer subsystem (1 pure crate + 4 effect crates + 1 binary) and EXTENDS ports/claim-domain/lexicon/adapter-atproto-did/cli/xtask in place; production crate count 11 -> 17 (+1 test-support +1 xtask = 19 workspace members). Introducing any FURTHER crate/store/style during DELIVER requires returning to DESIGN."
+    },
+    "external_integrations_contract_tested": [
+      {
+        "service": "OpenLore Indexer query API (XRPC org.openlore.appview.searchClaims over HTTP; B1, CLI<->indexer)",
+        "protocol": "HTTP carrying the org.openlore.appview.searchClaims XRPC query method; the response carries per-result author_did (anti-merging across the transport)",
+        "tool": "Pact-style consumer-driven contract (contract-pact-indexer-query sub-job; D-D36)",
+        "owner": "platform-architect (DEVOPS) per D-D36",
+        "test_location": "tests/contracts/pact/",
+        "note": "Out of DELIVER scope as a contract test; DEVOPS owns the consumer-driven contract pinning every result carries author_did + no merged/consensus object. DELIVER lands the REAL openlore-indexer serve over a localhost ephemeral port that AV-14 (search_succeeds_with_indexer_localhost) drives end-to-end; the Pact suite pins the wire shape the AT proves at the binary level."
+      },
+      {
+        "service": "Network Author PDS listRecords + PLC Directory DID-document resolution (B2, indexer->network)",
+        "protocol": "public listRecords enumeration (ADR-024) + PLC DID-document publicKeyMultibase z6Mk... shape the ADR-026 decode reads",
+        "tool": "Pact-style consumer-driven contract (contract-pact-pds-network sub-job; D-D37; extends slice-03 listRecords Pact + ADDS the plc.directory DID-document contract)",
+        "owner": "platform-architect (DEVOPS) per D-D37 + D-D39 (the new plc.directory allowlist host)",
+        "test_location": "tests/contracts/pact/",
+        "note": "Out of DELIVER scope as a contract test; DEVOPS owns the recorded-fixture + real-provider (plc.directory, manual approval) verify. DELIVER consumes FakeIngestSource + the fixture real-z6Mk DID-doc resolver for acceptance scenarios (AV-1..7) and lands the real ADR-026 decode the gold path AV-4 proves end-to-end."
+      }
+    ],
+    "validation": {
+      "status": "pending",
+      "gate": "des-roadmap validate (this file) + des-verify-integrity --roadmap-only + reviewer (nw-acceptance-designer-reviewer) 37/37 scenarios mapped + DD-AV-13 fail-for-right-reason gate after Phase 01",
+      "approved_at": null,
+      "approved_by": null
+    },
+    "notes": [
+      "Phase 01 is the DD-AV-13 fail-for-right-reason gate per acceptance-tests.md §12: it stands up the WHOLE indexer subsystem so all 37 slice-05 ATs COMPILE and classify RED (panic at todo!()), not BROKEN. It lands the pure crates/appview-domain crate (ingest_decision/compose_results/near_match_suggestion + ADTs, todo!() bodies) + the claim-domain decode_ed25519_multibase pure helper; the FOUR new ports (IndexQueryPort/IngestSourcePort/IndexStorePort/IdentityResolvePort) + RawRecord/IndexedClaim/NetworkResultRow/NetworkSearchResult/SearchDimension/CounterRef + AuthorRelationship::NetworkUnfollowed in ports; the four effect adapter crates (impl <Port> + probe() stubs); the openlore-indexer binary (the 2nd composition root, serve+ingest); the cli search verb dispatch (5 flags, todo!() bodies); the xtask rule extensions + the appview-domain pure-core allowlist; test-support fixtures_ingest (the adversarial + valid ingest fixtures + the real-z6Mk DID-doc keypair) + the support/mod.rs slice-05 harness (FakeIngestSource wrapper, IndexerHandle for the localhost ephemeral-port serve, seed_network_index, run_openlore_indexer + run_openlore search helpers + the anti-merging/verified/banner/relationship assertion helper bodies); AND the THREE [[test]] registrations (appview_search, indexer_ingest, appview_core) in crates/cli/Cargo.toml (DD-AV-14). End state: cargo build --tests succeeds, all 37 ATs RED at todo!().",
+      "Phase 02 ships the layer-2 (in-memory) pure-core appview-domain @property + example scenarios FIRST (AVC-1..AVC-8 across 9 #[test] fns): the verify-before-index gate (AVC-1, the KPI-AV-3 generative half), the anti-merging compose (AVC-2, the KPI-AV-2 generative half), determinism (AVC-3a ingest + AVC-3b compose), author-from-signed-payload (AVC-4), the no-merged-row type contract (AVC-5), the universal verified marker (AVC-7), counter-shown-not-applied (AVC-6), near-match suggestion (AVC-8). These drive the pure appview-domain crate FULLY and unblock the layer-3 ingest (Phase 03) + search (Phase 04/05) scenarios — the binaries only need to verify the user-visible RENDERING + the real-I/O wiring of these already-proven invariants. The two cardinal trust primitives are proven generatively at the cheap layer-2 boundary (debt-never-accumulates posture).",
+      "Phase 03 (indexer_ingest — US-AV-001) ships AV-1..AV-7 over the REAL openlore-indexer binary + FakeIngestSource + the fixture real-z6Mk PLC resolver + the REAL index.duckdb. AV-1 is the slice-05 WALKING-SKELETON beat 1 (the index exists, is trustworthy, is searchable). AV-3 (indexer_rejects_unverified_claim) is the CARDINAL verified-before-index release gate (KPI-AV-3, load-bearing) — the adversarial set (unsigned/tampered-sig/cid-mismatch) NEVER enters the index nor any search result; reuses claim_domain::verify (no second path). AV-4 is the ADR-026 gold path (the REAL z6Mk PLC decode runs with the env seam UNSET; the did_unresolvable reject path per ADR-026 surfaces via AV-3/AV-6). AV-5 is the capability boundary (signing-incapable + touches no local store, ADR-023). AV-6 is the wire->probe->use startup refusal. AV-7 is public-data-only ingest.",
+      "Phase 04 (appview_search walking skeleton + US-AV-002/004 Release 1) ships AV-8/9/10/11/13/14/23 over the REAL openlore CLI against a REAL openlore-indexer serve on a localhost EPHEMERAL port (:0, read back — parallel-safe, DEVOPS open-q 8). AV-8 is the slice-05 WALKING-SKELETON beat 2 (search surfaces unfollowed authors, trustworthily). AV-9 (network_result_preserves_attribution) is the CARDINAL anti-merging-at-network-scale release gate (KPI-AV-2, load-bearing). AV-13 (local_first_preserved) is the CARDINAL local-first release gate (KPI-5, load-bearing). AV-10 (public-data banner), AV-11 (universal [verified]), AV-14 (B1 localhost transport) are the other Release-1 cardinal gates; AV-23 (--show trust surface) chains off the AV-8 result's cid.",
+      "Phase 05 (dimensions + funnel + share + counter — US-AV-003/005/006 + the Release-1 sad paths, Release 2/3) ships AV-12/15/16/17/18/19/20/21/22/24/25/26/27/28/29. AV-15/16/17/18 = contributor + subject search (US-AV-003). AV-19 (discovery_follow_reuses_slice03_path) is the discovery->federation funnel that REUSES the slice-03 peer add/peer pull/peer remove VERBATIM (KPI-AV-4; no new external fake — the slice-03 PeerPds double is the funnel seed); AV-20/21/22 are its no-auto-subscribe / no-redundant-affordance / zero-residue-purge guardrails. AV-26/27/28/29 = --share (query-encoding-not-snapshot; KPI-AV-6; AV-28 is the current-not-stale proof). AV-25 = countered-claim-still-appears (OD-AV-7 render half; pairs with AVC-6). AV-12 (typo->suggestion exit 0) + AV-24 (--show absent cid usage error nonzero) are the Release-1 search sad paths, grouped here with the other edges.",
+      "Three cardinal release gates are EXPLICIT load-bearing single-scenario steps, never merged: AV-3 (verify-before-index; 03-03), AV-9 (anti-merging; 04-02), AV-13 (local-first; 04-05). The two cheap generative halves (AVC-1 verify-gate; AVC-2 anti-merging) are also single steps (02-01 + 02-04). Per DISTILL §7 every gate has >=1 layer-3 behavioral assertion AND the two cardinal trust guarantees ALSO have a layer-2 generative property.",
+      "Anti-merging at NETWORK SCALE (WD-103/WD-120/I-AV-2; the direct descendant of slice-03 I-FED-1 + slice-04 I-GRAPH-1/2) is THREE semantically orthogonal layers: TYPE (non-Option author_did on IndexedClaim/NetworkResultRow + a per-author NetworkSearchResult with NO merged-row API — Phase 01 lands the types; AVC-4/AVC-5 prove it at layer 2); STRUCTURAL (xtask no_cross_table_join_elides_author EXTENDED to the adapter-index-store SQL — Phase 01 + Phase 03); BEHAVIORAL (network_result_preserves_attribution AV-9 + AVC-2/AV-2/AV-16/AV-27 — Phases 02/03/04/05). Aggregation (distinct_author_count) happens in the PURE appview-domain core (Rust), NEVER in SQL (no GROUP BY across authors); the index-store queries return per-claim attributed rows. There is NO consensus/merged/aggregate table — the load-bearing ABSENCE (AV-2 asserts it).",
+      "Verified-before-index (WD-104/WD-121/I-AV-1) REUSES the pure claim-domain verify + compute_cid core at ingest (no second verification path); only the Index arm reaches the store; verified_against NOT NULL + CHECK <> '' is a schema invariant; the [verified] marker is a CONSTRUCTION guarantee (there is no verified BOOLEAN column, no [unverified] state). The production pubkey decode is REAL (ADR-026): claim_domain::decode_ed25519_multibase (pure) + the verify-only IdentityResolvePort PLC resolution (effect); the slice-03 OPENLORE_PEER_PUBKEY_HEX_<did> env seam is RETAINED but release-forbidden (xtask no_pubkey_seam_in_release_build; AV-4 runs the REAL decode with the seam UNSET).",
+      "The indexer is signing-INCAPABLE + holds NO local store (ADR-023/I-AV-5; mirrors slice-02 I-SCR-1): three layers — TYPE (verify-only IdentityResolvePort + read-only IngestSourcePort; no sign/publish method exists), STRUCTURAL (xtask indexer_holds_no_signing_or_local_store + the CLI-links-no-HTTP-server clause replacing the narrowed deny.toml axum ban), BEHAVIORAL (the composition-root capability_boundary_probe + AV-5). The two composition roots are DISJOINT (I-3 extended to both binaries): cli wires the USER's adapters + the index-query CLIENT; openlore-indexer wires the indexer's adapters; neither wires the other's.",
+      "Earned Trust (the four NEW adapters' probe() bodies) is DELIVER's adapter-integration deliverable per DESIGN §6.3, landed in Phase 01 as stubs + filled in Phase 03/04 against the substrate lies: adapter-index-store fsync-honored-on-container-substrate (overlayfs/DrvFs/tmpfs no-op -> refuse storage.fsync_unhonored) + attribution round-trip + no-merge-schema; adapter-atproto-ingest source-reachability + the network-lies check (a fixture tampered/cid-mismatch record REJECTED before the index); adapter-atproto-did the REAL z6Mk decode verifies a known-good sig + rejects a tampered one (the gold path); adapter-xrpc-query-server bind+serve + the response carries per-result author_did; adapter-index-query reachable-shape + the INVERTED/degradation check (unreachable -> soft Unreachable, NOT a startup refusal). xtask check-probes enforces non-stub probe bodies. AV-6 is the only probe concern surfaced as an ACCEPTANCE scenario (the user-visible startup REFUSAL the probes drive); the rest are below the driving-port boundary (out of DISTILL scope per DD-AV-7).",
+      "Q-DELIVER-AV resolutions baked into implementation_notes: Q-DELIVER-AV-1 (exact index.duckdb migration SQL = the ADR-025/data-models.md indexed_claims + indexed_claim_evidence + indexed_claim_references DDL; the indexed_claims/<did>/<cid>.json encoding = slice-03 did_to_fs_segment) at 01-03 + 03-01; Q-DELIVER-AV-2 (HTTP server framework: axum vs hand-rolled hyper — if axum, narrow the deny.toml axum ban + rely on the xtask CLI-no-HTTP-server rule; if hyper, no deny.toml edit) at 01-04 + 04-06; Q-DELIVER-AV-3 (the openlore://search?... link grammar + the CLI re-run parser) at 05-12 + 05-13; Q-DELIVER-AV-4 (ingest cadence defaults) at 01-05 + 03-01 (NOT load-bearing; no AT asserts cadence); Q-DELIVER-AV-5 (one IndexQueryPort/IndexStorePort method with a dimension enum vs three thin methods — default ONE filtered method, smaller anti-merging surface, mirrors slice-04 Q-DELIVER-2) at 01-02 + 03-01; Q-DELIVER-AV-6 (PLC endpoint config key + did:plc:* z6Mk-only boundary + the explicit-rejection message) at 01-01 + 03-04; Q-DELIVER-AV-7 (search degraded mode: DELEGATE to local graph query vs POINT to it — either; the contract is 'clear local-only message, no hang, no fatal exit') at 04-05; Q-DELIVER-AV-8 (base58 multibase decode: bs58 crate vs hand-rolled inline — either, MUST stay in the pure-core allowlist) at 01-01; Q-DELIVER-AV-9 (once-per-user first-search orientation message — OPTIONAL, not load-bearing, no AT requires it) deferred, recorded at 01-04.",
+      "DD-AV-10 state-delta migration (DEFERRED to DELIVER, inherits the slice-01 tests/common/state_delta.rs port; [port-mode] inherit): the load-bearing scenarios (AV-3, AV-9, AV-13, AV-5, AV-22) carry an implementation_notes call-out to migrate from named assertion helpers to assert_state_delta(before, after, universe, expected) over PORT-EXPOSED universe names once the helper bodies are real — e.g. AV-3 {indexed_claims.row_count==1, the adversarial cids absent from index AND every search result, indexer.ingest.rejected{reason} counts, indexer.ingest.verified==1}; AV-9 {attributed-rows-for-(deno,dependency-pinning)==2, author-set {priya,sven}, no merged/consensus/mean-confidence row, footer distinct_author_count==2}; AV-13 {claim_add.exit==0, claim_publish.exit==0, graph_query.exit==0, search.exit non-fatal, search.hung==false, local store mutated only by authoring verbs}; AV-5 {openlore.duckdb mtime/bytes unchanged, index.duckdb written, indexer help verb-set has no sign/publish/add}; AV-22 {peer_subscriptions priya absent, peer_claims/<priya>/ removed, no orphaned discovery-side subscription record}. NEVER internal store/compose struct fields.",
+      "DD-AV-9 Tier B state-machine acceptance (the ingest->store->query lifecycle) is DEFERRED to DELIVER (Open Item 9): DELIVER SHOULD add tests/acceptance/appview_state_machine.rs (proptest stateful API / proptest-state-machine) with @invariants = the two cardinal gates (every stored row verified+attributed; distinct_author_count == COUNT DISTINCT), once the Tier A harness step-methods land (given_a_fake_source_with / when_the_indexer_ingests / then_every_stored_row_is_verified_and_attributed). NOT authored RED in DISTILL; the two pure primitives are already explored generatively at layer 2 (AVC-1/AVC-2), so the example layer-3 suite is sound without Tier B (Tier B is amplification, not a gap). Not a roadmap step — recorded here so DELIVER does not lose it.",
+      "Mutation testing scope (D-D40, the THIRD widening after slice-02 D-D23 + slice-04 D-D31): crates/appview-domain (ingest_decision + compose_results + near_match_suggestion + annotate_counter_relationship) joins the nightly cargo-mutants --package list at >=95% kill rate (release-tag blocking, PR advisory). The claim-domain decode_ed25519_multibase helper is mutated as part of the EXISTING claim-domain scope (no new --package entry). The four new EFFECT crates are NOT mutated (effect shell; covered by the extended probes + acceptance/contract tests). The pure-core layer-1 unit/mutation tests in each crate's #[cfg(test)] are DELIVER's inner TDD loop, OUT of DISTILL scope (DD-AV-7).",
+      "DEVOPS gate jobs (D-D35, the CI mapping; NOT a DELIVER roadmap deliverable but the CI consequence): three release-blocking GUARDRAIL ATs (at-indexer-rejects-unverified-claim/AV-3, at-network-result-preserves-attribution/AV-9, at-local-first-preserved/AV-13) + the search-scenario functional ATs + the two consumer-driven contract sub-jobs (contract-pact-indexer-query/D-D36, contract-pact-pds-network/D-D37). DELIVER also lands the extended adapter probes, narrows the deny.toml axum ban (D-D42; ONLY if axum chosen), and ships the openlore-indexer as the second release-matrix binary (D-D35; release.yml when the first tag is cut).",
+      "Sizing: 43 steps for 37 ATs = 1.16 steps/AT. Phase 01 bootstrap is 5 steps (the new pure crate + decode helper, the 4 ports + ADTs, the 4 effect adapters + probes, the binary + cli dispatch + xtask rules, the test-support harness + 3 [[test]] registrations) — matched to the slice-02 (5-step) + slice-04 (4-step) front-load. The 32 scenario steps are 1:1 with a DISTILL scenario (every AV-*/AVC-* maps to exactly one step's scenario_name verbatim from the scaffold fn names). NO step covers 8+ scenarios; NO @sizing-review-needed step. Two cardinal-gate scenarios that SHARE a fixture corpus (none combined) are kept isolated so each release gate is its own load-bearing step.",
+      "DO NOT plan the DEFERRED scope: NO web AppView UI (OD-AV-6 / WD-122 — CLI re-run resolver only), NO ATProto Firehose consumer (OD-AV-4 / WD-114 — bounded PULL only; Firehose a documented future option), NO cross-user network-scale scoring/ranking (WD-79 carried forward — the index ranks nothing), NO retraction-aware search FILTER (OD-AV-7 / WD-119 — counter SHOWN, never applied), NO hosted/community indexer service (OD-AV-1 / WD-112 — self-hostable single binary only)."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Bootstrap — DD-AV-13 fail-for-right-reason gate (slice-05 indexer subsystem)",
+      "description": "Stand up the WHOLE indexer subsystem (the pure appview-domain crate + the claim-domain decode helper + the 4 new ports + the 4 effect adapter crates + the openlore-indexer binary + the cli search dispatch + the xtask rules + the test-support ingest harness) and register the THREE [[test]] targets, so all 37 slice-05 acceptance tests COMPILE and classify RED (panic at todo!()) rather than BROKEN.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Create pure crates/appview-domain + claim-domain decode_ed25519_multibase + workspace member + xtask allowlist",
+          "criteria": [
+            "crates/appview-domain is a NEW pure workspace member declaring the ADTs IngestOutcome {Index(IndexedClaim)|Reject(RejectReason)}, RejectReason {Unsigned|BadSignature|CidMismatch|SchemaUnknown}, NetworkResultRow (non-Option author_did + cid + subject + predicate + object + confidence f64 + verified_against KeyId + relationship + counter_annotation Option<CounterRef>), NetworkSearchResult {by_author: Vec<(Did, Vec<NetworkResultRow>)> + distinct_author_count u32 + total_claims u32 + suggestion Option<String>}, SearchDimension {Object|Contributor|Subject}, CounterRef",
+            "the pure entry points ingest_decision(record, resolved_key) -> IngestOutcome, compose_results(rows, dimension) -> NetworkSearchResult, near_match_suggestion(query, known) -> Option<String> exist with todo!() bodies + SCAFFOLD markers",
+            "crates/claim-domain gains the PURE decode_ed25519_multibase(s) -> Result<VerificationKey, DecodeError> with DecodeError {NotMultibase|BadBase58|BadMulticodecPrefix|WrongKeyLength|UnsupportedKeyType} + VerificationKey/KeyId value types; verify/compute_cid UNCHANGED",
+            "crates/appview-domain depends only on std/chrono + the pure Did/Cid/VerificationKey/KeyId value types (from ports/claim-domain); NO duckdb/tokio/reqwest/keyring/atrium-api/std::fs/std::net/std::time::SystemTime/adapter-* crate",
+            "xtask check-arch pure-core allowlist gains crates/appview-domain (the claim-domain decode helper stays inside the already-allowlisted claim-domain; any base58 dep e.g. bs58 is whitelisted in the pure-core allowlist)",
+            "cargo build -p appview-domain + cargo build -p claim-domain + cargo xtask check-arch succeed"
+          ],
+          "test_file": "crates/appview-domain/src/lib.rs",
+          "scenario_name": "bootstrap_pure_appview_domain_crate_adts_and_claim_domain_decode",
+          "implementation_scope": [
+            "crates/appview-domain/Cargo.toml",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/suggest.rs",
+            "crates/claim-domain/src/decode.rs",
+            "crates/claim-domain/src/lib.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/Cargo.toml",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/suggest.rs",
+            "crates/claim-domain/src/decode.rs",
+            "crates/claim-domain/src/lib.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "deps": [],
+          "estimated_minutes": 55,
+          "implementation_notes": "Per component-boundaries.md §crates/appview-domain + §crates/claim-domain + data-models.md §The ingest/search ADTs + ADR-026 + WD-118/WD-120/WD-121 + DD-AV-13(a). Split appview-domain into ingest.rs (ingest_decision verify-before-index gate) + compose.rs (compose_results anti-merging composition + annotate_counter_relationship) + suggest.rs (near_match_suggestion edit-distance) for mutation-test clarity (D-D40 mutates all four at >=95% kill). LOAD-BEARING type-level anti-merging (WD-120 layer 1): NetworkResultRow.author_did and IndexedClaim.author_did are non-Option Did; NetworkSearchResult.by_author is per-author with NO merged-row API — the aggregate decomposes by construction; there is NO API returning a faceless consensus row without its per-author rows. Q-DELIVER-AV-8: the base58btc decode is ~40 lines; pick bs58 (MIT) OR hand-roll inline — either MUST stay in the pure-core allowlist (no I/O); multicodec-prefix strip is trivial byte ops. Q-DELIVER-AV-6: the decode supports did:plc:* Ed25519 z6Mk... only; unsupported key types return DecodeError::UnsupportedKeyType (explicit rejection, never a mis-decode/panic). Bodies are todo!() at this step; the formula/gate/compose land in Phase 02 driven by AVC-1..AVC-8. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a // bypass: comment if used. Acceptance scenarios are PINNED examples per slice-05 DD-AV (subprocess layer 3 is example-only); layer-2 appview-core scenarios AVC-1..AVC-4 carry the @property tag and DO use proptest; AVC-5..AVC-8 are example-pinned. Universe declaration is mandatory: the unchanged() predicate covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero, no debt accumulates). Rust specifics: crate-skeleton step has no runtime behavior yet; proptest applies once the gate/compose/decode bodies land in Phase 02 (generators live in this crate's #[cfg(test)] inner loop + appview_core.rs, DD-AV-7; D-D40 mutates ingest.rs/compose.rs/suggest.rs + the claim-domain decode)."
+        },
+        {
+          "id": "01-02",
+          "name": "Extend ports with the FOUR new ports + IndexedClaim/RawRecord/result ADTs + AuthorRelationship::NetworkUnfollowed",
+          "criteria": [
+            "ports declares FOUR new ports: IndexQueryPort (async; search(dim, value, cid) -> Result<NetworkSearchResultRaw, IndexQueryError> where IndexQueryError {Unreachable|BadResponse|NotFound} and Unreachable is NON-FATAL; + probe()); IngestSourcePort (async; enumerate(source) -> Result<Vec<RawRecord>, IngestError>; + probe(); NO write/sign/publish method); IndexStorePort (sync; upsert + query_by_object + query_by_contributor + query_by_subject + get_by_cid all returning rows with non-Option author_did, NO method aggregates across authors; + probe()); IdentityResolvePort (async; resolve_verification_key(did) -> Result<VerificationKey, ResolveError>; + probe(); NO sign/publish/put_record method)",
+            "ports declares RawRecord {published_cid + raw_payload: SignedClaim + source_pds} and IndexedClaim {author_did Did non-Option + cid + subject + predicate + object + confidence f64 + composed_at + verified_against KeyId never-empty + evidence + references + relationship}",
+            "AuthorRelationship reuses the slice-03 enum + ONE new variant NetworkUnfollowed; the variant set: You|SubscribedPeer|UnsubscribedCache|NetworkUnfollowed",
+            "the async ports follow the existing async_trait/PdsPort pattern; IndexStorePort is sync (like StoragePort); NO new external dependency added to ports",
+            "cargo build -p ports succeeds"
+          ],
+          "test_file": "crates/ports/src/lib.rs",
+          "scenario_name": "bootstrap_ports_four_appview_ports_and_indexed_claim_adts",
+          "implementation_scope": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/index_query.rs",
+            "crates/ports/src/ingest_source.rs",
+            "crates/ports/src/index_store.rs",
+            "crates/ports/src/identity_resolve.rs",
+            "crates/ports/src/indexed_claim.rs"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/index_query.rs",
+            "crates/ports/src/ingest_source.rs",
+            "crates/ports/src/index_store.rs",
+            "crates/ports/src/identity_resolve.rs",
+            "crates/ports/src/indexed_claim.rs"
+          ],
+          "deps": [
+            "01-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per component-boundaries.md §crates/ports + data-models.md §In-memory value types + design §6.1 + WD-115/WD-116/WD-120/I-AV-2/I-AV-5 + DD-AV-13(b). FOUR genuinely-new ports (the first network service genuinely requires them; not a forced split). Q-DELIVER-AV-5: ONE filtered query method per dimension via the SearchDimension enum is the DEFAULT (smaller anti-merging enforcement surface, mirrors slice-04 Q-DELIVER-2) BUT IndexStorePort here exposes the explicit by_object/by_contributor/by_subject methods per the DESIGN public surface + get_by_cid for --show; crafter MAY collapse to one filtered method if it keeps the no-aggregate-across-authors contract — confirm by ergonomics. IndexedClaim is the shared boundary value (defined in ports, consumed by appview-domain + the adapters + the renderers); author_did is Did (NOT Option) and verified_against is KeyId never-empty — compile-time anti-merging + verified-before-index layer 1 (I-AV-1/I-AV-2, extends slice-03 I-FED-1 FederatedRow + slice-04 AttributedClaim discipline). CAPABILITY BOUNDARY by construction (I-AV-5 type layer): IngestSourcePort has NO write/sign/publish method; IdentityResolvePort has NO sign/publish/put_record method (read/verify-only by construction). IndexQueryError::Unreachable is NON-FATAL (KPI-5/WD-116). Method bodies are trait declarations only; impls land in the effect crates (01-03). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only — document why in a // bypass: comment if used. Acceptance scenarios are PINNED examples per slice-05 DD-AV; AVC-1..AVC-4 carry @property. Universe declaration is mandatory: unchanged() covers slots not asserted-on. STAGE CONTEXT: Stage 0 NEW code. Rust specifics: trait-surface step has no runtime behavior; proptest applies only if helper combinator types are introduced."
+        },
+        {
+          "id": "01-03",
+          "name": "Stub the 4 effect adapter crates (impl <Port> + probe stubs) + extend xtask anti-merging rule to index-store SQL",
+          "criteria": [
+            "adapter-atproto-ingest (NEW): impl IngestSourcePort for AtProtoIngestAdapter (bounded PULL of public listRecords; reuses workspace reqwest/rustls; read-only by construction); enumerate + probe bodies todo!() with SCAFFOLD markers",
+            "adapter-index-store (NEW): impl IndexStorePort for IndexStoreAdapter over a SEPARATE index.duckdb (the ADR-025/data-models.md indexed_claims + indexed_claim_evidence + indexed_claim_references DDL sketched in comments; non-Option author_did; verified_against NOT NULL; NO consensus/merged/aggregate table); upsert/query_*/get_by_cid + probe bodies todo!()",
+            "adapter-xrpc-query-server (NEW): the HTTP bind + query handler serving org.openlore.appview.searchClaims (reads IndexStorePort, calls appview_domain::compose_results, returns per-result author_did always present); bind/serve + probe bodies todo!()",
+            "adapter-index-query (NEW, CLI side): impl IndexQueryPort for HttpIndexQueryAdapter over HTTP/XRPC to a configured URL; unreachable -> soft IndexQueryError::Unreachable; search + probe bodies todo!()",
+            "xtask check-arch rule no_cross_table_join_elides_author EXTENDS to the adapter-index-store SQL string literals: any literal aggregating over indexed_claims (GROUP BY/COUNT/SUM across authors) without projecting author_did fails CI; a positive fixture (the SAFE explicit-author_did SELECT) + a negative fixture (the FORBIDDEN GROUP BY object dropping author_did from data-models.md) are committed to xtask tests",
+            "cargo build -p adapter-atproto-ingest -p adapter-index-store -p adapter-xrpc-query-server -p adapter-index-query + cargo xtask check-arch succeed"
+          ],
+          "test_file": "crates/adapter-index-store/src/lib.rs",
+          "scenario_name": "bootstrap_four_effect_adapters_and_index_store_anti_merging_rule",
+          "implementation_scope": [
+            "crates/adapter-atproto-ingest/Cargo.toml",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-index-store/Cargo.toml",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/src/schema.rs",
+            "crates/adapter-xrpc-query-server/Cargo.toml",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/adapter-index-query/Cargo.toml",
+            "crates/adapter-index-query/src/lib.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/anti_merging_index_store.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-ingest/Cargo.toml",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-index-store/Cargo.toml",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/src/schema.rs",
+            "crates/adapter-xrpc-query-server/Cargo.toml",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/adapter-index-query/Cargo.toml",
+            "crates/adapter-index-query/src/lib.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/anti_merging_index_store.rs"
+          ],
+          "deps": [
+            "01-02"
+          ],
+          "estimated_minutes": 65,
+          "implementation_notes": "Per component-boundaries.md §adapter-atproto-ingest/§adapter-index-store/§adapter-xrpc-query-server/§adapter-index-query + data-models.md §Network index schema + §Read-side query shapes + ADR-024/025/027 + WD-117/WD-120 + DD-AV-13(c). Q-DELIVER-AV-1: the index.duckdb migration is the ADR-025 DDL (single indexed_claims table, CID PK, NO UNIQUE on (author,subject,predicate,object), CHECK author_did<>'' + cid<>'' + verified_against<>''); the live DDL lands in 03-01 driven by AV-1/AV-2/AV-3. Q-DELIVER-AV-2: the HTTP framework (axum tokio-native vs hand-rolled hyper) is the crafter's call within the rustls + cargo-deny allowlist — if axum, the deny.toml axum ban is narrowed (D-D42) and the xtask CLI-no-HTTP-server rule (01-04) is the structural backstop; if hyper (already a transitive reqwest dep), no deny.toml edit. CRITICAL I-AV-2: aggregation (distinct_author_count) happens in the PURE appview-domain core in Rust, NEVER in SQL — the index-store query methods return per-claim attributed rows (no GROUP BY/SUM across authors); this is what keeps the aggregate decomposable. The xtask rule is the STRUCTURAL layer of the three-layer enforcement (type=01-01/01-02 non-Option author_did; behavioral=AV-9/AV-2/AV-16 + AVC-2). Probe bodies declared but todo!() to fill per-scenario in Phase 03/04 (the substrate-lie checks per DESIGN §6.3: index-store fsync-honesty + attribution round-trip + no-merge-schema; ingest network-lies; identity real-z6Mk decode; query-server author_did-present; index-query unreachable-soft). CLI must NOT link adapter-xrpc-query-server/adapter-index-store/adapter-atproto-ingest (I-AV-3; enforced 01-04). TEST PARADIGM (mandatory): Unit tests as property-based (proptest + state-delta, strict=True); single-example FALLBACK only with a // bypass: comment. Acceptance scenarios example-pinned (layer 3); AVC-1..AVC-4 @property at layer 2. Universe declaration mandatory. STAGE CONTEXT: Stage 0 NEW code. Rust specifics: the xtask rule unit tests use proptest to generate adversarial SQL strings (e.g. 'SELECT object, COUNT(*), AVG(confidence) FROM indexed_claims GROUP BY object') and assert the rule FIRES; the SAFE pattern (explicit author_did projection) asserts pass."
+        },
+        {
+          "id": "01-04",
+          "name": "Create the openlore-indexer binary (2nd composition root) + cli search dispatch (5 flags) + xtask capability/seam/composition-root rules + lexicon query DTOs",
+          "criteria": [
+            "crates/openlore-indexer is a NEW binary workspace member: the SECOND composition root with serve + ingest + stats subcommands; main() wires the four driven adapters, runs capability_boundary_probe + ALL probes BEFORE ingest/serve (wire->probe->use), refuses to start on any probe failure (health.startup.refused + exit 2); todo!() bodies + SCAFFOLD markers; depends ONLY on the verify-only IdentityResolvePort impl + IngestSourcePort + IndexStorePort + the query server + the pure cores; NO signing IdentityPort, NO adapter-duckdb/StoragePort, NO PDS-write surface",
+            "crates/cli gains the openlore search verb dispatch for --object/--contributor/--subject/--show <cid>/--share (clap-parsed per ADR-027); VerbSearch + the network-result renderer + the public-data banner + the relationship-label + the peer add follow affordance + the --show verification-line + the --share link emitter present with todo!() bodies + SCAFFOLD markers; the CLI wires + SOFT-probes HttpIndexQueryAdapter (skipped-or-soft at startup); the CLI does NOT link adapter-xrpc-query-server/adapter-index-store/adapter-atproto-ingest",
+            "crates/lexicon gains the org.openlore.appview.searchClaims query lexicon + the shared SearchQueryRequest/SearchQueryResponse DTOs (per-result author_did always present); a [appview] indexer_url key recognized in identity.toml + the indexer's own config shape recognized",
+            "xtask check-arch ADDS indexer_holds_no_signing_or_local_store (the openlore-indexer dep graph excludes the signing IdentityPort impl + adapter-duckdb/StoragePort + PDS-write; AND the cli crate links no HTTP server) + no_pubkey_seam_in_release_build (a release build reading OPENLORE_PEER_PUBKEY_HEX_<did> fails) + EXTENDS I-3 to cover BOTH binaries; positive/negative classifier tests committed for the two new rules",
+            "cargo build -p openlore-indexer -p cli -p lexicon + cargo xtask check-arch + cargo xtask check-probes succeed"
+          ],
+          "test_file": "crates/openlore-indexer/src/main.rs",
+          "scenario_name": "bootstrap_indexer_binary_cli_search_dispatch_and_capability_rules",
+          "implementation_scope": [
+            "crates/openlore-indexer/Cargo.toml",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs",
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/appview_query.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/capability_boundary.rs",
+            "xtask/tests/pubkey_seam.rs"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/Cargo.toml",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs",
+            "crates/cli/src/dispatch.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs",
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/appview_query.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs",
+            "xtask/tests/capability_boundary.rs",
+            "xtask/tests/pubkey_seam.rs"
+          ],
+          "deps": [
+            "01-01",
+            "01-02",
+            "01-03"
+          ],
+          "estimated_minutes": 75,
+          "implementation_notes": "Per ADR-023/026/027 + component-boundaries.md §crates/openlore-indexer + §crates/cli + §crates/lexicon + §Composition-root wiring + §xtask + data-models.md §indexer config + §XRPC query DTOs + DD-AV-5/6/13(d). The renderers land in crates/cli/src/render.rs (the slice-04 lesson: renderers landed in render.rs, NOT a roadmap-advised render/ subpath; use the path the codebase actually dictates — the slice-01/02/03/04 cli render surface is render.rs). WD-113: openlore search is a NEW top-level verb; graph query stays unambiguously LOCAL (no --network flag added to it). WD-116: the indexer is NOT probed at CLI startup — HttpIndexQueryAdapter.probe() is informational/soft; an unreachable indexer MUST NOT block claim add. ADR-023 capability boundary: the openlore-indexer main() wires NO signing identity + NO local store; capability_boundary_probe asserts the store is index.duckdb + the identity adapter is resolve-only and refuses on violation. The shared SearchQueryRequest/Response DTOs MAY co-locate in lexicon (the query lexicon) so the CLI client + indexer server agree on the shape without drift (component-boundaries grouping note). Q-DELIVER-AV-9: the once-per-user first-search orientation message is OPTIONAL (no AT requires it); DELIVER may add an [appview] orientation key but DISTILL does not assert it. Q-DELIVER-AV-2 deny.toml: narrow the axum ban here ONLY if axum is the chosen framework (D-D42); the xtask CLI-no-HTTP-server clause of indexer_holds_no_signing_or_local_store is the structural backstop either way. TEST PARADIGM (mandatory): Unit tests as property-based (proptest + state-delta, strict=True); clap-derive flag parsing covered by snapshot tests (single-example FALLBACK acceptable since clap parsing is itself a substrate — // bypass: comment). Acceptance scenarios example-pinned at layer 3. Universe declaration mandatory. STAGE CONTEXT: Stage 0 NEW code. Rust specifics: VerbSearch -> dimension router -> index_query + renderer; the two new xtask rules' classifier tests use proptest to generate adversarial dep-graph/source patterns and assert the rule fires (mirrors slice-03 autoconfirm_guard + slice-02 I-SCR-1)."
+        },
+        {
+          "id": "01-05",
+          "name": "Materialize test-support fixtures_ingest + the support/mod.rs slice-05 harness + register the THREE [[test]] targets",
+          "criteria": [
+            "openlore_test_support::fixtures_ingest is materialized: RawRecordSpec builders + the named ingest fixtures (fixture_ingest_valid_signed, fixture_ingest_unsigned, fixture_ingest_tampered_signature, fixture_ingest_cid_mismatch) + a real-z6Mk... DID-document fixture (a known test keypair so the ADR-026 decode runs the REAL path) + the network-search corpora (the US-AV-002 Ex1 9-author/7-subject reproducible-builds set; the deno/dependency-pinning priya+sven pairing; Priya's 8-claim/6-subject contributor trail; the bazel 5-author subject set), re-exported from test-support lib.rs; expected values cross-checked against the ADTs",
+            "tests/acceptance/support/mod.rs gains the slice-05 additions: a FakeIngestSource wrapper (driven-external, hosting the adversarial + valid records, validating inputs like the real adapter), an IndexerHandle (spawns a REAL openlore-indexer serve bound to an EPHEMERAL localhost :0 read-back port for parallel-safety; RAII shutdown), seed_network_index(NetworkIndexFixture::*) (seeds the index via the ingest harness), run_openlore_indexer + run_openlore search helpers, and the assertion-helper bodies (assert_attributed_rows_for / assert_no_merged_consensus_row / assert_verified_marker_universal / assert_public_data_banner_precedes_results / assert_relationship_label / assert_no_local_store_mutation / assert_indexer_help_has_no_signing_verb)",
+            "crates/cli/Cargo.toml registers the THREE [[test]] targets appview_search + indexer_ingest + appview_core (DD-AV-14); crates/openlore-indexer is added as a dev-dependency / assert_cmd cargo_bin target so the harness can spawn it",
+            "cargo build --tests succeeds; cargo nextest run --tests classifies all 37 slice-05 ATs as RED (panic at todo!()), not BROKEN — grep -c 'SCAFFOLD: true' covers the three files + fixtures_ingest + the support/mod.rs additions"
+          ],
+          "test_file": "tests/acceptance/support/mod.rs",
+          "scenario_name": "bootstrap_test_support_ingest_harness_and_three_test_registrations",
+          "implementation_scope": [
+            "crates/test-support/src/fixtures_ingest.rs",
+            "crates/test-support/src/fake_ingest_source.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "files_to_modify": [
+            "crates/test-support/src/fixtures_ingest.rs",
+            "crates/test-support/src/fake_ingest_source.rs",
+            "crates/test-support/src/lib.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "deps": [
+            "01-01",
+            "01-02",
+            "01-03",
+            "01-04"
+          ],
+          "estimated_minutes": 80,
+          "implementation_notes": "Per acceptance-tests.md §11 + §12 + component-boundaries.md §crates/test-support + DD-AV-2/4/13(e)/14. DD-AV-2: the FakeIngestSource is a driven-external/non-deterministic double (the Architecture of Reference -> FAKE with output capture); per the Integration Test Contract (nw-tdd-methodology Test Doubles Must Validate Inputs) it MUST reject the same malformed inputs the real ingest adapter would, and the fixture PLC resolver MUST carry a real z6Mk so the decode it feeds is the production path (a permissive fake that 'verified' anything would hide the AV-3 reject-gate wiring). The discovery->federation funnel (AV-19/AV-22) REUSES the slice-03 PeerPds double + peer add/peer pull/peer remove VERBATIM (NO new external fake for the funnel; WD-110). The IndexerHandle binds the serve to :0 and reads the port back (DEVOPS open-q 8, parallel-safe — NOT a fixed port). The named assertion helpers encode the universe shape (DD-AV-10) for the later state-delta migration. After this step cargo nextest run --tests --no-fail-fast 2>&1 | grep -c 'not yet implemented' equals 37 (the DD-AV-13 gate); the red-classification.md per-scenario MISSING_FUNCTIONALITY output is written at this point (DELIVER's RED phase entry per ADR-025). Register all THREE [[test]] targets in ONE step (NOT deferred per-file) so the RED gate covers all 37 at once (slice-02 5-bootstrap precedent). TEST PARADIGM (mandatory): test-support bodies are test infrastructure; Unit tests where present as property-based (proptest + state-delta, strict=True); the fixture expected-value constants are proptest-checkable against the ADTs; single-example FALLBACK only with a // bypass: comment. Acceptance scenarios example-pinned at layer 3. Universe declaration mandatory. STAGE CONTEXT: Stage 0 NEW code. Rust specifics: the IndexerHandle owns a tokio runtime + the spawned serve subprocess (or in-process serve task) the same RAII way FakePds/PeerPds do; the ephemeral-port read-back avoids the parallel-bind race the DEVOPS ci-cd-pipeline.md §2 warns about."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "appview-domain pure core — layer-2 properties + examples (AVC-1..AVC-8)",
+      "description": "Ship the pure appview-domain crate FULLY: the verify-before-index gate (AVC-1, KPI-AV-3 generative half), the anti-merging compose (AVC-2, KPI-AV-2 generative half), determinism (AVC-3a/AVC-3b), author-from-signed-payload (AVC-4), the no-merged-row type contract (AVC-5), universal verified marker (AVC-7), counter-shown-not-applied (AVC-6), near-match suggestion (AVC-8). Layer 2 in-memory direct against the pure functions — drives ingest_decision + compose_results + near_match_suggestion + annotate_counter_relationship.",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "AVC-1 verify-before-index gate indexes iff verified and cid matches (PROPERTY; KPI-AV-3 generative half)",
+          "criteria": [
+            "ingest_decision returns Index(_) IF AND ONLY IF claim_domain::verify(record.raw_payload, key) == Ok AND claim_domain::compute_cid(record.raw_payload) == record.published_cid",
+            "on Index: claim.author_did == record.raw_payload.author AND claim.verified_against != \"\"; on Reject: NO IndexedClaim is produced",
+            "any adversarial record (unsigned / tampered-signature / cid-mismatch) returns Reject(reason); reuses the SAME pure claim_domain::verify + compute_cid (no second verification path)",
+            "Property over arbitrary_raw_records() (~50% valid, ~50% adversarial split across unsigned/tampered/cid-mismatch) paired with the resolved VerificationKey",
+            "AVC-1 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_ingest_gate_indexes_iff_verified_and_cid_matches_property",
+          "implementation_scope": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/proptest_strategies.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/proptest_strategies.rs"
+          ],
+          "deps": [
+            "01-05"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per data-models.md §The verified-before-index invariant + ADR-026 + WD-104/WD-121 + I-AV-1 + KPI-AV-3 (the cheap generative half) + DESIGN 5.1 inv 2. CARDINAL gate: this IS the verify-before-index disprover proven generatively at the cheap layer-2 boundary. A mutant that lets a tampered record through, or fabricates a verified_against on a rejected record, fails LOUDLY here (D-D40 mutates ingest.rs at >=95%). LOAD-BEARING no-second-path: ingest_decision calls claim_domain::verify + compute_cid (the SAME pure core the indexer runs at ingest AND the CLI renders as [verified]). The decode the verify consumes is the ADR-026 real path (the exhaustive decode-boundary + decode-encode-identity unit/mutation tests are DELIVER's claim-domain inner loop, out of DISTILL scope per DD-AV-7). TEST PARADIGM (mandatory): this is LAYER-2 PROPTEST per Mandate 9 — proptest IS the implementation strategy; generator arbitrary_raw_records() over the small bounded universe (valid + the three adversarial arms); assert the iff + author-derivation + non-empty verified_against on Index + no-claim on Reject. The exhaustive per-RejectReason-arm coverage lives in crates/appview-domain/src/#[cfg(test)] (DELIVER inner loop, DD-AV-7). State-delta: universe = the IngestOutcome discriminant + (on Index) claim.author_did/verified_against/cid; unchanged() covers the rest. Acceptance scenario is the @property gate. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-02",
+          "name": "AVC-3a ingest_decision is deterministic (PROPERTY)",
+          "criteria": [
+            "ingest_decision(record, key) == ingest_decision(record, key) for all inputs — byte-identical IngestOutcome (same discriminant; same IndexedClaim or same RejectReason)",
+            "no clock read / hash-map iteration-order leak makes the gate non-deterministic (the [verified] construction guarantee precondition)",
+            "Property over arbitrary (record, key)",
+            "AVC-3a passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_ingest_decision_is_deterministic_property",
+          "implementation_scope": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per DESIGN 5.1 inv 4 + I-AV-1. Determinism is the reproducibility precondition for the verify gate; it is structural in a pure core (no clock, no I/O) but a clock read or hash-map-order leak would break it — the test pins it. AVC-3 splits into AVC-3a (ingest, this step) + AVC-3b (compose, 02-05); appview_core.rs has 9 distinct #[test] fns for the 8 numbered scenarios. Mirrors slice-04 SC-2 (scoring determinism) + slice-02 scraper-domain determinism. TEST PARADIGM (mandatory): LAYER-2 PROPTEST per Mandate 9; assert ingest_decision(r,k) == ingest_decision(r,k) over arbitrary_raw_records(); universe = the full IngestOutcome value; unchanged() N/A (full-value equality). Single-example FALLBACK only with // bypass:. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-03",
+          "name": "AVC-4 indexed author is derived from the signed payload (PROPERTY; anti-merging type/derivation)",
+          "criteria": [
+            "for every record that ingest_decision indexes, the resulting IndexedClaim.author_did equals record.raw_payload.author byte-for-byte",
+            "attribution comes from the SIGNED bytes (the signature covers them), NEVER from the unsigned forgeable provenance (source_pds)",
+            "an author can never be substituted or dropped between the signed payload and the indexed row",
+            "Property over arbitrary records that verify",
+            "AVC-4 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_indexed_author_is_derived_from_signed_payload_property",
+          "implementation_scope": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per data-models.md §Invariant (the row's attribution is derived from the signed payload) + I-AV-2 + WD-103 (anti-merging type/derivation half). This is the type/derivation half of anti-merging at ingest: the indexed author is the signed payload's author, never the unsigned source_pds — a forgeable field. Complements AVC-1 (the gate) and AVC-5 (the no-merged-row type contract). TEST PARADIGM (mandatory): LAYER-2 PROPTEST per Mandate 9; forall record indexed by ingest_decision: IndexedClaim.author_did == record.raw_payload.author (byte-equal); universe = claim.author_did vs record.raw_payload.author (port-exposed boundary values). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-04",
+          "name": "AVC-2 compose_results preserves every author (PROPERTY; KPI-AV-2 generative half)",
+          "criteria": [
+            "for an arbitrary non-empty Vec<IndexedClaim>: distinct_author_count == COUNT(DISTINCT author_did) over the input (a COUNT over attributed rows, NEVER a merged aggregate)",
+            "total_claims == rows.len() (no claim dropped); the flattened by_author rows == the input rows as a MULTISET (every (author_did, cid) appears EXACTLY once in exactly one author group)",
+            "two input rows with identical (subject, object) but distinct author_did land in DIFFERENT author groups (never collapsed); there is NO NetworkSearchResult API exposing a merged multi-author row",
+            "Property over a small bounded universe (3 subjects x 2 objects x 3 authors, confidence in [0,1], every verified_against non-empty)",
+            "AVC-2 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_compose_preserves_every_author_property",
+          "implementation_scope": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/proptest_strategies.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/proptest_strategies.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per data-models.md §The anti-merging-at-network-scale invariant + WD-103/WD-120 + I-AV-2 + KPI-AV-2 (the cheap generative half) + DESIGN §10. CARDINAL gate: this IS the anti-merging-at-network-scale disprover proven generatively. The network-scale descendant of slice-03 I-FED-1 + slice-04 I-GRAPH-1/2. A mutant that GROUP-BYs object/subject (dropping author_did into a faceless consensus count) fails LOUDLY here (D-D40 mutates compose.rs at >=95%). There is no merged-row API to assert against — the absence is the type-level guarantee (AVC-5). TEST PARADIGM (mandatory): LAYER-2 PROPTEST per Mandate 9; generator arbitrary_indexed_claims() over the small bounded universe (so generated sets exercise single-author, multi-author, and identical-content-distinct-author pairings); assert distinct_author_count == COUNT(DISTINCT author_did), total_claims == rows.len(), flattened by_author == input rows as a multiset, identical-content-distinct-author rows in different groups. State-delta: universe = result.distinct_author_count, result.total_claims, the multiset of (author_did,cid) flattened from by_author; NEVER an internal grouping-map field. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-05",
+          "name": "AVC-3b compose_results is deterministic (PROPERTY; the share query-not-snapshot precondition)",
+          "criteria": [
+            "compose_results(rows, dimension) == compose_results(rows, dimension) for all inputs — byte-identical NetworkSearchResult (same by_author ordering, same counts, same suggestion)",
+            "by_author is sorted by a stable key (no HashMap-iteration-order leak)",
+            "Property over arbitrary (rows, dimension)",
+            "AVC-3b passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_compose_results_is_deterministic_property",
+          "implementation_scope": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "deps": [
+            "02-04"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per DESIGN 5.1 inv 4 + I-AV-8 + US-AV-006. Determinism underpins the --share 're-running the query yields the same result' contract (the link encodes the QUERY, not a snapshot — AV-26/AV-27/AV-28) AND the wire-shape the B1 transport relies on. AVC-3b is the compose half of the AVC-3 determinism split (AVC-3a is the ingest half, 02-02). A HashMap-ordered by_author would break it — pin the stable tiebreak (data-models.md §NetworkSearchResult). TEST PARADIGM (mandatory): LAYER-2 PROPTEST per Mandate 9; assert compose_results(rows,dim) == compose_results(rows,dim) over arbitrary_indexed_claims(); the determinism is enforced by sorting by_author with a stable key, not insertion order; universe = the full NetworkSearchResult value. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-06",
+          "name": "AVC-5 two identical-content distinct-author claims compose to two groups (example; Gate type-level)",
+          "criteria": [
+            "compose over the canonical US-AV-002 Example 2 deno/dependency-pinning pairing (Priya@0.70, Sven@0.65) yields by_author with TWO entries (did:plc:priya-test, did:plc:sven-test), each a single-row group",
+            "distinct_author_count == 2; total_claims == 2",
+            "the NetworkSearchResult TYPE has no merged-author row to produce (the per-author structure is the only shape) — the load-bearing absence (WD-103)",
+            "AVC-5 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_two_identical_content_distinct_author_claims_compose_to_two_groups",
+          "implementation_scope": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/test-support/src/fixtures_ingest.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/test-support/src/fixtures_ingest.rs"
+          ],
+          "deps": [
+            "02-04"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per WD-103/WD-120 + DESIGN §10 (Gate type-level) + I-AV-2 + data-models.md §anti-merging-at-network-scale (deno). Example-pinned (the canonical pairing), NOT a property, per acceptance-tests.md CM-F. This is the type-level half of the three-layer anti-merging enforcement: the aggregate can ALWAYS enumerate its individually-attributed claims — there is NO struct field or method representing the two combined; the absence IS the design. The structural xtask SQL-string layer (01-03) + the behavioral layer-3 render (AV-9, 04-02) complete the three layers. TEST PARADIGM (mandatory): AVC-5 is example-pinned per slice-05 DD-AV (worked pairing); the exhaustive coverage is in crates/appview-domain/src/#[cfg(test)] (DELIVER inner loop). Universe = result.by_author author-set {priya, sven}, distinct_author_count (2), total_claims (2). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-07",
+          "name": "AVC-7 every composed row carries a non-empty verified_against (example; universal verified marker)",
+          "criteria": [
+            "a NetworkSearchResult built only from IndexedClaims that came out of ingest_decision's Index arm has EVERY NetworkResultRow with verified_against != \"\"",
+            "there is no verified BOOLEAN; verified_against records that every row WAS verified (the construction guarantee, DESIGN 5.2 #3); the renderer reads it as a universal [verified] marker",
+            "there is no mixed-trust list — no [unverified] state to render (US-AV-004 Ex 3)",
+            "AVC-7 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_every_composed_row_carries_a_nonempty_verified_against",
+          "implementation_scope": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "deps": [
+            "02-04"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-AV-004 boundary + I-AV-1 + data-models.md §verified marker. Example-pinned. Because ingest_decision only ever produces an IndexedClaim on the Index arm (which always sets a non-empty verified_against), every row that reaches compose_results carries the verified marker by construction — the layer-2 proof behind the AV-11 universal-marker release gate (04-04). TEST PARADIGM (mandatory): example-pinned; build a NetworkSearchResult from Index-arm IndexedClaims only; assert every NetworkResultRow.verified_against != \"\"; universe = { row.verified_against for row in flatten(by_author) }, assert none empty. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-08",
+          "name": "AVC-6 countered claim still appears with annotation (example; OD-AV-7 shown-not-applied)",
+          "criteria": [
+            "a claim C referenced by a later indexed claim K with ref_type=counters (both indexed) is STILL present in compose_results' output (total_claims unchanged, C present)",
+            "C's row carries counter_annotation == Some(CounterRef { by: K.author_did, cid: K.cid })",
+            "the counter is an ANNOTATION, never a filter/removal/down-weight (the load-bearing OD-AV-7 default; mirrors slice-04 WD-85)",
+            "AVC-6 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_countered_claim_still_appears_with_annotation",
+          "implementation_scope": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/test-support/src/fixtures_ingest.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/compose.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/test-support/src/fixtures_ingest.rs"
+          ],
+          "deps": [
+            "02-04"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per OD-AV-7 + WD-119 + I-AV-9 + component-boundaries.md §appview-domain probe responsibilities (counter unit). Example-pinned. annotate_counter_relationship adds an annotation, NEVER removes a row; a code path that filtered or down-weighted C fails here. This is the pure-core behavior the layer-3 render AV-25 (05-11) pins user-visibly. D-D40 mutates annotate_counter_relationship. TEST PARADIGM (mandatory): example-pinned; given claim C countered by indexed claim K, compose_results returns C present with counter_annotation Some(CounterRef{by: K.author, cid: K.cid}); C NOT removed/filtered/down-weighted; universe = presence of C in flatten(by_author), C.counter_annotation (Some), result.total_claims (unchanged by the counter). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "02-09",
+          "name": "AVC-8 near_match_suggestion finds the closest known object (example; empty-result suggestion)",
+          "criteria": [
+            "near_match_suggestion(typo, known) returns the closest known object by edit distance — e.g. a typo'd 'org.openlore.philosophy.reproducable-builds' returns Some('org.openlore.philosophy.reproducible-builds')",
+            "returns None when nothing is within the threshold",
+            "the pure helper feeds the CLI empty-result 'Did you mean ...?' line; the CLI then exits 0 (a valid empty result, US-AV-002 Ex 4), NOT a usage error",
+            "AVC-8 passes"
+          ],
+          "test_file": "tests/acceptance/appview_core.rs",
+          "scenario_name": "appview_near_match_suggestion_finds_closest_known_object",
+          "implementation_scope": [
+            "crates/appview-domain/src/suggest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/suggest.rs",
+            "crates/appview-domain/src/lib.rs"
+          ],
+          "deps": [
+            "02-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-002 Example 4 + I-AV (suggestion). Example-pinned. The pure helper drives the empty-result line AV-12 (object typo, 05-01) renders; exit 0 (valid empty, distinct from the --show usage error AV-24 which exits non-zero). D-D40 mutates near_match_suggestion. TEST PARADIGM (mandatory): example-pinned; near_match_suggestion(typo, known) returns the closest known object by edit distance + None below threshold; universe = the Option<String> suggestion returned. An inner-loop proptest on the ranker (forall query + candidate set: the suggested string is the minimum-edit-distance candidate) MAY be added in #[cfg(test)] (DELIVER inner loop). STAGE CONTEXT: Stage 0 NEW code."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "indexer ingest — verified, attributed, anti-merging pull (US-AV-001; AV-1..AV-7)",
+      "description": "Ship US-AV-001 over the REAL openlore-indexer binary + FakeIngestSource + the fixture real-z6Mk PLC resolver + the REAL index.duckdb. The walking-skeleton beat 1 (AV-1) + the CARDINAL verify-before-index release gate (AV-3) + the ADR-026 gold path (AV-4) + the capability boundary (AV-5) + the startup probe gauntlet (AV-6) + public-data-only (AV-7).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "AV-1 indexer ingests a verified attributed claim and it becomes searchable (WALKING SKELETON beat 1)",
+          "criteria": [
+            "openlore-indexer ingest against a FakeIngestSource hosting one VALID signed claim by Priya (did:plc:priya-test) on github:bazelbuild/bazel embodying reproducible-builds (0.82) + a real-z6Mk DID-doc resolvable for her key, verifies its signature + recomputes its CID + indexes it",
+            "a subsequent query (via the index store / serve query handler) returns Priya's claim with author_did == did:plc:priya-test and verified_against != \"\"",
+            "the ingest emitted indexer.ingest.verified (count 1) and indexer.ingest.rejected (count 0); the live index.duckdb DDL (ADR-025) + the indexed_claims/<did>/<cid>.json artifact land here",
+            "AV-1 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_ingests_a_verified_attributed_claim_and_it_becomes_searchable",
+          "implementation_scope": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/src/schema.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/appview-domain/src/ingest.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/adapter-index-store/src/schema.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/appview-domain/src/ingest.rs"
+          ],
+          "deps": [
+            "01-05",
+            "02-01"
+          ],
+          "estimated_minutes": 60,
+          "implementation_notes": "Per US-AV-001 + acceptance-tests.md §3 (walking skeleton) + ADR-024/025 + data-models.md §Network index schema + WD-104/WD-121 + I-AV-1 + KPI-AV-3 + DD-AV-13. SLICE-05 WALKING-SKELETON beat 1 (the index exists + is trustworthy + is searchable — the thinnest end-to-end ingest path). Q-DELIVER-AV-1: the live index.duckdb migration v1 (the ADR-025 indexed_claims DDL: CID PK, non-Option author_did, verified_against NOT NULL + CHECK <> '', NO UNIQUE on (author,subject,predicate,object), NO consensus/merged table) + the indexed_claims/<did_to_fs_segment>/<cid>.json artifact (slice-03 encoding) land here, driven by AV-1. Q-DELIVER-AV-4: ingest cadence (--ingest-interval, batch size) defaults are NOT load-bearing (no AT asserts cadence); pick a conservative interval. The ingest_decision gate (proven generatively in AVC-1, 02-01) is wired through the real binary + real store here. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11 (NOT PBT at layer 3 — the pure gate property is AVC-1). The inner-loop proptest covers the store round-trip (forall IndexedClaim: upsert-then-query-by-object returns it byte-equal with author_did) in adapter-index-store #[cfg(test)]. Universe = the indexed row's author_did, verified_against; indexer.ingest.verified count (1); indexer.ingest.rejected count (0) — port-exposed, NOT an internal store struct field. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "03-02",
+          "name": "AV-2 indexer stores two distinct-author claims without merging on the same subject/object (anti-merging at ingest)",
+          "criteria": [
+            "openlore-indexer ingest against a source hosting two valid signed claims on the SAME (github:denoland/deno, dependency-pinning) by Priya (0.70) and Sven (0.65), both with resolvable real-z6Mk keys, stores TWO individually-attributed indexed_claims rows (distinct non-empty author_did)",
+            "a search by that object returns both as separate attributed rows",
+            "index.duckdb has NO consensus/merged/aggregate table (the no-merge-schema assertion — the load-bearing absence, WD-103)",
+            "AV-2 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_stores_two_distinct_author_claims_without_merging_on_same_subject_object",
+          "implementation_scope": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-AV-001 anti-merging + WD-103/WD-120 + I-AV-2 + KPI-AV-2 + data-models.md §anti-merging-at-network-scale + DESIGN §10. The ingest-layer half of the three-layer anti-merging enforcement (the structural xtask rule = 01-03; the behavioral search gate = AV-9, 04-02). The no-merge-schema assertion: the index-store probe + this AT assert NO consensus/merged/aggregate table exists; upsert de-dups by CID only, never merges across authors. The pure compose preserves both (AVC-2/AVC-5, 02-04/02-06); this asserts the REAL store mirrors it. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Inner-loop proptest in adapter-index-store #[cfg(test)] (forall two claims with identical subject+object but distinct author_did: two rows, two CIDs, no merge). Universe = the set of author_did in indexed_claims for the (subject,object) pair {priya, sven}; the presence/absence of any consensus/merged/aggregate table (absent). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "03-03",
+          "name": "AV-3 indexer rejects unverified claim (CARDINAL RELEASE GATE; KPI-AV-3 load-bearing)",
+          "criteria": [
+            "openlore-indexer ingest against a source hosting FOUR records on the same author surface — (a) unsigned, (b) tampered-signature, (c) cid-mismatch, (d) one VALID signed record — plus the resolvable real-z6Mk key, REJECTS all three adversarial records at ingest",
+            "index.duckdb's indexed_claims contains EXACTLY the one valid record (the three adversarial records produced NO row); a search across every dimension NEVER returns any of the three adversarial records; the valid record IS searchable, attributed, verified_against != \"\"",
+            "indexer.ingest.rejected emitted with reason in {unsigned, bad_signature, cid_mismatch} per adversarial record; indexer.ingest.verified count 1; the reject path reuses the SAME pure claim_domain::verify + compute_cid (no second verification path); a false-positive reject of the good claim is ALSO a failure (KPI-AV-3 cuts both ways)",
+            "AV-3 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_rejects_unverified_claim",
+          "implementation_scope": [
+            "crates/openlore-indexer/src/run.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/appview-domain/src/ingest.rs"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/run.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/appview-domain/src/ingest.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-AV-001 RELEASE GATE + WD-104/WD-121 + I-AV-1 + KPI-AV-3 (release-blocking) + DEVOPS D-D35 (at-indexer-rejects-unverified-claim GUARDRAIL) + acceptance-tests.md §7. CARDINAL load-bearing gate — NOT merged with any other scenario. The KPI-AV-3 disprover: any unverified claim reaching the index or a search result is UNSHIPPABLE. Reuses the SAME pure claim_domain::verify + compute_cid (proven generatively in AVC-1, 02-01) — this layer-3 example pins the REAL binary + REAL store + the adversarial wire fixtures (the slice-03 adversarial-peer fixture discipline D-D15 extended to the ingest source, D-D38). The adapter-atproto-ingest network-lies probe (a fixture tampered/cid-mismatch record REJECTED before the index, DESIGN §6.3) is filled here. Per Mandate 11 the adversarial inputs are NAMED fixtures, never PBT-generated at layer 3. DD-AV-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta with universe {indexed_claims.row_count==1, the 3 adversarial cids absent from indexed_claims AND every search result, indexer.ingest.rejected{reason} counts, indexer.ingest.verified==1} once the helper bodies are real. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. STAGE CONTEXT: Stage 0 NEW code (the gate is paradigm-from-day-zero)."
+        },
+        {
+          "id": "03-04",
+          "name": "AV-4 indexer verifies against the real decoded PLC z6Mk key, not the test seam (ADR-026 gold path)",
+          "criteria": [
+            "with the OPENLORE_PEER_PUBKEY_HEX_<did> env seam UNSET and a fixture PLC DID-document carrying a REAL z6Mk... value for a known test keypair, openlore-indexer ingest resolves + decodes the multibase value via the production claim_domain::decode_ed25519_multibase path",
+            "the decoded key VERIFIES a known-good-signature record (indexed, verified_against != \"\") AND REJECTS a tampered one (bad_signature)",
+            "because the env seam is unset, success PROVES the real PLC z6Mk decode ran (a seam-only pass is a CI failure by construction; the no_pubkey_seam_in_release_build rule backs it structurally)",
+            "AV-4 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam",
+          "implementation_scope": [
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/claim-domain/src/decode.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/claim-domain/src/decode.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "deps": [
+            "03-03"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-AV-001 gold path + ADR-026 + WD-118 + I-AV-6 + component-boundaries.md §adapter-atproto-did probe responsibilities + DESIGN §6.3. The verify-only IdentityResolvePort production path lands here: resolve the PLC DID document, locate the #org.openlore.application verification method, call the pure claim_domain::decode_ed25519_multibase (whose body lands here driven by AV-4 + the claim-domain decode unit/mutation inner loop). Q-DELIVER-AV-6: did:plc:* Ed25519 z6Mk... only; unsupported key types rejected explicitly (DecodeError::UnsupportedKeyType). The slice-03 OPENLORE_PEER_PUBKEY_HEX_<did> seam is RETAINED but release-forbidden (the no_pubkey_seam_in_release_build xtask rule, 01-04). The did_unresolvable reject-not-index path (ADR-026; a PLC doc that cannot be decoded) is exercised via the adapter probe + surfaces at AV-3/AV-6. The decode-encode-identity + malformed-input-errors properties are DELIVER's claim-domain unit/mutation tests (out of DISTILL scope, DD-AV-7); this AT pins the END-TO-END real-decode wiring. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11; the env seam is asserted UNSET throughout. Universe = the good record indexed (verified_against != \"\"); the tampered record rejected (bad_signature); the env seam unset. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "03-05",
+          "name": "AV-5 indexer is signing-incapable and touches no local store (capability boundary; ADR-023)",
+          "criteria": [
+            "openlore-indexer --help exposes NO claim add / sign / publish verb (the help/usage surface lists only serve + ingest + stats)",
+            "after an ingest pass, the user's openlore.duckdb is byte-unchanged (the indexer never opened or wrote it — it has no handle to it); only the SEPARATE index.duckdb (the indexer's own store) is written",
+            "this is the behavioral layer of the three-layer capability-boundary enforcement (type: verify-only/read-only ports = 01-02; structural: the xtask indexer_holds_no_signing_or_local_store rule = 01-04; behavioral: this + the capability_boundary_probe)",
+            "AV-5 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_is_signing_incapable_and_touches_no_local_store",
+          "implementation_scope": [
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-AV-001 capability boundary + ADR-023 + I-AV-5 + component-boundaries.md §crates/openlore-indexer + §Composition-root wiring (the indexer root). Mirrors the slice-02 adapter-github human-gate (I-SCR-1). The capability_boundary_probe (asserts the store is index.duckdb + the identity adapter is resolve-only; refuses on violation) lands here. DD-AV-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta with universe {openlore.duckdb mtime/bytes unchanged, index.duckdb written, indexer help verb-set has no sign/publish/add} once the helper bodies are real. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the indexer help verb-set (no sign/publish/add); openlore.duckdb mtime/bytes (unchanged); index.duckdb (written) — port-exposed, never internal. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "03-06",
+          "name": "AV-6 indexer refuses to start when a driven-adapter probe fails (wire -> probe -> use)",
+          "criteria": [
+            "configured with an index store whose substrate LIES about durability (a tmpfs/overlayfs fsync no-op) OR an unreachable required ingest source, openlore-indexer serve runs ALL four driven-adapter probes + the capability-boundary probe BEFORE the first ingest/query and REFUSES to start",
+            "exit code 2 + a health.startup.refused event with the failing reason (storage.fsync_unhonored | indexer.ingest_source_unreachable | identity.pubkey_decode_failed | indexer.capability_boundary_violated); NO ingest pass runs / NO query is served",
+            "the probes run BEFORE use (ADR-009; the indexer analog of the slice-01 startup-refusal gate)",
+            "AV-6 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_refuses_to_start_when_a_driven_adapter_probe_fails",
+          "implementation_scope": [
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs",
+            "crates/adapter-index-store/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/main.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs",
+            "crates/adapter-index-store/src/lib.rs"
+          ],
+          "deps": [
+            "03-05"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-AV-001 wire->probe->use + ADR-009/023 + acceptance-tests.md §6 (the ONLY probe concern surfaced as an acceptance scenario — the user-visible startup REFUSAL the probes drive) + DESIGN §6.3 (the substrate lies). EARNED TRUST at the acceptance boundary: the index-store fsync-honored-on-container-substrate probe (overlayfs/DrvFs/tmpfs no-op -> refuse storage.fsync_unhonored) + the ingest source-reachability probe are filled here; the remaining substrate-lie probe internals (attribution round-trip, no-merge-schema, the network-lies check, the real-decode check, the query-server author_did-present, the index-query unreachable-soft) are below the driving-port boundary (out of DISTILL scope, DD-AV-7) but their bodies land alongside this gauntlet. health.startup.refused reasons per DEVOPS observability (storage.fsync_unhonored / indexer.capability_boundary_violated / indexer.ingest_source_unreachable / identity.pubkey_decode_failed). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11 (a named probe-failure example). Universe = exit code (2); the health.startup.refused reason; absence of any indexed row / served query. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "03-07",
+          "name": "AV-7 indexer ingests only public records, no private read (public-data-only; I-AV-4)",
+          "criteria": [
+            "openlore-indexer ingest against a source whose public listRecords surface returns public signed claims and whose (distinct) auth-scoped surface would return private records if called, reads + indexes ONLY the public records",
+            "the fake source records that the indexer made NO auth-scoped/private call (the public-data-only invariant, WD-105); no telemetry on claim CONTENTS is emitted (structural counts + DIDs only)",
+            "AV-7 passes"
+          ],
+          "test_file": "tests/acceptance/indexer_ingest.rs",
+          "scenario_name": "indexer_ingests_only_public_records_no_private_read",
+          "implementation_scope": [
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "deps": [
+            "03-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-001 public-data-only + I-AV-4 + WD-105 + component-boundaries.md §adapter-atproto-ingest. The ingest-side half of the public-data honesty contract (the user-visible banner is the search-side AV-10, 04-03). The ingest adapter reads only the unauthenticated public listRecords surface (no auth-scoped read); the FakeIngestSource records which endpoints were called. DEVOPS privacy constraint: no claim-content telemetry. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the set of source endpoints the indexer called (public listRecords only; no auth-scoped read); the indexed rows (public only). STAGE CONTEXT: Stage 0 NEW code."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "search walking skeleton + trust surface (US-AV-002/004 Release 1; AV-8/9/10/11/13/14/23)",
+      "description": "Ship the slice-05 walking-skeleton beat 2 (AV-8) + the Release-1 cardinal release gates over the REAL openlore CLI against a REAL openlore-indexer serve on a localhost ephemeral port. AV-9 (anti-merging, KPI-AV-2 load-bearing), AV-13 (local-first, KPI-5 load-bearing), AV-10 (public-data banner), AV-11 (universal verified marker), AV-14 (B1 localhost transport), AV-23 (--show trust inspect).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "AV-8 search by object surfaces verified claims by unfollowed authors, attributed (WALKING SKELETON beat 2)",
+          "criteria": [
+            "openlore search --object org.openlore.philosophy.reproducible-builds against a localhost openlore-indexer serve over an index seeded with the US-AV-002 Ex1 corpus (9 authors / 7 subjects, incl. unfollowed Priya on bazel 0.82 + subscribed Rachel on nixpkgs 0.88) exits 0 with the public-data banner preceding the results",
+            "results include claims by authors the user does NOT follow, labeled (not subscribed); Rachel labeled (subscribed peer); every result row shows author DID + numeric confidence + display bucket + evidence + cid + [verified]; NO row collapses multiple authors",
+            "the footer states the distinct-author count (9) + the no-merge guarantee + 'openlore peer add <did>'",
+            "AV-8 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_by_object_surfaces_verified_claims_by_unfollowed_authors_attributed",
+          "implementation_scope": [
+            "crates/adapter-index-query/src/lib.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-query/src/lib.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "01-05",
+            "02-04",
+            "03-01"
+          ],
+          "estimated_minutes": 65,
+          "implementation_notes": "Per US-AV-002 Example 1 + acceptance-tests.md §3 (walking skeleton) + ADR-027 + WD-113/WD-115/WD-103 + KPI-AV-1/KPI-AV-2 + component-boundaries.md §crates/cli + data-models.md §Read-side query shapes (by object). SLICE-05 WALKING-SKELETON beat 2 (search surfaces unfollowed authors, trustworthily). The full B1 path lands here: the adapter-xrpc-query-server query handler (reads IndexStorePort, calls appview_domain::compose_results, returns per-result author_did) + the adapter-index-query CLI client + the cli search --object renderer (per-author groups + [verified] + relationship labels + the public-data banner + the no-merge footer + the peer add affordance). The relationship label is resolved CLI-side against the user's peer_subscriptions (the index is per-user-neutral, data-models.md). The renderer lands in crates/cli/src/render.rs (the slice-04 lesson). DD-AV-10 STATE-DELTA MIGRATION: migrate to assert_state_delta with universe.unchanged() over the index row-count PLUS strict-assert on search.distinct_authors_in_output==9 (counted from attributed rows, EXCLUDING the footer template), search.rows_collapsed==0, the banner-precedes-results flag, the relationship labels {priya:(not subscribed), rachel:(subscribed peer)}, every row [verified]. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11 (the anti-merging property is AVC-2). Inner-loop proptest covers the renderer grouping (forall claim set: every output row has exactly one author_did; no row merges two authors) in cli #[cfg(test)]. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "04-02",
+          "name": "AV-9 network result preserves attribution (CARDINAL RELEASE GATE; KPI-AV-2 load-bearing)",
+          "criteria": [
+            "openlore search --object org.openlore.philosophy.dependency-pinning over an index seeded with two unfollowed-author claims on the SAME (github:denoland/deno, dependency-pinning) by Priya (0.70) and Sven (0.65) returns BOTH as DISTINCT rows under the subject, each attributed to a distinct author DID labeled (not subscribed)",
+            "there is NO 'deno: 2 authors agree' / 'the network says X' / mean-confidence merged row anywhere in the output; the footer's distinct-author count is 2 (a COUNT over attributed rows, not a merge)",
+            "the wire (B1) carried per-result author_did (D-D36); anti-merging assertion discipline: count attributed rows for (deno, dependency-pinning) == 2, assert NO merged/consensus/N-authors-agree/mean-confidence line, EXCLUDE the footer template from the row count",
+            "AV-9 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "network_result_preserves_attribution",
+          "implementation_scope": [
+            "crates/cli/src/render.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs",
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-AV-002 RELEASE GATE + WD-103/WD-120 + I-AV-2 + KPI-AV-2 (release-blocking) + DEVOPS D-D35 (at-network-result-preserves-attribution GUARDRAIL) + acceptance-tests.md §7 + data-models.md §anti-merging-at-network-scale. CARDINAL load-bearing gate — NOT merged with any other scenario. The KPI-AV-2 disprover: any merged/consensus row or attribution loss is UNSHIPPABLE. The behavioral layer of the three-layer anti-merging enforcement (type = AVC-4/AVC-5; structural = the xtask index-store rule 01-03; this = behavioral render + B1 transport). The pure composition preserves both (AVC-2/AVC-5, 02-04/02-06); this layer-3 example pins the user-visible RENDERING + the real B1 transport (the wire carries per-result author_did, D-D36; backed by the runtime counter indexer_query_attribution_missing_total target 0). DD-AV-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta with universe {attributed-rows-for-(deno,dependency-pinning)==2, author-set {priya,sven}, no merged/consensus/mean-confidence row, footer distinct_author_count==2}. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. STAGE CONTEXT: Stage 0 NEW code (paradigm-from-day-zero)."
+        },
+        {
+          "id": "04-03",
+          "name": "AV-10 public-data banner shown (RELEASE GATE; KPI-AV-5)",
+          "criteria": [
+            "any openlore search session prints, BEFORE the first result row, a banner stating discovery indexes only PUBLIC signed claims, each verified before indexing, and that nothing private is read or aggregated",
+            "banner_precedes_results == true",
+            "AV-10 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "public_data_banner_shown",
+          "implementation_scope": [
+            "crates/cli/src/render.rs",
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs",
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-004 RELEASE GATE + I-AV-4 + WD-105 + KPI-AV-5 + DEVOPS D-D35 (at-public-data-banner-shown) + component-boundaries.md §Annotation for acceptance-designer. The search-side half of the public-data honesty contract (the ingest-side half is AV-7, 03-07). The banner sets the indexing expectation honestly (the framing ADR-014 deferred to slice-05). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the banner present in stdout AND positioned before the first result row (banner_precedes_results == true); the banner asserts public-only + verified-before-indexing + nothing-private. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "04-04",
+          "name": "AV-11 verified marker is universal (RELEASE GATE; I-AV-1)",
+          "criteria": [
+            "every row in every openlore search result across object + contributor + subject dimensions carries [verified]; NO row ever shows [unverified] or [unknown signature]",
+            "the marker is a construction guarantee (the ingest gate, AV-3 + AVC-7), not a per-result runtime guess; there is no mixed-trust list",
+            "AV-11 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "verified_marker_is_universal",
+          "implementation_scope": [
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-004 RELEASE GATE + I-AV-1 + acceptance-tests.md §7 + data-models.md §verified marker. The construction guarantee proven at layer 2 (AVC-7, 02-07): every IndexedClaim carries a non-empty verified_against; the renderer reads it as the universal [verified] marker; there is no verified BOOLEAN, no [unverified] state. This step exercises ALL THREE dimensions (so the marker is universal across object/contributor/subject) — the contributor + subject render paths are completed in Phase 05 (AV-15/16) but the marker render is pinned here. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = for every result row across all three dimensions, row carries [verified]; the strings [unverified]/unknown-signature never appear in any search output. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "04-05",
+          "name": "AV-13 local-first preserved (CARDINAL RELEASE GATE; KPI-5 load-bearing)",
+          "criteria": [
+            "with the indexer UNREACHABLE ([appview] indexer_url points at a closed/unbound port) AND the network disabled: openlore claim add succeeds (exit 0, composed/stored LOCALLY — the indexer is NOT probed at CLI startup, WD-116); offline openlore claim publish succeeds; openlore graph query --object succeeds (exit 0, LOCAL graph, links no indexer code)",
+            "openlore search --object prints a clear 'Network index unavailable. See LOCAL results via openlore graph query --object ...' message, exits NON-fatally (the soft Unreachable outcome, ADR-027/WD-116), and does NOT hang (bounded wall-clock)",
+            "the CLI links NO indexer store/ingest/server code (structural layer = the xtask dependency-graph check); the local store is mutated only by the authoring verbs, never by search",
+            "AV-13 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "local_first_preserved",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/adapter-index-query/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/adapter-index-query/src/lib.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-AV-002 + inherited RELEASE GATE + WD-106/WD-116 + I-AV-3 + KPI-5 (release-blocking) + DEVOPS D-D35 (at-local-first-preserved GUARDRAIL) + acceptance-tests.md §7. CARDINAL load-bearing gate — NOT merged with any other scenario. The KPI-5 disprover: any regression that breaks offline authoring (or makes search a startup hard-fail) is UNSHIPPABLE. Q-DELIVER-AV-7: the degraded mode may DELEGATE to local graph query OR just POINT to it — either; the contract is 'clear local-only message, no hang, no fatal exit'. The adapter-index-query INVERTED/degradation probe (unreachable -> soft Unreachable, NOT a startup refusal; DESIGN §6.3) is wired here; WD-116: HttpIndexQueryAdapter.probe() is soft — an unreachable indexer MUST NOT block claim add. DD-AV-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta with universe {claim_add.exit==0, claim_publish.exit==0 (offline), graph_query.exit==0, search.exit non-fatal, search.hung==false, local store mutated only by authoring verbs}. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11 (a named example, FOUR sub-assertions one observable each). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "04-06",
+          "name": "AV-14 search succeeds with indexer localhost (RELEASE GATE; B1 transport)",
+          "criteria": [
+            "with a REAL openlore-indexer serve bound to an EPHEMERAL localhost port (:0, read back) over a seeded index and the CLI's [appview] indexer_url pointed at it, openlore search --object <philosophy> reaches the indexer over localhost HTTP/XRPC (org.openlore.appview.searchClaims)",
+            "the response carries EVERY result's author_did (the B1 contract, D-D36 — a response dropping it is an anti-merging violation across the transport); the CLI renders attributed verified results",
+            "exit 0; the rendered result is non-empty + attributed (every row has author_did + [verified]); the transport reached the localhost serve port (a result was returned, NOT the Unreachable degradation)",
+            "AV-14 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_succeeds_with_indexer_localhost",
+          "implementation_scope": [
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/adapter-index-query/src/lib.rs",
+            "crates/lexicon/src/appview_query.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-xrpc-query-server/src/lib.rs",
+            "crates/adapter-index-query/src/lib.rs",
+            "crates/lexicon/src/appview_query.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-AV-002 RELEASE GATE / B1 + WD-115 + ADR-027 + DEVOPS D-D36 (contract-pact-indexer-query) + acceptance-tests.md §7. The production CLI->indexer transport wiring end-to-end (the B1 boundary). Q-DELIVER-AV-2: the HTTP server framework (axum/hyper) is the crafter's call (if axum, the deny.toml axum ban is narrowed per D-D42; the xtask CLI-no-HTTP-server rule is the structural backstop). The adapter-xrpc-query-server bind+serve + author_did-present probe + the adapter-index-query reachable-shape probe (DESIGN §6.3) are filled here. This pins the production B1 transport the consumer-driven Pact contract (D-D36) covers at the wire level — the AT proves the CLI driving port reaches the real server (over the ephemeral localhost port the harness reads back, parallel-safe) and renders the result. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = search.exit_code (0); the rendered result is non-empty + attributed (every row has author_did + [verified]); the transport reached the localhost serve port (a result returned, not the Unreachable path). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "04-07",
+          "name": "AV-23 --show inspects a verified record with signature and CID-match lines (trust surface)",
+          "criteria": [
+            "openlore search --object org.openlore.philosophy.reproducible-builds --show <cid> for Priya's verified bazel claim prints the full record (subject/object/confidence/evidence/author DID) PLUS 'Signature: VERIFIED against did:plc:priya-test' AND 'CID: <cid> (recomputed, matches published record)'",
+            "these lines render the SAME pure-core verification result the indexer computed at ingest (no second path); the display is READ-ONLY (creates/signs/mutates nothing)",
+            "AV-23 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "show_inspects_a_verified_record_with_signature_and_cid_match_lines",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-index-query/src/lib.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs",
+            "crates/adapter-index-query/src/lib.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-AV-004 Example 1 + KPI-AV-3 + KPI-4 (inherited; CID recomputed matches published record at network scale) + acceptance-tests.md §2 Pillar (chained: --show the AV-8 result's cid). The --show <cid> path reuses the SAME pure-core verification result (no second path, US-AV-004 Technical Notes); get_by_cid on the index store + the verification-line renderer. The display is read-only. Chains off AV-8 (04-01): --show a cid the AV-8 search listed. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the --show output contains the full record fields + the 'Signature: VERIFIED against did:plc:priya-test' line + the 'CID ... (recomputed, matches published record)' line; no local state mutated. STAGE CONTEXT: Stage 0 NEW code."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "dimensions + funnel + share + counter (US-AV-003/005/006 + Release-1 sad paths; Release 2/3)",
+      "description": "Ship the contributor + subject dimensions (AV-15/16/17/18), the discovery->federation funnel reusing slice-03 peer add/pull/remove verbatim (AV-19/20/21/22), --share query-encoding-not-snapshot (AV-26/27/28/29), counter-shown-not-applied render (AV-25), and the Release-1 search sad paths (AV-12 typo->suggestion exit 0; AV-24 --show absent-cid usage error nonzero).",
+      "default_deps_strategy": "sequential",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "AV-12 search by object unknown philosophy returns empty with suggestion, exit zero",
+          "criteria": [
+            "openlore search --object org.openlore.philosophy.reproducable-builds (typo) against an index with no such match prints 'No network claims found for object <typo>' AND a near-match suggestion line ('Did you mean reproducible-builds?')",
+            "exit code 0 (a valid empty result, US-AV-002 Ex 4 — distinct from the --show usage error which exits non-zero)",
+            "AV-12 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01",
+            "02-09"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-002 Example 4 + I-AV (suggestion). The near-match suggestion engine is the pure appview_domain::near_match_suggestion (proven in AVC-8, 02-09); the CLI renders the empty-result line + exits 0 (a valid not-yet-found state, NOT an error). Deliberately distinct from AV-24 (--show absent cid, non-zero) so the user can tell a typo'd query from a typo'd --show. Mandate 11: a NAMED example sad path, not PBT. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = search.exit_code (0); stdout states empty + a near-match suggestion line. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-02",
+          "name": "AV-15 search by contributor lists the full network trail with honest framing",
+          "criteria": [
+            "openlore search --contributor github:priya (resolves to did:plc:priya-test, unfollowed) returns Priya's whole verified network trail (8 claims / 6 subjects) under one DID, each with subject/object/confidence/cid/[verified]",
+            "the trail is labeled (not subscribed); the footer states 'one developer's reasoning trail, not a community consensus' + 'openlore peer add did:plc:priya-test'",
+            "AV-15 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_by_contributor_lists_full_network_trail_with_honest_framing",
+          "implementation_scope": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 45,
+          "implementation_notes": "Per US-AV-003 Example 1 + KPI-AV-1/KPI-AV-4 + data-models.md §Read-side query shapes (by contributor) + acceptance-tests.md §2 Pillar (chained: read-before-following). The contributor-dimension query (query_by_contributor, explicit author_did projection) + the 'one developer's reasoning trail, not a community consensus' footer + the peer add offer. github:priya resolves to did:plc:priya-test (the slice-02/04 handle->DID). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = search.exit_code (0); the count of attributed rows under priya (8); the (not subscribed) label; the footer one-developer-not-consensus framing + the peer-add offer. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-03",
+          "name": "AV-16 search by subject surfaces every author's verified claims, attributed (anti-merging render)",
+          "criteria": [
+            "openlore search --subject github:bazelbuild/bazel returns verified bazel claims from 5 distinct network authors, grouped by author, each with philosophy/confidence/cid/[verified]",
+            "NO row collapses multiple authors into a single 'network consensus' entry (the subject-dimension anti-merging render)",
+            "AV-16 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_by_subject_surfaces_every_authors_verified_claims_attributed",
+          "implementation_scope": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-AV-003 Example 2 + KPI-AV-2 + I-AV-2 + data-models.md §Read-side query shapes (by subject). The subject-dimension query (query_by_subject, explicit author_did projection) + the per-author grouped render (NO 'the network thinks X about this project' merged row). The anti-merging RENDER for the subject dimension (the pure composition proven in AVC-2, 02-04). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the count of distinct author groups (5, from attributed rows, excluding any footer template); absence of a merged/consensus row; every row [verified]. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-04",
+          "name": "AV-17 search by contributor absent from index degrades gracefully, exit zero",
+          "criteria": [
+            "openlore search --contributor github:nobody-here against an index with no such claims prints a clear 'no network claims found for contributor <handle>' message",
+            "exit code 0 (a valid empty result)",
+            "AV-17 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_by_contributor_absent_from_index_degrades_gracefully_exit_zero",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-02"
+          ],
+          "estimated_minutes": 25,
+          "implementation_notes": "Per US-AV-003 Example 3. Empty result is NOT an error: exit 0 (they may not publish OpenLore claims, or are not yet ingested). Mandate 11: a NAMED example sad path. Mirrors AV-12 (object empty) for the contributor dimension. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = search.exit_code (0); stdout states the empty-contributor message. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-05",
+          "name": "AV-18 search labels a followed author as subscribed peer (relationship label in network search)",
+          "criteria": [
+            "with Maria subscribed to did:plc:rachel-test (a slice-03 peer add), openlore search --contributor github:rachel labels Rachel's network claims (subscribed peer), NOT (not subscribed)",
+            "every claim retains its author DID + [verified] marker; NO 'Follow this author' affordance is shown for her (she is already followed)",
+            "the relationship is resolved CLI-side against the user's peer_subscriptions (the index is per-user-neutral)",
+            "AV-18 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "search_labels_a_followed_author_as_subscribed_peer",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-02"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-003 Example 4 + data-models.md §relationship_label. The relationship resolution (the result author_did checked against peer_subscriptions: you/subscribed-peer/unsubscribed-cache/network-unfollowed) preserves the slice-03 relationship labeling even in network search. Chains into AV-21 (no redundant affordance for the already-followed). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = Rachel's rows labeled (subscribed peer); absence of the 'Follow this author' affordance for Rachel; every row [verified]. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-06",
+          "name": "AV-19 discovery follow reuses the slice-03 path (the discovery -> federation funnel; KPI-AV-4)",
+          "criteria": [
+            "openlore search --object reproducible-builds -> the result for unfollowed Priya ends with 'Follow this author: openlore peer add did:plc:priya-test'; running THAT slice-03 command verbatim (NO new verb) + openlore peer pull + openlore graph query --contributor did:plc:priya-test surfaces Priya's claims in Maria's LOCAL graph",
+            "Priya's claims participate in --weighted / --traverse exactly like any pulled peer; the affordance is a RENDER-ONLY hint printing the EXISTING slice-03 command (no parallel subscription path, no auto-follow; I-AV-7)",
+            "the subscription appears in peer list exactly as a slice-03 add (no parallel state); reuses the slice-03 PeerPds double for the pull (no new external fake)",
+            "AV-19 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "discovery_follow_reuses_slice03_path",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 50,
+          "implementation_notes": "Per US-AV-005 Example 1 + WD-110/WD-122 + I-AV-7 + KPI-AV-4 + DEVOPS D-D35 (at-discovery-follow-reuses-slice03-path) + acceptance-tests.md §2 Pillar (chained: the funnel reuses the AV-8/AV-15 result's peer add affordance). The funnel that makes the AppView STRENGTHEN the local-first graph instead of competing. The follow affordance is a RENDER-ONLY string printing the EXISTING slice-03 peer add command — there is NO executable follow path, NO parallel subscription state; the subscription is created by the SAME slice-03 peer add (proven by AV-22's purge symmetry, 05-09). REUSES the slice-03 PeerPds double + peer add/peer pull VERBATIM (no new external fake; the funnel seed). Chained: AV-19's Given reuses the AV-8 search When. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the search result's follow-affordance line (the slice-03 peer add <did> command verbatim); after peer add + pull, graph_query_contributor(priya).rows non-empty; the subscription appears in peer list exactly as a slice-03 add (no parallel state). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-07",
+          "name": "AV-20 discovery never auto-subscribes (no auto-follow)",
+          "criteria": [
+            "running several openlore search queries + a --show WITHOUT any peer add leaves openlore peer list (peer_subscriptions) UNCHANGED — no subscription is created by search/inspect",
+            "discovery is read-only; following is always an explicit human action; the render-only affordance never executes a follow (I-AV-7)",
+            "AV-20 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "discovery_never_auto_subscribes",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "deps": [
+            "05-06"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-005 Example 3 + I-AV-7. LOAD-BEARING regression: the render-only affordance (AV-19) must NEVER execute a follow; search + --show mutate NO subscription state. Mandate 11: a NAMED example. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = peer_subscriptions before == after (search + --show mutate NO subscription state); peer list output unchanged. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-08",
+          "name": "AV-21 already-followed author shows no redundant follow affordance (relationship-conditioned)",
+          "criteria": [
+            "with Tobias subscribed to did:plc:rachel-test, a search returning Rachel + an unfollowed author labels Rachel's row (subscribed peer) with NO 'Follow this author' affordance",
+            "the unfollowed author's row DOES carry the affordance (the affordance is conditioned on the relationship label, resolved CLI-side against peer_subscriptions)",
+            "AV-21 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "already_followed_author_shows_no_redundant_follow_affordance",
+          "implementation_scope": [
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-05",
+            "05-06"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-005 Example 2 + I-AV-7. The funnel affordance appears ONLY for unfollowed authors (relationship == NetworkUnfollowed); for SubscribedPeer it is suppressed. Builds on the relationship resolution (AV-18, 05-05) + the affordance render (AV-19, 05-06). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = presence of the follow affordance per author (absent for Rachel/subscribed; present for the unfollowed author). STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-09",
+          "name": "AV-22 followed discovery author purges via slice-03 semantics with zero residue",
+          "criteria": [
+            "after following a discovered author via the AV-19 funnel (the slice-03 peer add) + pulling their claims, openlore peer remove did:plc:priya-test --purge applies the slice-03 purge semantics UNCHANGED",
+            "the subscription + the pulled peer_claims are removed leaving ZERO residue (the same state-delta universe slice-03 PS-6 asserts); because the author was added via the SAME peer add path (no parallel discovery-subscription state, I-AV-7), the purge is indistinguishable from a slice-03 add+purge",
+            "no orphaned discovery-side subscription record exists (the load-bearing absence of a parallel path)",
+            "AV-22 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "followed_discovery_author_purges_via_slice03_semantics_zero_residue",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "deps": [
+            "05-06"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-005 Example (purge) + I-AV-7 + slice-03 PS-6 purge semantics. Because discovery introduced NO parallel subscription state (the funnel reuses slice-03 peer add verbatim, AV-19), the purge is byte-indistinguishable from a slice-03 add+purge. This is the load-bearing PROOF that the funnel added no parallel path. Reuses the slice-03 peer remove --purge verb verbatim. DD-AV-10 STATE-DELTA MIGRATION: load-bearing; migrate to assert_state_delta over the SAME purge universe slice-03 PS-6 asserts {peer_subscriptions priya absent, peer_claims/<priya>/ removed, no orphaned discovery-side subscription record}. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-10",
+          "name": "AV-24 --show on a CID absent from the result set is a usage error, nonzero exit",
+          "criteria": [
+            "openlore search --object ... --show <cid not in result set> prints a usage error ('CID ... is not in this search result. Run the search without --show to list results, then --show a listed CID.')",
+            "exit code is NON-ZERO (a usage error — deliberately distinct from an empty search which exits 0, so the user can tell a typo'd --show from an empty query)",
+            "AV-24 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "show_on_cid_absent_from_result_set_is_a_usage_error_nonzero_exit",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-07"
+          ],
+          "estimated_minutes": 30,
+          "implementation_notes": "Per US-AV-004 Example 4. The ONE non-zero sad path on the search surface — deliberately distinct from the empty-result exit-0 (AV-12/AV-17), so the user can tell a typo'd --show from an empty query. Builds on the --show path (AV-23, 04-07): the requested cid is not in the current result set. Mandate 11: a NAMED example. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = search.exit_code (non-zero); the 'CID is not in this search result' usage message + remediation hint. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-11",
+          "name": "AV-25 countered claim still appears in search with annotation (OD-AV-7 render half)",
+          "criteria": [
+            "openlore search --object <C's object> over an index whose index has claim C and a later indexed claim K referencing C with ref_type=counters (both verified) returns C STILL as a result row (NOT filtered/dropped/down-weighted)",
+            "C's row carries a counter annotation 'countered-by <K.cid> (by <K.author_did>)'; the counter is SHOWN, never applied as a filter (mirrors slice-04 WD-85)",
+            "AV-25 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "countered_claim_still_appears_in_search_with_annotation",
+          "implementation_scope": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/render.rs",
+            "crates/appview-domain/src/compose.rs"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/cli/src/render.rs",
+            "crates/appview-domain/src/compose.rs"
+          ],
+          "deps": [
+            "04-01",
+            "02-08"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-002 / OD-AV-7 + WD-119 + I-AV-9 + DEVOPS D-D35 (at-countered-claim-still-appears) + data-models.md §Counter-relationship annotation. The render half of counter-shown-not-applied (the pure-core behavior is AVC-6, 02-08). The counter-relationship JOIN (indexed_claims <-> indexed_claim_references, same store, counter_author projected — NOT a cross-store join, anti-merging preserved) feeds annotate_counter_relationship; the countered row is NEVER removed. Mirrors slice-04 WD-85 (counter shown in --explain, not applied). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = presence of C in the search output; C's row carries the counter annotation; C is NOT filtered/down-weighted. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-12",
+          "name": "AV-26 --share emits a stable query-encoding link for an object search (US-AV-006; KPI-AV-6)",
+          "criteria": [
+            "openlore search --object org.openlore.philosophy.reproducible-builds --share prints 'Shareable link: openlore://search?object=org.openlore.philosophy.reproducible-builds' (the link encodes the QUERY dimension+value ONLY — no results, no snapshot)",
+            "a line states the link encodes the query, not a frozen snapshot (the sharing semantics)",
+            "AV-26 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "share_emits_stable_query_encoding_link_for_object_search",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "04-01"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-006 Example 1 + WD-110/WD-122 + I-AV-8 + KPI-AV-6 + DEVOPS D-D35 (at-share-link-encodes-query-not-snapshot). Q-DELIVER-AV-3: the exact openlore://search?... link grammar + the CLI re-run parser are DELIVER's call; DISTILL asserts the query-encoding-not-snapshot CONTRACT (the link encodes dimension+value only, no result payload). The --share affordance is render-only. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the printed share link encodes dimension=object + value=<philosophy> and NO result payload/snapshot; the 'encodes the query, not a snapshot' semantics line present. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-13",
+          "name": "AV-27 opening a shared link re-runs the query, yielding the same attributed results (anti-merging across the share boundary)",
+          "criteria": [
+            "opening the openlore://search?object=... link (from AV-26) via the CLI re-run resolver re-runs the encoded query against the index and returns the SAME per-author-attributed verified results (each row author DID + [verified]), anti-merging preserved (NO merged consensus row), with the same peer add affordance for unfollowed authors",
+            "the link encoded the QUERY (deterministic per AVC-3b), NOT a snapshot — the resolver re-composes per-author rows (anti-merging across the share boundary, I-AV-8/KPI-AV-2)",
+            "AV-27 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "opening_a_shared_link_re_runs_the_query_yielding_same_attributed_results",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-12"
+          ],
+          "estimated_minutes": 40,
+          "implementation_notes": "Per US-AV-006 Example 2 + WD-110/WD-122 + I-AV-8 + KPI-AV-6/KPI-AV-2 + acceptance-tests.md §2 Pillar (chained: AV-27's Given reuses AV-26's emitted link). Q-DELIVER-AV-3: the CLI re-run resolver (web AppView OUT of scope per OD-AV-6) — e.g. openlore search <link> or the resolver verb DELIVER picks. The link encoded the QUERY (compose_results deterministic per AVC-3b, 02-05), NOT a snapshot; the resolver re-composes per-author rows (anti-merging across the share boundary). TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the resolved result's per-author rows match the original query's (same authors, same [verified] marks); NO merged row; the follow affordance present for unfollowed authors. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-14",
+          "name": "AV-28 shared link resolves to current results, not a stale snapshot (query-encoding proof)",
+          "criteria": [
+            "after sharing a query link, the indexer ingests two MORE verified matching claims (a second ingest pass); opening the SAME link returns a result set that INCLUDES the two newly-ingested claims",
+            "the link re-runs the QUERY against the CURRENT index (each new row attributed + [verified]); the link NEVER resolves to a stored merged snapshot that loses attribution",
+            "AV-28 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "shared_link_resolves_to_current_results_not_a_stale_snapshot",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-13"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-006 Example 4 + I-AV-8 + KPI-AV-6. The query-encoding-not-snapshot contract proven end-to-end across an INDEX CHANGE: share a link, ingest two more matching verified claims, re-open the SAME link, assert the result set now INCLUDES the two new claims (current, not frozen). This is the load-bearing proof that --share encodes the query not a snapshot. Reuses the openlore-indexer ingest pass (Phase 03) for the second ingest. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the resolved result count grows by 2 after the new ingest (current, not frozen); the new rows are attributed + [verified]; no merged snapshot. STAGE CONTEXT: Stage 0 NEW code."
+        },
+        {
+          "id": "05-15",
+          "name": "AV-29 --share encodes the contributor dimension, resolving to the trail",
+          "criteria": [
+            "openlore search --contributor github:priya --share emits openlore://search?contributor=did:plc:priya-test (the resolved handle->DID, not the handle)",
+            "opening it (CLI re-run) resolves to Priya's verified trail with the same 'one developer's reasoning trail, not a community consensus' framing",
+            "AV-29 passes"
+          ],
+          "test_file": "tests/acceptance/appview_search.rs",
+          "scenario_name": "share_encodes_contributor_dimension_resolving_to_the_trail",
+          "implementation_scope": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render.rs"
+          ],
+          "deps": [
+            "05-12",
+            "05-02"
+          ],
+          "estimated_minutes": 35,
+          "implementation_notes": "Per US-AV-006 Example 3 + I-AV-8 + KPI-AV-6. The contributor-dimension share round-trip (parallel to AV-26/AV-27 for object). The link encodes dimension=contributor + value=did:plc:priya-test (the RESOLVED DID, not the handle — so the link is stable regardless of the opener's handle resolution); opening it resolves to Priya's verified trail (AV-15) + the not-consensus framing. TEST PARADIGM (mandatory): layer-3 subprocess example-only per Mandate 11. Universe = the share link encodes contributor=did:plc:priya-test (resolved handle->DID, not the handle); resolving yields the trail + the not-consensus framing. STAGE CONTEXT: Stage 0 NEW code."
+        }
+      ]
+    }
+  ]
+}

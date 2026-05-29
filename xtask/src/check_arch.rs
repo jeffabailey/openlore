@@ -19,6 +19,9 @@
 //!    `serde_yaml_ng` parser (allowlisted). `scoring` (slice-04 pure
 //!    closed-form weight, WD-71/WD-82/ADR-022) — same ban list; its only
 //!    non-pure-core deps are `ports` + `claim-domain` + pure `chrono`/`serde`.
+//!    `appview-domain` (slice-05 pure ingest-gate + anti-merging search,
+//!    WD-103/WD-104/ADR-026/I-AV-1/I-AV-2) — same ban list; its only
+//!    non-pure-core deps are `claim-domain` + pure `chrono`/`serde`.
 //! 3. `ports` MAY depend on `async-trait` (the `PdsPort` trait is
 //!    inherently async per ADR-004) but MUST NOT depend on a tokio
 //!    runtime or any other I/O crate.
@@ -446,6 +449,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "scoring",
         "scoring MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-71/WD-82/ADR-022/I-GRAPH-1)",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "appview-domain",
+        "appview-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-103/WD-104/ADR-026/I-AV-1/I-AV-2)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -755,6 +763,37 @@ mod tests {
             v.iter()
                 .any(|x| x.package == "scoring" && x.forbidden == "duckdb"),
             "expected scoring→duckdb violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn appview_domain_with_pure_deps_is_allowed() {
+        // WD-103/WD-104/ADR-026: `appview-domain` is the slice-05 PURE
+        // ingest-gate + anti-merging search core. Its dep surface is
+        // `claim-domain` + pure `chrono`/`serde` — no I/O. The pure-core ban
+        // list must pass (I-AV-1/I-AV-2).
+        let w = ws(&[
+            ("appview-domain", &["claim-domain", "serde", "chrono"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "appview-domain with pure deps must pass the pure-core allowlist (WD-103/WD-104), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn appview_domain_depending_on_duckdb_is_violation() {
+        // The pure-core ban list is in force for appview-domain (I-AV-2): an
+        // appview-domain crate reaching duckdb would mean the search/grouping
+        // ran in the substrate, not the pure core.
+        let w = ws(&[("appview-domain", &["duckdb"])]);
+        let v = check_workspace(&w);
+        assert!(
+            v.iter()
+                .any(|x| x.package == "appview-domain" && x.forbidden == "duckdb"),
+            "expected appview-domain→duckdb violation, got: {v:?}"
         );
     }
 

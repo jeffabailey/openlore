@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 mod canonicalize;
 mod cid;
 mod confidence;
+mod decode;
 mod normalize;
 mod references;
 mod sign;
@@ -34,6 +35,9 @@ mod verify;
 pub use canonicalize::canonicalize;
 pub use cid::compute_cid;
 pub use confidence::confidence_bucket;
+// Slice-05 (ADR-026): the PURE z6Mk publicKeyMultibase decode helper + its
+// value types. `verify`/`compute_cid` are UNCHANGED and reused (no second path).
+pub use decode::{decode_ed25519_multibase, DecodeError, KeyId, VerificationKey};
 pub use normalize::normalize_reason;
 pub use references::reference_rules_validate;
 pub use sign::sign;
