@@ -75,12 +75,64 @@ fn indexer_ingests_a_verified_attributed_claim_and_it_becomes_searchable() {
     // Universe (port-exposed observable surface of the ingest pass): the indexed
     // row's author_did, verified_against; indexer.ingest.verified count (1);
     // indexer.ingest.rejected count (0). NOT an internal store struct field.
-    todo!(
-        "DELIVER (slice-05): seed FakeIngestSource with one valid signed Priya \
-         claim + a real-z6Mk PLC DID-doc; run `openlore-indexer ingest`; assert \
-         the row is searchable with author_did==did:plc:priya-test, \
-         verified_against != \"\", verified count 1, rejected count 0. The \
-         walking-skeleton beat-1 proof: the index exists + is trustworthy."
+
+    // -- Precondition: a fake network source hosts ONE valid signed claim by
+    // Priya on github:bazelbuild/bazel embodying reproducible-builds (0.82). The
+    // PLC verify key is wired via the slice-03 pubkey seam (the real z6Mk decode
+    // is 03-04/AV-4); the seam value is Priya's fixture keypair pubkey hex. --
+    let env = TestEnv::fresh();
+    let priya = FixtureKeypair::for_did(PRIYA_DID);
+    let priya_pubkey_hex = hex_lower(&priya.verifying_key.0);
+    let source = FakeIngestServer::start(vec![fixture_ingest_valid_signed()]);
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass (wire ->
+    // probe -> use) against the fake source + the PLC pubkey seam. --
+    let outcome = run_openlore_indexer_with_source(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        &[(PRIYA_DID, &priya_pubkey_hex)],
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // The ingest emitted indexer.ingest.verified (count 1) + rejected (count 0).
+    assert!(
+        outcome.stdout.contains("indexer.ingest.verified")
+            && outcome.stdout.contains("\"count\":1"),
+        "expected indexer.ingest.verified count 1 in stdout; got: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("indexer.ingest.rejected")
+            && outcome.stdout.contains("\"count\":0"),
+        "expected indexer.ingest.rejected count 0 in stdout; got: {}",
+        outcome.stdout
+    );
+
+    // -- Observable outcome (port-exposed): a subsequent query (a direct
+    // index-store read of the REAL index.duckdb) returns Priya's claim, attributed
+    // (author_did == did:plc:priya-test#org.openlore.application) with a non-empty
+    // verified_against. The index exists + is trustworthy + is searchable. --
+    let rows = read_indexed_claims_by_object(&env, "org.openlore.philosophy.reproducible-builds");
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one verified claim must be searchable by object; got {rows:?}"
+    );
+    let row = &rows[0];
+    assert_eq!(
+        row.author_did, "did:plc:priya-test#org.openlore.application",
+        "the indexed row must be attributed to Priya (author derived from the signed payload)"
+    );
+    assert_eq!(row.subject, "github:bazelbuild/bazel");
+    assert!(
+        !row.verified_against.is_empty(),
+        "verified_against must never be empty on an indexed row (WD-104)"
     );
 }
 

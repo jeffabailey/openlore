@@ -59,6 +59,15 @@ pub use openlore_test_support::{
     fixture_other_developer_three_claims,
 };
 
+// Slice-05 (step 03-01): the ingest fixtures + the fixture keypair the AV-1
+// walking-skeleton scenario seeds are re-exported flat so the `indexer_ingest`
+// acceptance file can name them via `use support::*` (matching how the slice-01
+// /03 fixtures already surface).
+pub use openlore_test_support::{
+    fixture_ingest_adversarial_set_plus_one_valid, fixture_ingest_valid_signed, FixtureKeypair,
+    Posture, RawRecordSpec, PRIYA_DID,
+};
+
 /// A sealed test environment.
 ///
 /// Holds an isolated `HOME` so XDG paths (`~/.config/openlore`,
@@ -1729,7 +1738,7 @@ fn base64url_no_pad(bytes: &[u8]) -> String {
 }
 
 /// Lowercase-hex encode raw bytes (the peer-pubkey env-seam wire shape).
-fn hex_lower(bytes: &[u8]) -> String {
+pub fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         out.push_str(&format!("{b:02x}"));
@@ -4233,4 +4242,277 @@ pub fn parse_and_assert_query_encoding_share_link(stdout: &str) -> ShareLink {
          assert it encodes ONLY dimension+value (no result snapshot) + the \
          'encodes the query, not a snapshot' semantics line (I-AV-8)."
     )
+}
+
+// =============================================================================
+// Slice-05 walking-skeleton beat-1 harness (step 03-01; AV-1).
+//
+// The AV-1 scenario drives the REAL `openlore-indexer ingest` binary against a
+// FAKE network ingest source (a localhost HTTP fixture serving the ATProto
+// `com.atproto.repo.listRecords` surface) + the slice-03 PLC pubkey seam, into
+// a REAL separate `index.duckdb`. The bodies below are what AV-1 needs; the
+// search-side helpers (`seed_network_index`/`IndexerHandle`) stay `todo!()`
+// (AV-8+ own them).
+//
+// The HTTP fixture is hand-rolled over `std::net::TcpListener` (one fixed
+// `listRecords` response) rather than `hyper`, because the cli test target's
+// dev-deps do NOT include `hyper`/`http-body-util` (only the `openlore-test-
+// support` crate links those, via its own `serve_http` methods). A bounded
+// single-route HTTP/1.1 fixture is the thinnest path that keeps the real
+// `reqwest`-based ingest adapter exercising real network I/O (DD-AV-2 / the
+// Architecture-of-Reference fake-for-external rule). Mirrors the slice-03
+// `PeerPds` runtime-ownership shape (RAII shutdown on drop).
+// =============================================================================
+
+/// A bounded localhost HTTP fixture that serves the ATProto
+/// `com.atproto.repo.listRecords` surface for a fixed set of fixture records.
+///
+/// Owns a background acceptor thread bound to an OS-assigned `127.0.0.1:0`
+/// port; the URL is read back via [`FakeIngestServer::source_url`] and wired
+/// into the `openlore-indexer` subprocess. Dropping the handle signals the
+/// acceptor to stop — RAII per-scenario isolation (mirrors `PeerPds`).
+pub struct FakeIngestServer {
+    base_url: String,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FakeIngestServer {
+    /// Host `specs` (materialized to wire records via the REAL crypto in
+    /// `RawRecordSpec::into_raw_record`) on a localhost `listRecords` surface.
+    /// The adversarial postures are hosted VERBATIM — the indexer's gate, not
+    /// this fixture, rejects them.
+    pub fn start(specs: Vec<openlore_test_support::RawRecordSpec>) -> Self {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::Ordering;
+
+        // Materialize the wire records + the canonical `listRecords` JSON body
+        // ONCE at construction (deterministic; no per-request work).
+        let records: Vec<serde_json::Value> = specs
+            .into_iter()
+            .map(|spec| raw_record_to_list_records_view(&spec.into_raw_record()))
+            .collect();
+        let body = serde_json::json!({
+            "records": records,
+            "cursor": serde_json::Value::Null,
+        })
+        .to_string();
+
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("FakeIngestServer: bind 127.0.0.1:0");
+        listener
+            .set_nonblocking(true)
+            .expect("FakeIngestServer: set_nonblocking");
+        let local_addr = listener
+            .local_addr()
+            .expect("FakeIngestServer: local_addr");
+        let base_url = format!("http://{local_addr}");
+
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
+
+        let join = std::thread::Builder::new()
+            .name("fake-ingest-source".to_string())
+            .spawn(move || {
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                while !shutdown_for_thread.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _peer)) => {
+                            // Drain the request line/headers (we serve one fixed
+                            // route; we do not branch on the path for AV-1).
+                            let mut buf = [0u8; 2048];
+                            let _ = stream.read(&mut buf);
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(_) => return,
+                    }
+                }
+            })
+            .expect("FakeIngestServer: spawn acceptor thread");
+
+        Self {
+            base_url,
+            shutdown,
+            join: Some(join),
+        }
+    }
+
+    /// The `http://127.0.0.1:<port>` base URL the indexer's ingest adapter PULLs
+    /// `listRecords` from (wired via `OPENLORE_INDEXER_SOURCE_URL`).
+    pub fn source_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for FakeIngestServer {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Serialize a `ports::RawRecord` into the ATProto `listRecords` record view
+/// (`{uri, cid, value}`) the indexer's ingest adapter parses. `value` is the
+/// lexicon claim JSON (`author`/`composedAt`/nested `signature:{kid,alg,sig}`);
+/// `cid` echoes the published CID so the adapter's recompute-vs-published gate
+/// has the published value (the SAME wire shape the slice-03 peer PDS uses).
+fn raw_record_to_list_records_view(record: &ports::RawRecord) -> serde_json::Value {
+    let claim = &record.raw_payload.unsigned;
+    let sig = &record.raw_payload.signature;
+    let references: Vec<serde_json::Value> = claim
+        .references
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "type": reference_type_wire(r.ref_type),
+                "cid": r.cid.0,
+            })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "subject": claim.subject,
+        "predicate": claim.predicate,
+        "object": claim.object,
+        "evidence": claim.evidence,
+        "confidence": confidence_as_f64(&claim.confidence),
+        "author": claim.author_did.0,
+        "composedAt": claim.composed_at,
+        "references": references,
+        "signature": {
+            "kid": sig.verification_method,
+            "alg": "EdDSA",
+            "sig": base64url_no_pad(&sig.signature_bytes),
+        }
+    });
+    serde_json::json!({
+        "uri": format!("at://{}/org.openlore.claim/{}", claim.author_did.0, record.published_cid.0),
+        "cid": record.published_cid.0,
+        "value": value,
+    })
+}
+
+/// Map a `claim_domain::ReferenceType` to its lexicon wire token.
+fn reference_type_wire(ref_type: claim_domain::ReferenceType) -> &'static str {
+    match ref_type {
+        claim_domain::ReferenceType::Retracts => "retracts",
+        claim_domain::ReferenceType::Corrects => "corrects",
+        claim_domain::ReferenceType::Counters => "counters",
+        claim_domain::ReferenceType::Supersedes => "supersedes",
+    }
+}
+
+/// Read the numeric confidence out of the domain `Confidence` wrapper via its
+/// transparent serde representation (the inner field is crate-private; the same
+/// trick the fixtures + the pure ingest gate use).
+fn confidence_as_f64(confidence: &claim_domain::Confidence) -> f64 {
+    serde_json::to_value(confidence)
+        .ok()
+        .and_then(|v| v.as_f64())
+        .expect("Confidence serializes transparently as a JSON number")
+}
+
+/// Path to the indexer's SEPARATE `index.duckdb` for this scenario, under
+/// `env.home` (the indexer's own data dir — NOT the user's `openlore.duckdb`).
+pub fn index_duckdb_path(env: &TestEnv) -> PathBuf {
+    env.home
+        .join(".local")
+        .join("share")
+        .join("openlore-indexer")
+        .join("index.duckdb")
+}
+
+/// Run `openlore-indexer <args>` (the SECOND binary) against a fake ingest
+/// `source_url` + the slice-03 PLC pubkey seam(s) for `pubkey_seams`
+/// (`(did, pubkey_hex)`), writing its index to [`index_duckdb_path`].
+///
+/// The indexer reads its config from env-var seams (the test analog of its
+/// `config.toml`, mirroring the CLI's `OPENLORE_*` seams):
+///   - `OPENLORE_INDEXER_INDEX_PATH`  — the SEPARATE `index.duckdb` path;
+///   - `OPENLORE_INDEXER_SOURCE_URL`  — the fake `listRecords` source URL;
+///   - `OPENLORE_PEER_PUBKEY_HEX_<did>` — the per-DID verify-key seam (slice-03).
+pub fn run_openlore_indexer_with_source(
+    env: &TestEnv,
+    args: &[&str],
+    source_url: &str,
+    pubkey_seams: &[(&str, &str)],
+) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        .env("PATH", std::env::var("PATH").unwrap_or_default());
+    for (did, pubkey_hex) in pubkey_seams {
+        cmd.env(peer_pubkey_env_var(did), pubkey_hex);
+    }
+    let output = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore-indexer at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// One indexed row, projected from `index.duckdb` for assertions (port-exposed
+/// observable surface of the ingest pass — never an internal store struct).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedRow {
+    pub author_did: String,
+    pub cid: String,
+    pub subject: String,
+    pub object: String,
+    pub verified_against: String,
+}
+
+/// Read every `indexed_claims` row attributed to `author_did` from the
+/// indexer's `index.duckdb` (read-only; the AV-1 "is it searchable?" assertion).
+/// Test-support is the only place raw SQL is acceptable; production goes through
+/// `IndexStorePort`. Returns rows with a NON-`Option` `author_did` (mirrors the
+/// type-level anti-merging contract; we SELECT `author_did` explicitly).
+pub fn read_indexed_claims_by_object(env: &TestEnv, object: &str) -> Vec<IndexedRow> {
+    let db_path = index_duckdb_path(env);
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open index.duckdb at {} for AV-1 searchable assertion: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare(
+            "SELECT author_did, cid, subject, object, verified_against \
+             FROM indexed_claims WHERE object = ?",
+        )
+        .unwrap_or_else(|err| panic!("prepare indexed_claims read: {err}"));
+    let rows = stmt
+        .query_map(duckdb::params![object], |row| {
+            Ok(IndexedRow {
+                author_did: row.get(0)?,
+                cid: row.get(1)?,
+                subject: row.get(2)?,
+                object: row.get(3)?,
+                verified_against: row.get(4)?,
+            })
+        })
+        .unwrap_or_else(|err| panic!("query indexed_claims by object: {err}"));
+    rows.map(|r| r.expect("decode indexed_claims row")).collect()
 }

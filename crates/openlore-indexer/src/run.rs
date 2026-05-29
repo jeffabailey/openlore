@@ -21,13 +21,16 @@
 //
 // SCAFFOLD: true
 
-#![allow(dead_code)] // scaffold; the wired adapters' bodies land in Phase 03/04
+#![allow(dead_code)] // some scaffold seams (serve/stats) land in Phase 03/04
+
+use std::path::PathBuf;
 
 use adapter_atproto_did::AtProtoDidAdapter;
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::XrpcQueryServer;
+use appview_domain::{ingest_decision, IngestOutcome, RejectReason};
 use ports::{ClockPort, IdentityResolvePort, IndexStorePort, IngestSourcePort};
 
 use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
@@ -42,33 +45,82 @@ pub struct IndexerWiring {
     pub ingest_source: Box<dyn IngestSourcePort>,
     /// VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
     pub identity_resolve: Box<dyn IdentityResolvePort>,
-    pub query_server: XrpcQueryServer,
+    /// The query server is bound only for `serve` (Phase 04); the `ingest`
+    /// one-shot pass leaves it `None` (it does not serve).
+    pub query_server: Option<XrpcQueryServer>,
     pub clock: Box<dyn ClockPort>,
+    /// The configured bounded ingest source base URL (ADR-024).
+    pub source_url: String,
+}
+
+/// The indexer's resolved configuration (the test analog of `config.toml`, read
+/// from env-var seams; mirrors the CLI's `OPENLORE_*` seams). Production reads
+/// `~/.config/openlore-indexer/config.toml`; the TOML path lands in a later step.
+struct IndexerConfig {
+    /// The SEPARATE `index.duckdb` path (ADR-023; NEVER the user's openlore.duckdb).
+    index_path: PathBuf,
+    /// The bounded ingest source base URL hosting public `listRecords` (ADR-024).
+    source_url: String,
+}
+
+impl IndexerConfig {
+    /// Resolve config from env-var seams. `OPENLORE_INDEXER_INDEX_PATH` /
+    /// `OPENLORE_INDEXER_SOURCE_URL` override; otherwise fall back to the
+    /// `OPENLORE_HOME`-anchored default path + an empty source.
+    fn from_env() -> Self {
+        let index_path = std::env::var("OPENLORE_INDEXER_INDEX_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_index_path());
+        let source_url = std::env::var("OPENLORE_INDEXER_SOURCE_URL").unwrap_or_default();
+        Self {
+            index_path,
+            source_url,
+        }
+    }
+}
+
+/// The `OPENLORE_HOME`-anchored default index path:
+/// `<home>/.local/share/openlore-indexer/index.duckdb`.
+fn default_index_path() -> PathBuf {
+    let home = std::env::var("OPENLORE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    home.join(".local")
+        .join("share")
+        .join("openlore-indexer")
+        .join("index.duckdb")
 }
 
 impl IndexerWiring {
-    /// Construct the production wiring. Bootstrap SCAFFOLD: the adapter
-    /// constructors read the indexer's OWN config (index.duckdb path, listen
-    /// addr, PLC endpoint, bounded seed sources) in Phase 03/04. None of the
-    /// wired adapters can sign/publish or touch the user's `openlore.duckdb`.
+    /// Construct the production wiring from the indexer's OWN config (env-seam now;
+    /// `config.toml` later). NONE of the wired adapters can sign/publish or touch
+    /// the user's `openlore.duckdb` — the capability boundary (ADR-023 / I-AV-5)
+    /// is the ABSENCE of the signing identity / local store from this dep graph
+    /// (`xtask check-arch`'s `indexer_holds_no_signing_or_local_store` rule).
     pub fn production() -> anyhow::Result<Self> {
-        // SCAFFOLD: true — wire the indexer's adapters from the indexer config:
-        //   let clock           = SystemClockAdapter::new();
-        //   let index_store     = IndexStoreAdapter::open(&cfg.index_path)?;     // SEPARATE index.duckdb
-        //   let ingest_source   = AtProtoIngestAdapter::new(&cfg.sources, &cfg.relay)?;  // read-only PULL
-        //   let identity_resolve= AtProtoDidAdapter::resolve_only(&cfg.plc_endpoint)?;   // VERIFY-ONLY
-        //   let query_server    = XrpcQueryServer::bind(cfg.listen_addr)?;
-        // The names below are referenced so the (disjoint) adapter set + the
-        // verify-only/read-only/no-local-store capability boundary is visible at
-        // the wiring seam even while the constructors are scaffolds.
-        let _wire = (
-            SystemClockAdapter::new,
-            IndexStoreAdapter::open,
-            AtProtoIngestAdapter::new,
-            AtProtoDidAdapter::for_did,
-            XrpcQueryServer::bind,
-        );
-        todo!("IndexerWiring::production — wire the indexer adapters from config (Phase 03/04, ADR-023)")
+        let cfg = IndexerConfig::from_env();
+
+        let clock = SystemClockAdapter::new();
+        // SEPARATE index.duckdb (ADR-023).
+        let index_store = IndexStoreAdapter::open(&cfg.index_path)
+            .map_err(|err| anyhow::anyhow!("open index store: {err}"))?;
+        // Read-only bounded PULL (ADR-024).
+        let ingest_source = AtProtoIngestAdapter::new(&cfg.source_url);
+        // VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
+        let identity_resolve = AtProtoDidAdapter::resolve_only();
+        // The query server is bound only for `serve` (Phase 04); the `ingest`
+        // one-shot pass leaves it `None` (it never listens). `XrpcQueryServer::bind`
+        // itself is still a scaffold (step 04-06) — NOT called on the ingest path.
+        let query_server = None;
+
+        Ok(Self {
+            index_store: Box::new(index_store),
+            ingest_source: Box::new(ingest_source),
+            identity_resolve: Box::new(identity_resolve),
+            query_server,
+            clock: Box::new(clock),
+            source_url: cfg.source_url,
+        })
     }
 
     /// Run the wire → PROBE → use gate: the `capability_boundary_probe` FIRST
@@ -135,11 +187,120 @@ fn serve(_wiring: &IndexerWiring) -> i32 {
     todo!("openlore-indexer serve — run the pull-ingest loop + query server (Phase 03/04)")
 }
 
-/// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024). SCAFFOLD.
-fn ingest(_wiring: &IndexerWiring) -> i32 {
-    // SCAFFOLD: true — one bounded `enumerate` → `ingest_decision` → `upsert`
-    // pass lands in Phase 03/04 (records flow through the pure verify gate).
-    todo!("openlore-indexer ingest — one-shot bounded PULL pass (Phase 03/04, ADR-024)")
+/// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024).
+///
+/// The pipeline (wire → probe → use already ran upstream): bounded `enumerate`
+/// of public `listRecords` → for each record resolve the author's verification
+/// key → run the PURE `appview_domain::ingest_decision` verify-before-index gate
+/// (the SAME pure core; no second verification path, WD-104) → on `Index` upsert
+/// the attributed row + write the JSON artifact + bump `verified`; on `Reject`
+/// bump `rejected{reason}` (the adversarial records NEVER enter the index).
+///
+/// Emits `indexer.ingest.verified` (count) + `indexer.ingest.rejected` (count)
+/// as structured stdout events (the DevOps observability contract — structural
+/// counts + DIDs only, NO claim-content telemetry, WD-105).
+fn ingest(wiring: &IndexerWiring) -> i32 {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("openlore-indexer: failed to build async runtime: {err}");
+            return 2;
+        }
+    };
+
+    // Bounded PULL of the public listRecords surface (read-only, ADR-024).
+    let records = match runtime.block_on(wiring.ingest_source.enumerate(&wiring.source_url)) {
+        Ok(records) => records,
+        Err(err) => {
+            eprintln!("openlore-indexer: ingest source enumerate failed: {err}");
+            return 2;
+        }
+    };
+
+    let mut verified: u64 = 0;
+    let mut rejected_unsigned: u64 = 0;
+    let mut rejected_bad_signature: u64 = 0;
+    let mut rejected_cid_mismatch: u64 = 0;
+    let mut rejected_schema_unknown: u64 = 0;
+
+    for record in &records {
+        // Resolve the author's verification key (ADR-026 resolve-only path). A
+        // resolution failure is a REJECT (we never index a claim we cannot
+        // verify) — classified as BadSignature (the key authority is absent).
+        let author = &record.raw_payload.unsigned.author_did;
+        let resolved_key = match runtime
+            .block_on(wiring.identity_resolve.resolve_verification_key(author))
+        {
+            Ok(key) => key,
+            Err(_) => {
+                rejected_bad_signature += 1;
+                continue;
+            }
+        };
+
+        // The PURE verify-before-index gate (SAME core; no second path, WD-104).
+        match ingest_decision(record, &resolved_key) {
+            IngestOutcome::Index(claim) => {
+                // Upsert the verified, attributed row + write the JSON artifact.
+                if let Err(err) = wiring.index_store.upsert(&claim) {
+                    eprintln!("openlore-indexer: index upsert failed: {err}");
+                    return 2;
+                }
+                verified += 1;
+            }
+            IngestOutcome::Reject(reason) => match reason {
+                RejectReason::Unsigned => rejected_unsigned += 1,
+                RejectReason::BadSignature => rejected_bad_signature += 1,
+                RejectReason::CidMismatch => rejected_cid_mismatch += 1,
+                RejectReason::SchemaUnknown => rejected_schema_unknown += 1,
+            },
+        }
+    }
+
+    let rejected_total =
+        rejected_unsigned + rejected_bad_signature + rejected_cid_mismatch + rejected_schema_unknown;
+    emit_ingest_counters(
+        verified,
+        rejected_total,
+        rejected_unsigned,
+        rejected_bad_signature,
+        rejected_cid_mismatch,
+        rejected_schema_unknown,
+    );
+    0
+}
+
+/// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
+/// events to stdout (the DevOps observability contract). Structural counts +
+/// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
+#[allow(clippy::too_many_arguments)]
+fn emit_ingest_counters(
+    verified: u64,
+    rejected_total: u64,
+    rejected_unsigned: u64,
+    rejected_bad_signature: u64,
+    rejected_cid_mismatch: u64,
+    rejected_schema_unknown: u64,
+) {
+    let verified_event = serde_json::json!({
+        "event": "indexer.ingest.verified",
+        "count": verified,
+    });
+    let rejected_event = serde_json::json!({
+        "event": "indexer.ingest.rejected",
+        "count": rejected_total,
+        "by_reason": {
+            "unsigned": rejected_unsigned,
+            "bad_signature": rejected_bad_signature,
+            "cid_mismatch": rejected_cid_mismatch,
+            "schema_unknown": rejected_schema_unknown,
+        },
+    });
+    println!("{verified_event}");
+    println!("{rejected_event}");
 }
 
 /// `openlore-indexer stats` — report index coverage (claims indexed, distinct

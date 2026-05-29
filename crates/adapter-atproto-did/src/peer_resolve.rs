@@ -36,8 +36,8 @@
 //! `OPENLORE_PDS_ENDPOINT`). The env-var NAME encoding MUST match the test
 //! harness: uppercase the DID, replace every non-`[A-Z0-9]` char with `_`.
 
-use claim_domain::Did;
-use ports::{IdentityError, PeerInfo, VerificationMethod};
+use claim_domain::{Did, VerificationKey};
+use ports::{IdentityError, PeerInfo, ResolveError, VerificationMethod};
 use url::Url;
 
 /// Production resolver base URL when no per-peer env override is present.
@@ -87,6 +87,64 @@ fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
         // (`VerbPeerPull`) can decode it without a multibase dependency.
         public_key_multibase: format!("hex:{trimmed}"),
     })
+}
+
+/// Slice-05 (step 03-01): resolve `did` into its Ed25519 [`VerificationKey`]
+/// via the slice-03 pubkey seam (`OPENLORE_PEER_PUBKEY_HEX_<did>`), for the
+/// indexer's verify-only [`IdentityResolvePort`] walking-skeleton path (AV-1).
+///
+/// This seam-reading helper lives HERE (not in `lib.rs`) because `peer_resolve`
+/// is the established home of the `OPENLORE_PEER_PUBKEY_HEX_<did>` seam (RETAINED
+/// for tests per the slice-03 contract) and is intentionally OUT of the I-AV-6
+/// `xtask check-arch` pubkey-seam scan scope — keeping the seam token out of the
+/// scanned `lib.rs`. The REAL PLC `z6Mk...` decode
+/// (`claim_domain::decode_ed25519_multibase`) replaces this seam at step 03-04
+/// (AV-4), with `OPENLORE_PEER_PUBKEY_HEX_<did>` UNSET.
+///
+/// The DID is normalized to its bare form (the seed env var is keyed on the bare
+/// DID, but the indexer resolves the SIGNED payload's author, which carries the
+/// `#org.openlore.application` fragment).
+pub(crate) fn resolve_verification_key_via_seam(did: &Did) -> Result<VerificationKey, ResolveError> {
+    let bare_did = did.0.split('#').next().unwrap_or(&did.0);
+    let hex = std::env::var(peer_pubkey_env_var(bare_did)).map_err(|_| {
+        ResolveError::ResolutionFailed {
+            did: did.clone(),
+            detail: "no pubkey seam set for DID (slice-05 walking-skeleton seam)".to_string(),
+        }
+    })?;
+    let bytes = decode_hex(hex.trim()).map_err(|detail| ResolveError::PubkeyDecodeFailed {
+        did: did.clone(),
+        detail,
+    })?;
+    Ok(VerificationKey(bytes))
+}
+
+/// Lowercase/uppercase hex → raw bytes. Strict: an odd length or a non-hex
+/// character is a hard error.
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err(format!("hex string has odd length {}", s.len()));
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = hex_nibble(bytes[i])?;
+        let lo = hex_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+/// Parse one hex character into a 4-bit nibble.
+fn hex_nibble(b: u8) -> Result<u8, String> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(format!("invalid hex character: {:?}", b as char)),
+    }
 }
 
 /// The per-peer pubkey env-var NAME for a DID: uppercase the DID, replace

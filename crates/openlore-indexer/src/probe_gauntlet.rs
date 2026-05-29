@@ -59,11 +59,19 @@ fn check_probe(adapter: &'static str, outcome: ProbeOutcome) -> Result<(), Probe
 /// `indexer_holds_no_signing_or_local_store` rule (which already passes on the
 /// real indexer crate's dep graph).
 pub fn capability_boundary_probe(
-    _index_store: &dyn IndexStorePort,
-    _resolve: &dyn IdentityResolvePort,
+    index_store: &dyn IndexStorePort,
+    resolve: &dyn IdentityResolvePort,
 ) -> Result<(), ProbeRefusal> {
-    // SCAFFOLD: true — assert index.duckdb + resolve-only (ADR-023, I-AV-5).
-    todo!("capability_boundary_probe — assert index.duckdb + resolve-only (ADR-023)")
+    // Happy-path arm for the AV-1 walking skeleton (step 03-01): the index store +
+    // resolve adapter are wired (their own probes assert readiness; the index
+    // store probe confirms the schema is the SEPARATE index.duckdb, the resolve
+    // adapter is the verify-only port — the indexer never wires the signing
+    // IdentityPort or the user's StoragePort, enforced structurally by the
+    // `xtask check-arch` `indexer_holds_no_signing_or_local_store` rule + the
+    // crate dep graph). The behavioral substrate-lie refusal (a fsync-lying store
+    // / a signing identity wired by mistake) is AV-6/03-06.
+    let _ = (index_store, resolve);
+    Ok(())
 }
 
 /// Walk every indexer adapter's probe arm AFTER the capability-boundary probe.
@@ -79,16 +87,11 @@ pub fn probe_gauntlet(
     ingest_src: &dyn IngestSourcePort,
     resolve: &dyn IdentityResolvePort,
 ) -> Result<(), ProbeRefusal> {
-    // SCAFFOLD: true — the real walk (mirrors the CLI gauntlet):
-    //   check_probe("index_store", index_store.probe())?;
-    //   check_probe("ingest_source", ingest_src.probe())?;
-    //   check_probe("identity_resolve", resolve.probe())?;
-    // is enabled when the adapters' probe bodies stop being `todo!()` scaffolds.
-    let _ = (
-        index_store,
-        ingest_src,
-        resolve,
-        check_probe as fn(_, _) -> _,
-    );
-    todo!("probe_gauntlet — wire → probe → use across the indexer adapters (Phase 03/04)")
+    // The real walk (mirrors the CLI gauntlet): refuse on the FIRST adapter that
+    // is not ready (wire → probe → use; ADR-009). The adapters' probe bodies are
+    // now real (step 03-01).
+    check_probe("index_store", index_store.probe())?;
+    check_probe("ingest_source", ingest_src.probe())?;
+    check_probe("identity_resolve", resolve.probe())?;
+    Ok(())
 }

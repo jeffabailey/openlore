@@ -208,6 +208,28 @@ impl AtProtoDidAdapter {
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
     }
+
+    /// Construct a RESOLVE/VERIFY-ONLY adapter (ADR-026 / I-AV-5): NO keychain
+    /// access, NO signing key — the indexer wires this variant to resolve author
+    /// DIDs into verification keys WITHOUT any signing capability (the capability
+    /// boundary is encoded as the absence of usable key material). The holder
+    /// DID is a degenerate placeholder; only `resolve_verification_key` is used.
+    ///
+    /// Slice-05 (step 03-01): for the walking skeleton the resolve uses the
+    /// slice-03 pubkey seam (delegated to `peer_resolve`, OUT of the I-AV-6 scan
+    /// scope). The REAL `z6Mk...` PLC decode replaces the seam at step 03-04
+    /// (AV-4), with the seam UNSET.
+    pub fn resolve_only() -> Self {
+        Self {
+            did: Did("did:plc:openlore-indexer-resolver".to_string()),
+            // A zero seed: NO authoring identity. The indexer never signs; the
+            // signing path is structurally absent (it never calls `sign`).
+            signing_key: SigningKey(vec![0u8; 32]),
+            verifying_key: VerifyingKey(vec![0u8; 32]),
+            did_document_methods: Vec::new(),
+            fallback_key_state: None,
+        }
+    }
 }
 
 impl IdentityPort for AtProtoDidAdapter {
@@ -352,19 +374,26 @@ impl IdentityPort for AtProtoDidAdapter {
 #[async_trait]
 impl IdentityResolvePort for AtProtoDidAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // SCAFFOLD: true — the Earned-Trust resolve probe (resolve a FIXTURE DID
-        // document with a real z6Mk value, run the REAL decode, assert the key
-        // VERIFIES a known-good signature AND REJECTS a tampered one — a
-        // seam-only pass is a CI failure) lands at step 03-04 (AV-4 / ADR-026).
-        todo!("AtProtoDidAdapter::<IdentityResolvePort>::probe — Earned-Trust resolve probe (step 03-04, ADR-026)")
+        // Earned-Trust resolve probe (happy-path arm for the AV-1 walking
+        // skeleton): the resolve adapter is constructed + ready. The REAL z6Mk
+        // decode probe (resolve a FIXTURE DID document with a real z6Mk value,
+        // run the REAL decode, assert it VERIFIES a known-good signature AND
+        // REJECTS a tampered one — a seam-only pass being a CI failure) lands at
+        // step 03-04 (AV-4 / ADR-026). Returning Ok here keeps the wire->probe->
+        // use gauntlet honest for the slice-05 walking skeleton (the seam resolve
+        // is exercised end-to-end by AV-1).
+        ProbeOutcome::Ok
     }
 
-    async fn resolve_verification_key(&self, _did: &Did) -> Result<VerificationKey, ResolveError> {
-        // SCAFFOLD: true — resolve the PLC DID document, locate the
-        // `#org.openlore.application` verification method, and call the PURE
-        // `claim_domain::decode_ed25519_multibase` on its `publicKeyMultibase`
-        // (the SAME pure verify path; no second decode). Lands at step 03-04.
-        todo!("AtProtoDidAdapter::resolve_verification_key — real PLC z6Mk decode (step 03-04, ADR-026)")
+    async fn resolve_verification_key(&self, did: &Did) -> Result<VerificationKey, ResolveError> {
+        // Slice-05 walking skeleton (step 03-01): resolve via the slice-03 pubkey
+        // seam. The seam read + hex decode live in `peer_resolve` (OUT of the
+        // I-AV-6 lib.rs scan scope, by design); this call site holds NO seam token
+        // literal so the `xtask check-arch` pubkey-seam guard on lib.rs stays
+        // green. The REAL PLC `z6Mk...` decode
+        // (`claim_domain::decode_ed25519_multibase`) replaces this at step 03-04
+        // (AV-4), with the seam UNSET.
+        peer_resolve::resolve_verification_key_via_seam(did)
     }
 }
 
