@@ -1983,12 +1983,58 @@ fn share_emits_stable_query_encoding_link_for_object_search() {
     // Universe (port-exposed): the printed share link encodes dimension=object +
     // value=<philosophy> and NO result payload/snapshot; the "encodes the query,
     // not a snapshot" semantics line present.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --object \
-         org.openlore.philosophy.reproducible-builds --share`; assert a stable \
-         `openlore://search?object=...` link encoding ONLY dimension+value (no \
-         result snapshot) + the 'encodes the query, not a snapshot' line \
-         (US-AV-006 Ex1 / I-AV-8)."
+    let env = TestEnv::initialized();
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    // -- Precondition (index): a reachable localhost `openlore-indexer serve` over
+    // an index.duckdb seeded with the headline reproducible-builds corpus. --share
+    // is render-only (it encodes the QUERY, never the results), but a reachable
+    // indexer pins that the share path emits a link INSTEAD OF running the search
+    // — the link must be query-encoding even with a populated index. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Action: the object-dimension SHARE through the CLI driving port. --
+    let outcome = run_openlore_search(&env, &["search", "--object", object, "--share"], &indexer);
+
+    // exit 0 (a valid share, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --object <philosophy> --share` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 1. The printed link encodes the QUERY dimension+value ONLY — dimension=object,
+    //    value=<philosophy> — with NO result payload / snapshot (I-AV-8 / KPI-AV-6).
+    let link = parse_and_assert_query_encoding_share_link(&outcome.stdout);
+    assert_eq!(
+        link.dimension, "object",
+        "the share link must encode dimension=object:\n{}",
+        outcome.stdout
+    );
+    assert_eq!(
+        link.value, object,
+        "the share link must encode value=<the queried philosophy>:\n{}",
+        outcome.stdout
+    );
+    // The exact `Shareable link:` line (criterion 1 — the user-visible affordance).
+    assert!(
+        outcome.stdout.contains(&format!(
+            "Shareable link: openlore://search?object={object}"
+        )),
+        "expected `Shareable link: openlore://search?object={object}`:\n{}",
+        outcome.stdout
+    );
+
+    // 2. A line states the link encodes the QUERY, not a frozen snapshot (the
+    //    sharing semantics, US-AV-006 Ex1).
+    assert!(
+        outcome.stdout.contains("encodes the query, not a")
+            && outcome.stdout.contains("snapshot"),
+        "expected a line stating the link encodes the query, NOT a frozen snapshot:\n{}",
+        outcome.stdout
     );
 }
 

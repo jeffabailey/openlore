@@ -4937,20 +4937,73 @@ pub struct ShareLink {
     pub value: String,
 }
 
+/// The `openlore://search?` scheme+authority prefix every share link carries.
+const SHARE_LINK_PREFIX: &str = "openlore://search?";
+
+/// Result-payload / snapshot tokens that MUST NEVER appear inside a share link —
+/// the link encodes the QUERY (dimension+value) only, never a frozen result
+/// snapshot (I-AV-8 / KPI-AV-6). If any of these leak into the link's
+/// query-string the share is a snapshot, not a query encoding.
+const SNAPSHOT_PAYLOAD_TOKENS: &[&str] =
+    &["author_did", "[verified]", "cid", "confidence", "results", "snapshot"];
+
 /// Parse the `openlore://search?<dimension>=<value>` link from a `--share`
 /// stdout, asserting it encodes ONLY the query dimension+value (NO result
 /// payload / NO snapshot; I-AV-8; AV-26/AV-29).
 ///
-/// SCAFFOLD: true (slice-05) — universe (port-exposed): the link's encoded
-/// dimension + value; the absence of any result/snapshot payload in the link.
+/// The link is emitted on a `Shareable link: <link>` line. The parser extracts
+/// the single `<dimension>=<value>` query parameter and asserts the query-string
+/// carries NO result-payload / snapshot token ([`SNAPSHOT_PAYLOAD_TOKENS`]) — the
+/// share encodes the QUERY only, never a frozen result set. Returns the parsed
+/// [`ShareLink`] so the caller can pin the exact dimension + value.
+///
+/// universe (port-exposed): the link's encoded dimension + value; the absence of
+/// any result/snapshot payload in the link.
 pub fn parse_and_assert_query_encoding_share_link(stdout: &str) -> ShareLink {
-    // SCAFFOLD: true (slice-05)
-    let _ = stdout;
-    todo!(
-        "DELIVER (slice-05): parse the openlore://search?<dim>=<value> link; \
-         assert it encodes ONLY dimension+value (no result snapshot) + the \
-         'encodes the query, not a snapshot' semantics line (I-AV-8)."
-    )
+    // Find the `openlore://search?...` link anywhere in stdout (it is emitted on
+    // the `Shareable link: <link>` line). The link is whitespace-delimited.
+    let link = stdout
+        .split_whitespace()
+        .find(|token| token.starts_with(SHARE_LINK_PREFIX))
+        .unwrap_or_else(|| {
+            panic!("expected an `openlore://search?<dim>=<value>` share link in stdout:\n{stdout}")
+        });
+
+    // The query string is everything after the `openlore://search?` prefix.
+    let query = link
+        .strip_prefix(SHARE_LINK_PREFIX)
+        .expect("link starts with the share prefix");
+
+    // The query encodes EXACTLY ONE `<dimension>=<value>` parameter — no result
+    // payload, no snapshot. A second `&`-separated parameter would be extra state.
+    assert!(
+        !query.contains('&'),
+        "the share link must encode a SINGLE query parameter (dimension=value), \
+         never a multi-field snapshot — got `{query}`"
+    );
+
+    // NO result-payload / snapshot token may appear in the query string — the link
+    // encodes the QUERY, not a frozen result set (I-AV-8 / KPI-AV-6).
+    for token in SNAPSHOT_PAYLOAD_TOKENS {
+        assert!(
+            !query.contains(token),
+            "the share link must NOT carry a result-payload/snapshot token \
+             (`{token}`) — it encodes the QUERY only, never a snapshot. link: {link}"
+        );
+    }
+
+    let (dimension, value) = query.split_once('=').unwrap_or_else(|| {
+        panic!("the share link query must be `<dimension>=<value>` — got `{query}`")
+    });
+    assert!(
+        !dimension.is_empty() && !value.is_empty(),
+        "the share link must encode a non-empty dimension AND value — got `{query}`"
+    );
+
+    ShareLink {
+        dimension: dimension.to_string(),
+        value: value.to_string(),
+    }
 }
 
 // =============================================================================

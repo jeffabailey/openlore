@@ -1979,16 +1979,49 @@ pub fn render_show_verification_line(row: &NetworkResultRowRaw) -> String {
     out
 }
 
+/// Content-frozen `--share` sharing-semantics line (US-AV-006 Ex1 / I-AV-8 /
+/// KPI-AV-6): the shared link encodes the QUERY (dimension+value), so opening it
+/// re-runs the search against the CURRENT index — it is NOT a frozen snapshot of
+/// the results. Do NOT paraphrase — the exact phrasing is the user-visible
+/// honesty contract (a stale snapshot would silently lose later-ingested claims).
+pub const SHARE_QUERY_NOT_SNAPSHOT_SEMANTICS: &str =
+    "This link encodes the query, not a frozen snapshot — opening it re-runs the \
+search against the current index.";
+
+/// The `<dimension>` token a `--share` link encodes for each search dimension —
+/// the query-string KEY (`object` / `contributor` / `subject`). PURE helper; the
+/// link is `openlore://search?<key>=<value>`, forward-compatible across all three
+/// dimensions (AV-26 object today, AV-29 contributor next).
+fn share_dimension_key(dimension: SearchDimension) -> &'static str {
+    match dimension {
+        SearchDimension::Object => "object",
+        SearchDimension::Contributor => "contributor",
+        SearchDimension::Subject => "subject",
+    }
+}
+
 /// Emit the `--share` query-encoding link (WD-110 / I-AV-8): encodes ONLY the
 /// dimension + value, NEVER a result snapshot. Opening it re-runs the query →
 /// current per-author-attributed verified results. PURE function — no I/O.
 ///
-/// SCAFFOLD: true — emits `openlore://search?<dimension>=<value>`. Lands in
-/// Phase 03/04 (`share_link_encodes_query_not_snapshot`, KPI-AV-6).
-pub fn render_share_link(_dimension: SearchDimension, _value: &str) -> String {
-    // SCAFFOLD: true — `openlore://search?<dimension>=<value>` (query only,
-    // never a snapshot). Lands in Phase 03/04.
-    todo!("render_share_link — --share query-encoding link (Phase 03/04, I-AV-8)")
+/// Output is two lines:
+///
+/// ```text
+/// Shareable link: openlore://search?<dimension>=<value>
+/// This link encodes the query, not a frozen snapshot — opening it re-runs the search against the current index.
+/// ```
+///
+/// The link carries EXACTLY one `<dimension>=<value>` query parameter — no result
+/// payload, no author DID, no cid, no confidence, no `&`-joined snapshot fields —
+/// so it encodes the QUERY only (the query-encoding-not-snapshot contract,
+/// KPI-AV-6). The caller resolves the value to encode (e.g. the contributor
+/// dimension passes the RESOLVED app-identity-bare DID, AV-29).
+pub fn render_share_link(dimension: SearchDimension, value: &str) -> String {
+    let key = share_dimension_key(dimension);
+    format!(
+        "Shareable link: openlore://search?{key}={value}\n\
+         {SHARE_QUERY_NOT_SNAPSHOT_SEMANTICS}\n"
+    )
 }
 
 #[cfg(test)]
@@ -2979,5 +3012,98 @@ mod tests {
             !rendered.contains("distinct author(s)."),
             "the contributor footer must NOT be the object-dimension count footer:\n{rendered}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Slice-05 (US-AV-006 / I-AV-8 / KPI-AV-6) — `--share` query-encoding link
+    // -------------------------------------------------------------------------
+
+    /// AV-26 (US-AV-006 Ex1): the OBJECT-dimension `--share` link emits the exact
+    /// `Shareable link: openlore://search?object=<value>` affordance line PLUS the
+    /// "encodes the query, not a frozen snapshot" semantics line. The grammar is
+    /// pinned here so the user-visible affordance is byte-stable; the no-snapshot
+    /// INVARIANT (no result payload leaks into the link, for ANY value/dimension)
+    /// is covered generatively by `render_share_link_encodes_query_never_snapshot`.
+    ///
+    /// bypass: exact affordance/semantics strings are the user-visible contract
+    /// (a single-example assertion on a content-frozen line; the invariant lives
+    /// in the property below).
+    #[test]
+    fn render_share_link_object_emits_link_and_query_not_snapshot_semantics() {
+        let object = "org.openlore.philosophy.reproducible-builds";
+
+        let rendered = render_share_link(SearchDimension::Object, object);
+
+        // Criterion 1: the exact `Shareable link:` affordance encoding the query.
+        assert!(
+            rendered.contains(&format!("Shareable link: openlore://search?object={object}")),
+            "the object share link must read `Shareable link: openlore://search?object=<value>`:\n{rendered}"
+        );
+        // Criterion 2: the sharing semantics — the link encodes the QUERY, not a
+        // frozen snapshot (US-AV-006 Ex1).
+        assert!(
+            rendered.contains("encodes the query, not a") && rendered.contains("snapshot"),
+            "the share output must state the link encodes the query, NOT a snapshot:\n{rendered}"
+        );
+    }
+
+    proptest! {
+        /// Property (Invariant, Hebert ch.3): for ANY dimension + ANY value over a
+        /// philosophy/DID/project character alphabet, the `--share` link encodes
+        /// EXACTLY that `<dimension>=<value>` query and carries NO result-payload /
+        /// snapshot token — the link encodes the QUERY, never a frozen result set
+        /// (I-AV-8 / KPI-AV-6). This is the query-encoding-not-snapshot invariant:
+        /// no author_did, no [verified], no cid, no confidence, no second `&`
+        /// parameter ever leaks into the link.
+        #[test]
+        fn render_share_link_encodes_query_never_snapshot(
+            // A philosophy/DID/project-shaped value alphabet that, by construction,
+            // cannot itself spell a banned snapshot token (no letters that form
+            // `cid`/`confidence`/`results`/`snapshot`/`verified`/`author_did`) — so
+            // a banned token in the link can ONLY come from a payload leak, never
+            // from the queried value.
+            value in "[ab09.:/-]{1,40}",
+            which in 0u8..3,
+        ) {
+            let dimension = match which {
+                0 => SearchDimension::Object,
+                1 => SearchDimension::Contributor,
+                _ => SearchDimension::Subject,
+            };
+            let flag = match dimension {
+                SearchDimension::Object => "object",
+                SearchDimension::Contributor => "contributor",
+                SearchDimension::Subject => "subject",
+            };
+
+            let rendered = render_share_link(dimension, &value);
+
+            // The link is present and encodes EXACTLY this dimension+value.
+            let expected_link = format!("openlore://search?{flag}={value}");
+            prop_assert!(
+                rendered.contains(&expected_link),
+                "expected the link `{expected_link}` in:\n{rendered}"
+            );
+
+            // Extract the link's query string and assert NO snapshot payload leaks.
+            let link = rendered
+                .split_whitespace()
+                .find(|t| t.starts_with("openlore://search?"))
+                .expect("a share link is emitted");
+            let query = link
+                .strip_prefix("openlore://search?")
+                .expect("link carries the share prefix");
+            // EXACTLY one query parameter (no `&`-joined snapshot fields).
+            prop_assert!(
+                !query.contains('&'),
+                "the link must encode a single dimension=value, never a multi-field snapshot: {query}"
+            );
+            for token in ["author_did", "[verified]", "cid", "confidence", "results", "snapshot"] {
+                prop_assert!(
+                    !query.contains(token),
+                    "the link query must NOT carry a snapshot token `{token}`: {query}"
+                );
+            }
+        }
     }
 }

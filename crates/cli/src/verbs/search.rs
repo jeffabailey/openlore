@@ -509,11 +509,56 @@ fn show_usage_error_no_dimension() -> SearchOutcome {
 }
 
 /// `--share`: emit a stable query-encoding link (WD-110 / I-AV-8) — encodes only
-/// the dimension + value, never a result snapshot. SCAFFOLD.
-fn run_share(_args: &SearchArgs) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — emit `openlore://search?<dimension>=<value>` via the
-    // pure render::render_share_link; no network call. Lands in Phase 03/04.
-    todo!("openlore search --share — emit a query-encoding link (Phase 03/04, I-AV-8)")
+/// the dimension + value, never a result snapshot.
+///
+/// Render-only (I-AV-8): NO network call. The verb resolves which dimension was
+/// supplied + the value to encode, then hands them to the PURE
+/// [`render::render_share_link`] which emits `openlore://search?<dimension>=<value>`
+/// plus the "encodes the query, not a snapshot" semantics line. The contributor
+/// dimension encodes the RESOLVED app-identity-bare DID (AV-29, forward-compat),
+/// NOT the typed handle, so opening the link re-runs the SAME query.
+fn run_share(args: &SearchArgs) -> Result<SearchOutcome> {
+    let (dimension, value) = match share_dimension(args) {
+        Some(pair) => pair,
+        None => return Ok(share_usage_error_no_dimension()),
+    };
+    Ok(SearchOutcome {
+        exit_code: 0,
+        stdout: render::render_share_link(dimension, &value),
+    })
+}
+
+/// Resolve the `--share` dimension + the value to ENCODE in the link. The user
+/// shares one dimension (`--object`/`--contributor`/`--subject`); the contributor
+/// dimension encodes the RESOLVED app-identity-bare DID (so opening the link
+/// re-runs the SAME `author_did` query, AV-29), while object/subject encode the
+/// value verbatim. PURE — no I/O.
+fn share_dimension(args: &SearchArgs) -> Option<(SearchDimension, String)> {
+    if let Some(object) = &args.object {
+        return Some((SearchDimension::Object, object.clone()));
+    }
+    if let Some(contributor) = &args.contributor {
+        // Encode the resolved DID (bare of the app-identity fragment), NOT the
+        // handle — `openlore://search?contributor=did:plc:priya-test` (AV-29).
+        let resolved = resolve_contributor_to_did(contributor);
+        let bare = crate::verbs::bare_did(&resolved);
+        return Some((SearchDimension::Contributor, bare));
+    }
+    if let Some(subject) = &args.subject {
+        return Some((SearchDimension::Subject, subject.clone()));
+    }
+    None
+}
+
+/// `--share` without a dimension flag: a usage error (non-zero exit) — there is no
+/// query to encode. Mirrors [`show_usage_error_no_dimension`].
+fn share_usage_error_no_dimension() -> SearchOutcome {
+    SearchOutcome {
+        exit_code: 2,
+        stdout: "openlore search --share requires a dimension \
+                 (--object/--contributor/--subject) to encode into the link.\n"
+            .to_string(),
+    }
 }
 
 /// No dimension / mode supplied: a usage error pointing at the dimension flags.
