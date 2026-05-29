@@ -389,22 +389,22 @@ fn appview_near_match_suggestion_finds_closest_known_object() {
 // Generators (proptest) — materialized by DELIVER's bootstrap step
 // =============================================================================
 
-/// Generator for an arbitrary mix of valid + adversarial `RawRecord`s paired
-/// with the resolved `VerificationKey`, over the real-`z6Mk...` test keypair.
-/// Used by AVC-1 (gate iff) + AVC-3a (determinism) + AVC-4 (author derivation).
-/// Bodies materialized by DELIVER from `fixtures_ingest.rs`.
-///
-/// Distribution: ~50% valid signed records, ~50% adversarial split across
-/// unsigned / tampered-signature / cid-mismatch — so the gate's Index AND
-/// Reject arms are both exercised on every run.
+// Generator for an arbitrary mix of valid + adversarial `RawRecord`s paired
+// with the resolved `VerificationKey`, over the real-`z6Mk...` test keypair.
+// Used by AVC-1 (gate iff) + AVC-3a (determinism) + AVC-4 (author derivation).
+// Bodies materialized by DELIVER from `fixtures_ingest.rs`.
+//
+// Distribution: ~50% valid signed records, ~50% adversarial split across
+// unsigned / tampered-signature / cid-mismatch — so the gate's Index AND
+// Reject arms are both exercised on every run.
 //
 // (signature scaffolded; DELIVER fills the proptest Strategy body)
 
-/// Generator for an arbitrary NON-EMPTY `Vec<IndexedClaim>` over a small bounded
-/// universe (3 subjects x 2 objects x 3 authors, confidence in `[0.0, 1.0]`,
-/// every `verified_against` non-empty) so generated sets exercise single-author,
-/// multi-author, and identical-content-distinct-author pairings. Used by AVC-2
-/// (preserve every author) + AVC-3b (compose determinism). Bodies materialized
-/// by DELIVER.
+// Generator for an arbitrary NON-EMPTY `Vec<IndexedClaim>` over a small bounded
+// universe (3 subjects x 2 objects x 3 authors, confidence in `[0.0, 1.0]`,
+// every `verified_against` non-empty) so generated sets exercise single-author,
+// multi-author, and identical-content-distinct-author pairings. Used by AVC-2
+// (preserve every author) + AVC-3b (compose determinism). Bodies materialized
+// by DELIVER.
 //
 // (signature scaffolded; DELIVER fills the proptest Strategy body)

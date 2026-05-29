@@ -110,6 +110,28 @@ pub use fixtures_scoring::{
     EXPECTED_CROSS_PROJECT_TRIANGULATION_BONUS,
 };
 
+// Slice-05 step 01-05 (DD-AV-13): the network-ingest fixtures + the validating
+// ingest-source fake. `fixtures_ingest` materializes the adversarial + valid
+// `RawRecordSpec` builders, the four named ingest fixtures, the real-`z6Mk` PLC
+// DID-document fixture (a known test keypair so the ADR-026 decode runs the REAL
+// path; AV-4), and the network-search corpora. `fake_ingest_source` hosts those
+// records over `ports::IngestSourcePort` and VALIDATES inputs like the real
+// adapter (DD-AV-2) — a permissive fake that "verified" anything would hide the
+// AV-3 reject-gate wiring (the cardinal verify-before-index gate). Re-exported
+// flat so the slice-05 acceptance + harness code can name them directly.
+pub mod fixtures_ingest;
+pub use fixtures_ingest::{
+    corpus_bazel_five_distinct_authors, corpus_deno_dependency_pinning_two_authors,
+    corpus_priya_eight_claims_six_subjects, corpus_reproducible_builds_nine_authors, did_doc_for,
+    fixture_ingest_adversarial_set_plus_one_valid, fixture_ingest_cid_mismatch,
+    fixture_ingest_tampered_signature, fixture_ingest_unsigned, fixture_ingest_valid_signed,
+    fixture_real_z6mk_did_doc, DidDocFixture, FixtureKeypair, Posture, RawRecordSpec, PRIYA_DID,
+    RACHEL_DID, SVEN_DID,
+};
+
+pub mod fake_ingest_source;
+pub use fake_ingest_source::FakeIngestSource;
+
 use claim_domain::{Cid, ClaimLookup, Did, SignedClaim};
 use ports::{
     AttributedClaim, ClockPort, GraphNode, ProbeOutcome, ScoringFilter, StorageError, StoragePort,

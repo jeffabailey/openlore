@@ -643,7 +643,7 @@ mod tests {
         )
         .expect("adapter constructs");
 
-        let outcome = adapter.probe();
+        let outcome = IdentityPort::probe(&adapter);
         assert!(
             matches!(outcome, ProbeOutcome::Ok),
             "expected probe Ok, got {:?}",
@@ -663,7 +663,7 @@ mod tests {
         )
         .expect("adapter constructs");
 
-        let outcome = adapter.probe();
+        let outcome = IdentityPort::probe(&adapter);
         match outcome {
             ProbeOutcome::Refused { reason, .. } => {
                 assert_eq!(

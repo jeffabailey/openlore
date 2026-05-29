@@ -91,6 +91,15 @@ chrono = { workspace = true }
 # placeholder sigs per `fixtures_peer.rs`). Deterministic seeded keypair;
 # `default-features = false` keeps OS randomness off the test compile path.
 ed25519-dalek = { version = "2", default-features = false }
+# Step 01-05 (slice-05; DD-AV-13/DD-AV-14): the indexer_ingest + appview_search
+# acceptance harness spawns the REAL `openlore-indexer` binary via
+# `assert_cmd::cargo_bin("openlore-indexer")` (the SECOND composition root) over
+# an ephemeral localhost serve port (DEVOPS open-q 8 parallel-safety). Adding it
+# as a dev-dependency makes cargo build the binary for these test targets so
+# `cargo_bin` resolves it. The CLI's PRODUCTION dep graph still links ONLY the
+# index-query CLIENT (above) — never the indexer's server/store/ingest crates
+# (I-AV-3); this is a TEST-ONLY dependency on the sibling binary crate.
+openlore-indexer = { path = "../openlore-indexer" }
 
 [[test]]
 name = "walking_skeleton"
@@ -222,4 +231,38 @@ harness = true
 [[test]]
 name = "scoring_core"
 path = "../../tests/acceptance/scoring_core.rs"
+harness = true
+
+# Slice-05 subprocess acceptance (the `openlore-indexer` verified attributed
+# ingest pipeline — US-AV-001). Drives the REAL `openlore-indexer` binary via
+# `assert_cmd::cargo_bin` against a `FakeIngestSource` (the adversarial + valid
+# record source) + a real-`z6Mk` PLC DID-doc resolver, over a REAL separate
+# `index.duckdb`. Step 01-05 registers the target + materializes the harness +
+# fixtures so the 7 AV-1..AV-7 scenarios classify RED (panic at `todo!()`);
+# they stay RED until DELIVER's per-scenario Phase 02+ steps.
+[[test]]
+name = "indexer_ingest"
+path = "../../tests/acceptance/indexer_ingest.rs"
+harness = true
+
+# Slice-05 subprocess acceptance (the `openlore search` network-discovery verb —
+# US-AV-002..006; ADR-027). Drives the REAL `openlore` binary via `assert_cmd`
+# against a REAL `openlore-indexer serve` over an ephemeral localhost port (B1
+# transport; DEVOPS open-q 8 parallel-safe) over a seeded `index.duckdb`. Step
+# 01-05 registers + RED gate; the 22 AV-8..AV-29 scenarios stay RED (`todo!()`).
+[[test]]
+name = "appview_search"
+path = "../../tests/acceptance/appview_search.rs"
+harness = true
+
+# Slice-05 layer-2 acceptance (pure `appview-domain` core — the verify-before-
+# index gate + anti-merging search composition; US-AV-001/002/004). Exercises the
+# PURE core DIRECTLY (no indexer subprocess), so it lives under the cli package's
+# test targets purely for workspace co-location (symmetric with `scoring_core` /
+# `scraper_domain` / `lexicon_counter_claim`). `@property` proptest scenarios
+# (AVC-1/2/3a/3b/4) plus example-pinned (AVC-5/6/7/8). Step 01-05 registers +
+# RED gate; the AVC scenarios stay RED (`todo!()`).
+[[test]]
+name = "appview_core"
+path = "../../tests/acceptance/appview_core.rs"
 harness = true
