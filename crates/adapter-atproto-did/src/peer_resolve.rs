@@ -220,7 +220,10 @@ fn openlore_application_public_key_multibase(
         .get("verificationMethod")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            resolve_fail(did, "DID document has no verificationMethod array".to_string())
+            resolve_fail(
+                did,
+                "DID document has no verificationMethod array".to_string(),
+            )
         })?;
 
     let fragment = format!("{bare_did}#org.openlore.application");

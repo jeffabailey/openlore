@@ -131,11 +131,9 @@ impl IndexStoreAdapter {
 
         let final_path = dir.join(format!("{}.json", claim.cid.0));
         let tmp_path = dir.join(format!("{}.json.tmp", claim.cid.0));
-        write_atomic(&tmp_path, &final_path, &payload).map_err(|err| {
-            IndexStoreError::WriteFailed {
-                cid: claim.cid.clone(),
-                message: err,
-            }
+        write_atomic(&tmp_path, &final_path, &payload).map_err(|err| IndexStoreError::WriteFailed {
+            cid: claim.cid.clone(),
+            message: err,
         })
     }
 
@@ -226,7 +224,10 @@ impl IndexStorePort for IndexStoreAdapter {
         // Arm 2: fsync honored on the durability medium (the substrate-lie check).
         // The indexer writes its `<cid>.json` artifacts under `artifacts_root`, so
         // that is the medium whose durability the probe must trust.
-        probe_fsync_honored(&self.artifacts_root, detect_fsync_honesty(&self.artifacts_root))
+        probe_fsync_honored(
+            &self.artifacts_root,
+            detect_fsync_honesty(&self.artifacts_root),
+        )
     }
 
     fn upsert(&self, claim: &IndexedClaim) -> Result<(), IndexStoreError> {
@@ -541,9 +542,7 @@ mod tests {
             composed_at: "2026-05-26T12:00:00Z"
                 .parse::<DateTime<Utc>>()
                 .expect("fixed RFC3339 timestamp parses"),
-            verified_against: KeyId(
-                "did:plc:priya-test#org.openlore.application".to_string(),
-            ),
+            verified_against: KeyId("did:plc:priya-test#org.openlore.application".to_string()),
             evidence: vec!["https://example.test/evidence/bazel".to_string()],
             references: Vec::new(),
             relationship: AuthorRelationship::NetworkUnfollowed,
@@ -673,9 +672,9 @@ mod tests {
 
         match store.probe() {
             ProbeOutcome::Ok => {}
-            other => panic!(
-                "a durable substrate with a current schema must probe Ok; got {other:?}"
-            ),
+            other => {
+                panic!("a durable substrate with a current schema must probe Ok; got {other:?}")
+            }
         }
     }
 

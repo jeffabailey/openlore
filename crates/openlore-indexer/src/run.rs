@@ -240,15 +240,14 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         // resolution failure is a REJECT (we never index a claim we cannot
         // verify) — classified as BadSignature (the key authority is absent).
         let author = &record.raw_payload.unsigned.author_did;
-        let resolved_key = match runtime
-            .block_on(wiring.identity_resolve.resolve_verification_key(author))
-        {
-            Ok(key) => key,
-            Err(_) => {
-                rejected_bad_signature += 1;
-                continue;
-            }
-        };
+        let resolved_key =
+            match runtime.block_on(wiring.identity_resolve.resolve_verification_key(author)) {
+                Ok(key) => key,
+                Err(_) => {
+                    rejected_bad_signature += 1;
+                    continue;
+                }
+            };
 
         // The PURE verify-before-index gate (SAME core; no second path, WD-104).
         match ingest_decision(record, &resolved_key) {
@@ -269,8 +268,10 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     }
 
-    let rejected_total =
-        rejected_unsigned + rejected_bad_signature + rejected_cid_mismatch + rejected_schema_unknown;
+    let rejected_total = rejected_unsigned
+        + rejected_bad_signature
+        + rejected_cid_mismatch
+        + rejected_schema_unknown;
     emit_ingest_counters(
         verified,
         rejected_total,

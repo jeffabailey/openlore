@@ -181,10 +181,7 @@ fn indexer_stores_two_distinct_author_claims_without_merging_on_same_subject_obj
         &env,
         &["ingest"],
         source.source_url(),
-        &[
-            (PRIYA_DID, &priya_pubkey_hex),
-            (SVEN_DID, &sven_pubkey_hex),
-        ],
+        &[(PRIYA_DID, &priya_pubkey_hex), (SVEN_DID, &sven_pubkey_hex)],
     );
 
     assert_eq!(
@@ -714,7 +711,8 @@ fn indexer_refuses_to_start_when_a_driven_adapter_probe_fails() {
     // composition root runs ALL driven-adapter probes + the capability-boundary
     // probe BEFORE the first ingest/query; the fsync-lying index store fails its
     // fsync-honesty probe. --
-    let outcome = run_openlore_indexer_with_fsync_lying_store(&env, &["serve"], source.source_url());
+    let outcome =
+        run_openlore_indexer_with_fsync_lying_store(&env, &["serve"], source.source_url());
 
     // -- Observable outcome 1 (port-exposed): exit code 2 — the indexer REFUSES
     // to start (the indexer analog of the slice-01 startup-refusal gate). --
@@ -793,10 +791,8 @@ fn indexer_ingests_only_public_records_no_private_read() {
         "org.openlore.philosophy.private-do-not-read",
         0.51,
     );
-    let source = FakeIngestServer::start_with_private_tripwire(
-        vec![public_record],
-        vec![private_record],
-    );
+    let source =
+        FakeIngestServer::start_with_private_tripwire(vec![public_record], vec![private_record]);
 
     // -- Action: run the REAL `openlore-indexer ingest` one-shot pass against the
     // fake source + the PLC pubkey seam (the SAME read-only bounded PULL). --

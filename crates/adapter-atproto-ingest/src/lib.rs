@@ -29,8 +29,7 @@
 
 use async_trait::async_trait;
 use claim_domain::{
-    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim,
-    UnsignedClaim,
+    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
 };
 use ports::{IngestError, IngestSourcePort, ProbeOutcome, RawRecord};
 
@@ -101,14 +100,14 @@ impl IngestSourcePort for AtProtoIngestAdapter {
             CLAIM_COLLECTION
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|err| IngestError::Unreachable {
-                message: format!("listRecords transport error: {err}"),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|err| IngestError::Unreachable {
+                    message: format!("listRecords transport error: {err}"),
+                })?;
 
         if !response.status().is_success() {
             return Err(IngestError::BadResponse {
@@ -346,6 +345,9 @@ mod tests {
             record.raw_payload.unsigned.author_did.0,
             "did:plc:priya-test#org.openlore.application"
         );
-        assert_eq!(record.raw_payload.unsigned.subject, "github:bazelbuild/bazel");
+        assert_eq!(
+            record.raw_payload.unsigned.subject,
+            "github:bazelbuild/bazel"
+        );
     }
 }

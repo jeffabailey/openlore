@@ -180,8 +180,7 @@ mod tests {
     /// PURE base58btc encoder (the encoder side of the round-trip; identical to
     /// the test-support fixture encoder).
     fn base58btc_encode(input: &[u8]) -> String {
-        const ALPHABET: &[u8; 58] =
-            b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
         let leading_zeros = input.iter().take_while(|&&b| b == 0).count();
         let mut digits: Vec<u8> = Vec::new();
         for &byte in input {
@@ -209,7 +208,9 @@ mod tests {
     /// A deterministic 32-byte key fixture (distinct, non-trivial bytes so the
     /// round-trip exercises the full byte range, not an all-zero degenerate).
     fn sample_key() -> Vec<u8> {
-        (0u8..32).map(|i| i.wrapping_mul(7).wrapping_add(3)).collect()
+        (0u8..32)
+            .map(|i| i.wrapping_mul(7).wrapping_add(3))
+            .collect()
     }
 
     /// decode ∘ encode == identity: a real `z6Mk...` value encoded from a known
@@ -254,10 +255,7 @@ mod tests {
             Err(DecodeError::NotMultibase)
         );
         // The empty string also lacks the prefix.
-        assert_eq!(
-            decode_ed25519_multibase(""),
-            Err(DecodeError::NotMultibase)
-        );
+        assert_eq!(decode_ed25519_multibase(""), Err(DecodeError::NotMultibase));
     }
 
     /// Boundary — BadBase58: a `z`-prefixed body carrying a non-alphabet char

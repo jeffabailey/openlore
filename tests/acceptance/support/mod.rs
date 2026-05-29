@@ -4452,9 +4452,7 @@ impl FakeIngestServer {
         listener
             .set_nonblocking(true)
             .expect("FakeIngestServer: set_nonblocking");
-        let local_addr = listener
-            .local_addr()
-            .expect("FakeIngestServer: local_addr");
+        let local_addr = listener.local_addr().expect("FakeIngestServer: local_addr");
         let base_url = format!("http://{local_addr}");
 
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -4490,11 +4488,9 @@ impl FakeIngestServer {
                                 .and_then(|line| line.split_whitespace().nth(1))
                                 .unwrap_or_default()
                                 .to_string();
-                            let had_authorization_header = request
-                                .lines()
-                                .any(|line| {
-                                    line.to_ascii_lowercase().starts_with("authorization:")
-                                });
+                            let had_authorization_header = request.lines().any(|line| {
+                                line.to_ascii_lowercase().starts_with("authorization:")
+                            });
                             if let Ok(mut log) = recorded_for_thread.lock() {
                                 log.push(RecordedIngestRequest {
                                     path: path.clone(),
@@ -4880,8 +4876,7 @@ impl FakePlcResolver {
             })
             .collect();
 
-        let listener =
-            TcpListener::bind("127.0.0.1:0").expect("FakePlcResolver: bind 127.0.0.1:0");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("FakePlcResolver: bind 127.0.0.1:0");
         listener
             .set_nonblocking(true)
             .expect("FakePlcResolver: set_nonblocking");
@@ -5083,7 +5078,8 @@ pub fn read_indexed_claims_by_object(env: &TestEnv, object: &str) -> Vec<Indexed
             })
         })
         .unwrap_or_else(|err| panic!("query indexed_claims by object: {err}"));
-    rows.map(|r| r.expect("decode indexed_claims row")).collect()
+    rows.map(|r| r.expect("decode indexed_claims row"))
+        .collect()
 }
 
 /// Read every `indexed_claims` row attributed to `author_did` (the Contributor
@@ -5149,7 +5145,8 @@ fn read_indexed_rows_where(env: &TestEnv, where_clause: &str, bind: &str) -> Vec
             })
         })
         .unwrap_or_else(|err| panic!("query indexed_claims by dimension: {err}"));
-    rows.map(|r| r.expect("decode indexed_claims row")).collect()
+    rows.map(|r| r.expect("decode indexed_claims row"))
+        .collect()
 }
 
 /// Universe-bound: "the indexer's `index.duckdb` contains NO table whose name
@@ -5370,10 +5367,7 @@ pub fn snapshot_user_openlore_duckdb(env: &TestEnv) -> UserStoreSnapshot {
     match std::fs::read(&path) {
         Ok(bytes) => UserStoreSnapshot::Present { bytes },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => UserStoreSnapshot::Absent,
-        Err(err) => panic!(
-            "snapshot user openlore.duckdb at {}: {err}",
-            path.display()
-        ),
+        Err(err) => panic!("snapshot user openlore.duckdb at {}: {err}", path.display()),
     }
 }
 
@@ -5402,7 +5396,9 @@ pub fn assert_user_openlore_duckdb_unchanged(env: &TestEnv, before: &UserStoreSn
             env.duckdb_path().display()
         ),
         (
-            UserStoreSnapshot::Present { bytes: before_bytes },
+            UserStoreSnapshot::Present {
+                bytes: before_bytes,
+            },
             UserStoreSnapshot::Present { bytes: after_bytes },
         ) => {
             assert_eq!(
@@ -5437,13 +5433,11 @@ pub fn assert_user_openlore_duckdb_unchanged(env: &TestEnv, before: &UserStoreSn
 pub fn seed_user_openlore_duckdb(env: &TestEnv) {
     let db_path = env.duckdb_path();
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).unwrap_or_else(|err| {
-            panic!("create user store dir {}: {err}", parent.display())
-        });
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|err| panic!("create user store dir {}: {err}", parent.display()));
     }
-    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
-        panic!("seed user openlore.duckdb at {}: {err}", db_path.display())
-    });
+    let conn = duckdb::Connection::open(&db_path)
+        .unwrap_or_else(|err| panic!("seed user openlore.duckdb at {}: {err}", db_path.display()));
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS claims (cid VARCHAR PRIMARY KEY, subject VARCHAR); \
          INSERT INTO claims (cid, subject) VALUES ('bafy_user_own_claim', 'github:rust-lang/rust');",
