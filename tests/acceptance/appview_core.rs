@@ -210,11 +210,42 @@ fn appview_ingest_decision_is_deterministic_property() {
     // make the `[verified]` construction guarantee unsound.
     //
     // Universe: the full IngestOutcome value (discriminant + payload).
-    todo!(
-        "DELIVER (slice-05): forall (record, key): \
-         ingest_decision(record, key) == ingest_decision(record, key) \
-         (byte-identical IngestOutcome). Pure determinism precondition."
-    );
+    //
+    //     forall (record, key):
+    //         ingest_decision(record, key) == ingest_decision(record, key)
+    //
+    // `IngestOutcome` derives `PartialEq` + `Debug` over its `Index(IndexedClaim)`
+    // / `Reject(RejectReason)` arms, so this equality covers the discriminant AND
+    // the full payload (the IndexedClaim's derived author / cid / confidence /
+    // composed_at / verified_against, or the structured RejectReason) byte-for-
+    // byte. Symmetric-property style (Hebert ch.3 Tier 1): applying the same pure
+    // transformation twice yields the same value. The generator drives over the
+    // valid AND every adversarial posture, so determinism is pinned across BOTH
+    // gate arms. ingest_decision is clock-free / I/O-free / HashMap-order-free by
+    // construction (02-01); this property PINS that — a future refactor that reads
+    // a wall clock (e.g. `Utc::now()`) or lets a HashMap iteration order leak into
+    // the decision fails LOUDLY here. Mirrors slice-04's
+    // `scoring_score_is_deterministic_property`.
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_raw_records(), |(record, key)| {
+            let first = appview_domain::ingest_decision(&record, &key);
+            let second = appview_domain::ingest_decision(&record, &key);
+            prop_assert_eq!(
+                first,
+                second,
+                "ingest_decision must be DETERMINISTIC: the same (record, resolved_key) must yield \
+                 a byte-identical IngestOutcome (same discriminant; same IndexedClaim or same \
+                 RejectReason) — the reproducibility precondition for the verify gate and the \
+                 universal `[verified]` construction guarantee (DESIGN 5.1 inv 4). A clock read or \
+                 a HashMap iteration-order leak in the decision would make this unsound."
+            );
+            Ok(())
+        })
+        .expect(
+            "determinism invariant: ingest_decision(record, key) must equal a second call with the \
+             SAME inputs for all generated valid + adversarial records",
+        );
 }
 
 /// AVC-4 / Property (Mandate 9 layer 2): a record that verifies is indexed with
