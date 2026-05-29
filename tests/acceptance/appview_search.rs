@@ -1009,11 +1009,38 @@ fn search_by_contributor_absent_from_index_degrades_gracefully_exit_zero() {
     //
     // Universe (port-exposed): search.exit_code (0); stdout states the empty-
     // contributor message.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --contributor github:nobody- \
-         here` against an index with no such claims; assert exit 0 + 'no network \
-         claims found for contributor' message (US-AV-003 Ex3)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-003 Ex1 contributor-trail corpus — Priya's
+    // 8 verified claims across 6 subjects. The index has NO claims authored by
+    // github:nobody-here (resolves to did:plc:nobody-here-test, an author absent
+    // from the corpus). The CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+
+    // -- Action: query a contributor handle ABSENT from the index through the CLI
+    // driving port. `github:nobody-here` resolves to
+    // did:plc:nobody-here-test#org.openlore.application (slice-02/04 handle→DID
+    // convention), which authors ZERO claims in the seeded index. --
+    let outcome = run_openlore_search(
+        &env,
+        &["search", "--contributor", "github:nobody-here"],
+        &indexer,
     );
+
+    // The empty result is a VALID not-yet-found state, NOT an error: exit 0
+    // (US-AV-003 Ex3 — mirrors AV-12 for the contributor dimension).
+    assert_eq!(
+        outcome.status, 0,
+        "AV-17: an empty `--contributor` result is a valid empty state and MUST \
+         exit 0 (US-AV-003 Ex3). stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // The empty result NAMES the queried contributor and offers NO near-match
+    // suggestion (a contributor is absent, not a typo — distinct from AV-12's
+    // object-dimension "Did you mean <near>?" line).
+    assert_empty_contributor_message(&outcome.stdout, "github:nobody-here");
 }
 
 /// AV-18 (US-AV-003 edge — followed author labeled correctly in network search):

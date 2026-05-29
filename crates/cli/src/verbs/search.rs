@@ -122,36 +122,69 @@ pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query`, exiting 0 (the SOFT, non-fatal contract; WD-116).
 fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> {
-    run_dimension(wiring, SearchDimension::Object, object)
+    // The OBJECT dimension queries + displays the SAME value, and an empty result
+    // probes the index for a near-match suggestion (a typo'd philosophy URI is one
+    // edit from the correct one — US-AV-002 Ex 4 / AV-12).
+    run_dimension(wiring, SearchDimension::Object, object, object, EmptyPolicy::SuggestNearMatch)
 }
 
-/// Shared dimension-search path. The walking skeleton wires only `--object`; the
-/// contributor/subject dimensions register the same shape in later steps (05-04+).
+/// How the empty-dimension-result branch behaves for a given dimension.
+///
+/// - `SuggestNearMatch` (OBJECT): the empty value is likely a TYPO one edit from a
+///   known object, so probe the index for a near-match and offer "Did you mean
+///   <near>?" (US-AV-002 Ex 4 / AV-12).
+/// - `NoSuggestion` (CONTRIBUTOR/SUBJECT): an absent contributor (or subject) is
+///   not a typo — they simply publish no OpenLore claims (or are not yet ingested);
+///   there is nothing to suggest, so the empty message names the queried value with
+///   NO suggestion (US-AV-003 Ex 3 / AV-17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyPolicy {
+    SuggestNearMatch,
+    NoSuggestion,
+}
+
+/// Shared dimension-search path. The `query_value` is what the wire query matches
+/// against (for the contributor dimension this is the resolved app-identity DID);
+/// the `display_value` is what the user typed and is surfaced in the empty/degraded
+/// messages (for the contributor dimension this is the original handle, so the
+/// empty message reads "for contributor github:nobody-here", AV-17). The
+/// `empty_policy` selects whether an empty result probes for a near-match
+/// suggestion (OBJECT) or names the value with no suggestion (CONTRIBUTOR/SUBJECT).
 fn run_dimension(
     wiring: &Wiring,
     dimension: SearchDimension,
-    value: &str,
+    query_value: &str,
+    display_value: &str,
+    empty_policy: EmptyPolicy,
 ) -> Result<SearchOutcome> {
     let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
     if indexer_url.is_empty() {
-        return Ok(degrade_to_local_only(dimension, value));
+        return Ok(degrade_to_local_only(dimension, display_value));
     }
 
     let adapter = HttpIndexQueryAdapter::for_url(indexer_url);
     let runtime = crate::verbs::claim_publish::build_tokio_runtime();
-    let outcome = runtime.block_on(adapter.search(dimension, value, None));
+    let outcome = runtime.block_on(adapter.search(dimension, query_value, None));
 
     match outcome {
-        // An empty result is a VALID not-yet-found state (US-AV-002 Ex 4 / AV-12):
-        // name the queried value, offer a near-match suggestion, and exit 0 — NOT
-        // an error. A non-empty result renders the attributed per-author view.
-        Ok(result) if result.results.is_empty() => {
-            Ok(render_empty_result(&adapter, &runtime, dimension, value))
-        }
+        // An empty result is a VALID not-yet-found state (US-AV-002 Ex 4 / AV-12;
+        // US-AV-003 Ex 3 / AV-17): name the queried DISPLAY value, optionally offer
+        // a near-match suggestion (per `empty_policy`), and exit 0 — NOT an error. A
+        // non-empty result renders the attributed per-author view.
+        Ok(result) if result.results.is_empty() => Ok(render_empty_result(
+            &adapter,
+            &runtime,
+            dimension,
+            query_value,
+            display_value,
+            empty_policy,
+        )),
         Ok(result) => Ok(render_network_result(wiring, dimension, result)),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
-        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(dimension, value)),
+        Err(IndexQueryError::Unreachable { .. }) => {
+            Ok(degrade_to_local_only(dimension, display_value))
+        }
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
 }
@@ -173,13 +206,29 @@ fn render_empty_result(
     adapter: &HttpIndexQueryAdapter,
     runtime: &tokio::runtime::Runtime,
     dimension: SearchDimension,
-    value: &str,
+    query_value: &str,
+    display_value: &str,
+    empty_policy: EmptyPolicy,
 ) -> SearchOutcome {
-    let known = known_objects_near(adapter, runtime, dimension, value);
-    let suggestion = appview_domain::near_match_suggestion(value, &known);
+    // The near-match suggestion is OBJECT-only (a typo'd philosophy URI is one edit
+    // from a known object). An absent CONTRIBUTOR/SUBJECT is not a typo, so the
+    // empty message names the DISPLAY value with NO suggestion (AV-17). The probe
+    // runs against the resolved QUERY value (the index is keyed by it); the message
+    // names the DISPLAY value the user typed.
+    let suggestion = match empty_policy {
+        EmptyPolicy::SuggestNearMatch => {
+            let known = known_objects_near(adapter, runtime, dimension, query_value);
+            appview_domain::near_match_suggestion(query_value, &known)
+        }
+        EmptyPolicy::NoSuggestion => None,
+    };
     SearchOutcome {
         exit_code: 0,
-        stdout: render::render_empty_network_search(dimension, value, suggestion.as_deref()),
+        stdout: render::render_empty_network_search(
+            dimension,
+            display_value,
+            suggestion.as_deref(),
+        ),
     }
 }
 
@@ -289,8 +338,18 @@ fn dimension_flag(dimension: SearchDimension) -> &'static str {
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query --contributor`, exiting 0 (the SOFT contract; WD-116).
 fn run_dimension_contributor(wiring: &Wiring, contributor: &str) -> Result<SearchOutcome> {
+    // The wire query matches the indexed `author_did` exactly, so query with the
+    // RESOLVED app-identity DID; but the empty message names the ORIGINAL handle the
+    // user typed (`github:nobody-here`, not the resolved DID — AV-17), and an absent
+    // contributor is not a typo so it offers NO near-match suggestion.
     let author_did = resolve_contributor_to_did(contributor);
-    run_dimension(wiring, SearchDimension::Contributor, &author_did)
+    run_dimension(
+        wiring,
+        SearchDimension::Contributor,
+        &author_did,
+        contributor,
+        EmptyPolicy::NoSuggestion,
+    )
 }
 
 /// The app-identity verification-method fragment every signed/indexed claim's
@@ -340,7 +399,16 @@ fn resolve_contributor_to_did(contributor: &str) -> String {
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query --subject`, exiting 0 (the SOFT contract; WD-116).
 fn run_dimension_subject(wiring: &Wiring, subject: &str) -> Result<SearchOutcome> {
-    run_dimension(wiring, SearchDimension::Subject, subject)
+    // The SUBJECT dimension queries + displays the SAME project URI; an empty result
+    // probes for a near-match (a typo'd project URI is one edit from a known one),
+    // mirroring the OBJECT dimension's AV-12 behavior.
+    run_dimension(
+        wiring,
+        SearchDimension::Subject,
+        subject,
+        subject,
+        EmptyPolicy::SuggestNearMatch,
+    )
 }
 
 /// `--show <cid>`: inspect one result — the full record + the verification line

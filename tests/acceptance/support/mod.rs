@@ -4420,6 +4420,44 @@ pub fn assert_empty_with_near_match_suggestion(stdout: &str, queried: &str, near
     );
 }
 
+/// Assert a `search` stdout reports a VALID EMPTY CONTRIBUTOR result (US-AV-003 Ex3
+/// / AV-17): it NAMES the queried contributor handle ("no network claims found for
+/// contributor <handle>") and is genuinely empty (no attributed result row). Unlike
+/// the object dimension (AV-12), the contributor empty path offers NO near-match
+/// suggestion — a contributor either publishes OpenLore claims or does not; there is
+/// no "Did you mean <near>?" guess. The empty result is NOT an error (exit 0).
+///
+/// Universe (port-exposed): stdout states the empty-for-contributor message naming
+/// the handle (case-insensitive on the leading "No"); NO "Did you mean" suggestion
+/// line; no attributed `author_did:` row exists (it was an empty result).
+pub fn assert_empty_contributor_message(stdout: &str, handle: &str) {
+    // 1. The empty result NAMES the queried contributor handle. Compare
+    // case-insensitively on the message prefix so the renderer's "No network claims
+    // found for contributor <handle>" satisfies the spec's "no network claims found
+    // for contributor <handle>" phrasing regardless of leading capitalization.
+    let lowered = stdout.to_ascii_lowercase();
+    let expected = format!("no network claims found for contributor {handle}").to_ascii_lowercase();
+    assert!(
+        lowered.contains(&expected),
+        "AV-17: the empty contributor result must NAME the queried contributor \
+         ('no network claims found for contributor {handle}'):\n{stdout}"
+    );
+    // 2. The contributor empty path offers NO near-match suggestion (distinct from
+    // the object dimension's AV-12 "Did you mean <near>?" line).
+    assert!(
+        !stdout.contains("Did you mean"),
+        "AV-17: an empty contributor result must NOT offer a near-match suggestion \
+         (a contributor is absent, not a typo):\n{stdout}"
+    );
+    // 3. It was genuinely EMPTY — no attributed result row was rendered.
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim().starts_with("author_did:")),
+        "AV-17: an empty contributor result must render NO attributed `author_did:` row:\n{stdout}"
+    );
+}
+
 /// Assert a `search` stdout prints the public-data banner UP FRONT (before the
 /// first result row): public-signed-only + verified-before-indexing +
 /// nothing-private-read/aggregated (I-AV-4 / KPI-AV-5; AV-10).
