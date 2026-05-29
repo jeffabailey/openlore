@@ -32,3 +32,4 @@ mutants.out/
 
 # DES progress tracker (updated by hooks; safe to ignore)
 docs/feature/*/deliver/.develop-progress.json
+.dual-graph/
