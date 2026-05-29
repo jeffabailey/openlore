@@ -35,14 +35,15 @@
 //! The strategies compose via `prop_map` / `prop_oneof` — small, named,
 //! single-purpose builders, NEVER a 200-line nested tuple.
 
+use chrono::{TimeZone, Utc};
 use claim_domain::{
-    canonicalize, compute_cid, sign, Cid, Confidence, Did, SignatureBlock, SignedClaim, SigningKey,
-    UnsignedClaim, VerificationKey,
+    canonicalize, compute_cid, sign, Cid, Confidence, Did, KeyId, SignatureBlock, SignedClaim,
+    SigningKey, UnsignedClaim, VerificationKey,
 };
 use ed25519_dalek::SigningKey as DalekSigningKey;
 use proptest::prelude::*;
 
-use crate::RawRecord;
+use crate::{AuthorRelationship, IndexedClaim, RawRecord};
 
 /// The OpenLore application verification-method fragment appended to every
 /// author DID in the signed payload (mirrors the test-support fixtures).
@@ -222,4 +223,114 @@ pub fn arbitrary_raw_records() -> impl Strategy<Value = (RawRecord, Verification
             raw_record(author, subject, object, confidence, composed_at, posture)
         },
     )
+}
+
+// =============================================================================
+// AVC-2 — anti-merging-at-network-scale generator (arbitrary IndexedClaim set)
+// =============================================================================
+
+/// The bounded `author_did` universe (3) for [`arbitrary_indexed_claims`]. Three
+/// distinct authors so generated sets exercise single-author, multi-author, and
+/// identical-content-distinct-author groupings.
+const AUTHORS: [&str; 3] = [
+    "did:plc:priya-test",
+    "did:plc:sven-test",
+    "did:plc:rachel-test",
+];
+
+/// The bounded `subject` universe (3) for [`arbitrary_indexed_claims`].
+const SUBJECTS: [&str; 3] = [
+    "github:bazelbuild/bazel",
+    "github:denoland/deno",
+    "github:NixOS/nixpkgs",
+];
+
+/// The bounded `object` universe (2) for [`arbitrary_indexed_claims`] — only TWO
+/// objects so the {3 subject × 2 object} space (6) is smaller than the row count
+/// upper bound, GUARANTEEING (subject, object) collisions across DISTINCT authors
+/// in larger generated sets (the no-merge property's load-bearing case).
+const OBJECTS: [&str; 2] = [
+    "org.openlore.philosophy.reproducible-builds",
+    "org.openlore.philosophy.dependency-pinning",
+];
+
+/// One generated cell of the bounded universe: indices into the AUTHOR / SUBJECT
+/// / OBJECT tables plus a confidence in `[0.0, 1.0]`. The `cid` is NOT generated
+/// here — it is derived from the row's ordinal in [`arbitrary_indexed_claims`] so
+/// every generated row carries a DISTINCT CID (multiset uniqueness) even when two
+/// rows share identical (author, subject, object) content.
+#[derive(Debug, Clone)]
+struct ClaimCell {
+    author_idx: usize,
+    subject_idx: usize,
+    object_idx: usize,
+    confidence: f64,
+}
+
+/// Strategy for a single [`ClaimCell`] over the bounded universe.
+fn arb_claim_cell() -> impl Strategy<Value = ClaimCell> {
+    (
+        0..AUTHORS.len(),
+        0..SUBJECTS.len(),
+        0..OBJECTS.len(),
+        0.0_f64..=1.0,
+    )
+        .prop_map(
+            |(author_idx, subject_idx, object_idx, confidence)| ClaimCell {
+                author_idx,
+                subject_idx,
+                object_idx,
+                confidence,
+            },
+        )
+}
+
+/// Materialize one [`IndexedClaim`] from a [`ClaimCell`] and a row ordinal. The
+/// `cid` encodes the ordinal so it is DISTINCT for every generated row (the
+/// multiset-uniqueness precondition AVC-2 relies on); `author_did` is carried
+/// byte-equal from the bounded author table (anti-merging attribution, WD-103);
+/// `verified_against` is NON-empty by construction (verified-before-index, WD-104,
+/// AVC-7). Pure: no I/O, no clock — `composed_at` is a pinned deterministic value.
+fn indexed_claim_from(cell: &ClaimCell, ordinal: usize) -> IndexedClaim {
+    let author = AUTHORS[cell.author_idx];
+    let subject = SUBJECTS[cell.subject_idx];
+    let object = OBJECTS[cell.object_idx];
+    IndexedClaim {
+        author_did: Did(format!("{author}{APP_FRAGMENT}")),
+        // Ordinal-encoded so every row is a DISTINCT multiset member, even when two
+        // rows share identical (author, subject, object). The author segment keeps
+        // identical-content-distinct-author rows trivially distinguishable too.
+        cid: Cid(format!("bafyclaim{ordinal:04}{author}")),
+        subject: subject.to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: object.to_string(),
+        confidence: cell.confidence,
+        composed_at: Utc.with_ymd_and_hms(2026, 5, 26, 12, 0, 0).unwrap(),
+        verified_against: KeyId(format!("{author}{APP_FRAGMENT}")),
+        evidence: vec![format!("https://example.test/evidence/{subject}")],
+        references: Vec::new(),
+        relationship: AuthorRelationship::NetworkUnfollowed,
+    }
+}
+
+/// Generator for an arbitrary NON-EMPTY `Vec<IndexedClaim>` over the bounded
+/// universe (3 authors × 3 subjects × 2 objects, confidence in `[0.0, 1.0]`, every
+/// `verified_against` non-empty). Drives AVC-2 (preserve every author) + AVC-3b
+/// (compose determinism).
+///
+/// Because the (subject, object) space is small (3 × 2 = 6) relative to the row
+/// count (1..=12), larger generated sets are GUARANTEED to contain
+/// identical-(subject, object) rows under DISTINCT authors — the load-bearing
+/// no-merge case (two authors asserting the same thing must stay in two groups,
+/// never collapse to a faceless consensus row). Every generated row carries a
+/// DISTINCT ordinal-encoded `cid`, so the flattened `by_author` rows form a clean
+/// multiset against the input (every `(author_did, cid)` appears exactly once).
+pub fn arbitrary_indexed_claims() -> impl Strategy<Value = Vec<IndexedClaim>> {
+    prop::collection::vec(arb_claim_cell(), 1..=12).prop_map(|cells| {
+        cells
+            .iter()
+            .enumerate()
+            .map(|(ordinal, cell)| indexed_claim_from(cell, ordinal))
+            .collect()
+    })
 }

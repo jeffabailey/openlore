@@ -60,12 +60,13 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use appview_domain::proptest_strategies::arbitrary_raw_records;
-use appview_domain::IngestOutcome;
+use appview_domain::proptest_strategies::{arbitrary_indexed_claims, arbitrary_raw_records};
+use appview_domain::{IngestOutcome, SearchDimension};
 use chrono::{TimeZone, Utc};
 use claim_domain::{Cid, Did, VerifyingKey};
 use proptest::prelude::*;
 use proptest::test_runner::TestRunner;
+use std::collections::HashSet;
 
 // The `appview-domain` crate + its public ADTs (RawRecord [re-exported from
 // ports], IngestOutcome, RejectReason, IndexedClaim [ports], NetworkResultRow,
@@ -387,14 +388,128 @@ fn appview_compose_preserves_every_author_property() {
     // result.distinct_author_count, result.total_claims, and the multiset of
     // (author_did, cid) flattened from result.by_author. NEVER an internal
     // grouping-map field.
-    todo!(
-        "DELIVER (slice-05): drive appview_domain::compose_results over \
-         arbitrary_indexed_claims(); assert distinct_author_count == \
-         COUNT(DISTINCT author_did), total_claims == rows.len(), flattened \
-         by_author == input rows as a multiset (every (author_did,cid) once), \
-         identical-content-distinct-author rows in different groups. No \
-         merged-row API exists to violate."
-    );
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_indexed_claims(), |rows| {
+            // ORACLE — the obviously-correct reference for the anti-merging
+            // invariants, computed DIRECTLY over the input rows (a COUNT over
+            // attributed rows, never a merge). Hebert ch.3 Tier-1 "Modeling":
+            // SUT (compose_results) vs simpler-but-correct reference (these
+            // direct over-the-input computations).
+            let expected_total = rows.len() as u32;
+            let expected_distinct_authors: HashSet<Did> =
+                rows.iter().map(|c| c.author_did.clone()).collect();
+            // The input as a multiset of (author_did, cid): every generated row
+            // carries a DISTINCT cid, so this is the exact set the output must
+            // reproduce (no row dropped, none invented, none merged).
+            let input_pairs: HashSet<(Did, Cid)> = rows
+                .iter()
+                .map(|c| (c.author_did.clone(), c.cid.clone()))
+                .collect();
+            prop_assert_eq!(
+                input_pairs.len(),
+                rows.len(),
+                "test self-check: the generator must emit DISTINCT (author_did, cid) per row \
+                 so the multiset equivalence below is well-defined"
+            );
+
+            let result = appview_domain::compose_results(rows.clone(), SearchDimension::Object);
+
+            // (Criterion 1) distinct_author_count == COUNT(DISTINCT author_did)
+            // over the input — a COUNT over attributed rows, NEVER a merged
+            // aggregate. A mutant that GROUP-BYs object/subject into a faceless
+            // count fails LOUDLY here.
+            prop_assert_eq!(
+                result.distinct_author_count,
+                expected_distinct_authors.len() as u32,
+                "distinct_author_count must equal COUNT(DISTINCT author_did) over the input \
+                 (a COUNT over attributed rows, never a merged aggregate) — WD-103 / I-AV-2"
+            );
+
+            // (Criterion 2a) total_claims == rows.len() (no claim dropped).
+            prop_assert_eq!(
+                result.total_claims,
+                expected_total,
+                "total_claims must equal rows.len() — no claim may be dropped or merged away"
+            );
+
+            // (Criterion 2b) the flattened by_author rows == the input rows as a
+            // MULTISET: every input (author_did, cid) appears EXACTLY once, in
+            // exactly one author group. We assert (i) the flattened count equals
+            // the input count (none dropped, none invented) and (ii) the set of
+            // (author_did, cid) pairs is identical (none merged, none renamed).
+            let flattened: Vec<(Did, Cid)> = result
+                .by_author
+                .iter()
+                .flat_map(|(_did, group)| {
+                    group
+                        .iter()
+                        .map(|row| (row.author_did.clone(), row.cid.clone()))
+                })
+                .collect();
+            prop_assert_eq!(
+                flattened.len(),
+                rows.len(),
+                "the flattened by_author rows must equal the input rows in COUNT (no row \
+                 dropped, none invented, none merged across authors)"
+            );
+            let output_pairs: HashSet<(Did, Cid)> = flattened.iter().cloned().collect();
+            prop_assert_eq!(
+                output_pairs.len(),
+                flattened.len(),
+                "each (author_did, cid) must appear EXACTLY once across the whole result \
+                 (no duplication; the multiset is in fact a set of distinct rows)"
+            );
+            prop_assert_eq!(
+                &output_pairs,
+                &input_pairs,
+                "the flattened by_author (author_did, cid) multiset must EQUAL the input rows \
+                 — every input row preserved, none merged, none invented"
+            );
+
+            // (Criterion 2c) every row lands in the group keyed by ITS OWN
+            // author_did — never collapsed under a foreign / faceless key. This is
+            // what makes the by_author grouping attribution-preserving rather than
+            // a relabeling.
+            for (group_did, group) in &result.by_author {
+                for row in group {
+                    prop_assert_eq!(
+                        &row.author_did,
+                        group_did,
+                        "every row must live under its OWN author_did group key — never \
+                         collapsed under a foreign or merged key (anti-merging, WD-103)"
+                    );
+                }
+            }
+
+            // (Criterion 3) two input rows with identical (subject, object) but
+            // DISTINCT author_did must land in DIFFERENT author groups (never
+            // collapsed into a merged multi-author row). We verify the structural
+            // guarantee directly: the by_author group KEYS are exactly the distinct
+            // authors of the input and each appears ONCE — so no two distinct
+            // authors can ever share a group, regardless of identical content.
+            let group_keys: Vec<Did> = result
+                .by_author
+                .iter()
+                .map(|(did, _)| did.clone())
+                .collect();
+            let unique_group_keys: HashSet<Did> = group_keys.iter().cloned().collect();
+            prop_assert_eq!(
+                unique_group_keys.len(),
+                group_keys.len(),
+                "each author_did must key AT MOST ONE group — distinct authors with \
+                 identical (subject, object) content can never be collapsed into one \
+                 multi-author row (no merged-row API exists to violate)"
+            );
+            prop_assert_eq!(
+                &unique_group_keys,
+                &expected_distinct_authors,
+                "the by_author group keys must be EXACTLY the distinct authors of the input"
+            );
+
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// AVC-3b / Property (Mandate 9 layer 2): `compose_results` is deterministic —
