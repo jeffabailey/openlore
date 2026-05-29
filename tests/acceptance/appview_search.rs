@@ -1839,12 +1839,43 @@ fn show_on_cid_absent_from_result_set_is_a_usage_error_nonzero_exit() {
     //
     // Universe (port-exposed): search.exit_code (non-zero); the "CID is not in
     // this search result" usage message + remediation hint.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --object ... --show \
-         bafy...nothere` for a CID absent from the result set; assert NON-ZERO \
-         exit + 'CID is not in this search result' usage message (distinct from \
-         the empty-search exit-0; US-AV-004 Ex4)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a REACHABLE localhost `openlore-indexer serve` over
+    // an index.duckdb seeded with the headline reproducible-builds corpus (9 authors
+    // / 7 subjects) — the SAME corpus AV-8/AV-23 list. The search itself SUCCEEDS
+    // (a non-empty result set exists); the `--show`n cid is simply absent FROM that
+    // result set, which is what makes this a usage error rather than an empty query.
+    // The CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
     );
+
+    // -- Action: list the object dimension AND `--show` a cid that is NOT in that
+    // result set. `bafy...nothere` is a syntactically-shaped-but-fabricated cid the
+    // reproducible-builds corpus never carries (the user typo'd / pasted a stale cid),
+    // so the client-side cid filter over the dimension result set finds NO matching
+    // row (DESIGN §2: --show reuses the same dimension search + filters client-side). --
+    let absent_cid = "bafy...nothere";
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+            "--show",
+            absent_cid,
+        ],
+        &indexer,
+    );
+
+    // The ONE non-zero sad path on the search surface (US-AV-004 Ex4): a NON-ZERO
+    // exit + the content-frozen "CID <cid> is not in this search result." usage
+    // message + the run-without-`--show` remediation hint — deliberately distinct
+    // from the empty-result exit-0 (AV-12/AV-17) so the user can tell a typo'd
+    // `--show` from an empty query.
+    assert_show_absent_cid_usage_error(&outcome, absent_cid);
 }
 
 // =============================================================================

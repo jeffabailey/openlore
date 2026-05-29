@@ -4625,6 +4625,51 @@ pub fn cid_from_search_row(stdout: &str, author_substr: &str, subject_substr: &s
     );
 }
 
+/// Assert the AV-24 `--show <cid>` absent-cid USAGE-ERROR contract (US-AV-004 Ex4):
+/// `--show`ing a CID NOT in the current result set is a usage error — the CLI exits
+/// NON-ZERO (deliberately distinct from the empty-search exit-0, AV-12/AV-17, so the
+/// user can tell a typo'd `--show` from an empty query) AND names the absent `cid`
+/// in the content-frozen "CID ... is not in this search result." message PLUS the
+/// remediation hint ("Run the search without --show to list results, then --show a
+/// listed CID."). The production verb prints this on the SearchOutcome's stdout.
+///
+/// Universe (port-exposed, asserted against the `--show` outcome): the NON-ZERO exit
+/// code; the "CID <cid> is not in this search result" usage message; the
+/// run-without-`--show` remediation hint. Never an internal struct field.
+pub fn assert_show_absent_cid_usage_error(outcome: &CliOutcome, absent_cid: &str) {
+    // 1. NON-ZERO exit — the ONE non-zero sad path on the search surface (distinct
+    //    from the empty-result exit-0; the user can tell a typo'd --show from an
+    //    empty query, US-AV-004 Ex4).
+    assert_ne!(
+        outcome.status, 0,
+        "AV-24: `--show <absent cid>` must exit NON-ZERO (a usage error, distinct \
+         from the empty-search exit-0). \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2. The usage message NAMES the absent cid + states it is not in this search
+    //    result. The verb writes the SearchOutcome stdout, so the message lands
+    //    there; scan both surfaces so the assertion stays robust to the boundary.
+    let surfaces = format!("{}\n{}", outcome.stdout, outcome.stderr);
+    assert!(
+        surfaces.contains(&format!("CID {absent_cid} is not in this search result")),
+        "AV-24: the usage error must name the absent cid + state it is not in this \
+         search result ('CID {absent_cid} is not in this search result'). \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 3. The remediation hint — re-run the search WITHOUT --show to list results,
+    //    then --show a LISTED cid (the user-visible recovery path).
+    assert!(
+        surfaces.contains("Run the search without --show to list results, then --show a listed CID."),
+        "AV-24: the usage error must carry the remediation hint ('Run the search \
+         without --show to list results, then --show a listed CID.'). \
+         \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+}
+
 /// Assert the AV-23 `--show <cid>` trust-inspection contract (US-AV-004 Ex1 /
 /// KPI-AV-3): the output prints the FULL record (subject / object / confidence /
 /// evidence / author DID) PLUS the content-frozen
