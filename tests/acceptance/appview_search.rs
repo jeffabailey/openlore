@@ -1457,11 +1457,107 @@ fn already_followed_author_shows_no_redundant_follow_affordance() {
     //
     // Universe (port-exposed): presence of the follow affordance per author
     // (absent for Rachel/subscribed; present for the unfollowed author).
-    todo!(
-        "DELIVER (slice-05): with Tobias subscribed to Rachel, run a search that \
-         returns Rachel + an unfollowed author; assert Rachel (subscribed peer) \
-         has NO follow affordance while the unfollowed author DOES (US-AV-005 \
-         Ex2)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (relationship): Tobias already SUBSCRIBES to Rachel
+    // (did:plc:rachel-test) via the slice-03 `peer add` (resolved against a
+    // PeerPds double — the SAME path AV-8 / AV-18 / slice-03 use). The
+    // subscription is persisted under OPENLORE_HOME, so the later `search`
+    // (sharing the same env home) resolves the relationship CLI-side against the
+    // REAL peer_subscriptions state — the index is per-user-neutral. Every OTHER
+    // corpus author (incl. the unfollowed Priya) stays unfollowed. --
+    let rachel_did = "did:plc:rachel-test";
+    let rachel_peer = PeerPds::for_peer(rachel_did, Vec::new());
+    let peer_add = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", rachel_did],
+        rachel_did,
+        rachel_peer.endpoint_url(),
+    );
+    assert_eq!(
+        peer_add.status, 0,
+        "precondition: `openlore peer add {rachel_did}` must exit 0. stdout: {} stderr: {}",
+        peer_add.stdout, peer_add.stderr
+    );
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus — the
+    // MIXED-relationship shape the per-row conditioning must handle: the SAME
+    // `--object reproducible-builds` query returns BOTH the SUBSCRIBED Rachel
+    // (did:plc:rachel-test, nixpkgs 0.88) AND the UNFOLLOWED Priya
+    // (did:plc:priya-test, bazel 0.82). The index carries NO relationship state;
+    // the labels are a CLI-side projection of Tobias's own peer_subscriptions
+    // established above. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Action: the object-dimension network read through the CLI driving port —
+    // one result containing BOTH the subscribed peer + the unfollowed author. --
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+
+    // exit 0 (a valid network result, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "AV-21: `openlore search --object reproducible-builds` must exit 0. \
+         stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Criterion 1: Rachel's row is labeled "(subscribed peer)" (NOT
+    // "(not subscribed)") — the relationship resolves CLI-side against Tobias's
+    // peer_subscriptions, even in a MIXED result.
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:rachel-test#org.openlore.application (subscribed peer)"),
+        "AV-21: the already-followed Rachel must be labeled (subscribed peer) in a \
+         mixed result:\n{}",
+        outcome.stdout
+    );
+
+    // Criterion 1 (cardinal): the SUBSCRIBED Rachel carries NO redundant
+    // "Follow this author" affordance — the funnel affordance is SUPPRESSED for a
+    // subscribed peer (per-row conditioning on the relationship label; I-AV-7).
+    assert!(
+        !outcome
+            .stdout
+            .contains("Follow this author: openlore peer add did:plc:rachel-test"),
+        "AV-21: NO redundant follow affordance for the subscribed Rachel (the \
+         affordance must be suppressed for a subscribed peer):\n{}",
+        outcome.stdout
+    );
+
+    // Criterion 2 (the MIXED-case disprover): the UNFOLLOWED Priya — in the SAME
+    // result — IS labeled "(not subscribed)" and DOES carry the follow affordance.
+    // Per-row conditioning: the affordance follows the relationship label, so one
+    // result can suppress it for the subscribed peer while emitting it for the
+    // unfollowed author.
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:priya-test#org.openlore.application (not subscribed)"),
+        "AV-21: the unfollowed Priya must be labeled (not subscribed) in the same \
+         mixed result:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("Follow this author: openlore peer add did:plc:priya-test"),
+        "AV-21: the unfollowed Priya's row MUST carry the follow affordance (the \
+         affordance is conditioned per-row on the relationship — present for the \
+         unfollowed author, absent for the subscribed peer):\n{}",
+        outcome.stdout
     );
 }
 
