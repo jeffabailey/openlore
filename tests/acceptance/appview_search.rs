@@ -2308,11 +2308,116 @@ fn share_encodes_contributor_dimension_resolving_to_the_trail() {
     // Universe (port-exposed): the share link encodes contributor=did:plc:priya-
     // test (resolved handle->DID, not the handle); resolving yields the trail +
     // the not-consensus framing.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --contributor github:priya \
-         --share`; assert the link encodes contributor=did:plc:priya-test \
-         (resolved DID); opening it resolves to Priya's verified trail + the \
-         'one developer's reasoning trail, not a community consensus' framing \
-         (US-AV-006 Ex3)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-003 Ex1 contributor-trail corpus —
+    // did:plc:priya-test authors 8 verified claims across 6 subjects (the SAME
+    // corpus AV-15 lists). Maria does NOT follow her. The CLI's indexer_url points
+    // at the serve port. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+
+    // -- The REFERENCE trail (what opening the shared link must re-derive): the
+    // contributor-dimension network read through the CLI driving port —
+    // `github:priya` resolves to did:plc:priya-test, the corpus author_did. Its 8
+    // attributed per-author rows + the not-consensus footer are the SAME set the
+    // shared link must re-derive. --
+    let original = run_openlore_search(
+        &env,
+        &["search", "--contributor", "github:priya"],
+        &indexer,
+    );
+    assert_eq!(
+        original.status, 0,
+        "precondition: the original `openlore search --contributor github:priya` must \
+         exit 0. stdout: {} stderr: {}",
+        original.stdout, original.stderr
+    );
+
+    // -- Action (share): the contributor-dimension SHARE through the CLI driving
+    // port (`--share` is render-only, I-AV-8 — NO network call). --
+    let share = run_openlore_search(
+        &env,
+        &["search", "--contributor", "github:priya", "--share"],
+        &indexer,
+    );
+    assert_eq!(
+        share.status, 0,
+        "`openlore search --contributor github:priya --share` must exit 0. \
+         stdout: {} stderr: {}",
+        share.stdout, share.stderr
+    );
+
+    // 1. The printed link encodes the QUERY dimension+value ONLY — dimension=
+    //    contributor, value=did:plc:priya-test (the RESOLVED handle->DID, NOT the
+    //    handle `github:priya`) — with NO result payload / snapshot (I-AV-8 /
+    //    KPI-AV-6). Encoding the resolved DID makes the link STABLE regardless of
+    //    the opener's handle resolution (US-AV-006 Ex3).
+    let link = parse_and_assert_query_encoding_share_link(&share.stdout);
+    assert_eq!(
+        link.dimension, "contributor",
+        "the share link must encode dimension=contributor:\n{}",
+        share.stdout
+    );
+    assert_eq!(
+        link.value, "did:plc:priya-test",
+        "the share link must encode value=did:plc:priya-test (the RESOLVED \
+         handle->DID, NOT the handle `github:priya`):\n{}",
+        share.stdout
+    );
+    // The exact `Shareable link:` line (criterion 1 — the user-visible affordance).
+    assert!(
+        share
+            .stdout
+            .contains("Shareable link: openlore://search?contributor=did:plc:priya-test"),
+        "expected `Shareable link: openlore://search?contributor=did:plc:priya-test`:\n{}",
+        share.stdout
+    );
+    // The link is whitespace-delimited; reconstruct it verbatim for the open below.
+    let opened_link = format!("openlore://search?{}={}", link.dimension, link.value);
+
+    // -- Action (open): Tobias OPENS the shared link via the CLI re-run resolver
+    // (Q-DELIVER-AV-3: `openlore search <link>` — a positional link arg the search
+    // verb detects; web AppView OUT of scope per OD-AV-6). The resolver PARSES the
+    // link, maps `contributor` to the SearchDimension, and RE-RUNS the SAME
+    // `author_did` query against the CURRENT index. The link carried the RESOLVED
+    // DID, so no second handle->DID resolution is needed. --
+    let resolved = run_openlore_search(&env, &["search", &opened_link], &indexer);
+    assert_eq!(
+        resolved.status, 0,
+        "AV-29: opening the shared contributor link via the CLI re-run resolver must \
+         exit 0. stdout: {} stderr: {}",
+        resolved.stdout, resolved.stderr
+    );
+
+    // 2. The encoded query re-ran and yielded Priya's SAME verified network trail as
+    //    the original `--contributor github:priya` query (same author rows, same
+    //    [verified] marks), anti-merging preserved, with the same `peer add` follow
+    //    affordance — the contributor-dimension parallel to AV-27's object round-trip.
+    assert_resolved_link_matches_original_query(&original.stdout, &resolved.stdout);
+
+    // The re-run preserved attribution end-to-end: 8 attributed rows under the SOLE
+    // author did:plc:priya-test, NO merged/consensus row (anti-merging across the
+    // share boundary, KPI-AV-2) — proven independently of the set-equality above so
+    // the gate stands on its own.
+    assert_network_result_preserves_attribution(
+        &resolved.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        8,
+        &["did:plc:priya-test#org.openlore.application"],
+    );
+
+    // 3. The resolved trail carries the SAME honest framing as AV-15 — "one
+    //    developer's reasoning trail, not a community consensus" — preserved across
+    //    the share boundary (a network trail is never a consensus; KPI-AV-1 /
+    //    US-AV-006 Ex3).
+    assert!(
+        resolved
+            .stdout
+            .contains("one developer's reasoning trail, not a community consensus"),
+        "AV-29: the resolved contributor trail must carry the honest 'one developer's \
+         reasoning trail, not a community consensus' framing:\n{}",
+        resolved.stdout
     );
 }
