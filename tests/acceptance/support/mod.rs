@@ -6213,3 +6213,171 @@ pub fn local_claim_file_set(env: &TestEnv) -> Vec<String> {
     names.sort();
     names
 }
+
+// =============================================================================
+// AV-19 — the discovery→federation FUNNEL harness (US-AV-005 Ex1; KPI-AV-4 /
+// I-AV-7). The funnel REUSES the slice-03 `peer add`/`peer pull` verbs + the
+// slice-03 `PeerPds` double VERBATIM — there is NO new external fake and NO
+// executable follow path. The render-only affordance prints the EXISTING
+// slice-03 command (`openlore peer add <bare-did>`); the user runs THAT command
+// to follow the discovered author. The subscription that results is an ordinary
+// slice-03 add (no parallel discovery-subscription state — proven by AV-22's
+// purge symmetry).
+// =============================================================================
+
+/// Parse the RENDER-ONLY follow affordance for `author_did_substr` out of a
+/// `search` stdout and return the VERBATIM `openlore` argv it instructs the user
+/// to run (e.g. `["peer", "add", "did:plc:priya-test"]`). The renderer emits the
+/// affordance as `    Follow this author: openlore peer add <bare-did>` for an
+/// unfollowed network author (`render::render_follow_affordance`, US-AV-005 /
+/// I-AV-7); the funnel runs the returned argv UNCHANGED — it must be the SAME
+/// slice-03 verb, never a new follow path.
+///
+/// Port-exposed: parses only the rendered stdout (the CLI driving-port
+/// observable), never an internal struct. Panics with the full stdout if no
+/// affordance line for the author is present (the affordance is the load-bearing
+/// funnel seam — its absence is an AV-19 failure, not a silent skip).
+pub fn parse_follow_affordance_command(stdout: &str, author_did_substr: &str) -> Vec<String> {
+    const MARKER: &str = "Follow this author: openlore ";
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(MARKER) {
+            // The affordance line names the author's bare DID as the final token;
+            // only return the one matching the requested author.
+            if rest.contains(author_did_substr) {
+                return rest.split_whitespace().map(|s| s.to_string()).collect();
+            }
+        }
+    }
+    panic!(
+        "parse_follow_affordance_command: no `{MARKER}...` follow affordance for \
+         author {author_did_substr:?} in search output:\n{stdout}"
+    );
+}
+
+/// Run the AV-19 funnel's follow + pull steps REUSING the slice-03 verbs
+/// VERBATIM. Given the `search` stdout that rendered Priya's follow affordance:
+///
+///   1. parse the rendered `openlore peer add <bare-did>` affordance argv;
+///   2. start a slice-03 `PeerPds` double hosting Priya's bazel/reproducible-
+///      builds claim (the SAME (subject, object, confidence) the index ingested,
+///      so the LOCAL graph query finds it after the pull) — NO new external fake;
+///   3. run the parsed `peer add` argv UNCHANGED against that `PeerPds` (the
+///      slice-03 subscribe path; NO new verb, NO auto-follow);
+///   4. run `openlore peer pull` (the slice-03 federation pull) so Priya's claim
+///      lands in the LOCAL `peer_claims` store.
+///
+/// Returns the live `PeerPds` (the caller keeps it alive for the pull's HTTP
+/// runtime) so a re-pull or a later assertion can reuse it. The (subject,
+/// object, confidence) MUST mirror `corpus_reproducible_builds_nine_authors`'s
+/// Priya entry (`github:bazelbuild/bazel`, `reproducible-builds`, 0.82).
+pub fn funnel_follow_and_pull(env: &TestEnv, search_stdout: &str, priya_did: &str) -> PeerPds {
+    // 1. The render-only affordance argv — the slice-03 `peer add <bare-did>`.
+    let affordance = parse_follow_affordance_command(search_stdout, priya_did);
+    assert_eq!(
+        affordance.first().map(String::as_str),
+        Some("peer"),
+        "AV-19: the follow affordance MUST reuse the slice-03 `openlore peer add` \
+         verb verbatim (no new follow path); got argv {affordance:?}"
+    );
+    assert_eq!(
+        affordance.get(1).map(String::as_str),
+        Some("add"),
+        "AV-19: the follow affordance MUST be `peer add <did>` (the slice-03 \
+         subscribe verb); got argv {affordance:?}"
+    );
+    let affordance_did = affordance
+        .get(2)
+        .cloned()
+        .expect("the affordance argv names the author's bare DID");
+    let affordance_args: Vec<&str> = affordance.iter().map(String::as_str).collect();
+
+    // 2. The slice-03 `PeerPds` double serving Priya's claim — the SAME records
+    //    the index ingested, materialized with REAL crypto so the pull's
+    //    per-record verify + CID-recompute pass. NO new external fake.
+    let priya_seed = [19u8; 32];
+    let (records, priya_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        &affordance_did,
+        priya_seed,
+        &[(
+            "github:bazelbuild/bazel",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        )],
+    );
+    let priya_peer = PeerPds::for_peer(&affordance_did, records);
+
+    // 3. Run the rendered affordance argv UNCHANGED — the slice-03 `peer add`.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &affordance_args,
+        &affordance_did,
+        priya_peer.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "AV-19: running the rendered slice-03 follow affordance `openlore {}` \
+         verbatim must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        affordance_args.join(" "),
+        added.stdout,
+        added.stderr
+    );
+
+    // 4. The slice-03 `peer pull` — Priya's claim lands in the LOCAL graph.
+    let pulled = run_openlore_pull(
+        env,
+        &["peer", "pull"],
+        &affordance_did,
+        priya_peer.endpoint_url(),
+        &priya_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "AV-19: `openlore peer pull` (the slice-03 federation pull) must exit 0 \
+         after following the discovered author;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    priya_peer
+}
+
+/// Assert the subscription created via the funnel is EXACTLY a slice-03 `peer
+/// add` — one ACTIVE row in `peer_subscriptions` for `peer_did` (`removed_at IS
+/// NULL`), with NO parallel discovery-subscription state (I-AV-7). This is the
+/// SAME `peer_subscriptions` row state slice-03 PS-1 asserts for a plain `peer
+/// add`; the funnel introduces no separate follow store. Port-exposed name:
+/// `peer_storage.subscriptions.active_row_count[did]` — the slice-03 store, the
+/// load-bearing absence of a parallel path.
+pub fn assert_funnel_subscription_is_slice03(env: &TestEnv, peer_did: &str) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for AV-19 subscription assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let (total, active): (i64, i64) = conn
+        .query_row(
+            "SELECT \
+                count(*), \
+                count(*) FILTER (WHERE removed_at IS NULL) \
+             FROM peer_subscriptions WHERE peer_did = ?",
+            duckdb::params![peer_did],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or_else(|err| panic!("query peer_subscriptions for {peer_did}: {err}"));
+
+    assert_eq!(
+        total, 1,
+        "AV-19: the funnel must create EXACTLY ONE `peer_subscriptions` row for \
+         {peer_did} — a slice-03 add, no parallel discovery-subscription state \
+         (I-AV-7); got {total} rows"
+    );
+    assert_eq!(
+        active, 1,
+        "AV-19: the funnel's `peer_subscriptions` row for {peer_did} must be \
+         ACTIVE (removed_at IS NULL) — exactly as a slice-03 `peer add`; got \
+         {active} active rows"
+    );
+}

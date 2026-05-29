@@ -1183,14 +1183,121 @@ fn discovery_follow_reuses_slice03_path() {
     // slice-03 `peer add <did>` command verbatim); after peer add + pull,
     // graph_query_contributor(priya).rows non-empty; the subscription appears in
     // `peer list` exactly as a slice-03 add (no parallel state).
-    todo!(
-        "DELIVER (slice-05): chain `openlore search --object reproducible-builds` \
-         -> run the rendered `openlore peer add did:plc:priya-test` affordance \
-         verbatim -> `openlore peer pull` -> `openlore graph query --contributor \
-         did:plc:priya-test`; assert Priya's claims now in the LOCAL graph + in \
-         --weighted; the affordance reused slice-03 peer add (no parallel path; \
-         KPI-AV-4 / I-AV-7)."
+    let env = TestEnv::initialized();
+    // The bare DID the slice-03 `peer add`/`pull`/local-graph paths use; the
+    // NETWORK search renders the app-identity form (`<did>#org.openlore.application`)
+    // but the LOCAL `peer_claims` store + `graph query` use the bare DID
+    // (`adapter-duckdb::peer_storage::bare_did`, I-FED-2 / GQE-6).
+    let priya_did = "did:plc:priya-test";
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus (9 authors
+    // / 7 subjects), which includes the UNFOLLOWED Priya's verified bazel/
+    // reproducible-builds claim (0.82). The CLI's indexer_url points at the serve
+    // port. NO `peer add` precedes the search, so Priya is unfollowed → her result
+    // carries the render-only follow affordance. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
     );
+
+    // === Step 1: discover Priya via `openlore search --object reproducible-builds`.
+    // Her result row ends with the RENDER-ONLY affordance
+    // `Follow this author: openlore peer add did:plc:priya-test` (the EXISTING
+    // slice-03 command, bare DID; I-AV-7). ===
+    let discovered = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+    assert_eq!(
+        discovered.status, 0,
+        "AV-19: the discovery `search --object reproducible-builds` must exit 0. \
+         stdout: {} stderr: {}",
+        discovered.stdout, discovered.stderr
+    );
+    // 1. The result for the unfollowed Priya ends with the EXACT slice-03 command
+    //    (bare DID) — a render-only hint, no executable follow path (criterion 1 /
+    //    I-AV-7). The funnel runs THIS string verbatim below.
+    assert!(
+        discovered
+            .stdout
+            .contains("Follow this author: openlore peer add did:plc:priya-test"),
+        "AV-19: the unfollowed Priya's result must end with the verbatim slice-03 \
+         follow affordance `Follow this author: openlore peer add did:plc:priya-test`:\n{}",
+        discovered.stdout
+    );
+
+    // === Steps 2 + 3: run THAT slice-03 command verbatim (NO new verb) against a
+    // slice-03 `PeerPds` double serving Priya's SAME claim, then `openlore peer
+    // pull` — the discovery→federation funnel REUSES the slice-03 path verbatim
+    // (criterion 1/2/3). The affordance is parsed out of the rendered stdout and
+    // its argv run UNCHANGED. ===
+    let _priya_peer = funnel_follow_and_pull(&env, &discovered.stdout, priya_did);
+
+    // === Step 4: `openlore graph query --contributor did:plc:priya-test` — Priya's
+    // pulled claim is now in Maria's LOCAL graph (criterion 1). The local graph
+    // keys peer claims by the BARE DID (GQE-6), so query + assert the bare form. ===
+    let local_trail = run_openlore(&env, &["graph", "query", "--contributor", priya_did]);
+    assert_eq!(
+        local_trail.status, 0,
+        "AV-19: `graph query --contributor` must exit 0 after the funnel pull. \
+         stdout: {} stderr: {}",
+        local_trail.stdout, local_trail.stderr
+    );
+    // Priya's bazel/reproducible-builds claim surfaces in the LOCAL graph,
+    // attributed to her DID (the SAME record the index ingested + the PeerPds
+    // served — the funnel strengthened the local-first graph; KPI-AV-4).
+    assert!(
+        local_trail
+            .stdout
+            .contains(&format!("author_did: {priya_did}")),
+        "AV-19: after following + pulling, Priya's claim must appear in the LOCAL \
+         `graph query --contributor` trail attributed to {priya_did}:\n{}",
+        local_trail.stdout
+    );
+    assert!(
+        local_trail.stdout.contains("github:bazelbuild/bazel")
+            && local_trail
+                .stdout
+                .contains("org.openlore.philosophy.reproducible-builds"),
+        "AV-19: Priya's pulled bazel/reproducible-builds claim must be in the LOCAL \
+         graph (the funnel surfaced the network claim locally):\n{}",
+        local_trail.stdout
+    );
+
+    // 2. Priya's claim participates in the LOCAL graph EXACTLY like any pulled peer
+    //    — the affordance is a RENDER-ONLY hint reusing the slice-03 path (no
+    //    parallel subscription path; I-AV-7). The cardinal "like any peer" proof:
+    //    after the funnel pull her claim is an ORDINARY `peer_claims` row (the SAME
+    //    store + attribution a slice-03 `peer add`/`pull` writes for Rachel in
+    //    GQE-6), with NO claim filed under any other DID (anti-merging, I-FED-1).
+    //    The weighted/traverse explorer scopes (slice-04) read this SAME
+    //    `peer_claims` store, so a row indistinguishable from a slice-03 pull
+    //    participates in them exactly like any pulled peer.
+    assert_peer_claims_attributed_to(&env, priya_did, 1);
+    // She also surfaces in the LOCAL graph attributed to her bare DID across BOTH
+    // her subject + object (criterion 1/2: the network claim is now a first-class
+    // local claim, queryable like any pulled peer's).
+    assert!(
+        local_trail.stdout.contains("subject:")
+            && local_trail
+                .stdout
+                .contains("org.openlore.philosophy.reproducible-builds"),
+        "AV-19: Priya's pulled claim must render as a normal local trail row \
+         (subject + object), participating like any pulled peer (criterion 2):\n{}",
+        local_trail.stdout
+    );
+
+    // 3. The subscription appears EXACTLY as a slice-03 add — one ACTIVE
+    //    `peer_subscriptions` row, no parallel discovery-subscription state
+    //    (I-AV-7). Indistinguishable from a plain slice-03 `peer add`: the funnel
+    //    introduced no separate follow store to leak (proven by AV-22's purge).
+    assert_funnel_subscription_is_slice03(&env, priya_did);
 }
 
 /// AV-20 (US-AV-005 edge — discovery never auto-subscribes): Aanya runs several
