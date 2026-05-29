@@ -943,10 +943,42 @@ fn appview_near_match_suggestion_finds_closest_known_object() {
     // CLI then exits 0 (a valid empty result, US-AV-002 Ex 4) — NOT a usage error.
     //
     // Universe: the Option<String> suggestion returned.
-    todo!(
-        "DELIVER (slice-05): near_match_suggestion(typo, known) returns the \
-         closest known object by edit distance (the US-AV-002 Ex4 'Did you \
-         mean...?'); returns None when nothing is within threshold."
+    //
+    // The known object set the indexer would have on hand for the philosophy
+    // dimension (a small slice of the canonical org.openlore.philosophy.* URIs).
+    let known: Vec<String> = vec![
+        "org.openlore.philosophy.reproducible-builds".to_string(),
+        "org.openlore.philosophy.dependency-pinning".to_string(),
+        "org.openlore.philosophy.minimalism".to_string(),
+        "org.openlore.philosophy.fail-fast".to_string(),
+    ];
+
+    // (Criteria 1) A typo'd query — `reproducable` for `reproducible`, a single
+    // substitution — returns the closest known object by edit distance: the
+    // US-AV-002 Ex4 "Did you mean ...?" suggestion the CLI renders on an empty
+    // result (exit 0, a valid empty result — NOT a usage error).
+    let typo = "org.openlore.philosophy.reproducable-builds";
+    assert_eq!(
+        appview_domain::near_match_suggestion(typo, &known),
+        Some("org.openlore.philosophy.reproducible-builds".to_string()),
+        "a single-substitution typo must suggest the closest known object by edit distance \
+         (US-AV-002 Ex4 'Did you mean ...?')"
+    );
+
+    // (Criteria 2) A query with NO close match returns None — the CLI then shows
+    // a bare empty result (still exit 0), with no spurious "Did you mean ...?".
+    let unrelated = "com.example.totally.unrelated.gibberish-xyzzy";
+    assert_eq!(
+        appview_domain::near_match_suggestion(unrelated, &known),
+        None,
+        "a query with no close known object must return None (no spurious suggestion)"
+    );
+
+    // (Criteria 2, boundary) An empty known set can never offer a suggestion.
+    assert_eq!(
+        appview_domain::near_match_suggestion(typo, &[]),
+        None,
+        "an empty known set yields no suggestion"
     );
 }
 
