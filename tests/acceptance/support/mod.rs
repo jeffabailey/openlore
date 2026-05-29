@@ -4193,16 +4193,98 @@ pub fn assert_public_data_banner_precedes_results(stdout: &str) {
 /// present + searchable.
 pub fn assert_unverified_claims_never_indexed_nor_searchable(
     env: &TestEnv,
-    adversarial_cids: &[&str],
-    valid_cid: &str,
+    adversarial: &[SearchAnchors],
+    valid: &SearchAnchors,
 ) {
-    // SCAFFOLD: true (slice-05)
-    let _ = (env, adversarial_cids, valid_cid);
-    todo!(
-        "DELIVER (slice-05): assert each adversarial cid is absent from \
-         indexed_claims AND from every search result; the valid cid is present + \
-         searchable + verified_against != \"\" (I-AV-1 / KPI-AV-3 reject gate)."
-    )
+    // 1. The index holds EXACTLY one row — the valid record. The three
+    //    adversarial records produced NO row (the load-bearing count, WD-104).
+    let all_cids = read_all_indexed_cids(env);
+    assert_eq!(
+        all_cids.len(),
+        1,
+        "KPI-AV-3: index.duckdb must contain EXACTLY the one valid record; the \
+         three adversarial records must produce NO row. Found cids: {all_cids:?}"
+    );
+    assert_eq!(
+        all_cids[0], valid.cid,
+        "KPI-AV-3: the single indexed row must be the VALID record's cid"
+    );
+
+    // 2. Each adversarial CID is absent from indexed_claims AND from a search
+    //    across EVERY dimension (object / subject / contributor). A search must
+    //    NEVER surface any of the three (the cardinal disprover).
+    for adv in adversarial {
+        assert!(
+            !all_cids.contains(&adv.cid),
+            "KPI-AV-3: adversarial cid {} must be ABSENT from indexed_claims; \
+             present cids: {all_cids:?}",
+            adv.cid
+        );
+        for (dimension, rows) in search_every_dimension(env, adv) {
+            assert!(
+                rows.iter().all(|r| r.cid != adv.cid),
+                "KPI-AV-3: a search by {dimension} must NEVER return adversarial \
+                 cid {}; it leaked into the {dimension} search result: {rows:?}",
+                adv.cid
+            );
+        }
+    }
+
+    // 3. The valid record IS searchable across every dimension, attributed, with
+    //    a non-empty verified_against (the false-positive direction: the good
+    //    claim must NOT be silently dropped — KPI-AV-3 cuts both ways).
+    for (dimension, rows) in search_every_dimension(env, valid) {
+        let found = rows.iter().find(|r| r.cid == valid.cid).unwrap_or_else(|| {
+            panic!(
+                "KPI-AV-3 (false-positive guard): the VALID record must be \
+                 searchable by {dimension}; it was NOT returned. rows: {rows:?}"
+            )
+        });
+        assert_eq!(
+            found.author_did, valid.author_did,
+            "the valid row must be attributed to its author across {dimension}"
+        );
+        assert!(
+            !found.verified_against.is_empty(),
+            "verified_against must never be empty on the valid indexed row \
+             (WD-104), but was empty in the {dimension} search result"
+        );
+    }
+}
+
+/// The per-record search anchors (the values a search keys on across every
+/// `SearchDimension` — object / subject / contributor) plus the record's CID.
+/// Port-exposed observable surface; never an internal store field.
+#[derive(Debug, Clone)]
+pub struct SearchAnchors {
+    pub cid: String,
+    pub object: String,
+    pub subject: String,
+    /// The signed-payload author DID (the `#fragment` form stored in the row).
+    pub author_did: String,
+}
+
+/// Search the index across EVERY `SearchDimension` for one record's anchors,
+/// returning `(dimension_label, rows)` per dimension. Used by the AV-3
+/// search-absence + search-presence assertions.
+fn search_every_dimension<'a>(
+    env: &TestEnv,
+    anchors: &'a SearchAnchors,
+) -> Vec<(&'static str, Vec<IndexedRow>)> {
+    vec![
+        (
+            "object",
+            read_indexed_claims_by_object(env, &anchors.object),
+        ),
+        (
+            "subject",
+            read_indexed_claims_by_subject(env, &anchors.subject),
+        ),
+        (
+            "contributor",
+            read_indexed_claims_by_contributor(env, &anchors.author_did),
+        ),
+    ]
 }
 
 /// Assert the user's `openlore.duckdb` is byte-unchanged across an
@@ -4514,6 +4596,72 @@ pub fn read_indexed_claims_by_object(env: &TestEnv, object: &str) -> Vec<Indexed
             })
         })
         .unwrap_or_else(|err| panic!("query indexed_claims by object: {err}"));
+    rows.map(|r| r.expect("decode indexed_claims row")).collect()
+}
+
+/// Read every `indexed_claims` row attributed to `author_did` (the Contributor
+/// search dimension) from the indexer's `index.duckdb`. Mirrors
+/// [`read_indexed_claims_by_object`] for the AV-3 search-across-every-dimension
+/// absence assertion. Test-support is the only place raw SQL is acceptable;
+/// production goes through `IndexStorePort::query_by_contributor`.
+pub fn read_indexed_claims_by_contributor(env: &TestEnv, author_did: &str) -> Vec<IndexedRow> {
+    read_indexed_rows_where(env, "author_did = ?", author_did)
+}
+
+/// Read every `indexed_claims` row for `subject` (the Subject search dimension).
+/// Mirrors [`read_indexed_claims_by_object`]. Production goes through
+/// `IndexStorePort::query_by_subject`.
+pub fn read_indexed_claims_by_subject(env: &TestEnv, subject: &str) -> Vec<IndexedRow> {
+    read_indexed_rows_where(env, "subject = ?", subject)
+}
+
+/// Read EVERY `indexed_claims` CID (no filter) — the universe of what is actually
+/// in the index, used by the AV-3 absence assertion to prove the three
+/// adversarial CIDs produced NO row.
+pub fn read_all_indexed_cids(env: &TestEnv) -> Vec<String> {
+    let db_path = index_duckdb_path(env);
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open index.duckdb at {} for AV-3 row-count assertion: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare("SELECT cid FROM indexed_claims")
+        .unwrap_or_else(|err| panic!("prepare all-cids read: {err}"));
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|err| panic!("query all indexed cids: {err}"));
+    rows.map(|r| r.expect("decode cid")).collect()
+}
+
+/// Shared single-bind `indexed_claims` projection used by the dimension readers.
+fn read_indexed_rows_where(env: &TestEnv, where_clause: &str, bind: &str) -> Vec<IndexedRow> {
+    let db_path = index_duckdb_path(env);
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open index.duckdb at {} for AV-3 dimension read: {err}",
+            db_path.display()
+        )
+    });
+    let sql = format!(
+        "SELECT author_did, cid, subject, object, verified_against \
+         FROM indexed_claims WHERE {where_clause}"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .unwrap_or_else(|err| panic!("prepare dimension read: {err}"));
+    let rows = stmt
+        .query_map(duckdb::params![bind], |row| {
+            Ok(IndexedRow {
+                author_did: row.get(0)?,
+                cid: row.get(1)?,
+                subject: row.get(2)?,
+                object: row.get(3)?,
+                verified_against: row.get(4)?,
+            })
+        })
+        .unwrap_or_else(|err| panic!("query indexed_claims by dimension: {err}"));
     rows.map(|r| r.expect("decode indexed_claims row")).collect()
 }
 

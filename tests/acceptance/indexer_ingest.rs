@@ -305,12 +305,151 @@ fn indexer_rejects_unverified_claim() {
     // Universe (port-exposed): count of indexed_claims rows (1); the set of
     // adversarial cids absent from indexed_claims AND absent from every search
     // result; indexer.ingest.rejected{reason} counts; indexer.ingest.verified (1).
-    todo!(
-        "DELIVER (slice-05): RELEASE GATE. Seed FakeIngestSource with unsigned + \
-         tampered-sig + cid-mismatch + one valid record; run `openlore-indexer \
-         ingest`; assert ONLY the valid record is in indexed_claims + searchable, \
-         the 3 adversarial cids never enter the index nor any search result, and \
-         indexer.ingest.rejected fires per reason. Reuses claim_domain::verify."
+    let env = TestEnv::fresh();
+    let priya = FixtureKeypair::for_did(PRIYA_DID);
+    let priya_pubkey_hex = hex_lower(&priya.verifying_key.0);
+
+    // Seed the FAKE source with the adversarial set + one VALID record, ALL on
+    // the SAME author surface (Priya). Per criterion 1 + DD-AV-2 the records are
+    // hosted VERBATIM — the indexer's gate, not the fixture, rejects them. Per
+    // Mandate 11 these are NAMED example specs (the `RawRecordSpec` builders),
+    // never PBT-generated at layer 3.
+    //
+    // Load-bearing falsifiability: each posture gets a DISTINCT payload (distinct
+    // object) so each computes a DISTINCT CID. De-dup is by CID only (ADR-025),
+    // so identical payloads would collide all four onto ONE CID — a row-count
+    // assertion could then NOT distinguish "unsigned rejected" from "unsigned
+    // admitted then de-duped onto the valid CID". Distinct CIDs make a wrongly
+    // admitted adversarial record surface as a NEW row (genuinely load-bearing).
+    let unsigned_spec = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.unsigned-adversary",
+        0.41,
+    )
+    .posture(Posture::Unsigned);
+    let tampered_spec = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.tampered-adversary",
+        0.42,
+    )
+    .posture(Posture::TamperedSignature);
+    let cid_mismatch_spec = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.cid-mismatch-adversary",
+        0.43,
+    )
+    .posture(Posture::CidMismatch);
+    let valid_spec = fixture_ingest_valid_signed();
+
+    // Materialize each record's wire CID + search anchors BEFORE handing the
+    // specs to the fake source (the port-exposed observable surface of the
+    // ingest pass). The author DID stored on the row carries the app fragment.
+    let priya_author = format!("{PRIYA_DID}#org.openlore.application");
+    let anchors_for = |spec: &RawRecordSpec| {
+        let record = spec.clone().into_raw_record();
+        SearchAnchors {
+            cid: record.published_cid.0.clone(),
+            object: record.raw_payload.unsigned.object.clone(),
+            subject: record.raw_payload.unsigned.subject.clone(),
+            author_did: priya_author.clone(),
+        }
+    };
+    let unsigned_anchors = anchors_for(&unsigned_spec);
+    let tampered_anchors = anchors_for(&tampered_spec);
+    let cid_mismatch_anchors = anchors_for(&cid_mismatch_spec);
+    let valid_anchors = anchors_for(&valid_spec);
+
+    let source = FakeIngestServer::start(vec![
+        unsigned_spec,
+        tampered_spec,
+        cid_mismatch_spec,
+        valid_spec,
+    ]);
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass against the
+    // fake source + the PLC pubkey seam (the SAME pure verify-before-index gate;
+    // no second verification path, WD-104). --
+    let outcome = run_openlore_indexer_with_source(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        &[(PRIYA_DID, &priya_pubkey_hex)],
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // -- Observable outcome 4: indexer.ingest.verified count 1; rejected count 3
+    // with a per-reason breakdown {unsigned:1, bad_signature:1, cid_mismatch:1}.
+    // Each adversarial posture maps to its DISTINCT reason (the gate reuses
+    // claim_domain::verify + compute_cid). --
+    assert!(
+        outcome.stdout.contains("indexer.ingest.verified")
+            && outcome.stdout.contains("\"count\":1"),
+        "expected indexer.ingest.verified count 1; got stdout: {}",
+        outcome.stdout
+    );
+    let rejected: serde_json::Value = outcome
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "indexer.ingest.rejected")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an indexer.ingest.rejected event in stdout; got: {}",
+                outcome.stdout
+            )
+        });
+    assert_eq!(
+        rejected["count"], 3,
+        "expected 3 rejected adversarial records; got event {rejected}"
+    );
+    assert_eq!(
+        rejected["by_reason"]["unsigned"], 1,
+        "expected exactly one `unsigned` reject; got {rejected}"
+    );
+    assert_eq!(
+        rejected["by_reason"]["bad_signature"], 1,
+        "expected exactly one `bad_signature` reject (tampered sig); got {rejected}"
+    );
+    assert_eq!(
+        rejected["by_reason"]["cid_mismatch"], 1,
+        "expected exactly one `cid_mismatch` reject; got {rejected}"
+    );
+
+    // -- Observable outcome 1+2+3 (the cardinal gate, state-delta over the
+    // universe): index.duckdb holds EXACTLY the one valid record; each of the
+    // three adversarial cids is ABSENT from indexed_claims AND from a search
+    // across EVERY dimension (object / subject / contributor); the valid record
+    // IS searchable, attributed, verified_against != "". A false-positive reject
+    // of the good claim is ALSO a failure (KPI-AV-3 cuts both ways). --
+    assert_unverified_claims_never_indexed_nor_searchable(
+        &env,
+        &[unsigned_anchors, tampered_anchors, cid_mismatch_anchors],
+        &valid_anchors,
+    );
+
+    // The valid record is attributed to Priya with a non-empty verified_against
+    // when read directly by its headline object (the AV-1 attribution convention).
+    let valid_rows =
+        read_indexed_claims_by_object(&env, "org.openlore.philosophy.reproducible-builds");
+    assert_eq!(
+        valid_rows.len(),
+        1,
+        "exactly one verified claim searchable by the valid object; got {valid_rows:?}"
+    );
+    assert_eq!(
+        valid_rows[0].author_did, "did:plc:priya-test#org.openlore.application",
+        "the valid indexed row must be attributed to Priya (author from the signed payload)"
+    );
+    assert!(
+        !valid_rows[0].verified_against.is_empty(),
+        "verified_against must never be empty on the valid indexed row (WD-104)"
     );
 }
 
