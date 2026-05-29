@@ -4668,6 +4668,78 @@ pub fn assert_transport_reached_serve_port(stdout: &str) {
     assert_verified_marker_is_universal(stdout);
 }
 
+/// The set of attributed result rows (each `author_did:` line, trimmed) in a
+/// `search` stdout — the port-exposed per-author attribution surface. Used to
+/// compare a re-run (link-resolved) result against the original query's (AV-27).
+fn attributed_author_rows(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| line.starts_with("author_did:"))
+        .collect()
+}
+
+/// Assert the AV-27 / US-AV-006 Ex2 share-boundary round-trip (KPI-AV-6 /
+/// KPI-AV-2 / I-AV-8): opening a shared link RE-RUNS the encoded query, so the
+/// `resolved` stdout's per-author attributed rows MATCH the `original` query's
+/// rows (same authors, same `[verified]` marks), with NO merged consensus row and
+/// the same `peer add` follow affordance for unfollowed authors. The link encoded
+/// the QUERY (deterministic per AVC-3b), NOT a snapshot — the resolver re-composes
+/// per-author rows from scratch (anti-merging across the share boundary).
+///
+/// Universe (port-exposed): the resolved result's set of attributed `author_did:`
+/// rows == the original query's set; every resolved row carries `[verified]`; NO
+/// merged/consensus row in the resolved output; the `openlore peer add` follow
+/// affordance present (for the unfollowed-author corpus). NEVER an internal field.
+pub fn assert_resolved_link_matches_original_query(original: &str, resolved: &str) {
+    // 1. The re-run preserves attribution: the resolved output's set of attributed
+    //    author rows EQUALS the original query's set (same authors, same per-author
+    //    rows). The link re-ran the QUERY, so the re-composition is deterministic
+    //    (AVC-3b) — same authors, same count, NOT a stale/lossy snapshot.
+    let mut original_rows = attributed_author_rows(original);
+    let mut resolved_rows = attributed_author_rows(resolved);
+    assert!(
+        !resolved_rows.is_empty(),
+        "AV-27: the resolved link must re-run the query to a NON-EMPTY attributed \
+         result (>=1 `author_did:` row):\nresolved:\n{resolved}"
+    );
+    original_rows.sort();
+    resolved_rows.sort();
+    assert_eq!(
+        resolved_rows, original_rows,
+        "AV-27: opening the shared link must RE-RUN the query to the SAME per-author \
+         attributed rows as the original query (same authors, same [verified] marks). \
+         original rows: {original_rows:?}\nresolved rows: {resolved_rows:?}\n\
+         original output:\n{original}\nresolved output:\n{resolved}"
+    );
+
+    // 2. Every resolved row carries `[verified]`; NO `[unverified]`/unknown-signature
+    //    state (the universal-marker guarantee survives the share boundary, I-AV-1).
+    assert_verified_marker_is_universal(resolved);
+
+    // 3. NO merged/consensus row in the resolved output (anti-merging across the
+    //    share boundary, I-AV-2/KPI-AV-2). The no-merge GUARANTEE footer is the
+    //    PROMISE, not a merged row, so it is excluded from the merge-detection scan.
+    for banned in &["authors agree", "the network says", "the network thinks"] {
+        for line in resolved.lines() {
+            assert!(
+                !line.to_ascii_lowercase().contains(banned),
+                "AV-27 (anti-merging, I-AV-2): no merged/consensus row may appear in \
+                 the resolved result; found {banned:?} in line {line:?}\nresolved:\n{resolved}"
+            );
+        }
+    }
+
+    // 4. The same `peer add` follow affordance is present for unfollowed authors —
+    //    the discovery->federation funnel (WD-110 / I-AV-7) survives the share
+    //    boundary (the resolver re-renders via the SAME network-result renderer).
+    assert!(
+        resolved.contains("openlore peer add"),
+        "AV-27: the resolved result must carry the same `openlore peer add <did>` \
+         follow affordance for unfollowed authors:\nresolved:\n{resolved}"
+    );
+}
+
 /// Extract the `cid:` value rendered for the FIRST result row whose attribution
 /// block names `author_substr` (e.g. `did:plc:priya-test`) and whose `subject:`
 /// line names `subject_substr` (e.g. `github:bazelbuild/bazel`) in an AV-8-style

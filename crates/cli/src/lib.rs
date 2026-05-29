@@ -85,6 +85,11 @@ pub enum Command {
         /// result snapshot.
         #[arg(long)]
         share: bool,
+        /// OPEN a shared `openlore://search?<dim>=<value>` link (the CLI re-run
+        /// resolver, Q-DELIVER-AV-3 / US-AV-006 Ex2): RE-RUNS the encoded query
+        /// against the CURRENT index (the link encoded the QUERY, never a
+        /// snapshot — I-AV-8). A positional argument the verb detects.
+        link: Option<String>,
     },
 }
 
@@ -457,6 +462,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             subject,
             show,
             share,
+            link,
         } => match verbs::search::run(
             &wiring,
             &verbs::search::SearchArgs {
@@ -465,6 +471,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                 subject,
                 show,
                 share,
+                link,
             },
         ) {
             Ok(outcome) => {

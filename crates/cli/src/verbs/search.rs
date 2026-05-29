@@ -70,6 +70,14 @@ pub struct SearchArgs {
     /// `--share`: emit a stable query-encoding link instead of running the query
     /// (WD-110 / I-AV-8 — encodes the QUERY, never a snapshot).
     pub share: bool,
+    /// A positional `openlore://search?<dim>=<value>` link to OPEN (the CLI
+    /// re-run resolver, Q-DELIVER-AV-3 / US-AV-006 Ex2). When supplied, the verb
+    /// PARSES the link (the inverse of the 05-12 `--share` emitter grammar),
+    /// maps the key to a [`SearchDimension`], then RE-RUNS the SAME dimension
+    /// search path against the CURRENT index (the link encoded the QUERY,
+    /// deterministic per AVC-3b — NOT a snapshot, I-AV-8). Web AppView is OUT of
+    /// scope (OD-AV-6); this is the CLI re-run only.
+    pub link: Option<String>,
 }
 
 /// The captured search output + exit code (mirrors the other verbs' outcomes).
@@ -90,6 +98,9 @@ pub struct SearchOutcome {
 /// are `todo!()`. The verb reads the SOFT-probed `HttpIndexQueryAdapter` the CLI
 /// composition root wired (WD-116).
 pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
+    if let Some(link) = &args.link {
+        return run_resolve_link(wiring, link);
+    }
     if args.share {
         return run_share(args);
     }
@@ -561,6 +572,101 @@ fn share_usage_error_no_dimension() -> SearchOutcome {
     }
 }
 
+/// The CLI re-run resolver (Q-DELIVER-AV-3 / US-AV-006 Ex2 / AV-27): open a
+/// shared `openlore://search?<dim>=<value>` link by RE-RUNNING the encoded query
+/// against the CURRENT index. The link encoded the QUERY (deterministic per
+/// AVC-3b, 02-05), NOT a result snapshot — so opening it re-composes the
+/// per-author-attributed verified rows from scratch, preserving anti-merging
+/// across the share boundary (I-AV-8 / KPI-AV-2). Web AppView is OUT of scope
+/// (OD-AV-6); this is the CLI re-run only.
+///
+/// The resolver PARSES the link (the inverse of the 05-12 `render_share_link`
+/// emitter grammar) into a [`SearchDimension`] + the encoded value, then drives
+/// the SAME dimension search path the original query ran:
+///
+/// - `object=<philosophy>`  -> [`run_dimension_object`] (the OBJECT survey, with
+///   the AV-12 near-match empty policy — re-running re-derives the same survey).
+/// - `subject=<project>`    -> [`run_dimension_subject`] (the SUBJECT survey).
+/// - `contributor=<did>`    -> the CONTRIBUTOR trail. The link encodes the
+///   RESOLVED app-identity-bare DID (the 05-12 emitter encoded the resolved DID,
+///   AV-29), so opening it re-runs the SAME `author_did` query verbatim — the
+///   value is passed straight through (no second handle->DID resolution).
+///
+/// A malformed link (missing the `openlore://search?` prefix, missing the
+/// `=`, an unknown dimension key, or an empty value) is a usage error
+/// (non-zero exit) — there is no query to re-run.
+fn run_resolve_link(wiring: &Wiring, link: &str) -> Result<SearchOutcome> {
+    let (dimension, value) = match parse_share_link(link) {
+        Some(parsed) => parsed,
+        None => return Ok(resolve_link_usage_error(link)),
+    };
+    // Re-run the SAME dimension search path the original `--share` query encoded.
+    // The contributor dimension's link already carries the RESOLVED DID (the
+    // 05-12 emitter encoded `bare_did(resolve_contributor_to_did(..))`, AV-29), so
+    // re-running matches the indexed `author_did` exactly — no second resolution.
+    match dimension {
+        SearchDimension::Object => run_dimension_object(wiring, &value),
+        SearchDimension::Subject => run_dimension_subject(wiring, &value),
+        SearchDimension::Contributor => run_dimension_contributor(wiring, &value),
+    }
+}
+
+/// Parse an `openlore://search?<dimension>=<value>` link into its
+/// [`SearchDimension`] + encoded value — the INVERSE of the 05-12
+/// [`render::render_share_link`] emitter grammar (`share_dimension_key`). PURE
+/// function — no I/O.
+///
+/// Returns `None` for a malformed link (missing the `openlore://search?` prefix,
+/// missing the `=` separator, an unknown dimension key, or an empty value/
+/// dimension) so the caller can surface a usage error. The grammar carries
+/// EXACTLY one `<key>=<value>` query parameter (the link encodes the QUERY, never
+/// a `&`-joined snapshot), so a second parameter is also malformed.
+fn parse_share_link(link: &str) -> Option<(SearchDimension, String)> {
+    let query = link.strip_prefix(SHARE_LINK_PREFIX)?;
+    // The link encodes EXACTLY one query parameter — a `&` means an extra
+    // (snapshot-shaped) field, which is not a valid query-encoding link.
+    if query.contains('&') {
+        return None;
+    }
+    let (key, value) = query.split_once('=')?;
+    if value.is_empty() {
+        return None;
+    }
+    let dimension = dimension_from_key(key)?;
+    Some((dimension, value.to_string()))
+}
+
+/// The `openlore://search?` scheme+authority prefix every `--share` link carries
+/// (the head of the 05-12 emitter grammar). The resolver strips it to read the
+/// `<dimension>=<value>` query string.
+const SHARE_LINK_PREFIX: &str = "openlore://search?";
+
+/// Map a share-link `<dimension>` query KEY back to its [`SearchDimension`] — the
+/// inverse of the 05-12 emitter's `share_dimension_key`. Returns `None` for an
+/// unknown key (a malformed/forward-incompatible link). PURE helper.
+fn dimension_from_key(key: &str) -> Option<SearchDimension> {
+    match key {
+        "object" => Some(SearchDimension::Object),
+        "contributor" => Some(SearchDimension::Contributor),
+        "subject" => Some(SearchDimension::Subject),
+        _ => None,
+    }
+}
+
+/// A malformed shared link: a usage error (non-zero exit) — the link is not a
+/// valid `openlore://search?<dimension>=<value>` query encoding, so there is no
+/// query to re-run. Mirrors the other usage-error shapes.
+fn resolve_link_usage_error(link: &str) -> SearchOutcome {
+    SearchOutcome {
+        exit_code: 2,
+        stdout: format!(
+            "openlore search: `{link}` is not a valid shareable link. Expected \
+             `openlore://search?<object|contributor|subject>=<value>` (run \
+             `openlore search --object <philosophy> --share` to emit one).\n"
+        ),
+    }
+}
+
 /// No dimension / mode supplied: a usage error pointing at the dimension flags.
 /// SCAFFOLD — the exact usage message lands with the verb behavior.
 fn run_no_dimension(_args: &SearchArgs) -> Result<SearchOutcome> {
@@ -577,6 +683,84 @@ mod tests {
     //! so the EXACT `author_did = ?` projection matches (AV-15). PURE — no I/O.
 
     use super::*;
+
+    /// AV-15 / US-AV-003: `github:<handle>` resolves to the author app-identity DID
+    /// (`did:plc:<handle>-test#org.openlore.application`, the slice-02/04 handle→DID
+    /// convention lifted to the indexed `author_did` form) so the contributor query
+    /// matches the corpus author exactly. A bare DID lifts the app-identity
+    /// fragment; an already-fragmented DID passes through unchanged.
+    use proptest::prelude::*;
+
+    /// The link line `render::render_share_link` emits carries the
+    /// `openlore://search?<dim>=<value>` token; extract it for the round-trip
+    /// property (the parser consumes the link token, not the whole render block).
+    fn link_token(rendered: &str) -> String {
+        rendered
+            .split_whitespace()
+            .find(|tok| tok.starts_with(SHARE_LINK_PREFIX))
+            .expect("render_share_link emits an openlore://search? link")
+            .to_string()
+    }
+
+    /// AV-27 / US-AV-006 Ex2 (PBT — the parser is the INVERSE of the 05-12
+    /// emitter): for EVERY dimension + (URL-safe) value, parsing the link
+    /// `render::render_share_link` emits ROUND-TRIPS back to the SAME
+    /// `(SearchDimension, value)`. The link encoded the QUERY deterministically
+    /// (AVC-3b), so the resolver re-derives the exact query the share encoded —
+    /// the symmetric property that makes opening a shared link re-run the SAME
+    /// search (anti-merging across the share boundary, I-AV-8). PURE — no I/O.
+    #[test]
+    fn parse_share_link_is_the_inverse_of_the_share_emitter() {
+        // The dimension space is the closed three-variant set; the value space is
+        // the share-grammar character class (philosophy/project URIs + DIDs —
+        // `[a-z0-9.:/_#-]`, never an empty value, never the `&`/`=` separators).
+        let dimensions = prop_oneof![
+            Just(SearchDimension::Object),
+            Just(SearchDimension::Contributor),
+            Just(SearchDimension::Subject),
+        ];
+        let value = "[a-z0-9][a-z0-9.:/_#-]{0,60}";
+        proptest!(|(dimension in dimensions, value in value)| {
+            let rendered = render::render_share_link(dimension, &value);
+            let link = link_token(&rendered);
+            let parsed = parse_share_link(&link);
+            prop_assert_eq!(
+                parsed,
+                Some((dimension, value.clone())),
+                "parse_share_link must invert render_share_link for {:?}={}",
+                dimension,
+                value
+            );
+        });
+    }
+
+    /// AV-27 sad paths (Mandate 11 — EXAMPLE-only, enumerated): a malformed link
+    /// PARSES to `None` (the caller surfaces a usage error) — a missing prefix, a
+    /// missing `=`, an unknown dimension key, an empty value, or a `&`-joined
+    /// (snapshot-shaped) extra parameter. The resolver re-runs ONLY a valid
+    /// query-encoding link; anything else has no query to re-run.
+    #[test]
+    fn parse_share_link_rejects_malformed_links() {
+        for malformed in [
+            // Missing the `openlore://search?` scheme+authority prefix.
+            "https://example.com/?object=x",
+            "object=org.openlore.philosophy.reproducible-builds",
+            // Missing the `=` separator (no value).
+            "openlore://search?object",
+            // An unknown / forward-incompatible dimension key.
+            "openlore://search?philosophy=x",
+            // An empty value (a dimension with nothing to query).
+            "openlore://search?object=",
+            // A `&`-joined extra parameter — a snapshot shape, not a query encoding.
+            "openlore://search?object=x&author_did=did:plc:y",
+        ] {
+            assert_eq!(
+                parse_share_link(malformed),
+                None,
+                "a malformed link must parse to None: {malformed}"
+            );
+        }
+    }
 
     /// AV-15 / US-AV-003: `github:<handle>` resolves to the author app-identity DID
     /// (`did:plc:<handle>-test#org.openlore.application`, the slice-02/04 handle→DID

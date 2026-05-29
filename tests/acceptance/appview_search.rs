@@ -2066,12 +2066,90 @@ fn opening_a_shared_link_re_runs_the_query_yielding_same_attributed_results() {
     // Universe (port-exposed): the resolved result's per-author rows match the
     // original query's (same authors, same [verified] marks); NO merged row; the
     // follow affordance present for unfollowed authors.
-    todo!(
-        "DELIVER (slice-05): open the `openlore://search?object=...` link via the \
-         CLI re-run resolver; assert it re-runs the query -> same per-author- \
-         attributed verified results (every row author DID + [verified]), NO \
-         merged row, same `peer add` affordance (US-AV-006 Ex2; anti-merging \
-         across the share boundary, I-AV-8/KPI-AV-2)."
+    let env = TestEnv::initialized();
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the SAME headline reproducible-builds corpus AV-26
+    // shared (9 authors / 7 subjects, all unfollowed). The CLI's indexer_url points
+    // at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- The ORIGINAL query (the reference Tobias's re-run must match): the
+    // object-dimension network read through the CLI driving port. Its attributed
+    // per-author rows are the SAME set the shared link must re-derive. --
+    let original = run_openlore_search(&env, &["search", "--object", object], &indexer);
+    assert_eq!(
+        original.status, 0,
+        "precondition: the original `openlore search --object` must exit 0. \
+         stdout: {} stderr: {}",
+        original.stdout, original.stderr
+    );
+
+    // -- Chain off AV-26: emit the shareable link (`--share` is render-only, I-AV-8),
+    // then PARSE it (asserting it encodes the QUERY only, no snapshot payload). This
+    // is the exact `openlore://search?object=...` link Maria shared. --
+    let share = run_openlore_search(&env, &["search", "--object", object, "--share"], &indexer);
+    assert_eq!(
+        share.status, 0,
+        "precondition: `openlore search --object <philosophy> --share` must exit 0. \
+         stdout: {} stderr: {}",
+        share.stdout, share.stderr
+    );
+    let parsed = parse_and_assert_query_encoding_share_link(&share.stdout);
+    assert_eq!(
+        parsed.dimension, "object",
+        "the shared link must encode dimension=object:\n{}",
+        share.stdout
+    );
+    assert_eq!(
+        parsed.value, object,
+        "the shared link must encode value=<the queried philosophy>:\n{}",
+        share.stdout
+    );
+    let link = format!("openlore://search?{}={}", parsed.dimension, parsed.value);
+
+    // -- Action: Tobias OPENS the shared link via the CLI re-run resolver
+    // (Q-DELIVER-AV-3: `openlore search <link>` — a positional link arg the search
+    // verb detects; web AppView OUT of scope per OD-AV-6). The resolver PARSES the
+    // link, maps the key to the SearchDimension, and RE-RUNS the SAME dimension
+    // search path against the CURRENT index. --
+    let resolved = run_openlore_search(&env, &["search", &link], &indexer);
+
+    // exit 0 (a valid re-run, never a fatal).
+    assert_eq!(
+        resolved.status, 0,
+        "AV-27: opening the shared link via the CLI re-run resolver must exit 0. \
+         stdout: {} stderr: {}",
+        resolved.stdout, resolved.stderr
+    );
+
+    // -- Observable outcome (the cardinal AV-27 gate): the encoded query re-ran and
+    // returned the SAME per-author-attributed verified results as the original query
+    // (same authors, same [verified] marks), anti-merging preserved (NO merged
+    // consensus row), with the same `peer add` affordance for unfollowed authors.
+    // The link encoded the QUERY (deterministic per AVC-3b), NOT a snapshot — the
+    // resolver re-composes per-author rows (anti-merging across the share boundary,
+    // I-AV-8/KPI-AV-2). --
+    assert_resolved_link_matches_original_query(&original.stdout, &resolved.stdout);
+
+    // The re-run preserved attribution for the headline pair end-to-end: 9 attributed
+    // rows, both the unfollowed Priya (0.82) + the (subscribed-corpus) Rachel present,
+    // NO merged/consensus row — proven independently of the original-vs-resolved set
+    // equality so the anti-merging gate stands on its own (KPI-AV-2 across the share
+    // boundary).
+    assert_network_result_preserves_attribution(
+        &resolved.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        9,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:rachel-test#org.openlore.application",
+        ],
     );
 }
 
