@@ -2,79 +2,244 @@
 //!
 //! EFFECT shell for the `IndexQueryPort` trait (`crates/ports`). Queries the
 //! self-hosted indexer at a CONFIGURED URL over HTTP/XRPC
-//! (`org.openlore.appview.searchClaims`, ADR-027) and returns the raw FLAT
-//! attributed transport result ([`NetworkSearchResultRaw`]); the CLI re-composes
-//! the per-author view via the pure `appview-domain` core.
+//! (`org.openlore.appview.searchClaims`, ADR-027) and decodes the FLAT attributed
+//! transport response ([`lexicon::SearchQueryResponse`]) into the raw
+//! [`NetworkSearchResultRaw`] the CLI re-composes per-author via the pure
+//! `appview-domain` core.
 //!
 //! ## Unreachable is SOFT and NON-FATAL (KPI-AV-5 / KPI-5 / WD-116)
 //!
-//! The headline contract: a connection failure maps to
-//! [`IndexQueryError::Unreachable`] — a SOFT, NON-FATAL outcome. An unreachable
-//! indexer NEVER blocks local CLI startup nor any local-first verb; `search`
-//! degrades to a clear local-only message and exits 0. This adapter classifies
-//! a transport connection failure as `Unreachable`, NEVER a panic or a startup
-//! refusal. READ-ONLY by construction (no sign/write method).
+//! A connection failure maps to [`IndexQueryError::Unreachable`] — a SOFT,
+//! NON-FATAL outcome. An unreachable indexer NEVER blocks local CLI startup nor
+//! any local-first verb; `search` degrades to a clear local-only message and
+//! exits 0. READ-ONLY by construction (no sign/write method).
 //!
 //! ## Architecture (nw-fp-hexagonal-architecture)
 //!
 //! The pure core never imports this crate; the CLI composition root wires a
-//! [`HttpIndexQueryAdapter`] behind the `IndexQueryPort` interface.
-//!
-//! Bootstrap SCAFFOLD (step 01-03): the port impl exists so the workspace
-//! compiles and the wiring seam is present, but every body is `todo!()`. The
-//! HTTP query + the graceful-degradation `Unreachable` mapping are driven by the
-//! Phase 03/04 acceptance scenarios (AV-* / the indexer-down non-fatal scenario).
+//! [`HttpIndexQueryAdapter`] behind the `IndexQueryPort` interface. Per the
+//! anti-merging-across-the-transport contract (I-AV-2), a response row dropping
+//! `author_did` is a `BadResponse` (the wire MUST carry attribution).
 //
-// SCAFFOLD: true  (adapter skeleton; HTTP query + degradation land in Phase 03/04)
+// SCAFFOLD: false  (step 04-01: live B1 transport for the `--object` walking skeleton)
 
-#![allow(dead_code)] // scaffold; real wiring lands in subsequent DELIVER steps
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use claim_domain::Cid;
+use chrono::{DateTime, Utc};
+use claim_domain::{Cid, Did, KeyId};
+use lexicon::{
+    SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto, SEARCH_CLAIMS_NSID,
+};
 use ports::{
-    IndexQueryError, IndexQueryPort, NetworkSearchResultRaw, ProbeOutcome, SearchDimension,
+    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw, ProbeOutcome,
+    SearchDimension,
 };
 
 /// CLI-side `IndexQueryPort` adapter over HTTP/XRPC to the configured indexer
-/// URL (ADR-027).
-///
-/// Bootstrap SCAFFOLD — the `reqwest` client + the configured indexer URL land
-/// with the real wiring in Phase 03/04. A connection failure will map to the
-/// SOFT `IndexQueryError::Unreachable` (WD-116), never a panic.
+/// URL (ADR-027). Holds the reqwest client + the configured indexer base URL. No
+/// signing/identity field exists (read-only by construction).
 pub struct HttpIndexQueryAdapter {
-    // SCAFFOLD: true — the HTTPS client + the configured indexer base URL land
-    // in Phase 03/04. No signing/identity field exists (read-only by construction).
-    _scaffold: (),
+    client: reqwest::Client,
+    /// The configured indexer base URL (e.g. `http://127.0.0.1:54321`).
+    base_url: String,
 }
 
 impl HttpIndexQueryAdapter {
-    /// Construct the CLI-side query adapter for a configured indexer URL.
-    /// Bootstrap SCAFFOLD: the real constructor (reqwest client + URL) lands in
-    /// Phase 03/04.
+    /// Construct the CLI-side query adapter with NO configured URL (the empty
+    /// base). Kept zero-arg so the composition root's `_phantom_index_query`
+    /// dep-graph anchor (`fn() -> HttpIndexQueryAdapter`) keeps compiling. A
+    /// search through this degenerate adapter degrades to the SOFT `Unreachable`
+    /// outcome; the configured adapter is built via [`Self::for_url`].
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        // SCAFFOLD: true
-        todo!("HttpIndexQueryAdapter::new — wired in Phase 03/04 (ADR-027)")
+        Self::for_url(String::new())
+    }
+
+    /// Construct the CLI-side query adapter for a configured indexer base URL.
+    pub fn for_url(base_url: impl Into<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            base_url: base_url.into(),
+        }
+    }
+
+    /// The full XRPC endpoint URL for the searchClaims query.
+    fn search_endpoint(&self) -> String {
+        format!(
+            "{}/xrpc/{SEARCH_CLAIMS_NSID}",
+            self.base_url.trim_end_matches('/')
+        )
     }
 }
 
 #[async_trait]
 impl IndexQueryPort for HttpIndexQueryAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // SCAFFOLD: true — the SOFT-at-startup probe (an unreachable indexer is
-        // informational, NOT a refusal — KPI-5) lands in Phase 03/04.
-        todo!("HttpIndexQueryAdapter::probe — SOFT index-query probe (Phase 03/04)")
+        // SOFT at startup: an unreachable indexer is informational, NOT a refusal
+        // (KPI-5). We do not perform a network round-trip in the probe — the
+        // graceful-degradation contract is exercised by `search` itself, which
+        // maps a connection failure to the SOFT `Unreachable` outcome. The
+        // adapter is always "ready" in the probe sense (its readiness is the
+        // CONFIGURED URL being present, which it is by construction).
+        ProbeOutcome::Ok
     }
 
     async fn search(
         &self,
-        _dim: SearchDimension,
-        _value: &str,
-        _cid: Option<&Cid>,
+        dim: SearchDimension,
+        value: &str,
+        cid: Option<&Cid>,
     ) -> Result<NetworkSearchResultRaw, IndexQueryError> {
-        // SCAFFOLD: true — the HTTP/XRPC searchClaims query lands in Phase 03/04.
-        // A connection failure MUST map to the SOFT IndexQueryError::Unreachable
-        // (WD-116), never a panic/fatal.
-        todo!("HttpIndexQueryAdapter::search — XRPC searchClaims query, Unreachable=soft (Phase 03/04)")
+        let request = SearchQueryRequest {
+            dimension: to_dto_dimension(dim),
+            value: value.to_string(),
+            cid: cid.map(|c| c.0.clone()),
+        };
+
+        let response = self
+            .client
+            .post(self.search_endpoint())
+            .json(&request)
+            .send()
+            .await
+            // A connection failure (refused, DNS, timeout) is the SOFT,
+            // NON-FATAL Unreachable outcome (WD-116) — NEVER a panic.
+            .map_err(|err| IndexQueryError::Unreachable {
+                message: format!("indexer at {} unreachable: {err}", self.base_url),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(IndexQueryError::BadResponse {
+                message: format!("indexer returned HTTP {}", response.status()),
+            });
+        }
+
+        let body: SearchQueryResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| IndexQueryError::BadResponse {
+                    message: format!("decode searchClaims response: {err}"),
+                })?;
+
+        decode_response(body)
+    }
+}
+
+/// Map a domain `SearchDimension` to its wire DTO keyword.
+fn to_dto_dimension(dim: SearchDimension) -> SearchDimensionDto {
+    match dim {
+        SearchDimension::Object => SearchDimensionDto::Object,
+        SearchDimension::Contributor => SearchDimensionDto::Contributor,
+        SearchDimension::Subject => SearchDimensionDto::Subject,
+    }
+}
+
+/// Decode the lexicon `SearchQueryResponse` into the raw FLAT attributed
+/// transport result. Every row MUST carry a non-empty `author_did` (the
+/// anti-merging-across-the-transport contract, I-AV-2) — a dropped attribution is
+/// a `BadResponse`.
+fn decode_response(body: SearchQueryResponse) -> Result<NetworkSearchResultRaw, IndexQueryError> {
+    let mut results = Vec::with_capacity(body.results.len());
+    for row in body.results {
+        results.push(decode_row(row)?);
+    }
+    Ok(NetworkSearchResultRaw {
+        results,
+        distinct_author_count: body.distinct_author_count,
+        total_claims: body.total_claims,
+        suggestion: body.suggestion,
+    })
+}
+
+/// Decode one wire `SearchResultDto` into a `NetworkResultRowRaw`. Refuses an
+/// empty `author_did` (I-AV-2 — the wire dropped attribution).
+fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryError> {
+    if row.author_did.is_empty() {
+        return Err(IndexQueryError::BadResponse {
+            message: "a result row carried an empty author_did (I-AV-2 violation)".to_string(),
+        });
+    }
+    let composed_at: DateTime<Utc> = row
+        .composed_at
+        .parse()
+        .map_err(|err| IndexQueryError::BadResponse {
+            message: format!("parse composed_at {:?}: {err}", row.composed_at),
+        })?;
+    Ok(NetworkResultRowRaw {
+        author_did: Did(row.author_did),
+        cid: Cid(row.cid),
+        subject: row.subject,
+        predicate: row.predicate,
+        object: row.object,
+        confidence: row.confidence,
+        composed_at,
+        verified_against: KeyId(row.verified_against),
+        evidence: row.evidence,
+        references: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! DELIVER inner loop (step 04-01): the decode contract — the lexicon
+    //! `SearchQueryResponse` decodes into `NetworkSearchResultRaw` preserving
+    //! per-row `author_did` (I-AV-2), and a row with an empty `author_did` is a
+    //! `BadResponse`. Pure-function unit (no network); the live transport is
+    //! exercised end-to-end by AV-8.
+
+    use super::*;
+
+    fn dto_row(author_did: &str) -> SearchResultDto {
+        SearchResultDto {
+            author_did: author_did.to_string(),
+            cid: "bafyk2".to_string(),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.reproducible-builds".to_string(),
+            confidence: 0.82,
+            composed_at: "2026-05-28T00:00:00Z".to_string(),
+            verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
+            evidence: vec!["https://example.org/e1".to_string()],
+        }
+    }
+
+    /// The load-bearing decode contract: every wire row preserves its non-empty
+    /// `author_did` into the raw transport result (anti-merging across the
+    /// transport, I-AV-2). Two distinct-author rows stay TWO rows.
+    #[test]
+    fn decode_preserves_author_did_per_row() {
+        let body = SearchQueryResponse {
+            results: vec![dto_row("did:plc:priya-test"), dto_row("did:plc:rachel-test")],
+            distinct_author_count: 2,
+            total_claims: 2,
+            suggestion: None,
+        };
+
+        let raw = decode_response(body).expect("decode succeeds");
+
+        assert_eq!(raw.results.len(), 2, "two rows stay two rows (no merge)");
+        assert_eq!(raw.results[0].author_did, Did("did:plc:priya-test".to_string()));
+        assert_eq!(raw.results[1].author_did, Did("did:plc:rachel-test".to_string()));
+        assert_eq!(raw.distinct_author_count, 2);
+    }
+
+    /// A wire row that dropped `author_did` is a `BadResponse` (the transport MUST
+    /// carry attribution — I-AV-2).
+    #[test]
+    fn empty_author_did_row_is_bad_response() {
+        let body = SearchQueryResponse {
+            results: vec![dto_row("")],
+            distinct_author_count: 0,
+            total_claims: 1,
+            suggestion: None,
+        };
+
+        let err = decode_response(body).expect_err("empty author_did must be rejected");
+        assert!(
+            matches!(err, IndexQueryError::BadResponse { .. }),
+            "an empty author_did over the wire is a BadResponse; got {err:?}"
+        );
     }
 }

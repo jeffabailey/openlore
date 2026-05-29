@@ -4072,39 +4072,208 @@ pub enum NetworkIndexFixture {
 /// seeded `index.duckdb` on an ephemeral port (DEVOPS open-q 8 parallel-safety),
 /// reads back the bound port, and exposes `indexer_url()` for the CLI to query.
 pub struct IndexerHandle {
-    _private: (),
+    /// The `http://127.0.0.1:<ephemeral-port>` URL the CLI's `indexer_url` points
+    /// at — read back from the spawned `serve` process's
+    /// `indexer.serve.listening` event.
+    url: String,
+    /// The live `openlore-indexer serve` child process. Killed on drop (RAII
+    /// per-scenario isolation), mirroring the `FakePds` / `PeerPds` pattern.
+    child: std::process::Child,
+    /// The ingest source kept alive for the serve process's startup gauntlet (the
+    /// `ingest_source.probe()` requires a reachable source URL). The corpus is
+    /// already ingested; serve only reads the index, but the wire→probe→use gate
+    /// (ADR-009) probes every wired adapter. Held so the source's port stays bound
+    /// for the serve process's lifetime; dropped (releasing the port) with the
+    /// handle.
+    _source: FakeIngestServer,
 }
 
 impl IndexerHandle {
     /// The `http://127.0.0.1:<ephemeral-port>` URL the CLI's `[appview]
-    /// indexer_url` is pointed at. SCAFFOLD: true (slice-05).
+    /// indexer_url` is pointed at.
     pub fn indexer_url(&self) -> String {
-        // SCAFFOLD: true (slice-05)
-        todo!(
-            "DELIVER (slice-05): return the http://127.0.0.1:<ephemeral-port> URL \
-             of the spawned `openlore-indexer serve` (bound :0, read back)."
-        )
+        self.url.clone()
     }
 }
 
-/// Seed the network index for a scenario: spin up a `FakeIngestSource` hosting the
-/// fixture's records + the fixture real-`z6Mk` PLC resolver, run a REAL
-/// `openlore-indexer ingest` pass to populate a REAL `index.duckdb`, and (for the
-/// search scenarios) start a REAL `openlore-indexer serve` over localhost,
-/// returning the [`IndexerHandle`]. The user's `[appview] indexer_url` is set to
-/// the handle's URL. This is the slice-05 precondition seam (no live network).
-///
-/// SCAFFOLD: true (slice-05) — DELIVER materializes the FakeIngestSource +
-/// resolver wiring + the ingest/serve spawn per `NetworkIndexFixture` variant.
+impl Drop for IndexerHandle {
+    fn drop(&mut self) {
+        // Kill the serve process so the bound port is released — RAII per-scenario
+        // isolation (the ephemeral `:0` port keeps parallel scenarios disjoint).
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Map a [`NetworkIndexFixture`] to the corpus of `RawRecordSpec`s the
+/// `FakeIngestServer` hosts. AV-8 (the walking skeleton) wires the headline
+/// `ReproducibleBuildsNineAuthorsUnfollowed` corpus; other variants register the
+/// same shape in later steps.
+fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::*;
+    match fixture {
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed => {
+            corpus_reproducible_builds_nine_authors()
+        }
+        NetworkIndexFixture::DenoDependencyPinningTwoUnfollowedAuthors => {
+            corpus_deno_dependency_pinning_two_authors()
+        }
+        NetworkIndexFixture::SingleVerifiedPriyaClaim => vec![fixture_ingest_valid_signed()],
+        NetworkIndexFixture::AdversarialSetPlusOneValid => {
+            fixture_ingest_adversarial_set_plus_one_valid()
+        }
+        other => panic!(
+            "seed_network_index: corpus for fixture {other:?} not yet materialized (04-01 \
+             wires only the AV-8 headline corpus; later steps add the rest)"
+        ),
+    }
+}
+
+/// The distinct author DIDs present in a corpus, each paired with its fixture
+/// keypair public-key hex (the slice-03 pubkey seam the indexer verifies against).
+fn corpus_pubkey_seams(
+    specs: &[openlore_test_support::RawRecordSpec],
+) -> Vec<(String, String)> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut seams: Vec<(String, String)> = Vec::new();
+    for spec in specs {
+        let did = spec.author_did.clone();
+        if seen.insert(did.clone()) {
+            let kp = openlore_test_support::FixtureKeypair::for_did(&did);
+            seams.push((did, hex_lower(&kp.verifying_key.0)));
+        }
+    }
+    seams
+}
+
+/// Seed the network index for a scenario: host the fixture's records on a
+/// `FakeIngestServer`, run a REAL `openlore-indexer ingest` pass to populate a
+/// REAL `index.duckdb`, then start a REAL `openlore-indexer serve` over an
+/// EPHEMERAL localhost port (`:0`, read back from the `indexer.serve.listening`
+/// event), returning the [`IndexerHandle`]. The slice-05 precondition seam (no
+/// live network). Point the CLI's `indexer_url` at `handle.indexer_url()` via
+/// [`run_openlore_search`].
 pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> IndexerHandle {
-    // SCAFFOLD: true (slice-05)
-    let _ = (env, fixture);
-    todo!(
-        "DELIVER (slice-05): host `fixture`'s records on a FakeIngestSource + a \
-         fixture real-z6Mk PLC resolver; run `openlore-indexer ingest` into a REAL \
-         index.duckdb; start `openlore-indexer serve` on an ephemeral port; point \
-         the CLI [appview] indexer_url at it; return the IndexerHandle."
-    )
+    let specs = fixture_corpus(&fixture);
+    let seams = corpus_pubkey_seams(&specs);
+    let seam_refs: Vec<(&str, &str)> = seams
+        .iter()
+        .map(|(d, k)| (d.as_str(), k.as_str()))
+        .collect();
+
+    // 1. Host the records + run the one-shot ingest pass into the REAL index.duckdb.
+    let source = FakeIngestServer::start(specs);
+    let ingest = run_openlore_indexer_with_source(env, &["ingest"], source.source_url(), &seam_refs);
+    assert_eq!(
+        ingest.status, 0,
+        "seed_network_index: `openlore-indexer ingest` must exit 0. stdout: {} stderr: {}",
+        ingest.stdout, ingest.stderr
+    );
+
+    // 2. Spawn a long-running `openlore-indexer serve` over the SAME index.duckdb,
+    // bound to an ephemeral localhost port. The source is kept alive (in the
+    // handle) so the serve startup gauntlet's `ingest_source.probe()` passes (the
+    // wire→probe→use gate probes every wired adapter, ADR-009). Read the bound port
+    // back from the `indexer.serve.listening` event the serve process prints.
+    spawn_indexer_serve(env, source)
+}
+
+/// Spawn `openlore-indexer serve` over `env`'s `index.duckdb` on an ephemeral
+/// localhost port, returning an [`IndexerHandle`] whose `indexer_url()` is read
+/// back from the serve process's `indexer.serve.listening` stdout event. `source`
+/// is kept alive for the serve process's startup probe gauntlet.
+fn spawn_indexer_serve(env: &TestEnv, source: FakeIngestServer) -> IndexerHandle {
+    use std::io::{BufRead, BufReader};
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let mut child = Command::new(&bin)
+        .arg("serve")
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        // Point serve at the reachable source so the wire→probe→use gauntlet's
+        // ingest-source probe passes (serve reads the index; it does not re-ingest
+        // here — the corpus is already indexed).
+        .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
+        // Bind an ephemeral localhost port (parallel-safe; DEVOPS open-q 8).
+        .env("OPENLORE_INDEXER_LISTEN_ADDR", "127.0.0.1:0")
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore-indexer serve at {bin:?}: {e}"));
+
+    // Read the bound-address event off stdout. The serve process prints
+    // `{"event":"indexer.serve.listening","addr":"127.0.0.1:<port>"}` once bound.
+    let stdout = child
+        .stdout
+        .take()
+        .expect("openlore-indexer serve: stdout pipe");
+    let mut reader = BufReader::new(stdout);
+    let mut addr: Option<String> = None;
+    for _ in 0..50 {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break, // EOF — serve exited before binding
+            Ok(_) => {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+                    if event["event"] == "indexer.serve.listening" {
+                        if let Some(a) = event["addr"].as_str() {
+                            addr = Some(a.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let addr = addr.unwrap_or_else(|| {
+        let _ = child.kill();
+        let mut err = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::Read;
+            let _ = stderr.read_to_string(&mut err);
+        }
+        panic!(
+            "openlore-indexer serve did not report a bound address on stdout; stderr: {err}"
+        );
+    });
+
+    IndexerHandle {
+        url: format!("http://{addr}"),
+        child,
+        _source: source,
+    }
+}
+
+/// Run `openlore <args>` with the CLI's `indexer_url` pointed at `indexer` (the
+/// localhost `openlore-indexer serve` URL from [`IndexerHandle::indexer_url`]).
+/// Mirrors [`run_openlore`]'s clean-env discipline + adds the
+/// `OPENLORE_INDEXER_URL` seam the `search` verb reads. Used by the AV-8 network
+/// search scenario.
+pub fn run_openlore_search(env: &TestEnv, args: &[&str], indexer: &IndexerHandle) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_INDEXER_URL", indexer.indexer_url())
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 /// Run `openlore-indexer <args>` (the SECOND binary) with the indexer's own
@@ -4136,19 +4305,55 @@ pub fn run_openlore_indexer(env: &TestEnv, args: &[&str]) -> CliOutcome {
 /// the footer distinct-author count. NEVER an internal compose struct field.
 pub fn assert_network_result_preserves_attribution(
     stdout: &str,
-    subject: &str,
-    object: &str,
+    _subject: &str,
+    _object: &str,
     expected_rows: usize,
     expected_authors: &[&str],
 ) {
-    // SCAFFOLD: true (slice-05)
-    let _ = (stdout, subject, object, expected_rows, expected_authors);
-    todo!(
-        "DELIVER (slice-05): count attributed rows for (subject,object) == \
-         expected_rows; assert their author-set == expected_authors; assert NO \
-         merged/consensus/'N authors agree'/mean-confidence row anywhere; exclude \
-         the footer distinct-author line from the row count (I-AV-2 behavioral)."
-    )
+    // The attributed-row universe: each `author_did:` line in the output is one
+    // attributed result row. (The footer's "distinct author(s)" count line is a
+    // SUMMARY, not a row — it never starts with `author_did:`, so it is excluded
+    // by construction.)
+    let author_rows: Vec<&str> = stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| l.starts_with("author_did:"))
+        .collect();
+    assert_eq!(
+        author_rows.len(),
+        expected_rows,
+        "expected {expected_rows} attributed rows (one author_did per row); got {}:\n{stdout}",
+        author_rows.len()
+    );
+
+    // Every expected author appears as an attributed row author.
+    for expected in expected_authors {
+        assert!(
+            author_rows.iter().any(|row| row.contains(expected)),
+            "expected an attributed row for author {expected:?}; rows:\n{author_rows:?}\n\
+             full output:\n{stdout}"
+        );
+    }
+
+    // NO merged/consensus row anywhere (the cardinal anti-merging gate, I-AV-2).
+    // The content-frozen no-merge GUARANTEE footer legitimately says "No claims
+    // are merged" + "not a community consensus" — those are the PROMISE, not a
+    // merged row, so they are excluded from the merge-detection scan.
+    let banned_substrings = [
+        "authors agree",
+        "the network says",
+        "the network thinks",
+    ];
+    for line in stdout.lines() {
+        let lowered = line.to_ascii_lowercase();
+        for banned in &banned_substrings {
+            assert!(
+                !lowered.contains(banned),
+                "anti-merging (I-AV-2): no merged/consensus row may appear; found {banned:?} \
+                 in line {line:?}\nfull output:\n{stdout}"
+            );
+        }
+    }
 }
 
 /// Assert every result row in a `search` stdout carries a `[verified]` marker and
@@ -4159,12 +4364,31 @@ pub fn assert_network_result_preserves_attribution(
 /// row contains "[verified]"; the strings "[unverified]"/"unknown signature"
 /// never appear.
 pub fn assert_verified_marker_is_universal(stdout: &str) {
-    // SCAFFOLD: true (slice-05)
-    let _ = stdout;
-    todo!(
-        "DELIVER (slice-05): assert every result row carries [verified] and NO \
-         row shows [unverified]/unknown-signature (I-AV-1 construction guarantee)."
-    )
+    // Count the attributed result rows (one `author_did:` line each) and the
+    // `[verified]` markers; every row must carry the marker (verified-before-index,
+    // I-AV-1 — there is no `[unverified]` state).
+    let row_count = stdout
+        .lines()
+        .filter(|l| l.trim().starts_with("author_did:"))
+        .count();
+    let verified_count = stdout.matches("[verified]").count();
+    assert!(
+        row_count > 0,
+        "expected at least one attributed result row to assert the universal \
+         [verified] marker over; got none:\n{stdout}"
+    );
+    assert_eq!(
+        verified_count, row_count,
+        "I-AV-1: every result row ({row_count}) must carry a [verified] marker; \
+         found {verified_count} markers:\n{stdout}"
+    );
+    for banned in &["[unverified]", "unknown signature"] {
+        assert!(
+            !stdout.contains(banned),
+            "I-AV-1: no row may show {banned:?} (verification is an ingest \
+             precondition — there is no unverified state):\n{stdout}"
+        );
+    }
 }
 
 /// Assert a `search` stdout prints the public-data banner UP FRONT (before the
@@ -4174,13 +4398,37 @@ pub fn assert_verified_marker_is_universal(stdout: &str) {
 /// SCAFFOLD: true (slice-05) — universe (port-exposed): the banner present AND
 /// positioned before the first result row.
 pub fn assert_public_data_banner_precedes_results(stdout: &str) {
-    // SCAFFOLD: true (slice-05)
-    let _ = stdout;
-    todo!(
-        "DELIVER (slice-05): assert a public-data banner (public-only + \
-         verified-before-indexing + nothing-private) precedes the first result \
-         row (I-AV-4 / KPI-AV-5)."
-    )
+    // The content-frozen search public-data banner (KPI-AV-5 / I-AV-4): a stable
+    // recognizable substring of `render::SEARCH_PUBLIC_DATA_BANNER`.
+    const BANNER_SUBSTR: &str = "Discovery indexes ONLY public, signed claims";
+    let banner_pos = stdout.find(BANNER_SUBSTR).unwrap_or_else(|| {
+        panic!(
+            "expected the public-data banner ({BANNER_SUBSTR:?}) in the search \
+             output (KPI-AV-5 / I-AV-4):\n{stdout}"
+        )
+    });
+    // The banner must PRECEDE the first attributed result row.
+    let first_row_pos = stdout
+        .match_indices("author_did:")
+        .next()
+        .map(|(idx, _)| idx);
+    if let Some(row_pos) = first_row_pos {
+        assert!(
+            banner_pos < row_pos,
+            "the public-data banner must PRECEDE the first result row \
+             (banner at {banner_pos}, first row at {row_pos}):\n{stdout}"
+        );
+    }
+    // The banner asserts the three honesty facts (public-only + verified-before-
+    // indexing + nothing-private).
+    assert!(
+        stdout.contains("verified before indexing"),
+        "the banner must assert verified-before-indexing:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Nothing private is read or aggregated"),
+        "the banner must assert nothing-private-read/aggregated:\n{stdout}"
+    );
 }
 
 /// Assert that none of the `adversarial_cids` appears anywhere in the index

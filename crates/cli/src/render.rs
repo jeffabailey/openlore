@@ -1613,33 +1613,139 @@ pub fn search_relationship_annotation(relationship: AuthorRelationship) -> &'sta
 /// it is a render string only; there is NO executable follow path and NO
 /// auto-subscribe. The user copy-pastes it to follow the discovered author. PURE.
 ///
-/// SCAFFOLD: true — the exact affordance copy lands in Phase 03/04 (it prints
-/// `openlore peer add <did>` + the `peer pull` next step). The reuse-of-slice-03
-/// contract is pinned by `discovery_follow_reuses_slice03_path` (KPI-AV-4).
-pub fn render_follow_affordance(_author_did: &str) -> String {
-    // SCAFFOLD: true — render-only `openlore peer add <did>` follow hint
-    // (no auto-follow; reuses slice-03 verbatim). Lands in Phase 03/04.
-    todo!("render_follow_affordance — render-only `peer add` follow hint (Phase 03/04, I-AV-7)")
+/// The affordance reuses the slice-03 `openlore peer add <did>` command verbatim
+/// (no parallel subscription path, I-AV-7); the bare DID is used so the printed
+/// command is the exact one the slice-03 verb accepts.
+pub fn render_follow_affordance(author_did: &str) -> String {
+    let bare = author_did.split('#').next().unwrap_or(author_did);
+    format!("    Follow this author: openlore peer add {bare}\n")
 }
 
 /// Render the network search result: the FLAT attributed transport rows
 /// re-grouped per author, each row carrying its `author_did` + numeric
-/// confidence + display bucket + cid + the `[verified]` marker, under a
+/// confidence + display bucket + evidence + cid + the `[verified]` marker, under a
 /// per-author header annotated with its relationship label; the unfollowed
 /// authors get the `peer add` follow affordance; the footer states the distinct-
-/// author count + the no-merge guarantee. PURE function — no I/O.
+/// author count + the no-merge guarantee + the `peer add` pointer. PURE function —
+/// no I/O.
 ///
-/// SCAFFOLD: true — the per-author grouping is computed via the pure
-/// `appview-domain` core; the render body lands in Phase 03/04 (AV-* scenarios).
-/// Two identical-(subject,object) rows by DIFFERENT authors render as TWO rows
-/// (anti-merging, I-AV-2).
+/// The public-data banner is printed FIRST (KPI-AV-5 / I-AV-4 — before the first
+/// result row). The relationship label is resolved CLI-side via `relationship_for`
+/// (the index is per-user-neutral; the caller closes over the user's
+/// `peer_subscriptions`). Two identical-(subject,object) rows by DIFFERENT authors
+/// render as TWO rows (anti-merging, I-AV-2) — there is NO merged/consensus row.
 pub fn render_network_search_result(
-    _dimension: SearchDimension,
-    _result: &NetworkSearchResultRaw,
+    dimension: SearchDimension,
+    result: &NetworkSearchResultRaw,
+    relationship_for: &dyn Fn(&str) -> AuthorRelationship,
 ) -> String {
-    // SCAFFOLD: true — banner + per-author groups + [verified] + relationship
-    // labels + follow affordances + the no-merge footer. Lands in Phase 03/04.
-    todo!("render_network_search_result — per-author network result render (Phase 03/04, ADR-027)")
+    let mut out = String::new();
+    // The public-data banner ALWAYS precedes the results (KPI-AV-5 / I-AV-4).
+    out.push_str(&format!("{SEARCH_PUBLIC_DATA_BANNER}\n\n"));
+
+    if result.results.is_empty() {
+        out.push_str(&render_empty_network_result(dimension, result));
+        return out;
+    }
+
+    // Group the FLAT attributed rows per author (first-seen author order — stable,
+    // hash-randomization-free). NEVER collapses two authors onto one row.
+    for (author_did, rows) in &group_network_rows_by_author(&result.results) {
+        let relationship = relationship_for(author_did);
+        out.push_str(&format!(
+            "author: {} {}\n",
+            author_did,
+            search_relationship_annotation(relationship)
+        ));
+        for row in rows {
+            out.push_str(&render_one_network_row(row));
+        }
+        // The discovery→federation funnel affordance — ONLY for unfollowed authors
+        // (a subscribed peer already followed; I-AV-7).
+        if matches!(relationship, AuthorRelationship::NetworkUnfollowed) {
+            out.push_str(&render_follow_affordance(author_did));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&render_network_search_footer(distinct_network_author_count(
+        &result.results,
+    )));
+    out
+}
+
+/// Render one FLAT attributed network row: the author DID, the numeric confidence
+/// + display-only bucket, evidence, the cid, and the `[verified]` marker (every
+/// row carries it by construction — verified-before-index, I-AV-1). Pure helper.
+fn render_one_network_row(row: &NetworkResultRowRaw) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("  author_did: {}\n", row.author_did.0));
+    out.push_str(&format!("    subject:    {}\n", row.subject));
+    out.push_str(&format!("    object:     {}\n", row.object));
+    out.push_str(&format!(
+        "    confidence: {} ({})\n",
+        render_candidate_confidence(row.confidence),
+        confidence_bucket_label(row.confidence)
+    ));
+    out.push_str(&format!(
+        "    evidence:   {}\n",
+        render_evidence(&row.evidence)
+    ));
+    out.push_str(&format!("    cid:        {}\n", row.cid.0));
+    out.push_str(&format!("    {VERIFIED_MARKER}\n"));
+    out
+}
+
+/// Group FLAT attributed network rows by author DID, preserving first-seen author
+/// order (stable output). Each row lands under ITS OWN `author_did` — two
+/// identical-content rows by distinct authors land in DISTINCT groups (anti-
+/// merging, I-AV-2). Pure helper.
+fn group_network_rows_by_author(
+    rows: &[NetworkResultRowRaw],
+) -> Vec<(String, Vec<&NetworkResultRowRaw>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: Vec<(String, Vec<&NetworkResultRowRaw>)> = Vec::new();
+    for row in rows {
+        let did = row.author_did.0.clone();
+        match order.iter().position(|d| d == &did) {
+            Some(pos) => grouped[pos].1.push(row),
+            None => {
+                order.push(did.clone());
+                grouped.push((did, vec![row]));
+            }
+        }
+    }
+    grouped
+}
+
+/// The count of distinct (full) author DIDs in a FLAT attributed result set — a
+/// COUNT over attributed rows, NEVER a merge. Pure helper.
+fn distinct_network_author_count(rows: &[NetworkResultRowRaw]) -> usize {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for row in rows {
+        seen.insert(row.author_did.0.as_str());
+    }
+    seen.len()
+}
+
+/// Render the network-search footer: the distinct-author count (a COUNT over
+/// attributed rows; never a merge) + the content-frozen no-merge guarantee + the
+/// `openlore peer add <did>` follow pointer. Pure helper.
+fn render_network_search_footer(author_count: usize) -> String {
+    format!(
+        "{author_count} distinct author(s). {SEARCH_NO_MERGE_FOOTER} \
+         Follow any author with `openlore peer add <did>`.\n"
+    )
+}
+
+/// Render the empty-network-result message (US-AV-002 Ex 4): name the queried
+/// value and, if the indexer reported a near-match suggestion, surface it. Exit
+/// stays 0 (a valid empty result — the verb does not error). Pure helper.
+fn render_empty_network_result(_dimension: SearchDimension, result: &NetworkSearchResultRaw) -> String {
+    match &result.suggestion {
+        Some(near) => format!("No network claims found. Did you mean {near}?\n"),
+        None => "No network claims found.\n".to_string(),
+    }
 }
 
 /// Render the `--show <cid>` verification line(s): the full record plus
@@ -2415,6 +2521,118 @@ mod tests {
                 !neighbours.iter().any(|n| n == &typo),
                 "single_edit_neighbours must never emit the original string as a neighbour"
             );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Slice-05 (AV-8 / I-AV-2) — the network-search renderer anti-merging property
+    // -------------------------------------------------------------------------
+
+    /// Build one raw attributed network row for the renderer property. Distinct
+    /// CIDs keep each generated row a distinct multiset member.
+    fn raw_network_row(author_did: &str, cid: &str, confidence: f64) -> NetworkResultRowRaw {
+        NetworkResultRowRaw {
+            author_did: Did(author_did.to_string()),
+            cid: Cid(cid.to_string()),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.reproducible-builds".to_string(),
+            confidence,
+            composed_at: chrono::Utc::now(),
+            verified_against: claim_domain::KeyId(format!("{author_did}#org.openlore.application")),
+            evidence: vec![format!("https://example.test/e/{cid}")],
+            references: Vec::new(),
+        }
+    }
+
+    /// A strategy over small attributed result sets: 1..=12 rows, each with an
+    /// author drawn from a small DID pool (so identical-content distinct-author
+    /// collisions occur) and a UNIQUE cid (rows stay distinct multiset members).
+    fn arb_network_rows() -> impl Strategy<Value = Vec<NetworkResultRowRaw>> {
+        prop::collection::vec((0usize..5, 0.0f64..=1.0), 1..=12).prop_map(|specs| {
+            specs
+                .into_iter()
+                .enumerate()
+                .map(|(idx, (author_idx, conf))| {
+                    raw_network_row(
+                        &format!("did:plc:author{author_idx}#org.openlore.application"),
+                        &format!("bafycid{idx}"),
+                        conf,
+                    )
+                })
+                .collect()
+        })
+    }
+
+    proptest! {
+        /// AV-8 / I-AV-2 anti-merging RENDER property (the inner-loop decomposition
+        /// of the AT's "NO row collapses multiple authors"): for ANY set of
+        /// attributed rows, the renderer emits EXACTLY one output `author_did:` row
+        /// per input row (no row dropped, no rows merged), every output row carries
+        /// the `[verified]` marker, the footer's distinct-author count equals the
+        /// number of distinct authors in the input, and NO merged/consensus row
+        /// ever appears. The relationship resolver is the identity-unfollowed
+        /// closure (the relationship label is orthogonal to the anti-merging
+        /// invariant under test).
+        #[test]
+        fn render_network_search_emits_one_row_per_author_never_merges(
+            rows in arb_network_rows()
+        ) {
+            let result = NetworkSearchResultRaw {
+                distinct_author_count: 0, // recomputed by the renderer; not read here
+                total_claims: rows.len() as u32,
+                results: rows.clone(),
+                suggestion: None,
+            };
+            let unfollowed = |_did: &str| AuthorRelationship::NetworkUnfollowed;
+
+            let rendered =
+                render_network_search_result(SearchDimension::Object, &result, &unfollowed);
+
+            // 1. Exactly one output `author_did:` row per input row — no row dropped,
+            //    no two rows collapsed onto one.
+            let output_rows = rendered
+                .lines()
+                .filter(|l| l.trim_start().starts_with("author_did:"))
+                .count();
+            prop_assert_eq!(
+                output_rows,
+                rows.len(),
+                "every attributed input row must render as exactly one output row \
+                 (anti-merging, I-AV-2); rendered:\n{}",
+                rendered
+            );
+
+            // 2. Every output row carries the `[verified]` marker (I-AV-1).
+            let verified_markers = rendered.matches(VERIFIED_MARKER).count();
+            prop_assert_eq!(
+                verified_markers,
+                rows.len(),
+                "every output row must carry the [verified] marker; rendered:\n{}",
+                rendered
+            );
+
+            // 3. The footer's distinct-author count == the distinct authors in input
+            //    (a COUNT over attributed rows, never a merge).
+            let distinct_authors: std::collections::HashSet<&str> =
+                rows.iter().map(|r| r.author_did.0.as_str()).collect();
+            prop_assert!(
+                rendered.contains(&format!("{} distinct author(s).", distinct_authors.len())),
+                "footer must state the distinct-author count {}; rendered:\n{}",
+                distinct_authors.len(),
+                rendered
+            );
+
+            // 4. NO merged/consensus row ever appears (the cardinal anti-merging gate).
+            let lowered = rendered.to_ascii_lowercase();
+            for banned in &["authors agree", "the network says", "the network thinks"] {
+                prop_assert!(
+                    !lowered.contains(banned),
+                    "no merged/consensus row may appear (found {:?}); rendered:\n{}",
+                    banned,
+                    rendered
+                );
+            }
         }
     }
 }

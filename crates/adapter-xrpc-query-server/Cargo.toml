@@ -27,6 +27,18 @@ path = "src/lib.rs"
 [dependencies]
 ports = { path = "../ports" }
 claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
 appview-domain = { path = "../appview-domain" }
 thiserror = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+# Step 04-01: real HTTP/XRPC serving for `org.openlore.appview.searchClaims`.
+# `hyper` (+ `hyper-util` server + `http-body-util`) is already a TRANSITIVE
+# dep of `reqwest` (NOT deny.toml-banned, unlike `axum`) — a minimal one-endpoint
+# server hand-rolled over the hyper 1.x API. `tokio` (current-thread rt) drives
+# the accept loop; the indexer composition root owns the runtime.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tokio = { workspace = true, features = ["rt", "net", "macros"] }

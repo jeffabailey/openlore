@@ -88,15 +88,116 @@ fn search_by_object_surfaces_verified_claims_by_unfollowed_authors_attributed() 
     // search.rows_collapsed (0); presence of the banner before results; the
     // relationship labels {priya:(not subscribed), rachel:(subscribed peer)};
     // every row carries "[verified]". Asserted against stdout, not internals.
-    todo!(
-        "DELIVER (slice-05): seed localhost indexer with the US-AV-002 Ex1 corpus \
-         (9 authors / 7 subjects reproducible-builds incl. unfollowed Priya + \
-         subscribed Rachel); run `openlore search --object \
-         org.openlore.philosophy.reproducible-builds`; assert exit 0, banner \
-         first, unfollowed labeled (not subscribed), every row [verified] + \
-         author DID + numeric confidence + bucket + evidence + cid, no collapsed \
-         row, footer = distinct-author count + no-merge + peer add pointer. \
-         WALKING-SKELETON beat-2."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (relationship): Maria already SUBSCRIBES to Rachel
+    // (did:plc:rachel-test) via the slice-03 `peer add` (resolved against a
+    // PeerPds double). Every OTHER corpus author stays unfollowed. The index is
+    // per-user-neutral; the relationship label is resolved CLI-side against this
+    // subscription. --
+    let rachel_did = "did:plc:rachel-test";
+    let rachel_peer = PeerPds::for_peer(rachel_did, Vec::new());
+    let peer_add = run_openlore_with_peer_resolver(
+        &env,
+        &["peer", "add", rachel_did],
+        rachel_did,
+        rachel_peer.endpoint_url(),
+    );
+    assert_eq!(
+        peer_add.status, 0,
+        "precondition: `openlore peer add {rachel_did}` must exit 0. stdout: {} stderr: {}",
+        peer_add.stdout, peer_add.stderr
+    );
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-002 Ex1 corpus (9 authors / 7 subjects
+    // reproducible-builds, incl. unfollowed Priya on bazel 0.82 + subscribed
+    // Rachel on nixpkgs 0.88). The CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Action: the object-dimension network read through the CLI driving port. --
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+
+    // 1. exit 0 + the public-data banner PRECEDES the results.
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --object` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+    assert_public_data_banner_precedes_results(&outcome.stdout);
+
+    // 2. results include claims by authors Maria does NOT follow, labeled
+    //    "(not subscribed)"; Rachel labeled "(subscribed peer)".
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:priya-test#org.openlore.application (not subscribed)"),
+        "expected unfollowed Priya labeled (not subscribed):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:rachel-test#org.openlore.application (subscribed peer)"),
+        "expected subscribed Rachel labeled (subscribed peer):\n{}",
+        outcome.stdout
+    );
+
+    // 3. every result row carries [verified] (+ author DID + numeric confidence +
+    //    display bucket + evidence + cid). 4. NO row collapses multiple authors.
+    assert_verified_marker_is_universal(&outcome.stdout);
+    // Numeric confidence + display bucket appear (Priya's bazel claim is 0.82 →
+    // the well-evidenced bucket); evidence + cid labels are emitted per row.
+    assert!(
+        outcome.stdout.contains("0.82") && outcome.stdout.contains("(well-evidenced)"),
+        "expected Priya's numeric confidence 0.82 + display bucket (well-evidenced):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("evidence:") && outcome.stdout.contains("cid:"),
+        "expected every row to show an evidence label + a cid:\n{}",
+        outcome.stdout
+    );
+    // No row collapses authors: exactly 9 attributed rows, the author-set includes
+    // both Priya (unfollowed) + Rachel (subscribed), and NO merged/consensus row.
+    assert_network_result_preserves_attribution(
+        &outcome.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        9,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:rachel-test#org.openlore.application",
+        ],
+    );
+
+    // 5. the footer states the distinct-author count (9) + the no-merge guarantee
+    //    + the `openlore peer add <did>` pointer.
+    assert!(
+        outcome.stdout.contains("9 distinct author(s)."),
+        "expected the footer to state the distinct-author count (9):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("No claims are merged."),
+        "expected the footer's no-merge guarantee:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("openlore peer add"),
+        "expected the footer's `openlore peer add <did>` follow pointer:\n{}",
+        outcome.stdout
     );
 }
 

@@ -43,5 +43,6 @@ serde_json = { workspace = true }
 # (ADR-024/026 network PULL + resolve) via a LOCAL current-thread runtime + block_on
 # — the SAME pattern the CLI's async verbs use (`verbs::claim_publish::build_tokio_runtime`).
 # rt + macros only (no multi-thread); the indexer's pure gate + sync store stay off the
-# async path.
-tokio = { workspace = true, features = ["macros", "rt"] }
+# async path. Step 04-01: `net` is added for the `serve` query-server accept loop
+# (the hyper listener); the runtime stays current-thread (single-query-at-a-time).
+tokio = { workspace = true, features = ["macros", "rt", "net"] }

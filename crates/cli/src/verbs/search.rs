@@ -36,8 +36,20 @@
 #![allow(dead_code)] // scaffold; the live search dispatch lands in Phase 03/04
 
 use anyhow::Result;
+use adapter_index_query::HttpIndexQueryAdapter;
+use ports::{
+    AuthorRelationship, IndexQueryError, IndexQueryPort, NetworkSearchResultRaw, SearchDimension,
+};
 
+use crate::render;
 use crate::wiring::Wiring;
+
+/// The env-var seam the composition root reads for the self-hosted indexer URL
+/// (ADR-023/027). Production resolves `[appview] indexer_url` from the config; the
+/// acceptance harness sets this env var to the localhost `openlore-indexer serve`
+/// port. Empty/unset ⇒ the indexer is treated as unreachable (the SOFT, non-fatal
+/// local-only degradation, WD-116).
+const INDEXER_URL_ENV: &str = "OPENLORE_INDEXER_URL";
 
 /// Parsed `openlore search` arguments (clap-parsed in `lib.rs` per ADR-027).
 ///
@@ -96,13 +108,90 @@ pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
     run_no_dimension(args)
 }
 
-/// `--object <philosophy>`: the headline dimension search (US-AV-002). SCAFFOLD.
-fn run_dimension_object(_wiring: &Wiring, _object: &str) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — query the indexer along the object dimension, re-compose
-    // per-author via appview-domain, render the attributed network result with
-    // the public-data banner + relationship labels + the `peer add` follow
-    // affordance + the no-merge footer; degrade gracefully if unreachable.
-    todo!("openlore search --object — network object-dimension search (Phase 03/04, ADR-027)")
+/// `--object <philosophy>`: the headline dimension search (US-AV-002).
+///
+/// The B1 transport walking skeleton (04-01): query the self-hosted indexer along
+/// the object dimension over HTTP/XRPC (`adapter-index-query`), resolve each
+/// result author's relationship CLI-side against the user's `peer_subscriptions`
+/// (the index is per-user-neutral; data-models.md), and render the attributed
+/// network result — the public-data banner FIRST, per-author groups each carrying
+/// author DID + numeric confidence + display bucket + evidence + cid +
+/// `[verified]`, the relationship label `(subscribed peer)` / `(not subscribed)`,
+/// and the no-merge footer with the distinct-author count + `peer add` pointer.
+///
+/// An unreachable indexer degrades GRACEFULLY to a clear local-only message
+/// pointing at `graph query`, exiting 0 (the SOFT, non-fatal contract; WD-116).
+fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> {
+    run_dimension(wiring, SearchDimension::Object, object)
+}
+
+/// Shared dimension-search path. The walking skeleton wires only `--object`; the
+/// contributor/subject dimensions register the same shape in later steps (05-04+).
+fn run_dimension(wiring: &Wiring, dimension: SearchDimension, value: &str) -> Result<SearchOutcome> {
+    let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
+    if indexer_url.is_empty() {
+        return Ok(degrade_to_local_only(value));
+    }
+
+    let adapter = HttpIndexQueryAdapter::for_url(indexer_url);
+    let runtime = crate::verbs::claim_publish::build_tokio_runtime();
+    let outcome = runtime.block_on(adapter.search(dimension, value, None));
+
+    match outcome {
+        Ok(result) => Ok(render_network_result(wiring, dimension, result)),
+        // SOFT, non-fatal: an unreachable indexer degrades to the local-only
+        // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
+        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(value)),
+        Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
+    }
+}
+
+/// Render a successful network result: the index is per-user-neutral, so resolve
+/// each author's relationship label CLI-side against the user's
+/// `peer_subscriptions` (a per-author resolver closure), then hand the attributed
+/// rows + the resolver to the PURE renderer (banner-first, per-author groups,
+/// `[verified]` per row, the no-merge footer with the distinct-author count +
+/// `peer add` pointer).
+fn render_network_result(
+    wiring: &Wiring,
+    dimension: SearchDimension,
+    result: NetworkSearchResultRaw,
+) -> SearchOutcome {
+    let relationship_for =
+        |author_did: &str| -> AuthorRelationship { resolve_relationship(wiring, author_did) };
+    let stdout = render::render_network_search_result(dimension, &result, &relationship_for);
+    SearchOutcome {
+        exit_code: 0,
+        stdout,
+    }
+}
+
+/// Resolve the relationship label for one author DID against the user's
+/// subscriptions. `SubscribedPeer` iff an ACTIVE subscription exists for the
+/// author's bare DID; otherwise `NetworkUnfollowed` (`(not subscribed)`). The
+/// index is per-user-neutral; the relationship is a CLI-side projection.
+fn resolve_relationship(wiring: &Wiring, author_did: &str) -> AuthorRelationship {
+    let bare = crate::verbs::bare_did(author_did);
+    match wiring
+        .peer_storage
+        .lookup_subscription(&claim_domain::Did(bare))
+    {
+        Ok(Some(sub)) if sub.is_active() => AuthorRelationship::SubscribedPeer,
+        _ => AuthorRelationship::NetworkUnfollowed,
+    }
+}
+
+/// The SOFT, non-fatal local-only degradation (WD-116 / KPI-5): an unreachable or
+/// unconfigured indexer never blocks — `search` prints a clear message pointing
+/// the user at the LOCAL `graph query` and exits 0 (never a hang/panic/fatal).
+fn degrade_to_local_only(value: &str) -> SearchOutcome {
+    let stdout = format!(
+        "Network index unavailable. See LOCAL results via `openlore graph query --object {value}`.\n"
+    );
+    SearchOutcome {
+        exit_code: 0,
+        stdout,
+    }
 }
 
 /// `--contributor <did>`: one developer's network trail (US-AV-003). SCAFFOLD.

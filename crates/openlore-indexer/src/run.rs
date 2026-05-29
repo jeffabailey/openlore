@@ -24,14 +24,18 @@
 #![allow(dead_code)] // some scaffold seams (serve/stats) land in Phase 03/04
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use adapter_atproto_did::AtProtoDidAdapter;
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
-use adapter_xrpc_query_server::XrpcQueryServer;
-use appview_domain::{ingest_decision, IngestOutcome, RejectReason};
-use ports::{ClockPort, IdentityResolvePort, IndexStorePort, IngestSourcePort};
+use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
+use appview_domain::{
+    compose_results, ingest_decision, IngestOutcome, NetworkSearchResult, RejectReason,
+};
+use lexicon::{SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto};
+use ports::{ClockPort, IdentityResolvePort, IndexStorePort, IngestSourcePort, SearchDimension};
 
 use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
 use crate::Command;
@@ -55,6 +59,9 @@ pub struct IndexerWiring {
     /// `capability_boundary_probe` so it can REFUSE if mis-wired against the
     /// user's `openlore.duckdb` (the capability boundary, I-AV-5).
     pub index_path: PathBuf,
+    /// The HTTP/XRPC query surface listen address (ADR-027). `serve` binds it;
+    /// `:0` resolves to an OS-assigned ephemeral port read back at runtime.
+    pub listen_addr: String,
 }
 
 /// The indexer's resolved configuration (the test analog of `config.toml`, read
@@ -65,20 +72,27 @@ struct IndexerConfig {
     index_path: PathBuf,
     /// The bounded ingest source base URL hosting public `listRecords` (ADR-024).
     source_url: String,
+    /// The HTTP/XRPC query surface listen address (ADR-027). `:0` for an
+    /// OS-assigned ephemeral port (the parallel-safe test default; DEVOPS open-q 8).
+    listen_addr: String,
 }
 
 impl IndexerConfig {
     /// Resolve config from env-var seams. `OPENLORE_INDEXER_INDEX_PATH` /
-    /// `OPENLORE_INDEXER_SOURCE_URL` override; otherwise fall back to the
-    /// `OPENLORE_HOME`-anchored default path + an empty source.
+    /// `OPENLORE_INDEXER_SOURCE_URL` / `OPENLORE_INDEXER_LISTEN_ADDR` override;
+    /// otherwise fall back to the `OPENLORE_HOME`-anchored default path + an empty
+    /// source + an ephemeral localhost listen address.
     fn from_env() -> Self {
         let index_path = std::env::var("OPENLORE_INDEXER_INDEX_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_index_path());
         let source_url = std::env::var("OPENLORE_INDEXER_SOURCE_URL").unwrap_or_default();
+        let listen_addr = std::env::var("OPENLORE_INDEXER_LISTEN_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:0".to_string());
         Self {
             index_path,
             source_url,
+            listen_addr,
         }
     }
 }
@@ -125,6 +139,7 @@ impl IndexerWiring {
             clock: Box::new(clock),
             source_url: cfg.source_url,
             index_path: cfg.index_path,
+            listen_addr: cfg.listen_addr,
         })
     }
 
@@ -188,12 +203,168 @@ pub fn run(command: Command) -> i32 {
     }
 }
 
-/// `openlore-indexer serve` — run the bounded pull-ingest loop + serve the
-/// `org.openlore.appview.searchClaims` query surface (ADR-024/027). SCAFFOLD.
-fn serve(_wiring: &IndexerWiring) -> i32 {
-    // SCAFFOLD: true — the run loop (bounded PULL → verify-before-index gate →
-    // upsert → serve queries) lands in Phase 03/04.
-    todo!("openlore-indexer serve — run the pull-ingest loop + query server (Phase 03/04)")
+/// `openlore-indexer serve` — serve the `org.openlore.appview.searchClaims`
+/// query surface over localhost HTTP (the B1 transport, ADR-027).
+///
+/// The walking-skeleton serve path (04-01): the index is already populated (the
+/// test harness runs a one-shot `ingest` pass FIRST, then `serve` over the same
+/// `index.duckdb`). `serve` binds the query server on the configured
+/// `listen_addr` (`:0` → an OS-assigned ephemeral port for parallel-safety),
+/// prints the bound address as a structured `indexer.serve.listening` event so a
+/// supervisor (the test harness) can read the port back, then runs the hyper
+/// accept loop until the process is killed.
+///
+/// The query handler reads the `IndexStorePort` (the SEPARATE `index.duckdb`) and
+/// composes per-author via the PURE `appview_domain::compose_results` (the SAME
+/// pure core the layer-2 AVC-2 proves) — the wire carries FLAT attributed rows
+/// (every `author_did` present; anti-merging across the transport, I-AV-2).
+fn serve(wiring: &IndexerWiring) -> i32 {
+    // A fresh handle to the SEPARATE index.duckdb for the serve handler. The
+    // adapter is Send+Sync (its `Arc<Mutex<Connection>>` substrate is), so it can
+    // be shared across the hyper accept loop's per-connection tasks. The wiring's
+    // `index_store` already proved (via probe) the store is reachable; this reopen
+    // is the long-lived serve handle.
+    let store = match IndexStoreAdapter::open(&wiring.index_path) {
+        Ok(s) => Arc::new(s),
+        Err(err) => {
+            eprintln!("openlore-indexer serve: open index store: {err}");
+            return 2;
+        }
+    };
+
+    let handler: QueryHandler = {
+        let store = Arc::clone(&store);
+        Arc::new(move |request: SearchQueryRequest| handle_search(store.as_ref(), request))
+    };
+
+    let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
+        Ok(addr) => addr,
+        Err(err) => {
+            eprintln!(
+                "openlore-indexer serve: invalid listen address {:?}: {err}",
+                wiring.listen_addr
+            );
+            return 2;
+        }
+    };
+
+    // A current-thread runtime suffices for the walking-skeleton serve: hyper's
+    // accept loop + the per-connection tasks run concurrently on the single-thread
+    // executor (the CLI makes one query at a time). The indexer's `tokio` feature
+    // set is `rt` + (via the query-server crate) `net`/`macros` — no multi-thread.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("openlore-indexer serve: build async runtime: {err}");
+            return 2;
+        }
+    };
+
+    runtime.block_on(async move {
+        let server = match XrpcQueryServer::bind(listen_addr, handler) {
+            Ok(server) => server,
+            Err(err) => {
+                eprintln!("openlore-indexer serve: bind query server: {err}");
+                return 2;
+            }
+        };
+        // Emit the bound address so the supervisor (the test harness) can read the
+        // ephemeral port back. The event is structural (an address; no claim
+        // content) — the DevOps observability contract (WD-105).
+        let listening = serde_json::json!({
+            "event": "indexer.serve.listening",
+            "addr": server.local_addr().to_string(),
+        });
+        println!("{listening}");
+        // Flush stdout so a line-reading supervisor sees the event immediately.
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+
+        match server.serve().await {
+            Ok(()) => 0,
+            Err(err) => {
+                eprintln!("openlore-indexer serve: serve loop failed: {err}");
+                2
+            }
+        }
+    })
+}
+
+/// The serve query handler: read the index store along `request.dimension`,
+/// compose per-author via the PURE `appview_domain::compose_results`, and project
+/// the per-author structure back to a FLAT attributed wire response (every
+/// `author_did` present; the `distinct_author_count` is the pure COUNT, never a
+/// merge). A store error degrades to an empty result (serve never panics on a
+/// read failure; the CLI sees an empty-but-attributed response).
+fn handle_search(store: &dyn IndexStorePort, request: SearchQueryRequest) -> SearchQueryResponse {
+    let dimension = from_dto_dimension(request.dimension);
+    let rows = match dimension {
+        SearchDimension::Object => store.query_by_object(&request.value),
+        SearchDimension::Subject => store.query_by_subject(&request.value),
+        SearchDimension::Contributor => {
+            store.query_by_contributor(&claim_domain::Did(request.value.clone()))
+        }
+    };
+    let rows = rows.unwrap_or_default();
+
+    // The per-author grouping + the distinct-author COUNT come from the PURE
+    // composition (the SAME core proven at layer 2 by AVC-2). The author ORDER on
+    // the wire follows that stable composition; the per-row payload is projected
+    // from the original `IndexedClaim` rows (which carry composed_at + evidence the
+    // composed `NetworkResultRow` does not). The wire stays FLAT + attributed.
+    let composed = compose_results(rows.clone(), dimension);
+    let results = flat_attributed_rows(&composed, &rows);
+    SearchQueryResponse {
+        results,
+        distinct_author_count: composed.distinct_author_count,
+        total_claims: composed.total_claims,
+        suggestion: composed.suggestion,
+    }
+}
+
+/// Project the per-author `NetworkSearchResult` (the pure composition's stable
+/// author order + within-group cid order) into FLAT attributed wire rows, looking
+/// each row's full payload (composed_at, evidence) up from the original
+/// `IndexedClaim` rows by cid. The wire carries one row per attributed claim (NO
+/// merged/consensus object — I-AV-2).
+fn flat_attributed_rows(
+    composed: &NetworkSearchResult,
+    rows: &[ports::IndexedClaim],
+) -> Vec<SearchResultDto> {
+    let mut out = Vec::new();
+    for (_author, group) in &composed.by_author {
+        for composed_row in group {
+            let source = rows.iter().find(|r| r.cid == composed_row.cid);
+            let composed_at = source
+                .map(|r| r.composed_at.to_rfc3339())
+                .unwrap_or_default();
+            let evidence = source.map(|r| r.evidence.clone()).unwrap_or_default();
+            out.push(SearchResultDto {
+                author_did: composed_row.author_did.0.clone(),
+                cid: composed_row.cid.0.clone(),
+                subject: composed_row.subject.clone(),
+                predicate: composed_row.predicate.clone(),
+                object: composed_row.object.clone(),
+                confidence: composed_row.confidence,
+                composed_at,
+                verified_against: composed_row.verified_against.0.clone(),
+                evidence,
+            });
+        }
+    }
+    out
+}
+
+/// Map a wire DTO dimension to the domain `SearchDimension`.
+fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
+    match dim {
+        SearchDimensionDto::Object => SearchDimension::Object,
+        SearchDimensionDto::Contributor => SearchDimension::Contributor,
+        SearchDimensionDto::Subject => SearchDimension::Subject,
+    }
 }
 
 /// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024).
