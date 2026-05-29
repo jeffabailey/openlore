@@ -1,0 +1,34 @@
+[package]
+name = "adapter-index-store"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore IndexStorePort adapter: embedded DuckDB over a SEPARATE index.duckdb (ADR-023/025). Per-claim attributed rows; NO merged/consensus table (WD-103)."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (slice-05). Bootstrap SCAFFOLD (step 01-03): `todo!()` bodies +
+# DDL sketched in `src/schema.rs` COMMENTS only; the live DDL + query bodies
+# land in step 03-01 (driven by AV-* scenarios).
+#
+# Mirrors `adapter-duckdb`'s SYNC embedded-DuckDB shape (the `bundled` feature
+# vendors the C library for CI reproducibility) but over a SEPARATE
+# `index.duckdb` (ADR-023: the indexer never touches `openlore.duckdb`). Every
+# query returns PER-CLAIM `IndexedClaim` rows carrying non-`Option` `author_did`
+# (I-AV-2); there is NO aggregate-across-authors surface — `distinct_author_count`
+# is composed in the PURE `appview-domain` core, NEVER in SQL.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+appview-domain = { path = "../appview-domain" }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+duckdb = { version = "1.3", features = ["bundled", "chrono"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

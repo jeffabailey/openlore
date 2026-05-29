@@ -1,0 +1,33 @@
+[package]
+name = "adapter-index-query"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore IndexQueryPort adapter (CLI side): query the self-hosted indexer over HTTP/XRPC (ADR-027). Unreachable maps to the SOFT, non-fatal IndexQueryError::Unreachable (WD-116)."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (slice-05, CLI side). Bootstrap SCAFFOLD (step 01-03): `todo!()`
+# bodies; the real HTTP/XRPC query + graceful-degradation mapping land in Phase
+# 03/04 (driven by AV-* scenarios).
+#
+# Mirrors `adapter-atproto-pds`'s async-network shape: `reqwest` (rustls +
+# webpki-roots) for the HTTPS query to the configured indexer URL, `tokio` for
+# the `async-trait` impl runtime, `async-trait` for the trait. READ-ONLY (no
+# sign/write). The headline contract (WD-116): a connection failure maps to the
+# SOFT, NON-FATAL `IndexQueryError::Unreachable` — never a panic/startup refusal.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

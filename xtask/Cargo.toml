@@ -31,3 +31,10 @@ walkdir = "2"
 # pure `check_workspace` function.
 # step 06-06 inner-TDD: in-memory Rust source snippets feed the pure
 # `classify_probe_body` function. No external test deps needed.
+# step 01-03 (slice-05): the index-store anti-merging integration test
+# (`tests/anti_merging_index_store.rs`) generates adversarial aggregating SQL
+# strings with proptest and asserts the pure
+# `classify_index_store_sql_literal` rule fires; the SAFE attributed read
+# class passes. `proptest` is pure-Rust (no transitive I/O) — safe in xtask's
+# tight dep graph, and a dev-dependency only.
+proptest = { workspace = true }

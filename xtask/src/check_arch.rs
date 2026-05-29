@@ -331,6 +331,73 @@ fn excerpt_of(literal: &str) -> String {
 }
 
 // -----------------------------------------------------------------------------
+// Anti-merging rule — index-store extension (WD-120 / I-AV-2)
+// -----------------------------------------------------------------------------
+//
+// Structural enforcement layer of the slice-05 3-layer anti-merging defense
+// (TYPE layer = `IndexedClaim.author_did` non-Option from 01-02; BEHAVIORAL
+// layer = AV-9/AV-2/AVC-2 in later phases). Per data-models.md §"Read-side
+// query shapes" / §"FORBIDDEN pattern" + ADR-025: the slice-05 index store is a
+// SINGLE `indexed_claims` table — unlike the slice-03/04 CROSS-STORE
+// `claims`+`peer_claims` rule above, the index-store risk is a SINGLE-TABLE
+// AGGREGATE (`GROUP BY` / `COUNT` / `SUM` / `AVG` across authors) that DROPS
+// `author_did`, fabricating a faceless "network consensus" row (WD-103).
+//
+// The aggregation MUST happen in the PURE `appview-domain` core (Rust); the
+// index-store SQL stays per-claim + attribution-projecting. This classifier is
+// a pure word-boundary pass over a single literal; the effect shell
+// (`scan_adapter_index_store_sql`) extracts literals with `syn` so comments are
+// never matched.
+
+/// An index-store SQL literal that aggregates over `indexed_claims` without
+/// projecting `author_did` — the index-store anti-merging violation. Carries an
+/// excerpt for the operator's error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStoreAntiMergingViolation {
+    /// First ~80 chars of the offending literal, for the operator's error.
+    pub excerpt: String,
+}
+
+/// True if `haystack` contains any of the aggregation tokens that, over the
+/// `indexed_claims` table, would merge across authors: a `GROUP BY` clause or a
+/// `COUNT(` / `SUM(` / `AVG(` aggregate function call. Case-insensitive (SQL
+/// keywords are case-insensitive); the function-call tokens keep the `(` so a
+/// column literally named `count` is not mistaken for the aggregate.
+fn mentions_aggregation(literal: &str) -> bool {
+    let upper = literal.to_ascii_uppercase();
+    // Normalize internal whitespace so `GROUP   BY` / `GROUP\nBY` still match.
+    let collapsed: String = upper.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.contains("GROUP BY")
+        || upper.contains("COUNT(")
+        || upper.contains("SUM(")
+        || upper.contains("AVG(")
+}
+
+/// Pure classifier for the index-store anti-merging rule. Given one SQL string
+/// literal, return `Some(violation)` iff it AGGREGATES over `indexed_claims`
+/// (mentions the `indexed_claims` table AND an aggregation construct) but does
+/// NOT mention `author_did`. Otherwise `None` (a per-claim attributed read, a
+/// non-aggregating statement, or one that does project `author_did`).
+///
+/// Word-boundary matching on `indexed_claims` ensures the child tables
+/// `indexed_claim_evidence` / `indexed_claim_references` (which do NOT contain
+/// `indexed_claims` as a whole word) are not mistaken for the parent table.
+pub fn classify_index_store_sql_literal(literal: &str) -> Option<IndexStoreAntiMergingViolation> {
+    if !contains_word(literal, "indexed_claims") {
+        return None;
+    }
+    if !mentions_aggregation(literal) {
+        return None;
+    }
+    if contains_word(literal, "author_did") {
+        return None;
+    }
+    Some(IndexStoreAntiMergingViolation {
+        excerpt: excerpt_of(literal),
+    })
+}
+
+// -----------------------------------------------------------------------------
 // Autoconfirm release-build guard rule (D-D20)
 // -----------------------------------------------------------------------------
 //
@@ -578,6 +645,50 @@ fn scan_adapter_duckdb_sql(workspace_root: &Path) -> anyhow::Result<Vec<String>>
     Ok(findings)
 }
 
+/// Effect shell for the index-store anti-merging rule (slice-05): scan
+/// `adapter-index-store` source for SQL string literals and classify each with
+/// [`classify_index_store_sql_literal`]. Returns one rendered violation per
+/// offending literal. A missing crate dir is treated as "nothing to scan" (the
+/// rule is for slice-05 onward; absence is not a failure). Mirrors
+/// [`scan_adapter_duckdb_sql`] — the SAME `no_cross_table_join_elides_author`
+/// anti-merging pass, extended to the SINGLE-`indexed_claims`-table store.
+fn scan_adapter_index_store_sql(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let src_dir = workspace_root.join("crates/adapter-index-store/src");
+    if !src_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut findings = Vec::new();
+    for entry in walkdir::WalkDir::new(&src_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !(path.is_file() && path.extension().is_some_and(|e| e == "rs")) {
+            continue;
+        }
+        let src = std::fs::read_to_string(path)?;
+        let file = match syn::parse_file(&src) {
+            Ok(f) => f,
+            Err(e) => return Err(anyhow::anyhow!("syn parse {}: {e}", path.display())),
+        };
+        let mut collector = StringLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        for literal in &collector.literals {
+            if let Some(v) = classify_index_store_sql_literal(literal) {
+                findings.push(format!(
+                    "{}: SQL literal aggregates over `indexed_claims` without \
+                     projecting `author_did` (I-AV-2 / no_cross_table_join_elides_author): {}",
+                    path.display(),
+                    v.excerpt
+                ));
+            }
+        }
+    }
+    Ok(findings)
+}
+
 /// Effect shell for the autoconfirm guard (D-D20): read `peer_remove.rs` and
 /// verify the `OPENLORE_TEST_AUTOCONFIRM` token is cfg-gated. A missing file is
 /// "nothing to check" (slice-03 verb may not exist yet in older trees).
@@ -606,10 +717,12 @@ pub fn run() -> anyhow::Result<i32> {
 
     let workspace_root = locate_workspace_root()?;
     let sql_findings = scan_adapter_duckdb_sql(&workspace_root)?;
+    let index_store_sql_findings = scan_adapter_index_store_sql(&workspace_root)?;
     let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
+    rendered.extend(index_store_sql_findings);
     rendered.extend(autoconfirm_findings);
 
     if rendered.is_empty() {

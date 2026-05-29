@@ -1,0 +1,32 @@
+[package]
+name = "adapter-atproto-ingest"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore IngestSourcePort adapter: bounded read-only PULL of public listRecords over rustls. Async per ADR-024. Read-only by construction (I-AV-5)."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (slice-05). Bootstrap SCAFFOLD (step 01-03): `todo!()` bodies;
+# real bounded-PULL ingestion lands in Phase 03/04 (driven by AV-* scenarios).
+#
+# Mirrors `adapter-atproto-pds`'s async-network dependency shape (ADR-024 reuses
+# the same XRPC/rustls posture as ADR-004): `reqwest` (rustls + webpki-roots)
+# for the HTTPS `listRecords` PULL, `tokio` for the `async-trait` impl runtime,
+# `async-trait` for the trait. READ-ONLY by construction — there is NO sign /
+# write dependency (I-AV-5); the adapter cannot author or mutate a claim.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

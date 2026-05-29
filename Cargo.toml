@@ -23,6 +23,11 @@ members = [
     "crates/adapter-atproto-pds",
     "crates/adapter-github",
     "crates/adapter-system-clock",
+    # slice-05 (appview search) indexer effect adapters — step 01-03 scaffolds.
+    "crates/adapter-atproto-ingest",
+    "crates/adapter-index-store",
+    "crates/adapter-xrpc-query-server",
+    "crates/adapter-index-query",
     "crates/cli",
     "crates/test-support",
     "xtask",

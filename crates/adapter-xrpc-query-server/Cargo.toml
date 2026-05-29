@@ -1,0 +1,32 @@
+[package]
+name = "adapter-xrpc-query-server"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore indexer XRPC query server: serves org.openlore.appview.searchClaims over HTTP (ADR-027). Reads IndexStorePort, composes via appview-domain. Framework-agnostic skeleton."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (slice-05). Bootstrap SCAFFOLD (step 01-03): a framework-agnostic
+# COMPILING skeleton with `todo!()` bodies. The concrete HTTP serving framework
+# is DEFERRED to step 04-06 when real serving lands.
+#
+# HTTP FRAMEWORK: intentionally NONE here. `axum` is BANNED (deny.toml:76; the
+# narrowing is a 01-04 task, out of scope). The signatures use abstract std
+# types (`std::net::SocketAddr`) so the skeleton compiles with zero HTTP-server
+# dependency. When real serving lands (04-06), the preferred concrete dependency
+# is `hyper` (already transitive via reqwest, NOT banned) — NOT axum.
+#
+# Depends on `ports` (IndexStorePort — the read side it serves), `appview-domain`
+# (the pure `compose_results` it calls to group results per-author before
+# responding), and `claim-domain` (the boundary value types).
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+appview-domain = { path = "../appview-domain" }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
