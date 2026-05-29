@@ -1584,11 +1584,117 @@ fn followed_discovery_author_purges_via_slice03_semantics_zero_residue() {
     // Universe (port-exposed): post-purge peer_subscriptions (priya absent),
     // peer_claims/<priya>/ (removed), no orphaned discovery-side subscription
     // record (none exists — the load-bearing absence of a parallel path).
-    todo!(
-        "DELIVER (slice-05): after following a discovered author via the funnel, \
-         run `openlore peer remove <did> --purge`; assert slice-03 purge \
-         semantics leave zero residue (no parallel discovery-subscription state \
-         to leak; I-AV-7)."
+    let env = TestEnv::initialized();
+    // The bare DID the slice-03 `peer add`/`pull`/`remove --purge` paths key on
+    // (the network search renders the app-identity form, but the LOCAL
+    // peer_subscriptions + peer_claims store + the purge verb use the bare DID;
+    // I-FED-2 / GQE-6 / Q-DELIVER-2).
+    let priya_did = "did:plc:priya-test";
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus (9 authors
+    // / 7 subjects), which includes the UNFOLLOWED Priya's verified bazel/
+    // reproducible-builds claim (0.82). The CLI's indexer_url points at the serve
+    // port. NO `peer add` precedes the search, so Priya is unfollowed → her result
+    // carries the render-only follow affordance the funnel runs verbatim. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // === Precondition (the AV-19 funnel): discover Priya, follow her via the
+    // render-only affordance (the slice-03 `peer add` VERBATIM), and `peer pull`
+    // her claim into the LOCAL `peer_claims` store. This is the SAME `peer add` +
+    // `peer pull` path slice-03 uses — the funnel introduces NO parallel
+    // subscription state (I-AV-7); AV-22 proves that by purging via the slice-03
+    // verb and observing zero residue. ===
+    let discovered = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+    assert_eq!(
+        discovered.status, 0,
+        "AV-22 (precondition): the discovery `search --object reproducible-builds` \
+         must exit 0. stdout: {} stderr: {}",
+        discovered.stdout, discovered.stderr
+    );
+    // Reuse the 05-06 funnel helper: parse the render-only `peer add` affordance,
+    // run it verbatim against a slice-03 PeerPds double, then `peer pull` so
+    // Priya's claim lands in the LOCAL `peer_claims` store. Keep the PeerPds alive
+    // through the rest of the scenario (the purge reads only the local store).
+    let _priya_peer = funnel_follow_and_pull(&env, &discovered.stdout, priya_did);
+
+    // Precondition assertions: the funnel created EXACTLY a slice-03 subscription
+    // (one ACTIVE peer_subscriptions row, no parallel discovery-side record) AND
+    // Priya's pulled claim is in the LOCAL peer_claims store attributed to her —
+    // the state the slice-03 `peer remove --purge` must reduce to zero residue.
+    assert_funnel_subscription_is_slice03(&env, priya_did);
+    assert_peer_claims_attributed_to(&env, priya_did, 1);
+
+    // DD-FED-10: capture the FULL observable purge universe BEFORE the action —
+    // the SAME four-slot universe slice-03 PS-6 asserts (peer_claims row count,
+    // author_claims row count, the on-disk peer_claims/<did>/ partition, the
+    // subscription row count). The before-state is a followed-via-discovery
+    // author: 1 peer_claims row, the partition exists, 1 active subscription.
+    let before = capture_purge_universe(&env, priya_did);
+
+    // -- Action: the slice-03 `peer remove <did> --purge` verb VERBATIM. The
+    // interactive `[y/N]` confirmation is answered "y" via piped stdin (scripted
+    // mode — exactly as slice-03 PS-6 drives the hard-purge branch; WD-21: a real
+    // confirmation, no `--yes`). Because the author was followed via the SAME
+    // `peer add` path, this purge is byte-indistinguishable from a slice-03
+    // add+purge. --
+    let outcome = run_openlore_with_stdin(&env, &["peer", "remove", priya_did, "--purge"], "y\n");
+    assert_eq!(
+        outcome.status, 0,
+        "AV-22: `openlore peer remove {priya_did} --purge` (the slice-03 verb \
+         verbatim) must exit 0 for a discovery-followed author. stdout: {} \
+         stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // === The cardinal AV-22 gate (US-AV-005 / I-AV-7 / slice-03 PS-6): the purge
+    // leaves ZERO residue over the SAME state-delta universe slice-03 PS-6 asserts
+    // for a plain add+purge —
+    //   - peer_storage.claims.row_count_by_author[did] : 1 → 0 (peer claims gone)
+    //   - author_claims.row_count                      : UNCHANGED (no user
+    //     counter-claims existed; the implicit-unchanged rule still pins it)
+    //   - filesystem.peer_claims_dir.exists[did]       : true → false (the on-disk
+    //     partition removed — zero filesystem residue)
+    //   - peer_storage.subscriptions.row_count[did]    : 1 → 0 (the subscription
+    //     hard-deleted; NO orphaned discovery-side record because none exists)
+    // Because the funnel added NO parallel subscription state, the slice-03 purge
+    // semantics apply UNCHANGED and the after-universe is identical to a slice-03
+    // add+purge. ===
+    let after = capture_purge_universe(&env, priya_did);
+    assert_purge_state_delta(&before, &after);
+
+    // Belt-and-suspenders against the named single-slot helpers (each observable
+    // read independently — the SAME assertions slice-03 PS-6 makes):
+    //   1. NO peer_claims residue (the pulled claim is gone).
+    assert_no_peer_claims_attributed_to(&env, priya_did);
+    //   2. the on-disk peer_claims/<priya>/ partition is removed (KPI-FED-4 zero
+    //      filesystem residue).
+    assert_peer_claims_dir_removed_for(&env, priya_did);
+    //   3. ZERO subscriptions remain — and, the load-bearing absence: there is NO
+    //      orphaned discovery-side subscription record (none was ever created; the
+    //      funnel reused the slice-03 store, so the slice-03 purge removed the ONE
+    //      row and left NOTHING behind — I-AV-7). The full `peer_subscriptions`
+    //      snapshot (what `peer list` renders) is EMPTY, the strongest form of
+    //      "no parallel discovery-subscription record leaked".
+    let subscriptions_after_purge = peer_subscriptions_snapshot(&env);
+    assert!(
+        subscriptions_after_purge.is_empty(),
+        "AV-22 (I-AV-7): after the slice-03 `peer remove --purge`, the \
+         peer_subscriptions snapshot (`peer list`) must be EMPTY — NO orphaned \
+         discovery-side subscription record may remain (the funnel created NO \
+         parallel path; the slice-03 purge left zero residue); got: \
+         {subscriptions_after_purge:?}"
     );
 }
 

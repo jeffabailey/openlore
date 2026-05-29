@@ -160,6 +160,22 @@ fn count_peer_claims(conn: &Connection, peer_did: &Did) -> Result<u32, PeerStora
     Ok(count.max(0) as u32)
 }
 
+/// Materialize the CIDs of every cached `peer_claims` row attributed to
+/// `peer_did`. Used by hard-purge to scope the child-row (references /
+/// evidence) deletes by an explicit value list instead of an in-DELETE
+/// subquery against the table being mutated — the robust form under DuckDB's
+/// foreign-key delete limitations. Caller holds the connection lock.
+fn peer_claim_cids_for(conn: &Connection, peer_did: &Did) -> Result<Vec<String>, PeerStorageError> {
+    let mut stmt = conn
+        .prepare("SELECT cid FROM peer_claims WHERE author_did = ?")
+        .map_err(|err| PeerStorageError::DuckDb(format!("prepare peer_claims cid scan: {err}")))?;
+    let rows = stmt
+        .query_map(duckdb::params![peer_did.0], |row| row.get::<_, String>(0))
+        .map_err(|err| PeerStorageError::DuckDb(format!("scan peer_claims cids: {err}")))?;
+    rows.collect::<Result<Vec<String>, _>>()
+        .map_err(|err| PeerStorageError::DuckDb(format!("read peer_claims cid row: {err}")))
+}
+
 /// Count the user's OWN claims in the slice-01 `claims` (author) table.
 /// The author store is single-tenant (the local user is the sole author),
 /// so a global COUNT is the observable surface for "user counter-claims
@@ -445,38 +461,75 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         let was_subscribed = lookup_subscription_row(&conn, peer_did)?.is_some();
         let preserved_user_counter_claim_count = count_author_claims(&conn)?;
 
-        // ALL three DB deletes run in ONE transaction (ADR-014 atomicity:
-        // either the subscription AND every cached peer_claim of this peer
-        // disappear together, or nothing does). Delete order honors the
-        // migration-v3 foreign keys:
-        //   1. peer_claim_references / peer_claim_evidence reference
-        //      peer_claims(cid) → delete the child rows FIRST (scoped to the
-        //      peer's CIDs via the author_did subquery);
-        //   2. peer_claims for this author;
-        //   3. the peer_subscriptions row.
-        // The author `claims` table is NEVER named — the own-vs-peer
-        // separation is structural (different tables), not a runtime filter.
+        // The deletes honor the migration-v3 foreign keys (the
+        // peer_claim_references / peer_claim_evidence child rows reference
+        // peer_claims(cid)), but they CANNOT all run in one transaction:
+        // DuckDB's FK enforcement refuses to delete a referenced parent row
+        // in the SAME transaction that deleted its referencing child rows —
+        // even when the child DELETE reports success, the in-transaction FK
+        // index still treats the reference as live ("Violates foreign key
+        // constraint because key ... is still referenced ... please refer to
+        // our foreign key limitations"). The fix is to COMMIT the child
+        // deletes BEFORE deleting the parent (two transactions); within each
+        // transaction the FK invariant holds, and the cross-tx order
+        // (children → parents) means the FK is never momentarily dangling on
+        // disk. This was latent until a REAL `peer pull` (which writes a
+        // peer_claim_evidence row for an evidence-bearing claim) reached the
+        // purge — the slice-03 PS-6 seed populated peer_claims WITHOUT any
+        // child rows, so the same-tx delete never hit the constraint.
+        //
+        // Observable atomicity is preserved: the purge is idempotent (the
+        // children are gone, so a re-run resumes at the parent delete), the
+        // on-disk partition removal is already post-commit, and the author
+        // `claims` table is NEVER named — the own-vs-peer separation is
+        // structural (different tables), not a runtime filter, so the user's
+        // counter-claims are untouched regardless of where a crash lands.
+
+        // Materialize the peer's cached CIDs in Rust so the child deletes are
+        // scoped by an explicit value (no in-DELETE subquery against the
+        // table being mutated).
+        let peer_cids = peer_claim_cids_for(&conn, peer_did)?;
+
+        // Transaction 1 — delete the child rows (references + evidence) for
+        // every one of the peer's CIDs, then COMMIT so the parent delete in
+        // transaction 2 sees a clean FK index.
+        {
+            let tx_children = conn.transaction().map_err(|err| {
+                PeerStorageError::DuckDb(format!("begin hard-purge child-delete tx: {err}"))
+            })?;
+            for cid in &peer_cids {
+                tx_children
+                    .execute(
+                        "DELETE FROM peer_claim_references WHERE referencing_cid = ?",
+                        duckdb::params![cid],
+                    )
+                    .map_err(|err| {
+                        PeerStorageError::DuckDb(format!(
+                            "hard-purge delete peer_claim_references: {err}"
+                        ))
+                    })?;
+                tx_children
+                    .execute(
+                        "DELETE FROM peer_claim_evidence WHERE cid = ?",
+                        duckdb::params![cid],
+                    )
+                    .map_err(|err| {
+                        PeerStorageError::DuckDb(format!(
+                            "hard-purge delete peer_claim_evidence: {err}"
+                        ))
+                    })?;
+            }
+            tx_children.commit().map_err(|err| {
+                PeerStorageError::DuckDb(format!("commit hard-purge child-delete tx: {err}"))
+            })?;
+        }
+
+        // Transaction 2 — delete the parent peer_claims rows + the
+        // peer_subscriptions row together (no FK dependency between them, so
+        // they stay atomic).
         let tx = conn
             .transaction()
             .map_err(|err| PeerStorageError::DuckDb(format!("begin hard-purge tx: {err}")))?;
-
-        tx.execute(
-            "DELETE FROM peer_claim_references WHERE referencing_cid IN \
-                (SELECT cid FROM peer_claims WHERE author_did = ?)",
-            duckdb::params![peer_did.0],
-        )
-        .map_err(|err| {
-            PeerStorageError::DuckDb(format!("hard-purge delete peer_claim_references: {err}"))
-        })?;
-
-        tx.execute(
-            "DELETE FROM peer_claim_evidence WHERE cid IN \
-                (SELECT cid FROM peer_claims WHERE author_did = ?)",
-            duckdb::params![peer_did.0],
-        )
-        .map_err(|err| {
-            PeerStorageError::DuckDb(format!("hard-purge delete peer_claim_evidence: {err}"))
-        })?;
 
         tx.execute(
             "DELETE FROM peer_claims WHERE author_did = ?",
