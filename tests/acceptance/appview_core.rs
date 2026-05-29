@@ -529,12 +529,53 @@ fn appview_compose_results_is_deterministic_property() {
     // determinism the wire-shape relies on.
     //
     // Universe: the full NetworkSearchResult value.
-    todo!(
-        "DELIVER (slice-05): forall (rows, dim): \
-         compose_results(rows, dim) == compose_results(rows, dim) \
-         (byte-identical NetworkSearchResult). Underpins the query-not-snapshot \
-         share contract (I-AV-8)."
-    );
+    //
+    //     forall (rows, dim):
+    //         compose_results(rows, dim) == compose_results(rows, dim)
+    //
+    // `NetworkSearchResult` derives `PartialEq` + `Debug` over its `by_author`
+    // (the per-author groups + their ordering), `distinct_author_count`,
+    // `total_claims`, and `suggestion`, so this equality covers the FULL value
+    // byte-for-byte (same by_author ordering, same counts, same suggestion).
+    // Symmetric-property style (Hebert ch.3 Tier 1): applying the same pure
+    // transformation twice yields the same value. We drive over the arbitrary
+    // IndexedClaim set (`arbitrary_indexed_claims()`, 02-04) crossed with an
+    // arbitrary `SearchDimension`, so determinism is pinned across the whole
+    // {single-author, multi-author, identical-content-distinct-author} × {Object,
+    // Contributor, Subject} space. compose_results is clock-free / I/O-free by
+    // construction (02-04: BTreeMap-keyed author grouping → stable author
+    // ordering, no HashMap-iteration-order leak; rows stable-sorted by cid within
+    // each group; constant `suggestion`). This property PINS that — a future
+    // refactor that swapped the BTreeMap for a HashMap (leaking iteration order
+    // into `by_author`) or read a wall clock would fail LOUDLY here. Mirrors the
+    // sibling AVC-3a (`appview_ingest_decision_is_deterministic_property`).
+    let dimension = prop_oneof![
+        Just(SearchDimension::Object),
+        Just(SearchDimension::Contributor),
+        Just(SearchDimension::Subject),
+    ];
+    let mut runner = TestRunner::default();
+    runner
+        .run(&(arbitrary_indexed_claims(), dimension), |(rows, dim)| {
+            let first = appview_domain::compose_results(rows.clone(), dim);
+            let second = appview_domain::compose_results(rows.clone(), dim);
+            prop_assert_eq!(
+                first,
+                second,
+                "compose_results must be DETERMINISTIC: the same (rows, dimension) must yield a \
+                 byte-identical NetworkSearchResult (same by_author ordering, same counts, same \
+                 suggestion) — the by-construction reproducibility precondition (DESIGN 5.1 inv 4). \
+                 The `--share` contract (US-AV-006 / I-AV-8) rests on this: the share link encodes \
+                 the QUERY, not a snapshot, so re-running the same query over the same rows must \
+                 yield the same per-author result. A HashMap-iteration-order leak in the by_author \
+                 grouping, or a wall-clock read, would make this unsound."
+            );
+            Ok(())
+        })
+        .expect(
+            "determinism invariant: compose_results(rows, dim) must equal a second call with the \
+             SAME inputs for all generated IndexedClaim sets and search dimensions",
+        );
 }
 
 // =============================================================================
