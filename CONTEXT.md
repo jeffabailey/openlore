@@ -12,7 +12,7 @@ The network INDEXER (ATProto AppView pattern): verified + attributed + anti-merg
 
 ## Open follow-ups (non-blocking, post-ship)
 - Pre-existing `clippy::manual_is_multiple_of` nit in adapter-atproto-did `decode_hex` (toolchain drift; not in the gate).
-- adapter-system-clock has a parallel-race flaky unit test (slice-01 tech debt; set_var env mutation) — fix with a serialize mutex (no active deliver session now, so the source-write guard no longer blocks orchestrator edits).
+- ~~adapter-system-clock parallel-race flaky unit test~~ FIXED: serialized the two OPENLORE_TEST_NOW env-var tests on a static Mutex (8/8 parallel runs green).
 - DESIGN-doc nit: component-boundaries.md ingest_decision prose mentions a `self_*` RejectReason not in the enum (4 variants: Unsigned/BadSignature/CidMismatch/SchemaUnknown).
 - No git remote configured → nothing pushed (by design).
 

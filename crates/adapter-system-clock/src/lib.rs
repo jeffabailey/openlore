@@ -77,6 +77,14 @@ impl ClockPort for SystemClockAdapter {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use std::sync::Mutex;
+
+    // `OPENLORE_TEST_NOW` is process-global, and Rust runs unit tests
+    // multi-threaded within one binary — so the two tests that mutate it
+    // would race (the pinned-time test's `set_var` leaking into the
+    // real-clock test's read window, ~50% of runs). Serialize them on
+    // this lock so each owns the env var for the window it touches + reads.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Property: `probe()` returns `ProbeOutcome::Ok` unconditionally.
     ///
@@ -108,12 +116,14 @@ mod tests {
     /// keep verifying the unpinned-clock contract).
     #[test]
     fn now_utc_returns_time_within_one_minute_of_reference() {
-        // SAFETY: tests in this module are not run in parallel against
-        // OPENLORE_TEST_NOW because the pinned-time test below also
-        // mutates it and we serialize via Rust's per-test process env
-        // (these tests run in the same binary). We accept that nuance:
-        // both tests set/unset the var deterministically before
-        // observing the clock, and there is no third concurrent reader.
+        // Serialize with the sibling pinned-time test so its `set_var`
+        // cannot leak into this real-clock read. Recover from a poisoned
+        // lock so a panic in one test does not cascade into the other.
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // SAFETY: the lock guarantees no sibling test concurrently
+        // reads or writes OPENLORE_TEST_NOW for the duration of `_env`.
         unsafe {
             std::env::remove_var("OPENLORE_TEST_NOW");
         }
@@ -141,9 +151,13 @@ mod tests {
     /// without introducing a separate FakeClock adapter.
     #[test]
     fn now_utc_honors_openlore_test_now_env_var() {
-        // SAFETY: see sibling test above. We set, observe, then unset
-        // to leave the env clean for any subsequent test.
+        // Hold the env lock across the whole set -> observe -> unset
+        // window so the sibling real-clock test never observes this pin.
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let pinned = "2026-05-26T12:00:00Z";
+        // SAFETY: the lock guarantees exclusive access to OPENLORE_TEST_NOW.
         unsafe {
             std::env::set_var("OPENLORE_TEST_NOW", pinned);
         }
