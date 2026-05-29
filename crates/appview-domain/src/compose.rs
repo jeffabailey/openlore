@@ -395,6 +395,57 @@ mod tests {
         );
     }
 
+    /// MULTI-COUNTER tiebreak (determinism, 02-05): when TWO distinct claims both
+    /// counter the SAME claim C, the annotation is the LOWEST-CID counterer,
+    /// independent of input order. This exercises the `existing.referencing_cid.0
+    /// <= candidate.referencing_cid.0` tiebreak guard that the single-counter
+    /// tests never reach. Asserting BOTH input orders pins the guard: a `<=`→`true`
+    /// mutant keeps the FIRST-seen (so the K2-first order would wrongly win K2);
+    /// a `<=`→`false` mutant always overwrites (so the K1-first order would wrongly
+    /// win K2); a `<=`→`>` mutant inverts the comparison (picking the highest CID).
+    /// Only the real `<=` lowest-CID-wins rule passes both orders.
+    #[test]
+    fn lowest_cid_counterer_wins_the_multi_counter_tiebreak_regardless_of_order() {
+        // Each counterer's author is bound to ITS OWN cid (so the winner's author
+        // is fully determined by the CID-only tiebreak, not by the input slot).
+        let counter_of = |cid: &str| {
+            let author = format!("did:plc:author-{cid}");
+            claim_with_refs(
+                &author,
+                cid,
+                "github:a/a",
+                "phil.x",
+                0.55,
+                vec![ClaimReference {
+                    ref_type: ReferenceType::Counters,
+                    cid: Cid("cidC".to_string()),
+                }],
+            )
+        };
+        // The deterministic winner: the LOWEST countering CID ("bafyaaa") and ITS
+        // bound author — fixed by the CID-only tiebreak, regardless of input order.
+        let expected_annotation = Some(CounterRef {
+            referencing_cid: Cid("bafyaaa".to_string()),
+            counter_author: Did("did:plc:author-bafyaaa".to_string()),
+            ref_type: ReferenceType::Counters,
+        });
+
+        for order in [["bafyaaa", "bafyzzz"], ["bafyzzz", "bafyaaa"]] {
+            let c = claim("did:plc:priya", "cidC", "github:a/a", "phil.x", 0.82);
+            let k1 = counter_of(order[0]);
+            let k2 = counter_of(order[1]);
+
+            let result = compose_results(vec![c, k1, k2], SearchDimension::Object);
+
+            let countered = row_for(&result, &Cid("cidC".to_string()))
+                .expect("the countered claim C is STILL present");
+            assert_eq!(
+                countered.counter_annotation, expected_annotation,
+                "the LOWEST-cid counterer (bafyaaa) must win the tiebreak for input order {order:?}"
+            );
+        }
+    }
+
     /// `Retracts` is the sibling case of `Counters`: a retraction is also an
     /// annotation on the retracted row, carrying `ref_type == Retracts`, and the
     /// retracted row is likewise never removed.

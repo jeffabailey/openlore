@@ -147,6 +147,40 @@ mod tests {
         );
     }
 
+    /// Pin KNOWN multi-edit Levenshtein distances so the DP arithmetic (`+ 1`
+    /// deletion / `+ 1` insertion / `+ substitution_cost`, plus the `i + 1`
+    /// first-column seed) is asserted EXACTLY. A mutant that replaces any `+`
+    /// with `*` diverges on these cases because at least one operand exceeds 1
+    /// (e.g. an interior cell whose neighbour distance is ≥ 2), so `n * 1 != n + 1`
+    /// and `n * cost != n + cost`. The classic `kitten`→`sitting` (3) plus two
+    /// further multi-edit pairs cover the deletion, insertion, and substitution
+    /// recurrence sites; the `i + 1` seed is exercised by the pure-deletion pair
+    /// (`"flaw"`→`""` is 4, forcing `current[0] = i + 1` up to 4).
+    #[test]
+    fn levenshtein_pins_known_multi_edit_distances() {
+        // Classic 3-edit textbook case (substitution k→s, substitution e→i,
+        // insertion g): the interior DP cells hold values ≥ 2, so a `+`→`*`
+        // mutant computes a different number.
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        // A 3-edit pair driving the deletion + substitution arms with operands ≥ 2.
+        assert_eq!(levenshtein("sunday", "saturday"), 3);
+        // A pure-deletion pair: distance equals the length, forcing the
+        // `current[0] = i + 1` seed to grow to 4 (an `i * 1` mutant would stay 0).
+        assert_eq!(levenshtein("flaw", ""), 4);
+        // A 2-edit pair (two substitutions) — interior cell reaches 2, so the
+        // substitution `+ substitution_cost` site diverges under `*`.
+        assert_eq!(levenshtein("abcde", "axcye"), 2);
+        // Pure-DELETION pair on the optimal path: `a` longer than `b`, so the
+        // `previous[j + 1] + 1` deletion term is the selected minimum at cells
+        // whose neighbour distance is ≥ 1. A `+`→`*` mutant on the deletion site
+        // makes deletion free (`x * 1 == x`), collapsing the distance.
+        assert_eq!(levenshtein("abc", "a"), 2);
+        // Pure-INSERTION pair (the mirror): `b` longer than `a`, so the
+        // `current[j] + 1` insertion term is on the optimal path. A `+`→`*` mutant
+        // on the insertion site makes insertion free, collapsing the distance.
+        assert_eq!(levenshtein("a", "abc"), 2);
+    }
+
     proptest! {
         /// Inner-loop ranker property (Hebert ch.3 Tier-1 "Modeling"): whenever
         /// `near_match_suggestion` returns `Some(s)`, `s` is a member of `known`

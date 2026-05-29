@@ -270,6 +270,26 @@ mod tests {
     }
 
     #[test]
+    fn indexed_claim_carries_the_signed_payloads_exact_confidence() {
+        // The signed payload's confidence is a SPECIFIC non-boundary value (0.82
+        // — distinct from the 0.0/1.0/-1.0 a constant-replacement mutant of
+        // `confidence_value` would yield). The indexed claim must carry that exact
+        // value through from the SIGNED payload, so any constant mutant diverges.
+        let (sk, vk) = keypair();
+        let record = valid_record(&sk);
+
+        match ingest_decision(&record, &vk) {
+            IngestOutcome::Index(claim) => {
+                assert_eq!(
+                    claim.confidence, 0.82,
+                    "the indexed claim must carry the signed payload's EXACT confidence"
+                );
+            }
+            other => panic!("a valid signed record must Index, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn unsigned_record_rejects_with_unsigned_reason() {
         let (_sk, vk) = keypair();
         assert_eq!(
