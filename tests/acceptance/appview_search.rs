@@ -832,12 +832,72 @@ fn search_by_contributor_lists_full_network_trail_with_honest_framing() {
     // Universe (port-exposed): search.exit_code (0); the count of attributed rows
     // under priya (8); the "(not subscribed)" label; the footer states the
     // one-developer-not-consensus framing + the peer-add offer.
-    todo!(
-        "DELIVER (slice-05): seed Priya's 8 verified claims / 6 subjects; run \
-         `openlore search --contributor github:priya`; assert exit 0, 8 \
-         attributed rows under did:plc:priya-test each [verified], label \
-         (not subscribed), footer = 'one developer's reasoning trail, not a \
-         community consensus' + `peer add did:plc:priya-test`."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-003 Ex1 contributor-trail corpus —
+    // did:plc:priya-test authors 8 verified claims across 6 subjects (bazel x2,
+    // buck2, nixpkgs x2, pants, please, ninja). Maria does NOT follow her. The
+    // CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+
+    // -- Action: the contributor-dimension network read through the CLI driving
+    // port. `github:priya` resolves to did:plc:priya-test (slice-02/04 handle->DID)
+    // → the priya app identity the corpus author_did carries. --
+    let outcome = run_openlore_search(&env, &["search", "--contributor", "github:priya"], &indexer);
+
+    // 1. exit 0 + the public-data banner PRECEDES the results.
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --contributor` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+    assert_public_data_banner_precedes_results(&outcome.stdout);
+
+    // 2. all 8 verified claims listed under the ONE author DID
+    // (did:plc:priya-test#org.openlore.application), each [verified], NO merged row
+    // (a single-author trail by construction, but the anti-merging row count + the
+    // no-consensus footer are the load-bearing assertions). The contributor trail
+    // covers 6 distinct subjects; the (subject, object) anti-merging helper counts
+    // ALL attributed rows and asserts the TOTAL attributed-row count (8) plus that
+    // priya is the sole author.
+    assert_network_result_preserves_attribution(
+        &outcome.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        8,
+        &["did:plc:priya-test#org.openlore.application"],
+    );
+
+    // 3. every row carries [verified] (verification is an ingest precondition;
+    //    I-AV-1) — the universal-marker guarantee holds on the contributor trail.
+    assert_verified_marker_is_universal(&outcome.stdout);
+
+    // 4. the trail is labeled "(not subscribed)" — Maria does NOT follow Priya.
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:priya-test#org.openlore.application (not subscribed)"),
+        "expected the unfollowed contributor labeled (not subscribed):\n{}",
+        outcome.stdout
+    );
+
+    // 5. the footer states this is ONE developer's reasoning trail, NOT a community
+    //    consensus (KPI-AV-1 honesty — a network trail is not a consensus), and
+    //    offers `openlore peer add did:plc:priya-test` (the slice-03 follow path).
+    assert!(
+        outcome
+            .stdout
+            .contains("one developer's reasoning trail, not a community consensus"),
+        "expected the honest-framing footer (a trail, NOT a consensus):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("openlore peer add did:plc:priya-test"),
+        "expected the `openlore peer add did:plc:priya-test` follow offer:\n{}",
+        outcome.stdout
     );
 }
 

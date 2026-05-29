@@ -64,8 +64,9 @@ pub use openlore_test_support::{
 // acceptance file can name them via `use support::*` (matching how the slice-01
 // /03 fixtures already surface).
 pub use openlore_test_support::{
-    corpus_deno_dependency_pinning_two_authors, fixture_ingest_adversarial_set_plus_one_valid,
-    fixture_ingest_valid_signed, FixtureKeypair, Posture, RawRecordSpec, PRIYA_DID, SVEN_DID,
+    corpus_deno_dependency_pinning_two_authors, corpus_priya_eight_claims_six_subjects,
+    fixture_ingest_adversarial_set_plus_one_valid, fixture_ingest_valid_signed, FixtureKeypair,
+    Posture, RawRecordSpec, PRIYA_DID, SVEN_DID,
 };
 
 /// A sealed test environment.
@@ -4121,6 +4122,9 @@ fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::R
         NetworkIndexFixture::SingleVerifiedPriyaClaim => vec![fixture_ingest_valid_signed()],
         NetworkIndexFixture::AdversarialSetPlusOneValid => {
             fixture_ingest_adversarial_set_plus_one_valid()
+        }
+        NetworkIndexFixture::PriyaEightClaimsSixSubjects => {
+            corpus_priya_eight_claims_six_subjects()
         }
         other => panic!(
             "seed_network_index: corpus for fixture {other:?} not yet materialized (04-01 \

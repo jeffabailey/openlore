@@ -134,7 +134,7 @@ fn run_dimension(
 ) -> Result<SearchOutcome> {
     let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
     if indexer_url.is_empty() {
-        return Ok(degrade_to_local_only(value));
+        return Ok(degrade_to_local_only(dimension, value));
     }
 
     let adapter = HttpIndexQueryAdapter::for_url(indexer_url);
@@ -151,7 +151,7 @@ fn run_dimension(
         Ok(result) => Ok(render_network_result(wiring, dimension, result)),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
-        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(value)),
+        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(dimension, value)),
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
 }
@@ -250,10 +250,13 @@ fn resolve_relationship(wiring: &Wiring, author_did: &str) -> AuthorRelationship
 
 /// The SOFT, non-fatal local-only degradation (WD-116 / KPI-5): an unreachable or
 /// unconfigured indexer never blocks — `search` prints a clear message pointing
-/// the user at the LOCAL `graph query` and exits 0 (never a hang/panic/fatal).
-fn degrade_to_local_only(value: &str) -> SearchOutcome {
+/// the user at the LOCAL `graph query` along the SAME dimension and exits 0 (never
+/// a hang/panic/fatal). The dimension flag in the pointer matches the search the
+/// user ran, so `--contributor` degrades to `graph query --contributor <did>`.
+fn degrade_to_local_only(dimension: SearchDimension, value: &str) -> SearchOutcome {
+    let flag = dimension_flag(dimension);
     let stdout = format!(
-        "Network index unavailable. See LOCAL results via `openlore graph query --object {value}`.\n"
+        "Network index unavailable. See LOCAL results via `openlore graph query {flag} {value}`.\n"
     );
     SearchOutcome {
         exit_code: 0,
@@ -261,11 +264,64 @@ fn degrade_to_local_only(value: &str) -> SearchOutcome {
     }
 }
 
-/// `--contributor <did>`: one developer's network trail (US-AV-003). SCAFFOLD.
-fn run_dimension_contributor(_wiring: &Wiring, _contributor: &str) -> Result<SearchOutcome> {
-    // SCAFFOLD: true — query along the contributor dimension; render the trail +
-    // the "one developer's reasoning trail, not a community consensus" framing.
-    todo!("openlore search --contributor — network contributor-dimension search (Phase 03/04)")
+/// The `graph query` flag for a search dimension (`--object`/`--contributor`/
+/// `--subject`) — the LOCAL-degradation pointer names the SAME dimension the user
+/// searched. Pure helper.
+fn dimension_flag(dimension: SearchDimension) -> &'static str {
+    match dimension {
+        SearchDimension::Object => "--object",
+        SearchDimension::Contributor => "--contributor",
+        SearchDimension::Subject => "--subject",
+    }
+}
+
+/// `--contributor <handle-or-did>`: one developer's network trail (US-AV-003).
+///
+/// The contributor argument is a GitHub handle (`github:priya`) or a DID. Resolve
+/// it to the author's app identity (`did:plc:priya-test#org.openlore.application` —
+/// the convention the indexed `author_did` carries), then query the contributor
+/// dimension over the SAME B1 transport the object dimension uses (the server
+/// routes `Contributor` to `query_by_contributor` — an EXPLICIT author_did
+/// projection, never an author-eliding aggregate). The render layer surfaces the
+/// trail under the one author DID + the honest-framing footer ("one developer's
+/// reasoning trail, not a community consensus") with the slice-03 `peer add` offer.
+///
+/// An unreachable indexer degrades GRACEFULLY to a clear local-only message
+/// pointing at `graph query --contributor`, exiting 0 (the SOFT contract; WD-116).
+fn run_dimension_contributor(wiring: &Wiring, contributor: &str) -> Result<SearchOutcome> {
+    let author_did = resolve_contributor_to_did(contributor);
+    run_dimension(wiring, SearchDimension::Contributor, &author_did)
+}
+
+/// The app-identity verification-method fragment every signed/indexed claim's
+/// `author_did` carries (`did:plc:X#org.openlore.application`). The contributor
+/// query matches the indexed `author_did` exactly, so a resolved bare DID is
+/// lifted to this app identity before the wire query.
+const APP_IDENTITY_FRAGMENT: &str = "#org.openlore.application";
+
+/// Resolve a `--contributor` argument to the author's app-identity DID the indexed
+/// `author_did` carries. PURE function — no I/O.
+///
+/// - A `github:<handle>` argument resolves via the handle→DID convention
+///   (`github:priya` → `did:plc:priya-test`, the slice-02/04 fixture handle→DID
+///   mapping) then lifts to the app identity (`…#org.openlore.application`).
+/// - A bare DID (`did:plc:…`) lifts to the app identity if it lacks the fragment;
+///   an already-fragmented DID passes through unchanged.
+///
+/// The query matches the indexed `author_did` exactly (`author_did = ?`), so the
+/// resolved value MUST carry the app-identity fragment.
+fn resolve_contributor_to_did(contributor: &str) -> String {
+    let bare = match contributor.strip_prefix("github:") {
+        // `github:priya` → `did:plc:priya-test` (the slice-02/04 handle→DID mapping).
+        Some(handle) => format!("did:plc:{handle}-test"),
+        // Already a DID — use as-is (the bare form below lifts the fragment).
+        None => contributor.to_string(),
+    };
+    if bare.contains('#') {
+        bare
+    } else {
+        format!("{bare}{APP_IDENTITY_FRAGMENT}")
+    }
 }
 
 /// `--subject <project>`: the project-dimension search (US-AV-004). SCAFFOLD.
@@ -302,7 +358,7 @@ fn run_show(wiring: &Wiring, args: &SearchArgs, cid: &str) -> Result<SearchOutco
 
     let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
     if indexer_url.is_empty() {
-        return Ok(degrade_to_local_only(value));
+        return Ok(degrade_to_local_only(dimension, value));
     }
 
     let adapter = HttpIndexQueryAdapter::for_url(indexer_url);
@@ -317,7 +373,7 @@ fn run_show(wiring: &Wiring, args: &SearchArgs, cid: &str) -> Result<SearchOutco
         Ok(result) => Ok(render_show(wiring, result, cid)),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
-        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(value)),
+        Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(dimension, value)),
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
 }
@@ -385,4 +441,42 @@ fn run_no_dimension(_args: &SearchArgs) -> Result<SearchOutcome> {
     // SCAFFOLD: true — render the usage error naming
     // --object/--contributor/--subject. Lands in Phase 03/04.
     todo!("openlore search — usage error (no dimension supplied) (Phase 03/04)")
+}
+
+#[cfg(test)]
+mod tests {
+    //! DELIVER inner loop (step 05-02): the contributor handle→DID resolution —
+    //! `--contributor github:priya` must resolve to the app-identity DID the
+    //! indexed `author_did` carries (`did:plc:priya-test#org.openlore.application`)
+    //! so the EXACT `author_did = ?` projection matches (AV-15). PURE — no I/O.
+
+    use super::*;
+
+    /// AV-15 / US-AV-003: `github:<handle>` resolves to the author app-identity DID
+    /// (`did:plc:<handle>-test#org.openlore.application`, the slice-02/04 handle→DID
+    /// convention lifted to the indexed `author_did` form) so the contributor query
+    /// matches the corpus author exactly. A bare DID lifts the app-identity
+    /// fragment; an already-fragmented DID passes through unchanged.
+    #[test]
+    fn resolve_contributor_lifts_handle_and_did_to_app_identity() {
+        // The headline AV-15 case: `github:priya` → the priya app identity.
+        assert_eq!(
+            resolve_contributor_to_did("github:priya"),
+            "did:plc:priya-test#org.openlore.application",
+            "github:<handle> must resolve to did:plc:<handle>-test#org.openlore.application"
+        );
+        // A bare DID lifts the app-identity fragment (the query matches the indexed
+        // fragmented author_did, never the bare form).
+        assert_eq!(
+            resolve_contributor_to_did("did:plc:priya-test"),
+            "did:plc:priya-test#org.openlore.application",
+            "a bare DID must lift the app-identity fragment"
+        );
+        // An already-fragmented DID passes through unchanged (idempotent).
+        assert_eq!(
+            resolve_contributor_to_did("did:plc:priya-test#org.openlore.application"),
+            "did:plc:priya-test#org.openlore.application",
+            "an already-fragmented DID must pass through unchanged"
+        );
+    }
 }

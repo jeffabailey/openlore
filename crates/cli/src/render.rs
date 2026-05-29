@@ -1677,10 +1677,51 @@ pub fn render_network_search_result(
         out.push('\n');
     }
 
-    out.push_str(&render_network_search_footer(
-        distinct_network_author_count(&result.results),
-    ));
+    // The footer is dimension-specific: the OBJECT/SUBJECT survey states the
+    // distinct-author COUNT + the no-merge guarantee; the CONTRIBUTOR trail frames
+    // ONE developer's reasoning trail (NOT a community consensus) + the slice-03
+    // `peer add <did>` follow offer naming the trail's author (KPI-AV-1 honesty).
+    match dimension {
+        SearchDimension::Contributor => {
+            out.push_str(&render_contributor_network_trail_footer(&result.results));
+        }
+        SearchDimension::Object | SearchDimension::Subject => {
+            out.push_str(&render_network_search_footer(
+                distinct_network_author_count(&result.results),
+            ));
+        }
+    }
     out
+}
+
+/// Render the CONTRIBUTOR-dimension network footer (AV-15 / US-AV-003 / KPI-AV-1):
+/// the honest framing that this is ONE developer's reasoning trail — NOT a
+/// community consensus — plus the slice-03 `openlore peer add <did>` follow offer
+/// naming the trail's BARE author DID. A network trail is one author's reasoning,
+/// never an aggregate the network endorses (the load-bearing honesty assertion).
+/// Pure helper.
+///
+/// The trail is single-author by construction (a contributor query is `author_did
+/// = ?`), so the author DID is read from the first attributed row; the follow offer
+/// strips the app-identity fragment to the bare DID the slice-03 `peer add` accepts.
+fn render_contributor_network_trail_footer(rows: &[NetworkResultRowRaw]) -> String {
+    match rows.first() {
+        Some(row) => {
+            let bare = row
+                .author_did
+                .0
+                .split('#')
+                .next()
+                .unwrap_or(&row.author_did.0);
+            format!(
+                "{CONTRIBUTOR_TRAIL_FOOTER} Follow this author with \
+                 `openlore peer add {bare}`.\n"
+            )
+        }
+        // Empty trails route through `render_empty_network_result` above; this is a
+        // defensive fallback that still states the honest framing.
+        None => format!("{CONTRIBUTOR_TRAIL_FOOTER}\n"),
+    }
 }
 
 /// Render one FLAT attributed network row: the author DID, the numeric confidence
@@ -2812,5 +2853,56 @@ mod tests {
                  rendered:\n{rendered}"
             );
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Slice-05 (AV-15 / US-AV-003 / KPI-AV-1) — the contributor-trail honest-
+    // framing footer (the inner-loop decomposition of the AT's "footer = a
+    // developer's reasoning trail, not a community consensus + peer add <did>").
+    // -------------------------------------------------------------------------
+
+    /// AV-15 / KPI-AV-1: the Contributor dimension footer frames the result as
+    /// ONE developer's reasoning trail — NOT a community consensus — and offers
+    /// the slice-03 `openlore peer add <author-did>` follow path naming the trail's
+    /// bare author DID. The OBJECT-dimension "N distinct author(s)." count footer
+    /// must NOT appear (a single-author trail is never a multi-author survey).
+    ///
+    /// bypass: content-frozen footer strings (exact phrasing is the KPI-AV-1
+    /// honesty contract); the anti-merging/marker INVARIANTS are covered
+    /// generatively by `render_network_search_emits_one_row_per_author_never_merges`.
+    #[test]
+    fn render_contributor_trail_footer_frames_one_developer_not_consensus() {
+        let author = "did:plc:priya-test#org.openlore.application";
+        let rows = vec![
+            raw_network_row(author, "bafycid0", 0.82),
+            raw_network_row(author, "bafycid1", 0.79),
+        ];
+        let result = NetworkSearchResultRaw {
+            distinct_author_count: 1,
+            total_claims: rows.len() as u32,
+            results: rows,
+            suggestion: None,
+        };
+        let unfollowed = |_did: &str| AuthorRelationship::NetworkUnfollowed;
+
+        let rendered =
+            render_network_search_result(SearchDimension::Contributor, &result, &unfollowed);
+
+        // The honest-framing footer (a trail, NOT a consensus — KPI-AV-1).
+        assert!(
+            rendered.contains("one developer's reasoning trail, not a community consensus"),
+            "the contributor footer must frame the result as a trail, NOT a consensus:\n{rendered}"
+        );
+        // The slice-03 follow offer naming the trail's BARE author DID.
+        assert!(
+            rendered.contains("openlore peer add did:plc:priya-test"),
+            "the contributor footer must offer `openlore peer add <bare-did>`:\n{rendered}"
+        );
+        // The OBJECT-dimension distinct-author COUNT footer must NOT leak into the
+        // single-author contributor trail.
+        assert!(
+            !rendered.contains("distinct author(s)."),
+            "the contributor footer must NOT be the object-dimension count footer:\n{rendered}"
+        );
     }
 }
