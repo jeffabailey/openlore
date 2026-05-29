@@ -25,14 +25,21 @@ path = "src/lib.rs"
 # tokio, reqwest, duckdb, keyring, atrium-*, std::fs, std::net,
 # std::time::SystemTime, any adapter-* crate.
 #
-# `proptest` is pinned crate-locally as a dev-dependency for the Earned-Trust
-# property tests on `ingest_decision` + `compose_results` (the canonical Rust
-# PBT crate per the nw-distill polyglot matrix), mirroring claim-domain/scoring.
+# `proptest` is a REGULAR dependency (not dev-only) so the `proptest_strategies`
+# module can expose `pub fn arbitrary_raw_records()` to the layer-2 acceptance
+# test (`tests/acceptance/appview_core.rs`, a `[[test]]` in `cli`, which already
+# depends on `appview-domain`) via the pure-core import path. This mirrors
+# slice-01's `claim-domain::proptest_strategies` exactly (proptest is the
+# canonical Rust PBT crate per the nw-distill polyglot matrix). proptest is a
+# pure-CPU crate — NOT on the `xtask check-arch` banned-I/O list — so the pure
+# core stays pure (WD-103/WD-104; check-arch still passes). `ed25519-dalek` +
+# `serde_json` are likewise pure (already regular deps of `claim-domain`),
+# needed by the self-contained generator's deterministic test-keypair signing.
 [dependencies]
 serde = { workspace = true }
 chrono = { workspace = true }
 claim-domain = { path = "../claim-domain" }
 ports = { path = "../ports" }
-
-[dev-dependencies]
 proptest = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { version = "2", default-features = false }

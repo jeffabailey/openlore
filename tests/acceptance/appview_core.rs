@@ -60,8 +60,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+use appview_domain::proptest_strategies::arbitrary_raw_records;
+use appview_domain::IngestOutcome;
 use chrono::{TimeZone, Utc};
-use claim_domain::{Cid, Did};
+use claim_domain::{Cid, Did, VerifyingKey};
 use proptest::prelude::*;
 use proptest::test_runner::TestRunner;
 
@@ -127,13 +129,71 @@ fn appview_ingest_gate_indexes_iff_verified_and_cid_matches_property() {
     // Universe (port-exposed observable surface of the gate): the IngestOutcome
     // discriminant (Index|Reject) + (on Index) claim.author_did,
     // claim.verified_against, claim.cid. NO internal field of the verify core.
-    todo!(
-        "DELIVER (slice-05): drive appview_domain::ingest_decision over \
-         arbitrary_raw_records() (valid + unsigned + tampered + cid-mismatch); \
-         assert Index(_) IFF verify+cid both pass; on Index assert \
-         author_did==payload.author and verified_against != \"\"; on Reject \
-         assert no IndexedClaim. Reuses claim_domain::verify (no second path)."
-    );
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_raw_records(), |(record, key)| {
+            // ORACLE — the SAME pure core the gate must reuse (no second path):
+            // a record may enter the index IFF its signature verifies against
+            // the resolved key AND its recomputed CID matches the published CID.
+            // `verify` takes the lower-level VerifyingKey; bridge the bytes (the
+            // ADR-026 VerificationKey decode output wraps the same 32 pubkey
+            // bytes the production gate bridges at its call site).
+            let pubkey = VerifyingKey(key.0.clone());
+            let verifies = claim_domain::verify(&record.raw_payload, &pubkey).is_ok();
+            let canonical = claim_domain::canonicalize(&record.raw_payload.unsigned)
+                .expect("a generated claim canonicalizes");
+            let cid_matches =
+                claim_domain::compute_cid(&canonical) == record.published_cid;
+            let should_index = verifies && cid_matches;
+
+            let outcome = appview_domain::ingest_decision(&record, &key);
+
+            match outcome {
+                IngestOutcome::Index(claim) => {
+                    // The iff (=> direction): the gate indexed, so BOTH the
+                    // signature AND the CID must have passed the pure core.
+                    prop_assert!(
+                        should_index,
+                        "ingest_decision returned Index but the pure core \
+                         disagrees (verifies={verifies}, cid_matches={cid_matches}) \
+                         — the gate must NOT admit an unverified/mismatched record"
+                    );
+                    // On Index: attribution is DERIVED byte-equal from the
+                    // SIGNED payload's author, never supplied out-of-band.
+                    prop_assert_eq!(
+                        &claim.author_did,
+                        &record.raw_payload.unsigned.author_did,
+                        "indexed author_did must equal the signed payload author byte-for-byte"
+                    );
+                    // On Index: the verified-marker key id is NEVER empty
+                    // (the universal `[verified]` construction guarantee, WD-104).
+                    prop_assert!(
+                        !claim.verified_against.0.is_empty(),
+                        "indexed claim.verified_against must never be empty (WD-104)"
+                    );
+                    // On Index: the indexed CID is the verified published CID.
+                    prop_assert_eq!(
+                        &claim.cid,
+                        &record.published_cid,
+                        "indexed cid must equal the verified published_cid"
+                    );
+                }
+                IngestOutcome::Reject(_reason) => {
+                    // The iff (<= direction): the gate rejected, so the pure
+                    // core must agree the record was NOT both verified AND
+                    // CID-matched — AND no IndexedClaim is produced (the Reject
+                    // arm carries a RejectReason, never a claim, by type).
+                    prop_assert!(
+                        !should_index,
+                        "ingest_decision rejected a record the pure core would \
+                         admit (verifies={verifies}, cid_matches={cid_matches}) \
+                         — a valid signed+matched record must be indexed"
+                    );
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// AVC-3a / Property (Mandate 9 layer 2): `ingest_decision` is deterministic —

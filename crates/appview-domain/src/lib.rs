@@ -45,6 +45,13 @@ mod compose;
 mod ingest;
 mod suggest;
 
+// Step 02-01 (AVC-1): proptest strategies for the verify-before-index gate's
+// `@property` scenarios. `pub` so the layer-2 acceptance test reaches
+// `arbitrary_raw_records()` directly via the pure-core import path (mirrors
+// slice-01's `claim_domain::proptest_strategies`). proptest is a regular dep
+// (pure-CPU; not on the check-arch banned-I/O list) — the pure core stays pure.
+pub mod proptest_strategies;
+
 pub use compose::compose_results;
 pub use ingest::ingest_decision;
 pub use suggest::near_match_suggestion;
