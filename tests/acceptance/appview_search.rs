@@ -240,13 +240,89 @@ fn network_result_preserves_attribution() {
     // dependency-pinning) == 2; the author-set of those rows {priya, sven};
     // absence of any merged/consensus/mean-confidence ROW; footer
     // distinct_author_count == 2.
-    todo!(
-        "DELIVER (slice-05): RELEASE GATE. Seed two unfollowed-author claims same \
-         (deno,dependency-pinning) priya(0.70)+sven(0.65); run `openlore search \
-         --object org.openlore.philosophy.dependency-pinning`; assert TWO distinct \
-         attributed rows under deno (both (not subscribed)), NO merged/consensus/ \
-         mean-confidence row anywhere, footer distinct-author count == 2 \
-         (excluding the footer template from the row count)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the US-AV-002 Ex2 / AVC-5 corpus — Priya (0.70)
+    // and Sven (0.65), BOTH UNFOLLOWED, both asserting github:denoland/deno
+    // embodies dependency-pinning (the identical-(subject,object) zero-merge
+    // fixture). The CLI's indexer_url points at the serve port. NO `peer add`
+    // precedes this scenario, so BOTH authors are unfollowed. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::DenoDependencyPinningTwoUnfollowedAuthors,
+    );
+
+    // -- Action: the object-dimension network read through the CLI driving port. --
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.dependency-pinning",
+        ],
+        &indexer,
+    );
+
+    // exit 0 (a valid result, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --object dependency-pinning` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 1 + 2 + 3. The cardinal anti-merging gate (KPI-AV-2): EXACTLY 2 attributed
+    // rows for (deno, dependency-pinning), the author-set {priya, sven}, and NO
+    // merged/consensus/"N authors agree"/"the network says" row anywhere — the
+    // footer template ("N distinct author(s)." / "No claims are merged.") is
+    // EXCLUDED from the row count by construction (it never starts with
+    // `author_did:`). The wire (B1) carried per-result author_did (D-D36): the two
+    // distinct rendered rows can only exist if the transport preserved each row's
+    // author attribution end-to-end.
+    assert_network_result_preserves_attribution(
+        &outcome.stdout,
+        "github:denoland/deno",
+        "org.openlore.philosophy.dependency-pinning",
+        2,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:sven-test#org.openlore.application",
+        ],
+    );
+
+    // 2 (label). BOTH authors are unfollowed → each labeled "(not subscribed)".
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:priya-test#org.openlore.application (not subscribed)"),
+        "expected unfollowed Priya labeled (not subscribed):\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("did:plc:sven-test#org.openlore.application (not subscribed)"),
+        "expected unfollowed Sven labeled (not subscribed):\n{}",
+        outcome.stdout
+    );
+
+    // Every row carries [verified] (verification is an ingest precondition; there
+    // is no [unverified] state) — pins the two rows are real attributed results.
+    assert_verified_marker_is_universal(&outcome.stdout);
+
+    // 4. The footer's distinct-author count is 2 — a COUNT over the attributed
+    //    rows, NOT a merge (the no-merge guarantee phrasing legitimately mentions
+    //    the count; it is the PROMISE, never a merged row).
+    assert!(
+        outcome.stdout.contains("2 distinct author(s)."),
+        "expected the footer to state the distinct-author count (2) as a COUNT, \
+         not a merged row:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("No claims are merged."),
+        "expected the footer's no-merge guarantee:\n{}",
+        outcome.stdout
     );
 }
 
