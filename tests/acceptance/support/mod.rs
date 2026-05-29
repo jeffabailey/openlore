@@ -4555,6 +4555,220 @@ pub fn run_openlore_indexer_with_source(
     }
 }
 
+// =============================================================================
+// Slice-05 (step 03-04; AV-4) — the REAL `z6Mk` PLC DID-document resolver fixture.
+//
+// The AV-4 gold path proves the indexer decodes the author's verification key via
+// the production `claim_domain::decode_ed25519_multibase` path (NOT the slice-03
+// `OPENLORE_PEER_PUBKEY_HEX_<did>` env seam). To exercise the REAL decode the
+// indexer must resolve a DID document carrying a REAL `z6Mk...` value: this
+// fixture serves the W3C DID document (with the `#org.openlore.application`
+// verification method's real `publicKeyMultibase`) at `GET /<did>`, the canonical
+// PLC-directory shape (ADR-026 §"Resolve the DID document"). The indexer is
+// pointed at this fixture via `OPENLORE_INDEXER_PLC_ENDPOINT`; the env seam stays
+// UNSET so a seam-only impl could NOT resolve (a seam-only pass is impossible by
+// construction).
+//
+// Hand-rolled over `std::net::TcpListener` (same rationale as `FakeIngestServer`:
+// the cli test target's dev-deps do not include `hyper`). It branches on the
+// request path so each hosted DID resolves to its own DID document. RAII shutdown
+// on drop mirrors `FakeIngestServer` / `PeerPds`.
+// =============================================================================
+
+/// A bounded localhost HTTP fixture that serves W3C DID documents (each carrying a
+/// REAL `z6Mk...` `publicKeyMultibase`) at the PLC-directory path `GET /<did>`.
+///
+/// Owns a background acceptor thread bound to an OS-assigned `127.0.0.1:0` port;
+/// the URL is read back via [`FakePlcResolver::endpoint_url`] and wired into the
+/// `openlore-indexer` subprocess via `OPENLORE_INDEXER_PLC_ENDPOINT`. Dropping the
+/// handle signals the acceptor to stop — RAII per-scenario isolation.
+pub struct FakePlcResolver {
+    base_url: String,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FakePlcResolver {
+    /// Host the real-`z6Mk` DID document(s) for `dids` (each derived via the
+    /// deterministic `FixtureKeypair`), serving each at `GET /<did>`.
+    pub fn start(dids: &[&str]) -> Self {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::Ordering;
+
+        // Materialize, ONCE at construction, a map from request path (`/<did>`)
+        // to the canonical DID-document JSON body carrying the real z6Mk value.
+        let docs: std::collections::HashMap<String, String> = dids
+            .iter()
+            .map(|did| {
+                let fixture = openlore_test_support::did_doc_for(did);
+                let body = did_document_json(&fixture);
+                (format!("/{did}"), body)
+            })
+            .collect();
+
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("FakePlcResolver: bind 127.0.0.1:0");
+        listener
+            .set_nonblocking(true)
+            .expect("FakePlcResolver: set_nonblocking");
+        let local_addr = listener.local_addr().expect("FakePlcResolver: local_addr");
+        let base_url = format!("http://{local_addr}");
+
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
+
+        let join = std::thread::Builder::new()
+            .name("fake-plc-resolver".to_string())
+            .spawn(move || {
+                while !shutdown_for_thread.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _peer)) => {
+                            let mut buf = [0u8; 2048];
+                            let read = stream.read(&mut buf).unwrap_or(0);
+                            let request = String::from_utf8_lossy(&buf[..read]);
+                            // Parse the request-target out of the request line
+                            // (`GET /<did> HTTP/1.1`). The path is percent-encoded
+                            // by the client (DIDs carry `:`), so decode it before
+                            // looking it up.
+                            let path = request
+                                .lines()
+                                .next()
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .map(percent_decode_path)
+                                .unwrap_or_default();
+                            let response = match docs.get(&path) {
+                                Some(body) => format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                ),
+                                None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
+                                     Connection: close\r\n\r\n"
+                                    .to_string(),
+                            };
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(_) => return,
+                    }
+                }
+            })
+            .expect("FakePlcResolver: spawn acceptor thread");
+
+        Self {
+            base_url,
+            shutdown,
+            join: Some(join),
+        }
+    }
+
+    /// The `http://127.0.0.1:<port>` base URL the indexer resolves DID documents
+    /// from (wired via `OPENLORE_INDEXER_PLC_ENDPOINT`).
+    pub fn endpoint_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for FakePlcResolver {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Render a W3C DID document JSON carrying the fixture's REAL `z6Mk...`
+/// `publicKeyMultibase` on the `#org.openlore.application` verification method —
+/// the exact shape the production resolve path parses (ADR-026 §"Locate the
+/// verification method").
+fn did_document_json(fixture: &openlore_test_support::DidDocFixture) -> String {
+    serde_json::json!({
+        "id": fixture.did,
+        "alsoKnownAs": [format!("at://{}.test", short_handle(&fixture.did))],
+        "verificationMethod": [{
+            "id": fixture.key_id.0,
+            "type": "Multikey",
+            "controller": fixture.did,
+            "publicKeyMultibase": fixture.public_key_multibase,
+        }],
+        "service": [{
+            "id": "#atproto_pds",
+            "type": "AtprotoPersonalDataServer",
+            "serviceEndpoint": "https://pds.example.test",
+        }]
+    })
+    .to_string()
+}
+
+/// A short handle stem from a DID (`did:plc:priya-test` → `priya-test`).
+fn short_handle(did: &str) -> String {
+    did.rsplit(':').next().unwrap_or(did).to_string()
+}
+
+/// Decode the `%XX` escapes a client puts in the request-target so DID `:` (and
+/// any other reserved char) round-trips back to the raw DID for the lookup.
+fn percent_decode_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Run `openlore-indexer <args>` against a fake ingest `source_url` and a fixture
+/// PLC resolver `plc_endpoint` — with the slice-03 pubkey seam UNSET (AV-4 gold
+/// path). Forces the indexer down the REAL `z6Mk` PLC-document resolve + decode
+/// path (a seam-only impl could not resolve any key → would reject every record).
+///
+/// Mirrors [`run_openlore_indexer_with_source`] but threads
+/// `OPENLORE_INDEXER_PLC_ENDPOINT` instead of any `OPENLORE_PEER_PUBKEY_HEX_<did>`
+/// seam. `env_clear()` guarantees the seam is absent.
+pub fn run_openlore_indexer_with_plc_resolver(
+    env: &TestEnv,
+    args: &[&str],
+    source_url: &str,
+    plc_endpoint: &str,
+) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        .env("OPENLORE_INDEXER_PLC_ENDPOINT", plc_endpoint)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore-indexer at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 /// One indexed row, projected from `index.duckdb` for assertions (port-exposed
 /// observable surface of the ingest pass — never an internal store struct).
 #[derive(Debug, Clone, PartialEq)]

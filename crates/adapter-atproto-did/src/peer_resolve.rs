@@ -89,34 +89,166 @@ fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
     })
 }
 
-/// Slice-05 (step 03-01): resolve `did` into its Ed25519 [`VerificationKey`]
-/// via the slice-03 pubkey seam (`OPENLORE_PEER_PUBKEY_HEX_<did>`), for the
-/// indexer's verify-only [`IdentityResolvePort`] walking-skeleton path (AV-1).
+/// Slice-05: resolve `did` into its Ed25519 [`VerificationKey`] for the indexer's
+/// verify-only [`IdentityResolvePort`] — the slice-03 pubkey seam
+/// (`OPENLORE_PEER_PUBKEY_HEX_<did>`) when SET (AV-1/2/3 hermetic walking
+/// skeleton), ELSE the REAL ADR-026 PLC `z6Mk...` resolve + decode (AV-4 gold
+/// path, seam UNSET).
 ///
-/// This seam-reading helper lives HERE (not in `lib.rs`) because `peer_resolve`
-/// is the established home of the `OPENLORE_PEER_PUBKEY_HEX_<did>` seam (RETAINED
-/// for tests per the slice-03 contract) and is intentionally OUT of the I-AV-6
+/// This dispatcher lives HERE (not in `lib.rs`) because `peer_resolve` is the
+/// established home of the `OPENLORE_PEER_PUBKEY_HEX_<did>` seam (RETAINED for
+/// tests per the slice-03 contract) and is intentionally OUT of the I-AV-6
 /// `xtask check-arch` pubkey-seam scan scope — keeping the seam token out of the
-/// scanned `lib.rs`. The REAL PLC `z6Mk...` decode
-/// (`claim_domain::decode_ed25519_multibase`) replaces this seam at step 03-04
-/// (AV-4), with `OPENLORE_PEER_PUBKEY_HEX_<did>` UNSET.
+/// scanned `lib.rs`. The `lib.rs` call site references only THIS function name,
+/// never the seam literal.
 ///
-/// The DID is normalized to its bare form (the seed env var is keyed on the bare
-/// DID, but the indexer resolves the SIGNED payload's author, which carries the
-/// `#org.openlore.application` fragment).
-pub(crate) fn resolve_verification_key_via_seam(did: &Did) -> Result<VerificationKey, ResolveError> {
+/// The DID is normalized to its bare form for the SEAM lookup (the seam env var
+/// is keyed on the bare DID) AND for the PLC resolve (the PLC directory is keyed
+/// on the bare DID, ADR-026); the indexer resolves the SIGNED payload's author,
+/// which carries the `#org.openlore.application` fragment.
+pub(crate) async fn resolve_verification_key(did: &Did) -> Result<VerificationKey, ResolveError> {
+    // Seam SET → hermetic walking-skeleton path (AV-1/2/3). Seam UNSET → fall
+    // through to the REAL PLC z6Mk decode (AV-4, ADR-026).
+    match seam_verification_key(did)? {
+        Some(key) => Ok(key),
+        None => resolve_verification_key_via_plc(did).await,
+    }
+}
+
+/// Read the slice-03 pubkey seam for `did`: `Ok(Some(key))` when
+/// `OPENLORE_PEER_PUBKEY_HEX_<did>` is set, `Ok(None)` when it is UNSET (the AV-4
+/// gold-path signal to fall through to the real PLC decode), `Err` when the seam
+/// value is malformed.
+fn seam_verification_key(did: &Did) -> Result<Option<VerificationKey>, ResolveError> {
     let bare_did = did.0.split('#').next().unwrap_or(&did.0);
-    let hex = std::env::var(peer_pubkey_env_var(bare_did)).map_err(|_| {
-        ResolveError::ResolutionFailed {
-            did: did.clone(),
-            detail: "no pubkey seam set for DID (slice-05 walking-skeleton seam)".to_string(),
-        }
-    })?;
+    let hex = match std::env::var(peer_pubkey_env_var(bare_did)) {
+        Ok(hex) => hex,
+        Err(_) => return Ok(None),
+    };
+    if hex.trim().is_empty() {
+        return Ok(None);
+    }
     let bytes = decode_hex(hex.trim()).map_err(|detail| ResolveError::PubkeyDecodeFailed {
         did: did.clone(),
         detail,
     })?;
-    Ok(VerificationKey(bytes))
+    Ok(Some(VerificationKey(bytes)))
+}
+
+/// The REAL ADR-026 production path (AV-4 gold path): resolve `did`'s PLC DID
+/// document over the network, locate the `#org.openlore.application` verification
+/// method, read its `publicKeyMultibase` (`z6Mk...`), and decode it via the PURE
+/// `claim_domain::decode_ed25519_multibase` into the [`VerificationKey`] the pure
+/// `verify` consumes.
+///
+/// The DID-document fetch reuses the established `reqwest` blocking client +
+/// `serde_json` DID-doc parse (the same transport `resolve_peer_did` uses); the
+/// PLC endpoint defaults to `https://plc.directory` (ADR-026 §"Config + default")
+/// and is overridable for hermetic acceptance via `OPENLORE_INDEXER_PLC_ENDPOINT`.
+/// The decode is the EFFECT-shell's only call into the pure core (no second
+/// verification path; WD-104).
+async fn resolve_verification_key_via_plc(did: &Did) -> Result<VerificationKey, ResolveError> {
+    let bare_did = did.0.split('#').next().unwrap_or(&did.0).to_string();
+    let base = plc_endpoint();
+    let document = fetch_plc_did_document(did, &base, &bare_did).await?;
+    let multibase = openlore_application_public_key_multibase(did, &bare_did, &document)?;
+    claim_domain::decode_ed25519_multibase(&multibase).map_err(|err| {
+        ResolveError::PubkeyDecodeFailed {
+            did: did.clone(),
+            detail: format!("{err:?}"),
+        }
+    })
+}
+
+/// The PLC directory endpoint: the per-run `OPENLORE_INDEXER_PLC_ENDPOINT`
+/// override (hermetic acceptance) if present, else the production default
+/// `https://plc.directory` (ADR-026 §"Config + default").
+fn plc_endpoint() -> String {
+    std::env::var("OPENLORE_INDEXER_PLC_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_PLC_ENDPOINT.to_string())
+}
+
+/// The production PLC directory base URL (ADR-026 default).
+const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
+
+/// GET the DID document from the PLC directory at `<base>/<did>` (the canonical
+/// PLC-directory shape, ADR-026 §"Resolve the DID document"). All transport
+/// failures lift to `ResolveError::ResolutionFailed`.
+async fn fetch_plc_did_document(
+    did: &Did,
+    base: &str,
+    bare_did: &str,
+) -> Result<serde_json::Value, ResolveError> {
+    let url = format!("{}/{}", base.trim_end_matches('/'), urlencode(bare_did));
+
+    // ASYNC client: this path runs inside the indexer's tokio runtime (the
+    // resolve trait method is async). A blocking reqwest client here would panic
+    // ("cannot block within an async context"); the async client composes cleanly.
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|err| resolve_fail(did, format!("build HTTP client: {err}")))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|err| resolve_fail(did, format!("PLC resolve transport error: {err}")))?;
+
+    if !response.status().is_success() {
+        return Err(resolve_fail(
+            did,
+            format!("PLC resolve returned HTTP {}", response.status().as_u16()),
+        ));
+    }
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|err| resolve_fail(did, format!("PLC DID document is not JSON: {err}")))
+}
+
+/// Locate the `#org.openlore.application` verification method in the resolved DID
+/// document and return its `publicKeyMultibase` (ADR-026 §"Locate the
+/// verification method"). The method id is matched by its `#fragment` suffix so a
+/// fully-qualified (`did:plc:x#org.openlore.application`) id resolves.
+fn openlore_application_public_key_multibase(
+    did: &Did,
+    bare_did: &str,
+    document: &serde_json::Value,
+) -> Result<String, ResolveError> {
+    let methods = document
+        .get("verificationMethod")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            resolve_fail(did, "DID document has no verificationMethod array".to_string())
+        })?;
+
+    let fragment = format!("{bare_did}#org.openlore.application");
+    methods
+        .iter()
+        .find(|m| {
+            m.get("id")
+                .and_then(|id| id.as_str())
+                .map(|id| id == fragment || id.ends_with("#org.openlore.application"))
+                .unwrap_or(false)
+        })
+        .and_then(|m| m.get("publicKeyMultibase"))
+        .and_then(|k| k.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            resolve_fail(
+                did,
+                "DID document has no #org.openlore.application publicKeyMultibase".to_string(),
+            )
+        })
+}
+
+/// Construct a `ResolveError::ResolutionFailed` for `did` with `detail`.
+fn resolve_fail(did: &Did, detail: String) -> ResolveError {
+    ResolveError::ResolutionFailed {
+        did: did.clone(),
+        detail,
+    }
 }
 
 /// Lowercase/uppercase hex → raw bytes. Strict: an odd length or a non-hex

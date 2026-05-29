@@ -386,14 +386,14 @@ impl IdentityResolvePort for AtProtoDidAdapter {
     }
 
     async fn resolve_verification_key(&self, did: &Did) -> Result<VerificationKey, ResolveError> {
-        // Slice-05 walking skeleton (step 03-01): resolve via the slice-03 pubkey
-        // seam. The seam read + hex decode live in `peer_resolve` (OUT of the
-        // I-AV-6 lib.rs scan scope, by design); this call site holds NO seam token
-        // literal so the `xtask check-arch` pubkey-seam guard on lib.rs stays
-        // green. The REAL PLC `z6Mk...` decode
-        // (`claim_domain::decode_ed25519_multibase`) replaces this at step 03-04
-        // (AV-4), with the seam UNSET.
-        peer_resolve::resolve_verification_key_via_seam(did)
+        // Slice-05: resolve via the `peer_resolve` dispatcher — the slice-03 pubkey
+        // seam when SET (AV-1/2/3 hermetic walking skeleton), ELSE the REAL ADR-026
+        // PLC `z6Mk...` resolve + `claim_domain::decode_ed25519_multibase` decode
+        // (AV-4 gold path, seam UNSET). The seam read + hex decode + the PLC fetch
+        // all live in `peer_resolve` (OUT of the I-AV-6 lib.rs scan scope, by
+        // design); this call site holds NO seam token literal so the `xtask
+        // check-arch` pubkey-seam guard on lib.rs stays green.
+        peer_resolve::resolve_verification_key(did).await
     }
 }
 

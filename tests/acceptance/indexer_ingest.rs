@@ -482,12 +482,111 @@ fn indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam() {
     //
     // Universe (port-exposed): the good record indexed (verified_against != "");
     // the tampered record rejected (bad_signature); the env seam unset throughout.
-    todo!(
-        "DELIVER (slice-05): with OPENLORE_PEER_PUBKEY_HEX_<did> UNSET and a real \
-         z6Mk PLC DID-doc fixture, run `openlore-indexer ingest`; assert the \
-         good-signature record verifies against the REAL decoded key (indexed) \
-         and the tampered one is rejected. Seam-unset success proves the real \
-         ADR-026 decode ran, not the seam (I-AV-6)."
+    let env = TestEnv::fresh();
+
+    // -- Precondition: a fixture PLC resolver hosts Priya's REAL z6Mk DID-document
+    // (her deterministic FixtureKeypair public key, encoded `z6Mk...`). The indexer
+    // is pointed at this resolver; the OPENLORE_PEER_PUBKEY_HEX_<did> env seam is
+    // UNSET (the new harness uses env_clear() + threads only the PLC endpoint), so
+    // a seam-only resolve could NOT obtain any key — a seam-only pass is impossible
+    // by construction. --
+    let plc = FakePlcResolver::start(&[PRIYA_DID]);
+
+    // The source hosts ONE good-signature record + ONE tampered-signature record on
+    // Priya's surface. Distinct objects → distinct CIDs (load-bearing falsifiability,
+    // mirroring AV-3): a wrongly-admitted tampered record would surface as a NEW row.
+    let good_spec = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        0.82,
+    );
+    let tampered_spec = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.tampered-gold-path",
+        0.42,
+    )
+    .posture(Posture::TamperedSignature);
+    let source = FakeIngestServer::start(vec![good_spec, tampered_spec]);
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass against the
+    // fake source + the fixture PLC resolver (seam UNSET). The indexer resolves
+    // Priya's z6Mk DID-doc + DECODES it via claim_domain::decode_ed25519_multibase
+    // (the REAL ADR-026 path), then runs the SAME pure verify-before-index gate. --
+    let outcome = run_openlore_indexer_with_plc_resolver(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        plc.endpoint_url(),
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // -- Observable outcome 1: the good record verifies against the REAL decoded
+    // key → indexed (verified count 1). Because the seam is UNSET, this PROVES the
+    // real PLC z6Mk decode ran (a seam-only impl would have resolved NO key and
+    // rejected the good record too). --
+    assert!(
+        outcome.stdout.contains("indexer.ingest.verified")
+            && outcome.stdout.contains("\"count\":1"),
+        "expected indexer.ingest.verified count 1 (the good record verified against \
+         the REAL decoded z6Mk key); got stdout: {}",
+        outcome.stdout
+    );
+
+    // -- Observable outcome 2: the tampered record is REJECTED with reason
+    // bad_signature (the SAME decoded key that verified the good one rejects it). --
+    let rejected: serde_json::Value = outcome
+        .stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "indexer.ingest.rejected")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an indexer.ingest.rejected event in stdout; got: {}",
+                outcome.stdout
+            )
+        });
+    assert_eq!(
+        rejected["count"], 1,
+        "expected exactly one rejected (the tampered record); got event {rejected}"
+    );
+    assert_eq!(
+        rejected["by_reason"]["bad_signature"], 1,
+        "the tampered record must be rejected as bad_signature against the REAL \
+         decoded key; got {rejected}"
+    );
+
+    // -- Observable outcome 3 (the gold-path proof): the good record IS searchable,
+    // attributed to Priya, with a NON-empty verified_against — verified against the
+    // key obtained by the REAL z6Mk decode (seam unset). The tampered record's
+    // object never produced a row. --
+    let good_rows =
+        read_indexed_claims_by_object(&env, "org.openlore.philosophy.reproducible-builds");
+    assert_eq!(
+        good_rows.len(),
+        1,
+        "exactly the good record is searchable by its object; got {good_rows:?}"
+    );
+    assert_eq!(
+        good_rows[0].author_did, "did:plc:priya-test#org.openlore.application",
+        "the indexed row must be attributed to Priya (author from the signed payload)"
+    );
+    assert!(
+        !good_rows[0].verified_against.is_empty(),
+        "verified_against must be non-empty — proves the record verified against the \
+         REAL decoded z6Mk key (WD-104 / I-AV-6)"
+    );
+
+    let tampered_rows =
+        read_indexed_claims_by_object(&env, "org.openlore.philosophy.tampered-gold-path");
+    assert!(
+        tampered_rows.is_empty(),
+        "the tampered record must NEVER enter the index; got {tampered_rows:?}"
     );
 }
 
