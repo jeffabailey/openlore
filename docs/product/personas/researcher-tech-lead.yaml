@@ -169,3 +169,47 @@ persona:
         - A sparse subgraph renders honestly as [SPARSE] with a "based on N claims by M authors" line; confidence is never manufactured from thin evidence.
         - Every weighted/traversed aggregate retains per-author attribution and decomposes via `--explain`; no "consensus weight" is shown without the contributing authors visible.
         - Traversal walks existing claims only; every edge maps to exactly one signed claim and is bounded by depth (default 2) to prevent fan-out explosion.
+
+    # -------------------------------------------------------------------------
+    # Network-discovery hat (slice-05 / openlore-appview-search)
+    # Added 2026-05-28 by Luna during DISCUSS for openlore-appview-search.
+    # -------------------------------------------------------------------------
+    - id: network-discovery
+      activated_in_slice: slice-05 / openlore-appview-search
+      one_liner: >
+        P-002 wearing the network-discovery hat is searching an index of many
+        authors' PUBLIC signed claims from ACROSS the network — by philosophy,
+        project, or contributor — to discover well-evidenced reasoning and the
+        people behind it WITHOUT already knowing whose DID to follow, then
+        subscribing to a discovered author to grow their trusted local graph.
+
+      typical_session:
+        - "Cares about reproducible-builds but does not yet follow anyone who claims it"
+        - "Run `openlore search --object org.openlore.philosophy.reproducible-builds` to search the network index, not just the local graph"
+        - "See results from authors never subscribed to, each with author DID, confidence, evidence, and a verified-signature marker"
+        - "Inspect one result; confirm the signature is verified and the CID matches what the author published"
+        - "Run `openlore search --contributor github:rachel` to read a discovered author's whole public reasoning trail"
+        - "Run `openlore peer add did:plc:rachel-test` straight from the discovery result to start following them (discovery -> federation)"
+        - "Optional: share the query result as a link a teammate can open and see the same attributed, verified claims"
+
+      load_bearing_anxieties:
+        - "Is this AppView just another centralized aggregator that collapses provenance, like the HN/Reddit/awesome-lists I distrust?"
+        - "Will the index serve me a tampered or fabricated claim that the author never actually signed?"
+        - "Does adding a network search service quietly betray the local-first promise I bought into?"
+        - "By publishing my claims, did I expose data I did not realize would be network-discoverable?"
+
+      load_bearing_signals_of_success:
+        - "I discover a relevant signed claim by an author I had never subscribed to, in my first network search."
+        - "Every discovered result shows its author DID and a verified-signature marker; no 'the network says X' consensus row ever hides the individual authors."
+        - "I subscribe to a newly-discovered author in one step, and their claims then flow into my local graph via the slice-03 federation path I already know."
+        - "My compose / sign / own-claim flows still work with the network disabled; the AppView is clearly a read-only discovery surface, not a new authority."
+        - "A banner makes the 'indexing aggregates only PUBLIC signed claims' expectation explicit, so I am never surprised by what is discoverable."
+
+      ux_guardrails_specific_to_appview:
+        - The AppView is a READ/discovery surface only; no `search` command creates, signs, publishes, or mutates a claim, and the local store remains the source of truth.
+        - Every search result shows the author DID FIRST and a verified-signature marker; results are grouped by author (or by subject under an author), NEVER as a faceless "network consensus" row (anti-merging carried into network aggregates).
+        - No claim enters the index until its signature is verified and its CID recomputed (mirrors slice-03 pull-time verification); an unverified claim is never searchable.
+        - Indexing aggregates ONLY public signed claims; a "your peer-published claims are public" expectation is surfaced honestly (the ADR-014-deferred framing).
+        - A discovered author drops straight into `openlore peer add` (no parallel subscription path); discovery is a front-door to the slice-03 federation flow.
+        - When the index is unreachable, `search` degrades to a clear local-only / unavailable message; it never blocks the local-first compose/sign/query flows.
+        - Confidence display still NEVER reads as "the system thinks this is true" (inherited P-001/P-002 guardrail); a network search result is still one author's claim, not truth.

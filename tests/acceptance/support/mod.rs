@@ -3977,3 +3977,260 @@ fn parse_traversal_edges(stdout: &str) -> Vec<TraversalEdge> {
     }
     edges
 }
+
+// =============================================================================
+// Slice-05 (appview-search) support extensions — SCAFFOLD: true
+// =============================================================================
+//
+// SCAFFOLD: true (slice-05)
+//
+// Slice-05 introduces the FIRST network service + the FIRST cross-process
+// boundary + the FIRST adversarial-input external boundary. Unlike slice-04 (no
+// new fake), it needs hermetic doubles for the two new external surfaces (per
+// the Architecture of Reference: driven-external -> fake):
+//   - `FakeIngestSource`: a bounded fixture network ingest source hosting a
+//     `listRecords`-style enumeration, carrying the adversarial set (unsigned /
+//     tampered-signature / cid-mismatch) + valid signed records (DD-AV-2/DD-AV-11).
+//   - a fixture PLC DID-document resolver carrying a REAL `z6Mk...` (a known test
+//     keypair) so the ADR-026 decode runs the REAL decode path (the AV-4 gold).
+// The B1 CLI<->indexer boundary is exercised against a REAL `openlore-indexer
+// serve` over LOCALHOST bound to an EPHEMERAL `:0` port (read back; parallel-safe,
+// DEVOPS open-q 8) — the production composition root (Pillar 3). The funnel
+// (AV-19/AV-22) reuses the slice-03 `PeerPds` + `peer add`/`peer pull` verbatim.
+//
+// Per DD-AV-10 (symmetric with slice-04 DD-GRAPH-10): the load-bearing assertion
+// helpers carry a `todo!()` body with a precise contract docstring; the
+// SIGNATURES are correct NOW so every slice-05 test file compiles and reaches its
+// own `todo!()` (RED, not BROKEN) AFTER DELIVER's bootstrap step lands the
+// production crates + the `fixtures_ingest.rs` recipes + the harness bodies
+// (DD-AV-13). The universe entries each helper names MUST be port-exposed (CLI
+// stdout substrings, indexed-row author_did sets, ingest counters, exit codes,
+// the openlore.duckdb byte-unchanged guard) — NEVER internal store/compose struct
+// fields (Mandate 8).
+
+/// A named network-index fixture: the precondition corpus a slice-05 scenario
+/// seeds into the REAL `index.duckdb` (via the ingest harness) before exercising
+/// `openlore search` / `openlore-indexer`. Each variant maps to a worked example
+/// in user-stories.md / data-models.md.
+///
+/// SCAFFOLD: true (slice-05) — DELIVER fills each variant's concrete seeding
+/// recipe (which `RawRecordSpec`s the `FakeIngestSource` hosts, which authors are
+/// followed vs unfollowed, which PLC `z6Mk` keys resolve) in `fixtures_ingest.rs`.
+#[derive(Debug, Clone)]
+pub enum NetworkIndexFixture {
+    /// US-AV-002 Example 1: 12 verified reproducible-builds claims across 7
+    /// subjects by 9 authors, incl. Priya (did:plc:priya-test, UNFOLLOWED, bazel
+    /// 0.82) + Rachel (did:plc:rachel-test, SUBSCRIBED peer, nixpkgs 0.88).
+    ReproducibleBuildsNineAuthorsUnfollowed,
+    /// US-AV-002 Example 2 / AVC-5: github:denoland/deno + dependency-pinning by
+    /// two UNFOLLOWED authors (Priya 0.70, Sven 0.65) — the identical-content
+    /// zero-merge fixture.
+    DenoDependencyPinningTwoUnfollowedAuthors,
+    /// US-AV-001 walking-skeleton beat-1: ONE valid signed Priya claim (bazel,
+    /// reproducible-builds, 0.82) + a resolvable real-z6Mk DID-doc.
+    SingleVerifiedPriyaClaim,
+    /// US-AV-001 / AV-3 release gate: the adversarial set (unsigned +
+    /// tampered-signature + cid-mismatch) PLUS one valid signed record, on the
+    /// same author surface — the verified-before-index reject fixture.
+    AdversarialSetPlusOneValid,
+    /// US-AV-003 Example 1: did:plc:priya-test authors 8 verified claims across 6
+    /// subjects (bazel x2, buck2, nixpkgs, pants, please, ninja); Maria unfollowed.
+    PriyaEightClaimsSixSubjects,
+    /// US-AV-003 Example 2: github:bazelbuild/bazel with verified claims from 5
+    /// DISTINCT network authors (the subject-survey anti-merging fixture).
+    BazelFiveDistinctAuthors,
+    /// US-AV-003 Example 4 / US-AV-005 Ex2: a corpus including Rachel
+    /// (did:plc:rachel-test) whom the user ALREADY follows (subscribed-peer label).
+    IncludesAlreadyFollowedRachel,
+    /// US-AV-005 Example 1 funnel: Priya's verified network claim (unfollowed) +
+    /// a slice-03 `PeerPds` hosting her claims for the post-`peer add` pull.
+    PriyaDiscoverableAndPullable,
+    /// US-AV-002 / OD-AV-7: a claim C + a later indexed claim K that references C
+    /// with ref_type=counters (the counter-shown-not-applied fixture).
+    CounteredClaimPlusCounter,
+    /// US-AV-004 Example 1: Priya's verified bazel/reproducible-builds claim with
+    /// a known cid (bafy...k2) for the `--show` inspect fixture.
+    PriyaShowableVerifiedRecord,
+}
+
+/// A handle to a REAL `openlore-indexer serve` running on a localhost EPHEMERAL
+/// port (bound `:0`, read back). Owns the child process (and its tokio runtime
+/// inside the spawned binary); the CLI's `[appview] indexer_url` is pointed at
+/// `indexer_url()`. Mirrors the slice-01 `FakePds` / slice-03 `PeerPds`
+/// runtime-ownership pattern (the server is released on drop).
+///
+/// SCAFFOLD: true (slice-05) — DELIVER spawns `openlore-indexer serve` over the
+/// seeded `index.duckdb` on an ephemeral port (DEVOPS open-q 8 parallel-safety),
+/// reads back the bound port, and exposes `indexer_url()` for the CLI to query.
+pub struct IndexerHandle {
+    _private: (),
+}
+
+impl IndexerHandle {
+    /// The `http://127.0.0.1:<ephemeral-port>` URL the CLI's `[appview]
+    /// indexer_url` is pointed at. SCAFFOLD: true (slice-05).
+    pub fn indexer_url(&self) -> String {
+        // SCAFFOLD: true (slice-05)
+        todo!(
+            "DELIVER (slice-05): return the http://127.0.0.1:<ephemeral-port> URL \
+             of the spawned `openlore-indexer serve` (bound :0, read back)."
+        )
+    }
+}
+
+/// Seed the network index for a scenario: spin up a `FakeIngestSource` hosting the
+/// fixture's records + the fixture real-`z6Mk` PLC resolver, run a REAL
+/// `openlore-indexer ingest` pass to populate a REAL `index.duckdb`, and (for the
+/// search scenarios) start a REAL `openlore-indexer serve` over localhost,
+/// returning the [`IndexerHandle`]. The user's `[appview] indexer_url` is set to
+/// the handle's URL. This is the slice-05 precondition seam (no live network).
+///
+/// SCAFFOLD: true (slice-05) — DELIVER materializes the FakeIngestSource +
+/// resolver wiring + the ingest/serve spawn per `NetworkIndexFixture` variant.
+pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> IndexerHandle {
+    // SCAFFOLD: true (slice-05)
+    let _ = (env, fixture);
+    todo!(
+        "DELIVER (slice-05): host `fixture`'s records on a FakeIngestSource + a \
+         fixture real-z6Mk PLC resolver; run `openlore-indexer ingest` into a REAL \
+         index.duckdb; start `openlore-indexer serve` on an ephemeral port; point \
+         the CLI [appview] indexer_url at it; return the IndexerHandle."
+    )
+}
+
+/// Run `openlore-indexer <args>` (the SECOND binary) with the indexer's own
+/// config + index dir under `env.home`. Returns the [`CliOutcome`]. Used by the
+/// US-AV-001 infra scenarios (ingest/serve/help/capability-boundary).
+///
+/// SCAFFOLD: true (slice-05) — DELIVER wires `assert_cmd::cargo_bin("openlore-
+/// indexer")` against the indexer config + the FakeIngestSource + the fixture
+/// PLC resolver env seams (the indexer-side analog of `run_openlore`).
+pub fn run_openlore_indexer(env: &TestEnv, args: &[&str]) -> CliOutcome {
+    // SCAFFOLD: true (slice-05)
+    let _ = (env, args);
+    todo!(
+        "DELIVER (slice-05): run `openlore-indexer <args>` via \
+         assert_cmd::cargo_bin against the indexer config + FakeIngestSource + \
+         fixture PLC resolver seams; capture status/stdout/stderr."
+    )
+}
+
+/// Assert the slice-05 network-search anti-merging contract over a `search`
+/// stdout (the slice-03/04 discipline carried to network scale): count the
+/// attributed result rows for `(subject, object)`; assert it equals
+/// `expected_rows` AND that NO line matches a merged/consensus/"N authors
+/// agree"/mean-confidence template, EXCLUDING the footer's "distinct authors"
+/// count line from the row count. The behavioral layer of I-AV-2 (AV-9/AV-16/AV-27).
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): the count of attributed
+/// rows for the pair; the author-set of those rows; absence of any merged row;
+/// the footer distinct-author count. NEVER an internal compose struct field.
+pub fn assert_network_result_preserves_attribution(
+    stdout: &str,
+    subject: &str,
+    object: &str,
+    expected_rows: usize,
+    expected_authors: &[&str],
+) {
+    // SCAFFOLD: true (slice-05)
+    let _ = (stdout, subject, object, expected_rows, expected_authors);
+    todo!(
+        "DELIVER (slice-05): count attributed rows for (subject,object) == \
+         expected_rows; assert their author-set == expected_authors; assert NO \
+         merged/consensus/'N authors agree'/mean-confidence row anywhere; exclude \
+         the footer distinct-author line from the row count (I-AV-2 behavioral)."
+    )
+}
+
+/// Assert every result row in a `search` stdout carries a `[verified]` marker and
+/// that NO row shows `[unverified]` / `unknown signature` (the universal-marker
+/// construction guarantee; I-AV-1; AV-11).
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): for every result row,
+/// row contains "[verified]"; the strings "[unverified]"/"unknown signature"
+/// never appear.
+pub fn assert_verified_marker_is_universal(stdout: &str) {
+    // SCAFFOLD: true (slice-05)
+    let _ = stdout;
+    todo!(
+        "DELIVER (slice-05): assert every result row carries [verified] and NO \
+         row shows [unverified]/unknown-signature (I-AV-1 construction guarantee)."
+    )
+}
+
+/// Assert a `search` stdout prints the public-data banner UP FRONT (before the
+/// first result row): public-signed-only + verified-before-indexing +
+/// nothing-private-read/aggregated (I-AV-4 / KPI-AV-5; AV-10).
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): the banner present AND
+/// positioned before the first result row.
+pub fn assert_public_data_banner_precedes_results(stdout: &str) {
+    // SCAFFOLD: true (slice-05)
+    let _ = stdout;
+    todo!(
+        "DELIVER (slice-05): assert a public-data banner (public-only + \
+         verified-before-indexing + nothing-private) precedes the first result \
+         row (I-AV-4 / KPI-AV-5)."
+    )
+}
+
+/// Assert that none of the `adversarial_cids` appears anywhere in the index
+/// (`index.duckdb` rows) NOR in any `search` result — the verified-before-index
+/// reject contract (I-AV-1 / KPI-AV-3; AV-3). `env` locates the index store; the
+/// search outputs are the rendered observable.
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): the adversarial cids
+/// absent from indexed_claims AND absent from every search result; the valid cid
+/// present + searchable.
+pub fn assert_unverified_claims_never_indexed_nor_searchable(
+    env: &TestEnv,
+    adversarial_cids: &[&str],
+    valid_cid: &str,
+) {
+    // SCAFFOLD: true (slice-05)
+    let _ = (env, adversarial_cids, valid_cid);
+    todo!(
+        "DELIVER (slice-05): assert each adversarial cid is absent from \
+         indexed_claims AND from every search result; the valid cid is present + \
+         searchable + verified_against != \"\" (I-AV-1 / KPI-AV-3 reject gate)."
+    )
+}
+
+/// Assert the user's `openlore.duckdb` is byte-unchanged across an
+/// `openlore-indexer` run (the capability boundary: the indexer holds no
+/// local-store handle; ADR-023 / I-AV-5; AV-5). Snapshot before, run, compare.
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): openlore.duckdb
+/// bytes/mtime unchanged; only index.duckdb written.
+pub fn assert_local_store_untouched_by_indexer(env: &TestEnv, run: impl FnOnce()) {
+    // SCAFFOLD: true (slice-05)
+    let _ = (env, run);
+    todo!(
+        "DELIVER (slice-05): snapshot openlore.duckdb bytes; run the indexer \
+         closure; assert openlore.duckdb byte-unchanged and only index.duckdb \
+         written (ADR-023 / I-AV-5 capability boundary)."
+    )
+}
+
+/// A parsed shareable link emitted by `openlore search --share`. SCAFFOLD: true.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareLink {
+    pub dimension: String,
+    pub value: String,
+}
+
+/// Parse the `openlore://search?<dimension>=<value>` link from a `--share`
+/// stdout, asserting it encodes ONLY the query dimension+value (NO result
+/// payload / NO snapshot; I-AV-8; AV-26/AV-29).
+///
+/// SCAFFOLD: true (slice-05) — universe (port-exposed): the link's encoded
+/// dimension + value; the absence of any result/snapshot payload in the link.
+pub fn parse_and_assert_query_encoding_share_link(stdout: &str) -> ShareLink {
+    // SCAFFOLD: true (slice-05)
+    let _ = stdout;
+    todo!(
+        "DELIVER (slice-05): parse the openlore://search?<dim>=<value> link; \
+         assert it encodes ONLY dimension+value (no result snapshot) + the \
+         'encodes the query, not a snapshot' semantics line (I-AV-8)."
+    )
+}

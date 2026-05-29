@@ -57,7 +57,7 @@ jobs:
       - User can read back their own claim and recognize it as their reasoning.
       - User feels safe publishing because retraction/counter-claim is first-class.
 
-    related_jobs: [J-002, J-003, J-004]
+    related_jobs: [J-002, J-003, J-004, J-005]
 
 
   - id: J-002
@@ -382,6 +382,153 @@ jobs:
         default_confidence: 0.25
 
 
+  - id: J-005
+    name: Discover signed claims across the network without knowing who to follow first
+    primary: false                  # secondary to J-001 at the umbrella level
+    walking_skeleton_for: openlore-appview-search   # but PRIMARY for slice-05
+    job_story: >
+      When I am orienting a decision around a philosophy or a project but do NOT
+      already know which developers to follow, I want to discover the signed
+      claims that exist across the whole network — not just my own and my
+      manually-subscribed peers — so I can find well-evidenced reasoning and the
+      people behind it without first having to know whose DID to subscribe to.
+
+    functional:
+      - Search PUBLIC signed claims aggregated from across the network by subject
+        (project), object (philosophy), or contributor (DID/handle) — beyond the
+        local store and beyond manually-pulled peers.
+      - Aggregate many authors' public claims into a query-able index while
+        preserving per-author attribution on every result (no faceless rows).
+      - Verify each claim's signature and recompute its CID BEFORE it enters the
+        index; never index an unsigned or unverified claim.
+      - Surface a discovered author as a one-step "subscribe to follow" path back
+        into the slice-03 federation flow (discovery feeds federation).
+      - Share a query/result as a stable link to a query (the slice-02 J-004
+        "shareable as a link to a query" success signal, deferred to here).
+
+    emotional:
+      - Relief: "I do not have to already know the right people to find good reasoning."
+      - Confidence: "What I discover is the SAME signed claim the author published —
+        verified, attributed, never a merged consensus."
+      - Sovereignty preserved: "Discovery is a read surface; my local store and my
+        own claims remain the source of truth and are never overwritten."
+
+    social:
+      - Find aligned developers and projects I would never have searched for by name.
+      - Make a discovery defensible: cite a specific signed claim by a named author,
+        not an aggregator's opinion.
+      - Lower the cold-start cost of a federated knowledge graph (you no longer need
+        a pre-existing follow-list to get value).
+
+    four_forces:
+      push: >
+        Closes the J-001 "undiscoverable" gap at NETWORK scale. slice-03 federation
+        only surfaces claims from peers I MANUALLY subscribed to; slice-04 scores
+        only the LOCAL graph. So a great signed claim by someone I have never heard
+        of is still invisible — exactly the discoverability failure J-001 named
+        ("unstructured, unsigned, and undiscoverable"). Two of the three are solved;
+        discoverability at scale is not.
+      pull: >
+        A query-driven discovery surface ("search by philosophy") over an index of
+        many authors' PUBLIC signed claims, where every result is signature-verified,
+        attributed to its author, and one step away from subscribing to follow.
+      anxiety: >
+        Multiple distinct anxieties drive J-005:
+        (a) "Is an AppView just another centralized aggregator that collapses
+            provenance — the exact failure mode this whole product exists to avoid?"
+            Mitigation: anti-merging carries into network aggregates (every indexed
+            result preserves per-author attribution; no network-consensus rows).
+        (b) "Will the index serve me tampered or fabricated claims?"
+            Mitigation: signature verification + CID recompute BEFORE indexing
+            (mirrors slice-03 pull-time verification); no unverified claim is indexed.
+        (c) "Does adding a network service betray the local-first promise (KPI-5)?"
+            Mitigation: the AppView is a READ/discovery surface only; the CLI +
+            local store remain the source of truth; compose/sign/own-claim flows
+            stay 100% local; discovery degrades to local-only when the index is
+            unreachable.
+        (d) "By publishing claims, did I expose data I did not mean to?"
+            Mitigation: indexing aggregates ONLY public signed claims; the
+            "your peer-published claims are public" expectation is surfaced
+            honestly (ADR-014 deferred this framing to slice-05).
+      habit: >
+        Devs already run `gh search`, Google, and skim awesome-lists to discover
+        projects/people. "Search by philosophy" must feel like a natural search
+        verb, and a discovered author must drop straight into the `openlore peer add`
+        flow they already learned in slice-03 — discovery is a front-door to
+        federation, not a separate cognitive surface.
+
+    opportunity_score:
+      importance: 8     # discoverability-at-scale is the last unmet third of the J-001 push
+      satisfaction: 1   # no tool federates + verifies + attributes + lets you search by philosophy
+      score: 15         # 8 + max(8 - 1, 0) = 15
+      verdict: underserved-primary-for-slice   # primary for slice-05 (openlore-appview-search)
+
+    success_signals:
+      - User discovers a relevant signed claim by an author they had NOT previously
+        subscribed to, within their first network search session.
+      - User subscribes to a newly-discovered author (discovery -> federation funnel)
+        within 30 days.
+      - Every discovered result the user inspects shows its author DID and a
+        verified-signature marker; the user can answer "who signed this, and is it
+        the claim they actually published?" without leaving the result.
+      - User shares a query result as a link that a teammate can open and see the
+        same attributed, verified claims (the J-004 shareable-link signal, realized).
+      - User reports the discovery surface never showed a "network says X" consensus
+        row that hid the individual authors (anti-merging-at-scale signal).
+
+    related_jobs: [J-001, J-002, J-003, J-004]
+
+    # Sub-jobs surfaced during slice-05 (appview-search) DISCUSS — each is an
+    # aspect of J-005, NOT a separate primary job, but each merits an Elevator
+    # Pitch in the corresponding user story.
+    sub_jobs:
+      - id: J-005a
+        name: Search by philosophy / subject / contributor at network scale
+        story: >
+          When I am orienting around a value but do not know who already claims it,
+          I want to search an index of many authors' PUBLIC signed claims by
+          philosophy (object), project (subject), or contributor — beyond my local
+          store and beyond my manually-pulled peers — so I can find aligned reasoning
+          I could never reach by name.
+        load_bearing: true
+        rationale: >
+          This is the headline "search by philosophy at network scale." It is the
+          ONLY net-new orienting surface in slice-05; the dimensions mirror slice-04
+          (subject/object/contributor) but the corpus is the network index, not the
+          local graph. Every result preserves per-author attribution (anti-merging
+          carried into network aggregates).
+
+      - id: J-005b
+        name: Index only signature-verified, attributed public claims
+        story: >
+          When the indexer ingests a claim from the network, I want it to verify the
+          author's signature and recompute the CID BEFORE the claim enters the index,
+          and to keep the author DID on every indexed record, so a network search can
+          never serve me a tampered, fabricated, or faceless claim.
+        load_bearing: true
+        rationale: >
+          The trust precondition for the whole slice. Mirrors slice-03 pull-time
+          verification (KPI-FED-6) at network scale. No unsigned/unverified claim is
+          ever indexed; every indexed record carries a non-Option author DID
+          (anti-merging at the ingest layer). Without this, discovery is just another
+          untrusted aggregator.
+
+      - id: J-005c
+        name: Turn a discovery into a follow (discovery feeds federation)
+        story: >
+          When a network search surfaces a claim by a developer I do not yet follow,
+          I want a one-step path to subscribe to them via the slice-03 federation
+          flow, so discovery becomes the front-door that grows my trusted local
+          graph rather than a dead-end read.
+        load_bearing: false
+        rationale: >
+          Connects J-005 (discover at scale) back to J-003 (federated read of a
+          chosen peer). Discovery without a follow path is a curiosity; the funnel
+          discovery -> subscribe -> local-graph is what makes the AppView strengthen
+          the local-first model instead of competing with it. Reuses
+          `openlore peer add` (no parallel subscription path).
+
+
 # ---------------------------------------------------------------------------
 # Red cards — all resolved 2026-05-25. Retained here for decision provenance.
 # Binding form lives in docs/feature/openlore-foundation/feature-delta.md
@@ -478,3 +625,26 @@ changelog:
       AGGREGATE VIEW that never loses per-author attribution (extends slice-03
       I-FED-1). J-002 retains primary=false at umbrella scope but is the
       walking-skeleton job for openlore-scoring-graph.
+  - date: "2026-05-28"
+    feature: openlore-appview-search
+    change: >
+      J-005 ADDED for slice-05 (appview-search) DISCUSS — a first-class job for
+      network-scale discoverability, closing the last unmet third of the J-001
+      push ("unstructured, unsigned, and UNDISCOVERABLE"; slices 01/02/04 solved
+      structure + signing, slice-03 solved manual federation, but a great claim by
+      an unknown author stayed undiscoverable). Opportunity score 15 (importance 8,
+      satisfaction 1), verdict underserved-primary-for-slice; walking_skeleton_for:
+      openlore-appview-search. Four-forces with four distinct anxieties surfaced
+      (centralized-aggregator distrust, tampered-claim fear, local-first betrayal,
+      accidental-exposure). Sub-jobs J-005a (search by philosophy/subject/
+      contributor at network scale), J-005b (index only signature-verified,
+      attributed public claims), J-005c (turn a discovery into a follow). J-005 is
+      DISTINCT from J-002 (local-graph exploration): same dimensions, but the corpus
+      is a network index of many authors' PUBLIC claims, not the local store.
+      Cardinal invariants carried in: anti-merging extends to NETWORK aggregates
+      (every indexed/searched result preserves per-author attribution); signature
+      verify + CID recompute BEFORE indexing (mirrors slice-03 KPI-FED-6); public-
+      data-only framing (ADR-014 deferred to slice-05); CLI-first / local-first
+      source-of-truth preserved (the AppView is a READ/discovery surface only).
+      J-005 retains primary=false at umbrella scope but is the walking-skeleton job
+      for openlore-appview-search.
