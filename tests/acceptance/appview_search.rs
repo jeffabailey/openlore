@@ -348,12 +348,41 @@ fn public_data_banner_shown() {
     // Universe (port-exposed): the banner present in stdout AND positioned before
     // the first result row (banner_precedes_results == true); the banner asserts
     // public-only + verified-before-indexing + nothing-private.
-    todo!(
-        "DELIVER (slice-05): RELEASE GATE. Run any `openlore search`; assert a \
-         public-data banner precedes the results stating public-signed-only + \
-         verified-before-indexing + nothing-private-read/aggregated (KPI-AV-5 / \
-         I-AV-4)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a reachable localhost `openlore-indexer serve` over
+    // an index.duckdb seeded with the headline reproducible-builds corpus (9
+    // authors / 7 subjects) so the search returns a NON-EMPTY result set — the
+    // banner must precede the FIRST result row, which only exists when results do.
+    // The CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
     );
+
+    // -- Action: ANY `openlore search` query — use the headline --object. --
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+
+    // exit 0 (a valid result, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "`openlore search --object` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // The RELEASE GATE (KPI-AV-5 / I-AV-4): the public-data banner is present AND
+    // positioned BEFORE the first result row (banner_precedes_results == true), and
+    // it asserts the three honesty facts — discovery indexes ONLY public, signed
+    // claims; each verified before indexing; nothing private is read or aggregated.
+    assert_public_data_banner_precedes_results(&outcome.stdout);
 }
 
 /// AV-11 / RELEASE GATE `verified_marker_is_universal` (US-AV-004; I-AV-1): every
