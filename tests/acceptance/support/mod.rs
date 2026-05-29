@@ -4555,6 +4555,108 @@ pub fn run_openlore_indexer_with_source(
     }
 }
 
+/// Run `openlore-indexer <args>` against a substrate whose fsync is a SILENT
+/// NO-OP — the container substrate lie (DESIGN §6.3). The index store's
+/// fsync-honesty probe MUST detect the lie and REFUSE to start.
+///
+/// We cannot reliably mount a real tmpfs/overlayfs/DrvFs across CI + macOS +
+/// Linux, so the substrate lie is injected through a seam the index-store probe
+/// honors: `OPENLORE_INDEXER_FORCE_FSYNC_NOOP=1` makes the probe treat the
+/// durability medium as a fsync no-op (the SAME pragmatic limitation the
+/// slice-01 `adapter-duckdb` fsync probe documents inline — userspace cannot
+/// fully detect a kernel-side silent no-op without kernel cooperation). The
+/// REAL fsync round-trip arm still runs; this seam only forces the no-op verdict
+/// the probe would reach on a lying substrate.
+///
+/// Mirrors [`run_openlore_indexer_with_source`]'s clean-env discipline; the
+/// `source_url` is wired so a wiring construction never fails for the wrong
+/// reason (the probe, not the source, drives the refusal).
+pub fn run_openlore_indexer_with_fsync_lying_store(
+    env: &TestEnv,
+    args: &[&str],
+    source_url: &str,
+) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let output = Command::new(&bin)
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        // The substrate lie: force the index-store fsync-honesty probe to reach
+        // the no-op verdict (storage.fsync_unhonored) it would reach on a real
+        // tmpfs/overlayfs/DrvFs durability no-op.
+        .env("OPENLORE_INDEXER_FORCE_FSYNC_NOOP", "1")
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore-indexer at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// Parse the single `health.startup.refused` event from an indexer's stderr (the
+/// DevOps observability contract: one structured JSON line per startup refusal).
+/// Returns the parsed JSON value so AV-6 can assert on the `reason` +
+/// `structured.event` fields. Panics with the full stderr if no such event is
+/// present (a refusal that emits no `health.startup.refused` is itself a failure).
+///
+/// Port-exposed surface: the `health.startup.refused` event, NOT any internal
+/// probe-struct field. Mirrors the AV-3 `indexer.ingest.rejected` line-scan.
+pub fn parse_health_startup_refused(outcome: &CliOutcome) -> serde_json::Value {
+    outcome
+        .stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "health.startup.refused")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a health.startup.refused event in stderr; got:\n--- stdout ---\n{}\n\
+                 --- stderr ---\n{}",
+                outcome.stdout, outcome.stderr
+            )
+        })
+}
+
+/// Universe-bound: "the indexer ran NO ingest pass and served NO query — its
+/// SEPARATE `index.duckdb` holds ZERO indexed rows (or was never created)".
+/// Port-exposed name: `index_storage.indexed_claims.row_count` (== 0).
+///
+/// The wire → probe → use proof (ADR-009): a startup refusal must happen BEFORE
+/// any ingest/serve work, so the index must be empty. Absent (never created) is
+/// the strongest form of "no work"; a present-but-empty `indexed_claims` table
+/// also proves no row was indexed. Any indexed row is a wire→use-without-probe
+/// violation. Test-support is the only place raw SQL is acceptable.
+pub fn assert_indexer_did_no_work(env: &TestEnv) {
+    let db_path = index_duckdb_path(env);
+    if !db_path.exists() {
+        // Never created — the refusal happened before the store was opened/written.
+        return;
+    }
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open index.duckdb at {} for AV-6 no-work assertion: {err}",
+            db_path.display()
+        )
+    });
+    // The table may not exist if the refusal happened before migrations; treat a
+    // missing table as zero work too.
+    let indexed: i64 = conn
+        .query_row("SELECT count(*) FROM indexed_claims", [], |r| r.get(0))
+        .unwrap_or(0);
+    assert_eq!(
+        indexed, 0,
+        "wire → probe → use (ADR-009): the indexer must REFUSE to start BEFORE any \
+         ingest pass — index.duckdb must hold ZERO indexed_claims rows, but found \
+         {indexed}. A failing probe must do NO work."
+    );
+}
+
 // =============================================================================
 // Slice-05 (step 03-04; AV-4) — the REAL `z6Mk` PLC DID-document resolver fixture.
 //

@@ -181,11 +181,11 @@ impl IndexStoreAdapter {
 
 impl IndexStorePort for IndexStoreAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // Earned-Trust probe (happy-path arm for the AV-1 walking skeleton): the
-        // schema version must match what this binary knows how to read. The full
-        // fsync + attribution-round-trip + no-merge-schema substrate-lie arms are
-        // AV-6/03-06; here we assert the schema is present + current so the
-        // gauntlet has a REAL readiness check (not a trivial `Ok`).
+        // Earned-Trust probe (ADR-009 / ADR-025): two arms run BEFORE the gauntlet
+        // trusts this store. (1) the schema version must match what this binary
+        // knows how to read; (2) the substrate must HONOR fsync — a tmpfs/
+        // overlayfs/DrvFs durability no-op is a substrate LIE the indexer must
+        // refuse (DESIGN §6.3, AV-6). Mirrors the slice-01 `adapter-duckdb` probe.
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(_) => {
@@ -196,26 +196,37 @@ impl IndexStorePort for IndexStoreAdapter {
                 };
             }
         };
+        // Arm 1: schema version.
         match schema::read_version(&conn) {
-            Ok(v) if v == schema::LATEST_VERSION => ProbeOutcome::Ok,
-            Ok(v) => ProbeOutcome::Refused {
-                reason: ProbeRefusalReason::StorageSchemaMismatch,
-                detail: format!(
-                    "index.duckdb schema version {v} != expected {}",
-                    schema::LATEST_VERSION
-                ),
-                structured: serde_json::json!({
-                    "adapter": "index_store",
-                    "found": v,
-                    "expected": schema::LATEST_VERSION,
-                }),
-            },
-            Err(err) => ProbeOutcome::Refused {
-                reason: ProbeRefusalReason::StorageSchemaMismatch,
-                detail: format!("could not read index schema version: {err}"),
-                structured: serde_json::json!({"adapter": "index_store"}),
-            },
+            Ok(v) if v == schema::LATEST_VERSION => {}
+            Ok(v) => {
+                return ProbeOutcome::Refused {
+                    reason: ProbeRefusalReason::StorageSchemaMismatch,
+                    detail: format!(
+                        "index.duckdb schema version {v} != expected {}",
+                        schema::LATEST_VERSION
+                    ),
+                    structured: serde_json::json!({
+                        "adapter": "index_store",
+                        "found": v,
+                        "expected": schema::LATEST_VERSION,
+                    }),
+                };
+            }
+            Err(err) => {
+                return ProbeOutcome::Refused {
+                    reason: ProbeRefusalReason::StorageSchemaMismatch,
+                    detail: format!("could not read index schema version: {err}"),
+                    structured: serde_json::json!({"adapter": "index_store"}),
+                };
+            }
         }
+        drop(conn);
+
+        // Arm 2: fsync honored on the durability medium (the substrate-lie check).
+        // The indexer writes its `<cid>.json` artifacts under `artifacts_root`, so
+        // that is the medium whose durability the probe must trust.
+        probe_fsync_honored(&self.artifacts_root, detect_fsync_honesty(&self.artifacts_root))
     }
 
     fn upsert(&self, claim: &IndexedClaim) -> Result<(), IndexStoreError> {
@@ -385,6 +396,106 @@ fn write_failed(claim: &IndexedClaim, message: String) -> IndexStoreError {
     }
 }
 
+/// The substrate-durability verdict the fsync-honesty probe acts on: does the
+/// medium HONOR fsync, or is it a silent no-op (tmpfs/overlayfs/DrvFs)?
+///
+/// Extracted as an explicit ADT so the load-bearing refusal decision is a PURE
+/// function of the verdict — unit-testable without process-global env state
+/// (mirrors the slice-01 probe's railway shape, made data-explicit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FsyncHonesty {
+    /// The medium persists fsynced writes durably (a real, durable filesystem).
+    Honored,
+    /// The medium SILENTLY no-ops fsync (the container substrate lie, DESIGN §6.3)
+    /// — a tmpfs/overlayfs/WSL2-DrvFs durability no-op. The indexer must refuse.
+    SilentNoop,
+}
+
+/// Detect whether `dir`'s substrate honors fsync.
+///
+/// ## Limitation (mirrors the slice-01 `adapter-duckdb` probe inline note)
+///
+/// Detecting that the kernel SILENTLY no-ops fsync on tmpfs/overlayfs/WSL2-DrvFs
+/// requires platform-specific kernel cooperation we don't have at the userspace
+/// boundary. The pragmatic check is the fsync round-trip in [`probe_fsync_honored`]
+/// (the file persists across an explicit `sync_all`); BEYOND that, the
+/// `OPENLORE_INDEXER_FORCE_FSYNC_NOOP` seam lets an operator (and the AV-6
+/// acceptance harness) assert the no-op verdict the probe would reach on a known
+/// lying substrate, so the refusal path is exercised deterministically across CI
+/// + macOS + Linux where a real tmpfs mount is not portable.
+fn detect_fsync_honesty(_dir: &Path) -> FsyncHonesty {
+    if std::env::var_os("OPENLORE_INDEXER_FORCE_FSYNC_NOOP").is_some() {
+        return FsyncHonesty::SilentNoop;
+    }
+    FsyncHonesty::Honored
+}
+
+/// The fsync-honesty probe arm: do a REAL fsync round-trip on `dir` (write a
+/// sentinel, `sync_all`, sync the dir handle, re-read) AND act on the substrate
+/// `honesty` verdict. Refuses with `StorageFsyncUnreliable` + the
+/// `storage.fsync_unhonored` structured event on a `SilentNoop` lie or any
+/// round-trip failure; returns `Ok` only when the medium is durable.
+///
+/// The decision is a pure function of (the round-trip result, `honesty`) so AV-6's
+/// load-bearing refusal is unit-testable by passing `FsyncHonesty::SilentNoop`.
+fn probe_fsync_honored(dir: &Path, honesty: FsyncHonesty) -> ProbeOutcome {
+    use std::io::{Read, Write};
+
+    let refuse = |detail: String| ProbeOutcome::Refused {
+        reason: ProbeRefusalReason::StorageFsyncUnreliable,
+        detail,
+        structured: serde_json::json!({
+            "event": "storage.fsync_unhonored",
+            "adapter": "index_store",
+            "path": dir.display().to_string(),
+        }),
+    };
+
+    // The substrate-lie verdict short-circuits: a fsync no-op medium is unsafe to
+    // index into regardless of whether THIS round-trip happened to persist.
+    if honesty == FsyncHonesty::SilentNoop {
+        return refuse(format!(
+            "index store substrate at {} silently no-ops fsync (tmpfs/overlayfs/DrvFs \
+             durability lie) — refusing to index into a store that cannot persist \
+             (DESIGN §6.3)",
+            dir.display()
+        ));
+    }
+
+    // The REAL round-trip: write → sync_all → re-read → byte-equal. Catches gross
+    // medium failures the verdict cannot (permissions, wrong mount, corruption).
+    if let Err(err) = fs::create_dir_all(dir) {
+        return refuse(format!("could not create index artifacts dir: {err}"));
+    }
+    let path = dir.join(".index-probe-fsync");
+    let payload = b"openlore-index-fsync-probe-v1";
+    {
+        let mut file = match fs::File::create(&path) {
+            Ok(f) => f,
+            Err(err) => return refuse(format!("could not create fsync sentinel: {err}")),
+        };
+        if let Err(err) = file.write_all(payload) {
+            return refuse(format!("could not write fsync sentinel: {err}"));
+        }
+        if let Err(err) = file.sync_all() {
+            return refuse(format!("sync_all on index fsync sentinel failed: {err}"));
+        }
+    }
+    if let Ok(dir_handle) = fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
+    let mut observed = Vec::new();
+    let reread = fs::File::open(&path).and_then(|mut f| f.read_to_end(&mut observed));
+    if let Err(err) = reread {
+        return refuse(format!("could not re-read fsync sentinel: {err}"));
+    }
+    if observed != payload {
+        return refuse("index fsync sentinel round-trip mismatch".to_string());
+    }
+    let _ = fs::remove_file(&path);
+    ProbeOutcome::Ok
+}
+
 /// Write `payload` to `final_path` atomically: write to `tmp_path`, fsync, then
 /// rename over the destination (the slice-01 POSIX-atomic artifact pattern).
 fn write_atomic(tmp_path: &Path, final_path: &Path, payload: &[u8]) -> Result<(), String> {
@@ -548,6 +659,59 @@ mod tests {
             ],
             "both authors must be individually attributed — never merged onto one row"
         );
+    }
+
+    /// Earned-Trust fsync-honesty probe — the honored-substrate arm (the
+    /// inner-loop decomposition of AV-6's "wire → probe → use" refusal gate). On
+    /// a real, durable tmp filesystem the fsync round-trip succeeds, so the probe
+    /// must return `Ok` (the gauntlet proceeds to ingest/serve).
+    #[test]
+    fn probe_returns_ok_on_a_durable_substrate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let store = IndexStoreAdapter::open(&db_path).expect("open index store");
+
+        match store.probe() {
+            ProbeOutcome::Ok => {}
+            other => panic!(
+                "a durable substrate with a current schema must probe Ok; got {other:?}"
+            ),
+        }
+    }
+
+    /// Earned-Trust fsync-honesty probe — the substrate-LIE arm (the load-bearing
+    /// AV-6 decomposition). A tmpfs/overlayfs/DrvFs fsync no-op (forced via the
+    /// `OPENLORE_INDEXER_FORCE_FSYNC_NOOP` seam — the same pragmatic limitation
+    /// the slice-01 duckdb probe documents) MUST refuse with
+    /// `StorageFsyncUnreliable` and the `storage.fsync_unhonored` structured event
+    /// the DevOps `health.startup.refused` layer routes on. The probe REFUSES so
+    /// the indexer never indexes into a store it cannot trust to persist.
+    #[test]
+    fn probe_refuses_when_fsync_is_a_silent_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // The load-bearing decision is a PURE function of the substrate verdict:
+        // the fsync-honesty arm refuses when the medium's fsync is a no-op. Tested
+        // at the pure-function boundary (no process-global env, parallel-safe). The
+        // env-seam → adapter-`probe()` → gauntlet → exit-2 wiring is proven
+        // end-to-end by AV-6 (`indexer_refuses_to_start_when_a_driven_adapter_probe_fails`).
+        let outcome = probe_fsync_honored(dir.path(), FsyncHonesty::SilentNoop);
+        match outcome {
+            ProbeOutcome::Refused {
+                reason, structured, ..
+            } => {
+                assert_eq!(
+                    reason,
+                    ProbeRefusalReason::StorageFsyncUnreliable,
+                    "a fsync no-op must refuse with the storage-durability reason"
+                );
+                assert_eq!(
+                    structured["event"], "storage.fsync_unhonored",
+                    "the structured payload must carry the storage.fsync_unhonored event"
+                );
+            }
+            ProbeOutcome::Ok => panic!("a fsync no-op substrate must REFUSE, not Ok"),
+        }
     }
 
     /// De-dup at upsert is by CID only (ADR-025): upserting the same CID twice

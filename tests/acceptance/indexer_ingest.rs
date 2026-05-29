@@ -702,12 +702,52 @@ fn indexer_refuses_to_start_when_a_driven_adapter_probe_fails() {
     //
     // Universe (port-exposed): exit code (2); the health.startup.refused reason;
     // absence of any indexed row / served query.
-    todo!(
-        "DELIVER (slice-05): configure a probe-failing adapter (fsync-lying store \
-         OR unreachable required source); run `openlore-indexer serve`; assert \
-         exit 2 + health.startup.refused{{reason}} + NO ingest/serve happened \
-         (wire->probe->use; ADR-009/023)."
+    let env = TestEnv::fresh();
+
+    // -- Precondition: the indexer is configured with an index store whose
+    // substrate LIES about durability (a tmpfs/overlayfs fsync no-op — the
+    // container substrate lie, DESIGN §6.3). The source is reachable so the
+    // PROBE, not the source, is unambiguously what drives the refusal. --
+    let source = FakeIngestServer::start(vec![fixture_ingest_valid_signed()]);
+
+    // -- Action: run the REAL `openlore-indexer serve` (wire → probe → use). The
+    // composition root runs ALL driven-adapter probes + the capability-boundary
+    // probe BEFORE the first ingest/query; the fsync-lying index store fails its
+    // fsync-honesty probe. --
+    let outcome = run_openlore_indexer_with_fsync_lying_store(&env, &["serve"], source.source_url());
+
+    // -- Observable outcome 1 (port-exposed): exit code 2 — the indexer REFUSES
+    // to start (the indexer analog of the slice-01 startup-refusal gate). --
+    assert_eq!(
+        outcome.status, 2,
+        "openlore-indexer serve must REFUSE to start (exit 2) when a driven-adapter \
+         probe fails (wire → probe → use; ADR-009/023). \n--- stdout ---\n{}\n\
+         --- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
     );
+
+    // -- Observable outcome 2 (port-exposed): a `health.startup.refused` event
+    // carrying the failing reason ∈ {storage.fsync_unhonored | ...}. The fsync
+    // no-op substrate lie maps to the storage-durability refusal. --
+    let refused = parse_health_startup_refused(&outcome);
+    assert_eq!(
+        refused["binary"], "openlore-indexer",
+        "the refusal event must identify the indexer binary; got {refused}"
+    );
+    assert_eq!(
+        refused["reason"], "StorageFsyncUnreliable",
+        "the fsync-no-op substrate lie must refuse with the storage-durability reason \
+         (storage.fsync_unhonored); got {refused}"
+    );
+    assert_eq!(
+        refused["structured"]["event"], "storage.fsync_unhonored",
+        "the structured payload must carry the storage.fsync_unhonored event the \
+         DevOps layer routes on; got {refused}"
+    );
+
+    // -- Observable outcome 3 (port-exposed): NO ingest pass ran / NO query was
+    // served — the index holds ZERO rows (probes run BEFORE use, ADR-009). --
+    assert_indexer_did_no_work(&env);
 }
 
 // =============================================================================
