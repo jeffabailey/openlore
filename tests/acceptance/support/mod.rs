@@ -4928,3 +4928,217 @@ pub fn assert_no_merged_consensus_table(env: &TestEnv) {
         }
     }
 }
+
+// =============================================================================
+// Slice-05 (step 03-05; AV-5) — the capability-boundary harness (ADR-023 / I-AV-5).
+//
+// The behavioral layer of the three-layer capability-boundary enforcement (type:
+// the verify-only/read-only ports; structural: the `xtask check-arch`
+// `indexer_holds_no_signing_or_local_store` rule; behavioral: AV-5 + the
+// composition-root `capability_boundary_probe`). These helpers observe ONLY the
+// port-exposed surface — the indexer's CLI help verb-set + the FILESYSTEM
+// (the user's `openlore.duckdb` byte-state, the indexer's own `index.duckdb`) —
+// NEVER an internal store struct field.
+// =============================================================================
+
+/// Universe-bound: "the `openlore-indexer` help/usage surface lists ONLY the
+/// `serve` + `ingest` + `stats` verbs and exposes NO `sign` / `publish` /
+/// `claim add` verb (it is signing-INCAPABLE, ADR-023 / I-AV-5)". Port-exposed
+/// name: `indexer.cli.help_verb_set`.
+///
+/// Runs the REAL `openlore-indexer --help` subprocess (NOT the ingest path — the
+/// help surface short-circuits BEFORE the wire → probe → use gate) and asserts:
+///   1. each of `serve`, `ingest`, `stats` appears in the help text, AND
+///   2. NONE of the signing/authoring verbs (`sign`, `publish`, `add`) appear as
+///      a subcommand — the absence IS the capability boundary.
+pub fn assert_indexer_help_has_no_signing_verb(env: &TestEnv) {
+    let outcome = run_openlore_indexer_help(env);
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer --help must exit 0; got {} \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.status, outcome.stdout, outcome.stderr
+    );
+
+    // clap prints the help to stdout for `--help`. The subcommand list lives in
+    // a `Commands:` section; assert the expected verb-set is fully present.
+    let help = &outcome.stdout;
+    for verb in ["serve", "ingest", "stats"] {
+        assert!(
+            help.contains(verb),
+            "expected `openlore-indexer --help` to list the {verb:?} verb \
+             (the indexer's only verbs are serve/ingest/stats); \n--- help ---\n{help}"
+        );
+    }
+
+    // The load-bearing ABSENCE (ADR-023 / I-AV-5): the indexer exposes NO
+    // signing/authoring verb. We scan the help for each banned authoring verb as
+    // a whole word so a substring like `ingest` (which contains no banned verb)
+    // or an unrelated word cannot false-positive. A `claim add` / `sign` /
+    // `publish` subcommand WOULD appear as a standalone token in the help.
+    const BANNED_VERBS: &[&str] = &["sign", "publish", "add"];
+    let help_lower = help.to_ascii_lowercase();
+    for banned in BANNED_VERBS {
+        let appears_as_word = help_lower
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|tok| tok == *banned);
+        assert!(
+            !appears_as_word,
+            "capability boundary (ADR-023 / I-AV-5): `openlore-indexer` must expose NO \
+             {banned:?} verb — it is signing-INCAPABLE. Found {banned:?} as a token in the \
+             help/usage surface: \n--- help ---\n{help}"
+        );
+    }
+}
+
+/// Run `openlore-indexer --help` under the scenario's isolated `OPENLORE_HOME`.
+/// Mirrors [`run_openlore_indexer_with_source`]'s clean-env discipline but threads
+/// NO source/index seam — the help surface short-circuits before any wiring.
+pub fn run_openlore_indexer_help(env: &TestEnv) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let output = Command::new(&bin)
+        .args(["--help"])
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore-indexer --help at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// A snapshot of the user's `openlore.duckdb` byte-state, taken BEFORE an indexer
+/// pass so [`assert_user_openlore_duckdb_unchanged`] can prove the indexer never
+/// opened or wrote it (the indexer has NO handle to the user's local store).
+///
+/// `Absent` is the strongest possible form of "untouched": if the indexer has no
+/// handle to the user store, an ingest pass must NOT create it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserStoreSnapshot {
+    /// The user `openlore.duckdb` did not exist when the snapshot was taken.
+    Absent,
+    /// The user `openlore.duckdb` existed; we recorded its exact bytes.
+    Present { bytes: Vec<u8> },
+}
+
+/// Snapshot the user's `openlore.duckdb` (`env.duckdb_path()`) byte-state. Records
+/// `Absent` if the file does not yet exist, else the full byte content (the
+/// strongest unchanged-witness: we compare bytes, not just mtime/size).
+pub fn snapshot_user_openlore_duckdb(env: &TestEnv) -> UserStoreSnapshot {
+    let path = env.duckdb_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => UserStoreSnapshot::Present { bytes },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => UserStoreSnapshot::Absent,
+        Err(err) => panic!(
+            "snapshot user openlore.duckdb at {}: {err}",
+            path.display()
+        ),
+    }
+}
+
+/// Universe-bound: "the user's `openlore.duckdb` is byte-identical to (or still as
+/// absent as) the `before` snapshot — the indexer never opened or wrote it".
+/// Port-exposed name: `user_storage.openlore_duckdb.bytes`.
+///
+/// The behavioral half of the capability boundary (ADR-023 / I-AV-5): the indexer
+/// holds NO handle to the user's local store, so an ingest pass cannot mutate it.
+/// `Absent → Absent` (never created) and `Present → byte-identical` both prove the
+/// store was untouched; an `Absent → Present` transition (or any byte change) is a
+/// capability-boundary breach.
+pub fn assert_user_openlore_duckdb_unchanged(env: &TestEnv, before: &UserStoreSnapshot) {
+    let after = snapshot_user_openlore_duckdb(env);
+    match (before, &after) {
+        (UserStoreSnapshot::Absent, UserStoreSnapshot::Absent) => {}
+        (UserStoreSnapshot::Absent, UserStoreSnapshot::Present { .. }) => panic!(
+            "capability boundary breach (ADR-023 / I-AV-5): the user's openlore.duckdb at {} \
+             did NOT exist before the indexer pass but EXISTS after — the indexer must have NO \
+             handle to the user's local store and must never create it",
+            env.duckdb_path().display()
+        ),
+        (UserStoreSnapshot::Present { .. }, UserStoreSnapshot::Absent) => panic!(
+            "the user's openlore.duckdb at {} existed before the indexer pass but is GONE after \
+             — the indexer must never delete the user's local store",
+            env.duckdb_path().display()
+        ),
+        (
+            UserStoreSnapshot::Present { bytes: before_bytes },
+            UserStoreSnapshot::Present { bytes: after_bytes },
+        ) => {
+            assert_eq!(
+                before_bytes.len(),
+                after_bytes.len(),
+                "capability boundary breach (ADR-023 / I-AV-5): the user's openlore.duckdb at {} \
+                 changed SIZE across the indexer pass ({} → {} bytes) — the indexer must never \
+                 open or write the user's local store",
+                env.duckdb_path().display(),
+                before_bytes.len(),
+                after_bytes.len()
+            );
+            assert!(
+                before_bytes == after_bytes,
+                "capability boundary breach (ADR-023 / I-AV-5): the user's openlore.duckdb at {} \
+                 changed CONTENT across the indexer pass — the indexer must never open or write \
+                 the user's local store",
+                env.duckdb_path().display()
+            );
+        }
+    }
+}
+
+/// Seed a populated user `openlore.duckdb` (own claims) so the AV-5 precondition
+/// ("a TestEnv with a populated user openlore.duckdb") is exercised against a
+/// REAL existing file — making the byte-unchanged witness load-bearing (the
+/// indexer must leave a populated store byte-identical, not merely never create
+/// one). Writes a small DuckDB at `env.duckdb_path()` with one `claims` row.
+///
+/// Test-support is the only place a raw `duckdb::Connection` write is acceptable;
+/// production goes through `StoragePort`.
+pub fn seed_user_openlore_duckdb(env: &TestEnv) {
+    let db_path = env.duckdb_path();
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).unwrap_or_else(|err| {
+            panic!("create user store dir {}: {err}", parent.display())
+        });
+    }
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!("seed user openlore.duckdb at {}: {err}", db_path.display())
+    });
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS claims (cid VARCHAR PRIMARY KEY, subject VARCHAR); \
+         INSERT INTO claims (cid, subject) VALUES ('bafy_user_own_claim', 'github:rust-lang/rust');",
+    )
+    .unwrap_or_else(|err| panic!("seed user claims row: {err}"));
+    // Drop the connection (flushes + closes the WAL) so the snapshot reads a
+    // settled file the indexer pass must not touch.
+    drop(conn);
+}
+
+/// Universe-bound: "the indexer's OWN `index.duckdb` (the SEPARATE store) was
+/// written by the ingest pass". Port-exposed name:
+/// `index_storage.index_duckdb.written`.
+///
+/// The complement to [`assert_user_openlore_duckdb_unchanged`]: the indexer DID
+/// persist to its OWN store (so the byte-unchanged witness on the user store is
+/// not vacuously true because nothing ran). Asserts the file exists and is
+/// non-empty under the indexer's data dir.
+pub fn assert_index_duckdb_written(env: &TestEnv) {
+    let path = index_duckdb_path(env);
+    let meta = std::fs::metadata(&path).unwrap_or_else(|err| {
+        panic!(
+            "expected the indexer to have written its SEPARATE index.duckdb at {} \
+             after an ingest pass; got {err}",
+            path.display()
+        )
+    });
+    assert!(
+        meta.len() > 0,
+        "the indexer's index.duckdb at {} exists but is EMPTY — the ingest pass must have \
+         written the verified attributed row",
+        path.display()
+    );
+}

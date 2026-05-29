@@ -51,6 +51,10 @@ pub struct IndexerWiring {
     pub clock: Box<dyn ClockPort>,
     /// The configured bounded ingest source base URL (ADR-024).
     pub source_url: String,
+    /// The configured SEPARATE `index.duckdb` path (ADR-023). Threaded into the
+    /// `capability_boundary_probe` so it can REFUSE if mis-wired against the
+    /// user's `openlore.duckdb` (the capability boundary, I-AV-5).
+    pub index_path: PathBuf,
 }
 
 /// The indexer's resolved configuration (the test analog of `config.toml`, read
@@ -120,6 +124,7 @@ impl IndexerWiring {
             query_server,
             clock: Box::new(clock),
             source_url: cfg.source_url,
+            index_path: cfg.index_path,
         })
     }
 
@@ -128,7 +133,11 @@ impl IndexerWiring {
     /// the first refusal so the composition root can emit `health.startup.refused`
     /// and exit 2. SCAFFOLD — wired once the probe bodies land.
     pub fn probe_all(&self) -> Result<(), ProbeRefusal> {
-        capability_boundary_probe(self.index_store.as_ref(), self.identity_resolve.as_ref())?;
+        capability_boundary_probe(
+            &self.index_path,
+            self.index_store.as_ref(),
+            self.identity_resolve.as_ref(),
+        )?;
         probe_gauntlet(
             self.index_store.as_ref(),
             self.ingest_source.as_ref(),

@@ -625,12 +625,56 @@ fn indexer_is_signing_incapable_and_touches_no_local_store() {
     //
     // Universe (port-exposed): the indexer help verb-set (no sign/publish/add);
     // openlore.duckdb mtime/bytes (unchanged); index.duckdb (written).
-    todo!(
-        "DELIVER (slice-05): assert `openlore-indexer` help exposes no \
-         sign/publish/add verb; after an ingest pass the user's openlore.duckdb \
-         is byte-unchanged and only the separate index.duckdb is written \
-         (ADR-023 capability boundary; I-AV-5 behavioral layer)."
+    let env = TestEnv::fresh();
+
+    // -- Precondition: a TestEnv with a POPULATED user openlore.duckdb (the user's
+    // own claims). Seeding a REAL existing file makes the byte-unchanged witness
+    // load-bearing: the indexer must leave a populated store byte-identical, not
+    // merely never create an absent one. --
+    seed_user_openlore_duckdb(&env);
+    let user_store_before = snapshot_user_openlore_duckdb(&env);
+    assert!(
+        matches!(user_store_before, UserStoreSnapshot::Present { .. }),
+        "AV-5 precondition: the user openlore.duckdb must be populated before the \
+         ingest pass so the byte-unchanged witness is load-bearing"
     );
+
+    // -- Observable outcome 1: `openlore-indexer` exposes NO claim add / sign /
+    // publish verb — the help/usage surface lists only serve + ingest + stats
+    // (the indexer is signing-INCAPABLE by construction, ADR-023 / I-AV-5). --
+    assert_indexer_help_has_no_signing_verb(&env);
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass (wire ->
+    // probe -> use; the capability_boundary_probe runs FIRST) against a fake
+    // source hosting ONE valid signed claim by Priya + her pubkey seam. The pass
+    // writes the indexer's OWN index.duckdb and must NOT touch the user store. --
+    let priya = FixtureKeypair::for_did(PRIYA_DID);
+    let priya_pubkey_hex = hex_lower(&priya.verifying_key.0);
+    let source = FakeIngestServer::start(vec![fixture_ingest_valid_signed()]);
+    let outcome = run_openlore_indexer_with_source(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        &[(PRIYA_DID, &priya_pubkey_hex)],
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0 (the capability_boundary_probe passes \
+         for the SEPARATE index.duckdb + the resolve-only identity). stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // -- Observable outcome 3: only the SEPARATE index.duckdb (the indexer's own
+    // store) is written — the ingest pass persisted the verified attributed row,
+    // so the byte-unchanged witness below is not vacuously true. --
+    assert_index_duckdb_written(&env);
+
+    // -- Observable outcome 2: after the ingest pass, the user's openlore.duckdb
+    // is BYTE-unchanged (the indexer never opened or wrote it — it has NO handle
+    // to it). This is the load-bearing state-delta over the capability-boundary
+    // universe (DD-AV-10): {user openlore.duckdb bytes UNCHANGED, index.duckdb
+    // WRITTEN, indexer help verb-set has NO sign/publish/add}. --
+    assert_user_openlore_duckdb_unchanged(&env, &user_store_before);
 }
 
 /// AV-6 (US-AV-001 wire -> probe -> use; ADR-009/023): the indexer runs ALL four
