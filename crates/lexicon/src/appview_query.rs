@@ -199,7 +199,10 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize");
         let back: SearchQueryResponse = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(back, response, "the response DTO must round-trip byte-for-byte");
+        assert_eq!(
+            back, response,
+            "the response DTO must round-trip byte-for-byte"
+        );
         // The load-bearing anti-merging assertion: every result still carries a
         // non-empty author_did after the round-trip.
         for row in &back.results {
@@ -208,7 +211,11 @@ mod tests {
                 "every result row MUST carry a non-empty author_did (I-AV-2)"
             );
         }
-        assert_eq!(back.results.len(), 2, "two distinct-author rows stay TWO rows");
+        assert_eq!(
+            back.results.len(),
+            2,
+            "two distinct-author rows stay TWO rows"
+        );
     }
 
     /// The dimension keyword serializes to the XRPC query-param contract

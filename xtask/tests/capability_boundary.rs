@@ -174,13 +174,11 @@ fn cli_linking_the_http_query_server_is_violation() {
 fn cli_linking_an_indexer_store_or_ingest_crate_is_violation() {
     for forbidden in ["adapter-index-store", "adapter-atproto-ingest"] {
         let mut w = compliant_workspace();
-        w.deps
-            .get_mut("cli")
-            .unwrap()
-            .insert(forbidden.to_string());
+        w.deps.get_mut("cli").unwrap().insert(forbidden.to_string());
         let v = check_indexer_capability_boundary(&w);
         assert!(
-            v.iter().any(|x| x.package == "cli" && x.forbidden == forbidden),
+            v.iter()
+                .any(|x| x.package == "cli" && x.forbidden == forbidden),
             "cli → {forbidden} (an indexer-side crate) MUST be a violation (I-3), got: {v:?}"
         );
     }

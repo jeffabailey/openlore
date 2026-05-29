@@ -20,7 +20,10 @@ use crate::{IndexedClaim, NetworkSearchResult, SearchDimension};
 /// The PURE anti-merging-preserving search composition. Groups by author (or by
 /// subject under an author per `dimension`); NEVER merges authors; computes
 /// `distinct_author_count` from the rows. Deterministic; no I/O.
-pub fn compose_results(_rows: Vec<IndexedClaim>, _dimension: SearchDimension) -> NetworkSearchResult {
+pub fn compose_results(
+    _rows: Vec<IndexedClaim>,
+    _dimension: SearchDimension,
+) -> NetworkSearchResult {
     // SCAFFOLD: true — behavior driven by the Phase 02+ anti-merging search scenarios.
     todo!("compose_results — driven by the anti-merging search acceptance scenarios (WD-103)")
 }

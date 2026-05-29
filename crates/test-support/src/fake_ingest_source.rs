@@ -77,7 +77,10 @@ impl FakeIngestSource {
     /// via the REAL crypto (`RawRecordSpec::into_raw_record`). The adversarial
     /// postures are hosted VERBATIM (the gate, not the fake, rejects them).
     pub fn with_specs(specs: Vec<RawRecordSpec>) -> Self {
-        let records = specs.into_iter().map(RawRecordSpec::into_raw_record).collect();
+        let records = specs
+            .into_iter()
+            .map(RawRecordSpec::into_raw_record)
+            .collect();
         Self::with_records(records)
     }
 
@@ -235,6 +238,9 @@ mod tests {
         let source = FakeIngestSource::with_specs(fixture_ingest_adversarial_set_plus_one_valid());
         let _ = source.enumerate("https://relay.example.test").await;
         assert_eq!(source.enumerate_call_count(), 1);
-        assert_eq!(source.requested_sources(), vec!["https://relay.example.test"]);
+        assert_eq!(
+            source.requested_sources(),
+            vec!["https://relay.example.test"]
+        );
     }
 }

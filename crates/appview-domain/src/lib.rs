@@ -139,4 +139,3 @@ pub struct NetworkSearchResult {
     /// Near-match suggestion for an empty result (US-AV-002 Ex 4).
     pub suggestion: Option<String>,
 }
-

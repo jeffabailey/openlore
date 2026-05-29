@@ -66,7 +66,9 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use claim_domain::{Cid, Did, SignatureBlock, SignedClaim, SigningKey, VerificationKey, VerifyingKey};
+use claim_domain::{
+    Cid, Did, SignatureBlock, SignedClaim, SigningKey, VerificationKey, VerifyingKey,
+};
 use ed25519_dalek::{SigningKey as DalekSigningKey, VerifyingKey as DalekVerifyingKey};
 use ports::{
     IdentityError, IdentityPort, IdentityResolvePort, PeerInfo, ProbeOutcome, ResolveError,
@@ -357,10 +359,7 @@ impl IdentityResolvePort for AtProtoDidAdapter {
         todo!("AtProtoDidAdapter::<IdentityResolvePort>::probe — Earned-Trust resolve probe (step 03-04, ADR-026)")
     }
 
-    async fn resolve_verification_key(
-        &self,
-        _did: &Did,
-    ) -> Result<VerificationKey, ResolveError> {
+    async fn resolve_verification_key(&self, _did: &Did) -> Result<VerificationKey, ResolveError> {
         // SCAFFOLD: true — resolve the PLC DID document, locate the
         // `#org.openlore.application` verification method, and call the PURE
         // `claim_domain::decode_ed25519_multibase` on its `publicKeyMultibase`

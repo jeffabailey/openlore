@@ -210,7 +210,10 @@ impl RawRecordSpec {
             object: object.to_string(),
             predicate: "embodiesPhilosophy".to_string(),
             confidence,
-            evidence: vec![format!("https://example.test/evidence/{}", short_tag(subject))],
+            evidence: vec![format!(
+                "https://example.test/evidence/{}",
+                short_tag(subject)
+            )],
             composed_at: "2026-05-26T12:00:00Z".to_string(),
             references: Vec::new(),
             source_pds: "https://pds.example.test".to_string(),
@@ -386,7 +389,11 @@ pub fn corpus_reproducible_builds_nine_authors() -> Vec<RawRecordSpec> {
     let authors_subjects = [
         (PRIYA_DID, "github:bazelbuild/bazel", 0.82),
         (RACHEL_DID, "github:NixOS/nixpkgs", 0.88),
-        ("did:plc:author3-test", "github:reproducible-builds/repro", 0.74),
+        (
+            "did:plc:author3-test",
+            "github:reproducible-builds/repro",
+            0.74,
+        ),
         ("did:plc:author4-test", "github:gentoo/gentoo", 0.66),
         ("did:plc:author5-test", "github:guix/guix", 0.91),
         ("did:plc:author6-test", "github:debian/debian", 0.58),
@@ -418,14 +425,46 @@ pub fn corpus_deno_dependency_pinning_two_authors() -> Vec<RawRecordSpec> {
 /// framing is the load-bearing assertion).
 pub fn corpus_priya_eight_claims_six_subjects() -> Vec<RawRecordSpec> {
     let entries = [
-        ("github:bazelbuild/bazel", "org.openlore.philosophy.reproducible-builds", 0.82),
-        ("github:bazelbuild/bazel", "org.openlore.philosophy.hermetic-builds", 0.79),
-        ("github:facebook/buck2", "org.openlore.philosophy.dependency-pinning", 0.68),
-        ("github:NixOS/nixpkgs", "org.openlore.philosophy.reproducible-builds", 0.85),
-        ("github:pantsbuild/pants", "org.openlore.philosophy.incremental-builds", 0.61),
-        ("github:please-build/please", "org.openlore.philosophy.hermetic-builds", 0.57),
-        ("github:ninja-build/ninja", "org.openlore.philosophy.minimal-tooling", 0.73),
-        ("github:NixOS/nixpkgs", "org.openlore.philosophy.dependency-pinning", 0.64),
+        (
+            "github:bazelbuild/bazel",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        ),
+        (
+            "github:bazelbuild/bazel",
+            "org.openlore.philosophy.hermetic-builds",
+            0.79,
+        ),
+        (
+            "github:facebook/buck2",
+            "org.openlore.philosophy.dependency-pinning",
+            0.68,
+        ),
+        (
+            "github:NixOS/nixpkgs",
+            "org.openlore.philosophy.reproducible-builds",
+            0.85,
+        ),
+        (
+            "github:pantsbuild/pants",
+            "org.openlore.philosophy.incremental-builds",
+            0.61,
+        ),
+        (
+            "github:please-build/please",
+            "org.openlore.philosophy.hermetic-builds",
+            0.57,
+        ),
+        (
+            "github:ninja-build/ninja",
+            "org.openlore.philosophy.minimal-tooling",
+            0.73,
+        ),
+        (
+            "github:NixOS/nixpkgs",
+            "org.openlore.philosophy.dependency-pinning",
+            0.64,
+        ),
     ];
     entries
         .iter()
@@ -439,11 +478,27 @@ pub fn corpus_priya_eight_claims_six_subjects() -> Vec<RawRecordSpec> {
 pub fn corpus_bazel_five_distinct_authors() -> Vec<RawRecordSpec> {
     let subject = "github:bazelbuild/bazel";
     let entries = [
-        (PRIYA_DID, "org.openlore.philosophy.reproducible-builds", 0.82),
+        (
+            PRIYA_DID,
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        ),
         (SVEN_DID, "org.openlore.philosophy.hermetic-builds", 0.71),
-        ("did:plc:tobias-test", "org.openlore.philosophy.dependency-pinning", 0.66),
-        ("did:plc:aanya-test", "org.openlore.philosophy.incremental-builds", 0.58),
-        ("did:plc:lena-test", "org.openlore.philosophy.minimal-tooling", 0.74),
+        (
+            "did:plc:tobias-test",
+            "org.openlore.philosophy.dependency-pinning",
+            0.66,
+        ),
+        (
+            "did:plc:aanya-test",
+            "org.openlore.philosophy.incremental-builds",
+            0.58,
+        ),
+        (
+            "did:plc:lena-test",
+            "org.openlore.philosophy.minimal-tooling",
+            0.74,
+        ),
     ];
     entries
         .iter()
@@ -471,8 +526,7 @@ fn encode_ed25519_z6mk(pubkey_bytes: &[u8]) -> String {
 /// algorithm is short + well-known, and a fixture builder is exactly the right
 /// place for a self-contained deterministic encoder.
 fn base58btc_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 58] =
-        b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
     // Count leading zero bytes → encoded as leading '1's.
     let leading_zeros = input.iter().take_while(|&&b| b == 0).count();
@@ -580,7 +634,11 @@ mod tests {
             .iter()
             .map(|s| s.author_did.clone())
             .collect();
-        assert_eq!(nine.len(), 9, "reproducible-builds corpus = 9 distinct authors");
+        assert_eq!(
+            nine.len(),
+            9,
+            "reproducible-builds corpus = 9 distinct authors"
+        );
 
         let deno = corpus_deno_dependency_pinning_two_authors();
         assert_eq!(deno.len(), 2, "deno corpus = 2 records (priya + sven)");

@@ -135,6 +135,69 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-29T03:37:51Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T03:38:41Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T03:44:55Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T03:52:32Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "BLOCKED_BY_DEPENDENCY: frozen AT appview_core.rs ends with two /// outer-doc-comments (L392-399, L403-408) lacking a following item -> 'expected item after doc comment'; appview_core BROKEN (0/9 RED). indexer_ingest 7/7 + appview_search 22/22 are cleanly RED (todo!). Forbidden to edit AT files; reporting DISTILL gap.",
+      "t": "2026-05-29T03:52:32Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "GREEN",
+      "s": "SKIPPED",
+      "d": "BLOCKED_BY_DEPENDENCY: DD-AV-13 gate cannot reach 38/38 RED. test-support compiles (36 unit tests pass incl 9 new fixture/fake sanity tests); 3 [[test]] targets registered + openlore-indexer dev-dep added; indexer_ingest 7/7 + appview_search 22/22 cleanly RED (todo!). appview_core BROKEN: frozen AT ends with /// doc-comments lacking a following item. Fix = ///->// on appview_core.rs L392-408 (scratch-verified, zero scenarios changed); requires orchestrator/DISTILL authority to edit the frozen AT.",
+      "t": "2026-05-29T03:53:10Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "COMMIT",
+      "s": "SKIPPED",
+      "d": "BLOCKED_BY_DEPENDENCY: per TIMEOUT_INSTRUCTION, do not commit a partial harness that leaves an AT BROKEN. Holding commit until the appview_core.rs ///->// DISTILL defect is resolved by orchestrator/DISTILL authority; harness+fixtures+registrations are staged-ready and sound.",
+      "t": "2026-05-29T03:53:10Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T04:01:01Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T04:01:01Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T04:01:30Z"
     }
   ]
 }

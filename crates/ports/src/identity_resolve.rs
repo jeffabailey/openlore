@@ -65,8 +65,5 @@ pub trait IdentityResolvePort: Send + Sync {
     /// Resolve `did` into the Ed25519 [`VerificationKey`] the pure `verify`
     /// consumes (decoded from the PLC DID-doc `z6Mk...`, ADR-026). Read-only;
     /// no signing capability is implied or exposed.
-    async fn resolve_verification_key(
-        &self,
-        did: &Did,
-    ) -> Result<VerificationKey, ResolveError>;
+    async fn resolve_verification_key(&self, did: &Did) -> Result<VerificationKey, ResolveError>;
 }

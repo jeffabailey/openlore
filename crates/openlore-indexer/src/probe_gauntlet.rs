@@ -84,6 +84,11 @@ pub fn probe_gauntlet(
     //   check_probe("ingest_source", ingest_src.probe())?;
     //   check_probe("identity_resolve", resolve.probe())?;
     // is enabled when the adapters' probe bodies stop being `todo!()` scaffolds.
-    let _ = (index_store, ingest_src, resolve, check_probe as fn(_, _) -> _);
+    let _ = (
+        index_store,
+        ingest_src,
+        resolve,
+        check_probe as fn(_, _) -> _,
+    );
     todo!("probe_gauntlet — wire → probe → use across the indexer adapters (Phase 03/04)")
 }
