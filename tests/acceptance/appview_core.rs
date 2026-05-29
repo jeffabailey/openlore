@@ -267,11 +267,76 @@ fn appview_indexed_author_is_derived_from_signed_payload_property() {
     //
     // Universe: claim.author_did vs record.raw_payload.author (port-exposed
     // boundary values).
-    todo!(
-        "DELIVER (slice-05): forall record indexed by ingest_decision: \
-         IndexedClaim.author_did == record.raw_payload.author (byte-equal); \
-         attribution derived from the signed payload, not source_pds."
-    );
+    //
+    //     forall (record, key) where ingest_decision indexes:
+    //         IndexedClaim.author_did == record.raw_payload.unsigned.author_did
+    //
+    // STRENGTHENING (source_pds independence — criteria 2 & 3): attribution is
+    // covered by the signature, so it comes from the SIGNED payload, NEVER from
+    // the unsigned/forgeable provenance (`source_pds`). We PIN this by re-running
+    // the SAME signed payload with a DIFFERENT `source_pds`: the gate must index
+    // the SAME author_did. A mutant that sourced attribution from `source_pds`
+    // (or substituted/dropped the author between the signed payload and the row)
+    // fails LOUDLY here. Only the Index arm carries an author to assert (the
+    // Reject arm carries a RejectReason, never a claim, by type) — so this is a
+    // property over `arbitrary_raw_records()` filtered to records that VERIFY.
+    let mut runner = TestRunner::default();
+    runner
+        .run(&arbitrary_raw_records(), |(record, key)| {
+            match appview_domain::ingest_decision(&record, &key) {
+                IngestOutcome::Index(claim) => {
+                    // (1) Attribution is DERIVED byte-equal from the SIGNED
+                    // payload's author — never asserted out-of-band.
+                    prop_assert_eq!(
+                        &claim.author_did,
+                        &record.raw_payload.unsigned.author_did,
+                        "indexed author_did must equal the signed payload author byte-for-byte \
+                         (data-models.md Invariant: attribution derived from the signed payload)"
+                    );
+
+                    // (2)+(3) source_pds INDEPENDENCE: forge a DIFFERENT
+                    // provenance on the SAME signed payload; the gate must still
+                    // index the SAME author. The forgeable `source_pds` can NEVER
+                    // be the attribution source, and the author can NEVER be
+                    // substituted or dropped between the signed payload and the
+                    // indexed row.
+                    let mut forged = record.clone();
+                    forged.source_pds =
+                        format!("https://forged-relay.example.test/{}", record.source_pds);
+                    prop_assert_ne!(
+                        &forged.source_pds,
+                        &record.source_pds,
+                        "the forged provenance must actually differ (test self-check)"
+                    );
+                    match appview_domain::ingest_decision(&forged, &key) {
+                        IngestOutcome::Index(forged_claim) => {
+                            prop_assert_eq!(
+                                &forged_claim.author_did,
+                                &claim.author_did,
+                                "indexed author_did must be INDEPENDENT of source_pds: the same \
+                                 signed payload under a forged provenance must index the SAME \
+                                 author (attribution comes from the SIGNED bytes, never the \
+                                 unsigned/forgeable source_pds)"
+                            );
+                        }
+                        IngestOutcome::Reject(reason) => {
+                            // Changing only the unsigned provenance must NEVER
+                            // flip a verified record's gate decision.
+                            prop_assert!(
+                                false,
+                                "forging source_pds (an unsigned field) must NOT change the gate \
+                                 decision: a record that indexed now Reject(ed) ({reason:?})"
+                            );
+                        }
+                    }
+                }
+                // The Reject arm carries no author to derive — out of scope for
+                // this derivation property (covered by AVC-1's gate iff).
+                IngestOutcome::Reject(_reason) => {}
+            }
+            Ok(())
+        })
+        .unwrap();
 }
 
 // =============================================================================
