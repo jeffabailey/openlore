@@ -36,6 +36,16 @@ use ports::{
     SearchDimension,
 };
 
+/// The bounded connect timeout (KPI-5 / WD-116): an unreachable indexer that does
+/// NOT promptly refuse (an unrouted/blackhole address) MUST fail fast to
+/// `Unreachable` rather than blocking the CLI indefinitely. This is the
+/// bounded-wall-clock guarantee AV-13 (the cardinal local-first gate) depends on.
+const INDEXER_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The bounded total request timeout: caps the whole round-trip (connect + send +
+/// receive) so a stalled-mid-response indexer also fails fast to `Unreachable`.
+const INDEXER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// CLI-side `IndexQueryPort` adapter over HTTP/XRPC to the configured indexer
 /// URL (ADR-027). Holds the reqwest client + the configured indexer base URL. No
 /// signing/identity field exists (read-only by construction).
@@ -57,9 +67,25 @@ impl HttpIndexQueryAdapter {
     }
 
     /// Construct the CLI-side query adapter for a configured indexer base URL.
+    ///
+    /// The reqwest client carries a BOUNDED connect + total-request timeout
+    /// (KPI-5 / WD-116): an unreachable indexer — whether it refuses promptly OR
+    /// silently blackholes the connect — fails fast to [`IndexQueryError::
+    /// Unreachable`] rather than hanging the CLI indefinitely. This is the
+    /// bounded-wall-clock guarantee the cardinal local-first gate (AV-13) rests
+    /// on; a misconfigured client (no timeout) would let `search` hang forever on
+    /// an unrouted address, breaking the soft-degradation contract.
     pub fn for_url(base_url: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(INDEXER_CONNECT_TIMEOUT)
+            .timeout(INDEXER_REQUEST_TIMEOUT)
+            .build()
+            // A builder failure here is a static-config bug (TLS backend init),
+            // not a runtime condition; fall back to a defaulted client so the
+            // adapter still constructs (degenerate, but never panics startup).
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            client: reqwest::Client::new(),
+            client,
             base_url: base_url.into(),
         }
     }
@@ -240,6 +266,68 @@ mod tests {
         assert!(
             matches!(err, IndexQueryError::BadResponse { .. }),
             "an empty author_did over the wire is a BadResponse; got {err:?}"
+        );
+    }
+
+    /// RED_UNIT for AV-13 (the cardinal local-first gate, KPI-5 / WD-116): the
+    /// bounded-wall-clock guarantee. A `search` against an indexer that ACCEPTS
+    /// the connection but NEVER responds (a stalled / blackhole indexer) MUST
+    /// fail fast to the SOFT, NON-FATAL `IndexQueryError::Unreachable` within the
+    /// bounded request timeout — it must NOT hang the CLI indefinitely.
+    ///
+    /// This is the load-bearing proof for the timeout added to [`for_url`]:
+    /// WITHOUT `.timeout(...)`, the accept-but-never-respond connection would
+    /// block forever (this test would hang). The closed-port AT path (a refused
+    /// connect) resolves promptly even without a timeout, so the timeout's
+    /// correctness is proven HERE, against a connection that connects but stalls.
+    #[tokio::test]
+    async fn search_against_a_stalled_indexer_fails_fast_to_unreachable() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::Instant;
+
+        // A localhost listener that ACCEPTS connections but never writes a
+        // response (it just holds the accepted socket open + drains a little of
+        // the request). connect() succeeds; the POST send/recv stalls — so the
+        // bounded REQUEST timeout (not the connect timeout) is what must fire.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stall listener");
+        let addr = listener.local_addr().expect("read stall listener addr");
+        let _stall = std::thread::spawn(move || {
+            // Accept one connection and hold it open without ever responding.
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut sink = [0u8; 1024];
+                // Drain a little so the client's send completes; then stall
+                // forever (never write a response). Holding `stream` keeps the
+                // socket open so the client waits on the response, not on a RST.
+                let _ = stream.read(&mut sink);
+                std::thread::sleep(std::time::Duration::from_secs(120));
+                drop(stream);
+            }
+        });
+
+        let adapter = HttpIndexQueryAdapter::for_url(format!("http://{addr}"));
+
+        let started = Instant::now();
+        let result = adapter
+            .search(SearchDimension::Object, "org.openlore.philosophy.x", None)
+            .await;
+        let elapsed = started.elapsed();
+
+        // SOFT, NON-FATAL: a stalled indexer maps to Unreachable (WD-116), never a
+        // panic and never a hang.
+        assert!(
+            matches!(result, Err(IndexQueryError::Unreachable { .. })),
+            "a stalled indexer must map to the SOFT Unreachable outcome; got {result:?}"
+        );
+        // Bounded wall-clock: the call returned well within the request-timeout +
+        // slack ceiling — it did NOT hang indefinitely. (Without `.timeout(...)`
+        // on the client, this would never return and the test would hang.)
+        assert!(
+            elapsed < INDEXER_REQUEST_TIMEOUT + std::time::Duration::from_secs(5),
+            "the bounded request timeout must fire promptly (≈{:?}); the search took {:?} \
+             — an unbounded client would hang forever (KPI-5 / WD-116)",
+            INDEXER_REQUEST_TIMEOUT,
+            elapsed
         );
     }
 }

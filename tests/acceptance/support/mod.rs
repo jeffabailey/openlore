@@ -5720,3 +5720,244 @@ pub fn assert_index_duckdb_written(env: &TestEnv) {
         path.display()
     );
 }
+
+// =============================================================================
+// Slice-05 AV-13 (CARDINAL RELEASE GATE `local_first_preserved`; KPI-5) harness
+// =============================================================================
+//
+// The AV-13 disprover drives offline authoring + soft search degradation with
+// the discovery INDEXER deliberately UNREACHABLE. Unlike the AV-8..11 happy
+// paths (which spawn a REAL `openlore-indexer serve` over a seeded index), AV-13
+// points the CLI's `OPENLORE_INDEXER_URL` at a CLOSED localhost port (bound then
+// dropped — the OS refuses the connect promptly) so:
+//   - `claim add` / offline `claim publish` / `graph query --object` succeed
+//     (the indexer is NOT probed at CLI startup, WD-116);
+//   - `openlore search --object` degrades softly (the local-only message + the
+//     `graph query` pointer), exits NON-fatally, and does NOT hang (the adapter's
+//     bounded connect/request timeout returns `Unreachable` promptly).
+//
+// The user's OWN PDS (`env.pds`, the in-process `FakePds`) stays reachable — the
+// cardinal KPI-5 claim is that an unreachable DISCOVERY indexer must not break
+// authoring/publish; the user's own infrastructure is a separate concern.
+
+/// A CLOSED localhost port: a `TcpListener` is bound to `127.0.0.1:0`, the
+/// OS-assigned port is read back, then the listener is DROPPED so the port is
+/// freed. A connect to the (now unbound) port is REFUSED promptly — the
+/// fastest, most deterministic "unreachable indexer" seam (no live serve
+/// process, no hang). Mirrors the slice-05 `IndexerHandle` shape but with NO
+/// running server: `indexer_url()` points at a port nothing listens on.
+///
+/// The bounded-wall-clock guarantee (DESIGN_CONTEXT 3) lives in the adapter's
+/// connect/request timeout; this seam just guarantees the address is a refused
+/// connect by construction so the AT is deterministic and fast.
+pub struct ClosedIndexerPort {
+    url: String,
+}
+
+impl ClosedIndexerPort {
+    /// Reserve then release a localhost port, returning a handle whose
+    /// `indexer_url()` is a `http://127.0.0.1:<freed-port>` that nothing listens
+    /// on (connect refused).
+    pub fn reserve() -> Self {
+        use std::net::TcpListener;
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("ClosedIndexerPort: bind 127.0.0.1:0");
+        let port = listener
+            .local_addr()
+            .expect("ClosedIndexerPort: read local_addr")
+            .port();
+        // Drop the listener — the OS frees the port; subsequent connects are
+        // refused (no server is ever started on it).
+        drop(listener);
+        Self {
+            url: format!("http://127.0.0.1:{port}"),
+        }
+    }
+
+    /// The `http://127.0.0.1:<freed-port>` URL the CLI's `OPENLORE_INDEXER_URL`
+    /// is pointed at — a closed port (connect refused).
+    pub fn indexer_url(&self) -> &str {
+        &self.url
+    }
+}
+
+/// Run `openlore <args>` with the discovery indexer UNREACHABLE (the
+/// `OPENLORE_INDEXER_URL` points at `closed`'s freed port) feeding `stdin_lines`
+/// (newline-joined) on stdin. The user's OWN PDS (`env.pds`) stays reachable so
+/// the authoring/publish path works — the cardinal KPI-5 claim is that an
+/// unreachable DISCOVERY indexer must not block `claim add` / `claim publish` /
+/// `graph query` (WD-116). Mirrors [`run_openlore_with_stdin`]'s clean-env
+/// discipline + adds the closed-indexer seam.
+///
+/// Used by AV-13 sub-assertions 1-3 (the offline authoring verbs): the indexer
+/// URL is set so we PROVE the CLI does not probe it at startup — `claim add`
+/// must still exit 0.
+pub fn run_openlore_unreachable_indexer(
+    env: &TestEnv,
+    args: &[&str],
+    closed: &ClosedIndexerPort,
+    stdin_lines: &str,
+) -> CliOutcome {
+    use std::io::Write;
+
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        // The user's OWN PDS stays reachable (the authoring/publish path needs
+        // it). The thing under test is the DISCOVERY indexer being down.
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        // The discovery indexer is UNREACHABLE: a closed/freed localhost port.
+        // If the CLI hard-probed it at startup, `claim add` would fail — the
+        // cardinal WD-116 disprover.
+        .env("OPENLORE_INDEXER_URL", closed.indexer_url())
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+    if !stdin_lines.is_empty() {
+        let stdin = child.stdin.as_mut().expect("stdin pipe");
+        stdin
+            .write_all(stdin_lines.as_bytes())
+            .expect("write stdin");
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// The bounded-wall-clock outcome of a `search` against an UNREACHABLE indexer:
+/// the captured [`CliOutcome`] plus `hung` — whether the invocation EXCEEDED the
+/// bound (a connect-timeout, not an indefinite block). Port-exposed name:
+/// `search.hung`.
+pub struct BoundedSearchOutcome {
+    pub outcome: CliOutcome,
+    /// True iff the search did NOT return within the wall-clock bound — i.e. it
+    /// hung. The AV-13 gate asserts this is FALSE (the adapter's bounded
+    /// connect/request timeout returns `Unreachable` promptly).
+    pub hung: bool,
+}
+
+/// Run `openlore search <args>` against an UNREACHABLE indexer (`closed`'s freed
+/// port) under a BOUNDED wall-clock, returning the outcome + a `hung` flag.
+///
+/// The search subprocess is spawned on a worker thread and joined with a
+/// `bound`-second deadline; if it has not returned by then we record `hung =
+/// true` (and kill nothing — a genuinely hung subprocess would be the bug AV-13
+/// disproves). A refused connect through the adapter's bounded
+/// connect/request timeout resolves in well under the bound, so a healthy soft
+/// degradation records `hung = false`. The user's own PDS stays reachable
+/// (same clean-env discipline as [`run_openlore_search`], minus a live indexer).
+pub fn run_openlore_search_bounded_unreachable(
+    env: &TestEnv,
+    args: &[&str],
+    closed: &ClosedIndexerPort,
+    bound: std::time::Duration,
+) -> BoundedSearchOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let home = env.home.clone();
+    let did = env.identity.author_did().to_string();
+    let seed = env.identity.seed_hex.clone();
+    let pds = env.pds.endpoint_url().to_string();
+    let indexer = closed.indexer_url().to_string();
+    let owned_args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+
+    let (tx, rx) = std::sync::mpsc::channel::<CliOutcome>();
+    std::thread::spawn(move || {
+        let output = Command::new(&bin)
+            .args(&owned_args)
+            .env_clear()
+            .env("OPENLORE_HOME", &home)
+            .env("OPENLORE_DID", &did)
+            .env("OPENLORE_KEY_SEED_HEX", &seed)
+            .env("OPENLORE_PDS_ENDPOINT", &pds)
+            .env("OPENLORE_INDEXER_URL", &indexer)
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap_or_else(|e| panic!("spawn openlore at {bin:?}: {e}"));
+        let _ = tx.send(CliOutcome {
+            status: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    });
+
+    match rx.recv_timeout(bound) {
+        Ok(outcome) => BoundedSearchOutcome {
+            outcome,
+            hung: false,
+        },
+        Err(_) => BoundedSearchOutcome {
+            // The subprocess did not return within the bound — it hung. Surface a
+            // placeholder outcome; the AV-13 gate asserts `hung == false`.
+            outcome: CliOutcome {
+                status: -1,
+                stdout: String::new(),
+                stderr: format!(
+                    "search did not return within the {:?} bound — the indexer connect HUNG \
+                     (no bounded timeout); KPI-5 / WD-116 violation",
+                    bound
+                ),
+            },
+            hung: true,
+        },
+    }
+}
+
+/// Recover the just-signed claim's CID from a `claim add` stdout. The
+/// `claim_add` verb prints `Computing claim CID <cid>` right before persistence
+/// (the load-bearing marker WS-6 keys on); this parses the CID token so AV-13
+/// can publish the exact record without hard-coding a CID. Distinct from
+/// [`published_cid_from_stdout`] (which keys on the publish-success block) —
+/// AV-13 declines publishing in `claim add`, so the publish block is absent.
+pub fn claim_add_cid_from_stdout(stdout: &str) -> String {
+    let marker = "Computing claim CID ";
+    let idx = stdout.find(marker).unwrap_or_else(|| {
+        panic!("could not locate 'Computing claim CID <cid>' marker in stdout:\n{stdout}")
+    });
+    let tail = &stdout[idx + marker.len()..];
+    let cid = tail
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    assert!(
+        !cid.is_empty(),
+        "found 'Computing claim CID' marker but no CID followed it in stdout:\n{stdout}"
+    );
+    cid
+}
+
+/// Snapshot the LOCAL claims store as a sorted set of file names under
+/// `{home}/.local/share/openlore/claims/`. Port-exposed observable surface:
+/// `storage.local_claim_store.file_set`. Used by AV-13 to assert the local
+/// store is mutated ONLY by the authoring verbs, never by `search` (the set is
+/// unchanged across a search invocation).
+pub fn local_claim_file_set(env: &TestEnv) -> Vec<String> {
+    let dir = env.claims_dir();
+    let mut names: Vec<String> = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect(),
+        // Absence == the empty set (no local claim written yet).
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
+}

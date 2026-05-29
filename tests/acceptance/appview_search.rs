@@ -549,12 +549,142 @@ fn local_first_preserved() {
     // soft Unreachable contract — clear local-only message + graph-query pointer);
     // search.hung (false). The local store mutated only by the authoring verbs,
     // never by search.
-    todo!(
-        "DELIVER (slice-05): RELEASE GATE. With indexer UNREACHABLE + network \
-         disabled: assert `claim add`, offline `claim publish`, `graph query \
-         --object` ALL exit 0, AND `openlore search --object` prints a clear \
-         local-only message + `graph query` pointer, exits non-fatally, no hang \
-         (KPI-5 / I-AV-3; the indexer is not probed at CLI startup, WD-116)."
+    let env = TestEnv::initialized();
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    // -- Precondition: the discovery indexer is UNREACHABLE — `OPENLORE_INDEXER_URL`
+    // points at a CLOSED localhost port (bound then dropped; connect refused). The
+    // user's OWN PDS stays reachable (the authoring/publish path needs it). If the
+    // CLI hard-probed the indexer at startup, `claim add` would fail — the cardinal
+    // WD-116 disprover. --
+    let closed = ClosedIndexerPort::reserve();
+
+    // === Sub-assertion 1: `openlore claim add` succeeds (exit 0; composed/stored
+    // LOCALLY) with the indexer UNREACHABLE — the indexer is NOT probed at CLI
+    // startup (WD-116). `\n` confirms the sign prompt; `N` declines publishing so
+    // the claim is persisted LOCALLY without an outbound publish yet (the publish
+    // is sub-assertion 2). ===
+    let claim_add = run_openlore_unreachable_indexer(
+        &env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            object,
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            "0.86",
+        ],
+        &closed,
+        "\nN\n",
+    );
+    assert_eq!(
+        claim_add.status, 0,
+        "KPI-5 (sub-1): `openlore claim add` MUST exit 0 with the indexer UNREACHABLE \
+         (the indexer is NOT probed at CLI startup, WD-116). stdout: {} stderr: {}",
+        claim_add.stdout, claim_add.stderr
+    );
+    // The claim landed in the LOCAL store (the authoring verb mutated it). Capture
+    // the local file set so sub-assertion 4 can prove `search` never mutates it.
+    let local_after_add = local_claim_file_set(&env);
+    assert!(
+        !local_after_add.is_empty(),
+        "KPI-5 (sub-1): `claim add` must have composed/stored the claim LOCALLY (the \
+         claims dir is non-empty); stdout: {}",
+        claim_add.stdout
+    );
+    // The CID the authoring verb signed (printed in `Computing claim CID <cid>`) —
+    // published next.
+    let cid = claim_add_cid_from_stdout(&claim_add.stdout);
+
+    // === Sub-assertion 2: offline `openlore claim publish <cid>` succeeds (exit 0).
+    // "Offline" = the discovery indexer is down; publish posts to the user's OWN PDS
+    // (reachable), proving an unreachable indexer never blocks publish (WD-116). ===
+    let claim_publish =
+        run_openlore_unreachable_indexer(&env, &["claim", "publish", &cid], &closed, "");
+    assert_eq!(
+        claim_publish.status, 0,
+        "KPI-5 (sub-2): offline `openlore claim publish {cid}` MUST exit 0 with the \
+         indexer UNREACHABLE (publish goes to the user's own PDS; the indexer is not \
+         in the publish path). stdout: {} stderr: {}",
+        claim_publish.stdout, claim_publish.stderr
+    );
+
+    // === Sub-assertion 3: `openlore graph query --object` succeeds (exit 0, LOCAL
+    // graph) with the indexer UNREACHABLE — the LOCAL read path links no indexer
+    // code. ===
+    let graph_query = run_openlore_unreachable_indexer(
+        &env,
+        &["graph", "query", "--object", object],
+        &closed,
+        "",
+    );
+    assert_eq!(
+        graph_query.status, 0,
+        "KPI-5 (sub-3): `openlore graph query --object {object}` MUST exit 0 (LOCAL \
+         graph) with the indexer UNREACHABLE. stdout: {} stderr: {}",
+        graph_query.stdout, graph_query.stderr
+    );
+
+    // === Sub-assertion 4: `openlore search --object` prints a clear local-only
+    // message pointing at `graph query`, exits NON-fatally (the soft Unreachable
+    // outcome, ADR-027/WD-116), and does NOT hang (bounded wall-clock — a connect
+    // timeout, not an indefinite block). ===
+    let bounded = run_openlore_search_bounded_unreachable(
+        &env,
+        &["search", "--object", object],
+        &closed,
+        std::time::Duration::from_secs(30),
+    );
+    // search.hung == false: the adapter's bounded connect/request timeout returns
+    // `Unreachable` promptly (a refused/closed port resolves in well under the
+    // 30s bound). A hang here is the KPI-5 / WD-116 violation AV-13 disproves.
+    assert!(
+        !bounded.hung,
+        "KPI-5 (sub-4): `openlore search` MUST NOT hang against an unreachable indexer \
+         (bounded wall-clock). stderr: {}",
+        bounded.outcome.stderr
+    );
+    let search = bounded.outcome;
+    // search.exit_code is NON-fatal (the soft Unreachable contract is exit 0).
+    assert_eq!(
+        search.status, 0,
+        "KPI-5 (sub-4): `openlore search --object` MUST exit NON-fatally (soft \
+         Unreachable, ADR-027/WD-116). stdout: {} stderr: {}",
+        search.stdout, search.stderr
+    );
+    // The clear local-only message + the `graph query` pointer (Q-DELIVER-AV-7: the
+    // degraded mode POINTS to the local graph query — the simplest contract).
+    assert!(
+        search.stdout.contains("Network index unavailable"),
+        "KPI-5 (sub-4): `search` must print a clear 'Network index unavailable' \
+         local-only message:\n{}",
+        search.stdout
+    );
+    assert!(
+        search
+            .stdout
+            .contains(&format!("openlore graph query --object {object}")),
+        "KPI-5 (sub-4): the soft-degradation message must POINT at the LOCAL \
+         `openlore graph query --object {object}`:\n{}",
+        search.stdout
+    );
+
+    // === The local store is mutated ONLY by the authoring verbs, never by search:
+    // the local claims file set is UNCHANGED across the `search` invocation (search
+    // is a read-only DISCOVERY verb; it links no indexer store/ingest code and
+    // touches no local store). ===
+    let local_after_search = local_claim_file_set(&env);
+    assert_eq!(
+        local_after_search, local_after_add,
+        "KPI-5: the LOCAL claim store must be mutated ONLY by the authoring verbs, \
+         never by `search` — the file set changed across the search invocation \
+         (before: {local_after_add:?}, after: {local_after_search:?})"
     );
 }
 
