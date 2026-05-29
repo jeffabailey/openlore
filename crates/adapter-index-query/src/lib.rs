@@ -33,7 +33,7 @@ use lexicon::{
 };
 use ports::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw, ProbeOutcome,
-    SearchDimension,
+    ProbeRefusalReason, SearchDimension,
 };
 
 /// The bounded connect timeout (KPI-5 / WD-116): an unreachable indexer that does
@@ -102,13 +102,32 @@ impl HttpIndexQueryAdapter {
 #[async_trait]
 impl IndexQueryPort for HttpIndexQueryAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // SOFT at startup: an unreachable indexer is informational, NOT a refusal
-        // (KPI-5). We do not perform a network round-trip in the probe — the
-        // graceful-degradation contract is exercised by `search` itself, which
-        // maps a connection failure to the SOFT `Unreachable` outcome. The
-        // adapter is always "ready" in the probe sense (its readiness is the
-        // CONFIGURED URL being present, which it is by construction).
-        ProbeOutcome::Ok
+        // SOFT at startup (DESIGN §6.3 / KPI-5 / WD-116): an unreachable indexer is
+        // INFORMATIONAL, NOT a refusal — the CLI MUST start (and `claim add` /
+        // offline `claim publish` / `graph query` MUST succeed) WITHOUT a reachable
+        // indexer. So the probe performs NO network round-trip; reachability is the
+        // SOFT `Unreachable` outcome `search` returns at use time, never a startup
+        // refusal. A CLI that hard-refused on an unreachable indexer is the cardinal
+        // regression AV-13 disproves — the INVERTED check.
+        //
+        // The real, deterministic readiness work this probe DOES do is the
+        // reachable-SHAPE contract (DESIGN §6.3(a)): the decode path this adapter
+        // will run over the wire correctly PRESERVES per-row `author_did` on a
+        // well-formed response AND REFUSES a response that dropped it (anti-merging
+        // across the transport, I-AV-2 / D-D36). This is an in-process self-probe
+        // (no I/O) — a regression in the decode contract is a genuine startup-worthy
+        // refusal, while an unreachable indexer stays SOFT.
+        match probe_decode_shape_contract() {
+            Ok(()) => ProbeOutcome::Ok,
+            Err(detail) => ProbeOutcome::Refused {
+                reason: ProbeRefusalReason::LexiconInvalid,
+                detail,
+                structured: serde_json::json!({
+                    "contract": "anti_merging_across_transport",
+                    "check": "decode_shape",
+                }),
+            },
+        }
     }
 
     async fn search(
@@ -207,6 +226,69 @@ fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryErr
     })
 }
 
+/// The reachable-SHAPE self-probe (DESIGN §6.3(a); step 04-06). Exercise the
+/// decode path this adapter runs over the wire against two sentinel responses —
+/// WITHOUT any network I/O (reachability is SOFT, never a startup refusal):
+///
+///   1. a well-formed response decodes Ok and PRESERVES per-row `author_did`
+///      (anti-merging across the transport, I-AV-2 / D-D36);
+///   2. a response that DROPPED `author_did` is refused as `BadResponse` (the
+///      client's attribution gate is intact).
+///
+/// Returns `Err(detail)` if the decode contract regressed (a genuine
+/// startup-worthy refusal — the wire-shape gate is broken), else `Ok(())`.
+fn probe_decode_shape_contract() -> Result<(), String> {
+    fn sentinel_row(author_did: &str) -> SearchResultDto {
+        SearchResultDto {
+            author_did: author_did.to_string(),
+            cid: "bafyprobe".to_string(),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.appview.__probe__".to_string(),
+            confidence: 0.82,
+            composed_at: "2026-05-28T00:00:00Z".to_string(),
+            verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
+            evidence: Vec::new(),
+        }
+    }
+
+    // (1) A well-formed response preserves per-row author_did across the decode.
+    let well_formed = SearchQueryResponse {
+        results: vec![sentinel_row("did:plc:priya-test")],
+        distinct_author_count: 1,
+        total_claims: 1,
+        suggestion: None,
+    };
+    let decoded = decode_response(well_formed).map_err(|err| {
+        format!("reachable-shape probe: a well-formed searchClaims response failed to decode: {err:?}")
+    })?;
+    match decoded.results.first() {
+        Some(row) if row.author_did == Did("did:plc:priya-test".to_string()) => {}
+        other => {
+            return Err(format!(
+                "reachable-shape probe: decode dropped/altered per-row author_did \
+                 (anti-merging across the transport violated; I-AV-2/D-D36); got {other:?}"
+            ));
+        }
+    }
+
+    // (2) A response that DROPPED author_did must be refused as BadResponse — the
+    // client's attribution gate is intact.
+    let dropped = SearchQueryResponse {
+        results: vec![sentinel_row("")],
+        distinct_author_count: 0,
+        total_claims: 1,
+        suggestion: None,
+    };
+    match decode_response(dropped) {
+        Err(IndexQueryError::BadResponse { .. }) => Ok(()),
+        other => Err(format!(
+            "reachable-shape probe: a dropped-author response must decode to a \
+             BadResponse (the attribution gate must reject it; I-AV-2/D-D36); got {other:?}"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! DELIVER inner loop (step 04-01): the decode contract — the lexicon
@@ -214,6 +296,8 @@ mod tests {
     //! per-row `author_did` (I-AV-2), and a row with an empty `author_did` is a
     //! `BadResponse`. Pure-function unit (no network); the live transport is
     //! exercised end-to-end by AV-8.
+    //!
+    //! Step 04-06 adds the SOFT reachable-shape probe contract (DESIGN §6.3).
 
     use super::*;
 
@@ -266,6 +350,45 @@ mod tests {
         assert!(
             matches!(err, IndexQueryError::BadResponse { .. }),
             "an empty author_did over the wire is a BadResponse; got {err:?}"
+        );
+    }
+
+    /// The reachable-shape self-probe (DESIGN §6.3(a)) accepts when the decode
+    /// contract holds — a well-formed response preserves author_did AND a
+    /// dropped-author response is refused. No network I/O.
+    #[test]
+    fn probe_decode_shape_contract_accepts_when_the_decode_gate_holds() {
+        assert!(
+            probe_decode_shape_contract().is_ok(),
+            "the reachable-shape decode contract must hold (preserve author_did; \
+             refuse a dropped-author response)"
+        );
+    }
+
+    /// The INVERTED/degradation check (DESIGN §6.3(b) / KPI-5 / WD-116): a
+    /// CONFIGURED-but-UNREACHABLE indexer is SOFT — the probe returns `Ok`, NOT a
+    /// startup refusal. The probe does NO network round-trip; reachability is the
+    /// SOFT `Unreachable` outcome `search` returns at USE time. A CLI that hard-
+    /// refused here on an unreachable indexer is the cardinal AV-13 regression.
+    #[test]
+    fn probe_is_soft_for_a_configured_but_unreachable_indexer() {
+        // A configured URL pointing at a port nothing listens on (unreachable).
+        let adapter = HttpIndexQueryAdapter::for_url("http://127.0.0.1:1");
+        assert!(
+            matches!(adapter.probe(), ProbeOutcome::Ok),
+            "an unreachable indexer must be SOFT — the probe must NOT refuse startup \
+             (KPI-5 / WD-116 inverted check)"
+        );
+    }
+
+    /// The degenerate (no configured URL) adapter is ALSO SOFT — the bootstrap
+    /// composition-root anchor must never hard-refuse startup either.
+    #[test]
+    fn probe_is_soft_for_the_unconfigured_adapter() {
+        let adapter = HttpIndexQueryAdapter::new();
+        assert!(
+            matches!(adapter.probe(), ProbeOutcome::Ok),
+            "the unconfigured adapter must be SOFT (never a startup refusal)"
         );
     }
 

@@ -37,8 +37,8 @@ use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use lexicon::{SearchQueryRequest, SearchQueryResponse};
-use ports::ProbeOutcome;
+use lexicon::{SearchDimensionDto, SearchQueryRequest, SearchQueryResponse};
+use ports::{ProbeOutcome, ProbeRefusalReason};
 use tokio::net::TcpListener;
 
 /// The query handler the composition root wires: a pure-by-contract
@@ -68,10 +68,46 @@ pub struct XrpcQueryServer {
 }
 
 impl XrpcQueryServer {
-    /// Earned-Trust probe — see ADR-009. The server is ready iff its listener is
-    /// bound (it is, by construction, since `bind` returns only on a successful
-    /// bind). A bound listener is the readiness signal the gauntlet trusts.
+    /// Earned-Trust probe — see ADR-009 §6.3. The server's listener is bound by
+    /// construction (`bind` returns only on a successful bind). The load-bearing
+    /// substrate-lie check is the ANTI-MERGING-ACROSS-THE-TRANSPORT contract
+    /// (I-AV-2 / D-D36): the response shape this server serves MUST carry a
+    /// non-empty `author_did` on EVERY result row. A response that dropped
+    /// attribution is a contract violation caught HERE at probe time, before the
+    /// server accepts traffic — not trusted, PROVEN.
+    ///
+    /// The probe is a SELF-PROBE: it dispatches a sentinel `SearchQueryRequest`
+    /// through the SAME wired [`QueryHandler`] the accept loop uses and asserts
+    /// every returned row carries a non-empty `author_did`. An empty result is
+    /// vacuously safe (no row dropped attribution). The handler is pure-by-contract
+    /// and side-effect-free over a read-only store, so the sentinel dispatch is
+    /// safe to run at startup within the 250ms probe budget.
     pub fn probe(&self) -> ProbeOutcome {
+        // A sentinel dimension query through the wired handler — the SAME path the
+        // accept loop dispatches. We do not assert on the CONTENT (the index may be
+        // empty); we assert the SHAPE invariant: no returned row drops author_did.
+        let sentinel = SearchQueryRequest {
+            dimension: SearchDimensionDto::Object,
+            value: "org.openlore.appview.__probe__".to_string(),
+            cid: None,
+        };
+        let response = (self.handler)(sentinel);
+        for (index, row) in response.results.iter().enumerate() {
+            if row.author_did.trim().is_empty() {
+                return ProbeOutcome::Refused {
+                    reason: ProbeRefusalReason::LexiconInvalid,
+                    detail: format!(
+                        "searchClaims response row {index} dropped author_did \
+                         (anti-merging across the transport violated; I-AV-2/D-D36)"
+                    ),
+                    structured: serde_json::json!({
+                        "contract": "anti_merging_across_transport",
+                        "violation": "empty_author_did",
+                        "row_index": index,
+                    }),
+                };
+            }
+        }
         ProbeOutcome::Ok
     }
 
@@ -191,4 +227,84 @@ fn internal_error(message: &str) -> Response<Full<Bytes>> {
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(Full::new(Bytes::from(message.to_string())))
         .expect("static response is well-formed")
+}
+
+#[cfg(test)]
+mod tests {
+    //! DELIVER inner loop (step 04-06): the author_did-present self-probe — the
+    //! anti-merging-across-the-transport contract (I-AV-2 / D-D36 / DESIGN §6.3).
+    //! The probe dispatches a sentinel request through the wired handler and
+    //! refuses if ANY returned row drops `author_did`. Pure (no socket I/O on the
+    //! probe path); the live transport is exercised end-to-end by AV-14.
+
+    use super::*;
+    use lexicon::SearchResultDto;
+    use std::net::SocketAddr;
+
+    fn row(author_did: &str) -> SearchResultDto {
+        SearchResultDto {
+            author_did: author_did.to_string(),
+            cid: "bafyprobe".to_string(),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.reproducible-builds".to_string(),
+            confidence: 0.82,
+            composed_at: "2026-05-28T00:00:00Z".to_string(),
+            verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
+            evidence: vec!["https://example.org/e1".to_string()],
+        }
+    }
+
+    /// Bind a server on an ephemeral localhost port over a handler that returns
+    /// `rows`, so `probe()` can dispatch its sentinel through the SAME handler.
+    fn server_serving(rows: Vec<SearchResultDto>) -> XrpcQueryServer {
+        let addr: SocketAddr = "127.0.0.1:0".parse().expect("ephemeral addr parses");
+        let handler: QueryHandler = Arc::new(move |_req: SearchQueryRequest| SearchQueryResponse {
+            distinct_author_count: rows.len() as u32,
+            total_claims: rows.len() as u32,
+            results: rows.clone(),
+            suggestion: None,
+        });
+        XrpcQueryServer::bind(addr, handler).expect("bind ephemeral query server")
+    }
+
+    /// The author_did-present probe ACCEPTS a handler whose response carries a
+    /// non-empty `author_did` on every row (the contract holds — Earned Trust).
+    #[tokio::test]
+    async fn probe_accepts_a_response_with_author_did_present_on_every_row() {
+        let server = server_serving(vec![row("did:plc:priya-test"), row("did:plc:rachel-test")]);
+        assert!(
+            matches!(server.probe(), ProbeOutcome::Ok),
+            "a response carrying author_did on every row must probe Ok"
+        );
+    }
+
+    /// An EMPTY result is vacuously safe (no row dropped attribution) — the probe
+    /// asserts the SHAPE invariant, not that the index is populated.
+    #[tokio::test]
+    async fn probe_accepts_an_empty_result() {
+        let server = server_serving(Vec::new());
+        assert!(
+            matches!(server.probe(), ProbeOutcome::Ok),
+            "an empty result drops no attribution; the probe must accept it"
+        );
+    }
+
+    /// The load-bearing substrate-lie check: a handler that would serve a row with
+    /// a DROPPED (empty) `author_did` is REFUSED at probe time (anti-merging across
+    /// the transport violated; I-AV-2 / D-D36) — the contract is PROVEN, not trusted.
+    #[tokio::test]
+    async fn probe_refuses_a_response_that_dropped_author_did() {
+        let server = server_serving(vec![row("did:plc:priya-test"), row("   ")]);
+        match server.probe() {
+            ProbeOutcome::Refused { reason, .. } => assert_eq!(
+                reason,
+                ProbeRefusalReason::LexiconInvalid,
+                "a dropped author_did must refuse with the lexicon-contract reason"
+            ),
+            ProbeOutcome::Ok => {
+                panic!("a response that dropped author_did must be REFUSED (I-AV-2/D-D36)")
+            }
+        }
+    }
 }

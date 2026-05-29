@@ -716,12 +716,59 @@ fn search_succeeds_with_indexer_localhost() {
     // non-empty + attributed (every row has author_did + [verified]); the
     // transport reached the localhost serve port (a result was returned, not the
     // Unreachable degradation).
-    todo!(
-        "DELIVER (slice-05): RELEASE GATE / B1. With a REAL `openlore-indexer \
-         serve` on an ephemeral localhost port + indexer_url pointed at it, run \
-         `openlore search --object <philosophy>`; assert exit 0, the CLI reached \
-         the real server (not the Unreachable path), and rendered attributed \
-         verified results (every wire result carried author_did; D-D36/WD-115)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a REAL `openlore-indexer serve` bound to an
+    // EPHEMERAL localhost port (`:0`, read back — DEVOPS open-q 8, parallel-safe)
+    // over an index.duckdb seeded with the US-AV-002 Ex1 reproducible-builds corpus
+    // (9 authors / 7 subjects). The CLI's indexer_url points at the serve port. The
+    // transport is the production B1 CLI<->indexer localhost HTTP/XRPC path. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Action: the object-dimension network read through the CLI driving port,
+    // over the REAL localhost transport. --
+    let outcome = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+
+    // 1. exit 0 (a valid network result over the real transport, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "B1 (AV-14): `openlore search --object` over the REAL localhost serve port \
+         must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // 2 + 3. The B1 RELEASE GATE: the transport REACHED the localhost serve port (a
+    // result was returned, NOT the SOFT `Unreachable` local-only degradation), the
+    // rendered result is NON-EMPTY + ATTRIBUTED (every row carries author_did +
+    // [verified]), and the wire carried per-result author_did end-to-end (D-D36 /
+    // WD-115 — a response dropping it is an anti-merging violation across the
+    // transport the client's `BadResponse` arm would catch).
+    assert_transport_reached_serve_port(&outcome.stdout);
+
+    // The wire preserved per-result author_did for the headline corpus — the
+    // attributed rows for (bazel, reproducible-builds) survive the transport, with
+    // both the unfollowed Priya (0.82) and the subscribed-corpus Rachel present, and
+    // NO merged/consensus row (anti-merging across the B1 transport, D-D36).
+    assert_network_result_preserves_attribution(
+        &outcome.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        9,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:rachel-test#org.openlore.application",
+        ],
     );
 }
 

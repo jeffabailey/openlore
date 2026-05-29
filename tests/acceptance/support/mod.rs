@@ -4431,6 +4431,49 @@ pub fn assert_public_data_banner_precedes_results(stdout: &str) {
     );
 }
 
+/// Assert a `search` stdout proves the B1 localhost transport was REACHED (AV-14;
+/// the positive complement to AV-13's soft-degradation): a result was returned
+/// over the real `openlore-indexer serve` localhost HTTP/XRPC port (NOT the SOFT
+/// `Unreachable` local-only degradation), the rendered result is NON-EMPTY +
+/// ATTRIBUTED (every attributed row carries `author_did:` AND `[verified]`), and
+/// the wire carried per-result `author_did` end-to-end (D-D36 / WD-115). The
+/// distinct rendered rows can only exist if the transport preserved each row's
+/// attribution.
+///
+/// Universe (port-exposed): the ABSENCE of the `Unreachable` degradation message
+/// (the transport reached the serve port); ≥1 attributed `author_did:` row; every
+/// such row carries `[verified]`.
+pub fn assert_transport_reached_serve_port(stdout: &str) {
+    // The transport was REACHED — NOT the SOFT `Unreachable` local-only
+    // degradation (AV-13's "Network index unavailable" soft path). A result over
+    // the wire is the positive complement: if `search` had degraded, it would
+    // print the local-only pointer instead of attributed rows.
+    assert!(
+        !stdout.contains("Network index unavailable"),
+        "B1 (AV-14): the search must REACH the real localhost serve port — it must \
+         NOT fall to the SOFT `Unreachable` local-only degradation:\n{stdout}"
+    );
+
+    // A NON-EMPTY attributed result: ≥1 row, each carrying `author_did:` (the wire
+    // preserved attribution end-to-end — D-D36). The transport returned a result.
+    let author_rows: Vec<&str> = stdout
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| line.starts_with("author_did:"))
+        .collect();
+    assert!(
+        !author_rows.is_empty(),
+        "B1 (AV-14): the transport must return a NON-EMPTY attributed result (≥1 \
+         `author_did:` row); a result was NOT returned over the localhost serve \
+         port:\n{stdout}"
+    );
+
+    // Every attributed row carries `[verified]` (the wire `verified_against` drives
+    // the universal marker; I-AV-1) AND the wire carried per-result `author_did`
+    // (anti-merging across the transport, D-D36). Reuse the universal-marker gate.
+    assert_verified_marker_is_universal(stdout);
+}
+
 /// Assert that none of the `adversarial_cids` appears anywhere in the index
 /// (`index.duckdb` rows) NOR in any `search` result — the verified-before-index
 /// reject contract (I-AV-1 / KPI-AV-3; AV-3). `env` locates the index store; the
