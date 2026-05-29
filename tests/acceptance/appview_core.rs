@@ -63,7 +63,8 @@
 use appview_domain::proptest_strategies::{arbitrary_indexed_claims, arbitrary_raw_records};
 use appview_domain::{IngestOutcome, SearchDimension};
 use chrono::{TimeZone, Utc};
-use claim_domain::{Cid, Did, VerifyingKey};
+use claim_domain::{Cid, Did, VerificationKey, VerifyingKey};
+use openlore_test_support::FixtureKeypair;
 use proptest::prelude::*;
 use proptest::test_runner::TestRunner;
 use std::collections::HashSet;
@@ -602,12 +603,105 @@ fn appview_two_identical_content_distinct_author_claims_compose_to_two_groups() 
     //
     // Universe: result.by_author author-set {priya, sven},
     // result.distinct_author_count (2), result.total_claims (2).
-    todo!(
-        "DELIVER (slice-05): compose two identical-(subject,object) claims by \
-         did:plc:priya-test (0.70) and did:plc:sven-test (0.65); assert \
-         by_author has both as separate single-row groups, \
-         distinct_author_count==2, total_claims==2; no merged-row shape exists."
+    //
+    // We obtain the two IndexedClaims through the REAL ingest gate over the
+    // canonical deno corpus (the SSOT for this pairing, materialized in
+    // `fixtures_ingest.rs` at 01-05): each `RawRecordSpec` -> `into_raw_record`
+    // -> `ingest_decision(record, resolved_key)` -> the `Index` arm's
+    // IndexedClaim. This keeps the example faithful to the worked US-AV-002
+    // Example 2 path (verified-before-index attribution DERIVED from the signed
+    // payload) rather than hand-rolling the claims, and the per-author DID is
+    // exactly what `compose_results` must keep separate.
+    let specs = openlore_test_support::corpus_deno_dependency_pinning_two_authors();
+    assert_eq!(specs.len(), 2, "the canonical deno corpus is exactly two records");
+
+    let claims: Vec<_> = specs
+        .into_iter()
+        .map(|spec| {
+            // Resolve the author's verification key from the deterministic
+            // fixture keypair keyed by the ROOT author DID (the same key that
+            // signs the record); bridge the 32 pubkey bytes into the ADR-026
+            // `VerificationKey` the gate consumes. Read the root DID off the
+            // spec BEFORE consuming it via `into_raw_record`.
+            let kp = FixtureKeypair::for_did(&spec.author_did);
+            let key = VerificationKey(kp.verifying_key.0.clone());
+            let record = spec.into_raw_record();
+            match appview_domain::ingest_decision(&record, &key) {
+                IngestOutcome::Index(claim) => claim,
+                IngestOutcome::Reject(reason) => {
+                    panic!("the canonical deno corpus must verify-and-index; got Reject({reason:?})")
+                }
+            }
+        })
+        .collect();
+
+    // The two indexed claims assert IDENTICAL content (same subject + object +
+    // predicate) under DISTINCT authors — the load-bearing anti-merging case.
+    assert_eq!(claims.len(), 2, "the deno corpus is exactly two records");
+    assert_eq!(
+        claims[0].subject, claims[1].subject,
+        "both claims share the SAME subject (github:denoland/deno)"
     );
+    assert_eq!(
+        claims[0].object, claims[1].object,
+        "both claims share the SAME object (dependency-pinning)"
+    );
+    assert_eq!(
+        claims[0].predicate, claims[1].predicate,
+        "both claims share the SAME predicate (embodiesPhilosophy)"
+    );
+    assert_ne!(
+        claims[0].author_did, claims[1].author_did,
+        "the two claims are by DISTINCT authors (priya vs sven)"
+    );
+    let priya = &claims[0].author_did; // corpus order: Priya@0.70 first
+    let sven = &claims[1].author_did; // Sven@0.65 second
+
+    let result = appview_domain::compose_results(claims.clone(), SearchDimension::Object);
+
+    // (Criterion 2) distinct_author_count == 2; total_claims == 2.
+    assert_eq!(
+        result.distinct_author_count, 2,
+        "distinct_author_count is a COUNT over the two attributed rows — never a merge (WD-103)"
+    );
+    assert_eq!(
+        result.total_claims, 2,
+        "total_claims == 2: neither identical-content row is dropped or merged away"
+    );
+
+    // (Criterion 1) by_author holds BOTH authors as SEPARATE single-row groups.
+    assert_eq!(
+        result.by_author.len(),
+        2,
+        "two identical-content claims by distinct authors stay in TWO separate groups"
+    );
+    let group_authors: HashSet<&claim_domain::Did> =
+        result.by_author.iter().map(|(did, _)| did).collect();
+    let expected_authors: HashSet<&claim_domain::Did> = [priya, sven].into_iter().collect();
+    assert_eq!(
+        group_authors, expected_authors,
+        "the by_author group keys must be EXACTLY {{priya, sven}} — both authors preserved, \
+         neither collapsed under a merged/foreign key"
+    );
+    for (group_did, group) in &result.by_author {
+        assert_eq!(
+            group.len(),
+            1,
+            "each author's group holds exactly its OWN single row (no merged multi-author row)"
+        );
+        assert_eq!(
+            &group[0].author_did, group_did,
+            "the row lives under its OWN author_did key — never a merged or faceless key"
+        );
+    }
+
+    // (Criterion 3) The NetworkSearchResult TYPE exposes NO merged-author row to
+    // assert against — `by_author` (the per-author structure) is the ONLY shape.
+    // The load-bearing absence (WD-103): there is no field or method on
+    // NetworkSearchResult that combines the two authors into one row. The fact
+    // that the only attribution-bearing surface above is `by_author` (a
+    // Vec<(Did, rows)>) is the type-level half of the three-layer anti-merging
+    // enforcement (DESIGN §10) — proven structurally by the assertions above.
 }
 
 // =============================================================================
