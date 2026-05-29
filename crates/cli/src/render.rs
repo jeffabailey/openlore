@@ -1668,9 +1668,9 @@ pub fn render_network_search_result(
         out.push('\n');
     }
 
-    out.push_str(&render_network_search_footer(distinct_network_author_count(
-        &result.results,
-    )));
+    out.push_str(&render_network_search_footer(
+        distinct_network_author_count(&result.results),
+    ));
     out
 }
 
@@ -1741,7 +1741,10 @@ fn render_network_search_footer(author_count: usize) -> String {
 /// Render the empty-network-result message (US-AV-002 Ex 4): name the queried
 /// value and, if the indexer reported a near-match suggestion, surface it. Exit
 /// stays 0 (a valid empty result — the verb does not error). Pure helper.
-fn render_empty_network_result(_dimension: SearchDimension, result: &NetworkSearchResultRaw) -> String {
+fn render_empty_network_result(
+    _dimension: SearchDimension,
+    result: &NetworkSearchResultRaw,
+) -> String {
     match &result.suggestion {
         Some(near) => format!("No network claims found. Did you mean {near}?\n"),
         None => "No network claims found.\n".to_string(),

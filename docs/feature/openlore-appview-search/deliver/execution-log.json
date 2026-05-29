@@ -758,6 +758,251 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-05-29T06:18:37Z"
+    },
+    {
+      "sid": "04-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:24:59Z"
+    },
+    {
+      "sid": "04-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:38:14Z"
+    },
+    {
+      "sid": "04-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:38:14Z"
+    },
+    {
+      "sid": "04-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:40:05Z"
+    },
+    {
+      "sid": "04-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:40:43Z"
+    },
+    {
+      "sid": "04-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:44:10Z"
+    },
+    {
+      "sid": "04-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:45:32Z"
+    },
+    {
+      "sid": "04-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: AV-9 passes with no production change (04-01 already preserves attribution). The render-layer anti-merging property render_network_search_emits_one_row_per_author_never_merges (render.rs:2578) is the AVC-2/AVC-5 generative invariant covering the two-author-same-object case (one output author_did row per input row, footer=distinct count, no merged row). A new unit test would duplicate it.",
+      "t": "2026-05-29T06:45:45Z"
+    },
+    {
+      "sid": "04-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:48:09Z"
+    },
+    {
+      "sid": "04-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:48:34Z"
+    },
+    {
+      "sid": "04-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:50:36Z"
+    },
+    {
+      "sid": "04-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:51:32Z"
+    },
+    {
+      "sid": "04-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: AV-10 pins existing 04-01 banner ordering; no production change made, so no new GREEN to decompose",
+      "t": "2026-05-29T06:52:20Z"
+    },
+    {
+      "sid": "04-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:53:05Z"
+    },
+    {
+      "sid": "04-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:53:28Z"
+    },
+    {
+      "sid": "04-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:56:19Z"
+    },
+    {
+      "sid": "04-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:58:02Z"
+    },
+    {
+      "sid": "04-04",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: no production change \u2014 AV-11 is a characterization test; the universal [verified] marker is pinned by AVC-7 (layer-2) + the 04-01 render proptest (render_network_search_emits_one_row_per_author_never_merges asserts every row carries [verified])",
+      "t": "2026-05-29T06:58:34Z"
+    },
+    {
+      "sid": "04-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:59:24Z"
+    },
+    {
+      "sid": "04-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T06:59:48Z"
+    },
+    {
+      "sid": "04-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:03:44Z"
+    },
+    {
+      "sid": "04-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:08:54Z"
+    },
+    {
+      "sid": "04-05",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:08:54Z"
+    },
+    {
+      "sid": "04-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:11:27Z"
+    },
+    {
+      "sid": "04-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:12:00Z"
+    },
+    {
+      "sid": "04-06",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:15:43Z"
+    },
+    {
+      "sid": "04-06",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:17:26Z"
+    },
+    {
+      "sid": "04-06",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:19:56Z"
+    },
+    {
+      "sid": "04-06",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:23:22Z"
+    },
+    {
+      "sid": "04-06",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:23:22Z"
+    },
+    {
+      "sid": "04-07",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:28:28Z"
+    },
+    {
+      "sid": "04-07",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:32:14Z"
+    },
+    {
+      "sid": "04-07",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:32:14Z"
+    },
+    {
+      "sid": "04-07",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:35:05Z"
+    },
+    {
+      "sid": "04-07",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-05-29T07:35:33Z"
     }
   ]
 }

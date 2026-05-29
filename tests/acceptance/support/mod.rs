@@ -4131,9 +4131,7 @@ fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::R
 
 /// The distinct author DIDs present in a corpus, each paired with its fixture
 /// keypair public-key hex (the slice-03 pubkey seam the indexer verifies against).
-fn corpus_pubkey_seams(
-    specs: &[openlore_test_support::RawRecordSpec],
-) -> Vec<(String, String)> {
+fn corpus_pubkey_seams(specs: &[openlore_test_support::RawRecordSpec]) -> Vec<(String, String)> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut seams: Vec<(String, String)> = Vec::new();
     for spec in specs {
@@ -4163,7 +4161,8 @@ pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> Indexe
 
     // 1. Host the records + run the one-shot ingest pass into the REAL index.duckdb.
     let source = FakeIngestServer::start(specs);
-    let ingest = run_openlore_indexer_with_source(env, &["ingest"], source.source_url(), &seam_refs);
+    let ingest =
+        run_openlore_indexer_with_source(env, &["ingest"], source.source_url(), &seam_refs);
     assert_eq!(
         ingest.status, 0,
         "seed_network_index: `openlore-indexer ingest` must exit 0. stdout: {} stderr: {}",
@@ -4236,9 +4235,7 @@ fn spawn_indexer_serve(env: &TestEnv, source: FakeIngestServer) -> IndexerHandle
             use std::io::Read;
             let _ = stderr.read_to_string(&mut err);
         }
-        panic!(
-            "openlore-indexer serve did not report a bound address on stdout; stderr: {err}"
-        );
+        panic!("openlore-indexer serve did not report a bound address on stdout; stderr: {err}");
     });
 
     IndexerHandle {
@@ -4339,11 +4336,7 @@ pub fn assert_network_result_preserves_attribution(
     // The content-frozen no-merge GUARANTEE footer legitimately says "No claims
     // are merged" + "not a community consensus" — those are the PROMISE, not a
     // merged row, so they are excluded from the merge-detection scan.
-    let banned_substrings = [
-        "authors agree",
-        "the network says",
-        "the network thinks",
-    ];
+    let banned_substrings = ["authors agree", "the network says", "the network thinks"];
     for line in stdout.lines() {
         let lowered = line.to_ascii_lowercase();
         for banned in &banned_substrings {
@@ -4504,10 +4497,7 @@ pub fn cid_from_search_row(stdout: &str, author_substr: &str, subject_substr: &s
             continue;
         }
         if subject_seen && trimmed.starts_with("cid:") {
-            return trimmed
-                .trim_start_matches("cid:")
-                .trim()
-                .to_string();
+            return trimmed.trim_start_matches("cid:").trim().to_string();
         }
     }
     panic!(
@@ -4557,14 +4547,18 @@ pub fn assert_show_inspects_verified_record(
     // The Signature-VERIFIED line names the author DID (the verification result the
     // indexer computed at ingest — no second path).
     assert!(
-        stdout.contains(&format!("Signature: VERIFIED against {expected_author_did}")),
+        stdout.contains(&format!(
+            "Signature: VERIFIED against {expected_author_did}"
+        )),
         "--show must print 'Signature: VERIFIED against {expected_author_did}' \
          (the stored ingest verification result; no second path):\n{stdout}"
     );
 
     // The CID-recomputed-matches line names the inspected cid.
     assert!(
-        stdout.contains(&format!("CID: {cid} (recomputed, matches published record)")),
+        stdout.contains(&format!(
+            "CID: {cid} (recomputed, matches published record)"
+        )),
         "--show must print 'CID: {cid} (recomputed, matches published record)' \
          (the cid the indexer recomputed + matched at ingest):\n{stdout}"
     );

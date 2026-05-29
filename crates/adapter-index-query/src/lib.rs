@@ -29,7 +29,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did, KeyId};
 use lexicon::{
-    SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto, SEARCH_CLAIMS_NSID,
+    SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
+    SEARCH_CLAIMS_NSID,
 };
 use ports::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw, ProbeOutcome,
@@ -206,12 +207,12 @@ fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryErr
             message: "a result row carried an empty author_did (I-AV-2 violation)".to_string(),
         });
     }
-    let composed_at: DateTime<Utc> = row
-        .composed_at
-        .parse()
-        .map_err(|err| IndexQueryError::BadResponse {
-            message: format!("parse composed_at {:?}: {err}", row.composed_at),
-        })?;
+    let composed_at: DateTime<Utc> =
+        row.composed_at
+            .parse()
+            .map_err(|err| IndexQueryError::BadResponse {
+                message: format!("parse composed_at {:?}: {err}", row.composed_at),
+            })?;
     Ok(NetworkResultRowRaw {
         author_did: Did(row.author_did),
         cid: Cid(row.cid),
@@ -260,7 +261,9 @@ fn probe_decode_shape_contract() -> Result<(), String> {
         suggestion: None,
     };
     let decoded = decode_response(well_formed).map_err(|err| {
-        format!("reachable-shape probe: a well-formed searchClaims response failed to decode: {err:?}")
+        format!(
+            "reachable-shape probe: a well-formed searchClaims response failed to decode: {err:?}"
+        )
     })?;
     match decoded.results.first() {
         Some(row) if row.author_did == Did("did:plc:priya-test".to_string()) => {}
@@ -321,7 +324,10 @@ mod tests {
     #[test]
     fn decode_preserves_author_did_per_row() {
         let body = SearchQueryResponse {
-            results: vec![dto_row("did:plc:priya-test"), dto_row("did:plc:rachel-test")],
+            results: vec![
+                dto_row("did:plc:priya-test"),
+                dto_row("did:plc:rachel-test"),
+            ],
             distinct_author_count: 2,
             total_claims: 2,
             suggestion: None,
@@ -330,8 +336,14 @@ mod tests {
         let raw = decode_response(body).expect("decode succeeds");
 
         assert_eq!(raw.results.len(), 2, "two rows stay two rows (no merge)");
-        assert_eq!(raw.results[0].author_did, Did("did:plc:priya-test".to_string()));
-        assert_eq!(raw.results[1].author_did, Did("did:plc:rachel-test".to_string()));
+        assert_eq!(
+            raw.results[0].author_did,
+            Did("did:plc:priya-test".to_string())
+        );
+        assert_eq!(
+            raw.results[1].author_did,
+            Did("did:plc:rachel-test".to_string())
+        );
         assert_eq!(raw.distinct_author_count, 2);
     }
 

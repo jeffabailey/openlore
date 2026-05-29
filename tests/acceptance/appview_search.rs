@@ -1094,8 +1094,11 @@ fn show_inspects_a_verified_record_with_signature_and_cid_match_lines() {
          --show. stdout: {} stderr: {}",
         listed.stdout, listed.stderr
     );
-    let priya_bazel_cid =
-        cid_from_search_row(&listed.stdout, "did:plc:priya-test", "github:bazelbuild/bazel");
+    let priya_bazel_cid = cid_from_search_row(
+        &listed.stdout,
+        "did:plc:priya-test",
+        "github:bazelbuild/bazel",
+    );
 
     // === Step 2 (the action under test): inspect that listed cid via `--show`. ===
     let shown = run_openlore_search(

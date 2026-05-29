@@ -35,8 +35,8 @@
 
 #![allow(dead_code)] // scaffold; the live search dispatch lands in Phase 03/04
 
-use anyhow::Result;
 use adapter_index_query::HttpIndexQueryAdapter;
+use anyhow::Result;
 use ports::{
     AuthorRelationship, IndexQueryError, IndexQueryPort, NetworkSearchResultRaw, SearchDimension,
 };
@@ -127,7 +127,11 @@ fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> 
 
 /// Shared dimension-search path. The walking skeleton wires only `--object`; the
 /// contributor/subject dimensions register the same shape in later steps (05-04+).
-fn run_dimension(wiring: &Wiring, dimension: SearchDimension, value: &str) -> Result<SearchOutcome> {
+fn run_dimension(
+    wiring: &Wiring,
+    dimension: SearchDimension,
+    value: &str,
+) -> Result<SearchOutcome> {
     let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
     if indexer_url.is_empty() {
         return Ok(degrade_to_local_only(value));

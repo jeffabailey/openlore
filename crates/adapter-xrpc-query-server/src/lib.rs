@@ -116,11 +116,10 @@ impl XrpcQueryServer {
     /// composition-root-wired query function. Must be called inside a tokio
     /// runtime (the indexer composition root provides one).
     pub fn bind(addr: SocketAddr, handler: QueryHandler) -> Result<Self, QueryServerError> {
-        let listener = std::net::TcpListener::bind(addr).map_err(|err| {
-            QueryServerError::BindFailed {
+        let listener =
+            std::net::TcpListener::bind(addr).map_err(|err| QueryServerError::BindFailed {
                 message: format!("bind {addr}: {err}"),
-            }
-        })?;
+            })?;
         listener
             .set_nonblocking(true)
             .map_err(|err| QueryServerError::BindFailed {
@@ -183,8 +182,8 @@ async fn route(
     handler: QueryHandler,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let path = req.uri().path().to_string();
-    let is_search = req.method() == Method::POST
-        && path == format!("/xrpc/{}", lexicon::SEARCH_CLAIMS_NSID);
+    let is_search =
+        req.method() == Method::POST && path == format!("/xrpc/{}", lexicon::SEARCH_CLAIMS_NSID);
     if !is_search {
         return Ok(not_found());
     }
