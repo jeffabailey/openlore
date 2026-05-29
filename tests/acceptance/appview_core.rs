@@ -825,11 +825,101 @@ fn appview_countered_claim_still_appears_with_annotation() {
     //
     // Universe: presence of C in flatten(by_author), C.counter_annotation
     // (Some), result.total_claims (unchanged by the counter relationship).
-    todo!(
-        "DELIVER (slice-05): given claim C countered by indexed claim K, \
-         compose_results returns C present with counter_annotation == \
-         Some(CounterRef{{by: K.author, cid: K.cid}}); C is NOT removed/filtered/ \
-         down-weighted (OD-AV-7 shown-not-applied)."
+    //
+    // We obtain BOTH IndexedClaims through the REAL ingest gate (same path as
+    // AVC-5): build C via `RawRecordSpec::valid`, index it to learn C.cid, then
+    // build K with a `Counters` reference at C.cid and index it too. This keeps
+    // the example faithful to the verified-before-index path (K's `references`
+    // are signed payload data) rather than hand-rolling the claims.
+    use claim_domain::ReferenceType;
+    use openlore_test_support::{FixtureKeypair, RawRecordSpec, PRIYA_DID, SVEN_DID};
+
+    fn index(spec: RawRecordSpec) -> appview_domain::IndexedClaim {
+        let kp = FixtureKeypair::for_did(&spec.author_did);
+        let key = VerificationKey(kp.verifying_key.0.clone());
+        let record = spec.into_raw_record();
+        match appview_domain::ingest_decision(&record, &key) {
+            IngestOutcome::Index(claim) => claim,
+            IngestOutcome::Reject(reason) => {
+                panic!("the AVC-6 fixture must verify-and-index; got Reject({reason:?})")
+            }
+        }
+    }
+
+    // Claim C — Priya asserts bazel embodies reproducible-builds (the countered claim).
+    let claim_c = index(RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        0.82,
+    ));
+
+    // Claim K — Sven counters C by referencing C's CID with ref_type=Counters.
+    let claim_k = index(
+        RawRecordSpec::valid(
+            SVEN_DID,
+            "github:bazelbuild/bazel",
+            "org.openlore.philosophy.reproducible-builds",
+            0.55,
+        )
+        .with_reference(ReferenceType::Counters, &claim_c.cid.0),
+    );
+
+    // Sanity on the fixture: K really references C with Counters (both indexed).
+    assert_ne!(
+        claim_c.author_did, claim_k.author_did,
+        "C and K are by DISTINCT authors (priya counters sven)"
+    );
+    assert!(
+        claim_k
+            .references
+            .iter()
+            .any(|r| r.ref_type == ReferenceType::Counters && r.cid == claim_c.cid),
+        "K must reference C.cid with ref_type=Counters (the countering relationship)"
+    );
+
+    let result = appview_domain::compose_results(
+        vec![claim_c.clone(), claim_k.clone()],
+        SearchDimension::Object,
+    );
+
+    // (Criterion 1) The counter is an ANNOTATION, never a filter/removal: BOTH C
+    // and K are still present; total_claims unchanged by the counter relationship.
+    assert_eq!(
+        result.total_claims, 2,
+        "total_claims is unchanged by the counter — C is NEVER removed/filtered (OD-AV-7)"
+    );
+    let flattened: Vec<&appview_domain::NetworkResultRow> = result
+        .by_author
+        .iter()
+        .flat_map(|(_did, rows)| rows.iter())
+        .collect();
+    let countered_row = flattened
+        .iter()
+        .find(|row| row.cid == claim_c.cid)
+        .expect("the countered claim C must STILL be present in compose_results' output");
+
+    // (Criterion 2) C's row carries the counter annotation pointing at K.
+    assert_eq!(
+        countered_row.counter_annotation,
+        Some(appview_domain::CounterRef {
+            referencing_cid: claim_k.cid.clone(),
+            counter_author: claim_k.author_did.clone(),
+            ref_type: ReferenceType::Counters,
+        }),
+        "C's counter_annotation must be Some(CounterRef{{ by: K.author, cid: K.cid, Counters }}) \
+         — the counter is SHOWN as an annotation, never applied (OD-AV-7 / WD-119)"
+    );
+
+    // (Criterion 3) The countering claim K itself is NOT annotated (it is the
+    // counter, not the countered) — the annotation is one-directional.
+    let counter_row = flattened
+        .iter()
+        .find(|row| row.cid == claim_k.cid)
+        .expect("the countering claim K is also present (nothing is filtered)");
+    assert_eq!(
+        counter_row.counter_annotation, None,
+        "K is the COUNTERING claim — it carries no counter_annotation itself"
     );
 }
 

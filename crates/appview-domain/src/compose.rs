@@ -17,7 +17,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IndexedClaim, NetworkResultRow, NetworkSearchResult, SearchDimension};
+use claim_domain::{Cid, ReferenceType};
+
+use crate::{CounterRef, IndexedClaim, NetworkResultRow, NetworkSearchResult, SearchDimension};
 
 /// The PURE anti-merging-preserving search composition. Groups by author; NEVER
 /// merges authors; computes `distinct_author_count` from the rows (a COUNT, never
@@ -33,7 +35,12 @@ pub fn compose_results(
     _dimension: SearchDimension,
 ) -> NetworkSearchResult {
     let total_claims = rows.len() as u32;
-    let by_author = group_by_author(rows.into_iter().map(to_result_row));
+    // OD-AV-7 (shown-not-applied): derive the counter/retract annotations BEFORE
+    // mapping rows. This is a pure annotation pass — it NEVER removes, filters, or
+    // down-weights any row (D-D40); the countered row is preserved and merely
+    // carries a `counter_annotation`.
+    let counters = annotate_counter_relationship(&rows);
+    let by_author = group_by_author(rows.into_iter().map(|claim| to_result_row(claim, &counters)));
     let distinct_author_count = by_author.len() as u32;
     NetworkSearchResult {
         by_author,
@@ -43,13 +50,68 @@ pub fn compose_results(
     }
 }
 
+/// PURE OD-AV-7 counter-relationship detection (D-D40). Scans the indexed claims
+/// for typed references with `ref_type ∈ {Counters, Retracts}` and builds the map
+/// `countered_cid -> CounterRef` describing WHICH countering claim annotates each
+/// countered row. This is the SHOWN-not-applied default (WD-119; mirrors slice-04
+/// WD-85): it produces an ANNOTATION and NOTHING else — it never removes, filters,
+/// or down-weights a row. The countered row stays in the result; only its
+/// `counter_annotation` is populated by [`to_result_row`].
+///
+/// A claim K "counters"/"retracts" claim C when K carries a [`ClaimReference`]
+/// whose `cid == C.cid` and whose `ref_type` is `Counters` or `Retracts`. The map
+/// records `CounterRef { referencing_cid: K.cid, counter_author: K.author_did,
+/// ref_type }`. References at CIDs that are NOT present in this result set still
+/// produce a map entry keyed by that CID — applying it is a lookup by the
+/// countered row's own CID, so an absent target simply never matches a row.
+///
+/// **Multi-counter tiebreak (determinism, 02-05):** if several claims counter the
+/// SAME C, the annotation is the one whose countering CID is lexicographically
+/// LOWEST. The choice is independent of input order, so the same input multiset
+/// always yields a byte-identical result (DESIGN 5.1 inv 4). A later `Retracts`
+/// and an earlier `Counters` on the same C are compared purely by countering CID;
+/// the lowest-CID counterer wins regardless of relationship kind.
+fn annotate_counter_relationship(claims: &[IndexedClaim]) -> BTreeMap<String, CounterRef> {
+    let mut by_countered: BTreeMap<String, CounterRef> = BTreeMap::new();
+    for counterer in claims {
+        for reference in &counterer.references {
+            if !is_counter_relationship(reference.ref_type) {
+                continue;
+            }
+            let candidate = CounterRef {
+                referencing_cid: counterer.cid.clone(),
+                counter_author: counterer.author_did.clone(),
+                ref_type: reference.ref_type,
+            };
+            let key = reference.cid.0.clone();
+            match by_countered.get(&key) {
+                // Deterministic tiebreak: keep the lowest countering CID.
+                Some(existing) if existing.referencing_cid.0 <= candidate.referencing_cid.0 => {}
+                _ => {
+                    by_countered.insert(key, candidate);
+                }
+            }
+        }
+    }
+    by_countered
+}
+
+/// The OD-AV-7 relationship kinds that annotate a countered row. `Counters` and
+/// its sibling `Retracts` are SHOWN, never applied; `Corrects` / `Supersedes` are
+/// not counter relationships and never annotate.
+fn is_counter_relationship(ref_type: ReferenceType) -> bool {
+    matches!(ref_type, ReferenceType::Counters | ReferenceType::Retracts)
+}
+
 /// Map one verified [`IndexedClaim`] to its [`NetworkResultRow`], carrying every
 /// load-bearing field through unchanged. `author_did` (anti-merging, WD-103) and
 /// `verified_against` (the `[verified]` marker, WD-104) are preserved byte-equal.
-/// `counter_annotation` is `None` at this step (the OD-AV-7 annotation lands in
-/// 02-08). The `relationship` is carried through; the CLI resolves the final
-/// per-user relationship at render time.
-fn to_result_row(claim: IndexedClaim) -> NetworkResultRow {
+/// `counter_annotation` is set from `counters` keyed by this row's OWN `cid` (the
+/// OD-AV-7 shown-not-applied annotation, 02-08) — `None` when nothing counters it.
+/// The `relationship` is carried through; the CLI resolves the final per-user
+/// relationship at render time.
+fn to_result_row(claim: IndexedClaim, counters: &BTreeMap<String, CounterRef>) -> NetworkResultRow {
+    let counter_annotation = annotation_for(&claim.cid, counters);
     NetworkResultRow {
         author_did: claim.author_did,
         cid: claim.cid,
@@ -59,8 +121,14 @@ fn to_result_row(claim: IndexedClaim) -> NetworkResultRow {
         confidence: claim.confidence,
         verified_against: claim.verified_against,
         relationship: claim.relationship,
-        counter_annotation: None,
+        counter_annotation,
     }
+}
+
+/// Look up the counter annotation for a row by its OWN `cid`. The annotation is
+/// SHOWN on the countered row; absent CIDs simply have no entry (returns `None`).
+fn annotation_for(cid: &Cid, counters: &BTreeMap<String, CounterRef>) -> Option<CounterRef> {
+    counters.get(&cid.0).cloned()
 }
 
 /// Group rows BY AUTHOR into a stable, deterministic per-author structure. Each
@@ -93,9 +161,9 @@ fn group_by_author(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AuthorRelationship;
+    use crate::{AuthorRelationship, CounterRef};
     use chrono::{TimeZone, Utc};
-    use claim_domain::{Cid, Did, KeyId};
+    use claim_domain::{Cid, ClaimReference, Did, KeyId, ReferenceType};
 
     /// Build a verified `IndexedClaim` for the in-crate compose tests. The CID is
     /// caller-supplied so identical-content-distinct-author rows stay DISTINCT
@@ -107,6 +175,20 @@ mod tests {
         object: &str,
         confidence: f64,
     ) -> IndexedClaim {
+        claim_with_refs(author, cid, subject, object, confidence, Vec::new())
+    }
+
+    /// Like [`claim`] but carrying typed `references` (for the OD-AV-7 counter /
+    /// retract annotation tests). A countering claim K references the countered
+    /// claim C's CID with `ref_type ∈ {Counters, Retracts}`.
+    fn claim_with_refs(
+        author: &str,
+        cid: &str,
+        subject: &str,
+        object: &str,
+        confidence: f64,
+        references: Vec<ClaimReference>,
+    ) -> IndexedClaim {
         IndexedClaim {
             author_did: Did(author.to_string()),
             cid: Cid(cid.to_string()),
@@ -117,9 +199,22 @@ mod tests {
             composed_at: Utc.with_ymd_and_hms(2026, 5, 26, 12, 0, 0).unwrap(),
             verified_against: KeyId(format!("{author}#org.openlore.application")),
             evidence: Vec::new(),
-            references: Vec::new(),
+            references,
             relationship: AuthorRelationship::NetworkUnfollowed,
         }
+    }
+
+    /// Find the single composed row whose `cid` matches `target` across all author
+    /// groups (the flattened presence-universe the OD-AV-7 tests assert over).
+    fn row_for<'a>(
+        result: &'a NetworkSearchResult,
+        target: &Cid,
+    ) -> Option<&'a NetworkResultRow> {
+        result
+            .by_author
+            .iter()
+            .flat_map(|(_did, rows)| rows.iter())
+            .find(|row| &row.cid == target)
     }
 
     /// Canonical single-author case: two claims by ONE author compose to ONE
@@ -248,8 +343,125 @@ mod tests {
             );
             assert_eq!(
                 row.counter_annotation, None,
-                "counter_annotation is None at this step (lands in 02-08)"
+                "no-counter rows carry no counter_annotation"
             );
+        }
+    }
+
+    /// OD-AV-7 (shown-not-applied): a claim C countered by an indexed claim K is
+    /// STILL present (`total_claims` unchanged, C in the output) and C's row
+    /// carries `counter_annotation == Some(CounterRef{ by: K.author, cid: K.cid,
+    /// Counters })`. The counter is an ANNOTATION, NEVER a filter/removal — a code
+    /// path that dropped C would fail the presence assertion below.
+    #[test]
+    fn counter_annotates_the_countered_row_and_never_removes_it() {
+        let c = claim("did:plc:priya", "cidC", "github:a/a", "phil.x", 0.82);
+        let k = claim_with_refs(
+            "did:plc:sven",
+            "cidK",
+            "github:a/a",
+            "phil.x",
+            0.55,
+            vec![ClaimReference {
+                ref_type: ReferenceType::Counters,
+                cid: Cid("cidC".to_string()),
+            }],
+        );
+
+        let result = compose_results(vec![c, k], SearchDimension::Object);
+
+        // Presence: neither row removed/filtered/down-weighted.
+        assert_eq!(result.total_claims, 2, "the counter never drops a row (OD-AV-7)");
+        let countered = row_for(&result, &Cid("cidC".to_string()))
+            .expect("the countered claim C is STILL present after annotation");
+        assert_eq!(
+            countered.counter_annotation,
+            Some(CounterRef {
+                referencing_cid: Cid("cidK".to_string()),
+                counter_author: Did("did:plc:sven".to_string()),
+                ref_type: ReferenceType::Counters,
+            }),
+            "C carries the counter annotation pointing at K (shown, not applied)"
+        );
+        // The countering claim K itself is NOT annotated (one-directional).
+        let counter = row_for(&result, &Cid("cidK".to_string()))
+            .expect("the countering claim K is also present");
+        assert_eq!(
+            counter.counter_annotation, None,
+            "K is the COUNTERING claim; it carries no annotation of its own"
+        );
+    }
+
+    /// `Retracts` is the sibling case of `Counters`: a retraction is also an
+    /// annotation on the retracted row, carrying `ref_type == Retracts`, and the
+    /// retracted row is likewise never removed.
+    #[test]
+    fn retract_annotates_the_retracted_row_with_retracts_ref_type() {
+        let c = claim("did:plc:priya", "cidC", "github:a/a", "phil.x", 0.82);
+        let k = claim_with_refs(
+            "did:plc:priya",
+            "cidK",
+            "github:a/a",
+            "phil.x",
+            0.10,
+            vec![ClaimReference {
+                ref_type: ReferenceType::Retracts,
+                cid: Cid("cidC".to_string()),
+            }],
+        );
+
+        let result = compose_results(vec![c, k], SearchDimension::Object);
+
+        assert_eq!(result.total_claims, 2, "a retraction never drops a row");
+        let retracted = row_for(&result, &Cid("cidC".to_string()))
+            .expect("the retracted claim C is STILL present");
+        assert_eq!(
+            retracted.counter_annotation,
+            Some(CounterRef {
+                referencing_cid: Cid("cidK".to_string()),
+                counter_author: Did("did:plc:priya".to_string()),
+                ref_type: ReferenceType::Retracts,
+            }),
+            "C carries a Retracts annotation (the sibling of Counters)"
+        );
+    }
+
+    /// References that are NOT counter/retract relationships (e.g. `Corrects`,
+    /// `Supersedes`), or references at CIDs not in the result set, leave every
+    /// row's `counter_annotation` as `None` — only the load-bearing OD-AV-7
+    /// relationships annotate.
+    #[test]
+    fn non_counter_references_leave_annotation_none() {
+        let c = claim("did:plc:priya", "cidC", "github:a/a", "phil.x", 0.82);
+        let k = claim_with_refs(
+            "did:plc:sven",
+            "cidK",
+            "github:a/a",
+            "phil.x",
+            0.55,
+            vec![
+                // A non-counter relationship at C — must NOT annotate.
+                ClaimReference {
+                    ref_type: ReferenceType::Corrects,
+                    cid: Cid("cidC".to_string()),
+                },
+                // A Counters reference at a CID NOT in the result — must NOT annotate.
+                ClaimReference {
+                    ref_type: ReferenceType::Counters,
+                    cid: Cid("cid-absent".to_string()),
+                },
+            ],
+        );
+
+        let result = compose_results(vec![c, k], SearchDimension::Object);
+
+        for (_did, rows) in &result.by_author {
+            for row in rows {
+                assert_eq!(
+                    row.counter_annotation, None,
+                    "neither Corrects nor a counter at an absent CID annotates any row"
+                );
+            }
         }
     }
 }
