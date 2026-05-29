@@ -34,7 +34,9 @@ use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
 use appview_domain::{
     compose_results, ingest_decision, IngestOutcome, NetworkSearchResult, RejectReason,
 };
-use lexicon::{SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto};
+use lexicon::{
+    ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
+};
 use ports::{ClockPort, IdentityResolvePort, IndexStorePort, IngestSourcePort, SearchDimension};
 
 use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
@@ -342,6 +344,14 @@ fn flat_attributed_rows(
                 .map(|r| r.composed_at.to_rfc3339())
                 .unwrap_or_default();
             let evidence = source.map(|r| r.evidence.clone()).unwrap_or_default();
+            // Carry the row's typed references over the wire (OD-AV-7): a countering
+            // claim K's `counters` reference to the countered claim C's CID lets the
+            // CLI render reconstruct C's `countered-by <K.cid> (by <K.author>)`
+            // annotation (shown, never applied — I-AV-9). The reference rows carry no
+            // author (anti-merging preserved); K's author is K's own `author_did`.
+            let references = source
+                .map(|r| r.references.iter().map(reference_to_dto).collect())
+                .unwrap_or_default();
             out.push(SearchResultDto {
                 author_did: composed_row.author_did.0.clone(),
                 cid: composed_row.cid.0.clone(),
@@ -352,10 +362,27 @@ fn flat_attributed_rows(
                 composed_at,
                 verified_against: composed_row.verified_against.0.clone(),
                 evidence,
+                references,
             });
         }
     }
     out
+}
+
+/// Map a typed `claim_domain::ClaimReference` to its wire DTO, using the lowercase
+/// `ref_type` token the `indexed_claim_references` CHECK domain + the on-disk
+/// artifact use (so the wire, the store, and the artifact agree without drift).
+fn reference_to_dto(reference: &claim_domain::ClaimReference) -> ClaimReferenceDto {
+    let ref_type = match reference.ref_type {
+        claim_domain::ReferenceType::Retracts => "retracts",
+        claim_domain::ReferenceType::Corrects => "corrects",
+        claim_domain::ReferenceType::Counters => "counters",
+        claim_domain::ReferenceType::Supersedes => "supersedes",
+    };
+    ClaimReferenceDto {
+        ref_type: ref_type.to_string(),
+        cid: reference.cid.0.clone(),
+    }
 }
 
 /// Map a wire DTO dimension to the domain `SearchDimension`.

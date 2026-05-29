@@ -1657,6 +1657,15 @@ pub fn render_network_search_result(
         return out;
     }
 
+    // OD-AV-7 (shown-not-applied; I-AV-9): the counter/retract relationships
+    // visible across the FLAT result set. Computed ONCE, up front, as a pure
+    // projection of the rows' typed `references` — a countering claim K's `counters`
+    // reference to a countered claim C's CID becomes a `countered-by <K.cid>
+    // (by <K.author>)` annotation on C's row. The counter is SHOWN, never APPLIED:
+    // no row is filtered, dropped, or down-weighted (mirrors slice-04 WD-85 / the
+    // federated `counter_relationships` precedent).
+    let counters = network_counter_relationships(&result.results);
+
     // Group the FLAT attributed rows per author (first-seen author order — stable,
     // hash-randomization-free). NEVER collapses two authors onto one row.
     for (author_did, rows) in &group_network_rows_by_author(&result.results) {
@@ -1667,7 +1676,7 @@ pub fn render_network_search_result(
             search_relationship_annotation(relationship)
         ));
         for row in rows {
-            out.push_str(&render_one_network_row(row));
+            out.push_str(&render_one_network_row(row, &counters));
         }
         // The discovery→federation funnel affordance — ONLY for unfollowed authors
         // (a subscribed peer already followed; I-AV-7).
@@ -1727,7 +1736,13 @@ fn render_contributor_network_trail_footer(rows: &[NetworkResultRowRaw]) -> Stri
 /// Render one FLAT attributed network row: the author DID, the numeric confidence
 /// + display-only bucket, evidence, the cid, and the `[verified]` marker (every
 /// row carries it by construction — verified-before-index, I-AV-1). Pure helper.
-fn render_one_network_row(row: &NetworkResultRowRaw) -> String {
+///
+/// OD-AV-7 (shown-not-applied; I-AV-9): when this row is COUNTERED by another
+/// claim K in the result set, its `countered-by <K.cid> (by <K.author>)`
+/// annotation is appended at the end of the block. The annotation is per-row
+/// METADATA derived from `counters`; it NEVER removes or down-weights the row —
+/// the countered claim is SHOWN with its counter, never filtered.
+fn render_one_network_row(row: &NetworkResultRowRaw, counters: &[NetworkCounterRelationship]) -> String {
     let mut out = String::new();
     out.push_str(&format!("  author_did: {}\n", row.author_did.0));
     out.push_str(&format!("    subject:    {}\n", row.subject));
@@ -1743,7 +1758,67 @@ fn render_one_network_row(row: &NetworkResultRowRaw) -> String {
     ));
     out.push_str(&format!("    cid:        {}\n", row.cid.0));
     out.push_str(&format!("    {VERIFIED_MARKER}\n"));
+    // OD-AV-7: the counter annotation(s) for THIS row (it is countered by K).
+    for annotation in network_counter_annotations_for(&row.cid.0, counters) {
+        out.push_str(&format!("    {annotation}\n"));
+    }
     out
+}
+
+/// One counter/retract relationship visible in the network result set: a
+/// countering claim K (`counter_cid`, authored by `counter_author`) that
+/// `counters`/`retracts` a countered claim C (`countered_cid`). The countered
+/// row's author is NOT captured here — the annotation lands on C's row and names
+/// K (the counterer); C's own attribution is its row's `author_did` (anti-merging
+/// preserved — this projection never separates a claim from its attribution).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkCounterRelationship {
+    counter_cid: String,
+    counter_author: String,
+    countered_cid: String,
+}
+
+/// Pure projection: every counter/retract relationship visible across the FLAT
+/// network rows. A row K participates when it carries a typed `Counters`/`Retracts`
+/// reference; the target C's CID is the reference's `cid`. K's author is K's own
+/// `author_did` (the wire carried K's `references` + `author_did` — OD-AV-7). The
+/// annotation lands on C by its CID, so C need not carry any reference itself.
+/// Mirrors the federated `counter_relationships` precedent at network scale.
+fn network_counter_relationships(rows: &[NetworkResultRowRaw]) -> Vec<NetworkCounterRelationship> {
+    let mut relationships = Vec::new();
+    for row in rows {
+        for reference in &row.references {
+            if !matches!(
+                reference.ref_type,
+                claim_domain::ReferenceType::Counters | claim_domain::ReferenceType::Retracts
+            ) {
+                continue;
+            }
+            relationships.push(NetworkCounterRelationship {
+                counter_cid: row.cid.0.clone(),
+                counter_author: row.author_did.0.clone(),
+                countered_cid: reference.cid.0.clone(),
+            });
+        }
+    }
+    relationships
+}
+
+/// The counter annotation line(s) for the row whose CID is `cid`: for every
+/// relationship that COUNTERS this row, emit `countered-by <K.cid> (by <K.author>)`
+/// — the counter SHOWN on the countered row (OD-AV-7 / I-AV-9). Pure helper over
+/// the precomputed relationships; sorted by countering CID for deterministic output.
+fn network_counter_annotations_for(
+    cid: &str,
+    counters: &[NetworkCounterRelationship],
+) -> Vec<String> {
+    let mut matching: Vec<&NetworkCounterRelationship> =
+        counters.iter().filter(|r| r.countered_cid == cid).collect();
+    matching.sort_by(|a, b| a.counter_cid.cmp(&b.counter_cid));
+    matching
+        .into_iter()
+        .map(|rel| format!("countered-by {} (by {})", rel.counter_cid, rel.counter_author))
+        .collect()
 }
 
 /// Group FLAT attributed network rows by author DID, preserving first-seen author

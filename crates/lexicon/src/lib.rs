@@ -71,8 +71,8 @@ pub use probe::{probe, ProbeError};
 
 pub mod appview_query;
 pub use appview_query::{
-    AppviewConfig, IndexerConfig, IndexerSources, SearchDimensionDto, SearchQueryRequest,
-    SearchQueryResponse, SearchResultDto, SEARCH_CLAIMS_NSID,
+    AppviewConfig, ClaimReferenceDto, IndexerConfig, IndexerSources, SearchDimensionDto,
+    SearchQueryRequest, SearchQueryResponse, SearchResultDto, SEARCH_CLAIMS_NSID,
 };
 
 // =============================================================================

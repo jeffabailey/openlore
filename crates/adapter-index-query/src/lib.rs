@@ -27,10 +27,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did, KeyId};
+use claim_domain::{ClaimReference, Cid, Did, KeyId, ReferenceType};
 use lexicon::{
-    SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
-    SEARCH_CLAIMS_NSID,
+    ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse,
+    SearchResultDto, SEARCH_CLAIMS_NSID,
 };
 use ports::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw, ProbeOutcome,
@@ -213,6 +213,11 @@ fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryErr
             .map_err(|err| IndexQueryError::BadResponse {
                 message: format!("parse composed_at {:?}: {err}", row.composed_at),
             })?;
+    // Decode the typed references the wire carried (OD-AV-7): a countering claim's
+    // `counters` reference to a countered claim's CID flows through here so the
+    // render can reconstruct the `countered-by <cid> (by <author>)` annotation
+    // (shown, never applied — I-AV-9). An unknown ref_type token is skipped.
+    let references = row.references.iter().filter_map(decode_reference).collect();
     Ok(NetworkResultRowRaw {
         author_did: Did(row.author_did),
         cid: Cid(row.cid),
@@ -223,7 +228,25 @@ fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryErr
         composed_at,
         verified_against: KeyId(row.verified_against),
         evidence: row.evidence,
-        references: Vec::new(),
+        references,
+    })
+}
+
+/// Decode one wire `ClaimReferenceDto` into a typed `ClaimReference`. The
+/// `ref_type` is the lowercase token the store + artifact + wire agree on; an
+/// unrecognized token (impossible under the schema CHECK) yields `None` and is
+/// skipped rather than failing the whole response.
+fn decode_reference(reference: &ClaimReferenceDto) -> Option<ClaimReference> {
+    let ref_type = match reference.ref_type.as_str() {
+        "retracts" => ReferenceType::Retracts,
+        "corrects" => ReferenceType::Corrects,
+        "counters" => ReferenceType::Counters,
+        "supersedes" => ReferenceType::Supersedes,
+        _ => return None,
+    };
+    Some(ClaimReference {
+        ref_type,
+        cid: Cid(reference.cid.clone()),
     })
 }
 
@@ -250,6 +273,7 @@ fn probe_decode_shape_contract() -> Result<(), String> {
             composed_at: "2026-05-28T00:00:00Z".to_string(),
             verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
             evidence: Vec::new(),
+            references: Vec::new(),
         }
     }
 
@@ -315,6 +339,7 @@ mod tests {
             composed_at: "2026-05-28T00:00:00Z".to_string(),
             verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
             evidence: vec!["https://example.org/e1".to_string()],
+            references: Vec::new(),
         }
     }
 

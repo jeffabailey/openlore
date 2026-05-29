@@ -146,6 +146,13 @@ impl IndexStoreAdapter {
 
     /// Run a per-claim attributed SELECT with an EXPLICIT `author_did` projection
     /// (anti-merging; NEVER an author-eliding aggregate) bound by one parameter.
+    ///
+    /// Each returned row carries its typed `references` populated from the
+    /// `indexed_claim_references` child table (a SAME-store lookup keyed by the
+    /// row's own `referencing_cid`) so the PURE `appview_domain::compose_results`
+    /// counter/retract annotation (OD-AV-7 / AVC-6) can fire. This is NOT a
+    /// cross-store join and it NEVER elides `author_did`: each row keeps its own
+    /// attribution; the reference rows only carry `(referenced_cid, ref_type)`.
     fn select_rows(
         &self,
         where_clause: &str,
@@ -173,7 +180,63 @@ impl IndexStoreAdapter {
                 message: format!("decode index row: {err}"),
             })?);
         }
+        // Populate each row's typed references (OD-AV-7 same-store lookup). Done in
+        // a second pass so the base SELECT's borrow of `stmt` is released first.
+        for claim in &mut out {
+            claim.references = references_for(&conn, &claim.cid)?;
+        }
         Ok(out)
+    }
+}
+
+/// The typed `references` a claim carries, read from the `indexed_claim_references`
+/// child table by the claim's OWN `referencing_cid` (a SAME-store lookup — NOT a
+/// cross-store join). Each reference is `ClaimReference { ref_type, cid:
+/// referenced_cid }`; the countering claim K's row therefore carries a `Counters`
+/// reference to the countered claim C's CID, which the pure compose core reads to
+/// annotate C (OD-AV-7 / AVC-6). Anti-merging is preserved: this lookup touches
+/// only the reference rows; the claim's `author_did` is untouched.
+fn references_for(conn: &Connection, cid: &Cid) -> Result<Vec<ClaimReference>, IndexStoreError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT referenced_cid, ref_type FROM indexed_claim_references \
+             WHERE referencing_cid = ? ORDER BY referenced_cid, ref_type",
+        )
+        .map_err(|err| IndexStoreError::QueryFailed {
+            message: format!("prepare references query: {err}"),
+        })?;
+    let rows = stmt
+        .query_map(duckdb::params![cid.0], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| IndexStoreError::QueryFailed {
+            message: format!("run references query: {err}"),
+        })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (referenced_cid, ref_type) = row.map_err(|err| IndexStoreError::QueryFailed {
+            message: format!("decode reference row: {err}"),
+        })?;
+        if let Some(ref_type) = reference_type_from_wire(&ref_type) {
+            out.push(ClaimReference {
+                ref_type,
+                cid: Cid(referenced_cid),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a `ref_type` wire token (the `indexed_claim_references` CHECK domain) back
+/// into a [`ReferenceType`]. The inverse of [`reference_type_wire`]; an unknown
+/// token (impossible under the CHECK constraint) is skipped, not panicked.
+fn reference_type_from_wire(token: &str) -> Option<ReferenceType> {
+    match token {
+        "retracts" => Some(ReferenceType::Retracts),
+        "corrects" => Some(ReferenceType::Corrects),
+        "counters" => Some(ReferenceType::Counters),
+        "supersedes" => Some(ReferenceType::Supersedes),
+        _ => None,
     }
 }
 
@@ -711,6 +774,75 @@ mod tests {
             }
             ProbeOutcome::Ok => panic!("a fsync no-op substrate must REFUSE, not Ok"),
         }
+    }
+
+    /// OD-AV-7 (AV-25 decomposition): the query path POPULATES each row's typed
+    /// `references` from the `indexed_claim_references` child table (the same-store
+    /// lookup the pure counter annotation reads). A countering claim K upserted with
+    /// a `Counters` reference to claim C's CID reads back via `query_by_object` with
+    /// that reference INTACT — so `appview_domain::compose_results` can annotate C.
+    /// The countered claim C carries NO references (it counters nothing). Anti-
+    /// merging is preserved: each row keeps its own `author_did`.
+    #[test]
+    fn query_populates_typed_references_for_the_counter_annotation() {
+        use claim_domain::{ClaimReference, ReferenceType};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let store = IndexStoreAdapter::open(&db_path).expect("open index store");
+
+        // C — the countered claim (Priya), no references of its own.
+        let c = IndexedClaim {
+            author_did: Did("did:plc:priya-test#org.openlore.application".to_string()),
+            cid: Cid("bafyclaimc".to_string()),
+            ..sample_claim()
+        };
+        // K — the countering claim (Sven), same object so it co-appears, carrying a
+        // typed Counters reference to C's CID.
+        let k = IndexedClaim {
+            author_did: Did("did:plc:sven-test#org.openlore.application".to_string()),
+            cid: Cid("bafyclaimk".to_string()),
+            verified_against: KeyId("did:plc:sven-test#org.openlore.application".to_string()),
+            references: vec![ClaimReference {
+                ref_type: ReferenceType::Counters,
+                cid: Cid("bafyclaimc".to_string()),
+            }],
+            ..sample_claim()
+        };
+
+        store.upsert(&c).expect("upsert C");
+        store.upsert(&k).expect("upsert K");
+
+        let rows = store
+            .query_by_object("org.openlore.philosophy.reproducible-builds")
+            .expect("query by object");
+        assert_eq!(rows.len(), 2, "both C and K are returned (counter never drops a row)");
+
+        let k_row = rows
+            .iter()
+            .find(|r| r.cid.0 == "bafyclaimk")
+            .expect("K is in the result");
+        assert_eq!(
+            k_row.references,
+            vec![ClaimReference {
+                ref_type: ReferenceType::Counters,
+                cid: Cid("bafyclaimc".to_string()),
+            }],
+            "K's typed Counters reference to C must be populated from the same-store \
+             child table (the OD-AV-7 annotation input)"
+        );
+
+        let c_row = rows
+            .iter()
+            .find(|r| r.cid.0 == "bafyclaimc")
+            .expect("C is in the result");
+        assert!(
+            c_row.references.is_empty(),
+            "C counters nothing — it carries no references of its own"
+        );
+        // Anti-merging: each row keeps its OWN author_did.
+        assert_eq!(c_row.author_did.0, "did:plc:priya-test#org.openlore.application");
+        assert_eq!(k_row.author_did.0, "did:plc:sven-test#org.openlore.application");
     }
 
     /// De-dup at upsert is by CID only (ADR-025): upserting the same CID twice

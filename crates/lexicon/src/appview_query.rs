@@ -82,6 +82,28 @@ pub struct SearchResultDto {
     pub verified_against: String,
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// Typed inter-claim references the row carries (data-models.md §"The XRPC
+    /// query DTOs" — `"references": [...]`). LOAD-BEARING for OD-AV-7: a
+    /// countering claim K carries a `counters` reference to the countered claim
+    /// C's CID, which the CLI render reads to annotate C `countered-by <K.cid>
+    /// (by <K.author_did>)` (shown, never applied — I-AV-9). `#[serde(default)]`
+    /// keeps a references-less row backward-compatible (the field is omitted on
+    /// the wire when empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ClaimReferenceDto>,
+}
+
+/// One typed inter-claim reference carried over the wire (the wire form of
+/// `claim_domain::ClaimReference`). `ref_type` is the lowercase token the
+/// `indexed_claim_references` CHECK domain uses (`"retracts" | "corrects" |
+/// "counters" | "supersedes"`) so the wire, the store schema, and the on-disk
+/// artifact agree without drift; `cid` is the REFERENCED claim's CID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimReferenceDto {
+    /// `"retracts" | "corrects" | "counters" | "supersedes"`.
+    pub ref_type: String,
+    /// The referenced (e.g. countered) claim's CID.
+    pub cid: String,
 }
 
 /// The `org.openlore.appview.searchClaims` response DTO (ADR-027).
@@ -178,6 +200,8 @@ mod tests {
                     composed_at: "2026-05-28T00:00:00Z".to_string(),
                     verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
                     evidence: vec!["https://example.org/e1".to_string()],
+                    // A references-less row stays backward-compatible (field omitted).
+                    references: vec![],
                 },
                 SearchResultDto {
                     author_did: "did:plc:rachel-test".to_string(),
@@ -189,6 +213,11 @@ mod tests {
                     composed_at: "2026-05-28T00:00:00Z".to_string(),
                     verified_against: "did:plc:rachel-test#org.openlore.application".to_string(),
                     evidence: vec![],
+                    // A typed counter reference must survive the wire round-trip (OD-AV-7).
+                    references: vec![ClaimReferenceDto {
+                        ref_type: "counters".to_string(),
+                        cid: "bafyk2".to_string(),
+                    }],
                 },
             ],
             distinct_author_count: 2,

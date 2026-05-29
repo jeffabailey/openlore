@@ -4130,6 +4130,7 @@ fn fixture_corpus(fixture: &NetworkIndexFixture) -> Vec<openlore_test_support::R
         NetworkIndexFixture::IncludesAlreadyFollowedRachel => {
             corpus_includes_already_followed_rachel()
         }
+        NetworkIndexFixture::CounteredClaimPlusCounter => corpus_countered_claim_plus_counter(),
         other => panic!(
             "seed_network_index: corpus for fixture {other:?} not yet materialized (04-01 \
              wires only the AV-8 headline corpus; later steps add the rest)"
@@ -4177,6 +4178,39 @@ fn corpus_includes_already_followed_rachel() -> Vec<openlore_test_support::RawRe
         .iter()
         .map(|(subject, object, conf)| RawRecordSpec::valid(RACHEL_DID, subject, object, *conf))
         .collect()
+}
+
+/// US-AV-002 / OD-AV-7 corpus (AV-25): claim C (Priya, bazel, reproducible-builds,
+/// 0.82) PLUS a LATER indexed claim K (Sven) that REFERENCES C with
+/// `ref_type=counters`. Both are VERIFIED (`RawRecordSpec::valid` runs the real
+/// crypto). K asserts the SAME object as C so a `--object reproducible-builds`
+/// search returns BOTH rows — the render reconstructs the
+/// `countered-by <K.cid> (by <K.author_did>)` annotation from K's `references`
+/// (pointing at C) + K's own `author_did`, and C is STILL present (shown, NEVER
+/// applied — OD-AV-7 / I-AV-9; mirrors slice-04 WD-85).
+///
+/// K's reference target is C's PUBLISHED CID, computed by running C's spec through
+/// the SAME real crypto (`into_raw_record().published_cid`) the ingest gate
+/// recomputes — so the `indexed_claim_references.referenced_cid` K carries matches
+/// the `indexed_claims.cid` C is indexed under (the same-store JOIN key).
+fn corpus_countered_claim_plus_counter() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, PRIYA_DID, SVEN_DID};
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    // Claim C — the countered claim (Priya, bazel). Verified; appears as a result.
+    let c = RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82);
+
+    // C's PUBLISHED CID (the same-store JOIN key K references) — computed by
+    // running C's spec through the REAL crypto, exactly as the ingest gate does.
+    let c_cid = c.clone().into_raw_record().published_cid;
+
+    // Claim K — the countering claim (Sven). Verified; carries a typed
+    // `Counters` reference to C's CID. Same object so it co-appears in the search
+    // result set, giving the render K's author_did + cid to attribute the counter.
+    let k = RawRecordSpec::valid(SVEN_DID, "github:bazelbuild/bazel", object, 0.40)
+        .with_reference(claim_domain::ReferenceType::Counters, &c_cid.0);
+
+    vec![c, k]
 }
 
 /// The distinct author DIDs present in a corpus, each paired with its fixture
@@ -4430,6 +4464,54 @@ pub fn assert_verified_marker_is_universal(stdout: &str) {
             !stdout.contains(banned),
             "I-AV-1: no row may show {banned:?} (verification is an ingest \
              precondition — there is no unverified state):\n{stdout}"
+        );
+    }
+}
+
+/// Assert the OD-AV-7 counter-shown-not-applied render contract over a `search`
+/// stdout (AV-25 / I-AV-9): the countered claim C (`countered_cid`, authored by
+/// `countered_author`) is STILL present as an attributed result row AND its row
+/// carries the counter annotation `countered-by <counter_cid> (by <counter_author>)`
+/// — the counter is SHOWN, never applied as a filter / removal / down-weight
+/// (mirrors slice-04 WD-85). Universe (port-exposed): presence of C's attributed
+/// row; the counter annotation on C's row; C NOT filtered (its row is rendered as
+/// a normal verified attributed row).
+pub fn assert_counter_annotation_shown_not_applied(
+    stdout: &str,
+    countered_cid: &str,
+    countered_author: &str,
+    counter_cid: &str,
+    counter_author: &str,
+) {
+    // 1. C is STILL present — its attributed row (author + cid) is rendered (NOT
+    //    filtered / dropped). The countered row survives the counter (OD-AV-7).
+    assert!(
+        stdout.contains(&format!("author_did: {countered_author}")),
+        "AV-25: the countered claim's author row must STILL be present (shown, not \
+         filtered): expected an `author_did: {countered_author}` row:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("cid:        {countered_cid}")),
+        "AV-25: the countered claim C ({countered_cid}) must STILL appear as a \
+         result row (NOT filtered/dropped/down-weighted — OD-AV-7 shown-not-applied):\n{stdout}"
+    );
+
+    // 2. C's row carries the counter annotation naming the COUNTERING claim K's cid
+    //    + its author (countered-by <K.cid> (by <K.author>)). The counter is SHOWN.
+    assert!(
+        stdout.contains(&format!("countered-by {counter_cid} (by {counter_author})")),
+        "AV-25: the countered row must carry the counter annotation \
+         'countered-by {counter_cid} (by {counter_author})' (OD-AV-7 / I-AV-9 — \
+         counter SHOWN, never applied):\n{stdout}"
+    );
+
+    // 3. The counter is SHOWN, NEVER applied: NO filtering/down-weighting language
+    //    appears (the countered claim is not hidden, dimmed, or removed).
+    for banned in &["filtered out", "down-weighted", "suppressed", "hidden by counter"] {
+        assert!(
+            !stdout.to_ascii_lowercase().contains(banned),
+            "AV-25: the counter must be SHOWN, never APPLIED — found {banned:?} in the \
+             output (OD-AV-7 shown-not-applied / WD-119 default):\n{stdout}"
         );
     }
 }

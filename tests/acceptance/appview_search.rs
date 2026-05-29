@@ -1905,12 +1905,53 @@ fn countered_claim_still_appears_in_search_with_annotation() {
     //
     // Universe (port-exposed): presence of C in the search output; C's row
     // carries the counter annotation; C is NOT filtered/down-weighted.
-    todo!(
-        "DELIVER (slice-05): with claim C countered by indexed claim K, run \
-         `openlore search --object <C.object>`; assert C STILL appears with a \
-         'countered-by <K.cid> (by <K.author>)' annotation and is NOT filtered/ \
-         down-weighted (OD-AV-7 / I-AV-9 shown-not-applied)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with claim C (Priya, bazel, reproducible-builds, 0.82)
+    // AND a later indexed claim K (Sven) that references C with ref_type=counters
+    // (both verified). K asserts the SAME object so it co-appears in the search
+    // result set — the render reconstructs the counter annotation from K's typed
+    // `references` (pointing at C's CID) + K's own author_did. --
+    let indexer = seed_network_index(&env, NetworkIndexFixture::CounteredClaimPlusCounter);
+
+    // Recompute the SAME published CIDs the ingest gate computes for C + K (the
+    // same-store JOIN keys): the annotation names K's CID; presence is asserted on
+    // C's CID. The author DIDs carry the app-identity fragment the indexed
+    // `author_did` uses (`did:plc:X#org.openlore.application`).
+    let object = "org.openlore.philosophy.reproducible-builds";
+    let c_spec = RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82);
+    let c_cid = c_spec.clone().into_raw_record().published_cid;
+    let k_spec = RawRecordSpec::valid(SVEN_DID, "github:bazelbuild/bazel", object, 0.40)
+        .with_reference(claim_domain::ReferenceType::Counters, &c_cid.0);
+    let k_cid = k_spec.into_raw_record().published_cid;
+    let priya_app = format!("{PRIYA_DID}#org.openlore.application");
+    let sven_app = format!("{SVEN_DID}#org.openlore.application");
+
+    // -- Action: the object-dimension network read through the CLI driving port. --
+    let outcome = run_openlore_search(&env, &["search", "--object", object], &indexer);
+
+    // exit 0 (a valid result, never a fatal).
+    assert_eq!(
+        outcome.status, 0,
+        "AV-25: `openlore search --object` must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
     );
+
+    // The OD-AV-7 render gate (I-AV-9): C is STILL present + carries the counter
+    // annotation `countered-by <K.cid> (by <K.author>)`; the counter is SHOWN,
+    // never applied (NOT filtered/dropped/down-weighted).
+    assert_counter_annotation_shown_not_applied(
+        &outcome.stdout,
+        &c_cid.0,
+        &priya_app,
+        &k_cid.0,
+        &sven_app,
+    );
+
+    // Both rows survive (C the countered + K the countering) — the counter never
+    // drops a row; both are verified attributed results (anti-merging preserved).
+    assert_verified_marker_is_universal(&outcome.stdout);
 }
 
 // =============================================================================
