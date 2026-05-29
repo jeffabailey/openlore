@@ -777,10 +777,98 @@ fn indexer_ingests_only_public_records_no_private_read() {
     // Universe (port-exposed): the set of source endpoints the indexer called
     // (public listRecords only; no auth-scoped read); the indexed rows (public
     // only).
-    todo!(
-        "DELIVER (slice-05): assert `openlore-indexer ingest` reads ONLY the \
-         public listRecords surface (the fake source records zero auth-scoped \
-         calls) and indexes only public records; no claim-content telemetry \
-         (WD-105 / I-AV-4 public-data-only)."
+    let env = TestEnv::fresh();
+    let priya = FixtureKeypair::for_did(PRIYA_DID);
+    let priya_pubkey_hex = hex_lower(&priya.verifying_key.0);
+
+    // The PUBLIC surface hosts ONE valid signed claim by Priya (the headline
+    // reproducible-builds record). The auth-scoped/private TRIPWIRE hosts a
+    // DISTINCT valid signed record (a different object) that WOULD verify + index
+    // if the indexer ever read it — load-bearing falsifiability: a distinct object
+    // means a wrongly-read private record surfaces as a NEW indexed row.
+    let public_record = fixture_ingest_valid_signed();
+    let private_record = RawRecordSpec::valid(
+        PRIYA_DID,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.private-do-not-read",
+        0.51,
     );
+    let source = FakeIngestServer::start_with_private_tripwire(
+        vec![public_record],
+        vec![private_record],
+    );
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass against the
+    // fake source + the PLC pubkey seam (the SAME read-only bounded PULL). --
+    let outcome = run_openlore_indexer_with_source(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        &[(PRIYA_DID, &priya_pubkey_hex)],
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // -- Observable outcome 1 (the public-data-only invariant, WD-105 / I-AV-4):
+    // the fake source records that the indexer touched ONLY the public listRecords
+    // surface — NO Authorization header, and NEVER the auth-scoped/private
+    // tripwire. The indexer makes no auth-scoped/private read. --
+    assert_ingest_read_public_records_only(&source);
+
+    // -- Observable outcome 2: only the PUBLIC record was indexed. The public
+    // record IS searchable, attributed to Priya, verified_against != "". --
+    let public_rows =
+        read_indexed_claims_by_object(&env, "org.openlore.philosophy.reproducible-builds");
+    assert_eq!(
+        public_rows.len(),
+        1,
+        "exactly the public record is searchable by its object; got {public_rows:?}"
+    );
+    assert_eq!(
+        public_rows[0].author_did, "did:plc:priya-test#org.openlore.application",
+        "the indexed row must be attributed to Priya (author from the signed payload)"
+    );
+    assert!(
+        !public_rows[0].verified_against.is_empty(),
+        "verified_against must never be empty on an indexed row (WD-104)"
+    );
+
+    // -- Observable outcome 3 (the load-bearing absence): the private record's
+    // object NEVER produced an indexed row — the indexer never read the
+    // auth-scoped surface, so the private record cannot have entered the index. --
+    let private_rows =
+        read_indexed_claims_by_object(&env, "org.openlore.philosophy.private-do-not-read");
+    assert!(
+        private_rows.is_empty(),
+        "the auth-scoped/private record must NEVER enter the index (public-data-only, \
+         WD-105 / I-AV-4); got {private_rows:?}"
+    );
+
+    // -- Observable outcome 4 (the DEVOPS privacy constraint): the ingest telemetry
+    // is content-free — structural counts + per-reason breakdown ONLY, NEVER any
+    // claim subject / object / confidence content. The verified record's headline
+    // object/subject/confidence must NOT appear in the emitted telemetry. --
+    assert!(
+        outcome.stdout.contains("indexer.ingest.verified")
+            && outcome.stdout.contains("\"count\":1"),
+        "expected indexer.ingest.verified count 1 in stdout; got: {}",
+        outcome.stdout
+    );
+    for content_field in &[
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        "0.82",
+        "private-do-not-read",
+    ] {
+        assert!(
+            !outcome.stdout.contains(content_field),
+            "no claim-content telemetry (WD-105 privacy): the ingest telemetry must \
+             emit structural counts + DIDs only — claim content {content_field:?} \
+             must NOT appear in stdout; got: {}",
+            outcome.stdout
+        );
+    }
 }

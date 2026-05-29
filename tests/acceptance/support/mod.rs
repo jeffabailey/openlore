@@ -4346,6 +4346,38 @@ pub fn parse_and_assert_query_encoding_share_link(stdout: &str) -> ShareLink {
 // `PeerPds` runtime-ownership shape (RAII shutdown on drop).
 // =============================================================================
 
+/// The ATProto auth-scoped/private read surface the public-data-only indexer must
+/// NEVER call (the AV-7 tripwire). `getRepo` is the canonical "give me the whole
+/// repo including non-public records" sync endpoint; an auth-scoped `listRecords`
+/// would carry an `Authorization` header. Either is a public-data-only violation.
+const AUTH_SCOPED_TRIPWIRE_PATH: &str = "/xrpc/com.atproto.sync.getRepo";
+
+/// One request the [`FakeIngestServer`] received, projected to the
+/// public-data-only observable surface (AV-7): the request-target path and
+/// whether the request carried an `Authorization` header. NEVER any claim
+/// content — the universe is "which endpoints did the indexer touch, and did it
+/// authenticate", not "what did it read".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedIngestRequest {
+    /// The request-target (e.g. `/xrpc/com.atproto.repo.listRecords?...`).
+    pub path: String,
+    /// `true` iff the request carried an `Authorization` header (the marker of
+    /// an authenticated / auth-scoped read — forbidden, WD-105 / I-AV-4).
+    pub had_authorization_header: bool,
+}
+
+impl RecordedIngestRequest {
+    /// Whether this request hit the PUBLIC `listRecords` surface.
+    pub fn is_public_list_records(&self) -> bool {
+        self.path.starts_with("/xrpc/com.atproto.repo.listRecords")
+    }
+
+    /// Whether this request hit the auth-scoped/private tripwire surface.
+    pub fn is_auth_scoped(&self) -> bool {
+        self.path.starts_with(AUTH_SCOPED_TRIPWIRE_PATH)
+    }
+}
+
 /// A bounded localhost HTTP fixture that serves the ATProto
 /// `com.atproto.repo.listRecords` surface for a fixed set of fixture records.
 ///
@@ -4353,9 +4385,23 @@ pub fn parse_and_assert_query_encoding_share_link(stdout: &str) -> ShareLink {
 /// port; the URL is read back via [`FakeIngestServer::source_url`] and wired
 /// into the `openlore-indexer` subprocess. Dropping the handle signals the
 /// acceptor to stop — RAII per-scenario isolation (mirrors `PeerPds`).
+///
+/// ## Public-data-only request recording (AV-7 / WD-105)
+///
+/// Every request the acceptor receives is recorded into a shared
+/// `Vec<RecordedIngestRequest>` (path + presence of an `Authorization` header),
+/// observable after the ingest pass via [`FakeIngestServer::recorded_requests`].
+/// [`FakeIngestServer::start_with_private_tripwire`] additionally hosts an
+/// auth-scoped/private surface ([`AUTH_SCOPED_TRIPWIRE_PATH`]) that WOULD serve a
+/// private record if the indexer ever called it — the AV-7 tripwire. A
+/// public-data-only indexer hits ONLY the public `listRecords` path, with NO
+/// `Authorization` header, and NEVER the tripwire.
 pub struct FakeIngestServer {
     base_url: String,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Every request the acceptor has received (path + Authorization presence) —
+    /// the AV-7 public-data-only universe. Shared with the acceptor thread.
+    recorded: std::sync::Arc<std::sync::Mutex<Vec<RecordedIngestRequest>>>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -4364,22 +4410,42 @@ impl FakeIngestServer {
     /// `RawRecordSpec::into_raw_record`) on a localhost `listRecords` surface.
     /// The adversarial postures are hosted VERBATIM — the indexer's gate, not
     /// this fixture, rejects them.
+    ///
+    /// No auth-scoped tripwire is hosted: a request to any path OTHER than the
+    /// public `listRecords` surface returns 404 (AV-1..6 only PULL the public
+    /// surface). Requests are still recorded so [`Self::recorded_requests`] is
+    /// always observable.
     pub fn start(specs: Vec<openlore_test_support::RawRecordSpec>) -> Self {
+        Self::start_inner(specs, Vec::new())
+    }
+
+    /// Host `public_specs` on the PUBLIC `listRecords` surface AND `private_specs`
+    /// on the auth-scoped/private tripwire surface ([`AUTH_SCOPED_TRIPWIRE_PATH`])
+    /// — the AV-7 public-data-only fixture (WD-105 / I-AV-4).
+    ///
+    /// The tripwire is a live route that WOULD serve the private records if the
+    /// indexer ever called it; AV-7 asserts (via [`Self::recorded_requests`]) that
+    /// the indexer hit ONLY the public surface with NO `Authorization` header and
+    /// NEVER the tripwire — so the private records never enter the index.
+    pub fn start_with_private_tripwire(
+        public_specs: Vec<openlore_test_support::RawRecordSpec>,
+        private_specs: Vec<openlore_test_support::RawRecordSpec>,
+    ) -> Self {
+        Self::start_inner(public_specs, private_specs)
+    }
+
+    fn start_inner(
+        public_specs: Vec<openlore_test_support::RawRecordSpec>,
+        private_specs: Vec<openlore_test_support::RawRecordSpec>,
+    ) -> Self {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::sync::atomic::Ordering;
 
-        // Materialize the wire records + the canonical `listRecords` JSON body
-        // ONCE at construction (deterministic; no per-request work).
-        let records: Vec<serde_json::Value> = specs
-            .into_iter()
-            .map(|spec| raw_record_to_list_records_view(&spec.into_raw_record()))
-            .collect();
-        let body = serde_json::json!({
-            "records": records,
-            "cursor": serde_json::Value::Null,
-        })
-        .to_string();
+        // Materialize the public + private `listRecords`-shaped JSON bodies ONCE
+        // at construction (deterministic; no per-request work).
+        let public_body = list_records_body(public_specs);
+        let private_body = list_records_body(private_specs);
 
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("FakeIngestServer: bind 127.0.0.1:0");
@@ -4393,23 +4459,63 @@ impl FakeIngestServer {
 
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
+        let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_for_thread = std::sync::Arc::clone(&recorded);
 
         let join = std::thread::Builder::new()
             .name("fake-ingest-source".to_string())
             .spawn(move || {
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
+                let ok_response = |body: &str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
                 while !shutdown_for_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _peer)) => {
-                            // Drain the request line/headers (we serve one fixed
-                            // route; we do not branch on the path for AV-1).
-                            let mut buf = [0u8; 2048];
-                            let _ = stream.read(&mut buf);
+                            // The listener is non-blocking (to poll the shutdown
+                            // flag), but the ACCEPTED stream inherits non-blocking
+                            // mode on some platforms (macOS). Force it BLOCKING so
+                            // we reliably read the full request header block before
+                            // routing — a partial/empty read would otherwise parse
+                            // an empty path and misroute (the flake root cause).
+                            let _ = stream.set_nonblocking(false);
+                            let request = read_http_request_head(&mut stream);
+                            let path = request
+                                .lines()
+                                .next()
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .unwrap_or_default()
+                                .to_string();
+                            let had_authorization_header = request
+                                .lines()
+                                .any(|line| {
+                                    line.to_ascii_lowercase().starts_with("authorization:")
+                                });
+                            if let Ok(mut log) = recorded_for_thread.lock() {
+                                log.push(RecordedIngestRequest {
+                                    path: path.clone(),
+                                    had_authorization_header,
+                                });
+                            }
+
+                            // Route on the path: the auth-scoped tripwire serves
+                            // the private body (it WOULD leak if the indexer ever
+                            // called it — the AV-7 tripwire); EVERY other request
+                            // (the public listRecords surface, and the empty-path
+                            // fallback for an unparseable read) serves the public
+                            // body. The indexer only legitimately PULLs the public
+                            // listRecords surface, so the public body is the safe
+                            // default — never a 404 that would spuriously fail a
+                            // healthy PULL under parallel load.
+                            let response = if path.starts_with(AUTH_SCOPED_TRIPWIRE_PATH) {
+                                ok_response(&private_body)
+                            } else {
+                                ok_response(&public_body)
+                            };
                             let _ = stream.write_all(response.as_bytes());
                             let _ = stream.flush();
                         }
@@ -4425,6 +4531,7 @@ impl FakeIngestServer {
         Self {
             base_url,
             shutdown,
+            recorded,
             join: Some(join),
         }
     }
@@ -4434,6 +4541,70 @@ impl FakeIngestServer {
     pub fn source_url(&self) -> &str {
         &self.base_url
     }
+
+    /// Every request the fixture received during the ingest pass (path +
+    /// Authorization presence). The AV-7 public-data-only observable surface —
+    /// inspect after the ingest pass to prove the indexer touched ONLY the public
+    /// `listRecords` surface with NO `Authorization` header and NEVER the
+    /// auth-scoped tripwire. Returns a snapshot (the lock is not held).
+    pub fn recorded_requests(&self) -> Vec<RecordedIngestRequest> {
+        self.recorded
+            .lock()
+            .map(|log| log.clone())
+            .unwrap_or_default()
+    }
+
+    /// The number of requests that hit the auth-scoped/private tripwire surface
+    /// ([`AUTH_SCOPED_TRIPWIRE_PATH`]). MUST be zero for a public-data-only
+    /// indexer (WD-105 / I-AV-4).
+    pub fn auth_scoped_call_count(&self) -> usize {
+        self.recorded_requests()
+            .iter()
+            .filter(|r| r.is_auth_scoped())
+            .count()
+    }
+}
+
+/// Read an HTTP/1.1 request's head (request line + headers, up to the blank
+/// `\r\n\r\n`) from a BLOCKING stream. Robust against the request arriving in
+/// multiple TCP segments under parallel load — we keep reading until the header
+/// terminator is seen (or the peer closes / a bounded cap is hit), so the
+/// request-target path + the `Authorization` header are reliably parsed. Returns
+/// the decoded head as a `String`. (We only inspect the head; the request body —
+/// `listRecords`/`getRepo` are GETs — is irrelevant.)
+fn read_http_request_head(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut acc: Vec<u8> = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    // Cap total reads so a malformed peer can never wedge the acceptor thread.
+    for _ in 0..16 {
+        match stream.read(&mut chunk) {
+            Ok(0) => break, // peer closed
+            Ok(n) => {
+                acc.extend_from_slice(&chunk[..n]);
+                if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break; // full header block received
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&acc).into_owned()
+}
+
+/// Materialize a `listRecords`-shaped JSON body from `specs` (each run through
+/// the REAL crypto via `RawRecordSpec::into_raw_record`). Shared by the public +
+/// private surfaces of [`FakeIngestServer`].
+fn list_records_body(specs: Vec<openlore_test_support::RawRecordSpec>) -> String {
+    let records: Vec<serde_json::Value> = specs
+        .into_iter()
+        .map(|spec| raw_record_to_list_records_view(&spec.into_raw_record()))
+        .collect();
+    serde_json::json!({
+        "records": records,
+        "cursor": serde_json::Value::Null,
+    })
+    .to_string()
 }
 
 impl Drop for FakeIngestServer {
@@ -5028,6 +5199,69 @@ pub fn assert_no_merged_consensus_table(env: &TestEnv) {
                  substring {banned:?}. The full table set was: {table_names:?}"
             );
         }
+    }
+}
+
+/// Universe-bound (AV-7 / WD-105 / I-AV-4): "the indexer's ingest pass touched
+/// ONLY the PUBLIC `listRecords` surface — every recorded request hit
+/// `com.atproto.repo.listRecords` with NO `Authorization` header, the indexer
+/// made AT LEAST one such public read, and it NEVER hit the auth-scoped/private
+/// tripwire". Port-exposed name: `ingest_source.requests.public_only`.
+///
+/// This is the ingest-side half of the public-data honesty contract: the indexer
+/// reads only the unauthenticated public surface — no auth-scoped read, no
+/// Authorization header — so private records can never enter the index. The
+/// search-side user-visible banner is AV-10 (`appview_search.rs`).
+pub fn assert_ingest_read_public_records_only(source: &FakeIngestServer) {
+    let requests = source.recorded_requests();
+
+    // The indexer must actually have pulled the public surface (otherwise the
+    // "no auth-scoped call" witness would be vacuously true on a no-op).
+    let public_reads = requests
+        .iter()
+        .filter(|r| r.is_public_list_records())
+        .count();
+    assert!(
+        public_reads >= 1,
+        "expected the indexer to PULL the public listRecords surface at least once \
+         (public-data-only ingest, WD-105); recorded requests: {requests:?}"
+    );
+
+    // EVERY request the indexer made must be the PUBLIC listRecords surface — no
+    // auth-scoped/private endpoint was ever called (the tripwire never fired).
+    let auth_scoped: Vec<&RecordedIngestRequest> =
+        requests.iter().filter(|r| r.is_auth_scoped()).collect();
+    assert!(
+        auth_scoped.is_empty(),
+        "public-data-only violation (WD-105 / I-AV-4): the indexer hit the \
+         auth-scoped/private tripwire surface — it must read ONLY the public \
+         listRecords surface; offending requests: {auth_scoped:?}"
+    );
+
+    // NO request carried an Authorization header — the public surface is read
+    // UNAUTHENTICATED (an Authorization header is the marker of an auth-scoped
+    // read even against the listRecords path).
+    let authenticated: Vec<&RecordedIngestRequest> = requests
+        .iter()
+        .filter(|r| r.had_authorization_header)
+        .collect();
+    assert!(
+        authenticated.is_empty(),
+        "public-data-only violation (WD-105 / I-AV-4): the indexer sent an \
+         Authorization header — it must read the public surface UNAUTHENTICATED; \
+         offending requests: {authenticated:?}"
+    );
+
+    // Every recorded request must be the public surface (defense-in-depth: catches
+    // any OTHER non-public path the indexer might reach for).
+    for request in &requests {
+        assert!(
+            request.is_public_list_records(),
+            "public-data-only violation (WD-105 / I-AV-4): the indexer reached a \
+             non-public endpoint {:?}; it must read ONLY the public listRecords \
+             surface",
+            request.path
+        );
     }
 }
 
