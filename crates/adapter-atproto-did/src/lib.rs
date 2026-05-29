@@ -374,15 +374,31 @@ impl IdentityPort for AtProtoDidAdapter {
 #[async_trait]
 impl IdentityResolvePort for AtProtoDidAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // Earned-Trust resolve probe (happy-path arm for the AV-1 walking
-        // skeleton): the resolve adapter is constructed + ready. The REAL z6Mk
-        // decode probe (resolve a FIXTURE DID document with a real z6Mk value,
-        // run the REAL decode, assert it VERIFIES a known-good signature AND
-        // REJECTS a tampered one — a seam-only pass being a CI failure) lands at
-        // step 03-04 (AV-4 / ADR-026). Returning Ok here keeps the wire->probe->
-        // use gauntlet honest for the slice-05 walking skeleton (the seam resolve
-        // is exercised end-to-end by AV-1).
-        ProbeOutcome::Ok
+        // Earned-Trust resolve-readiness probe (ADR-009 / I-4): a REAL,
+        // deterministic readiness check — the configured PLC endpoint (the URL the
+        // verify-only resolve path fetches `z6Mk` DID documents from) must be a
+        // well-formed http(s) URL. An empty/malformed endpoint means the resolve
+        // path could NEVER obtain a DID document (it would reject every network
+        // record at use-time), so the indexer REFUSES to start instead. This
+        // mirrors `AtProtoIngestAdapter`'s empty-source readiness arm + the
+        // index-query in-process decode-shape contract: no network round-trip at
+        // probe time (the REAL end-to-end z6Mk resolve+decode — verify a known-good
+        // sig, reject a tampered one — is exercised by the AV-4 gold-path test).
+        //
+        // The endpoint read + URL validation live in `peer_resolve` (which owns the
+        // `OPENLORE_INDEXER_PLC_ENDPOINT` seam) so this call site holds NO seam
+        // token — the lib.rs `xtask check-arch` seam-scan scope stays green.
+        match peer_resolve::check_plc_endpoint_ready() {
+            Ok(_endpoint) => ProbeOutcome::Ok,
+            Err(detail) => ProbeOutcome::Refused {
+                reason: ports::ProbeRefusalReason::IdentityPeerResolutionFailed,
+                detail,
+                structured: serde_json::json!({
+                    "adapter": "identity_resolve",
+                    "check": "plc_endpoint_ready",
+                }),
+            },
+        }
     }
 
     async fn resolve_verification_key(&self, did: &Did) -> Result<VerificationKey, ResolveError> {

@@ -6,7 +6,7 @@
 //!
 //! 1. **The verify-before-index gate** ([`ingest_decision`]): the pure
 //!    `RawRecord -> IngestOutcome` decision that reuses `claim_domain::verify`
-//!    + `compute_cid` (the SAME pure core — NO second verification path,
+//!    and `compute_cid` (the SAME pure core — NO second verification path,
 //!    WD-104). A record enters the index ONLY when its signature verifies
 //!    against the resolved key AND its recomputed CID matches the published
 //!    CID; otherwise it is `Reject`ed.
@@ -83,6 +83,13 @@ pub use ports::{AuthorRelationship, CounterRef, IndexedClaim, RawRecord, SearchD
 /// verified, attributed claim whose `author_did` is taken from the SIGNED
 /// payload; `Reject` carries the structured reason. There is no third state —
 /// a record is either admitted with full attribution or rejected.
+// reason: large_enum_variant — `IngestOutcome` is short-lived (produced per-record
+// by `ingest_decision`, immediately matched, NEVER stored in bulk), so the
+// `Index(IndexedClaim)` vs `Reject(RejectReason)` size gap costs nothing. Boxing
+// the large variant would ripple a `Box<IndexedClaim>` deref through ~10 match
+// arms across `openlore-indexer` + the AVC-* acceptance tests (several of which
+// bind `Index(claim) => claim` as a value); not worth churning a stable contract.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum IngestOutcome {
     /// Verified + CID-matched; ready to enter the index.

@@ -93,17 +93,19 @@ const PORT_TRAIT_SUFFIX: &str = "Port";
 ///   the SOFT-at-startup probe lands Phase 03/04 (KPI-5 / WD-116).
 /// - `IndexStoreAdapter`     (adapter-index-store): `IndexStorePort::probe` stub;
 ///   schema/fsync/attribution-roundtrip probe lands step 03-01 (ADR-025).
-/// - `AtProtoDidAdapter`     (adapter-atproto-did): the NEW verify-only
-///   `IdentityResolvePort::probe` stub (scope correction #5); the real z6Mk
-///   resolve probe lands step 03-04 (AV-4 / ADR-026). NOTE the SAME adapter's
-///   existing `IdentityPort::probe` is a REAL body (classifies `Accept`), so it
-///   is never in the warn/fail bucket — only the resolve-port stub site is.
+///
+/// DE-ALLOWLISTED (real probe landed — self-healing per the note above):
+/// - `AtProtoDidAdapter` (adapter-atproto-did): its verify-only
+///   `IdentityResolvePort::probe` now does a REAL resolve-readiness check (the
+///   configured PLC endpoint must be a usable http(s) URL — `peer_resolve::
+///   check_plc_endpoint_ready`), so the body classifies `Accept` and no longer
+///   needs the allowlist. The REAL end-to-end z6Mk resolve+decode is proven by
+///   AV-4. (The SAME adapter's `IdentityPort::probe` was always a REAL body.)
 const BOOTSTRAP_STUB_ALLOWLIST: &[&str] = &[
     "DuckDbPeerStorageAdapter",
     "AtProtoIngestAdapter",
     "HttpIndexQueryAdapter",
     "IndexStoreAdapter",
-    "AtProtoDidAdapter",
 ];
 
 /// Result of classifying one `probe()` body. The variants carry the

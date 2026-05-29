@@ -168,6 +168,42 @@ fn plc_endpoint() -> String {
         .unwrap_or_else(|_| DEFAULT_PLC_ENDPOINT.to_string())
 }
 
+/// Resolve-readiness Earned-Trust check for the verify-only
+/// [`crate::AtProtoDidAdapter`]'s `IdentityResolvePort::probe` (ADR-009 / I-4):
+/// the configured PLC endpoint (the URL the resolve path fetches `z6Mk` DID
+/// documents from) MUST be a well-formed absolute `http(s)` URL. An empty or
+/// malformed endpoint means the resolve path could NEVER fetch a DID document —
+/// the indexer would then reject every network record at use-time, so it must
+/// REFUSE to start instead (DESIGN §6.3; mirrors `AtProtoIngestAdapter`'s
+/// empty-source readiness arm).
+///
+/// Deterministic + in-process: like the sibling adapters' probes it does NO
+/// network round-trip — the REAL end-to-end `z6Mk` resolve+decode is exercised by
+/// the AV-4 gold-path acceptance test. The `OPENLORE_INDEXER_PLC_ENDPOINT` read
+/// lives HERE (not in `lib.rs`) so the lib.rs `xtask check-arch` pubkey/endpoint
+/// seam-scan scope stays clean (same rationale as `resolve_verification_key`).
+///
+/// Returns `Ok(endpoint)` with the validated endpoint when ready; `Err(detail)`
+/// (a pre-formatted refusal reason) when the configured endpoint is unusable.
+pub(crate) fn check_plc_endpoint_ready() -> Result<String, String> {
+    let endpoint = plc_endpoint();
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err("PLC resolver endpoint is empty — cannot resolve any DID document".to_string());
+    }
+    match Url::parse(trimmed) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.has_host() => Ok(endpoint),
+        Ok(url) => Err(format!(
+            "PLC resolver endpoint {trimmed:?} is not a usable http(s) URL with a host \
+             (scheme {:?})",
+            url.scheme()
+        )),
+        Err(err) => Err(format!(
+            "PLC resolver endpoint {trimmed:?} is not a valid URL: {err}"
+        )),
+    }
+}
+
 /// The production PLC directory base URL (ADR-026 default).
 const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
 
@@ -521,5 +557,45 @@ mod tests {
         let document = serde_json::json!({ "id": "did:plc:no-pds" });
         let err = parse_peer_info(&did, &document).expect_err("must fail without a PDS endpoint");
         assert!(matches!(err, IdentityError::PeerResolutionFailed { .. }));
+    }
+
+    /// Resolve-readiness probe arm: with the production default endpoint (no env
+    /// override) the configured PLC endpoint is a well-formed http(s) URL, so the
+    /// readiness check is `Ok` and returns the validated endpoint. Mutating the
+    /// env var to a malformed value flips it to `Err` — proving the check does
+    /// REAL work (it is not a trivial always-`Ok`). Serialized on the env var so
+    /// it never races a concurrent test reading `OPENLORE_INDEXER_PLC_ENDPOINT`.
+    #[test]
+    fn check_plc_endpoint_ready_accepts_default_and_refuses_malformed() {
+        // Snapshot + clear any ambient override so the default path is exercised.
+        let prior = std::env::var("OPENLORE_INDEXER_PLC_ENDPOINT").ok();
+        std::env::remove_var("OPENLORE_INDEXER_PLC_ENDPOINT");
+        let ready = check_plc_endpoint_ready();
+        assert_eq!(
+            ready.as_deref(),
+            Ok(DEFAULT_PLC_ENDPOINT),
+            "the production default PLC endpoint must pass the readiness check"
+        );
+
+        // A malformed endpoint must REFUSE (proves the arm does real validation).
+        std::env::set_var("OPENLORE_INDEXER_PLC_ENDPOINT", "not a url");
+        let refused = check_plc_endpoint_ready();
+        assert!(
+            refused.is_err(),
+            "a malformed PLC endpoint must refuse readiness; got {refused:?}"
+        );
+
+        // An empty endpoint must also REFUSE.
+        std::env::set_var("OPENLORE_INDEXER_PLC_ENDPOINT", "   ");
+        assert!(
+            check_plc_endpoint_ready().is_err(),
+            "an empty PLC endpoint must refuse readiness"
+        );
+
+        // Restore ambient state for any sibling test.
+        match prior {
+            Some(v) => std::env::set_var("OPENLORE_INDEXER_PLC_ENDPOINT", v),
+            None => std::env::remove_var("OPENLORE_INDEXER_PLC_ENDPOINT"),
+        }
     }
 }

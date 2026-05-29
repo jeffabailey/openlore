@@ -5951,6 +5951,27 @@ fn percent_decode_path(path: &str) -> String {
 /// Mirrors [`run_openlore_indexer_with_source`] but threads
 /// `OPENLORE_INDEXER_PLC_ENDPOINT` instead of any `OPENLORE_PEER_PUBKEY_HEX_<did>`
 /// seam. `env_clear()` guarantees the seam is absent.
+///
+/// ## Test-isolation contract (load-bearing under full-workspace `cargo test`)
+///
+/// `env_clear()` is what keeps the `OPENLORE_PEER_PUBKEY_HEX_<did>` seam UNSET
+/// (AV-4's whole point: prove the REAL `z6Mk` PLC decode ran, not the seam). But
+/// `env_clear()` ALSO drops the per-scenario `OPENLORE_HOME` — and without it the
+/// indexer's `default_index_path()` would fall back to a `OPENLORE_HOME`-anchored
+/// (and ultimately CWD-anchored) SHARED default `index.duckdb`, colliding with
+/// other cli test binaries' indexer state when many run concurrently. So after
+/// `env_clear()` we RE-SET, in this exact order, the per-scenario isolation the
+/// indexer needs so it uses its OWN tempdir-backed index — never a shared default:
+///   - `OPENLORE_HOME`               → this scenario's `TestEnv` tempdir home;
+///   - `OPENLORE_INDEXER_INDEX_PATH` → the scenario's SEPARATE `index.duckdb`
+///     under that home (the indexer reads this FIRST, so even if the
+///     `OPENLORE_HOME` fallback regressed the index path stays isolated);
+///   - `OPENLORE_INDEXER_SOURCE_URL` / `OPENLORE_INDEXER_PLC_ENDPOINT` → this
+///     scenario's fake source + fixture PLC resolver.
+/// The seam stays UNSET (NOT re-set) — re-introducing it would defeat AV-4.
+/// This mirrors [`run_openlore_indexer_with_source`]'s clean-env-plus-isolation
+/// discipline. Removing any of these `.env(...)` lines reintroduces the
+/// full-workspace flake.
 pub fn run_openlore_indexer_with_plc_resolver(
     env: &TestEnv,
     args: &[&str],
@@ -5961,6 +5982,8 @@ pub fn run_openlore_indexer_with_plc_resolver(
     let output = Command::new(&bin)
         .args(args)
         .env_clear()
+        // Per-scenario isolation re-set after env_clear() — see the contract above.
+        // (The OPENLORE_PEER_PUBKEY_HEX_<did> seam is deliberately NOT re-set.)
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
         .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
