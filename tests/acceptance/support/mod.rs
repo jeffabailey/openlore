@@ -64,8 +64,8 @@ pub use openlore_test_support::{
 // acceptance file can name them via `use support::*` (matching how the slice-01
 // /03 fixtures already surface).
 pub use openlore_test_support::{
-    fixture_ingest_adversarial_set_plus_one_valid, fixture_ingest_valid_signed, FixtureKeypair,
-    Posture, RawRecordSpec, PRIYA_DID,
+    corpus_deno_dependency_pinning_two_authors, fixture_ingest_adversarial_set_plus_one_valid,
+    fixture_ingest_valid_signed, FixtureKeypair, Posture, RawRecordSpec, PRIYA_DID, SVEN_DID,
 };
 
 /// A sealed test environment.
@@ -4515,4 +4515,54 @@ pub fn read_indexed_claims_by_object(env: &TestEnv, object: &str) -> Vec<Indexed
         })
         .unwrap_or_else(|err| panic!("query indexed_claims by object: {err}"));
     rows.map(|r| r.expect("decode indexed_claims row")).collect()
+}
+
+/// Universe-bound: "the indexer's `index.duckdb` contains NO table whose name
+/// implies a merged / consensus / aggregate / summary projection across authors".
+/// Port-exposed name: `index_storage.schema.no_merge_table_present`.
+///
+/// The load-bearing ABSENCE (WD-103 / I-AV-2): the ADR-025 schema is exactly
+/// `indexed_claims` + `indexed_claim_evidence` + `indexed_claim_references` +
+/// `index_schema_version` — NONE of which is a cross-author merge. Aggregates
+/// (`distinct_author_count`) are composed in the PURE `appview-domain` core at
+/// QUERY time, NEVER stored as a merged row. This is the structural complement
+/// to the type-level (ports non-`Option` `author_did`) + behavioral (AV-9)
+/// anti-merging layers. Introspects the live `information_schema.tables` rather
+/// than asserting against a hard-coded allow-list so a future merge table CANNOT
+/// slip in unnoticed. Test-support is the only place raw SQL is acceptable.
+pub fn assert_no_merged_consensus_table(env: &TestEnv) {
+    let db_path = index_duckdb_path(env);
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open index.duckdb at {} for no-merge-schema assertion: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema NOT IN ('information_schema', 'pg_catalog')",
+        )
+        .unwrap_or_else(|err| panic!("prepare schema introspection: {err}"));
+    let table_names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|err| panic!("query information_schema.tables: {err}"))
+        .map(|r| r.expect("decode table_name"))
+        .collect();
+
+    // Any table whose name suggests a cross-author roll-up is forbidden — the
+    // absence IS the WD-103 design. Substring match (case-insensitive) so a
+    // `claim_consensus` or `author_aggregate` variant is caught too.
+    const BANNED_SUBSTRINGS: &[&str] = &["consensus", "merged", "aggregate", "summary"];
+    for name in &table_names {
+        let lowered = name.to_ascii_lowercase();
+        for banned in BANNED_SUBSTRINGS {
+            assert!(
+                !lowered.contains(banned),
+                "anti-merging at ingest (WD-103 / I-AV-2): index.duckdb must contain NO \
+                 merge/consensus/aggregate table; found table {name:?} matching banned \
+                 substring {banned:?}. The full table set was: {table_names:?}"
+            );
+        }
+    }
 }

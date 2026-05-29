@@ -495,6 +495,61 @@ mod tests {
         assert!(absent.is_none(), "absent CID returns None");
     }
 
+    /// Anti-merging at the store boundary (WD-103 / I-AV-2; the inner-loop
+    /// decomposition of AV-2): two DISTINCT-author claims on the SAME
+    /// (subject,object) but with distinct CIDs stay TWO individually-attributed
+    /// rows — `query_by_object` returns both, attributed to {priya, sven}, and
+    /// there is no cross-author collapse. De-dup is by CID only (ADR-025), so a
+    /// merge would require collapsing on (subject,object) — which the store MUST
+    /// NOT do.
+    #[test]
+    fn upsert_two_distinct_authors_same_subject_object_stays_two_attributed_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        let store = IndexStoreAdapter::open(&db_path).expect("open index store");
+
+        let object = "org.openlore.philosophy.dependency-pinning";
+        let subject = "github:denoland/deno";
+        let priya = IndexedClaim {
+            author_did: Did("did:plc:priya-test#org.openlore.application".to_string()),
+            cid: Cid("bafytestpriyadeno".to_string()),
+            subject: subject.to_string(),
+            object: object.to_string(),
+            confidence: 0.70,
+            verified_against: KeyId("did:plc:priya-test#org.openlore.application".to_string()),
+            ..sample_claim()
+        };
+        let sven = IndexedClaim {
+            author_did: Did("did:plc:sven-test#org.openlore.application".to_string()),
+            cid: Cid("bafytestsvendeno".to_string()),
+            subject: subject.to_string(),
+            object: object.to_string(),
+            confidence: 0.65,
+            verified_against: KeyId("did:plc:sven-test#org.openlore.application".to_string()),
+            ..sample_claim()
+        };
+
+        store.upsert(&priya).expect("upsert priya");
+        store.upsert(&sven).expect("upsert sven");
+
+        let rows = store.query_by_object(object).expect("query by object");
+        assert_eq!(
+            rows.len(),
+            2,
+            "two distinct-author claims on the same (subject,object) must stay TWO rows"
+        );
+        let mut authors: Vec<String> = rows.iter().map(|r| r.author_did.0.clone()).collect();
+        authors.sort();
+        assert_eq!(
+            authors,
+            vec![
+                "did:plc:priya-test#org.openlore.application".to_string(),
+                "did:plc:sven-test#org.openlore.application".to_string(),
+            ],
+            "both authors must be individually attributed — never merged onto one row"
+        );
+    }
+
     /// De-dup at upsert is by CID only (ADR-025): upserting the same CID twice
     /// leaves exactly one row.
     #[test]

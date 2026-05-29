@@ -163,12 +163,103 @@ fn indexer_stores_two_distinct_author_claims_without_merging_on_same_subject_obj
     // Universe: the set of (author_did) in indexed_claims for the (subject,
     // object) pair {priya, sven}; the presence/absence of any
     // consensus/merged/aggregate table (absent).
-    todo!(
-        "DELIVER (slice-05): ingest two valid claims same (deno,dependency- \
-         pinning) by priya(0.70)+sven(0.65); assert indexed_claims has TWO rows \
-         distinct non-empty author_did, a search returns both attributed, NO \
-         consensus/merged/aggregate table exists (the no-merge-schema absence)."
+
+    // -- Precondition: a fake source hosts TWO valid signed claims on the SAME
+    // (github:denoland/deno, dependency-pinning) by Priya (0.70) + Sven (0.65),
+    // both with resolvable verify keys (the slice-03 pubkey seam carries each
+    // fixture keypair pubkey hex; the real z6Mk decode is AV-4). --
+    let env = TestEnv::fresh();
+    let priya = FixtureKeypair::for_did(PRIYA_DID);
+    let sven = FixtureKeypair::for_did(SVEN_DID);
+    let priya_pubkey_hex = hex_lower(&priya.verifying_key.0);
+    let sven_pubkey_hex = hex_lower(&sven.verifying_key.0);
+    let source = FakeIngestServer::start(corpus_deno_dependency_pinning_two_authors());
+
+    // -- Action: run the REAL `openlore-indexer ingest` one-shot pass (wire ->
+    // probe -> use) against the fake source + both PLC pubkey seams. --
+    let outcome = run_openlore_indexer_with_source(
+        &env,
+        &["ingest"],
+        source.source_url(),
+        &[
+            (PRIYA_DID, &priya_pubkey_hex),
+            (SVEN_DID, &sven_pubkey_hex),
+        ],
     );
+
+    assert_eq!(
+        outcome.status, 0,
+        "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Both records verified; none rejected (the pure compose preserves both —
+    // AVC-2/AVC-5; this asserts the REAL binary mirrors it).
+    assert!(
+        outcome.stdout.contains("indexer.ingest.verified")
+            && outcome.stdout.contains("\"count\":2"),
+        "expected indexer.ingest.verified count 2 in stdout; got: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("indexer.ingest.rejected")
+            && outcome.stdout.contains("\"count\":0"),
+        "expected indexer.ingest.rejected count 0 in stdout; got: {}",
+        outcome.stdout
+    );
+
+    // -- Observable outcome 1+2: a search by the SAME object returns BOTH claims
+    // as separate, individually-attributed rows — distinct non-empty author_did
+    // {priya, sven}, NEVER merged into one consensus row. --
+    let rows = read_indexed_claims_by_object(&env, "org.openlore.philosophy.dependency-pinning");
+    assert_eq!(
+        rows.len(),
+        2,
+        "two distinct-author claims on the SAME (subject,object) must stay TWO \
+         individually-attributed rows (anti-merging, WD-103); got {rows:?}"
+    );
+
+    // Every row is attributed to a distinct, non-empty author DID — the set is
+    // exactly {priya, sven}. The author_did carries the codebase `#fragment` form
+    // (one app identity per DID), matching the AV-1 attribution convention.
+    for row in &rows {
+        assert!(
+            !row.author_did.is_empty(),
+            "each indexed row must carry a non-empty author_did (WD-103); got {row:?}"
+        );
+        assert_eq!(
+            row.subject, "github:denoland/deno",
+            "both rows share the same subject; only the author differs"
+        );
+        assert!(
+            !row.verified_against.is_empty(),
+            "verified_against must never be empty on an indexed row (WD-104)"
+        );
+    }
+    let mut authors: Vec<&str> = rows.iter().map(|r| r.author_did.as_str()).collect();
+    authors.sort_unstable();
+    assert_eq!(
+        authors,
+        vec![
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:sven-test#org.openlore.application",
+        ],
+        "the two rows must be attributed to Priya AND Sven as SEPARATE authors — \
+         never collapsed/merged onto a single attributed row"
+    );
+
+    // The two rows have distinct CIDs — de-dup at upsert is by CID only (ADR-025);
+    // distinct authors yield distinct canonical payloads -> distinct CIDs -> two
+    // rows. (A merge would have collapsed them onto one CID.)
+    assert_ne!(
+        rows[0].cid, rows[1].cid,
+        "the two distinct-author claims must have distinct CIDs (no CID-level merge)"
+    );
+
+    // -- Observable outcome 3: the load-bearing ABSENCE — `index.duckdb` has NO
+    // consensus/merged/aggregate/summary table anywhere in its schema (WD-103).
+    // This is the structural complement to the per-row attribution above. --
+    assert_no_merged_consensus_table(&env);
 }
 
 // =============================================================================
