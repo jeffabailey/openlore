@@ -47,17 +47,28 @@ pub struct FederatedRow {
     pub source_table: SourceTable,
 }
 
-/// How the federated row relates to the local user.
+/// How the federated row (slice-03) or network search result (slice-05)
+/// relates to the local user.
 ///
 /// `UnsubscribedCache` is the soft-remove residue: the user used to be
 /// subscribed, ran `openlore peer remove <did>` (no `--purge`), and the
 /// peer_claims rows were retained but the subscription is now inactive
 /// (per ADR-014 soft-remove semantics).
+///
+/// `NetworkUnfollowed` is the slice-05 addition: an author present in the
+/// NETWORK index whom the user does NOT subscribe to → drives the
+/// `(not subscribed)` label + the `peer add` follow affordance (US-AV-005).
+/// The relationship is resolved CLI-side by checking the result's `author_did`
+/// against the user's `peer_subscriptions`; the index itself is
+/// per-user-neutral. The federated-read (slice-03) paths only ever produce the
+/// first three variants — `NetworkUnfollowed` is exclusively a slice-05
+/// network-search relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorRelationship {
     You,
     SubscribedPeer,
     UnsubscribedCache,
+    NetworkUnfollowed,
 }
 
 /// Which physical table the row came from.
@@ -298,11 +309,13 @@ mod tests {
             AuthorRelationship::You,
             AuthorRelationship::SubscribedPeer,
             AuthorRelationship::UnsubscribedCache,
+            AuthorRelationship::NetworkUnfollowed,
         ] {
             let name = match rel {
                 AuthorRelationship::You => "you",
                 AuthorRelationship::SubscribedPeer => "subscribed-peer",
                 AuthorRelationship::UnsubscribedCache => "unsubscribed-cache",
+                AuthorRelationship::NetworkUnfollowed => "network-unfollowed",
             };
             assert!(!name.is_empty(), "rendered name must be non-empty");
         }

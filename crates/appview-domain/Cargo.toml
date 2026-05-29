@@ -32,6 +32,7 @@ path = "src/lib.rs"
 serde = { workspace = true }
 chrono = { workspace = true }
 claim-domain = { path = "../claim-domain" }
+ports = { path = "../ports" }
 
 [dev-dependencies]
 proptest = { workspace = true }

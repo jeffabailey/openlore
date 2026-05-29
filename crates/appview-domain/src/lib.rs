@@ -49,31 +49,28 @@ pub use compose::compose_results;
 pub use ingest::ingest_decision;
 pub use suggest::near_match_suggestion;
 
-use chrono::{DateTime, Utc};
-use claim_domain::{Cid, ClaimReference, Did, KeyId, SignedClaim};
+use claim_domain::{Cid, Did, KeyId};
 use serde::{Deserialize, Serialize};
+
+// -----------------------------------------------------------------------------
+// Hoisted boundary types — single home is `ports` (step 01-02)
+// -----------------------------------------------------------------------------
+//
+// `RawRecord`, `IndexedClaim`, `SearchDimension`, `CounterRef`, and
+// `AuthorRelationship` were temporarily declared here at the 01-01 bootstrap so
+// `appview-domain` compiled self-contained. Step 01-02 reconciles them: their
+// single home is now `ports` (the boundary shapes the ingest adapter, the
+// index-store adapter, and this pure core all share — `appview-domain -> ports`,
+// never the reverse). `ReferenceType` was a DUPLICATE of `claim_domain::ReferenceType`
+// — deleted; `ports::CounterRef.ref_type` reuses the claim-domain SSOT. These
+// re-exports preserve the existing `appview_domain::{...}` public surface +
+// every `crate::`-path reference in `ingest.rs`/`compose.rs`/`suggest.rs`.
+pub use claim_domain::ReferenceType;
+pub use ports::{AuthorRelationship, CounterRef, IndexedClaim, RawRecord, SearchDimension};
 
 // -----------------------------------------------------------------------------
 // Ingest ADTs (the verify-before-index decision — WD-104)
 // -----------------------------------------------------------------------------
-
-/// A fetched-but-not-yet-verified network record — the `IngestSourcePort::enumerate`
-/// output the ingest gate consumes. Transient; NEVER persisted as-is.
-///
-/// The 01-02 step hoists this to `ports` (the home shared by the ingest adapter
-/// and the pure gate); declared here at bootstrap so `appview-domain` compiles
-/// self-contained before that reconciliation.
-///
-/// `PartialEq` (not `Eq`) because `SignedClaim` carries an `f64` confidence.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RawRecord {
-    /// The network-published rkey/CID (recomputed + verified at ingest).
-    pub published_cid: Cid,
-    /// The signed-claim value (author/subject/object/confidence/signature/...).
-    pub raw_payload: SignedClaim,
-    /// The PDS/relay URL it was pulled from (provenance; NOT signed).
-    pub source_pds: String,
-}
 
 /// The PURE verify-before-index gate decision (WD-104). `Index` carries the
 /// verified, attributed claim whose `author_did` is taken from the SIGNED
@@ -100,40 +97,6 @@ pub enum RejectReason {
     CidMismatch,
     /// The record does not match the `org.openlore.claim` Lexicon shape.
     SchemaUnknown,
-}
-
-// -----------------------------------------------------------------------------
-// Indexed-claim boundary value (an indexed_claims row + a JSON artifact)
-// -----------------------------------------------------------------------------
-
-/// The verified, attributed indexed claim — the boundary value `appview-domain`,
-/// the index-store adapter, and the query handler share.
-///
-/// `author_did` is NON-`Option` and LOAD-BEARING (anti-merging, WD-103): it is
-/// taken byte-equal from the signed payload's author, never asserted separately.
-/// `verified_against` is NEVER empty (verified-before-index, WD-104). Declared
-/// here at bootstrap; hoisted to `ports` in 01-02.
-///
-/// `PartialEq` (not `Eq`) because of the `f64` confidence.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexedClaim {
-    /// NON-`Option`; LOAD-BEARING (anti-merging, WD-103); == signed payload author.
-    pub author_did: Did,
-    /// Verified `== compute_cid(payload)` (WD-104).
-    pub cid: Cid,
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
-    /// Numeric `[0.0, 1.0]` (WD-10 / I-6) — the display bucket is render-only.
-    pub confidence: f64,
-    pub composed_at: DateTime<Utc>,
-    /// The DID-doc key id the signature verified against (ADR-026); NEVER empty (WD-104).
-    pub verified_against: KeyId,
-    pub evidence: Vec<String>,
-    /// For the OD-AV-7 counter annotation.
-    pub references: Vec<ClaimReference>,
-    /// Resolved CLI-side (you/subscribed-peer/unsubscribed-cache/network-unfollowed).
-    pub relationship: AuthorRelationship,
 }
 
 // -----------------------------------------------------------------------------
@@ -177,60 +140,3 @@ pub struct NetworkSearchResult {
     pub suggestion: Option<String>,
 }
 
-/// The search dimension a query addresses. Declared here at bootstrap; hoisted
-/// to `ports` in 01-02 (the home shared by `IndexQueryPort`/`IndexStorePort`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SearchDimension {
-    /// By philosophy URI — the headline dimension.
-    Object,
-    /// By author DID — one developer's whole network trail.
-    Contributor,
-    /// By project URI.
-    Subject,
-}
-
-/// A counter/retract relationship annotation on a result row (OD-AV-7). The
-/// annotation is SHOWN, never applied — the countered row is never removed from
-/// the result set. Carries the countering claim's CID + its author (the
-/// attribution of the counter is itself preserved).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CounterRef {
-    /// The CID of the claim that counters/retracts this row.
-    pub referencing_cid: Cid,
-    /// The author of the countering claim (attribution preserved).
-    pub counter_author: Did,
-    /// The kind of relationship (`Counters` | `Retracts`).
-    pub ref_type: ReferenceType,
-}
-
-/// The subset of inter-claim relationships the counter annotation surfaces.
-/// Mirrors `claim_domain::ReferenceType` (`Counters`/`Retracts`); declared
-/// locally so the annotation stays self-contained at the appview boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReferenceType {
-    Counters,
-    Retracts,
-}
-
-// -----------------------------------------------------------------------------
-// Author relationship (slice-03 enum + the slice-05 NetworkUnfollowed variant)
-// -----------------------------------------------------------------------------
-
-/// How a result's author relates to the local user.
-///
-/// `NetworkUnfollowed` is the slice-05 addition: an author present in the
-/// network index whom the user does NOT subscribe to → drives the
-/// `(not subscribed)` label + the `peer add` follow affordance (US-AV-005). The
-/// relationship is resolved CLI-side by checking the result's `author_did`
-/// against the user's `peer_subscriptions`; the index itself is per-user-neutral.
-///
-/// Declared here at bootstrap as the 4-variant slice-05 set; the 01-02 step
-/// reconciles this with `ports::AuthorRelationship` (which gains the
-/// `NetworkUnfollowed` variant there).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AuthorRelationship {
-    You,
-    SubscribedPeer,
-    UnsubscribedCache,
-    NetworkUnfollowed,
-}

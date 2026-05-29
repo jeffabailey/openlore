@@ -96,6 +96,39 @@ pub use github::{
 };
 
 // -----------------------------------------------------------------------------
+// Slice-05 (appview search) — the indexer subsystem ports + boundary ADTs
+// -----------------------------------------------------------------------------
+//
+// FOUR new ports + the indexed-claim/raw-record boundary value types, each in
+// its own submodule (mirroring the federated_row/graph/github/peer_storage
+// pattern). The async ports (`IndexQueryPort`/`IngestSourcePort`/
+// `IdentityResolvePort`) follow the existing `#[async_trait] pub trait X: Send +
+// Sync` pattern (PdsPort/GithubPort); `IndexStorePort` is SYNC (like
+// `StoragePort`). `indexed_claim` is the single home for `IndexedClaim` +
+// `SearchDimension` + `CounterRef`, hoisted from `appview-domain` (step 01-02)
+// so `ports` owns the boundary shapes (`appview-domain -> ports`, never the
+// reverse). `RawRecord` lives with its producing port (`ingest_source`).
+//
+// LOAD-BEARING (WD-120 / I-AV-2): `IndexedClaim.author_did` + every transport
+// row in `NetworkSearchResultRaw` carry `author_did: Did` as NON-`Option`;
+// `IndexStorePort` exposes NO aggregate-across-authors method (anti-merging at
+// the type + surface level). NO new external dependency added to `ports`.
+
+mod identity_resolve;
+mod index_query;
+mod index_store;
+mod indexed_claim;
+mod ingest_source;
+
+pub use identity_resolve::{IdentityResolvePort, ResolveError};
+pub use index_query::{
+    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
+};
+pub use index_store::{IndexStoreError, IndexStorePort};
+pub use indexed_claim::{CounterRef, IndexedClaim, SearchDimension};
+pub use ingest_source::{IngestError, IngestSourcePort, RawRecord};
+
+// -----------------------------------------------------------------------------
 // Driven ports — adapters implement these
 // -----------------------------------------------------------------------------
 
