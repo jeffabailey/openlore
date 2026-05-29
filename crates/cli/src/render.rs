@@ -61,7 +61,7 @@ use adapter_github::AuthReport;
 use claim_domain::{Cid, SignedClaim};
 use ports::{
     AttributedClaim, AuthorRelationship, CandidateClaim, FederatedRow, GraphEdge, GraphNode,
-    SourceTable, TraversalResult,
+    NetworkResultRowRaw, NetworkSearchResultRaw, SearchDimension, SourceTable, TraversalResult,
 };
 
 // -----------------------------------------------------------------------------
@@ -1048,11 +1048,19 @@ fn group_by_author(rows: &[FederatedRow]) -> Vec<(String, AuthorRelationship, Ve
 
 /// The human-readable relationship annotation appended to a per-author
 /// header. Content-frozen per ADR-013 header convention.
+///
+/// `NetworkUnfollowed` is exclusively a slice-05 NETWORK-search concern (a
+/// `FederatedRow` never carries it); for these LOCAL/federated views it maps to
+/// the same `(not subscribed)` label as the slice-05 network renderer
+/// ([`search_relationship_annotation`]) so the match stays total without a panic
+/// (the variant is structurally unreachable here, but a label is safer than
+/// `unreachable!`).
 fn relationship_annotation(relationship: AuthorRelationship) -> &'static str {
     match relationship {
         AuthorRelationship::You => "(you)",
         AuthorRelationship::SubscribedPeer => "(subscribed peer)",
         AuthorRelationship::UnsubscribedCache => "(unsubscribed cache)",
+        AuthorRelationship::NetworkUnfollowed => "(not subscribed)",
     }
 }
 
@@ -1548,6 +1556,114 @@ fn render_explain_contribution(contribution: &scoring::Contribution, running: f6
         running = render_weight_value(running),
     ));
     out
+}
+
+// -----------------------------------------------------------------------------
+// Slice-05 (ADR-027) — `openlore search` network-result renderers
+// -----------------------------------------------------------------------------
+//
+// The NETWORK discovery verb's render layer (WD-113). Per criterion 2 the
+// renderers live HERE in render.rs (slice-04 lesson: renderers are NOT in a
+// render/ subpath). All are PURE functions of the re-composed per-author network
+// result — no I/O, no clock, no storage access. Bootstrap SCAFFOLD (step 01-04):
+// the content-frozen literals are real; the render bodies are `todo!()` (the
+// live renders land in Phase 03/04 driven by the AV-* acceptance scenarios).
+
+/// Content-frozen public-data-only banner for `search` (KPI-AV-5 / I-AV-4).
+/// Printed BEFORE network results so the user is reassured discovery indexes
+/// ONLY public, signed, signature-verified claims — nothing private is read or
+/// aggregated. Do NOT paraphrase — the exact string is the user-visible
+/// contract. (Distinct from the slice-02 `PUBLIC_DATA_BANNER`, which is about
+/// GitHub scraping; this one is about the network index.)
+pub const SEARCH_PUBLIC_DATA_BANNER: &str = "Discovery indexes ONLY public, signed claims, \
+verified before indexing. Nothing private is read or aggregated.";
+
+/// Content-frozen no-merge guarantee for the network search views (I-AV-2 /
+/// WD-103). Reuses the slice-03/04 ADR-013 phrasing so the anti-merging promise
+/// reads identically across local + network views. Do NOT paraphrase.
+pub const SEARCH_NO_MERGE_FOOTER: &str =
+    "Each claim is attributed to its author DID. No claims are merged.";
+
+/// Content-frozen `[verified]` marker (I-AV-1): every network result carries it
+/// by construction (verified-before-index; there is no `[unverified]` state). Do
+/// NOT paraphrase.
+pub const VERIFIED_MARKER: &str = "[verified]";
+
+/// Content-frozen honest-trail footer for the `--contributor` network view
+/// (US-AV-003 / J-002). One developer's RAW trail — never a community consensus.
+/// Do NOT paraphrase.
+pub const SEARCH_CONTRIBUTOR_TRAIL_FOOTER: &str =
+    "This is one developer's reasoning trail, not a community consensus.";
+
+/// The relationship annotation appended to a per-author header in a network
+/// view. Extends the slice-03 [`relationship_annotation`] with the slice-05
+/// `NetworkUnfollowed` label `(not subscribed)` (US-AV-005) — an author present
+/// in the network index the user does not follow. Content-frozen per ADR-013.
+pub fn search_relationship_annotation(relationship: AuthorRelationship) -> &'static str {
+    match relationship {
+        AuthorRelationship::You => "(you)",
+        AuthorRelationship::SubscribedPeer => "(subscribed peer)",
+        AuthorRelationship::UnsubscribedCache => "(unsubscribed cache)",
+        AuthorRelationship::NetworkUnfollowed => "(not subscribed)",
+    }
+}
+
+/// Render the render-only `peer add` FOLLOW AFFORDANCE for an unfollowed network
+/// author (US-AV-005 / WD-110 / I-AV-7). REUSES the slice-03 command VERBATIM —
+/// it is a render string only; there is NO executable follow path and NO
+/// auto-subscribe. The user copy-pastes it to follow the discovered author. PURE.
+///
+/// SCAFFOLD: true — the exact affordance copy lands in Phase 03/04 (it prints
+/// `openlore peer add <did>` + the `peer pull` next step). The reuse-of-slice-03
+/// contract is pinned by `discovery_follow_reuses_slice03_path` (KPI-AV-4).
+pub fn render_follow_affordance(_author_did: &str) -> String {
+    // SCAFFOLD: true — render-only `openlore peer add <did>` follow hint
+    // (no auto-follow; reuses slice-03 verbatim). Lands in Phase 03/04.
+    todo!("render_follow_affordance — render-only `peer add` follow hint (Phase 03/04, I-AV-7)")
+}
+
+/// Render the network search result: the FLAT attributed transport rows
+/// re-grouped per author, each row carrying its `author_did` + numeric
+/// confidence + display bucket + cid + the `[verified]` marker, under a
+/// per-author header annotated with its relationship label; the unfollowed
+/// authors get the `peer add` follow affordance; the footer states the distinct-
+/// author count + the no-merge guarantee. PURE function — no I/O.
+///
+/// SCAFFOLD: true — the per-author grouping is computed via the pure
+/// `appview-domain` core; the render body lands in Phase 03/04 (AV-* scenarios).
+/// Two identical-(subject,object) rows by DIFFERENT authors render as TWO rows
+/// (anti-merging, I-AV-2).
+pub fn render_network_search_result(
+    _dimension: SearchDimension,
+    _result: &NetworkSearchResultRaw,
+) -> String {
+    // SCAFFOLD: true — banner + per-author groups + [verified] + relationship
+    // labels + follow affordances + the no-merge footer. Lands in Phase 03/04.
+    todo!("render_network_search_result — per-author network result render (Phase 03/04, ADR-027)")
+}
+
+/// Render the `--show <cid>` verification line(s): the full record plus
+/// "Signature: VERIFIED against <did>" + "CID recomputed, matches published
+/// record" — the SAME pure-core verification result the ingest gate used (no
+/// second path; I-AV-1). PURE function — no I/O.
+///
+/// SCAFFOLD: true — the verification line copy lands in Phase 03/04.
+pub fn render_show_verification_line(_row: &NetworkResultRowRaw) -> String {
+    // SCAFFOLD: true — full record + "Signature: VERIFIED against <did>" +
+    // "CID recomputed, matches published record". Lands in Phase 03/04.
+    todo!("render_show_verification_line — --show verification line (Phase 03/04, I-AV-1)")
+}
+
+/// Emit the `--share` query-encoding link (WD-110 / I-AV-8): encodes ONLY the
+/// dimension + value, NEVER a result snapshot. Opening it re-runs the query →
+/// current per-author-attributed verified results. PURE function — no I/O.
+///
+/// SCAFFOLD: true — emits `openlore://search?<dimension>=<value>`. Lands in
+/// Phase 03/04 (`share_link_encodes_query_not_snapshot`, KPI-AV-6).
+pub fn render_share_link(_dimension: SearchDimension, _value: &str) -> String {
+    // SCAFFOLD: true — `openlore://search?<dimension>=<value>` (query only,
+    // never a snapshot). Lands in Phase 03/04.
+    todo!("render_share_link — --share query-encoding link (Phase 03/04, I-AV-8)")
 }
 
 #[cfg(test)]

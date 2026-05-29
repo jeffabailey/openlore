@@ -60,6 +60,22 @@ pub mod probe;
 pub use probe::{probe, ProbeError};
 
 // =============================================================================
+// org.openlore.appview.searchClaims — the slice-05 READ query lexicon (ADR-027)
+// =============================================================================
+//
+// Step 01-04: the XRPC query lexicon + the shared CLI↔indexer request/response
+// DTOs (per-result `author_did` ALWAYS present; anti-merging across the
+// transport, I-AV-2). A `query` (READ) type — no signed payload, no CID concern.
+// Also recognizes the `[appview] indexer_url` config key + the indexer's own
+// config shape (pure serde; the binaries do the I/O). Pure module: no I/O.
+
+pub mod appview_query;
+pub use appview_query::{
+    AppviewConfig, IndexerConfig, IndexerSources, SearchDimensionDto, SearchQueryRequest,
+    SearchQueryResponse, SearchResultDto, SEARCH_CLAIMS_NSID,
+};
+
+// =============================================================================
 // org.openlore.philosophy — RED scaffold (later step turns this GREEN)
 // =============================================================================
 

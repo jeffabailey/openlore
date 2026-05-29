@@ -33,6 +33,10 @@ ports = { path = "../ports" }
 claim-domain = { path = "../claim-domain" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
+# Slice-05 (ADR-026): the verify-only `IdentityResolvePort` is ASYNC (network
+# PLC DID-document resolution), so `#[async_trait]` is needed for that impl
+# exactly as `ports` uses it for the trait declaration (ADR-004).
+async-trait = "0.1"
 keyring = "3"
 ed25519-dalek = { version = "2", default-features = false }
 # Slice-03: peer DID-document resolution (`resolve_peer`) issues a

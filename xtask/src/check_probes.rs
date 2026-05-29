@@ -81,7 +81,30 @@ const PORT_TRAIT_SUFFIX: &str = "Port";
 /// flip from warning→error is required. If a NON-allowlisted adapter regresses
 /// to a stub, it is still a hard violation (exit 1). The list is intentionally
 /// pinned by adapter name so it cannot mask a different adapter's regression.
-const BOOTSTRAP_STUB_ALLOWLIST: &[&str] = &["DuckDbPeerStorageAdapter"];
+/// Slice-05 (step 01-04) bootstrap stubs added to the allowlist. Each is an
+/// in-flight scaffold whose REAL Earned-Trust probe body lands in a later phase;
+/// until then its `todo!()` probe warns (no exit-1) rather than hard-failing CI.
+/// SELF-HEALING: when each real probe lands, the body classifies as `Accept` and
+/// the entry simply goes unused (de-allowlist at that point).
+///
+/// - `AtProtoIngestAdapter`  (adapter-atproto-ingest): `IngestSourcePort::probe`
+///   stub; real bounded-PULL + network-lies probe lands Phase 03/04 (ADR-024).
+/// - `HttpIndexQueryAdapter` (adapter-index-query): `IndexQueryPort::probe` stub;
+///   the SOFT-at-startup probe lands Phase 03/04 (KPI-5 / WD-116).
+/// - `IndexStoreAdapter`     (adapter-index-store): `IndexStorePort::probe` stub;
+///   schema/fsync/attribution-roundtrip probe lands step 03-01 (ADR-025).
+/// - `AtProtoDidAdapter`     (adapter-atproto-did): the NEW verify-only
+///   `IdentityResolvePort::probe` stub (scope correction #5); the real z6Mk
+///   resolve probe lands step 03-04 (AV-4 / ADR-026). NOTE the SAME adapter's
+///   existing `IdentityPort::probe` is a REAL body (classifies `Accept`), so it
+///   is never in the warn/fail bucket — only the resolve-port stub site is.
+const BOOTSTRAP_STUB_ALLOWLIST: &[&str] = &[
+    "DuckDbPeerStorageAdapter",
+    "AtProtoIngestAdapter",
+    "HttpIndexQueryAdapter",
+    "IndexStoreAdapter",
+    "AtProtoDidAdapter",
+];
 
 /// Result of classifying one `probe()` body. The variants carry the
 /// minimum context needed to render a useful error.

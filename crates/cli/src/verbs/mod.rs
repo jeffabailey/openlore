@@ -30,6 +30,10 @@ pub mod peer_add;
 pub mod peer_pull;
 pub mod peer_remove;
 pub mod scrape_github;
+// Slice-05 (appview search; step 01-04): the `openlore search` NETWORK verb
+// (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario
+// in Phase 03/04 (AV-* scenarios register at 01-05).
+pub mod search;
 
 /// Strip a `#fragment` from a DID, returning the bare DID. A signed
 /// claim's `author` carries the verification-method fragment

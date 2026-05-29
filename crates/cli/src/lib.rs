@@ -59,6 +59,33 @@ pub enum Command {
     /// Scrape a public source for candidate claims — slice-02 (ADR-017).
     #[command(subcommand)]
     Scrape(ScrapeCommand),
+    /// Search the NETWORK index — slice-05 (ADR-027). A NEW top-level verb
+    /// (WD-113): `graph query` stays unambiguously LOCAL; `search` is the only
+    /// NETWORK verb. Queries the self-hosted indexer over HTTP/XRPC along one
+    /// dimension (`--object`/`--contributor`/`--subject`), inspects one result
+    /// (`--show <cid>`), or emits a query-encoding link (`--share`). An
+    /// unreachable indexer degrades gracefully — it never blocks the CLI
+    /// (WD-116 / KPI-5).
+    Search {
+        /// Query by OBJECT (philosophy URI) — the headline dimension (US-AV-002).
+        #[arg(long)]
+        object: Option<String>,
+        /// Query by CONTRIBUTOR (DID) — one developer's network trail (US-AV-003).
+        #[arg(long)]
+        contributor: Option<String>,
+        /// Query by SUBJECT (project URI) (US-AV-004).
+        #[arg(long)]
+        subject: Option<String>,
+        /// Inspect one result by CID — full record + the verification line
+        /// (US-AV-006). Distinct from an empty dimension search (which exits 0).
+        #[arg(long)]
+        show: Option<String>,
+        /// Emit a stable query-encoding link instead of running the search
+        /// (WD-110 / I-AV-8) — encodes the QUERY (dimension + value), never a
+        /// result snapshot.
+        #[arg(long)]
+        share: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -424,6 +451,31 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
+        Command::Search {
+            object,
+            contributor,
+            subject,
+            show,
+            share,
+        } => match verbs::search::run(
+            &wiring,
+            &verbs::search::SearchArgs {
+                object,
+                contributor,
+                subject,
+                show,
+                share,
+            },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore search: {err:#}");
+                1
+            }
+        },
     }
 }
 

@@ -52,6 +52,14 @@ scraper-domain = { path = "../scraper-domain" }
 # acceptance scenario in Phase 02/05; the dep is wired now so the explorer
 # handler module can name it and the wiring can construct the scoring config).
 scoring = { path = "../scoring" }
+# Slice-05 (appview search; ADR-027). The composition root wires the index-query
+# CLIENT (`adapter-index-query`) for the `openlore search` verb's transport to
+# the self-hosted indexer; `appview-domain` is the PURE core the verb re-composes
+# the per-author network result through. The CLI links the CLIENT ONLY — NEVER
+# the indexer's server (`adapter-xrpc-query-server`) / store (`adapter-index-store`)
+# / ingest (`adapter-atproto-ingest`) crates (I-AV-3, enforced by xtask check-arch).
+adapter-index-query = { path = "../adapter-index-query" }
+appview-domain = { path = "../appview-domain" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = { workspace = true }

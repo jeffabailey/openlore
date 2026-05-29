@@ -28,6 +28,8 @@ members = [
     "crates/adapter-index-store",
     "crates/adapter-xrpc-query-server",
     "crates/adapter-index-query",
+    # slice-05 (appview search) the SECOND composition root — step 01-04.
+    "crates/openlore-indexer",
     "crates/cli",
     "crates/test-support",
     "xtask",

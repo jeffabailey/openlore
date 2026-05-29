@@ -65,9 +65,12 @@
 #![allow(dead_code)] // probe arms used only via probe(); keychain helpers are slice-03 entry points
 #![forbid(unsafe_code)]
 
-use claim_domain::{Cid, Did, SignatureBlock, SignedClaim, SigningKey, VerifyingKey};
+use async_trait::async_trait;
+use claim_domain::{Cid, Did, SignatureBlock, SignedClaim, SigningKey, VerificationKey, VerifyingKey};
 use ed25519_dalek::{SigningKey as DalekSigningKey, VerifyingKey as DalekVerifyingKey};
-use ports::{IdentityError, IdentityPort, PeerInfo, ProbeOutcome};
+use ports::{
+    IdentityError, IdentityPort, IdentityResolvePort, PeerInfo, ProbeOutcome, ResolveError,
+};
 
 pub mod probe;
 
@@ -324,6 +327,45 @@ impl IdentityPort for AtProtoDidAdapter {
     fn resolve_peer(&self, peer_did: &Did) -> Result<PeerInfo, IdentityError> {
         // SCAFFOLD: true (slice-03)
         peer_resolve::resolve_peer_did(peer_did)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Slice-05 (ADR-026): the verify-only `IdentityResolvePort` (scope correction #5)
+// -----------------------------------------------------------------------------
+//
+// The indexer wires this VERIFY-ONLY resolve path (ADR-023): resolve the
+// author's PLC DID document, locate the `#org.openlore.application` verification
+// method, and decode its `publicKeyMultibase` (`z6Mk...`) via the PURE
+// `claim_domain::decode_ed25519_multibase` (ADR-026) — NO signing capability is
+// implied or exposed (there is intentionally no sign/publish method on this
+// trait). The adapter is resolve/verify-only, so the indexer depending on it does
+// NOT violate the no-signing capability boundary (I-AV-5); the verify-only home
+// is `adapter-atproto-did` (it already does DID resolution, peer_resolve.rs).
+//
+// SCAFFOLD: true — the real `z6Mk` resolve + decode lands at step 03-04 (AV-4),
+// which runs the REAL decode with the `OPENLORE_PEER_PUBKEY_HEX_<did>` seam
+// UNSET (the seam is release-forbidden, I-AV-6). The bodies are `todo!()` here.
+
+#[async_trait]
+impl IdentityResolvePort for AtProtoDidAdapter {
+    fn probe(&self) -> ProbeOutcome {
+        // SCAFFOLD: true — the Earned-Trust resolve probe (resolve a FIXTURE DID
+        // document with a real z6Mk value, run the REAL decode, assert the key
+        // VERIFIES a known-good signature AND REJECTS a tampered one — a
+        // seam-only pass is a CI failure) lands at step 03-04 (AV-4 / ADR-026).
+        todo!("AtProtoDidAdapter::<IdentityResolvePort>::probe — Earned-Trust resolve probe (step 03-04, ADR-026)")
+    }
+
+    async fn resolve_verification_key(
+        &self,
+        _did: &Did,
+    ) -> Result<VerificationKey, ResolveError> {
+        // SCAFFOLD: true — resolve the PLC DID document, locate the
+        // `#org.openlore.application` verification method, and call the PURE
+        // `claim_domain::decode_ed25519_multibase` on its `publicKeyMultibase`
+        // (the SAME pure verify path; no second decode). Lands at step 03-04.
+        todo!("AtProtoDidAdapter::resolve_verification_key — real PLC z6Mk decode (step 03-04, ADR-026)")
     }
 }
 

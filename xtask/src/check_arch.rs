@@ -68,8 +68,17 @@ const PORTS_BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 /// don't compose runtime behavior.
 const ADAPTER_DEPENDENT_EXEMPT_MEMBERS: &[&str] = &["xtask", "openlore-test-support"];
 
-/// The single shipped composition root, per ADR-009. The only crate
-/// allowed to depend on `adapter-*` at runtime.
+/// The shipped composition roots, per ADR-009/023. The ONLY crates allowed to
+/// depend on `adapter-*` at runtime. Slice-05 (ADR-023) adds the SECOND root,
+/// `openlore-indexer` (the network indexer binary): invariant 5 (I-3) covers
+/// BOTH. The disjointness of the two roots' adapter sets — neither wires the
+/// other's — is enforced separately by
+/// [`check_indexer_capability_boundary`] (I-AV-5 + the I-3 second axis).
+const COMPOSITION_ROOTS: &[&str] = &["cli", "openlore-indexer"];
+
+/// The user's CLI composition root, per ADR-009. Named separately because the
+/// indexer capability-boundary rule keys on it specifically (the `cli`-side I-3
+/// axis: the CLI links the index-query CLIENT, never the indexer's server).
 const COMPOSITION_ROOT: &str = "cli";
 
 /// Pure in-memory view of the workspace dep graph. `members` is the set
@@ -214,13 +223,16 @@ fn check_no_adapter_depends_on_adapter(workspace: &Workspace) -> Vec<Violation> 
     violations
 }
 
-/// Pure check: invariant 5 — only `cli` (composition root) depends on
-/// `adapter-*` crates. `xtask` and `openlore-test-support` are exempt
-/// (first-party tooling, not shipped).
+/// Pure check: invariant 5 (I-3) — only a composition root (`cli` OR the
+/// slice-05 `openlore-indexer`, ADR-023) depends on `adapter-*` crates. `xtask`
+/// and `openlore-test-support` are exempt (first-party tooling, not shipped).
+/// The two roots' adapter sets are kept DISJOINT by
+/// [`check_indexer_capability_boundary`] (this rule only governs WHO may touch
+/// `adapter-*`; that rule governs WHICH adapters each root may touch).
 fn check_only_cli_depends_on_adapters(workspace: &Workspace) -> Vec<Violation> {
     let mut violations = Vec::new();
     for member in &workspace.members {
-        if member == COMPOSITION_ROOT
+        if COMPOSITION_ROOTS.contains(&member.as_str())
             || ADAPTER_DEPENDENT_EXEMPT_MEMBERS.contains(&member.as_str())
             || is_adapter_crate(member)
         {
@@ -232,7 +244,7 @@ fn check_only_cli_depends_on_adapters(workspace: &Workspace) -> Vec<Violation> {
                 violations.push(Violation {
                     package: member.clone(),
                     forbidden: dep,
-                    rule: "only `cli` (composition root) may depend on `adapter-*` crates",
+                    rule: "only a composition root (`cli` / `openlore-indexer`) may depend on `adapter-*` crates (I-3)",
                 });
             }
         }
@@ -424,14 +436,28 @@ pub struct AutoconfirmGuardViolation {
 /// `OPENLORE_TEST_AUTOCONFIRM` token appears inside an item that is NOT
 /// cfg-gated (and would therefore compile into a release binary).
 ///
+/// Delegates to the shared [`classify_cfg_gated_token`] brace-depth pass.
+pub fn classify_autoconfirm_guard(source: &str) -> Option<AutoconfirmGuardViolation> {
+    classify_cfg_gated_token(source, AUTOCONFIRM_TOKEN)
+        .map(|line| AutoconfirmGuardViolation { line })
+}
+
+/// Pure, token-generic release-build cfg-gate classifier. Returns `Some(line)`
+/// iff `token` appears (as a substring of a line) inside an item that is NOT
+/// `#[cfg(...)]`-gated (and would therefore compile into a release binary);
+/// `None` when every occurrence sits inside a cfg-gated item (or the token never
+/// appears).
+///
 /// Approach: brace-depth tracking. At top level (depth 0) an attribute run is
 /// accumulated; when the item's body opens (`{`, depth 0→1) the gate state for
 /// that whole item is fixed from the run (any `#[cfg(...)]` ⇒ gated). The gate
 /// stays in force for every line until the body closes back to depth 0. A token
-/// seen while the enclosing item is ungated is a violation; a token at top
-/// level with no enclosing gated item is also a violation.
-pub fn classify_autoconfirm_guard(source: &str) -> Option<AutoconfirmGuardViolation> {
-    if !source.contains(AUTOCONFIRM_TOKEN) {
+/// seen while the enclosing item is ungated is a violation; a token at top level
+/// with no enclosing gated item is also a violation. Shared by the D-D20
+/// autoconfirm guard and the I-AV-6 pubkey-seam guard so the gating logic lives
+/// in exactly one place.
+fn classify_cfg_gated_token(source: &str, token: &str) -> Option<String> {
+    if !source.contains(token) {
         return None;
     }
 
@@ -461,15 +487,13 @@ pub fn classify_autoconfirm_guard(source: &str) -> Option<AutoconfirmGuardViolat
         // Token check uses the gate state currently in force: inside an open
         // item, that item's `item_gated`; at top level (e.g. a `const` or
         // `static` on one line), the pending attribute run's cfg state.
-        if line.contains(AUTOCONFIRM_TOKEN) {
+        if line.contains(token) {
             let gated = match item_gated {
                 Some(g) => g,
                 None => pending_cfg,
             };
             if !gated {
-                return Some(AutoconfirmGuardViolation {
-                    line: line.to_string(),
-                });
+                return Some(line.to_string());
             }
         }
 
@@ -490,6 +514,118 @@ pub fn classify_autoconfirm_guard(source: &str) -> Option<AutoconfirmGuardViolat
     }
 
     None
+}
+
+// -----------------------------------------------------------------------------
+// Pubkey-seam release-build guard rule (I-AV-6 / ADR-026)
+// -----------------------------------------------------------------------------
+//
+// The slice-03 `OPENLORE_PEER_PUBKEY_HEX_<did>` env seam is RETAINED for tests
+// but RELEASE-FORBIDDEN: production verification resolves + decodes the author's
+// REAL PLC `z6Mk...` key (the pure `claim_domain::decode_ed25519_multibase`),
+// never a key handed in via the environment. AV-4 (step 03-04) runs the REAL
+// decode with the seam UNSET. Source-level contract (mirrors D-D20): every
+// occurrence of the `OPENLORE_PEER_PUBKEY_HEX_` token must sit inside a
+// `#[cfg(...)]`-gated item; an ungated occurrence would ship the env-var read in
+// a release binary.
+
+/// The release-forbidden pubkey-seam env-var PREFIX. The full var name appends a
+/// per-DID suffix (`format!("OPENLORE_PEER_PUBKEY_HEX_{}", did)`), so the rule
+/// keys on the prefix the source literal carries.
+const PUBKEY_SEAM_TOKEN: &str = "OPENLORE_PEER_PUBKEY_HEX_";
+
+/// A leaked pubkey-seam token — present in source but NOT behind a `#[cfg]` gate,
+/// so it would compile into a release binary (I-AV-6 violation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubkeySeamViolation {
+    /// The line (trimmed) where the ungated token appears.
+    pub line: String,
+}
+
+/// Pure classifier for the pubkey-seam release-build guard (I-AV-6 / ADR-026).
+/// Given the full source text of the verify-only adapter, return
+/// `Some(violation)` iff the `OPENLORE_PEER_PUBKEY_HEX_` token appears inside an
+/// item that is NOT cfg-gated (and would therefore ship the env-seam read in a
+/// release binary). Mirrors [`classify_autoconfirm_guard`].
+pub fn classify_pubkey_seam_guard(source: &str) -> Option<PubkeySeamViolation> {
+    classify_cfg_gated_token(source, PUBKEY_SEAM_TOKEN).map(|line| PubkeySeamViolation { line })
+}
+
+// -----------------------------------------------------------------------------
+// Indexer capability-boundary rule — `indexer_holds_no_signing_or_local_store`
+// (I-AV-5 / ADR-023) + the I-3 extension to BOTH composition roots
+// -----------------------------------------------------------------------------
+//
+// The `openlore-indexer` binary is the SECOND composition root and is
+// signing-INCAPABLE + holds NO local store (ADR-023). Encoded as the ABSENCE of
+// two dep classes in the indexer's transitive dep graph: the user's local-store
+// adapter (`adapter-duckdb`, the `StoragePort` impl) and any PDS-write surface
+// (`adapter-atproto-pds`, which carries `create_record`/`put_record`). The
+// indexer MAY depend on `adapter-atproto-did` (the verify-only
+// `IdentityResolvePort` resolve path — resolve/verify-only, no signing).
+//
+// The rule also extends I-3 to the second composition-root axis: the `cli` crate
+// must link NO HTTP server (`adapter-xrpc-query-server`) and none of the
+// indexer-side store/ingest crates — the two roots wire disjoint adapter sets,
+// neither wires the other's.
+
+/// The indexer composition-root crate name.
+const INDEXER_ROOT: &str = "openlore-indexer";
+
+/// Dep classes the signing-incapable, store-less indexer MUST NOT reach (I-AV-5
+/// / ADR-023): the user's local store (`StoragePort` impl) + any PDS-write
+/// surface. `adapter-atproto-did` is intentionally NOT here — the indexer wires
+/// it ONLY for the verify-only `IdentityResolvePort` (resolve/verify-only).
+const INDEXER_FORBIDDEN_DEPS: &[&str] = &["adapter-duckdb", "adapter-atproto-pds"];
+
+/// Indexer-side adapters the `cli` composition root MUST NOT link (I-3 second
+/// axis): the HTTP query server + the indexer's store/ingest crates. The CLI
+/// links the index-query CLIENT (`adapter-index-query`) instead — that is
+/// permitted (NOT on this list).
+const CLI_FORBIDDEN_INDEXER_DEPS: &[&str] = &[
+    "adapter-xrpc-query-server",
+    "adapter-index-store",
+    "adapter-atproto-ingest",
+];
+
+/// Pure dep-graph check (I-AV-5 + I-3 extension): the `openlore-indexer` crate's
+/// transitive dep graph excludes the signing/local-store deps, AND the `cli`
+/// crate links no indexer-side server/store/ingest crate. Returns one
+/// [`Violation`] per offending edge; empty vec = compliant. A missing root crate
+/// is silently skipped (robust to incremental workspace changes — the rule only
+/// fires when the root is actually present).
+pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation> {
+    let mut violations = Vec::new();
+
+    if workspace.members.contains(INDEXER_ROOT) {
+        let transitive = workspace.transitive_deps(INDEXER_ROOT);
+        for forbidden in INDEXER_FORBIDDEN_DEPS {
+            if transitive.contains(*forbidden) {
+                violations.push(Violation {
+                    package: INDEXER_ROOT.to_string(),
+                    forbidden: (*forbidden).to_string(),
+                    rule: "openlore-indexer MUST NOT depend on the signing identity / \
+                           local store / PDS-write surface (I-AV-5 / ADR-023)",
+                });
+            }
+        }
+    }
+
+    if workspace.members.contains(COMPOSITION_ROOT) {
+        let transitive = workspace.transitive_deps(COMPOSITION_ROOT);
+        for forbidden in CLI_FORBIDDEN_INDEXER_DEPS {
+            if transitive.contains(*forbidden) {
+                violations.push(Violation {
+                    package: COMPOSITION_ROOT.to_string(),
+                    forbidden: (*forbidden).to_string(),
+                    rule: "cli MUST NOT link the indexer's HTTP server / store / ingest \
+                           crates (I-3: disjoint composition roots)",
+                });
+            }
+        }
+    }
+
+    violations
 }
 
 /// Pure entry point — given a workspace shape, return every violation.
@@ -524,6 +660,10 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
+    // Slice-05 (I-AV-5 / ADR-023 + I-3 extension): the indexer capability
+    // boundary — `openlore-indexer` holds no signing/local-store; both
+    // composition roots wire disjoint adapter sets.
+    violations.extend(check_indexer_capability_boundary(workspace));
     violations
 }
 
@@ -709,6 +849,44 @@ fn scan_autoconfirm_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> 
     })
 }
 
+/// The verify-only adapter source files the pubkey-seam guard scans (I-AV-6 /
+/// ADR-026). SCOPED to the file holding the NEW slice-05 verify-only
+/// `IdentityResolvePort` production resolve+decode path (`lib.rs`) — that is the
+/// production path AV-4 (step 03-04) lands the REAL `z6Mk...` decode into, and
+/// the path the rule must keep free of the release-forbidden env seam.
+///
+/// The pre-existing slice-03 `OPENLORE_PEER_PUBKEY_HEX_<did>` seam in
+/// `peer_resolve.rs` is a SEPARATE, already-shipped concern (RETAINED for tests
+/// per the slice-03 contract); it is intentionally OUT of this rule's scan scope.
+/// When the real ADR-026 decode lands in `lib.rs`, this scan guards it against
+/// re-introducing the seam (an ungated read in `lib.rs` fails CI).
+const PUBKEY_SEAM_GUARDED_SOURCES: &[&str] = &["crates/adapter-atproto-did/src/lib.rs"];
+
+/// Effect shell for the pubkey-seam release-build guard (I-AV-6 / ADR-026): scan
+/// the verify-only resolve+decode path for an UNGATED `OPENLORE_PEER_PUBKEY_HEX_`
+/// read. A missing file is "nothing to scan". Reads the source as text (not
+/// `syn`) because the rule is brace-depth / cfg-attribute aware, like the
+/// autoconfirm guard — comments are stripped by the classifier's own line filter.
+fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for rel in PUBKEY_SEAM_GUARDED_SOURCES {
+        let path = workspace_root.join(rel);
+        if !path.is_file() {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path)?;
+        if let Some(v) = classify_pubkey_seam_guard(&src) {
+            findings.push(format!(
+                "{}: `OPENLORE_PEER_PUBKEY_HEX_` seam read is NOT behind a `#[cfg(...)]` \
+                 gate — it would ship in a release binary (I-AV-6 / ADR-026): {}",
+                path.display(),
+                v.line
+            ));
+        }
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -719,11 +897,13 @@ pub fn run() -> anyhow::Result<i32> {
     let sql_findings = scan_adapter_duckdb_sql(&workspace_root)?;
     let index_store_sql_findings = scan_adapter_index_store_sql(&workspace_root)?;
     let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
+    let pubkey_seam_findings = scan_pubkey_seam_guard(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
     rendered.extend(index_store_sql_findings);
     rendered.extend(autoconfirm_findings);
+    rendered.extend(pubkey_seam_findings);
 
     if rendered.is_empty() {
         println!(

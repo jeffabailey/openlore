@@ -28,10 +28,12 @@ use adapter_atproto_did::AtProtoDidAdapter;
 use adapter_atproto_pds::AtProtoPdsAdapter;
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
+use adapter_index_query::HttpIndexQueryAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
-    ClockPort, GithubPort, IdentityPort, PdsPort, PeerStoragePort, ProbeOutcome, StoragePort,
+    ClockPort, GithubPort, IdentityPort, IndexQueryPort, PdsPort, PeerStoragePort, ProbeOutcome,
+    StoragePort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -53,6 +55,23 @@ pub struct Wiring {
     /// `GithubAdapter::from_env`. Holds NO storage/identity/pds reference —
     /// by construction it cannot sign or publish (the human-gate, I-SCR-1).
     pub github: Box<dyn GithubPort>,
+    /// Slice-05 (appview search; ADR-027) index-query CLIENT — the `openlore
+    /// search` verb's transport to the self-hosted indexer. WIRED + SOFT-probed
+    /// at startup: an unreachable indexer is informational, NOT a startup
+    /// refusal — it MUST NOT block `claim add` (WD-116 / KPI-5). The CLI links
+    /// the CLIENT (`adapter-index-query`) only — NEVER the indexer's server /
+    /// store / ingest crates (I-AV-3, enforced by `xtask check-arch`).
+    ///
+    /// Bootstrap SCAFFOLD (step 01-04): `None` because
+    /// `HttpIndexQueryAdapter::new()`/`probe()` are Phase 03/04 `todo!()`
+    /// scaffolds — constructing it now would panic the binary at startup for
+    /// EVERY verb (violating WD-116). The slot is present so the `search` verb
+    /// can name it and the SOFT-probe shape is established; the real
+    /// construction + the graceful-degradation `Unreachable` mapping land with
+    /// the AV-* scenarios in Phase 03/04. The `_phantom_index_query` reference
+    /// below keeps `HttpIndexQueryAdapter` in the dep graph so `xtask
+    /// check-arch` sees the CLI links the CLIENT (and only the client).
+    pub index_query: Option<Box<dyn IndexQueryPort>>,
     pub paths: OpenLorePaths,
 }
 
@@ -125,6 +144,17 @@ impl Wiring {
         // this wiring slot land in 01-04 (the live harvest is Phase 03/04).
         let github: Box<dyn GithubPort> = Box::new(GithubAdapter::from_env());
 
+        // Slice-05 (ADR-027): the index-query CLIENT slot. WIRED + SOFT-probed,
+        // but at this bootstrap step it is `None` because
+        // `HttpIndexQueryAdapter::new()` is a Phase 03/04 `todo!()` scaffold —
+        // calling it now would panic at startup for EVERY verb, violating WD-116
+        // (an unreachable indexer MUST NOT block `claim add`). The reference to
+        // `HttpIndexQueryAdapter::new` below keeps the CLIENT crate in the CLI's
+        // dep graph (so `xtask check-arch` sees the CLI links the client and
+        // ONLY the client — I-AV-3), without invoking the scaffold.
+        let _phantom_index_query: fn() -> HttpIndexQueryAdapter = HttpIndexQueryAdapter::new;
+        let index_query: Option<Box<dyn IndexQueryPort>> = None;
+
         Ok(Self {
             identity,
             storage,
@@ -132,6 +162,7 @@ impl Wiring {
             pds,
             clock,
             github,
+            index_query,
             paths,
         })
     }
@@ -171,6 +202,20 @@ impl Wiring {
         // exercised now, satisfying the step-01-04 AC "ProbeGauntlet includes
         // the new GithubPort.probe()".
         check_probe("github", self.github.probe())?;
+
+        // Slice-05 (ADR-027 / WD-116) index-query SOFT probe. UNLIKE every probe
+        // above, an unreachable indexer is INFORMATIONAL — it MUST NOT refuse
+        // startup (the CLI must start, and `claim add` / offline `claim publish`
+        // / `graph query` must succeed, without a reachable indexer — KPI-5).
+        // So the index-query outcome is read but NEVER propagated as a refusal:
+        // a `Refused` outcome is swallowed (logged at the verb layer when
+        // `search` actually runs). At this bootstrap step the slot is `None`
+        // (the adapter constructor is a Phase 03/04 scaffold), so the probe is
+        // skipped entirely; the SOFT-not-fatal shape is established here.
+        if let Some(index_query) = &self.index_query {
+            // Soft: discard the outcome — an unreachable indexer is non-fatal.
+            let _soft = index_query.probe();
+        }
         Ok(())
     }
 

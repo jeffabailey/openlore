@@ -1,0 +1,41 @@
+[package]
+name = "openlore-indexer"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore network indexer: the SECOND composition root (ADR-023). Signing-incapable; holds no local store. serve | ingest | stats."
+
+[[bin]]
+name = "openlore-indexer"
+path = "src/main.rs"
+
+# DRIVER / SECOND composition root (ADR-009/023). Wires ONLY the indexer's
+# driven adapters + the pure cores. The capability boundary (I-AV-5) is encoded
+# as the ABSENCE of the signing identity / the user's local store / any PDS-write
+# surface from this dep graph — `xtask check-arch`'s
+# `indexer_holds_no_signing_or_local_store` rule enforces it structurally.
+#
+# Permitted adapter deps:
+#   - adapter-atproto-ingest   (IngestSourcePort   — read-only bounded PULL)
+#   - adapter-index-store      (IndexStorePort     — SEPARATE index.duckdb)
+#   - adapter-atproto-did      (IdentityResolvePort — VERIFY-ONLY resolve; no signing)
+#   - adapter-xrpc-query-server(the HTTP/XRPC query surface)
+#   - adapter-system-clock     (ClockPort          — degenerate, no capability)
+# FORBIDDEN (NOT listed): adapter-duckdb (StoragePort/local store),
+# adapter-atproto-pds (PDS-write surface).
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+appview-domain = { path = "../appview-domain" }
+adapter-atproto-ingest = { path = "../adapter-atproto-ingest" }
+adapter-index-store = { path = "../adapter-index-store" }
+adapter-atproto-did = { path = "../adapter-atproto-did" }
+adapter-xrpc-query-server = { path = "../adapter-xrpc-query-server" }
+adapter-system-clock = { path = "../adapter-system-clock" }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
