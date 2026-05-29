@@ -6381,3 +6381,85 @@ pub fn assert_funnel_subscription_is_slice03(env: &TestEnv, peer_did: &str) {
          {active} active rows"
     );
 }
+
+/// AV-20 (US-AV-005 Ex3 / I-AV-7): snapshot the FULL `peer_subscriptions` table —
+/// the port-exposed observable that `openlore peer list` renders (the subscription
+/// state a user inspects). Returns every row as a deterministic, sorted list of
+/// stringified `(peer_did, peer_handle, peer_pds_endpoint, subscribed_at,
+/// removed_at)` tuples so two snapshots are byte-comparable across a `search` +
+/// `--show` invocation.
+///
+/// Port-exposed name: `peer_storage.subscriptions.rows`. Test-support is the only
+/// place raw SQL is acceptable; production reads go through `PeerStoragePort`. The
+/// baseline may be EMPTY — a fresh env has no DB file (no peer-write path opened it
+/// yet) or no `peer_subscriptions` table; both are the strongest form of "zero
+/// subscriptions", so absence maps to an empty snapshot (NOT a panic).
+pub fn peer_subscriptions_snapshot(env: &TestEnv) -> Vec<String> {
+    let db_path = env.duckdb_path();
+    // A fresh env may have no DB file at all (no write path ever opened it) — that
+    // is an EMPTY subscription state, the AV-20 baseline.
+    if !db_path.exists() {
+        return Vec::new();
+    }
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for the AV-20 peer_subscriptions snapshot: {err}",
+            db_path.display()
+        )
+    });
+    // The `peer_subscriptions` table may not exist if no peer-write migration ran;
+    // a failed query is therefore also the EMPTY subscription state. Every column is
+    // cast to text so the heterogeneous timestamp/nullable slots compare as strings.
+    let mut rows: Vec<String> = match conn.prepare(
+        "SELECT \
+            CAST(peer_did AS VARCHAR), \
+            CAST(peer_handle AS VARCHAR), \
+            CAST(peer_pds_endpoint AS VARCHAR), \
+            CAST(subscribed_at AS VARCHAR), \
+            CAST(COALESCE(CAST(removed_at AS VARCHAR), '<active>') AS VARCHAR) \
+         FROM peer_subscriptions",
+    ) {
+        Ok(mut stmt) => {
+            let mapped = stmt.query_map([], |r| {
+                Ok(format!(
+                    "peer_did={} | handle={} | pds={} | subscribed_at={} | removed_at={}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            });
+            match mapped {
+                Ok(iter) => iter.map(|r| r.expect("read peer_subscriptions row")).collect(),
+                Err(_) => return Vec::new(),
+            }
+        }
+        // No such table → empty subscription state (no peer-write path ran).
+        Err(_) => return Vec::new(),
+    };
+    // Deterministic order so the before/after comparison is stable regardless of
+    // DuckDB's row-return order.
+    rows.sort();
+    rows
+}
+
+/// AV-20 / RELEASE-GATE-ADJACENT (US-AV-005 Ex3 / I-AV-7): assert that discovery
+/// (`openlore search` along any dimension + `--show`) NEVER auto-subscribes — the
+/// `peer_subscriptions` state (what `peer list` renders) is BYTE-IDENTICAL before
+/// and after. Discovery is read-only; following is always an explicit, separate
+/// human action; the render-only follow affordance never executes a follow.
+///
+/// Port-exposed name: `peer_storage.subscriptions.rows` before == after. Asserts on
+/// the OBSERVABLE subscription surface, never an internal adapter field — refactor
+/// stays GREEN.
+pub fn assert_subscriptions_unchanged(before: &[String], after: &[String]) {
+    assert_eq!(
+        after, before,
+        "AV-20 (US-AV-005 Ex3 / I-AV-7): `openlore search` + `--show` must NEVER \
+         auto-subscribe — the `peer_subscriptions` state (`peer list`) must be \
+         UNCHANGED across discovery. Following is always an explicit human action; \
+         the render-only affordance never executes a follow.\n\
+         before: {before:?}\nafter:  {after:?}"
+    );
+}

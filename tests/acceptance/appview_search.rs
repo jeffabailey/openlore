@@ -1321,10 +1321,119 @@ fn discovery_never_auto_subscribes() {
     //
     // Universe (port-exposed): peer_subscriptions before == after (search +
     // --show mutate NO subscription state); `peer list` output unchanged.
-    todo!(
-        "DELIVER (slice-05): run several `openlore search` + `--show` queries \
-         WITHOUT any `peer add`; assert `peer list` (peer_subscriptions) is \
-         unchanged — discovery never auto-subscribes (US-AV-005 Ex3 / I-AV-7)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus (9 authors /
+    // 7 subjects), which carries several UNFOLLOWED authors (incl. Priya on bazel,
+    // 0.82) — each rendered with the render-only follow affordance. NO `peer add`
+    // precedes (or follows) the discovery, so the affordance is the ONLY follow
+    // surface, and it must remain a hint that never executes a follow (I-AV-7). The
+    // CLI's indexer_url points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Snapshot the FULL `peer_subscriptions` state (what `peer list` renders)
+    // BEFORE any discovery. With NO prior `peer add`, the baseline is EMPTY — the
+    // strongest form of "no subscription created by search". --
+    let subscriptions_before = peer_subscriptions_snapshot(&env);
+
+    // === Action: run SEVERAL `openlore search` queries across dimensions (object,
+    // contributor, subject) + a `--show` on a listed cid — the full discovery +
+    // inspect surface — WITHOUT ever running `peer add`. ===
+
+    // (1) The OBJECT dimension over the headline corpus — surfaces unfollowed
+    // authors each carrying the render-only follow affordance.
+    let object_search = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+        ],
+        &indexer,
+    );
+    assert_eq!(
+        object_search.status, 0,
+        "AV-20: `search --object` must exit 0. stdout: {} stderr: {}",
+        object_search.stdout, object_search.stderr
+    );
+    // The render-only affordance IS present for an unfollowed author (the funnel
+    // hint), confirming discovery surfaces the follow command — which the snapshot
+    // delta below proves is NEVER auto-executed (I-AV-7).
+    assert!(
+        object_search
+            .stdout
+            .contains("Follow this author: openlore peer add"),
+        "AV-20: the discovery result must surface the render-only follow affordance \
+         (the funnel hint that must NOT auto-execute):\n{}",
+        object_search.stdout
+    );
+
+    // (2) The CONTRIBUTOR dimension — one developer's network trail (also unfollowed).
+    let contributor_search =
+        run_openlore_search(&env, &["search", "--contributor", "github:priya"], &indexer);
+    assert_eq!(
+        contributor_search.status, 0,
+        "AV-20: `search --contributor` must exit 0. stdout: {} stderr: {}",
+        contributor_search.stdout, contributor_search.stderr
+    );
+
+    // (3) The SUBJECT dimension — a project survey across authors.
+    let subject_search = run_openlore_search(
+        &env,
+        &["search", "--subject", "github:bazelbuild/bazel"],
+        &indexer,
+    );
+    assert_eq!(
+        subject_search.status, 0,
+        "AV-20: `search --subject` must exit 0. stdout: {} stderr: {}",
+        subject_search.stdout, subject_search.stderr
+    );
+
+    // (4) Inspect a listed result via `--show` (the trust-display read path) — a cid
+    // captured from the object-dimension result set (US-AV-004 read-only inspect).
+    let priya_bazel_cid = cid_from_search_row(
+        &object_search.stdout,
+        "did:plc:priya-test",
+        "github:bazelbuild/bazel",
+    );
+    let shown = run_openlore_search(
+        &env,
+        &[
+            "search",
+            "--object",
+            "org.openlore.philosophy.reproducible-builds",
+            "--show",
+            &priya_bazel_cid,
+        ],
+        &indexer,
+    );
+    assert_eq!(
+        shown.status, 0,
+        "AV-20: `search --object ... --show <listed cid>` must exit 0. stdout: {} \
+         stderr: {}",
+        shown.stdout, shown.stderr
+    );
+
+    // -- Snapshot the `peer_subscriptions` state AFTER all the discovery + inspect
+    // actions. --
+    let subscriptions_after = peer_subscriptions_snapshot(&env);
+
+    // === The cardinal AV-20 gate (US-AV-005 Ex3 / I-AV-7): the subscription state
+    // (`peer list` / peer_subscriptions) is BYTE-IDENTICAL before and after — NO
+    // subscription was created by ANY search dimension or by `--show`. Discovery is
+    // read-only; following is always an explicit, separate human action; the
+    // render-only affordance never executes a follow. ===
+    assert_subscriptions_unchanged(&subscriptions_before, &subscriptions_after);
+    // The strongest form of the gate on a fresh env: the baseline was empty and
+    // STAYS empty — discovery created ZERO subscriptions.
+    assert!(
+        subscriptions_after.is_empty(),
+        "AV-20: with NO `peer add`, discovery must leave peer_subscriptions EMPTY \
+         (zero auto-follows); got: {subscriptions_after:?}"
     );
 }
 
