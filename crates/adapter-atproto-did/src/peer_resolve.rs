@@ -61,18 +61,28 @@ pub(crate) fn resolve_peer_did(peer_did: &Did) -> Result<PeerInfo, IdentityError
     // `publicKeyMultibase`, so when the per-peer pubkey env override is
     // present we inject a verification method whose `public_key_multibase`
     // carries the REAL Ed25519 key (encoded `hex:<64-char-hex>`). The pull
-    // pipeline (`VerbPeerPull`) decodes it for `claim_domain::verify`. In
-    // production this env var is absent and the resolved DID-document key
-    // stands as the authority.
+    // pipeline (`VerbPeerPull`) decodes it for `claim_domain::verify`.
+    //
+    // RELEASE-GATED (ADR-026 / I-AV-6): the seam is a DEBUG-ONLY short-circuit.
+    // `pubkey_override_method` is `#[cfg(debug_assertions)]` ⇒ in a release build
+    // (`debug_assertions = false`) it is the stub returning `None`, the seam env
+    // var is NEVER read, and the resolved DID-document key stands as the sole
+    // authority. In debug/test (`cargo test`/`cargo build`) it reads the seam so
+    // the slice-03 peer_pull/peer_subscribe acceptance tests keep working.
     if let Some(method) = pubkey_override_method(peer_did) {
         info.verification_methods.insert(0, method);
     }
     Ok(info)
 }
 
-/// Build a verification method from the per-peer pubkey env override, if
-/// set. Returns `None` in production (no env var) so the resolved
-/// DID-document verification methods stand unchanged.
+/// Build a verification method from the per-peer pubkey env override, if set.
+/// Returns `None` when the env var is absent so the resolved DID-document
+/// verification methods stand unchanged.
+///
+/// DEBUG-ONLY (ADR-026 / I-AV-6): this seam-reading variant compiles ONLY when
+/// `debug_assertions` is true (debug + test builds). The release variant below is
+/// a stub that never reads the env — the seam is release-FORBIDDEN.
+#[cfg(debug_assertions)]
 fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
     let hex = std::env::var(peer_pubkey_env_var(&peer_did.0)).ok()?;
     let trimmed = hex.trim();
@@ -87,6 +97,14 @@ fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
         // (`VerbPeerPull`) can decode it without a multibase dependency.
         public_key_multibase: format!("hex:{trimmed}"),
     })
+}
+
+/// Release variant of [`pubkey_override_method`]: the seam is compiled OUT
+/// (`debug_assertions = false`), so there is NO env read — resolution proceeds
+/// with the resolved DID-document verification methods only (ADR-026 / I-AV-6).
+#[cfg(not(debug_assertions))]
+fn pubkey_override_method(_peer_did: &Did) -> Option<VerificationMethod> {
+    None
 }
 
 /// Slice-05: resolve `did` into its Ed25519 [`VerificationKey`] for the indexer's
@@ -107,8 +125,12 @@ fn pubkey_override_method(peer_did: &Did) -> Option<VerificationMethod> {
 /// on the bare DID, ADR-026); the indexer resolves the SIGNED payload's author,
 /// which carries the `#org.openlore.application` fragment.
 pub(crate) async fn resolve_verification_key(did: &Did) -> Result<VerificationKey, ResolveError> {
-    // Seam SET → hermetic walking-skeleton path (AV-1/2/3). Seam UNSET → fall
-    // through to the REAL PLC z6Mk decode (AV-4, ADR-026).
+    // RELEASE-GATED (ADR-026 / I-AV-6): in DEBUG/test (`debug_assertions = true`)
+    // the seam SET → hermetic walking-skeleton path (AV-1/2/3); seam UNSET → fall
+    // through to the REAL PLC z6Mk decode (AV-4). In RELEASE
+    // (`debug_assertions = false`) `seam_verification_key` is the stub that always
+    // returns `Ok(None)` — the seam is compiled out — so resolution proceeds
+    // STRAIGHT to the real PLC decode. The seam is a debug-only short-circuit.
     match seam_verification_key(did)? {
         Some(key) => Ok(key),
         None => resolve_verification_key_via_plc(did).await,
@@ -119,6 +141,14 @@ pub(crate) async fn resolve_verification_key(did: &Did) -> Result<VerificationKe
 /// `OPENLORE_PEER_PUBKEY_HEX_<did>` is set, `Ok(None)` when it is UNSET (the AV-4
 /// gold-path signal to fall through to the real PLC decode), `Err` when the seam
 /// value is malformed.
+///
+/// DEBUG-ONLY (ADR-026 / I-AV-6): this seam-reading variant compiles ONLY when
+/// `debug_assertions` is true (debug + test builds), so the slice-05
+/// AV-1/2/3/5/6/7 acceptance tests that seed `OPENLORE_PEER_PUBKEY_HEX_*` keep
+/// working under `cargo test`. The release variant below always returns
+/// `Ok(None)` — the seam read is compiled OUT — so a release build can NEVER
+/// short-circuit the real PLC `z6Mk...` decode via the environment.
+#[cfg(debug_assertions)]
 fn seam_verification_key(did: &Did) -> Result<Option<VerificationKey>, ResolveError> {
     let bare_did = did.0.split('#').next().unwrap_or(&did.0);
     let hex = match std::env::var(peer_pubkey_env_var(bare_did)) {
@@ -133,6 +163,15 @@ fn seam_verification_key(did: &Did) -> Result<Option<VerificationKey>, ResolveEr
         detail,
     })?;
     Ok(Some(VerificationKey(bytes)))
+}
+
+/// Release variant of [`seam_verification_key`]: the seam is compiled OUT
+/// (`debug_assertions = false`), so it always signals "no seam" — resolution in
+/// [`resolve_verification_key`] falls through to the REAL PLC `z6Mk...` decode
+/// (ADR-026 / I-AV-6). The `did` is unused on this path.
+#[cfg(not(debug_assertions))]
+fn seam_verification_key(_did: &Did) -> Result<Option<VerificationKey>, ResolveError> {
+    Ok(None)
 }
 
 /// The REAL ADR-026 production path (AV-4 gold path): resolve `did`'s PLC DID
@@ -292,6 +331,10 @@ fn resolve_fail(did: &Did, detail: String) -> ResolveError {
 
 /// Lowercase/uppercase hex → raw bytes. Strict: an odd length or a non-hex
 /// character is a hard error.
+///
+/// DEBUG-ONLY (ADR-026 / I-AV-6): only the debug-gated `seam_verification_key`
+/// decodes the seam's hex value, so this helper compiles out of release with it.
+#[cfg(debug_assertions)]
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err(format!("hex string has odd length {}", s.len()));
@@ -309,6 +352,9 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Parse one hex character into a 4-bit nibble.
+///
+/// DEBUG-ONLY (ADR-026 / I-AV-6): used only by the debug-gated `decode_hex`.
+#[cfg(debug_assertions)]
 fn hex_nibble(b: u8) -> Result<u8, String> {
     match b {
         b'0'..=b'9' => Ok(b - b'0'),
@@ -323,6 +369,13 @@ fn hex_nibble(b: u8) -> Result<u8, String> {
 /// harness (`tests/acceptance/support/mod.rs::peer_pubkey_env_var`).
 ///
 /// `did:plc:rachel-test` → `OPENLORE_PEER_PUBKEY_HEX_DID_PLC_RACHEL_TEST`.
+///
+/// DEBUG-ONLY (ADR-026 / I-AV-6): this function holds the release-forbidden
+/// `OPENLORE_PEER_PUBKEY_HEX_` token literal and is called ONLY by the
+/// debug-gated seam readers, so it is `#[cfg(debug_assertions)]`-gated — the
+/// token is compiled OUT of release builds. The `xtask check-arch`
+/// pubkey-seam guard verifies this gate stays in place.
+#[cfg(debug_assertions)]
 fn peer_pubkey_env_var(did: &str) -> String {
     let encoded: String = did
         .chars()

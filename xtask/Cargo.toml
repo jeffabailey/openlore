@@ -38,3 +38,8 @@ walkdir = "2"
 # class passes. `proptest` is pure-Rust (no transitive I/O) — safe in xtask's
 # tight dep graph, and a dev-dependency only.
 proptest = { workspace = true }
+# ADR-026 (pubkey-seam release-gating): the broadened-scope integration test
+# (`tests/pubkey_seam.rs`) lays down a temp workspace-root with fixture
+# `adapter-atproto-did/src/*.rs` files and drives the EFFECT-shell scan against
+# it, proving `peer_resolve.rs` is in the scan scope. Pure-Rust, dev-only.
+tempfile = { workspace = true }

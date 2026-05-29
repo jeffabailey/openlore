@@ -850,24 +850,35 @@ fn scan_autoconfirm_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> 
 }
 
 /// The verify-only adapter source files the pubkey-seam guard scans (I-AV-6 /
-/// ADR-026). SCOPED to the file holding the NEW slice-05 verify-only
-/// `IdentityResolvePort` production resolve+decode path (`lib.rs`) — that is the
-/// production path AV-4 (step 03-04) lands the REAL `z6Mk...` decode into, and
-/// the path the rule must keep free of the release-forbidden env seam.
+/// ADR-026). Covers BOTH the slice-05 verify-only `IdentityResolvePort`
+/// production resolve+decode path (`lib.rs`) AND `peer_resolve.rs` — the home of
+/// the slice-03 `OPENLORE_PEER_PUBKEY_HEX_<did>` seam plus the slice-05
+/// `resolve_verification_key` dispatcher's seam read.
 ///
-/// The pre-existing slice-03 `OPENLORE_PEER_PUBKEY_HEX_<did>` seam in
-/// `peer_resolve.rs` is a SEPARATE, already-shipped concern (RETAINED for tests
-/// per the slice-03 contract); it is intentionally OUT of this rule's scan scope.
-/// When the real ADR-026 decode lands in `lib.rs`, this scan guards it against
-/// re-introducing the seam (an ungated read in `lib.rs` fails CI).
-const PUBKEY_SEAM_GUARDED_SOURCES: &[&str] = &["crates/adapter-atproto-did/src/lib.rs"];
+/// BROADENED (ADR-026): the seam is RELEASE-FORBIDDEN. It is RETAINED for the
+/// slice-03 + slice-05 debug acceptance tests, but every `OPENLORE_PEER_PUBKEY_HEX_`
+/// read MUST be `#[cfg(debug_assertions)]`-gated so it compiles ONLY in debug/test
+/// builds, never release (where resolution falls through to the REAL PLC `z6Mk...`
+/// decode). An UNGATED read ANYWHERE in `adapter-atproto-did` — `lib.rs` OR
+/// `peer_resolve.rs` — would ship the verification-bypass seam in a release binary
+/// and fails the rule. The earlier `lib.rs`-only narrowing existed only to dodge
+/// the then-ungated `peer_resolve.rs` seam; that seam is now gated, so the scan
+/// covers it too.
+const PUBKEY_SEAM_GUARDED_SOURCES: &[&str] = &[
+    "crates/adapter-atproto-did/src/lib.rs",
+    "crates/adapter-atproto-did/src/peer_resolve.rs",
+];
 
 /// Effect shell for the pubkey-seam release-build guard (I-AV-6 / ADR-026): scan
 /// the verify-only resolve+decode path for an UNGATED `OPENLORE_PEER_PUBKEY_HEX_`
 /// read. A missing file is "nothing to scan". Reads the source as text (not
 /// `syn`) because the rule is brace-depth / cfg-attribute aware, like the
 /// autoconfirm guard — comments are stripped by the classifier's own line filter.
-fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+///
+/// Public so the broadened-scope integration test (`xtask/tests/pubkey_seam.rs`)
+/// can drive it against a temp workspace-root and assert `peer_resolve.rs` is in
+/// scope (the load-bearing scope axis of this rule).
+pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
     let mut findings = Vec::new();
     for rel in PUBKEY_SEAM_GUARDED_SOURCES {
         let path = workspace_root.join(rel);
