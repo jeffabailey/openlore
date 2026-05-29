@@ -4236,7 +4236,21 @@ fn corpus_pubkey_seams(specs: &[openlore_test_support::RawRecordSpec]) -> Vec<(S
 /// live network). Point the CLI's `indexer_url` at `handle.indexer_url()` via
 /// [`run_openlore_search`].
 pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> IndexerHandle {
-    let specs = fixture_corpus(&fixture);
+    seed_network_index_from_specs(env, fixture_corpus(&fixture))
+}
+
+/// Seed the network index from an EXPLICIT corpus of `RawRecordSpec`s (the
+/// fixture-agnostic core of [`seed_network_index`]): host the records on a
+/// `FakeIngestServer`, run a REAL `openlore-indexer ingest` pass into the REAL
+/// `index.duckdb`, then spawn a REAL `openlore-indexer serve` over the SAME index
+/// on an ephemeral localhost port. Used directly by AV-28's SECOND ingest pass to
+/// re-seed the SAME index with a GROWN corpus (the original claims + two more
+/// matching ones) and re-serve it, proving the share link re-runs the QUERY
+/// against the CURRENT index (US-AV-006 Ex4 / I-AV-8).
+fn seed_network_index_from_specs(
+    env: &TestEnv,
+    specs: Vec<openlore_test_support::RawRecordSpec>,
+) -> IndexerHandle {
     let seams = corpus_pubkey_seams(&specs);
     let seam_refs: Vec<(&str, &str)> = seams
         .iter()
@@ -4244,6 +4258,10 @@ pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> Indexe
         .collect();
 
     // 1. Host the records + run the one-shot ingest pass into the REAL index.duckdb.
+    // The ingest gate de-dups by CID (INSERT OR REPLACE; adapter-index-store
+    // `upsert_is_idempotent_by_cid`), so re-ingesting a GROWN corpus (the original
+    // records PLUS new ones) idempotently replaces the originals and ADDS the new —
+    // the index ends with exactly the union (AV-28's second ingest grows the set).
     let source = FakeIngestServer::start(specs);
     let ingest =
         run_openlore_indexer_with_source(env, &["ingest"], source.source_url(), &seam_refs);
@@ -4259,6 +4277,66 @@ pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> Indexe
     // wire→probe→use gate probes every wired adapter, ADR-009). Read the bound port
     // back from the `indexer.serve.listening` event the serve process prints.
     spawn_indexer_serve(env, source)
+}
+
+/// AV-28 (US-AV-006 Ex4 / I-AV-8) — run a SECOND `openlore-indexer ingest` pass
+/// that adds two MORE verified matching claims to the SAME `index.duckdb`, then
+/// re-serve it; returns the NEW [`IndexerHandle`] the re-opened link queries.
+///
+/// `current` is the handle from the FIRST [`seed_network_index`]; it is consumed
+/// (taken by value) so its serve process is KILLED and its index file lock is
+/// RELEASED before the second ingest opens the SAME file (DuckDB takes an
+/// exclusive lock per file — the serve handle must let go first). `more_specs` is
+/// the additional matching corpus; it is unioned with the headline
+/// reproducible-builds corpus (the SAME corpus the FIRST seed used) so the second
+/// ingest produces the original rows PLUS the new ones (the ingest gate de-dups by
+/// CID, so the originals are idempotently replaced, never duplicated).
+///
+/// The re-spawned serve opens a FRESH connection over the now-grown index, so the
+/// re-opened share link — which re-runs the QUERY against the CURRENT index (the
+/// 05-13 live resolver) — sees the two new rows. The link encoded the QUERY, not a
+/// frozen snapshot (KPI-AV-6 / I-AV-8).
+///
+/// Universe (port-exposed): the re-served index holds the union corpus; the
+/// re-opened link resolves to that CURRENT set (the count grows by the number of
+/// new matching claims), each new row attributed + `[verified]`, no merged view.
+pub fn ingest_more_matching_claims_and_respawn(
+    env: &TestEnv,
+    current: IndexerHandle,
+    more_specs: Vec<openlore_test_support::RawRecordSpec>,
+) -> IndexerHandle {
+    // Drop the FIRST serve handle FIRST: killing its serve process releases the
+    // exclusive DuckDB lock on index.duckdb (and frees the old FakeIngestServer
+    // port) so the SECOND ingest pass can open the SAME file for writing. Without
+    // this, the second ingest's `Connection::open` would conflict with the live
+    // serve handle's open connection (DuckDB is single-writer per file).
+    drop(current);
+
+    // The SECOND ingest's hosted corpus = the headline reproducible-builds corpus
+    // (the SAME set the FIRST seed used) UNIONED with the new matching claims. The
+    // ingest gate de-dups by CID, so the originals are idempotently re-indexed
+    // (not duplicated) and the new claims are ADDED — the index grows by exactly
+    // `more_specs.len()`.
+    let mut union = openlore_test_support::corpus_reproducible_builds_nine_authors();
+    union.extend(more_specs);
+
+    // Re-ingest into the SAME index.duckdb (under the same `env.home`) and re-serve.
+    seed_network_index_from_specs(env, union)
+}
+
+/// AV-28 — the two MORE verified matching claims the SECOND ingest pass adds: two
+/// NEW distinct authors each asserting the headline object
+/// (`org.openlore.philosophy.reproducible-builds`), so a re-opened
+/// `--object reproducible-builds` link grows from 9 attributed rows to 11. Both
+/// are `RawRecordSpec::valid` (the REAL crypto runs; they pass the verify-before-
+/// index gate), so each new row renders attributed + `[verified]`.
+pub fn av28_two_more_matching_claims() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::RawRecordSpec;
+    let object = "org.openlore.philosophy.reproducible-builds";
+    vec![
+        RawRecordSpec::valid("did:plc:author10-test", "github:void/voidlinux", object, 0.69),
+        RawRecordSpec::valid("did:plc:author11-test", "github:alpine/aports", object, 0.73),
+    ]
 }
 
 /// Spawn `openlore-indexer serve` over `env`'s `index.duckdb` on an ephemeral
@@ -4738,6 +4816,93 @@ pub fn assert_resolved_link_matches_original_query(original: &str, resolved: &st
         "AV-27: the resolved result must carry the same `openlore peer add <did>` \
          follow affordance for unfollowed authors:\nresolved:\n{resolved}"
     );
+}
+
+/// Assert the AV-28 / US-AV-006 Ex4 query-encoding-NOT-snapshot contract across an
+/// INDEX CHANGE (KPI-AV-6 / I-AV-8): after a SECOND ingest pass adds matching
+/// claims, re-opening the SAME share link RE-RUNS the encoded query against the
+/// CURRENT index, so the resolved result set GREW by `grew_by` rows relative to
+/// the `original` pre-ingest result — it includes the newly-ingested claims rather
+/// than resolving to a frozen snapshot. Each newly-present author in `new_authors`
+/// appears as an attributed row; every row carries `[verified]`; NO merged/
+/// consensus row collapses authors into a stored merged view.
+///
+/// The cardinal AV-28 disprover: if the link resolved to a STALE snapshot the
+/// resolved row count would still equal the original (no growth) — this helper
+/// fails. The growth proves the link encoded the QUERY, re-run live against the
+/// CURRENT index (the 05-13 resolver), never a frozen result set.
+///
+/// Universe (port-exposed): the resolved attributed-row count == the original's +
+/// `grew_by` (CURRENT, not frozen); each `new_authors` DID present as an attributed
+/// row; every resolved row `[verified]`; no merged view. NEVER an internal field.
+pub fn assert_resolved_link_grew_to_current_results(
+    original: &str,
+    resolved: &str,
+    grew_by: usize,
+    new_authors: &[&str],
+) {
+    let original_rows = attributed_author_rows(original);
+    let resolved_rows = attributed_author_rows(resolved);
+
+    // 1. The resolved set GREW by exactly `grew_by` — the link re-ran the QUERY
+    //    against the CURRENT (post-ingest) index, never a frozen pre-ingest
+    //    snapshot. A stale snapshot would keep the original count (growth == 0).
+    assert_eq!(
+        resolved_rows.len(),
+        original_rows.len() + grew_by,
+        "AV-28: re-opening the link after a SECOND ingest must RE-RUN the query \
+         against the CURRENT index — the resolved attributed-row count must GROW by \
+         {grew_by} (from {} to {}), proving the link encodes the QUERY, not a frozen \
+         snapshot (US-AV-006 Ex4 / KPI-AV-6 / I-AV-8). original rows: {original_rows:?}\n\
+         resolved rows: {resolved_rows:?}\noriginal output:\n{original}\n\
+         resolved output:\n{resolved}",
+        original_rows.len(),
+        original_rows.len() + grew_by
+    );
+
+    // 2. The original result set is PRESERVED across the index change — every
+    //    pre-ingest attributed row is STILL present in the re-run (the new ingest
+    //    ADDED claims; it did not drop or replace the original attribution). This
+    //    rules out a lossy "replace the snapshot" path masquerading as growth.
+    for original_row in &original_rows {
+        assert!(
+            resolved_rows.contains(original_row),
+            "AV-28: the re-run must PRESERVE every original attributed row across the \
+             index change (the second ingest ADDS, never drops); missing \
+             {original_row:?} from the resolved rows: {resolved_rows:?}"
+        );
+    }
+
+    // 3. Each NEWLY-ingested author appears as an attributed row in the re-run —
+    //    the link surfaced the CURRENT claims, each attributed (anti-merging
+    //    preserved across the share boundary AND the index change, I-AV-8/KPI-AV-2).
+    for new_author in new_authors {
+        assert!(
+            resolved_rows.iter().any(|row| row.contains(new_author)),
+            "AV-28: the re-opened link must include the newly-ingested claim by \
+             {new_author:?} as an ATTRIBUTED row (the link re-runs the query against \
+             the CURRENT index); resolved rows: {resolved_rows:?}\nresolved output:\n{resolved}"
+        );
+    }
+
+    // 4. Every resolved row carries `[verified]`; NO `[unverified]`/unknown-signature
+    //    state — the universal-marker guarantee holds for the new rows too (the new
+    //    claims passed the verify-before-index gate; I-AV-1).
+    assert_verified_marker_is_universal(resolved);
+
+    // 5. NO merged/consensus row collapses authors into a stored merged view (the
+    //    link NEVER resolves to a merged snapshot that loses attribution; I-AV-8 /
+    //    KPI-AV-2). The no-merge GUARANTEE footer is the PROMISE, not a merged row.
+    for banned in &["authors agree", "the network says", "the network thinks"] {
+        for line in resolved.lines() {
+            assert!(
+                !line.to_ascii_lowercase().contains(banned),
+                "AV-28 (anti-merging, I-AV-8): the link must never resolve to a merged \
+                 snapshot that loses attribution; found {banned:?} in line {line:?}\n\
+                 resolved:\n{resolved}"
+            );
+        }
+    }
 }
 
 /// Extract the `cid:` value rendered for the FIRST result row whose attribution

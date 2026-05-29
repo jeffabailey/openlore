@@ -2178,11 +2178,109 @@ fn shared_link_resolves_to_current_results_not_a_stale_snapshot() {
     // Universe (port-exposed): the resolved result count grows by 2 after the new
     // ingest (current, not frozen); the new rows are attributed + [verified]; no
     // merged snapshot.
-    todo!(
-        "DELIVER (slice-05): share a link; ingest two MORE matching verified \
-         claims; re-open the SAME link; assert the result set now INCLUDES the \
-         two new claims (current, not a frozen snapshot), each attributed + \
-         [verified], no merged view (US-AV-006 Ex4 / I-AV-8)."
+    let env = TestEnv::initialized();
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the SAME headline reproducible-builds corpus AV-26/
+    // AV-27 shared (9 authors / 7 subjects, all unfollowed). The CLI's indexer_url
+    // points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- The ORIGINAL query (the pre-ingest reference the re-run must GROW beyond):
+    // the object-dimension network read through the CLI driving port. Its 9
+    // attributed per-author rows are the baseline the post-ingest re-run extends. --
+    let original = run_openlore_search(&env, &["search", "--object", object], &indexer);
+    assert_eq!(
+        original.status, 0,
+        "precondition: the original `openlore search --object` must exit 0. \
+         stdout: {} stderr: {}",
+        original.stdout, original.stderr
+    );
+
+    // -- Maria shares the query link (`--share` is render-only, I-AV-8): emit + PARSE
+    // it (asserting it encodes the QUERY only, no snapshot payload). This is the
+    // exact `openlore://search?object=...` link she shares. --
+    let share = run_openlore_search(&env, &["search", "--object", object, "--share"], &indexer);
+    assert_eq!(
+        share.status, 0,
+        "precondition: `openlore search --object <philosophy> --share` must exit 0. \
+         stdout: {} stderr: {}",
+        share.stdout, share.stderr
+    );
+    let parsed = parse_and_assert_query_encoding_share_link(&share.stdout);
+    assert_eq!(
+        parsed.dimension, "object",
+        "the shared link must encode dimension=object:\n{}",
+        share.stdout
+    );
+    assert_eq!(
+        parsed.value, object,
+        "the shared link must encode value=<the queried philosophy>:\n{}",
+        share.stdout
+    );
+    let link = format!("openlore://search?{}={}", parsed.dimension, parsed.value);
+
+    // -- The INDEX CHANGE: the indexer ingests two MORE verified matching claims
+    // (two NEW distinct authors on the SAME object) via a SECOND `openlore-indexer
+    // ingest` pass into the SAME index.duckdb, then re-serves it. The helper drops
+    // the first serve handle FIRST (releasing the exclusive DuckDB lock), runs the
+    // second ingest over the union corpus (the 9 originals — idempotently de-duped
+    // by CID — PLUS the 2 new), and re-spawns serve so the re-opened link sees the
+    // CURRENT (grown) index. Reuses the Phase-03 `openlore-indexer ingest` pass. --
+    let new_authors = [
+        "did:plc:author10-test#org.openlore.application",
+        "did:plc:author11-test#org.openlore.application",
+    ];
+    let indexer =
+        ingest_more_matching_claims_and_respawn(&env, indexer, av28_two_more_matching_claims());
+
+    // -- Action: Tobias OPENS the SAME shared link AFTER the new ingest, via the CLI
+    // re-run resolver (Q-DELIVER-AV-3). The resolver PARSES the link, maps the key to
+    // the SearchDimension, and RE-RUNS the SAME dimension search against the CURRENT
+    // index — so the two newly-ingested claims now appear. --
+    let resolved = run_openlore_search(&env, &["search", &link], &indexer);
+
+    // exit 0 (a valid re-run over the grown index, never a fatal).
+    assert_eq!(
+        resolved.status, 0,
+        "AV-28: re-opening the shared link after the second ingest must exit 0. \
+         stdout: {} stderr: {}",
+        resolved.stdout, resolved.stderr
+    );
+
+    // -- Observable outcome (the cardinal AV-28 gate): the re-opened link RE-RAN the
+    // QUERY against the CURRENT index, so the resolved result set GREW by 2 (the two
+    // newly-ingested claims now present), each attributed + [verified]; the original
+    // 9 attributed rows are PRESERVED; NO merged snapshot collapses authors. A stale
+    // frozen snapshot would have kept the original count (no growth) — the growth
+    // proves the link encodes the QUERY, not a snapshot (US-AV-006 Ex4 / I-AV-8). --
+    assert_resolved_link_grew_to_current_results(
+        &original.stdout,
+        &resolved.stdout,
+        2,
+        &new_authors,
+    );
+
+    // The re-run preserved attribution for the headline pair end-to-end over the
+    // grown index: 11 attributed rows now (the original 9 + the 2 new), the headline
+    // unfollowed Priya (0.82) + the (subscribed-corpus) Rachel still present, NO
+    // merged/consensus row — the anti-merging gate stands across BOTH the share
+    // boundary AND the index change (KPI-AV-2 / I-AV-8).
+    assert_network_result_preserves_attribution(
+        &resolved.stdout,
+        "github:bazelbuild/bazel",
+        "org.openlore.philosophy.reproducible-builds",
+        11,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:rachel-test#org.openlore.application",
+            "did:plc:author10-test#org.openlore.application",
+            "did:plc:author11-test#org.openlore.application",
+        ],
     );
 }
 
