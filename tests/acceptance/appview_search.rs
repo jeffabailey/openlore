@@ -501,11 +501,41 @@ fn search_by_object_unknown_philosophy_returns_empty_with_suggestion_exit_zero()
     //
     // Universe (port-exposed): search.exit_code (0); stdout states empty + a
     // near-match suggestion line.
-    todo!(
-        "DELIVER (slice-05): run `openlore search --object \
-         org.openlore.philosophy.reproducable-builds` (typo) against an index \
-         with no match; assert exit 0 + 'no network claims found' + 'Did you \
-         mean reproducible-builds?' (US-AV-002 Ex4 valid empty, not an error)."
+    let env = TestEnv::initialized();
+
+    // -- Precondition (index): a localhost `openlore-indexer serve` over an
+    // index.duckdb seeded with the headline reproducible-builds corpus (9 authors /
+    // 7 subjects) — the index HAS `org.openlore.philosophy.reproducible-builds`
+    // claims but NONE for the typo `…reproducable-builds`. The CLI's indexer_url
+    // points at the serve port. --
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+
+    // -- Action: query the TYPO'd philosophy URI through the CLI driving port (a
+    // single substituted character — `reproducable` for `reproducible`). The index
+    // returns ZERO matches for the typo. --
+    let typo = "org.openlore.philosophy.reproducable-builds";
+    let outcome = run_openlore_search(&env, &["search", "--object", typo], &indexer);
+
+    // The empty result is a VALID not-yet-found state, NOT an error: exit 0
+    // (US-AV-002 Ex4 — distinct from the `--show`-absent-cid usage error, AV-24).
+    assert_eq!(
+        outcome.status, 0,
+        "AV-12: an empty `--object` result is a valid not-yet-found state and MUST \
+         exit 0 (US-AV-002 Ex4). stdout: {} stderr: {}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // The empty result NAMES the queried object AND offers the closest KNOWN object
+    // as a near-match suggestion — `near_match_suggestion` (AVC-8) ranks the known
+    // network objects (gathered from the index) and the closest is the correctly
+    // spelled `…reproducible-builds`.
+    assert_empty_with_near_match_suggestion(
+        &outcome.stdout,
+        typo,
+        "org.openlore.philosophy.reproducible-builds",
     );
 }
 

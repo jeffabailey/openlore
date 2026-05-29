@@ -142,12 +142,75 @@ fn run_dimension(
     let outcome = runtime.block_on(adapter.search(dimension, value, None));
 
     match outcome {
+        // An empty result is a VALID not-yet-found state (US-AV-002 Ex 4 / AV-12):
+        // name the queried value, offer a near-match suggestion, and exit 0 — NOT
+        // an error. A non-empty result renders the attributed per-author view.
+        Ok(result) if result.results.is_empty() => {
+            Ok(render_empty_result(&adapter, &runtime, dimension, value))
+        }
         Ok(result) => Ok(render_network_result(wiring, dimension, result)),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
         Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(value)),
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
+}
+
+/// Render the empty-dimension-result view (US-AV-002 Ex 4 / AV-12): the typo'd
+/// `value` matched no network claims, so gather the KNOWN network objects near
+/// the query and rank them with the PURE `appview_domain::near_match_suggestion`
+/// (AVC-8) to offer "Did you mean <closest>?". Exit 0 — a valid not-yet-found
+/// state, distinct from the `--show`-absent-cid usage error (non-zero, AV-24).
+///
+/// The known-object set is collected by probing the single-edit-distance
+/// neighbours of `value` against the SAME indexer search port (the slice-04
+/// `graph query` near-match precedent, `render::single_edit_neighbours` + an
+/// exact-match read): a typo is one edit from the correct URI, so any neighbour
+/// that itself has network claims IS a real known object. The pure ranker then
+/// picks the closest — the suggestion is therefore always a real network object,
+/// never fabricated, and the input order does not matter (AVC-8 tiebreak).
+fn render_empty_result(
+    adapter: &HttpIndexQueryAdapter,
+    runtime: &tokio::runtime::Runtime,
+    dimension: SearchDimension,
+    value: &str,
+) -> SearchOutcome {
+    let known = known_objects_near(adapter, runtime, dimension, value);
+    let suggestion = appview_domain::near_match_suggestion(value, &known);
+    SearchOutcome {
+        exit_code: 0,
+        stdout: render::render_empty_network_search(dimension, value, suggestion.as_deref()),
+    }
+}
+
+/// Collect the KNOWN network objects close to `value` by probing the single-edit
+/// neighbours against the indexer (the slice-04 near-match precedent carried to
+/// the network port). Each neighbour that has ≥1 network claim contributes its
+/// real object string to the candidate set the pure ranker scores. A neighbour
+/// query that errors (unreachable mid-probe) is skipped — the empty path stays
+/// non-fatal (exit 0). Returns a deduplicated candidate set in deterministic
+/// (first-seen) order; the AVC-8 ranker's tiebreak makes the final pick stable.
+fn known_objects_near(
+    adapter: &HttpIndexQueryAdapter,
+    runtime: &tokio::runtime::Runtime,
+    dimension: SearchDimension,
+    value: &str,
+) -> Vec<String> {
+    let mut known: Vec<String> = Vec::new();
+    for candidate in render::single_edit_neighbours(value) {
+        match runtime.block_on(adapter.search(dimension, &candidate, None)) {
+            Ok(result) => {
+                for row in &result.results {
+                    if !known.contains(&row.object) {
+                        known.push(row.object.clone());
+                    }
+                }
+            }
+            // A mid-probe failure is non-fatal: skip the candidate, keep probing.
+            Err(_) => continue,
+        }
+    }
+    known
 }
 
 /// Render a successful network result: the index is per-user-neutral, so resolve

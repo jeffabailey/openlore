@@ -1644,7 +1644,16 @@ pub fn render_network_search_result(
     out.push_str(&format!("{SEARCH_PUBLIC_DATA_BANNER}\n\n"));
 
     if result.results.is_empty() {
-        out.push_str(&render_empty_network_result(dimension, result));
+        // The verb routes an empty dimension result to `render_empty_network_search`
+        // (it computes the near-match suggestion via `appview_domain`, AVC-8, and
+        // knows the queried value) — so this branch is a defensive fallback that
+        // names the dimension without a value. Pass the wire-supplied suggestion
+        // (server-side `None` today) so the message degrades gracefully.
+        out.push_str(&render_empty_network_result(
+            dimension,
+            "<unknown>",
+            result.suggestion.as_deref(),
+        ));
         return out;
     }
 
@@ -1738,17 +1747,57 @@ fn render_network_search_footer(author_count: usize) -> String {
     )
 }
 
-/// Render the empty-network-result message (US-AV-002 Ex 4): name the queried
-/// value and, if the indexer reported a near-match suggestion, surface it. Exit
-/// stays 0 (a valid empty result — the verb does not error). Pure helper.
-fn render_empty_network_result(
-    _dimension: SearchDimension,
-    result: &NetworkSearchResultRaw,
-) -> String {
-    match &result.suggestion {
-        Some(near) => format!("No network claims found. Did you mean {near}?\n"),
-        None => "No network claims found.\n".to_string(),
+/// The dimension noun used in the empty-result message ("object" / "contributor"
+/// / "subject") so the message names WHAT was searched. Pure helper.
+fn search_dimension_noun(dimension: SearchDimension) -> &'static str {
+    match dimension {
+        SearchDimension::Object => "object",
+        SearchDimension::Contributor => "contributor",
+        SearchDimension::Subject => "subject",
     }
+}
+
+/// Render the empty-network-result message (US-AV-002 Ex 4): NAME the queried
+/// dimension + value ("No network claims found for object <value>") and, when a
+/// near-match `suggestion` was resolved, surface it ("Did you mean <near>?"). Exit
+/// stays 0 (a valid empty result — the verb does not error, AV-12). Pure helper.
+///
+/// The `suggestion` is computed by the VERB (it ranks the known network objects
+/// against the query via the pure `appview_domain::near_match_suggestion`, AVC-8)
+/// and passed in — the renderer stays pure (no I/O). It is `None` when no
+/// known value is close enough (the bare empty-result line, still exit 0).
+fn render_empty_network_result(
+    dimension: SearchDimension,
+    value: &str,
+    suggestion: Option<&str>,
+) -> String {
+    let noun = search_dimension_noun(dimension);
+    match suggestion {
+        Some(near) => {
+            format!("No network claims found for {noun} {value}. Did you mean {near}?\n")
+        }
+        None => format!("No network claims found for {noun} {value}.\n"),
+    }
+}
+
+/// Render the empty network-search view (US-AV-002 Ex 4 / AV-12): the public-data
+/// banner FIRST (KPI-AV-5 / I-AV-4 — shown on EVERY search session, empty or not),
+/// then the empty-result message NAMING the queried dimension + value, plus the
+/// near-match "Did you mean <near>?" line when the verb resolved one. PURE
+/// function — no I/O. The verb computes `suggestion` by ranking the known network
+/// objects against the query (`appview_domain::near_match_suggestion`, AVC-8) and
+/// keeps exit 0 (a valid not-yet-found state, NOT an error).
+pub fn render_empty_network_search(
+    dimension: SearchDimension,
+    value: &str,
+    suggestion: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    // The public-data banner ALWAYS precedes the result — even an empty one
+    // (KPI-AV-5 / I-AV-4: every search session sets the indexing expectation).
+    out.push_str(&format!("{SEARCH_PUBLIC_DATA_BANNER}\n\n"));
+    out.push_str(&render_empty_network_result(dimension, value, suggestion));
+    out
 }
 
 /// Content-frozen `--show` signature-verified line prefix (US-AV-004 Ex1 /

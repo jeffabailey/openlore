@@ -4384,6 +4384,37 @@ pub fn assert_verified_marker_is_universal(stdout: &str) {
     }
 }
 
+/// Assert a `search` stdout reports a VALID EMPTY dimension result with a
+/// near-match suggestion (US-AV-002 Ex 4 / AV-12): it NAMES the queried object
+/// ("No network claims found for object <typo>") AND offers the closest known
+/// object as a "Did you mean <near>?" line. The empty result is NOT an error
+/// (exit 0) — distinct from the `--show`-absent-cid usage error (non-zero).
+///
+/// Universe (port-exposed): stdout states the empty-for-object message naming
+/// the typo, AND the near-match "Did you mean <near>?" line; no attributed result
+/// row exists (it was an empty result).
+pub fn assert_empty_with_near_match_suggestion(stdout: &str, queried: &str, near_match: &str) {
+    // 1. The empty result NAMES the queried object (self-explanatory message).
+    assert!(
+        stdout.contains(&format!("No network claims found for object {queried}")),
+        "AV-12: the empty result must NAME the queried object \
+         ('No network claims found for object {queried}'):\n{stdout}"
+    );
+    // 2. The near-match suggestion line offers the closest known object (AVC-8).
+    assert!(
+        stdout.contains(&format!("Did you mean {near_match}?")),
+        "AV-12: the empty result must offer the near-match suggestion \
+         ('Did you mean {near_match}?'):\n{stdout}"
+    );
+    // 3. It was genuinely EMPTY — no attributed result row was rendered.
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim().starts_with("author_did:")),
+        "AV-12: an empty result must render NO attributed `author_did:` row:\n{stdout}"
+    );
+}
+
 /// Assert a `search` stdout prints the public-data banner UP FRONT (before the
 /// first result row): public-signed-only + verified-before-indexing +
 /// nothing-private-read/aggregated (I-AV-4 / KPI-AV-5; AV-10).
