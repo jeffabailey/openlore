@@ -727,11 +727,80 @@ fn appview_every_composed_row_carries_a_nonempty_verified_against() {
     //
     // Universe: the set { row.verified_against for row in flatten(by_author) };
     // assert none is empty.
-    todo!(
-        "DELIVER (slice-05): build NetworkSearchResult from Index-arm \
-         IndexedClaims only; assert every NetworkResultRow.verified_against != \
-         \"\". No [unverified] state exists by construction (US-AV-004 Ex 3)."
+    //
+    // We obtain the IndexedClaims through the REAL ingest gate over the canonical
+    // deno corpus (the same verified-before-index path AVC-5/02-06 used): each
+    // `RawRecordSpec` -> `into_raw_record` -> `ingest_decision(record, key)` ->
+    // the `Index` arm's IndexedClaim. ingest_decision only ever produces an
+    // IndexedClaim on the Index arm (which always sets a non-empty
+    // verified_against, 02-01), and compose_results carries verified_against
+    // through (02-04) — so the universal marker holds BY CONSTRUCTION. This step
+    // PINS it.
+    let specs = openlore_test_support::corpus_deno_dependency_pinning_two_authors();
+    assert_eq!(
+        specs.len(),
+        2,
+        "the canonical deno corpus is exactly two records"
     );
+
+    let claims: Vec<_> = specs
+        .into_iter()
+        .map(|spec| {
+            // Resolve the author's verification key from the deterministic
+            // fixture keypair keyed by the ROOT author DID (read BEFORE the spec
+            // is consumed by `into_raw_record`); bridge the 32 pubkey bytes into
+            // the ADR-026 `VerificationKey` the gate consumes.
+            let kp = FixtureKeypair::for_did(&spec.author_did);
+            let key = VerificationKey(kp.verifying_key.0.clone());
+            let record = spec.into_raw_record();
+            match appview_domain::ingest_decision(&record, &key) {
+                IngestOutcome::Index(claim) => claim,
+                IngestOutcome::Reject(reason) => panic!(
+                    "the canonical deno corpus must verify-and-index; got Reject({reason:?})"
+                ),
+            }
+        })
+        .collect();
+
+    // Every claim that came out of the Index arm already carries a non-empty
+    // verified_against (the 02-01 construction guarantee) — self-check.
+    assert!(
+        !claims.is_empty(),
+        "the corpus must produce at least one Index-arm claim to pin the marker"
+    );
+    for claim in &claims {
+        assert!(
+            !claim.verified_against.0.is_empty(),
+            "an Index-arm IndexedClaim must carry a non-empty verified_against (WD-104, 02-01)"
+        );
+    }
+
+    let result = appview_domain::compose_results(claims, SearchDimension::Object);
+
+    // The Universe: { row.verified_against for row in flatten(by_author) }.
+    // EVERY composed row carries the universal `[verified]` marker — there is no
+    // `[unverified]` state to render (DESIGN 5.2 #3 / US-AV-004 Ex 3). The result
+    // is NOT a mixed-trust list: there is no `verified` BOOLEAN; verified_against
+    // NOT NULL records that every row WAS verified, and the renderer reads it as a
+    // universal `[verified]` marker.
+    let flattened_markers: Vec<&claim_domain::KeyId> = result
+        .by_author
+        .iter()
+        .flat_map(|(_did, group)| group.iter().map(|row| &row.verified_against))
+        .collect();
+    assert!(
+        !flattened_markers.is_empty(),
+        "the composed result must flatten to at least one row (the marker universe is non-empty)"
+    );
+    for marker in flattened_markers {
+        assert!(
+            !marker.0.is_empty(),
+            "EVERY composed NetworkResultRow must carry a non-empty verified_against — the \
+             universal `[verified]` marker holds by construction (ingest Index arm 02-01 + \
+             compose carry-through 02-04); there is no `[unverified]` state to render \
+             (US-AV-004 Ex 3, DESIGN 5.2 #3)"
+        );
+    }
 }
 
 // =============================================================================
