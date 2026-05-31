@@ -675,6 +675,21 @@ pub const SCRAPE_NO_CANDIDATES_NOTICE: &str =
     "No candidate claims could be derived from this target. Try a different \
      public repository or user.";
 
+/// The guided NETWORK-DOWN message shown when the live propose step could not
+/// reach GitHub (AC-005.4 / V-S4 / NFR-VIEW-6/7). Held in ONE place — a fixed,
+/// pre-written DOMAIN-language sentence (NOT interpolated from the transport
+/// error) so the message is a single source of truth AND structurally cannot
+/// leak internals: it (a) names the cause in plain language ("GitHub could not
+/// be reached"), (b) reassures that the offline store view "still works
+/// offline" (NFR-VIEW-7), and (c) contains NO HTTP status code, NO "connection
+/// refused" / "timed out" / "DNS", NO raw URL, NO stack-trace marker
+/// (NFR-VIEW-6). The renderer for [`ScrapeState::NetworkDown`] emits ONLY this
+/// constant — the raw [`ports::GithubError::Network`] string is NEVER threaded
+/// in. Pinned by V-S4 + the leak-absence unit test.
+pub const SCRAPE_NETWORK_DOWN_NOTICE: &str =
+    "GitHub could not be reached, so no live proposals could be fetched. Your \
+     store view still works offline — the saved claims remain available.";
+
 /// One LIVE-SCRAPE candidate proposal rendered as a row in the Live Scrape view
 /// (US-VIEW-005). The VIEW-model shape (nw-fp-domain-modeling §10): flat display
 /// strings + the numeric confidence + the DISPLAY-ONLY `derived_from` provenance.
@@ -742,9 +757,20 @@ pub enum ScrapeState {
     /// network-down one (V-S4) stay separate ADT arms — each with its own pinned,
     /// single-site copy — rather than collapsing into one generic guidance string.
     ZeroCandidates,
-    /// `POST /scrape` that produced no rows for another reason — a guided message
-    /// rather than a blank result (e.g. network-down, AC-005.4; specialized into
-    /// its own typed arm in a later step).
+    /// `POST /scrape` whose live propose step could NOT reach GitHub (the
+    /// transport/network failure class — `GithubError::Network`; AC-005.4 /
+    /// V-S4). Renders the fixed [`SCRAPE_NETWORK_DOWN_NOTICE`]: the plain-language
+    /// cause + the offline-store reassurance (NFR-VIEW-7). A DISTINCT arm from
+    /// [`ScrapeState::ZeroCandidates`] and [`ScrapeState::Guidance`] so the
+    /// network-down failure mode stays a separate ADT arm with its own pinned,
+    /// single-site copy. Carries NO transport detail — the arm is a UNIT variant
+    /// precisely so the raw error/URL/status CANNOT be interpolated, guaranteeing
+    /// no leaked internals (NFR-VIEW-6) by construction.
+    NetworkDown,
+    /// `POST /scrape` that produced no rows for another (non-network) reason — a
+    /// neutral guided message rather than a blank result. The network-down class
+    /// now routes to [`ScrapeState::NetworkDown`]; this stays the catch-all for
+    /// the remaining refusal classes (resolve/harvest errors other than network).
     Guidance(String),
 }
 
@@ -807,6 +833,15 @@ fn render_scrape_result(state: &ScrapeState) -> Markup {
             // (one pinned site) — NO candidate table, never a blank result.
             ScrapeState::ZeroCandidates => {
                 p { (SCRAPE_NO_CANDIDATES_NOTICE) }
+            }
+            // Network-down (AC-005.4 / V-S4): GitHub could not be reached. Emit
+            // ONLY the fixed SCRAPE_NETWORK_DOWN_NOTICE — the plain-language cause
+            // + offline-store reassurance. The raw transport error is NEVER
+            // interpolated here (the arm is a unit variant carrying none), so no
+            // HTTP status / "connection refused" / "DNS" / raw URL / stack trace
+            // can leak (NFR-VIEW-6) — NO candidate table, never a blank result.
+            ScrapeState::NetworkDown => {
+                p { (SCRAPE_NETWORK_DOWN_NOTICE) }
             }
             ScrapeState::Guidance(message) => {
                 p { (message) }
@@ -1900,6 +1935,83 @@ mod tests {
             assert!(
                 !html.contains(sign_control_marker),
                 "the zero-candidates state must render NO sign control \
+                 ({sign_control_marker:?}); got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (AC-005.4 / V-S4 — the network-down fork; the DISTILL low-nit
+    /// resolution): the typed [`ScrapeState::NetworkDown`] arm renders the EXACT
+    /// guided [`SCRAPE_NETWORK_DOWN_NOTICE`] — (a) it NAMES the cause in domain
+    /// language ("GitHub could not be reached"), (b) it REASSURES that the offline
+    /// store view "still works offline" (NFR-VIEW-7), and (c) it LEAKS NO transport
+    /// internals: no HTTP status code, no "connection refused"/"timed out"/"DNS",
+    /// no raw URL (`http`), no stack-trace marker (NFR-VIEW-6). This (the cause +
+    /// the leak-ABSENCE) is the prime mutation target — the arm is a unit variant
+    /// so the raw error can never be interpolated. NO candidate table, form still
+    /// renders, NO sign control (BR-VIEW-1 / I-SCR-1).
+    #[test]
+    fn render_scrape_page_network_down_names_cause_and_leaks_no_internals() {
+        let html = render_scrape_page(&ScrapeState::NetworkDown);
+        // (a) the EXACT network-down copy renders, naming the cause in plain
+        // domain language.
+        assert!(
+            html.contains(SCRAPE_NETWORK_DOWN_NOTICE),
+            "the network-down state must render the guided network-down message; \
+             got:\n{html}"
+        );
+        assert!(
+            html.contains("GitHub could not be reached"),
+            "the network-down message must name the cause in domain language; \
+             got:\n{html}"
+        );
+        // (b) it reassures that the store view still works offline (NFR-VIEW-7).
+        assert!(
+            html.contains("store view still works offline"),
+            "the network-down message must reassure that the store view still \
+             works offline (NFR-VIEW-7); got:\n{html}"
+        );
+        // (c) it leaks NO transport internals (NFR-VIEW-6) — the absence assertions
+        // are the load-bearing sanitization pins (the mutation target). Lowercase
+        // the body so casing variants cannot slip a leak through.
+        let lower = html.to_lowercase();
+        for leaked_internal in [
+            "connection refused",
+            "connecterror",
+            "timed out",
+            "timeout",
+            "dns",
+            "503",
+            "502",
+            "500",
+            "401",
+            "403",
+            "404",
+            "http",
+            "refused",
+            "panicked at",
+            "stack backtrace",
+        ] {
+            assert!(
+                !lower.contains(leaked_internal),
+                "the network-down render must leak NO transport internals \
+                 ({leaked_internal:?}); got:\n{html}"
+            );
+        }
+        // (d) NO candidate table / rows, the form still renders, NO sign control.
+        assert!(
+            !html.contains("<table"),
+            "the network-down state must render NO candidate table; got:\n{html}"
+        );
+        assert!(
+            html.contains("name=\"target\""),
+            "the network-down state must still render the target form so the \
+             operator can re-submit; got:\n{html}"
+        );
+        for sign_control_marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+            assert!(
+                !html.contains(sign_control_marker),
+                "the network-down state must render NO sign control \
                  ({sign_control_marker:?}); got:\n{html}"
             );
         }

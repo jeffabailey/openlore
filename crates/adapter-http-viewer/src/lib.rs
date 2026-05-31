@@ -385,9 +385,18 @@ async fn scrape_post(
         // result. DISTINCT from the network-down arm so the two failure modes do
         // not collapse into one generic guidance string.
         Ok(_) => ScrapeState::ZeroCandidates,
-        // A refusal / network failure: a guided message, never a leaked cause.
-        // The specific network-down copy (V-S4) lands in a later step; here a
-        // neutral guided line keeps the viewer from crashing (NFR-VIEW-6).
+        // GitHub could not be reached — the transport/network failure class
+        // (AC-005.4 / V-S4). Maps ONLY `GithubError::Network` to the typed
+        // `NetworkDown` arm, whose PURE render emits the fixed plain-language
+        // cause + offline-store reassurance and NEVER interpolates the raw error
+        // string — so no HTTP status / "connection refused" / "DNS" / raw URL /
+        // stack trace can leak (NFR-VIEW-6/7). The error VALUE is discarded here
+        // (`Network(_)`): the sanitized copy lives entirely in `viewer-domain`.
+        Err(GithubError::Network(_)) => ScrapeState::NetworkDown,
+        // Any OTHER refusal class (NotFound / NotPublic / RateLimited /
+        // TokenRejected / ApiShape — resolve/harvest errors that are NOT a
+        // network failure): a neutral guided message, never a leaked cause. The
+        // viewer never crashes or shows a blank result (NFR-VIEW-6).
         Err(_) => ScrapeState::Guidance(scrape_guidance_message()),
     };
     html_ok(render_scrape_page(&state))
