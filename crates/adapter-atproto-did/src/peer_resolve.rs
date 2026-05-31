@@ -336,7 +336,7 @@ fn resolve_fail(did: &Did, detail: String) -> ResolveError {
 /// decodes the seam's hex value, so this helper compiles out of release with it.
 #[cfg(debug_assertions)]
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(format!("hex string has odd length {}", s.len()));
     }
     let bytes = s.as_bytes();
