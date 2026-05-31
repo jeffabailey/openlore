@@ -170,12 +170,13 @@ async fn route(
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let query = req.uri().query().map(str::to_string);
     if method != Method::GET {
         return Ok(not_found());
     }
     match path.as_str() {
         "/" => Ok(landing_page()),
-        "/claims" => Ok(claims_page(store.as_ref())),
+        "/claims" => Ok(claims_page(store.as_ref(), query.as_deref())),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5).
@@ -196,26 +197,47 @@ fn landing_page() -> Response<Full<Bytes>> {
     html_ok(render_landing())
 }
 
-/// Render the My Claims page: read the read-only store (first page), project the
-/// boundary rows into the pure view-model, and render via `viewer-domain`. A
-/// store read failure degrades to an empty guided page rather than a crash
-/// (the viewer never shows a raw stack trace; NFR-VIEW-6).
-fn claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
+/// Parse the 1-based `?page=N` query into a page number, defaulting to 1 and
+/// CLAMPING any invalid / non-positive / unparseable value to 1 (FR-VIEW-6: a
+/// mistyped or out-of-range page never crashes the viewer — it lands on page 1).
+/// PURE total function over the raw query string. `?page=0`, `?page=-3`,
+/// `?page=abc`, and a missing `page` all resolve to 1.
+fn parse_page(query: Option<&str>) -> u64 {
+    query
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .filter_map(|pair| pair.strip_prefix("page="))
+        .next()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(1)
+}
+
+/// Render the My Claims page for `?page=N`: parse + clamp the page (default 1),
+/// read that page from the read-only store (`OFFSET (page-1)*size LIMIT size`,
+/// ordered composed_at DESC, cid ASC), project the boundary rows into the pure
+/// view-model, and render the position indicator + Next/Prev controls via
+/// `viewer-domain` (FR-VIEW-6). A store read failure degrades to an empty guided
+/// page rather than a crash (the viewer never shows a raw stack trace; NFR-VIEW-6).
+fn claims_page(store: &dyn StoreReadPort, query: Option<&str>) -> Response<Full<Bytes>> {
+    let page = parse_page(query);
     let request = PageRequest {
-        offset: 0,
+        offset: (page - 1) * DEFAULT_PAGE_SIZE,
         limit: DEFAULT_PAGE_SIZE,
     };
-    let rows = match store.list_claims(request) {
-        Ok(page) => page
-            .rows
-            .iter()
-            .map(ClaimRowView::from_row)
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
+    let page_view = match store.list_claims(request) {
+        Ok(read_page) => {
+            let rows = read_page
+                .rows
+                .iter()
+                .map(ClaimRowView::from_row)
+                .collect::<Vec<_>>();
+            PageView::paged(rows, page, DEFAULT_PAGE_SIZE, read_page.total)
+        }
+        // Degrade to an empty guided page (total 0) — no indicator, no controls.
+        Err(_) => PageView::paged(Vec::new(), page, DEFAULT_PAGE_SIZE, 0),
     };
-    let page_view = PageView::new(rows);
-    let html = render_claims_page(&page_view);
-    html_ok(html)
+    html_ok(render_claims_page(&page_view))
 }
 
 /// Render the Peer Claims page (`GET /peer-claims`, US-VIEW-003): read the

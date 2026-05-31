@@ -58,19 +58,90 @@ impl ClaimRowView {
     }
 }
 
-/// A page of view-model rows ready to render. For the walking skeleton (step
-/// 01-01) this is a thin wrapper over the rows; the position indicator +
-/// pagination controls (FR-VIEW-6) land in step 04-01, which extends this with
-/// the page bounds + total.
+/// A page of view-model rows ready to render, carrying the pagination bounds the
+/// position indicator + Next/Prev controls (FR-VIEW-6) project from. The
+/// arithmetic over (`total`, `page`, `page_size`) is PURE and TOTAL — it is the
+/// single richest mutation surface in the viewer (step 04-01), pinned by the
+/// property tests below.
+///
+/// - `page` is 1-based (the operator's `?page=N`; the effect shell clamps invalid
+///   / `<= 0` input to 1 before constructing this).
+/// - `page_size` is the fixed rows-per-page (50, ADR-030).
+/// - `total` is the `COUNT(*)` of the whole result set (NOT `rows.len()` — the
+///   last page holds fewer rows than `page_size`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageView<T> {
     pub rows: Vec<T>,
+    /// 1-based page number the operator is viewing.
+    pub page: u64,
+    /// Fixed rows-per-page (50, ADR-030).
+    pub page_size: u64,
+    /// Total matching rows across all pages (`COUNT(*)`).
+    pub total: u64,
 }
 
 impl<T> PageView<T> {
-    /// Construct a page view from its rows.
+    /// Construct a SINGLE-page view from its rows (no pagination): page 1, the
+    /// page size equal to the row count, total equal to the row count. Used by
+    /// surfaces that render one ungated page (the Peer Claims view) and by tests
+    /// — [`Self::start`]/[`Self::end`] then read `1–N of N`, [`Self::has_prev`] /
+    /// [`Self::has_next`] are both false (no controls).
     pub fn new(rows: Vec<T>) -> Self {
-        Self { rows }
+        let total = rows.len() as u64;
+        Self {
+            rows,
+            page: 1,
+            page_size: total.max(1),
+            total,
+        }
+    }
+
+    /// Construct a PAGINATED view (step 04-01): the rows for `page` (1-based), the
+    /// fixed `page_size`, and the whole-set `total`. The effect shell reads one
+    /// page from the store (`OFFSET (page-1)*page_size LIMIT page_size`) and the
+    /// `COUNT(*)` total, then builds this so the renderer projects the indicator +
+    /// controls from PURE arithmetic.
+    pub fn paged(rows: Vec<T>, page: u64, page_size: u64, total: u64) -> Self {
+        Self {
+            rows,
+            page,
+            page_size,
+            total,
+        }
+    }
+
+    /// The 1-based ordinal of the FIRST row shown on this page (the `start` of the
+    /// `start–end of total` indicator, FR-VIEW-6 / AC-004.4):
+    /// `start = (page - 1) * page_size + 1`. Returns `0` for an EMPTY result set
+    /// (`total == 0`) so the renderer shows the guided empty state, not `1–0 of 0`.
+    pub fn start(&self) -> u64 {
+        if self.total == 0 {
+            0
+        } else {
+            (self.page - 1) * self.page_size + 1
+        }
+    }
+
+    /// The 1-based ordinal of the LAST row shown on this page (the `end` of the
+    /// indicator, FR-VIEW-6 / AC-004.4): `end = min(page * page_size, total)` —
+    /// the last page is BOUNDED by `total` (AC-004.2), never overshoots.
+    pub fn end(&self) -> u64 {
+        (self.page * self.page_size).min(self.total)
+    }
+
+    /// Whether a PREVIOUS page exists — i.e. the operator is past page 1
+    /// (`page > 1`). Drives the Prev control's presence (FR-VIEW-6): absent on the
+    /// first page.
+    pub fn has_prev(&self) -> bool {
+        self.page > 1
+    }
+
+    /// Whether a NEXT page exists — i.e. this page does not reach `total`
+    /// (`end < total`). Drives the Next control's presence (FR-VIEW-6): absent on
+    /// the last page (AC-004.2), and absent entirely when the whole set fits one
+    /// page (AC-004.3).
+    pub fn has_next(&self) -> bool {
+        self.end() < self.total
     }
 }
 
@@ -96,10 +167,52 @@ pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
                 h1 { "My Claims" }
                 p { "This is a read-only view of the claims you have signed." }
                 (body)
+                (render_pagination(page))
             }
         }
     };
     markup.into_string()
+}
+
+/// Format the position indicator `start–end of total` (FR-VIEW-6 / AC-004.4),
+/// e.g. `1–50 of 312`. PURE total function over the page bounds — the EN DASH
+/// (U+2013, `–`) separates the range (a mutation to a hyphen fails the acceptance
+/// assertion). Held in ONE place so the exact indicator text is a single mutation
+/// site. Returns the empty string for an empty result set (`total == 0`) so the
+/// guided empty state stands alone.
+pub fn render_position_indicator<T>(page: &PageView<T>) -> String {
+    if page.total == 0 {
+        String::new()
+    } else {
+        format!("{}\u{2013}{} of {}", page.start(), page.end(), page.total)
+    }
+}
+
+/// Render the pagination block for the My Claims list (FR-VIEW-6): the position
+/// indicator (`start–end of total`) plus the Prev/Next anchor links to
+/// `?page=N\u{00b1}1`. PURE total function over the [`PageView`] bounds.
+///
+/// - An EMPTY result set (`total == 0`) renders NOTHING — the guided empty state
+///   stands alone, with no indicator and no controls (AC-001.3).
+/// - A store that fits ONE page (`!has_prev && !has_next`) shows the indicator but
+///   NO `?page=` controls (AC-004.3).
+/// - Prev links to `?page={page-1}` only when [`PageView::has_prev`]; Next links to
+///   `?page={page+1}` only when [`PageView::has_next`] (absent on the last page,
+///   AC-004.2).
+fn render_pagination<T>(page: &PageView<T>) -> Markup {
+    html! {
+        @if page.total > 0 {
+            nav {
+                p { (render_position_indicator(page)) }
+                @if page.has_prev() {
+                    a href=(format!("?page={}", page.page - 1)) { "Previous" }
+                }
+                @if page.has_next() {
+                    a href=(format!("?page={}", page.page + 1)) { "Next" }
+                }
+            }
+        }
+    }
 }
 
 /// Render the claims table (one `<tr>` per claim). Small, named, composable —
@@ -749,6 +862,176 @@ mod tests {
                     r.confidence
                 );
             }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Pagination arithmetic (FR-VIEW-6 / US-VIEW-004) — the load-bearing pure
+    // mutation surface. The (total, page, page_size) -> (start, end, prev, next)
+    // math is PURE + TOTAL; these property tests are its live mutation oracles.
+    // -------------------------------------------------------------------------
+
+    /// Build a `PageView` of `n` placeholder rows (the row content is irrelevant
+    /// to the bounds arithmetic — only the counts matter).
+    fn paged(n: usize, page: u64, page_size: u64, total: u64) -> PageView<ClaimRowView> {
+        let rows: Vec<ClaimRowView> = (0..n)
+            .map(|i| row(&format!("c{i}"), &format!("s{i}"), "p", &format!("o{i}"), 0.90))
+            .collect();
+        PageView::paged(rows, page, page_size, total)
+    }
+
+    /// Behavior (AC-004.1 — the exact V-11 fixture at the unit level): page 1 of
+    /// 312 at size 50 shows the `1–50 of 312` indicator (EN DASH) with a Next but
+    /// no Previous; page 2 shows `51–100 of 312` with BOTH controls. Pins the
+    /// load-bearing acceptance strings the V-11 driving test asserts on.
+    #[test]
+    fn page_one_and_two_of_312_render_the_exact_indicators_and_controls() {
+        let p1 = paged(50, 1, 50, 312);
+        assert_eq!(render_position_indicator(&p1), "1\u{2013}50 of 312");
+        assert!(!p1.has_prev(), "page 1 has no Previous");
+        assert!(p1.has_next(), "page 1 of 7 has a Next");
+
+        let p2 = paged(50, 2, 50, 312);
+        assert_eq!(render_position_indicator(&p2), "51\u{2013}100 of 312");
+        assert!(p2.has_prev(), "page 2 has a Previous");
+        assert!(p2.has_next(), "page 2 of 7 has a Next");
+    }
+
+    /// Behavior (AC-004.2 — the LAST page is bounded): page 7 of 312 at size 50
+    /// shows `301–312 of 312` (end clamped to total, never 350) with a Previous but
+    /// NO Next. Pins the bounded-last-page V-12 fixture.
+    #[test]
+    fn last_page_of_312_is_bounded_to_total_with_no_next() {
+        let last = paged(12, 7, 50, 312);
+        assert_eq!(render_position_indicator(&last), "301\u{2013}312 of 312");
+        assert!(last.has_prev(), "the last page has a Previous");
+        assert!(!last.has_next(), "the last page has no Next (bounded at total)");
+    }
+
+    /// Behavior (AC-004.3 — a store smaller than one page): 12 of 12 at size 50
+    /// shows `1–12 of 12` with NEITHER control (the whole set fits one page). Pins
+    /// the V-13 single-page fixture.
+    #[test]
+    fn a_store_smaller_than_one_page_shows_the_indicator_and_no_controls() {
+        let only = paged(12, 1, 50, 12);
+        assert_eq!(render_position_indicator(&only), "1\u{2013}12 of 12");
+        assert!(!only.has_prev(), "a single page has no Previous");
+        assert!(!only.has_next(), "a single page has no Next");
+        let html = render_claims_page(&only);
+        assert!(
+            !html.contains("?page="),
+            "a single-page store must render no ?page= controls; got:\n{html}"
+        );
+        assert!(
+            html.contains("1\u{2013}12 of 12"),
+            "a single-page store must still show the indicator; got:\n{html}"
+        );
+    }
+
+    /// Behavior: a rendered MIDDLE page links Prev to `?page={n-1}` and Next to
+    /// `?page={n+1}` (the controls ARE anchor links to the adjacent pages,
+    /// FR-VIEW-6). Pins the exact href arithmetic (a mutation to `+1`/`-1` fails).
+    #[test]
+    fn a_middle_page_links_prev_and_next_to_adjacent_pages() {
+        let html = render_claims_page(&paged(50, 4, 50, 312));
+        assert!(html.contains("?page=3"), "page 4 must link Prev to ?page=3; got:\n{html}");
+        assert!(html.contains("?page=5"), "page 4 must link Next to ?page=5; got:\n{html}");
+    }
+
+    proptest! {
+        /// Property (AC-004.4 — start/end/total invariants): for ANY non-empty
+        /// total, any page within bounds, and any positive page size, the
+        /// indicator's arithmetic holds — `start = (page-1)*size + 1`,
+        /// `end = min(page*size, total)`, `start <= end <= total`, and the rendered
+        /// indicator is EXACTLY `start–end of total` (EN DASH). The anti-mutation
+        /// net for the bounds math: dropping the `min`, the `+1`, or the `-1` fails.
+        #[test]
+        fn pagination_bounds_arithmetic_holds(
+            (total, page_size, page) in (1u64..=1000)
+                .prop_flat_map(|total| (Just(total), 1u64..=100))
+                .prop_flat_map(|(total, page_size)| {
+                    let last_page = total.div_ceil(page_size);
+                    (Just(total), Just(page_size), 1u64..=last_page)
+                }),
+        ) {
+            let view: PageView<ClaimRowView> = PageView::paged(Vec::new(), page, page_size, total);
+            let start = view.start();
+            let end = view.end();
+
+            prop_assert_eq!(start, (page - 1) * page_size + 1, "start = (page-1)*size+1");
+            prop_assert_eq!(end, (page * page_size).min(total), "end = min(page*size, total)");
+            prop_assert!(start <= end, "start ({}) must be <= end ({})", start, end);
+            prop_assert!(end <= total, "end ({}) must be <= total ({})", end, total);
+            prop_assert_eq!(
+                render_position_indicator(&view),
+                format!("{start}\u{2013}{end} of {total}"),
+                "indicator must read start–end of total"
+            );
+        }
+
+        /// Property (FR-VIEW-6 — prev/next presence boundaries): Previous is present
+        /// IFF `page > 1`; Next is present IFF this page does not reach `total`
+        /// (`end < total`). In particular: NO Prev on page 1, NO Next on the last
+        /// page. The anti-mutation net for the control-presence predicates.
+        #[test]
+        fn prev_and_next_presence_match_the_page_boundaries(
+            (total, page_size, page) in (1u64..=1000)
+                .prop_flat_map(|total| (Just(total), 1u64..=100))
+                .prop_flat_map(|(total, page_size)| {
+                    let last_page = total.div_ceil(page_size);
+                    (Just(total), Just(page_size), 1u64..=last_page)
+                }),
+        ) {
+            let view: PageView<ClaimRowView> = PageView::paged(Vec::new(), page, page_size, total);
+            let last_page = total.div_ceil(page_size);
+
+            prop_assert_eq!(view.has_prev(), page > 1, "Prev present iff page > 1");
+            prop_assert_eq!(view.has_next(), page < last_page, "Next present iff before the last page");
+            if page == 1 {
+                prop_assert!(!view.has_prev(), "page 1 must have no Previous");
+            }
+            if page == last_page {
+                prop_assert!(!view.has_next(), "the last page must have no Next");
+            }
+        }
+
+        /// Property (deterministic, non-overlapping page ranges, AC-004.3): for a
+        /// fixed total + page size, walking page 1..=last yields contiguous,
+        /// non-overlapping ranges whose union is exactly `1..=total` — each page's
+        /// `start` is the previous page's `end + 1`, and the final page's `end`
+        /// equals `total`. Pins that paging partitions the result set with no gaps
+        /// and no double-counting.
+        #[test]
+        fn page_ranges_partition_the_result_set(
+            total in 1u64..=1000,
+            page_size in 1u64..=100,
+        ) {
+            let last_page = total.div_ceil(page_size);
+            let mut expected_start = 1u64;
+            for page in 1..=last_page {
+                let view: PageView<ClaimRowView> =
+                    PageView::paged(Vec::new(), page, page_size, total);
+                prop_assert_eq!(view.start(), expected_start, "page {} start must follow the prior end", page);
+                prop_assert!(view.end() >= view.start(), "each page covers >= 1 row");
+                expected_start = view.end() + 1;
+            }
+            // After the last page, the next start would be total + 1: the union of
+            // ranges is exactly 1..=total (full cover, no overshoot).
+            prop_assert_eq!(expected_start, total + 1, "the pages must cover exactly 1..=total");
+        }
+
+        /// Property (AC-001.3 — the empty fork): a `total == 0` page renders the
+        /// EMPTY position indicator and NO `?page=` controls — regardless of the
+        /// (clamped) page / size. Guards the `total == 0` guard in the renderer.
+        #[test]
+        fn an_empty_result_set_renders_no_indicator_and_no_controls(
+            page in 1u64..=10,
+            page_size in 1u64..=100,
+        ) {
+            let view: PageView<ClaimRowView> = PageView::paged(Vec::new(), page, page_size, 0);
+            prop_assert_eq!(render_position_indicator(&view), String::new());
+            let html = render_claims_page(&view);
+            prop_assert!(!html.contains("?page="), "an empty set must render no controls");
         }
     }
 

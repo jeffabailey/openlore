@@ -7195,14 +7195,27 @@ impl Drop for ViewerServer {
 /// (+ the chained sign/publish prompts as the existing claim scenarios do) so
 /// `count` real signed rows land in the REAL DuckDB the viewer then opens.
 pub fn seed_own_claims_via_cli(env: &TestEnv, count: usize) {
-    // SCAFFOLD: true (slice-06)
-    let _ = (env, count);
-    todo!(
-        "DELIVER (slice-06): drive the PRODUCTION `openlore claim add` write path \
-         (run_openlore / run_openlore_with_stdin) `count` times so `count` real \
-         signed rows land in the env's REAL slice-01 `claims` table — the SAME \
-         store `openlore ui` opens (BR-VIEW-4, Pillar 3)."
-    )
+    // Drive the PRODUCTION `openlore claim add` write path `count` times so
+    // `count` real signed rows land in the env's REAL slice-01 `claims` table —
+    // the SAME store `openlore ui` opens (BR-VIEW-4, Pillar 3). Each claim gets a
+    // DISTINCT subject (`owner/repo-{i}`) so the rows are distinct records (no CID
+    // aliasing) and their CIDs differ — making the deterministic page boundaries
+    // (`ORDER BY composed_at DESC, cid ASC`) observable across requests
+    // (AC-004.3). A fixed predicate/object/confidence keeps every other field
+    // stable so only the subject/CID vary. Reuses `seed_own_claim_with_evidence`'s
+    // mechanism (the production `claim add` subprocess) in a tight loop — slow at
+    // 312, but the only path that honors BR-VIEW-4.
+    for i in 0..count {
+        let subject = format!("owner/repo-{i:04}");
+        seed_own_claim_with_evidence(
+            env,
+            &subject,
+            "is-maintained-by",
+            "The Maintainers",
+            0.90,
+            &[],
+        );
+    }
 }
 
 /// Seed ONE specific own claim (subject/predicate/object/confidence + optional
