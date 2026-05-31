@@ -63,6 +63,62 @@ pub struct ClaimDetail {
     pub evidence: Vec<String>,
 }
 
+/// Where a federated peer claim came from — its peer ORIGIN (US-VIEW-003 /
+/// FR-VIEW-4). There is no `peer_origin` column in the slice-03 schema; the
+/// origin IS the pair (`author_did`, `fetched_from_pds`) per data-models.md.
+///
+/// Modeled as an ADT so the "mine vs federated never ambiguous" contract
+/// (BR-VIEW-5) and the future unknown-origin path (step 03-03 / V-10) are both
+/// total at the type level:
+///
+/// - [`PeerOrigin::Known`] — the schema-guaranteed common case: `author_did` is
+///   NON-EMPTY (the slice-03 CHECK enforces `author_did <> ''`). Carries the
+///   peer's DID + the PDS it was fetched from.
+/// - [`PeerOrigin::Unknown`] — the DEFENSIVE path: a row whose `author_did` is
+///   blank/absent (data that predates/bypasses the CHECK). Step 03-01 only
+///   PRODUCES `Known` (the production `peer pull` path always sets a non-empty
+///   `author_did`); the `Unknown` variant is here so step 03-03 (V-10) is a
+///   clean, total extension — the renderer matches both arms, never drops a row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerOrigin {
+    /// A peer claim with a known origin: the peer's `author_did` (NON-EMPTY) and
+    /// the PDS endpoint it was `fetched_from`.
+    Known {
+        /// The peer's DID — the bare `did:plc:...` stored in
+        /// `peer_claims.author_did`. Rendered VERBATIM (attribution discipline,
+        /// I-FED-1 / FR-VIEW-4): the operator sees exactly who authored it.
+        author_did: String,
+        /// The PDS endpoint the claim was fetched from
+        /// (`peer_claims.fetched_from_pds`).
+        fetched_from_pds: String,
+    },
+    /// A peer claim whose origin is absent/blank (defensive). Renders labeled
+    /// "unknown" rather than being dropped (step 03-03 / V-10).
+    Unknown,
+}
+
+/// One federated PEER-claim row from the `peer_claims` table (slice-03),
+/// projected for the read-only Peer Claims view (`/peer-claims`, US-VIEW-003).
+/// A FLAT DTO (not the rich `SignedClaim`). DISTINCT from [`ClaimRow`] (own
+/// claims) so the viewer can render peers on a SEPARATE surface where
+/// "mine vs federated" is never ambiguous (BR-VIEW-5).
+///
+/// `confidence` is the stored DOUBLE, rendered VERBATIM (FR-VIEW-8). `origin`
+/// carries the peer ORIGIN ([`PeerOrigin`]) — the peer's `author_did` +
+/// `fetched_from_pds`, projected verbatim (there is no `peer_origin` column).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerClaimRow {
+    pub cid: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub confidence: f64,
+    /// The peer ORIGIN — who authored this federated claim + the PDS it came
+    /// from. The "distinct from own" / attribution surface (BR-VIEW-5).
+    pub origin: PeerOrigin,
+    pub composed_at: DateTime<Utc>,
+}
+
 /// An offset/limit pagination request over the own-claim store. The viewer
 /// translates a `?page=N` query (page size 50, ADR-030) into one of these. For
 /// the walking skeleton a single ordered read is enough; full pagination
@@ -120,4 +176,18 @@ pub trait StoreReadPort: Send + Sync {
     /// `Ok(Some(detail))` for a known CID. Read-only SQL only: a SELECT over
     /// `claims` joined to `claim_evidence` by `cid`, ordered by `ordinal`.
     fn get_claim(&self, cid: &str) -> Result<Option<ClaimDetail>, StoreReadError>;
+
+    /// List federated PEER claims ordered for display (composed_at DESC, mirroring
+    /// `list_claims`), paginated by `request` (US-VIEW-003 / FR-VIEW-4). Read-only
+    /// SQL only — a SELECT over the SAME shared connection's `peer_claims` table
+    /// (slice-03). Each row carries its peer ORIGIN ([`PeerOrigin`]: the peer's
+    /// `author_did` + `fetched_from_pds`) so the viewer renders peers on a SEPARATE
+    /// surface, "mine vs federated" never ambiguous (BR-VIEW-5).
+    fn list_peer_claims(&self, request: PageRequest)
+        -> Result<Page<PeerClaimRow>, StoreReadError>;
+
+    /// Total number of federated peer claims in the store. The Peer Claims
+    /// position indicator + empty-state decision (US-VIEW-003 / step 04-01) read
+    /// this `COUNT(*)` over `peer_claims`.
+    fn count_peer_claims(&self) -> Result<usize, StoreReadError>;
 }

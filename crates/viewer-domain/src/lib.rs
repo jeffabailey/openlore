@@ -25,7 +25,7 @@
 #![forbid(unsafe_code)]
 
 use maud::{html, Markup, DOCTYPE};
-use ports::{ClaimDetail, ClaimRow};
+use ports::{ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
 
 /// One claim rendered as a row in the My Claims list view. The VIEW-model shape
 /// (nw-fp-domain-modeling §10): flat display strings + the numeric confidence
@@ -356,6 +356,163 @@ fn render_evidence_section(evidence: &[String]) -> Markup {
                 }
             }
         }
+    }
+}
+
+// =============================================================================
+// Peer Claims view (`/peer-claims`, US-VIEW-003 / FR-VIEW-4)
+// =============================================================================
+
+/// The label shown when a peer claim's origin is absent/blank (the defensive
+/// `PeerOrigin::Unknown` path, step 03-03 / V-10). Held in ONE place so the
+/// "unknown" wording is a single source of truth (a string mutation has exactly
+/// one site to attack — pinned by the unit test). Step 03-01 produces only
+/// `Known` origins; this constant + the `Unknown` arm exist so 03-03 is a clean
+/// extension.
+pub const PEER_ORIGIN_UNKNOWN_LABEL: &str = "unknown";
+
+/// One federated peer claim rendered as a row in the Peer Claims list view. The
+/// VIEW-model shape (nw-fp-domain-modeling §10): flat display strings + the
+/// numeric confidence + the peer ORIGIN. DISTINCT from [`ClaimRowView`] (own
+/// claims) so peers render on a SEPARATE surface where "mine vs federated" is
+/// never ambiguous (BR-VIEW-5). Projected from a [`ports::PeerClaimRow`] by
+/// [`PeerClaimRowView::from_row`] (a total conversion — always succeeds).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeerClaimRowView {
+    pub cid: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    /// The stored confidence DOUBLE. Rendered VERBATIM as `0.90` by
+    /// [`render_confidence`] (FR-VIEW-8).
+    pub confidence: f64,
+    /// The peer ORIGIN — carried through from the boundary [`PeerOrigin`] ADT so
+    /// the renderer matches both arms totally (never drops a row). For `Known`,
+    /// the peer's `author_did` is rendered VERBATIM (attribution discipline).
+    pub origin: PeerOrigin,
+}
+
+impl PeerClaimRowView {
+    /// Project a boundary [`ports::PeerClaimRow`] into the view-model. Total —
+    /// never fails. The peer ORIGIN ADT is carried through unchanged so the
+    /// rendering rule (verbatim DID for `Known`, "unknown" label for `Unknown`)
+    /// lives in ONE place ([`render_peer_origin`]).
+    pub fn from_row(row: &PeerClaimRow) -> Self {
+        Self {
+            cid: row.cid.clone(),
+            subject: row.subject.clone(),
+            predicate: row.predicate.clone(),
+            object: row.object.clone(),
+            confidence: row.confidence,
+            origin: row.origin.clone(),
+        }
+    }
+}
+
+/// Render the Peer Claims page as a complete HTML document (maud). PURE: a total
+/// function from the view-model to an HTML string — no I/O. Each federated peer
+/// claim renders as a row carrying subject/predicate/object, the VERBATIM
+/// confidence (FR-VIEW-8), its CID, and its peer ORIGIN (the peer's `author_did`,
+/// rendered VERBATIM — attribution discipline, FR-VIEW-4). This is a SEPARATE
+/// surface from the My Claims page (BR-VIEW-5): the heading + the explicit
+/// per-row origin column make "mine vs federated" unambiguous. An empty page
+/// renders the guided "No federated claims yet" empty state (FR-VIEW-7) instead
+/// of a blank table.
+pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
+    let body = if page.rows.is_empty() {
+        render_peer_empty_state()
+    } else {
+        render_peer_claims_table(&page.rows)
+    };
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "OpenLore — Peer Claims" }
+            }
+            body {
+                h1 { "Peer Claims" }
+                p {
+                    "This is a read-only view of claims federated from your peers \
+                     — these are NOT your own claims."
+                }
+                (body)
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Render the peer-claims table (one `<tr>` per federated claim). Small, named,
+/// composable — the per-row markup is [`render_peer_claim_row`].
+fn render_peer_claims_table(rows: &[PeerClaimRowView]) -> Markup {
+    html! {
+        table {
+            thead {
+                tr {
+                    th { "Subject" }
+                    th { "Predicate" }
+                    th { "Object" }
+                    th { "Confidence" }
+                    th { "Peer origin" }
+                    th { "CID" }
+                }
+            }
+            tbody {
+                @for row in rows {
+                    (render_peer_claim_row(row))
+                }
+            }
+        }
+    }
+}
+
+/// Render one peer-claim row. The confidence cell goes through
+/// [`render_confidence`] (the VERBATIM `0.90` rule lives in one place,
+/// FR-VIEW-8); the origin cell goes through [`render_peer_origin`] (the
+/// attribution rule lives in one place — the DID is NEVER elided, FR-VIEW-4).
+fn render_peer_claim_row(row: &PeerClaimRowView) -> Markup {
+    html! {
+        tr {
+            td { (row.subject) }
+            td { (row.predicate) }
+            td { (row.object) }
+            td { (render_confidence(row.confidence)) }
+            td { (render_peer_origin(&row.origin)) }
+            td { (row.cid) }
+        }
+    }
+}
+
+/// Render a peer claim's ORIGIN for display (FR-VIEW-4 — the load-bearing
+/// attribution + mutation target). PURE total function over the [`PeerOrigin`]
+/// ADT:
+///
+/// - `Known` -> the peer's `author_did` VERBATIM (the operator sees exactly who
+///   authored it — the DID is NEVER elided). The `fetched_from_pds` is appended
+///   so the operator can see which PDS it came from.
+/// - `Unknown` -> the [`PEER_ORIGIN_UNKNOWN_LABEL`] ("unknown"), so a row whose
+///   origin is absent still renders labeled rather than being dropped (V-10).
+///
+/// Kept tiny + named so both the verbatim-DID rule and the "unknown" label have
+/// exactly one site each to pin against mutation.
+pub fn render_peer_origin(origin: &PeerOrigin) -> String {
+    match origin {
+        PeerOrigin::Known {
+            author_did,
+            fetched_from_pds,
+        } => format!("{author_did} (via {fetched_from_pds})"),
+        PeerOrigin::Unknown => PEER_ORIGIN_UNKNOWN_LABEL.to_string(),
+    }
+}
+
+/// Render the guided Peer Claims empty state (FR-VIEW-7 / NFR-VIEW-6): a node
+/// that has federated nothing sees the "No federated claims yet" guidance, NOT a
+/// blank page (V-9 pins this branch).
+fn render_peer_empty_state() -> Markup {
+    html! {
+        p { "No federated claims yet." }
     }
 }
 
@@ -733,6 +890,181 @@ mod tests {
                 !html.contains(leaked),
                 "the guided 404 must leak no raw internals ({leaked:?}); got:\n{html}"
             );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Peer Claims view (`/peer-claims`, US-VIEW-003 / V-8) unit + property tests
+    // -------------------------------------------------------------------------
+
+    fn peer_row(
+        cid: &str,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f64,
+        origin: PeerOrigin,
+    ) -> PeerClaimRowView {
+        PeerClaimRowView {
+            cid: cid.to_string(),
+            subject: subject.to_string(),
+            predicate: predicate.to_string(),
+            object: object.to_string(),
+            confidence,
+            origin,
+        }
+    }
+
+    fn known_origin(author_did: &str) -> PeerOrigin {
+        PeerOrigin::Known {
+            author_did: author_did.to_string(),
+            fetched_from_pds: "https://pds.example.test".to_string(),
+        }
+    }
+
+    /// Behavior (AC-003.1 / V-8 happy): the Peer Claims page renders each
+    /// federated claim as a row carrying subject/predicate/object, the VERBATIM
+    /// confidence, its CID, AND its peer ORIGIN — the peer's `author_did`,
+    /// rendered VERBATIM (attribution discipline, FR-VIEW-4). Pins the exact V-8
+    /// fixture at the unit level.
+    #[test]
+    fn render_peer_claims_page_shows_every_field_including_peer_origin() {
+        let page = PageView::new(vec![peer_row(
+            "bafypeer",
+            "github:peer/axum",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.ergonomics",
+            0.70,
+            known_origin("did:plc:peer-axum"),
+        )]);
+        let html = render_peer_claims_page(&page);
+        for needle in [
+            "github:peer/axum",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.ergonomics",
+            "0.70",
+            "bafypeer",
+            // The peer ORIGIN (author_did) is rendered VERBATIM — never elided.
+            "did:plc:peer-axum",
+        ] {
+            assert!(
+                html.contains(needle),
+                "peer claims page must render {needle:?}; got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (BR-VIEW-5 — "mine vs federated never ambiguous"): the Peer
+    /// Claims page is a SEPARATE surface — its heading + intro state these are
+    /// federated peer claims, NOT the operator's own. Guards against the page
+    /// being confused with My Claims (a mutation reusing the own-claims heading
+    /// would fail).
+    #[test]
+    fn render_peer_claims_page_is_a_distinct_federated_surface() {
+        let page = PageView::new(vec![peer_row(
+            "bafypeer",
+            "github:peer/axum",
+            "embodiesPhilosophy",
+            "obj",
+            0.70,
+            known_origin("did:plc:peer-axum"),
+        )]);
+        let html = render_peer_claims_page(&page);
+        assert!(
+            html.contains("Peer Claims"),
+            "the peer view must carry the Peer Claims heading; got:\n{html}"
+        );
+        assert!(
+            html.contains("NOT your own"),
+            "the peer view must state these are not the operator's own claims \
+             (BR-VIEW-5); got:\n{html}"
+        );
+    }
+
+    /// Behavior (FR-VIEW-4 — the prime mutation target): `render_peer_origin` for
+    /// a `Known` origin embeds the peer's `author_did` VERBATIM and is NOT elided.
+    /// A mutation that dropped the DID (rendered "" or a placeholder) fails here.
+    #[test]
+    fn render_peer_origin_known_shows_author_did_verbatim() {
+        let rendered = render_peer_origin(&known_origin("did:plc:peer-axum"));
+        assert!(
+            rendered.contains("did:plc:peer-axum"),
+            "a Known origin must render the author_did verbatim; got {rendered:?}"
+        );
+        // The fetched-from PDS is also surfaced (origin = author_did + pds).
+        assert!(
+            rendered.contains("https://pds.example.test"),
+            "a Known origin must surface the fetched_from_pds; got {rendered:?}"
+        );
+    }
+
+    /// Behavior (V-10 boundary, step 03-03 extension — pinned now so the ADT arm
+    /// is total): an `Unknown` origin renders the literal "unknown" label, never
+    /// an empty string (the row must still render, labeled — never dropped).
+    #[test]
+    fn render_peer_origin_unknown_shows_the_unknown_label() {
+        let rendered = render_peer_origin(&PeerOrigin::Unknown);
+        assert_eq!(rendered, "unknown");
+        assert_eq!(PEER_ORIGIN_UNKNOWN_LABEL, "unknown");
+    }
+
+    /// Behavior (FR-VIEW-7 / AC-003.2 / V-9): an empty Peer Claims page renders
+    /// the guided "No federated claims yet" empty state — NOT a blank page, NO
+    /// table. Pins the `total == 0` empty/non-empty fork.
+    #[test]
+    fn empty_peer_claims_page_renders_the_guided_no_peers_state() {
+        let page: PageView<PeerClaimRowView> = PageView::new(vec![]);
+        let html = render_peer_claims_page(&page);
+        assert!(
+            html.contains("No federated claims yet"),
+            "the empty peer view must guide the operator (FR-VIEW-7); got:\n{html}"
+        );
+        assert!(
+            !html.contains("<table"),
+            "the empty peer view must render NO table — only guidance; got:\n{html}"
+        );
+    }
+
+    proptest! {
+        /// Property (FR-VIEW-4 — attribution discipline, anti-elision net): for an
+        /// arbitrary set of peer rows each with a DISTINCT `Known` author_did, the
+        /// rendered Peer Claims page contains EVERY peer's `author_did` verbatim
+        /// (plus every subject/object/cid/verbatim-confidence). A renderer that
+        /// dropped, deduped, or elided any origin fails. Generalizes the example
+        /// across the row domain.
+        #[test]
+        fn every_peer_row_renders_its_origin_did_verbatim(
+            n in 1usize..6,
+        ) {
+            let rows: Vec<PeerClaimRowView> = (0..n)
+                .map(|i| {
+                    peer_row(
+                        &format!("bafypeercid{i}"),
+                        &format!("github:peer/repo{i}"),
+                        "embodiesPhilosophy",
+                        &format!("philosophy-{i}"),
+                        0.70,
+                        known_origin(&format!("did:plc:peer-{i}")),
+                    )
+                })
+                .collect();
+            let page = PageView::new(rows.clone());
+            let html = render_peer_claims_page(&page);
+            for r in &rows {
+                prop_assert!(html.contains(&r.cid), "page must contain cid {:?}", r.cid);
+                prop_assert!(
+                    html.contains(&r.subject),
+                    "page must contain subject {:?}",
+                    r.subject
+                );
+                if let PeerOrigin::Known { author_did, .. } = &r.origin {
+                    prop_assert!(
+                        html.contains(author_did),
+                        "page must render the peer origin DID {author_did:?} VERBATIM \
+                         (never elided)"
+                    );
+                }
+            }
         }
     }
 }

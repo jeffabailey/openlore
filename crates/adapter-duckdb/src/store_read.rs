@@ -19,7 +19,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use duckdb::Connection;
-use ports::{ClaimDetail, ClaimRow, Page, PageRequest, StoreReadError, StoreReadPort};
+use ports::{
+    ClaimDetail, ClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin, StoreReadError,
+    StoreReadPort,
+};
 
 /// Read-only view over the SAME shared DuckDB connection the CLI writes through.
 /// Constructed via [`crate::DuckDbStorageAdapter::read_adapter`] so no second
@@ -181,5 +184,94 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             composed_at,
             evidence,
         }))
+    }
+
+    fn list_peer_claims(
+        &self,
+        request: PageRequest,
+    ) -> Result<Page<PeerClaimRow>, StoreReadError> {
+        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
+            detail: "connection mutex poisoned".to_string(),
+        })?;
+
+        // Ordered, paginated, read-only SELECT over the SAME shared connection's
+        // slice-03 `peer_claims` table (BR-VIEW-4). composed_at DESC mirrors
+        // `list_claims` (most-recent first). The peer ORIGIN is projected from
+        // `author_did` + `fetched_from_pds` — there is no `peer_origin` column.
+        let mut stmt = conn
+            .prepare(
+                "SELECT cid, subject, predicate, object, confidence, author_did, \
+                 fetched_from_pds, composed_at \
+                 FROM peer_claims ORDER BY composed_at DESC, cid LIMIT ? OFFSET ?",
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare list_peer_claims: {err}"),
+            })?;
+
+        let row_iter = stmt
+            .query_map(
+                duckdb::params![request.limit as i64, request.offset as i64],
+                |row| {
+                    let author_did = row.get::<_, String>(5)?;
+                    let fetched_from_pds = row.get::<_, String>(6)?;
+                    // The origin IS (author_did, fetched_from_pds). A blank
+                    // author_did (defensive data bypassing the slice-03 CHECK)
+                    // projects to `Unknown` so the viewer labels it rather than
+                    // dropping the row (step 03-03 / V-10). The production
+                    // `peer pull` path always yields a non-empty author_did, so
+                    // step 03-01 produces only `Known`.
+                    let origin = if author_did.is_empty() {
+                        PeerOrigin::Unknown
+                    } else {
+                        PeerOrigin::Known {
+                            author_did,
+                            fetched_from_pds,
+                        }
+                    };
+                    Ok(PeerClaimRow {
+                        cid: row.get::<_, String>(0)?,
+                        subject: row.get::<_, String>(1)?,
+                        predicate: row.get::<_, String>(2)?,
+                        object: row.get::<_, String>(3)?,
+                        confidence: row.get::<_, f64>(4)?,
+                        origin,
+                        composed_at: row.get::<_, DateTime<Utc>>(7)?,
+                    })
+                },
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map list_peer_claims: {err}"),
+            })?;
+
+        let mut rows = Vec::new();
+        for row in row_iter {
+            rows.push(row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode list_peer_claims: {err}"),
+            })?);
+        }
+        drop(stmt);
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM peer_claims", [], |row| row.get(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("count for list_peer_claims total: {err}"),
+            })?;
+
+        Ok(Page {
+            rows,
+            total: total as u64,
+        })
+    }
+
+    fn count_peer_claims(&self) -> Result<usize, StoreReadError> {
+        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
+            detail: "connection mutex poisoned".to_string(),
+        })?;
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM peer_claims", [], |row| row.get(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("count_peer_claims read failed: {err}"),
+            })?;
+        Ok(total as usize)
     }
 }

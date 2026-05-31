@@ -137,7 +137,8 @@ pub use identity_resolve::{IdentityResolvePort, ResolveError};
 mod store_read;
 
 pub use store_read::{
-    ClaimDetail, ClaimRow, Page, PageRequest, StoreReadError, StoreReadPort,
+    ClaimDetail, ClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin, StoreReadError,
+    StoreReadPort,
 };
 pub use index_query::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,

@@ -7294,14 +7294,49 @@ pub fn signed_cid_from_stdout(stdout: &str) -> String {
 /// `peer_claims` rows (carrying `author_did` + `fetched_from_pds`) land in the
 /// REAL DuckDB the viewer opens.
 pub fn seed_peer_claims_via_pull(env: &TestEnv, peer_did: &str, count: usize) {
-    // SCAFFOLD: true (slice-06)
-    let _ = (env, peer_did, count);
-    todo!(
-        "DELIVER (slice-06): drive the PRODUCTION `openlore peer pull` federation \
-         path (run_openlore_pull + PeerPds, slice-03) so `count` real `peer_claims` \
-         rows (with author_did + fetched_from_pds) land in the env's REAL \
-         `peer_claims` table — the SAME store `openlore ui` opens (BR-VIEW-4)."
-    )
+    // Drive the PRODUCTION slice-03 federation write path: build `count`
+    // verifiable wire records for `peer_did`, `peer add` (subscribe), then
+    // `peer pull`. The pull pipeline verifies each record, recomputes its CID,
+    // and persists a `peer_claims` row (author_did + fetched_from_pds) into the
+    // env's REAL DuckDB — the SAME store `openlore ui` opens (BR-VIEW-4). The
+    // pull completes synchronously before this returns, so the returned
+    // SeededGraph (which owns the live PeerPds doubles) can be dropped here: the
+    // rows are already persisted; the viewer reads them from the store, not the
+    // PDS.
+    //
+    // Each peer claim gets a distinct subject so the `count` rows are distinct
+    // records (no CID aliasing) and a fixed confidence the renderer shows
+    // verbatim. The peer's Ed25519 seed is derived from `peer_did` so repeated
+    // calls with different DIDs cross-verify against distinct keys.
+    let triples: Vec<(String, String, f64)> = (0..count)
+        .map(|i| {
+            (
+                format!("github:peer/{peer_did}-{i}"),
+                format!("org.openlore.philosophy.peer-{i}"),
+                0.70,
+            )
+        })
+        .collect();
+    let triple_refs: Vec<(&str, &str, f64)> = triples
+        .iter()
+        .map(|(s, o, c)| (s.as_str(), o.as_str(), *c))
+        .collect();
+
+    let mut seed = [0u8; 32];
+    for (slot, byte) in seed.iter_mut().zip(peer_did.bytes()) {
+        *slot = byte;
+    }
+    // Avoid an all-zero seed colliding with the local identity's key material.
+    seed[31] = seed[31].wrapping_add(1);
+
+    let peers = [SeedPeer {
+        peer_did,
+        seed,
+        triples: &triple_refs,
+    }];
+    // The SeededGraph is dropped at end of scope — the pull already persisted the
+    // rows, so the PeerPds doubles are no longer needed for the viewer read.
+    let _graph = seed_peer_authored_graph(env, &peers);
 }
 
 /// Seed ONE peer_claims row whose origin (`author_did`) is BLANK/absent — a

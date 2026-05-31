@@ -33,8 +33,8 @@ use hyper_util::rt::TokioIo;
 use ports::{PageRequest, StoreReadPort};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claims_page, render_error, render_landing, ClaimDetailView,
-    ClaimRowView, PageView,
+    render_claim_detail, render_claims_page, render_error, render_landing,
+    render_peer_claims_page, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -176,6 +176,10 @@ async fn route(
     match path.as_str() {
         "/" => Ok(landing_page()),
         "/claims" => Ok(claims_page(store.as_ref())),
+        // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
+        // route from `/claims` so "mine vs federated" is never ambiguous
+        // (BR-VIEW-5).
+        "/peer-claims" => Ok(peer_claims_page(store.as_ref())),
         _ => match path.strip_prefix("/claims/") {
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
@@ -212,6 +216,29 @@ fn claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
     let page_view = PageView::new(rows);
     let html = render_claims_page(&page_view);
     html_ok(html)
+}
+
+/// Render the Peer Claims page (`GET /peer-claims`, US-VIEW-003): read the
+/// federated `peer_claims` over the read-only store (first page), project the
+/// boundary rows into the pure view-model, and render via `viewer-domain`. A
+/// SEPARATE surface from the My Claims page (BR-VIEW-5). A store read failure
+/// degrades to an empty guided page rather than a crash (the viewer never shows
+/// a raw stack trace; NFR-VIEW-6).
+fn peer_claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
+    let request = PageRequest {
+        offset: 0,
+        limit: DEFAULT_PAGE_SIZE,
+    };
+    let rows = match store.list_peer_claims(request) {
+        Ok(page) => page
+            .rows
+            .iter()
+            .map(PeerClaimRowView::from_row)
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    let page_view = PageView::new(rows);
+    html_ok(render_peer_claims_page(&page_view))
 }
 
 /// Render one claim's detail page (`GET /claims/{cid}`, US-VIEW-002): read the
