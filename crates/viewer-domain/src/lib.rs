@@ -80,6 +80,22 @@ pub struct PageView<T> {
     pub total: u64,
 }
 
+/// Clamp a requested 1-based `page` into the valid range `[1, last_page]` for a
+/// result set of `total` rows at `page_size` per page (step 04-02 / AC-004.4).
+/// PURE + TOTAL. `last_page = ceil(total / page_size)`; a page past it resolves
+/// to `last_page` (the page-beyond-last CLAMP — never an error, never a broken
+/// overshoot indicator). An EMPTY set (`total == 0`) has no last page, so the
+/// clamp resolves to 1 (the single guided page) — never 0, which would underflow
+/// [`PageView::start`]'s `(page - 1) * page_size`. `page_size` is floored at 1 so
+/// the ceiling never divides by zero.
+fn clamp_page(page: u64, page_size: u64, total: u64) -> u64 {
+    if total == 0 {
+        return 1;
+    }
+    let last_page = total.div_ceil(page_size.max(1));
+    page.clamp(1, last_page)
+}
+
 impl<T> PageView<T> {
     /// Construct a SINGLE-page view from its rows (no pagination): page 1, the
     /// page size equal to the row count, total equal to the row count. Used by
@@ -101,10 +117,17 @@ impl<T> PageView<T> {
     /// page from the store (`OFFSET (page-1)*page_size LIMIT page_size`) and the
     /// `COUNT(*)` total, then builds this so the renderer projects the indicator +
     /// controls from PURE arithmetic.
+    ///
+    /// The requested `page` is CLAMPED to the valid range `[1, last_page]` (step
+    /// 04-02 / AC-004.4): a page PAST the last (e.g. `?page=999` over 312 rows)
+    /// resolves to the LAST page rather than erroring or rendering a broken
+    /// `49901–312 of 312` over an empty page — the operator lands on the bounded
+    /// last page. An EMPTY result set (`total == 0`) has no last page, so the clamp
+    /// resolves to page 1 (the single guided page), never page 0.
     pub fn paged(rows: Vec<T>, page: u64, page_size: u64, total: u64) -> Self {
         Self {
             rows,
-            page,
+            page: clamp_page(page, page_size, total),
             page_size,
             total,
         }
@@ -906,6 +929,44 @@ mod tests {
         assert_eq!(render_position_indicator(&last), "301\u{2013}312 of 312");
         assert!(last.has_prev(), "the last page has a Previous");
         assert!(!last.has_next(), "the last page has no Next (bounded at total)");
+    }
+
+    /// Behavior (AC-004.2 / AC-004.4 — page-beyond-last CLAMP): requesting a page
+    /// PAST the last (e.g. `?page=999` over 312 at size 50, last_page = 7) CLAMPS
+    /// to the last page rather than erroring or showing a broken `49901–312 of 312`
+    /// indicator over an empty page. The clamped view reads the bounded last-page
+    /// indicator `301–312 of 312`, a Previous, and NO Next — exactly as page 7.
+    /// Pins the clamp ceiling `ceil(total/page_size)` (a mutation dropping the
+    /// clamp, or off-by-one in the ceiling, fails this oracle).
+    #[test]
+    fn a_page_beyond_the_last_is_clamped_to_the_last_page() {
+        // page 999 is far past the last page (7) of 312 at size 50.
+        let clamped = paged(0, 999, 50, 312);
+        assert_eq!(
+            clamped.page, 7,
+            "a page beyond the last must clamp to the last page (ceil(312/50) = 7)"
+        );
+        assert_eq!(
+            render_position_indicator(&clamped),
+            "301\u{2013}312 of 312",
+            "the clamped page shows the bounded last-page indicator, not 49901–312"
+        );
+        assert!(clamped.has_prev(), "the clamped last page has a Previous");
+        assert!(
+            !clamped.has_next(),
+            "the clamped last page has no Next (bounded at total)"
+        );
+
+        // An EXACT-multiple total (300 at size 50 -> last_page 6) clamps to 6, not
+        // 7 — pins the ceiling at the boundary where div and div_ceil agree.
+        let exact = paged(0, 999, 50, 300);
+        assert_eq!(exact.page, 6, "ceil(300/50) = 6, not 7");
+        assert_eq!(render_position_indicator(&exact), "251\u{2013}300 of 300");
+
+        // An empty result set has no last page: the clamp resolves to page 1 (the
+        // single guided page) — never page 0 (which would underflow `start`).
+        let empty = paged(0, 999, 50, 0);
+        assert_eq!(empty.page, 1, "an empty set clamps to page 1, never 0");
     }
 
     /// Behavior (AC-004.3 — a store smaller than one page): 12 of 12 at size 50
