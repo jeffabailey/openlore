@@ -1248,6 +1248,45 @@ mod tests {
     }
 
     #[test]
+    fn viewer_adapter_depending_on_pds_write_surface_is_violation() {
+        // I-VIEW-3 (the pds-exclusion axis, AC #3): `adapter-atproto-pds` carries
+        // the PDS-write surface (`create_record`/`put_record`). The read-only
+        // viewer adapter must NOT reach it — pinning this independently of the
+        // signing-identity (`adapter-atproto-did`) axis so weakening EITHER entry
+        // of `VIEWER_FORBIDDEN_DEPS` is caught.
+        let w = ws(&[
+            ("adapter-http-viewer", &["adapter-atproto-pds"]),
+            ("adapter-atproto-pds", &[]),
+        ]);
+        let v = check_viewer_capability_boundary(&w);
+        assert!(
+            v.iter().any(|x| {
+                x.package == "adapter-http-viewer" && x.forbidden == "adapter-atproto-pds"
+            }),
+            "expected adapter-http-viewer→adapter-atproto-pds (I-VIEW-3 PDS-write) violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn viewer_adapter_transitively_reaching_signing_surface_is_violation() {
+        // The viewer capability boundary is TRANSITIVE: even if the viewer adapter
+        // reaches a signing/PDS surface via an intermediate crate, it still holds
+        // the forbidden capability (mirrors the indexer's transitive guard).
+        let w = ws(&[
+            ("adapter-http-viewer", &["some-helper"]),
+            ("some-helper", &["adapter-atproto-pds"]),
+            ("adapter-atproto-pds", &[]),
+        ]);
+        let v = check_viewer_capability_boundary(&w);
+        assert!(
+            v.iter().any(|x| {
+                x.package == "adapter-http-viewer" && x.forbidden == "adapter-atproto-pds"
+            }),
+            "a TRANSITIVE adapter-http-viewer→adapter-atproto-pds path MUST be a violation, got: {v:?}"
+        );
+    }
+
+    #[test]
     fn only_cli_may_link_the_viewer_adapter() {
         // The viewer capability invariant: cli links it (OK); a pure core or the
         // indexer root linking it is a violation.
