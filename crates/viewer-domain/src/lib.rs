@@ -340,17 +340,43 @@ mod tests {
         }
     }
 
-    /// Behavior (FR-VIEW-7): an empty page renders the guided empty state — the
-    /// operator is pointed at the CLI, not shown a blank page.
+    /// Behavior (FR-VIEW-7 / AC-001.3): an empty page renders the guided empty
+    /// state — the operator is pointed at the CLI, not shown a blank page — AND it
+    /// is JUST guidance: NO claims `<table>`, NO pagination controls, and NO
+    /// error/stack-trace markers (AC-001.3 criterion 2; NFR-VIEW-6). Pins the
+    /// `total == 0` empty/non-empty fork: a mutation swapping the branch would
+    /// either drop the guidance or emit a table here.
     #[test]
-    fn empty_page_renders_the_guided_empty_state() {
+    fn empty_page_renders_only_the_guided_empty_state() {
         let page: PageView<ClaimRowView> = PageView::new(vec![]);
         let html = render_claims_page(&page);
+        // (a) the guided CLI text IS present — never a blank page.
         assert!(
             html.contains("not signed any claims yet")
                 || html.contains("claims you sign with the CLI will appear here"),
             "empty My Claims page must guide the operator to the CLI; got:\n{html}"
         );
+        // (b) NO claims table renders on the empty page (the non-empty fork is the
+        // only place a `<table>`/row appears) — guards the `total == 0` boundary.
+        assert!(
+            !html.contains("<table"),
+            "the empty page must render NO claims table — only guidance; got:\n{html}"
+        );
+        // (c) NO pagination controls (no `?page=` next/prev links) on a page with
+        // zero claims (AC-001.3 criterion 2).
+        assert!(
+            !html.contains("?page="),
+            "the empty page must render NO pagination controls; got:\n{html}"
+        );
+        // (d) NO error / raw stack-trace markers leak into the operator's view
+        // (NFR-VIEW-6) — the empty store is a guided state, not an error.
+        for stack_trace_marker in ["panicked at", "RUST_BACKTRACE", "stack backtrace", "Error:"] {
+            assert!(
+                !html.contains(stack_trace_marker),
+                "the empty page must show no error/stack-trace marker \
+                 ({stack_trace_marker:?}); got:\n{html}"
+            );
+        }
     }
 
     /// Behavior (AC-001.2): a bound loopback socket address renders as an
