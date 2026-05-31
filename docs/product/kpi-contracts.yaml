@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-05-29  # slice-05 (openlore-appview-search) KPI-AV-1..6 recorded at finalize
+last_updated: 2026-05-31  # slice-06 (htmx-scraper-viewer) KPI-VIEW-1..5 recorded at finalize
 
 kpis:
   - id: KPI-1
@@ -325,6 +325,60 @@ kpis:
     baseline_at_ga: "per-user GREEN (AV-26..29 — `--share` emits a stable query-encoding link; `openlore search <link>` re-runs and re-composes CURRENT per-author-attributed verified results, AV-28 proves not-a-stale-snapshot); cohort share rate pending the day-30 survey. Implicit baseline is 0 (no shareable query link existed before slice-05)."
     notes: "Leading indicator for KPI-AV-1 (proves a discovery became a decision artifact worth sharing). The link encodes the QUERY, not a snapshot (WD-110 / I-AV-8) — keeping the shared artifact attribution-preserving + always-current (anti-merging across the share boundary). web AppView is OUT of scope (CLI-re-run resolver only, OD-AV-6)."
 
+  # --- slice-06 (htmx-scraper-viewer), recorded at finalize 2026-05-31 ---
+  # The read-only localhost htmx store viewer (J-001 legibility). Persona is
+  # P-001 (the node operator, "Maria"). KPI-VIEW-2 + KPI-VIEW-5 are guardrails.
+
+  - id: KPI-VIEW-1
+    name: "Time-to-see-store-contents (cold viewer start -> persisted claims in a browser, zero SQL)"
+    type: leading
+    feature_origin: htmx-scraper-viewer
+    persona: P-001
+    target: "< 10 seconds from cold viewer start to viewing persisted claims in a browser, with ZERO SQL typed"
+    measurement_method: "viewer timing (cold start -> first /claims paint) via a timed test against a representative store; behaviorally exercised by V-1/V-2 (read-only landing + paginated My Claims render with zero SQL typed)"
+    baseline_at_ga: "per-feature GREEN (the store-view path is GREEN — V-1/V-2 render My Claims, size 50, with zero SQL typed); cohort/timing histogram YELLOW pending the DEVOPS cold-start-to-first-paint timing hook. Baseline before slice-06: required a DuckDB shell + hand-written SQL (effectively never done routinely)."
+    notes: "North star of slice-06 (the feature EXISTS to make the store glanceable, Job 1 / opportunity 15). Disprover: if the operator still reaches for the DuckDB shell, legibility has not landed. Cohort timing requires the per-release timed test against a representative store."
+
+  - id: KPI-VIEW-2
+    name: "Read-only viewer (zero write/sign paths reachable from any route; zero key reads in the process)"
+    type: guardrail
+    feature_origin: htmx-scraper-viewer
+    persona: P-001
+    target: "0 write/sign code paths reachable from any route; 0 signing-key reads in the web process"
+    measurement_method: "release-gate gold acceptance tests viewer_invariants V-INV-1 (no write/sign route) + V-INV-2 (no signing key in the process) driving the REAL `openlore ui` over HTTP + static route inventory + key-access audit (every CI run, blocking); THREE-layer enforcement: StoreReadPort no-mutation type + xtask viewer capability rule (exclusion set independently unit-pinned) + behavioral V-INV"
+    baseline_at_ga: "MET — V-INV-1/V-INV-2 GREEN as of slice-06 ship; StoreReadPort exposes no mutation method, the viewer composition root holds no SigningPort/keychain handle, and the web process reads no key material. The /scrape NetworkDown render is a payload-free unit ADT variant (cannot leak transport internals, DV-4)."
+    notes: "Guardrail / cardinal. Inherits the slice-02 human-gate I-SCR-1. A single reachable write/sign path OR any key read in the web process is a release blocker (I-VIEW-1/2/3) — UNSHIPPABLE. CI alert if the route audit shows any write/sign endpoint or the key-access audit shows any key read (release-blocking)."
+
+  - id: KPI-VIEW-3
+    name: "Federated peer claims distinguishable (origin shown, separable from own claims)"
+    type: leading
+    feature_origin: htmx-scraper-viewer
+    persona: P-001
+    target: "100% of peer rows show origin (author_did + fetched_from_pds) and are separable from the operator's own claims"
+    measurement_method: "acceptance test (viewer_store Peer Claims view: peer rows show origin, distinct from own claims) against the slice-03 peer_claims table"
+    baseline_at_ga: "MET — the GET /peer-claims view renders every peer row with origin = author_did + fetched_from_pds, separable from own claims, as of slice-06 ship. Baseline before slice-06: no browser view of peer_claims existed."
+    notes: "Leading indicator for KPI-VIEW-1 (broadens the legibility outcome into the federated dimension). Inherits the slice-03 anti-merging discipline (attribution preserved; origin never elided)."
+
+  - id: KPI-VIEW-4
+    name: "Browser scrape-proposal triage (review-before-sign in browser, sign-in-CLI)"
+    type: leading
+    feature_origin: htmx-scraper-viewer
+    persona: P-001
+    target: ">= 1 review-before-sign-in-browser path (candidate triage shifts from CLI batch text to a scannable browser list; sign stays in the CLI)"
+    measurement_method: "acceptance test (viewer_scrape Live Scrape view: proposals render + NO sign control + a CLI-sign directive present) reusing the slice-02 GithubPort + derive_candidates"
+    baseline_at_ga: "per-feature GREEN (the GET/POST /scrape view renders live ephemeral candidates with NO sign control and a sign-in-CLI directive as of slice-06 ship); cohort triage-shift behavior pending dogfood. Baseline before slice-06: only CLI batch-text review."
+    notes: "Leading (secondary) indicator. Preserves the slice-02 human-gate (KPI-SCR-2) across the new surface — the browser proposes, the CLI signs; the viewer has no write/sign affordance (KPI-VIEW-2)."
+
+  - id: KPI-VIEW-5
+    name: "Offline store views (My Claims, Peer Claims, detail render with zero network calls)"
+    type: guardrail
+    feature_origin: htmx-scraper-viewer
+    persona: P-001
+    target: "100% — store views (My Claims, Peer Claims, detail) render with 0 network calls"
+    measurement_method: "release-gate offline test harness (run the store views with the network disabled; I-VIEW-6) + viewer_invariants V-INV-4 (loopback-only bind)"
+    baseline_at_ga: "MET — the store views render fully with the network disabled as of slice-06 ship (the viewer reads the local DuckDB store only; only the live /scrape view requires the network, by design)."
+    notes: "Guardrail. Inherits/reinforces slice-01 KPI-5 (local-first). Any release that makes a store view require the network is blocked. The live /scrape view is the sole network-requiring route (explicitly out of the offline guarantee, by design)."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -356,16 +410,25 @@ kpis:
 #   compose/sign is blocked). The slice-03 KPI-FED-6 production-z6Mk-decode CAVEAT
 #   is RESOLVED this slice (ADR-026; the test seam release-forbidden).
 #
+#   Slice-06 guardrails: KPI-VIEW-2 (read-only — zero write/sign paths from the
+#   web surface; zero key reads in the web process) and KPI-VIEW-5 (offline store
+#   views). Both MET at GA; both are release-blocking per the slice-06 disprovers
+#   in docs/feature/htmx-scraper-viewer/discuss/outcome-kpis.md. KPI-VIEW-2 is
+#   three-layer enforced (StoreReadPort no-mutation type + xtask viewer capability
+#   rule + behavioral V-INV-1/2 gold tests through the real `openlore ui` binary).
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-03): docs/feature/openlore-federated-read/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-04): docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-05): docs/feature/openlore-appview-search/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-06): docs/feature/htmx-scraper-viewer/discuss/outcome-kpis.md
 #   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Slice-04 evolution archive: docs/evolution/openlore-scoring-graph-evolution.md
 #   - Slice-05 evolution archive: docs/evolution/openlore-appview-search-evolution.md
+#   - Slice-06 evolution archive: docs/evolution/htmx-scraper-viewer-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml

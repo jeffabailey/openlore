@@ -51,11 +51,52 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 **Slice-01 ships 8 production crates + 1 test-support crate + 1 xtask binary.
 Slice-02 adds 2 production crates (`scraper-domain` + `adapter-github`); slice-04
 adds 1 (`scoring`); slice-05 adds 6 (1 pure `appview-domain` + 4 effect adapters +
-1 binary `openlore-indexer` — the indexer subsystem / first network service),
-bringing the production count to 17 + 1 test-support + 1 xtask binary (19
-workspace members total; `cargo xtask check-arch` reports 19).**
+1 binary `openlore-indexer` — the indexer subsystem / first network service);
+slice-06 adds 2 (1 pure `viewer-domain` + 1 effect `adapter-http-viewer` — the
+read-only localhost htmx viewer), bringing the production count to 19 + 1
+test-support + 1 xtask binary (21 workspace members total; `cargo xtask check-arch`
+reports 21).**
 
 Shipped slice extensions:
+
+- **slice-06 (htmx-scraper-viewer): SHIPPED 2026-05-31 — TWO-CRATE ADDITIVE
+  EXTENSION (the read-only localhost htmx store viewer).** Makes the node
+  operator's node LEGIBLE (J-001): a new `openlore ui [--port <P>]` verb (default
+  8788, binds **127.0.0.1 only, no auth**) serves server-rendered HTML (htmx-ready,
+  progressive enhancement) over the operator's local DuckDB store — read-only,
+  zero SQL. Routes: `GET /` (read-only landing), `GET /claims` (paginated, size
+  50), `GET /claims/{cid}` (detail + evidence), `GET /peer-claims` (federated,
+  origin = `author_did` + `fetched_from_pds`), `GET/POST /scrape` (live ephemeral
+  GitHub propose reusing the slice-02 `GithubPort` + `derive_candidates`; sign
+  stays in the CLI). Adds 2 crates + extends slice-01/02/03 crates in place;
+  **zero new persisted types, zero new table, zero new CID path**.
+  - **NEW `crates/viewer-domain` (PURE)**: the viewer's pure core — `maud` render
+    (`view-model → HTML string`, no I/O) + view-model ADTs + pure pagination
+    arithmetic (offset/limit, clamp). Deps `maud` + `ports` only (`check-arch`
+    pure-core allowlist, ADR-029).
+  - **NEW `crates/adapter-http-viewer` (EFFECT)**: the read-only HTTP listener — a
+    hand-rolled `hyper` 1.x handler (`axum`/`actix` are `deny.toml`-banned, DV-3);
+    binds loopback-only; holds no signing key.
+  - `crates/ports`: adds `StoreReadPort` (NO mutation method) + the `ClaimRow` /
+    `ClaimDetail` / `PeerClaimRow` / `PageRequest` / `Page` / `StoreReadError`
+    ADTs (ADR-030).
+  - `crates/adapter-duckdb`: adds the read-only `StoreReadPort` impl over the SAME
+    shared `Arc<Mutex<Connection>>` (no new table, no store swap; ADR-030 / WD-8).
+  - `crates/cli`: the NEW `openlore ui` verb wired as a read-only composition root
+    routed BEFORE `Wiring::production` (no signing identity in the web root).
+  - `xtask`: the `maud` pure-core allowlist entry + the viewer capability rule
+    (the web process may not link signing / mutation; exclusion set independently
+    unit-pinned) + the pure-core arm.
+  - **Invariants I-VIEW-1..6** (read-only [3-layer TYPE/STRUCTURAL/BEHAVIORAL];
+    no key in the web process; human gate preserved; derived-from honesty; same-
+    store / zero-new-schema; offline store views + loopback-only bind) —
+    slice-06-scoped.
+  - **ADRs ADR-028..030** (viewer architecture: `ui` verb + pure/effect split +
+    read-only + loopback/no-auth; `maud` templating + pure-core allowlist;
+    read-only DuckDB store-read port + column mapping + offset/limit pagination
+    size 50).
+  - See ADR-028..ADR-030, `docs/evolution/htmx-scraper-viewer-evolution.md`, and
+    `docs/feature/htmx-scraper-viewer/design/`.
 
 - **slice-05 (openlore-appview-search): SHIPPED 2026-05-29 — SIX-CRATE ADDITIVE
   EXTENSION (the indexer subsystem; the FIRST network service + the SECOND shipped
@@ -241,8 +282,10 @@ slice-05: `claim_domain::decode_ed25519_multibase` ships the real `z6Mk...` deco
 the first 2 production crates since slice-01 (`scraper-domain` + `adapter-github`,
 WD-59); slice-03 was EXTENSION ONLY (zero new crates, WD-26); slice-04 adds 1 pure
 crate (`scoring`); slice-05 adds 6 (1 pure `appview-domain` + 4 effect adapters + 1
-binary `openlore-indexer`, the indexer subsystem). Cumulative: 17 production + 1
-test-support + 1 xtask = 19 workspace members.**
+binary `openlore-indexer`, the indexer subsystem); slice-06 adds 2 (1 pure
+`viewer-domain` + 1 effect `adapter-http-viewer`, the read-only localhost htmx
+viewer). Cumulative: 19 production + 1 test-support + 1 xtask = 21 workspace
+members.**
 
 ## CLI surface (cumulative)
 

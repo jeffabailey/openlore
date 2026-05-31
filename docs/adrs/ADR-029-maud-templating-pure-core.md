@@ -1,6 +1,6 @@
 # ADR-029: `maud` as the Viewer Templating Engine + Pure-Core Allowlist Addition
 
-- **Status**: Proposed
+- **Status**: Accepted (shipped — slice-06 htmx-scraper-viewer, DELIVER close 2026-05-31)
 - **Date**: 2026-05-31
 - **Deciders**: Morgan (nw-solution-architect), per OD-VIEW-1 for htmx-scraper-viewer (slice-06)
 - **Feature**: htmx-scraper-viewer (slice-06)

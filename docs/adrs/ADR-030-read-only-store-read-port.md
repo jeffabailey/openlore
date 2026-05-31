@@ -1,6 +1,6 @@
 # ADR-030: The Read-Only DuckDB Store-Read Port Seam (Structural Read-Only Enforcement)
 
-- **Status**: Proposed
+- **Status**: Accepted (shipped — slice-06 htmx-scraper-viewer, DELIVER close 2026-05-31)
 - **Date**: 2026-05-31
 - **Deciders**: Morgan (nw-solution-architect), per OD-VIEW-6 + I-VIEW-1 / I-VIEW-2 (inherited I-SCR-1) for htmx-scraper-viewer (slice-06)
 - **Feature**: htmx-scraper-viewer (slice-06)

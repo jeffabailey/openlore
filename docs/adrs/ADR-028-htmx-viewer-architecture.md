@@ -1,6 +1,6 @@
 # ADR-028: `openlore ui` Viewer — Verb Shape, Pure/Effect Split, and Read-Only Web Surface
 
-- **Status**: Proposed
+- **Status**: Accepted (shipped — slice-06 htmx-scraper-viewer, DELIVER close 2026-05-31)
 - **Date**: 2026-05-31
 - **Deciders**: Morgan (nw-solution-architect), per OD-VIEW-5 / OD-VIEW-7 + I-VIEW-1..6 for htmx-scraper-viewer (slice-06)
 - **Feature**: htmx-scraper-viewer (slice-06)
