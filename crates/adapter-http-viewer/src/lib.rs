@@ -42,6 +42,13 @@ pub use viewer_domain::read_only_launch_banner;
 
 mod probe;
 
+/// Re-export the PURE store-unreadable refusal constructors so the `cli` `ui`
+/// verb (the viewer's composition root) renders the SAME plain-language refusal
+/// when `DuckDbStorageAdapter::open` fails on a held lock — that failure happens
+/// BEFORE the server can be built, so it cannot flow through [`ViewerServer::probe`].
+/// Both surfaces share one operator-facing sentence (NFR-VIEW-6).
+pub use probe::{viewer_store_unreadable_message, viewer_store_unreadable_refusal};
+
 /// The read-only store the viewer serves, shared across the hyper accept loop's
 /// per-connection tasks (`Send + Sync` via the `StoreReadPort` supertrait).
 pub type SharedStore = Arc<dyn StoreReadPort>;
@@ -74,9 +81,11 @@ pub struct ViewerServer {
 impl ViewerServer {
     /// Earned-Trust probe — see `probe.rs`. Real (non-stub): the store is
     /// readable (sentinel `count_claims`), the port is read-only by
-    /// construction, and the bound address is loopback (127.0.0.1).
-    pub fn probe(&self) -> ports::ProbeOutcome {
-        probe::run_probe(self.store.as_ref(), &self.local_addr)
+    /// construction, and the bound address is loopback (127.0.0.1). `store_path`
+    /// is the resolved store file the composition root opened — threaded in so a
+    /// store-readable refusal can NAME the store (NFR-VIEW-6).
+    pub fn probe(&self, store_path: &str) -> ports::ProbeOutcome {
+        probe::run_probe(self.store.as_ref(), &self.local_addr, store_path)
     }
 
     /// Bind the HTTP listener at `addr` (use `:0` for an OS-assigned ephemeral

@@ -13,8 +13,10 @@
 //! can read the bound `:0` port back), then run the accept loop until killed.
 
 use adapter_duckdb::DuckDbStorageAdapter;
-use adapter_http_viewer::{read_only_launch_banner, SharedStore, ViewerServer};
-use anyhow::{anyhow, Context, Result};
+use adapter_http_viewer::{
+    read_only_launch_banner, viewer_store_unreadable_refusal, SharedStore, ViewerServer,
+};
+use anyhow::{anyhow, Result};
 use ports::{ProbeOutcome, StoreReadPort};
 use std::sync::Arc;
 
@@ -47,12 +49,28 @@ pub fn run(paths: &OpenLorePaths, args: &UiArgs) -> i32 {
 /// Split out from [`run`] so the error path renders a single plain-language line.
 fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     // Open the SAME store the CLI writes through (BR-VIEW-4). The viewer is a
-    // separate process; opening the file at the resolved path is the read handle
-    // (the writing CLI process has exited). `read_adapter()` exposes ONLY the
-    // read-only `StoreReadPort` surface (no write/sign method — I-VIEW-1).
+    // separate process; opening the file at the resolved path is the read handle.
+    // `read_adapter()` exposes ONLY the read-only `StoreReadPort` surface (no
+    // write/sign method — I-VIEW-1).
+    //
+    // WIRE→PROBE→USE store-readability fork (ADR-030 §Earned-Trust step 1): if the
+    // open FAILS — the common cause is another process holding the DuckDB file
+    // lock — the viewer REFUSES to serve with the SAME plain-language refusal the
+    // probe would render (naming the store path, asking if another process holds
+    // it; NO raw transport error / stack trace, NFR-VIEW-6), and emits the
+    // structured `health.startup.refused` event. This open failure happens BEFORE
+    // the server can be built, so it cannot flow through `server.probe()` — both
+    // surfaces share `viewer_store_unreadable_refusal` for one consistent message.
     let db_path = paths.duckdb_file();
-    let storage = DuckDbStorageAdapter::open(&db_path)
-        .with_context(|| format!("opening your store at {}", db_path.display()))?;
+    let store_path = db_path.display().to_string();
+    let storage = match DuckDbStorageAdapter::open(&db_path) {
+        Ok(storage) => storage,
+        Err(err) => {
+            let refusal = viewer_store_unreadable_refusal(&store_path, &err.to_string());
+            emit_startup_refused(&refusal);
+            return Ok(2);
+        }
+    };
     let store: SharedStore = Arc::new(storage.read_adapter());
 
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
@@ -75,9 +93,11 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
 
         // Wire → PROBE → use: run the store-readability + loopback probe BEFORE
         // serving. A refusal surfaces as a plain-language message naming the
-        // store + asking if another process holds it (ADR-030; NFR-VIEW-6).
-        if let ProbeOutcome::Refused { detail, .. } = server.probe() {
-            eprintln!("openlore ui: refusing to serve — {detail}");
+        // store + asking if another process holds it (ADR-030; NFR-VIEW-6), AND a
+        // structured `health.startup.refused` event for DevOps.
+        let outcome = server.probe(&store_path);
+        if let ProbeOutcome::Refused { .. } = &outcome {
+            emit_startup_refused(&outcome);
             return 2;
         }
 
@@ -108,6 +128,35 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
         }
     });
     Ok(code)
+}
+
+/// Emit the viewer's startup refusal: a structured `health.startup.refused`
+/// event (for DevOps observability — carries the reason + the structured payload
+/// with the raw cause) followed by the plain-language operator line on stderr
+/// (the `detail` — names the store path, asks if another process holds it; NO
+/// stack trace / raw transport error — NFR-VIEW-6). Mirrors the cli composition
+/// root's `emit_health_startup_refused`, but consumes a `ProbeOutcome` directly
+/// (the viewer is its own composition root and does not build a `Wiring`).
+///
+/// A no-op for `ProbeOutcome::Ok` (callers only invoke it on a `Refused`).
+fn emit_startup_refused(outcome: &ProbeOutcome) {
+    let ProbeOutcome::Refused {
+        reason,
+        detail,
+        structured,
+    } = outcome
+    else {
+        return;
+    };
+    let event = serde_json::json!({
+        "event": "health.startup.refused",
+        "adapter": "viewer",
+        "reason": format!("{reason:?}"),
+        "detail": detail,
+        "structured": structured,
+    });
+    eprintln!("{event}");
+    eprintln!("openlore ui: refusing to serve — {detail}");
 }
 
 /// Force-link the `StoreReadPort` trait into this module's import graph so the

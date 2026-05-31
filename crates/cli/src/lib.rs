@@ -264,6 +264,21 @@ pub fn dispatch(cli: Cli) -> i32 {
         }
     };
 
+    // Step 1.5: the `ui` viewer verb is its OWN read-only composition root
+    // (component-boundaries.md §"the `ui` verb"; ADR-028/030). It MUST NOT go
+    // through the read-write `Wiring::production` below — that would (a) open the
+    // store READ-WRITE, conflicting with any process holding the store and
+    // surfacing a generic non-viewer error instead of the plain-language
+    // store-readable refusal (NFR-VIEW-6 / AC-001.4); and (b) construct the
+    // identity / PDS / writable-storage adapters the viewer process is forbidden
+    // to hold (I-VIEW-1/3 — no signing key in the web process). So the viewer
+    // walks its OWN WIRE→PROBE→USE gauntlet inside `verbs::ui::run` (it opens its
+    // own store handle, probes store-readability + loopback, and refuses BEFORE
+    // binding a serve loop). Routed here, before the read-write wiring is built.
+    if let Command::Ui { port } = cli.command {
+        return verbs::ui::run(&paths, &verbs::ui::UiArgs { port });
+    }
+
     // Step 2: wiring.
     let wiring = match Wiring::production(paths) {
         Ok(w) => w,
@@ -495,12 +510,14 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
-        // Slice-06 (ADR-028/030): the read-only `openlore ui` viewer. A
-        // long-running localhost serve loop over a READ-ONLY `StoreReadPort`
-        // (I-VIEW-1) — it opens its own read handle on the SAME store the CLI
-        // wrote (BR-VIEW-4) and never holds the signing key (I-VIEW-3). Blocks
-        // until killed; returns the serve exit code.
-        Command::Ui { port } => verbs::ui::run(&wiring.paths, &verbs::ui::UiArgs { port }),
+        // Slice-06 (ADR-028/030): the read-only `openlore ui` viewer is handled
+        // EARLY (Step 1.5 above) as its OWN read-only composition root — it never
+        // reaches this read-write-wiring dispatch. This arm is unreachable but
+        // kept exhaustive for the match.
+        Command::Ui { .. } => unreachable!(
+            "the `ui` verb is dispatched as its own read-only composition root \
+             before the read-write wiring (see Step 1.5 in `dispatch`)"
+        ),
     }
 }
 

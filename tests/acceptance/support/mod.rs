@@ -7375,23 +7375,34 @@ pub fn assert_store_read_only(
 /// at `openlore ui` start — a plain-language refusal, never a per-request stack
 /// trace.
 ///
-/// SCAFFOLD: true (slice-06) — DELIVER takes an exclusive DuckDB lock on the file
-/// (a second open handle / file lock) OR chmod-000s it, so the viewer's startup
-/// `count_claims()` sentinel read fails and the verb refuses to serve.
+/// SCAFFOLD: materialized (slice-06, step 01-04). Holds a second DuckDB
+/// `Connection` open against the SAME `openlore.duckdb` file. DuckDB takes an
+/// exclusive file lock per open handle, so while this guard is alive the viewer
+/// process's own `Connection::open` of the same file fails with a lock conflict —
+/// exactly the "another process is using it" condition US-VIEW-001 Example 3
+/// describes. The lock (and the guard's connection) is released on `Drop`, so the
+/// `TestEnv` tempdir cleanup still succeeds afterwards.
 pub fn make_store_unreadable(env: &TestEnv) -> StoreLockGuard {
-    // SCAFFOLD: true (slice-06)
-    let _ = env;
-    todo!(
-        "DELIVER (slice-06): lock/deny-read the env's REAL DuckDB so the viewer's \
-         startup store-readability probe (ADR-030) fails; return a StoreLockGuard \
-         that restores access on Drop."
-    )
+    let db_path = env.duckdb_path();
+    // `TestEnv::initialized()` has already run `openlore init`, which created and
+    // migrated the file, so this is a re-open of an EXISTING store — the same
+    // operation the viewer attempts. Holding it open denies the viewer the lock.
+    let lock = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "make_store_unreadable: could not take the holding lock on {}: {err}",
+            db_path.display()
+        )
+    });
+    StoreLockGuard { _lock: lock }
 }
 
-/// RAII guard returned by [`make_store_unreadable`]; restores store readability on
-/// Drop so the `TestEnv` tempdir can clean up.
+/// RAII guard returned by [`make_store_unreadable`]; holds the conflicting DuckDB
+/// open handle so the viewer cannot acquire the file lock. Dropping it releases
+/// the lock, restoring store readability so the `TestEnv` tempdir can clean up.
 pub struct StoreLockGuard {
-    _private: (),
+    /// The held DuckDB connection whose exclusive file lock blocks the viewer.
+    /// Dropped (releasing the lock) when the guard goes out of scope.
+    _lock: duckdb::Connection,
 }
 
 /// Try to start `openlore ui` over an UNREADABLE store and capture the startup
@@ -7400,15 +7411,33 @@ pub struct StoreLockGuard {
 /// message naming the store path — NOT a raw stack trace (NFR-VIEW-6). Used by the
 /// unreadable-store scenario (V-4).
 ///
-/// SCAFFOLD: true (slice-06) — DELIVER spawns `openlore ui --port 0`, expects a
-/// non-zero exit + a `health.startup.refused` event whose plain-language stderr
-/// names the store path and asks if another process holds it.
+/// SCAFFOLD: materialized (slice-06, step 01-04). Spawns the REAL `openlore ui
+/// --port 0` binary over the env's (now unreadable) store, threading the SAME
+/// clean env-seams `ViewerServer::start_inner` uses so the viewer resolves the
+/// env's REAL DuckDB. Because the store is locked, the viewer walks WIRE→PROBE
+/// (ADR-009/030), refuses BEFORE binding a serve loop, and exits — so
+/// `wait_with_output()` returns promptly (no long-running server to kill). The
+/// captured stdout carries the structured `health.startup.refused` event line;
+/// stderr carries the plain-language refusal.
 pub fn run_openlore_ui_expecting_startup_refusal(env: &TestEnv) -> CliOutcome {
-    // SCAFFOLD: true (slice-06)
-    let _ = env;
-    todo!(
-        "DELIVER (slice-06): spawn `openlore ui --port 0` over an unreadable store; \
-         capture the non-zero exit + the plain-language `health.startup.refused` \
-         stderr (names the path; no stack trace, NFR-VIEW-6) as a CliOutcome."
-    )
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .args(["ui", "--port", "0"])
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn `openlore ui --port 0` at {bin:?}: {e}"));
+
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
