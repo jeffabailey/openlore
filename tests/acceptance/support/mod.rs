@@ -6930,3 +6930,352 @@ pub fn assert_subscriptions_unchanged(before: &[String], after: &[String]) {
          before: {before:?}\nafter:  {after:?}"
     );
 }
+
+// =============================================================================
+// Slice-06 (htmx-scraper-viewer) — the `openlore ui` viewer harness.
+//
+// DISTILL builds the doubles/harness for slice-06 the way slice-02 built
+// FakeGithub: a `ViewerServer` spawn helper that drives the NEW long-running
+// `openlore ui --port <P>` verb (ADR-028) as a subprocess, waits for readiness,
+// and exposes `get` / `post_form` HTTP helpers over the returned HTML.
+//
+// Hexagonal discipline (hard requirement): scenarios drive the CLI driving port
+// (`openlore ui` subprocess) + HTTP — NEVER the `viewer-domain` render fns
+// directly (those are unit-level, exercised in DELIVER). The external GitHub API
+// is the ONLY mocked boundary (reused `FakeGithub` via `GithubServer`); the local
+// DuckDB store is REAL (BR-VIEW-4 — the SAME store the CLI writes).
+//
+// Layer placement (nw-tdd-methodology Layered Test Discipline matrix): every
+// viewer scenario is a layer-3/layer-5 subprocess + real-I/O test — example-only
+// (Mandate 11). Sad paths (unreadable store, unknown CID, zero candidates,
+// network down) are enumerated explicitly, never PBT-generated.
+//
+// Build-before-run note (carry into DELIVER roadmap, mirrors the indexer ATs):
+// `cargo test` does NOT rebuild a spawned binary automatically — the roadmap/run
+// MUST `cargo build` the `openlore` bin before running these viewer ATs so the
+// `ViewerServer` spawns the CURRENT `openlore ui`, not a stale one.
+//
+// SCAFFOLD: true (slice-06) — `ViewerServer::start` spawns `openlore ui` (resolved
+// at RUNTIME via `assert_cmd::cargo_bin`), so this helper COMPILES now even though
+// the `ui` verb does not exist yet; the scenarios fail at RUNTIME (correct RED).
+// =============================================================================
+
+/// One HTTP response from the viewer: the status code + the response body
+/// (rendered HTML). The viewer is server-rendered HTML (ADR-028/029 — maud), so
+/// `body` is the HTML the operator's browser would display.
+#[derive(Debug, Clone)]
+pub struct ViewerResponse {
+    /// HTTP status code (200, 404, ...). Read-only views are 200; the `*` guided
+    /// not-found route is 404 (DESIGN §5 route table).
+    pub status: u16,
+    /// The rendered HTML body the browser displays.
+    pub body: String,
+}
+
+impl ViewerResponse {
+    /// Convenience: does the rendered HTML contain `needle`? (case-sensitive).
+    /// Scenarios assert on OBSERVABLE rendered text (what the operator SEES),
+    /// never internal struct fields (Mandate 8 universe = port-exposed surface).
+    pub fn body_contains(&self, needle: &str) -> bool {
+        self.body.contains(needle)
+    }
+}
+
+/// A handle to a REAL long-running `openlore ui --port 0` process bound to a
+/// localhost EPHEMERAL port (`:0`, read back — parallel-safe per the slice-05
+/// indexer-serve precedent). Owns the child process; killed on drop (RAII
+/// per-scenario isolation, mirroring `IndexerHandle` / `FakePds` / `PeerPds`).
+///
+/// The viewer reads the SAME `OPENLORE_HOME`-resolved DuckDB the CLI verbs write
+/// (BR-VIEW-4) and, for `/scrape`, reaches GitHub through the
+/// `OPENLORE_GITHUB_API_BASE` seam (so the reused `FakeGithub` double serves the
+/// live harvest). The `base_url()` is `http://127.0.0.1:<ephemeral-port>`.
+///
+/// SCAFFOLD: true (slice-06) — DELIVER spawns `openlore ui --port 0`, reads the
+/// bound port back from the `viewer.serve.listening` event (mirrors
+/// `indexer.serve.listening`), polls a TCP connect until the listener accepts,
+/// and exposes `get` / `post_form`.
+pub struct ViewerServer {
+    /// `http://127.0.0.1:<ephemeral-port>` — the base URL the scenario issues
+    /// HTTP GET/POST against. Read back from the spawned `ui` process's
+    /// `viewer.serve.listening` event (the bound `:0` address).
+    base_url: String,
+    /// The live `openlore ui` child process. Killed on drop so the bound port is
+    /// released (RAII per-scenario isolation; the ephemeral `:0` port keeps
+    /// parallel scenarios disjoint).
+    child: std::process::Child,
+    /// The `GithubServer` double kept alive for the viewer process's lifetime so
+    /// the `/scrape` route's `OPENLORE_GITHUB_API_BASE` seam stays reachable.
+    /// `None` for store-only scenarios that never exercise `/scrape`. Held so the
+    /// double's port stays bound; dropped (releasing it) with the handle.
+    _github: Option<GithubServer>,
+}
+
+impl ViewerServer {
+    /// Start a `openlore ui --port 0` viewer over the env's REAL store, with NO
+    /// `/scrape` GitHub seam wired (store-only scenarios: `/claims`,
+    /// `/claims/{cid}`, `/peer-claims`). Waits until the listener accepts a
+    /// connection, then exposes `base_url()`.
+    ///
+    /// SCAFFOLD: true (slice-06).
+    pub fn start(env: &TestEnv) -> Self {
+        Self::start_inner(env, None)
+    }
+
+    /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
+    /// `/scrape` route at the supplied `FakeGithub` double (via the
+    /// `OPENLORE_GITHUB_API_BASE` seam, exactly as `run_openlore_scrape` does).
+    /// Used by the live-scrape scenarios (US-VIEW-005). The double is kept alive
+    /// for the viewer's lifetime.
+    ///
+    /// SCAFFOLD: true (slice-06).
+    pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
+        Self::start_inner(env, Some(github))
+    }
+
+    /// Shared spawn + readiness core. Spawns the REAL `openlore ui --port 0`
+    /// binary (resolved at runtime via `assert_cmd::cargo_bin` — so this COMPILES
+    /// before the `ui` verb exists), threads the SAME clean env-seams the other
+    /// subprocess helpers use (`OPENLORE_HOME` so the viewer opens the env's REAL
+    /// DuckDB; optionally `OPENLORE_GITHUB_API_BASE` for `/scrape`), reads the
+    /// bound `:0` port back off stdout, and polls a TCP connect until the
+    /// listener accepts.
+    ///
+    /// SCAFFOLD: true (slice-06) — body is `todo!()`; DELIVER materializes it the
+    /// way `spawn_indexer_serve` materializes the indexer's long-running serve.
+    fn start_inner(env: &TestEnv, github: Option<GithubServer>) -> Self {
+        // SCAFFOLD: true (slice-06)
+        let _ = (env, &github);
+        todo!(
+            "DELIVER (slice-06): spawn `openlore ui --port 0` via \
+             assert_cmd::cargo_bin(\"openlore\") with env_clear() + OPENLORE_HOME \
+             (REAL store, BR-VIEW-4) + OPENLORE_DID/OPENLORE_KEY_SEED_HEX/\
+             OPENLORE_PDS_ENDPOINT + (when `github` is Some) OPENLORE_GITHUB_API_BASE; \
+             read the bound 127.0.0.1:<port> back off the `viewer.serve.listening` \
+             stdout event (mirrors `indexer.serve.listening`), poll a TCP connect \
+             until the listener accepts (timeout ~5s), and return ViewerServer with \
+             base_url = http://127.0.0.1:<port>, the child process (killed on drop), \
+             and `_github` held alive for the /scrape seam."
+        )
+    }
+
+    /// The `http://127.0.0.1:<ephemeral-port>` base URL the scenario issues HTTP
+    /// requests against.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Issue an HTTP `GET <base_url><path>` and return the status + rendered HTML
+    /// body. `path` includes the leading slash and any query string (e.g.
+    /// `/claims?page=2`). Uses the workspace `reqwest` blocking client (the same
+    /// HTTP client the indexer ATs use to reach the localhost serve).
+    ///
+    /// SCAFFOLD: true (slice-06).
+    pub fn get(&self, path: &str) -> ViewerResponse {
+        // SCAFFOLD: true (slice-06)
+        let _ = path;
+        todo!(
+            "DELIVER (slice-06): GET {{base_url}}{{path}} via a reqwest blocking \
+             client; return ViewerResponse {{ status, body }} where body is the \
+             rendered HTML. Assert on OBSERVABLE rendered text only."
+        )
+    }
+
+    /// Issue an HTTP `POST <base_url><path>` with `fields` as an
+    /// `application/x-www-form-urlencoded` body (the `/scrape` target form), and
+    /// return the status + rendered HTML. The form is how the operator submits a
+    /// scrape target on the Live Scrape view (DESIGN §5 — POST /scrape).
+    ///
+    /// SCAFFOLD: true (slice-06).
+    pub fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
+        // SCAFFOLD: true (slice-06)
+        let _ = (path, fields);
+        todo!(
+            "DELIVER (slice-06): POST {{base_url}}{{path}} with `fields` as a \
+             form-urlencoded body via a reqwest blocking client; return \
+             ViewerResponse {{ status, body }} (the re-rendered scrape page)."
+        )
+    }
+}
+
+impl Drop for ViewerServer {
+    fn drop(&mut self) {
+        // Kill the `openlore ui` process so the bound ephemeral port is released —
+        // RAII per-scenario isolation (mirrors IndexerHandle / FakePds / PeerPds).
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Seed `count` of the operator's OWN signed claims into the env's REAL slice-01
+/// `claims` table through the PRODUCTION write path — the `openlore claim add`
+/// verb (Pillar 3: the production composition root, the SAME store the viewer
+/// reads, BR-VIEW-4). The walking skeleton (V-1) seeds via this real verb so the
+/// rows the viewer renders are produced by production code, not hand-inserted.
+///
+/// SCAFFOLD: true (slice-06) — DELIVER drives `run_openlore` with `claim add`
+/// (+ the chained sign/publish prompts as the existing claim scenarios do) so
+/// `count` real signed rows land in the REAL DuckDB the viewer then opens.
+pub fn seed_own_claims_via_cli(env: &TestEnv, count: usize) {
+    // SCAFFOLD: true (slice-06)
+    let _ = (env, count);
+    todo!(
+        "DELIVER (slice-06): drive the PRODUCTION `openlore claim add` write path \
+         (run_openlore / run_openlore_with_stdin) `count` times so `count` real \
+         signed rows land in the env's REAL slice-01 `claims` table — the SAME \
+         store `openlore ui` opens (BR-VIEW-4, Pillar 3)."
+    )
+}
+
+/// Seed ONE specific own claim (subject/predicate/object/confidence + optional
+/// evidence URLs) into the REAL `claims` table via the production `claim add`
+/// path, returning its CID (for the `/claims/{cid}` detail scenarios). The CID is
+/// read back from the `claim add` stdout (the `published_cid_from_stdout` shape).
+///
+/// SCAFFOLD: true (slice-06).
+pub fn seed_own_claim_with_evidence(
+    env: &TestEnv,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    confidence: f64,
+    evidence_urls: &[&str],
+) -> String {
+    // SCAFFOLD: true (slice-06)
+    let _ = (env, subject, predicate, object, confidence, evidence_urls);
+    todo!(
+        "DELIVER (slice-06): drive `openlore claim add` for the given \
+         subject/predicate/object/confidence (+ evidence URLs) through the \
+         production write path; return the signed claim's CID (read back from \
+         stdout) so the `/claims/{{cid}}` detail scenarios can address it."
+    )
+}
+
+/// Seed `count` peer claims (federated from `peer_did`) into the env's REAL
+/// slice-03 `peer_claims` table through the PRODUCTION federation path — the
+/// `openlore peer pull` verb against a `PeerPds` double (the SAME store the viewer
+/// reads). Used by the peer-claims view + pagination scenarios (US-VIEW-003/004).
+///
+/// SCAFFOLD: true (slice-06) — DELIVER reuses the slice-03 `run_openlore_pull` +
+/// `PeerPds` seam (the established federation write path) so `count` real
+/// `peer_claims` rows (carrying `author_did` + `fetched_from_pds`) land in the
+/// REAL DuckDB the viewer opens.
+pub fn seed_peer_claims_via_pull(env: &TestEnv, peer_did: &str, count: usize) {
+    // SCAFFOLD: true (slice-06)
+    let _ = (env, peer_did, count);
+    todo!(
+        "DELIVER (slice-06): drive the PRODUCTION `openlore peer pull` federation \
+         path (run_openlore_pull + PeerPds, slice-03) so `count` real `peer_claims` \
+         rows (with author_did + fetched_from_pds) land in the env's REAL \
+         `peer_claims` table — the SAME store `openlore ui` opens (BR-VIEW-4)."
+    )
+}
+
+/// Seed ONE peer_claims row whose origin (`author_did`) is BLANK/absent — a
+/// DEFENSIVE fixture that bypasses the slice-03 schema CHECK (which makes
+/// `author_did` non-empty) to exercise the viewer's "unknown" render path
+/// (US-VIEW-003 boundary / AC-003.3). The row must still RENDER (labeled
+/// "unknown"), never be dropped. Test-support is the only place raw SQL +
+/// CHECK-bypass is acceptable; production federation goes through `peer pull`.
+///
+/// SCAFFOLD: true (slice-06) — DELIVER inserts a `peer_claims` row with a blank
+/// origin via raw SQL (bypassing the production write path so the defensive
+/// render branch is reachable), into the env's REAL DuckDB the viewer opens.
+pub fn seed_peer_claim_with_blank_origin(env: &TestEnv) {
+    // SCAFFOLD: true (slice-06)
+    let _ = env;
+    todo!(
+        "DELIVER (slice-06): insert ONE `peer_claims` row with a blank/absent \
+         origin (author_did) via raw SQL (a defensive CHECK-bypass fixture) into \
+         the env's REAL DuckDB, so the viewer's `/peer-claims` view exercises the \
+         \"unknown\" origin render path (US-VIEW-003 boundary) instead of dropping \
+         the row."
+    )
+}
+
+/// Capture the read-only universe: the row counts of BOTH persisted tables
+/// (`claims` + `peer_claims`) in the env's REAL DuckDB. Port-exposed observable
+/// names (`claims.row_count`, `peer_claims.row_count`) — NEVER an internal
+/// adapter struct field (Mandate 8). The `viewer_is_read_only` gold test snapshots
+/// this BEFORE and AFTER exercising every route (incl. POST /scrape) and asserts
+/// the delta is all-`unchanged` via `assert_state_delta`.
+///
+/// SCAFFOLD: true (slice-06) — DELIVER reads `SELECT COUNT(*)` from `claims` and
+/// `peer_claims` (test-support is the only place raw SQL is acceptable; the
+/// VIEWER goes through the read-only `StoreReadPort`) into the universe HashMap.
+pub fn capture_store_row_count_universe(env: &TestEnv) -> std::collections::HashMap<String, u64> {
+    // SCAFFOLD: true (slice-06)
+    let _ = env;
+    todo!(
+        "DELIVER (slice-06): snapshot {{`claims.row_count`, `peer_claims.row_count`}} \
+         via `SELECT COUNT(*)` over the env's REAL DuckDB into a HashMap — the \
+         port-exposed read-only universe the `viewer_is_read_only` gold test \
+         asserts UNCHANGED across every route."
+    )
+}
+
+/// Universe-bound read-only assertion (Mandate 8): the persisted-store row counts
+/// (`claims.row_count` + `peer_claims.row_count`) are UNCHANGED after exercising
+/// every viewer route incl. POST /scrape (I-VIEW-1 read-only; gold test
+/// `viewer_is_read_only`). Built on the project `state_delta` port — the universe
+/// is the two port-exposed counts, each expected `unchanged()`.
+///
+/// SCAFFOLD: true (slice-06).
+pub fn assert_store_read_only(
+    before: &std::collections::HashMap<String, u64>,
+    after: &std::collections::HashMap<String, u64>,
+) {
+    // SCAFFOLD: true (slice-06)
+    let _ = (before, after);
+    todo!(
+        "DELIVER (slice-06): assert_state_delta(before, after, \
+         universe={{`claims.row_count`, `peer_claims.row_count`}}, \
+         expected=all-unchanged()) — the structural read-only proof (I-VIEW-1). \
+         Any row-count change is an UNSHIPPABLE read-only breach."
+    )
+}
+
+/// Make the env's REAL store file UNREADABLE by the viewer (US-VIEW-001 Ex 3 /
+/// AC-001.4 — "is another process using it?"). Returns a guard whose `Drop`
+/// restores access (so the tempdir cleanup still works). The startup probe
+/// (ADR-030 §Earned-Trust step 1) surfaces this as a `health.startup.refused`
+/// at `openlore ui` start — a plain-language refusal, never a per-request stack
+/// trace.
+///
+/// SCAFFOLD: true (slice-06) — DELIVER takes an exclusive DuckDB lock on the file
+/// (a second open handle / file lock) OR chmod-000s it, so the viewer's startup
+/// `count_claims()` sentinel read fails and the verb refuses to serve.
+pub fn make_store_unreadable(env: &TestEnv) -> StoreLockGuard {
+    // SCAFFOLD: true (slice-06)
+    let _ = env;
+    todo!(
+        "DELIVER (slice-06): lock/deny-read the env's REAL DuckDB so the viewer's \
+         startup store-readability probe (ADR-030) fails; return a StoreLockGuard \
+         that restores access on Drop."
+    )
+}
+
+/// RAII guard returned by [`make_store_unreadable`]; restores store readability on
+/// Drop so the `TestEnv` tempdir can clean up.
+pub struct StoreLockGuard {
+    _private: (),
+}
+
+/// Try to start `openlore ui` over an UNREADABLE store and capture the startup
+/// refusal outcome (exit code + stderr) WITHOUT spawning a long-running server.
+/// The viewer refuses to serve (WIRE→PROBE→USE; ADR-009/030) with a plain-language
+/// message naming the store path — NOT a raw stack trace (NFR-VIEW-6). Used by the
+/// unreadable-store scenario (V-4).
+///
+/// SCAFFOLD: true (slice-06) — DELIVER spawns `openlore ui --port 0`, expects a
+/// non-zero exit + a `health.startup.refused` event whose plain-language stderr
+/// names the store path and asks if another process holds it.
+pub fn run_openlore_ui_expecting_startup_refusal(env: &TestEnv) -> CliOutcome {
+    // SCAFFOLD: true (slice-06)
+    let _ = env;
+    todo!(
+        "DELIVER (slice-06): spawn `openlore ui --port 0` over an unreadable store; \
+         capture the non-zero exit + the plain-language `health.startup.refused` \
+         stderr (names the path; no stack trace, NFR-VIEW-6) as a CliOutcome."
+    )
+}

@@ -100,6 +100,14 @@ ed25519-dalek = { version = "2", default-features = false }
 # index-query CLIENT (above) — never the indexer's server/store/ingest crates
 # (I-AV-3); this is a TEST-ONLY dependency on the sibling binary crate.
 openlore-indexer = { path = "../openlore-indexer" }
+# Slice-06 (htmx-scraper-viewer; DISTILL): the viewer acceptance harness
+# (`ViewerServer` in tests/acceptance/support) issues in-test HTTP GET/POST
+# against the long-running `openlore ui` process and asserts on the returned
+# HTML. Unlike the slice-05 indexer ATs (which query through the `search`
+# subprocess), the viewer ATs need an in-test HTTP client, so add `reqwest`'s
+# BLOCKING client (rustls; same version/TLS the workspace already uses in
+# `adapter-index-query`). Dev-only — production viewer code serves via hyper.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
 
 [[test]]
 name = "walking_skeleton"
@@ -265,4 +273,41 @@ harness = true
 [[test]]
 name = "appview_core"
 path = "../../tests/acceptance/appview_core.rs"
+harness = true
+
+# Slice-06 subprocess + real-I/O acceptance (the `openlore ui` read-only htmx
+# viewer — store views US-VIEW-001/002/003/004; ADR-028/029/030). Drives the REAL
+# `openlore ui` verb via the `ViewerServer` spawn helper (long-running localhost
+# `:0` server, read back) + in-test HTTP over a REAL DuckDB seeded through the
+# production `claim add` / `peer pull` write paths (BR-VIEW-4 — same store). No new
+# external fake (GitHub is only on `/scrape`). DISTILL registers the target +
+# materializes the harness so the V-* scenarios classify RED (panic at `todo!()`);
+# V-1..V-* stay RED until DELIVER's per-scenario phases.
+[[test]]
+name = "viewer_store"
+path = "../../tests/acceptance/viewer_store.rs"
+harness = true
+
+# Slice-06 subprocess + real-I/O acceptance (the `openlore ui` live-scrape view —
+# US-VIEW-005; ADR-028). Drives the REAL `openlore ui` verb via `ViewerServer` +
+# in-test HTTP POST /scrape, REUSING the slice-02 `FakeGithub` double (the ONLY
+# mocked boundary) for the live ephemeral harvest; persists NOTHING (BR-VIEW-2),
+# renders NO sign control (BR-VIEW-1 / I-SCR-1), and surfaces derived-from ONLY
+# here (I-VIEW-5 / WD-62). DISTILL registers + RED gate; V-S* stay RED (`todo!()`).
+[[test]]
+name = "viewer_scrape"
+path = "../../tests/acceptance/viewer_scrape.rs"
+harness = true
+
+# Slice-06 subprocess + real-I/O acceptance (the `openlore ui` viewer GOLD /
+# guardrail invariants — I-VIEW-1/2/4/5/6). The `@property` guardrail gold tests
+# from DESIGN §7 / ADR-030 §Earned-Trust: viewer_is_read_only (store row counts
+# UNCHANGED after EVERY route incl. POST /scrape), derived_from_only_on_candidates,
+# store_views_work_offline, web_process_holds_no_signing_key. Drives the REAL
+# `openlore ui` verb via `ViewerServer` over a REAL store. Per Mandate 11 the sad
+# paths are example-based, never PBT-generated at this layer. DISTILL registers +
+# RED gate; V-INV* stay RED (`todo!()`).
+[[test]]
+name = "viewer_invariants"
+path = "../../tests/acceptance/viewer_invariants.rs"
 harness = true
