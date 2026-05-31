@@ -1008,6 +1008,55 @@ mod tests {
         assert_eq!(PEER_ORIGIN_UNKNOWN_LABEL, "unknown");
     }
 
+    /// Behavior (V-10 boundary / AC-003.3 — the prime anti-elision mutation
+    /// target at the LIST level): a page containing an `Unknown`-origin row STILL
+    /// renders that row — it is NEVER filtered out — and the row is labeled
+    /// "unknown" while every OTHER field renders normally. The Known/Unknown ADT
+    /// match must be TOTAL: a mutation that dropped, skipped, or elided the
+    /// `Unknown` arm (rendering an empty page or omitting the row) fails here.
+    #[test]
+    fn render_peer_claims_page_keeps_an_unknown_origin_row() {
+        let page = PageView::new(vec![peer_row(
+            "bafyorphanrow",
+            "github:peer/orphan-repo",
+            "endorses",
+            "an-unattributed-object",
+            0.70,
+            PeerOrigin::Unknown,
+        )]);
+        let html = render_peer_claims_page(&page);
+        // The row is NOT dropped: a table renders (not the empty-state) and the
+        // row's OTHER fields all appear (AC-003.3 #1, #3).
+        assert!(
+            html.contains("<table"),
+            "an Unknown-origin row must still render as a table row — never be \
+             dropped into the empty state; got:\n{html}"
+        );
+        for needle in [
+            "bafyorphanrow",
+            "github:peer/orphan-repo",
+            "endorses",
+            "an-unattributed-object",
+            "0.70",
+        ] {
+            assert!(
+                html.contains(needle),
+                "an Unknown-origin row must render its field {needle:?} normally; \
+                 got:\n{html}"
+            );
+        }
+        // Its origin is labeled "unknown" rather than dropped (AC-003.3 #2).
+        assert!(
+            html.contains("unknown"),
+            "an Unknown-origin row must be labeled \"unknown\"; got:\n{html}"
+        );
+        assert!(
+            !html.contains("No federated claims yet"),
+            "a page WITH an Unknown-origin row must NOT show the empty state; \
+             got:\n{html}"
+        );
+    }
+
     /// Behavior (FR-VIEW-7 / AC-003.2 / V-9): an empty Peer Claims page renders
     /// the guided "No federated claims yet" empty state — NOT a blank page, NO
     /// table. Pins the `total == 0` empty/non-empty fork.

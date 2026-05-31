@@ -7350,15 +7350,95 @@ pub fn seed_peer_claims_via_pull(env: &TestEnv, peer_did: &str, count: usize) {
 /// origin via raw SQL (bypassing the production write path so the defensive
 /// render branch is reachable), into the env's REAL DuckDB the viewer opens.
 pub fn seed_peer_claim_with_blank_origin(env: &TestEnv) {
-    // SCAFFOLD: true (slice-06)
-    let _ = env;
-    todo!(
-        "DELIVER (slice-06): insert ONE `peer_claims` row with a blank/absent \
-         origin (author_did) via raw SQL (a defensive CHECK-bypass fixture) into \
-         the env's REAL DuckDB, so the viewer's `/peer-claims` view exercises the \
-         \"unknown\" origin render path (US-VIEW-003 boundary) instead of dropping \
-         the row."
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} to seed a blank-origin peer_claims row: {err}",
+            db_path.display()
+        )
+    });
+
+    // The slice-03 schema makes `author_did` non-empty (`NOT NULL` +
+    // `CHECK (author_did <> '')`), so a blank origin cannot be inserted while
+    // that CHECK stands. To exercise the viewer's DEFENSIVE "unknown" render
+    // path we must inject data that BYPASSES the CHECK — exactly the data that
+    // predates/bypasses the constraint. DuckDB's CHECK constraints here are
+    // unnamed, so they cannot be dropped by name; instead we rename the table
+    // aside, recreate it WITHOUT the `author_did` CHECK (keeping every other
+    // column + constraint the viewer reads), copy any existing rows back, and
+    // drop the staging table. Everything that DEPENDS on `peer_claims` blocks
+    // the rename and must be dropped first, then recreated: the three indexes
+    // (`idx_peer_claims_*`) and the two FK tables (`peer_claim_references`,
+    // `peer_claim_evidence`) that reference `peer_claims (cid)`. A
+    // freshly-initialized env has none of these rows yet, so recreating the
+    // dependent tables empty preserves the schema the viewer reads. Test-support
+    // is the only place raw SQL + CHECK-bypass is acceptable; production
+    // federation goes through `peer pull`.
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_peer_claims_author;
+         DROP INDEX IF EXISTS idx_peer_claims_subject;
+         DROP INDEX IF EXISTS idx_peer_claims_composed_at;
+         DROP TABLE IF EXISTS peer_claim_references;
+         DROP TABLE IF EXISTS peer_claim_evidence;
+         ALTER TABLE peer_claims RENAME TO peer_claims_check_bypass;
+         CREATE TABLE peer_claims (
+             cid                 VARCHAR PRIMARY KEY,
+             author_did          VARCHAR NOT NULL,
+             subject             VARCHAR NOT NULL,
+             predicate           VARCHAR NOT NULL,
+             object              VARCHAR NOT NULL,
+             confidence          DOUBLE  NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+             composed_at         TIMESTAMP NOT NULL,
+             fetched_at          TIMESTAMP NOT NULL,
+             fetched_from_pds    VARCHAR NOT NULL,
+             signed_record_path  VARCHAR NOT NULL,
+             CHECK (cid <> '')
+         );
+         INSERT INTO peer_claims SELECT * FROM peer_claims_check_bypass;
+         DROP TABLE peer_claims_check_bypass;
+         CREATE INDEX IF NOT EXISTS idx_peer_claims_author       ON peer_claims (author_did);
+         CREATE INDEX IF NOT EXISTS idx_peer_claims_subject      ON peer_claims (subject);
+         CREATE INDEX IF NOT EXISTS idx_peer_claims_composed_at  ON peer_claims (composed_at);
+         CREATE TABLE peer_claim_references (
+             referencing_cid     VARCHAR NOT NULL,
+             referenced_cid      VARCHAR NOT NULL,
+             ref_type            VARCHAR NOT NULL CHECK (ref_type IN ('retracts','corrects','counters','supersedes')),
+             PRIMARY KEY (referencing_cid, referenced_cid, ref_type),
+             FOREIGN KEY (referencing_cid) REFERENCES peer_claims (cid)
+         );
+         CREATE INDEX IF NOT EXISTS idx_peer_claim_refs_referenced ON peer_claim_references (referenced_cid);
+         CREATE TABLE peer_claim_evidence (
+             cid         VARCHAR NOT NULL,
+             evidence    VARCHAR NOT NULL,
+             ordinal     INTEGER NOT NULL,
+             PRIMARY KEY (cid, ordinal),
+             FOREIGN KEY (cid) REFERENCES peer_claims (cid)
+         );",
     )
+    .unwrap_or_else(|err| {
+        panic!("drop the peer_claims author_did CHECK to seed a blank-origin row: {err}")
+    });
+
+    // Now insert ONE row whose origin (`author_did`) is the empty string — the
+    // adapter maps `author_did == ""` to `PeerOrigin::Unknown` (defensive),
+    // never dropping the row. Every OTHER field is populated normally so the
+    // row renders in full (AC-003.3 #3).
+    conn.execute(
+        "INSERT INTO peer_claims \
+            (cid, author_did, subject, predicate, object, confidence, \
+             composed_at, fetched_at, fetched_from_pds, signed_record_path) \
+         VALUES (?, '', ?, ?, ?, ?, now(), now(), ?, ?)",
+        duckdb::params![
+            "bafyblankorigin0",
+            "github:peer/orphan-repo",
+            "endorses",
+            "an-unattributed-object",
+            0.7_f64,
+            "https://peer.example/pds",
+            "peer_claims/blank-origin/bafyblankorigin0.json",
+        ],
+    )
+    .unwrap_or_else(|err| panic!("seed blank-origin peer_claims row: {err}"));
 }
 
 /// Capture the read-only universe: the row counts of BOTH persisted tables
