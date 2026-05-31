@@ -76,7 +76,7 @@ pub fn ingest_decision(record: &RawRecord, resolved_key: &VerificationKey) -> In
 
 pub enum IngestOutcome {
     Index(IndexedClaim),         // verified + CID-matched; author_did from the SIGNED payload
-    Reject(RejectReason),        // unsigned | bad_signature | cid_mismatch | schema_unknown | self_*
+    Reject(RejectReason),        // unsigned | bad_signature | cid_mismatch | schema_unknown
 }
 
 pub enum RejectReason { Unsigned, BadSignature, CidMismatch, SchemaUnknown }
