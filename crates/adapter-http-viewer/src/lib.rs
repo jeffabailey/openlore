@@ -32,7 +32,10 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{PageRequest, StoreReadPort};
 use tokio::net::TcpListener;
-use viewer_domain::{render_claims_page, render_landing, ClaimRowView, PageView};
+use viewer_domain::{
+    render_claim_detail, render_claims_page, render_landing, ClaimDetailView, ClaimRowView,
+    PageView,
+};
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
 /// root (which links this adapter but NOT `viewer-domain` directly) can print the
@@ -173,7 +176,13 @@ async fn route(
     match path.as_str() {
         "/" => Ok(landing_page()),
         "/claims" => Ok(claims_page(store.as_ref())),
-        _ => Ok(not_found()),
+        _ => match path.strip_prefix("/claims/") {
+            // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
+            // non-empty CID segment routes to the detail handler; everything
+            // else is 404.
+            Some(cid) if !cid.is_empty() => Ok(claim_detail_page(store.as_ref(), cid)),
+            _ => Ok(not_found()),
+        },
     }
 }
 
@@ -203,6 +212,23 @@ fn claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
     let page_view = PageView::new(rows);
     let html = render_claims_page(&page_view);
     html_ok(html)
+}
+
+/// Render one claim's detail page (`GET /claims/{cid}`, US-VIEW-002): read the
+/// claim + its ordinal-ordered evidence over the read-only store, project into
+/// the pure detail view-model, and render via `viewer-domain`. The `Some` (known
+/// CID) path renders `200`; the `None` (unknown CID) + read-error paths return a
+/// minimal `404` for now — the GUIDED not-found message (FR-VIEW-3 / NFR-VIEW-6)
+/// lands in step 02-03 and will replace this minimal branch.
+fn claim_detail_page(store: &dyn StoreReadPort, cid: &str) -> Response<Full<Bytes>> {
+    match store.get_claim(cid) {
+        Ok(Some(detail)) => {
+            let view = ClaimDetailView::from_detail(&detail);
+            html_ok(render_claim_detail(&view))
+        }
+        // Unknown CID / read failure: minimal 404 (guided not-found is step 02-03).
+        Ok(None) | Err(_) => not_found(),
+    }
 }
 
 /// A `200 OK` HTML response.

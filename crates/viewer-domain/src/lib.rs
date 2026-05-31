@@ -25,7 +25,7 @@
 #![forbid(unsafe_code)]
 
 use maud::{html, Markup, DOCTYPE};
-use ports::ClaimRow;
+use ports::{ClaimDetail, ClaimRow};
 
 /// One claim rendered as a row in the My Claims list view. The VIEW-model shape
 /// (nw-fp-domain-modeling §10): flat display strings + the numeric confidence
@@ -216,6 +216,117 @@ pub fn render_landing() -> String {
     markup.into_string()
 }
 
+/// One claim's FULL detail, shaped for the `/claims/{cid}` detail render
+/// (US-VIEW-002). The VIEW-model (nw-fp-domain-modeling §10): flat display
+/// strings + the numeric confidence the renderer formats VERBATIM + the
+/// ordinal-ordered evidence URLs. Projected from a [`ports::ClaimDetail`] by
+/// [`ClaimDetailView::from_detail`] (a total conversion — always succeeds;
+/// evidence ORDER is preserved from the DTO, which the adapter ordered by
+/// `claim_evidence.ordinal`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimDetailView {
+    pub cid: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    /// The stored confidence DOUBLE. Rendered VERBATIM via [`render_confidence`]
+    /// (FR-VIEW-8).
+    pub confidence: f64,
+    pub author_did: String,
+    /// `composed_at` rendered as an RFC-3339 string by the effect shell (the
+    /// pure renderer shows it verbatim; held as a string so this crate takes no
+    /// `chrono` dependency edge).
+    pub composed_at: String,
+    /// The evidence URLs in attachment order (ordinal ascending). Empty for a
+    /// claim signed without evidence (the renderer then shows an explicit "no
+    /// evidence attached" state — step 02-02).
+    pub evidence: Vec<String>,
+}
+
+impl ClaimDetailView {
+    /// Project a boundary [`ports::ClaimDetail`] into the detail view-model.
+    /// Total — never fails. `composed_at` is rendered to RFC-3339 here so the
+    /// pure renderer needs no `chrono`. Evidence ORDER is carried through
+    /// unchanged (the adapter already ordered by `ordinal`).
+    pub fn from_detail(detail: &ClaimDetail) -> Self {
+        Self {
+            cid: detail.cid.clone(),
+            subject: detail.subject.clone(),
+            predicate: detail.predicate.clone(),
+            object: detail.object.clone(),
+            confidence: detail.confidence,
+            author_did: detail.author_did.clone(),
+            composed_at: detail.composed_at.to_rfc3339(),
+            evidence: detail.evidence.clone(),
+        }
+    }
+}
+
+/// Render one claim's detail page as a complete HTML document (maud). PURE: a
+/// total function from the detail view-model to an HTML string — no I/O. Shows
+/// EVERY claim field (subject, predicate, object, the VERBATIM confidence,
+/// author_did, composed_at, CID) PLUS the COMPLETE `evidence[]` array, one URL
+/// per row in ordinal order (FR-VIEW-3 / AC-002.1). A claim with no evidence
+/// shows an explicit "no evidence attached" state (FR-VIEW-3, step 02-02) rather
+/// than a blank section.
+pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "OpenLore — Claim Detail" }
+            }
+            body {
+                h1 { "Claim Detail" }
+                p { (READ_ONLY_NOTICE) }
+                (render_claim_fields(claim))
+                (render_evidence_section(&claim.evidence))
+                p {
+                    a href="/claims" { "Back to My Claims" }
+                }
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Render the claim's scalar fields as a definition list. Each field is labeled
+/// in domain language; the confidence cell goes through [`render_confidence`] so
+/// the VERBATIM `0.90` rule lives in exactly one place (FR-VIEW-8).
+fn render_claim_fields(claim: &ClaimDetailView) -> Markup {
+    html! {
+        dl {
+            dt { "Subject" }    dd { (claim.subject) }
+            dt { "Predicate" }  dd { (claim.predicate) }
+            dt { "Object" }     dd { (claim.object) }
+            dt { "Confidence" } dd { (render_confidence(claim.confidence)) }
+            dt { "Author" }     dd { (claim.author_did) }
+            dt { "Composed at" } dd { (claim.composed_at) }
+            dt { "CID" }        dd { (claim.cid) }
+        }
+    }
+}
+
+/// Render the evidence section: one row per evidence URL, in the order given
+/// (the adapter ordered by `claim_evidence.ordinal`, FR-VIEW-3). An EMPTY
+/// evidence list renders the explicit "no evidence attached" state, never a
+/// blank section (step 02-02 pins this branch).
+fn render_evidence_section(evidence: &[String]) -> Markup {
+    html! {
+        h2 { "Evidence" }
+        @if evidence.is_empty() {
+            p { "no evidence attached" }
+        } @else {
+            ul {
+                @for url in evidence {
+                    li { (url) }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! In-crate unit + property tests for the PURE viewer core. Port-to-port at
@@ -233,6 +344,118 @@ mod tests {
             predicate: predicate.to_string(),
             object: object.to_string(),
             confidence,
+        }
+    }
+
+    fn detail(evidence: &[&str]) -> ClaimDetailView {
+        ClaimDetailView {
+            cid: "bafytokio".to_string(),
+            subject: "tokio-rs/tokio".to_string(),
+            predicate: "has-license".to_string(),
+            object: "MIT".to_string(),
+            confidence: 0.95,
+            author_did: "did:plc:maria".to_string(),
+            composed_at: "2026-05-30T12:00:00+00:00".to_string(),
+            evidence: evidence.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Behavior (AC-002.1): the detail render shows EVERY claim field — subject,
+    /// predicate, object, the VERBATIM confidence `0.95`, author_did,
+    /// composed_at, and the CID — plus BOTH evidence URLs. Pins the exact V-5
+    /// acceptance fixture at the unit level (the prime mutation target).
+    #[test]
+    fn render_claim_detail_shows_all_fields_and_every_evidence_url() {
+        let view = detail(&[
+            "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE",
+            "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml",
+        ]);
+        let html = render_claim_detail(&view);
+        for needle in [
+            "tokio-rs/tokio",
+            "has-license",
+            "MIT",
+            "0.95",
+            "did:plc:maria",
+            "2026-05-30T12:00:00+00:00",
+            "bafytokio",
+            "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE",
+            "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml",
+        ] {
+            assert!(
+                html.contains(needle),
+                "detail page must render {needle:?}; got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (FR-VIEW-3, step 02-02 boundary): a claim with NO evidence renders
+    /// the explicit "no evidence attached" state, never a blank evidence section.
+    /// Guards the empty/non-empty fork of the evidence section.
+    #[test]
+    fn render_claim_detail_with_no_evidence_shows_explicit_empty_state() {
+        let html = render_claim_detail(&detail(&[]));
+        assert!(
+            html.contains("no evidence attached"),
+            "a claim with empty evidence must show \"no evidence attached\"; got:\n{html}"
+        );
+    }
+
+    proptest! {
+        /// Property (AC-002.1 — evidence ORDER + completeness): for an arbitrary
+        /// NON-EMPTY list of distinct evidence URLs, the detail render contains
+        /// EVERY URL AND lays them out in the GIVEN ordinal order (each URL's
+        /// position in the rendered HTML is monotonically increasing). This is the
+        /// anti-mutation net for the ordered evidence iteration: a renderer that
+        /// reversed, sorted, deduped, or dropped evidence fails. Distinct
+        /// `idx`-prefixed URLs make "appears in order" checkable by byte offset.
+        #[test]
+        fn render_claim_detail_lays_out_evidence_in_ordinal_order(
+            n in 1usize..6,
+        ) {
+            let urls: Vec<String> = (0..n)
+                .map(|i| format!("https://example.test/evidence-{i}"))
+                .collect();
+            let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+            let html = render_claim_detail(&detail(&url_refs));
+
+            let mut last_pos: Option<usize> = None;
+            for url in &urls {
+                let pos = html.find(url.as_str());
+                prop_assert!(pos.is_some(), "detail must contain evidence url {url:?}");
+                let pos = pos.unwrap();
+                if let Some(prev) = last_pos {
+                    prop_assert!(
+                        pos > prev,
+                        "evidence must render in ordinal order; {url:?} appeared out of order"
+                    );
+                }
+                last_pos = Some(pos);
+            }
+            prop_assert!(
+                !html.contains("no evidence attached"),
+                "a claim WITH evidence must not show the empty state; got:\n{html}"
+            );
+        }
+
+        /// Property (FR-VIEW-8 in the detail view): for ANY confidence in
+        /// `[0.0, 1.0]`, the detail render embeds the VERBATIM two-decimal
+        /// confidence (`render_confidence`) and never a `%` sign — the same
+        /// verbatim rule the list view obeys, re-pinned at the detail surface.
+        #[test]
+        fn render_claim_detail_renders_confidence_verbatim(confidence in 0.0f64..=1.0f64) {
+            let mut view = detail(&["https://example.test/e0"]);
+            view.confidence = confidence;
+            let html = render_claim_detail(&view);
+            prop_assert!(
+                html.contains(&render_confidence(confidence)),
+                "detail must embed the verbatim confidence {:?}",
+                render_confidence(confidence)
+            );
+            prop_assert!(
+                !html.contains(&format!("{:.2}%", confidence * 100.0)),
+                "confidence must never render as a percentage in the detail view"
+            );
         }
     }
 

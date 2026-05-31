@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use duckdb::Connection;
-use ports::{ClaimRow, Page, PageRequest, StoreReadError, StoreReadPort};
+use ports::{ClaimDetail, ClaimRow, Page, PageRequest, StoreReadError, StoreReadPort};
 
 /// Read-only view over the SAME shared DuckDB connection the CLI writes through.
 /// Constructed via [`crate::DuckDbStorageAdapter::read_adapter`] so no second
@@ -103,5 +103,83 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                 detail: format!("count_claims sentinel read failed: {err}"),
             })?;
         Ok(total as usize)
+    }
+
+    fn get_claim(&self, cid: &str) -> Result<Option<ClaimDetail>, StoreReadError> {
+        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
+            detail: "connection mutex poisoned".to_string(),
+        })?;
+
+        // Read the scalar claim row (read-only). Missing CID -> Ok(None): a
+        // guided not-found is the viewer's job, not an error (step 02-03).
+        let mut stmt = conn
+            .prepare(
+                "SELECT cid, subject, predicate, object, confidence, author_did, composed_at \
+                 FROM claims WHERE cid = ?",
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare get_claim: {err}"),
+            })?;
+        let mut claim_iter = stmt
+            .query_map(duckdb::params![cid], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, DateTime<Utc>>(6)?,
+                ))
+            })
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map get_claim: {err}"),
+            })?;
+        let claim = match claim_iter.next() {
+            None => {
+                drop(claim_iter);
+                drop(stmt);
+                return Ok(None);
+            }
+            Some(row) => row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode get_claim: {err}"),
+            })?,
+        };
+        drop(claim_iter);
+        drop(stmt);
+
+        // Read the evidence URLs ordered by ordinal ascending (the order they
+        // were attached, FR-VIEW-3).
+        let mut ev_stmt = conn
+            .prepare(
+                "SELECT evidence FROM claim_evidence WHERE cid = ? ORDER BY ordinal ASC",
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare get_claim evidence: {err}"),
+            })?;
+        let ev_iter = ev_stmt
+            .query_map(duckdb::params![cid], |row| row.get::<_, String>(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map get_claim evidence: {err}"),
+            })?;
+        let mut evidence = Vec::new();
+        for url in ev_iter {
+            evidence.push(url.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode get_claim evidence: {err}"),
+            })?);
+        }
+        drop(ev_stmt);
+
+        let (cid, subject, predicate, object, confidence, author_did, composed_at) = claim;
+        Ok(Some(ClaimDetail {
+            cid,
+            subject,
+            predicate,
+            object,
+            confidence,
+            author_did,
+            composed_at,
+            evidence,
+        }))
     }
 }

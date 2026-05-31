@@ -40,6 +40,29 @@ pub struct ClaimRow {
     pub composed_at: DateTime<Utc>,
 }
 
+/// One own-claim's FULL detail, projected for the read-only detail view
+/// (`/claims/{cid}`, US-VIEW-002). The flat claim fields PLUS the COMPLETE
+/// `evidence[]` array the list view summarizes away (FR-VIEW-3) — ordered by
+/// the `claim_evidence.ordinal` column so the operator sees the evidence in the
+/// order it was attached. A FLAT DTO (not the rich `SignedClaim`): the detail
+/// renderer reads these fields verbatim. `confidence` is the stored DOUBLE,
+/// rendered VERBATIM (FR-VIEW-8).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimDetail {
+    pub cid: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub confidence: f64,
+    pub author_did: String,
+    pub composed_at: DateTime<Utc>,
+    /// The claim's evidence URLs, ordered by `claim_evidence.ordinal` ascending
+    /// (the order they were attached). Empty when the claim was signed without
+    /// evidence (the detail view then shows an explicit "no evidence attached"
+    /// state — step 02-02).
+    pub evidence: Vec<String>,
+}
+
 /// An offset/limit pagination request over the own-claim store. The viewer
 /// translates a `?page=N` query (page size 50, ADR-030) into one of these. For
 /// the walking skeleton a single ordered read is enough; full pagination
@@ -90,4 +113,11 @@ pub trait StoreReadPort: Send + Sync {
     /// Total number of own claims in the store. Used by the store-readability
     /// startup probe (a `COUNT(*)` sentinel read) AND the position indicator.
     fn count_claims(&self) -> Result<usize, StoreReadError>;
+
+    /// Fetch ONE own claim by CID together with its COMPLETE, ordinal-ordered
+    /// `evidence[]` (US-VIEW-002 / FR-VIEW-3). Returns `Ok(None)` when no claim
+    /// with that CID exists (the viewer renders a guided not-found — step 02-03),
+    /// `Ok(Some(detail))` for a known CID. Read-only SQL only: a SELECT over
+    /// `claims` joined to `claim_evidence` by `cid`, ordered by `ordinal`.
+    fn get_claim(&self, cid: &str) -> Result<Option<ClaimDetail>, StoreReadError>;
 }
