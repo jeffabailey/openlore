@@ -216,6 +216,38 @@ pub fn render_landing() -> String {
     markup.into_string()
 }
 
+/// The EXACT plain-language message the operator sees when she opens a detail
+/// page for a CID that is not in her store (AC-002.3 / FR-VIEW-3 / NFR-VIEW-6).
+/// Held in ONE place so the not-found phrasing is a single source of truth and a
+/// string mutation has exactly one site to attack (pinned by the unit test).
+pub const CLAIM_NOT_FOUND_NOTICE: &str = "No claim with that identifier in your store";
+
+/// Render the guided not-found page for an unknown CID (`GET /claims/{cid}` where
+/// `get_claim` returns `None`; AC-002.3 / FR-VIEW-3). PURE: a total function — no
+/// I/O, takes no error value (it never echoes a raw cause). Shows the
+/// plain-language [`CLAIM_NOT_FOUND_NOTICE`] plus a back link to the My Claims
+/// list so the operator's next step is obvious — never a blank page, never a
+/// stack trace (NFR-VIEW-6). The effect shell maps this body to a `404` status.
+pub fn render_error() -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "OpenLore — Claim Not Found" }
+            }
+            body {
+                h1 { "Claim Not Found" }
+                p { (CLAIM_NOT_FOUND_NOTICE) }
+                p {
+                    a href="/claims" { "Back to My Claims" }
+                }
+            }
+        }
+    };
+    markup.into_string()
+}
+
 /// One claim's FULL detail, shaped for the `/claims/{cid}` detail render
 /// (US-VIEW-002). The VIEW-model (nw-fp-domain-modeling §10): flat display
 /// strings + the numeric confidence the renderer formats VERBATIM + the
@@ -671,5 +703,36 @@ mod tests {
             html.contains("/claims"),
             "landing page must link to the My Claims list; got:\n{html}"
         );
+    }
+
+    /// Behavior (AC-002.3 / FR-VIEW-3 / NFR-VIEW-6): the guided not-found page
+    /// carries the EXACT plain-language message the operator sees for a mistyped
+    /// CID AND a back link to the My Claims list — and leaks NO raw internals
+    /// (no stack-trace markers, no raw DB error). Pins the message literal + the
+    /// back link, the two mutation targets for the `get_claim -> None` 404 render.
+    #[test]
+    fn render_error_states_the_not_found_message_and_links_back_to_claims() {
+        let html = render_error();
+        assert!(
+            html.contains("No claim with that identifier in your store"),
+            "the guided 404 must carry the plain-language not-found message; got:\n{html}"
+        );
+        assert!(
+            html.contains("/claims"),
+            "the guided 404 must link back to the My Claims list; got:\n{html}"
+        );
+        for leaked in [
+            "panicked at",
+            "RUST_BACKTRACE",
+            "stack backtrace",
+            "IO Error",
+            "StoreReadError",
+            "Error:",
+        ] {
+            assert!(
+                !html.contains(leaked),
+                "the guided 404 must leak no raw internals ({leaked:?}); got:\n{html}"
+            );
+        }
     }
 }

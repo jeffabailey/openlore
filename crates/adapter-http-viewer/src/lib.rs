@@ -33,8 +33,8 @@ use hyper_util::rt::TokioIo;
 use ports::{PageRequest, StoreReadPort};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claims_page, render_landing, ClaimDetailView, ClaimRowView,
-    PageView,
+    render_claim_detail, render_claims_page, render_error, render_landing, ClaimDetailView,
+    ClaimRowView, PageView,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -217,17 +217,19 @@ fn claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
 /// Render one claim's detail page (`GET /claims/{cid}`, US-VIEW-002): read the
 /// claim + its ordinal-ordered evidence over the read-only store, project into
 /// the pure detail view-model, and render via `viewer-domain`. The `Some` (known
-/// CID) path renders `200`; the `None` (unknown CID) + read-error paths return a
-/// minimal `404` for now — the GUIDED not-found message (FR-VIEW-3 / NFR-VIEW-6)
-/// lands in step 02-03 and will replace this minimal branch.
+/// CID) path renders `200`; the `None` (unknown CID) + read-error paths render
+/// the GUIDED not-found page (the pure `render_error` — plain-language message +
+/// back link to /claims, FR-VIEW-3 / NFR-VIEW-6) at `404`. A read error degrades
+/// to the SAME guided page rather than leaking a raw cause (no stack trace).
 fn claim_detail_page(store: &dyn StoreReadPort, cid: &str) -> Response<Full<Bytes>> {
     match store.get_claim(cid) {
         Ok(Some(detail)) => {
             let view = ClaimDetailView::from_detail(&detail);
             html_ok(render_claim_detail(&view))
         }
-        // Unknown CID / read failure: minimal 404 (guided not-found is step 02-03).
-        Ok(None) | Err(_) => not_found(),
+        // Unknown CID / read failure: the GUIDED 404 (render_error) — message +
+        // back link, never a raw cause (NFR-VIEW-6).
+        Ok(None) | Err(_) => html_not_found(render_error()),
     }
 }
 
@@ -245,5 +247,17 @@ fn not_found() -> Response<Full<Bytes>> {
         .status(StatusCode::NOT_FOUND)
         .header("content-type", "text/html; charset=utf-8")
         .body(Full::new(Bytes::from_static(b"<p>Not found.</p>")))
+        .expect("static response is well-formed")
+}
+
+/// A `404 Not Found` HTML response carrying a rendered `body` — used for the
+/// GUIDED not-found page (unknown CID), which returns `404` (AC-002.3) yet shows
+/// the operator a plain-language message + back link (NFR-VIEW-6) rather than the
+/// terse route-miss `not_found()` body.
+fn html_not_found(body: String) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Full::new(Bytes::from(body)))
         .expect("static response is well-formed")
 }
