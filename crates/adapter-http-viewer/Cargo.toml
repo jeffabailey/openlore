@@ -28,6 +28,14 @@ path = "src/lib.rs"
 [dependencies]
 ports = { path = "../ports" }
 viewer-domain = { path = "../viewer-domain" }
+# `scraper-domain` is the PURE slice-02 candidate-derivation core (NOT an
+# adapter — no `adapter-` prefix, so the no-adapter-depends-on-adapter rule is
+# untouched). The `/scrape` route runs `derive_candidates` over the harvested
+# signals. The `GithubPort` trait itself lives in `ports` (already a dep) — the
+# CONCRETE `adapter-github` is wired by the cli composition root and passed in as
+# `Box<dyn GithubPort>`, so this crate never links another adapter (I-3) and
+# never reaches the signing/PDS surface (I-VIEW-3).
+scraper-domain = { path = "../scraper-domain" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 hyper = { version = "1", features = ["server", "http1"] }

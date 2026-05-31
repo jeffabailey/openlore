@@ -13,8 +13,10 @@
 //! can read the bound `:0` port back), then run the accept loop until killed.
 
 use adapter_duckdb::DuckDbStorageAdapter;
+use adapter_github::GithubAdapter;
 use adapter_http_viewer::{
-    read_only_launch_banner, viewer_store_unreadable_refusal, SharedStore, ViewerServer,
+    read_only_launch_banner, viewer_store_unreadable_refusal, SharedGithub, SharedStore,
+    ViewerServer,
 };
 use anyhow::{anyhow, Result};
 use ports::{ProbeOutcome, StoreReadPort};
@@ -73,6 +75,16 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     };
     let store: SharedStore = Arc::new(storage.read_adapter());
 
+    // Wire the slice-02 `GithubPort` (adapter-github) for the `/scrape` LIVE
+    // propose route (US-VIEW-005). `from_env` resolves the GitHub API base (the
+    // real public API, or the `OPENLORE_GITHUB_API_BASE` test seam) and the
+    // optional `GITHUB_TOKEN`. CAPABILITY (I-VIEW-1/I-VIEW-3): a `GithubPort`
+    // reads ONLY public GitHub — it holds NO signing key / IdentityPort / write
+    // StoragePort, so the viewer process STILL holds only a read-only store + a
+    // public-read GitHub port (no signing surface enters the viewer). The
+    // `/scrape` route persists nothing (BR-VIEW-2).
+    let github: SharedGithub = Arc::new(GithubAdapter::from_env());
+
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
         .parse()
         .map_err(|err| anyhow!("invalid viewer listen address: {err}"))?;
@@ -83,7 +95,11 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     // bind happens inside it.
     let runtime = build_tokio_runtime();
     let code = runtime.block_on(async move {
-        let server = match ViewerServer::bind(addr, Arc::clone(&store)) {
+        let server = match ViewerServer::bind_with_github(
+            addr,
+            Arc::clone(&store),
+            Arc::clone(&github),
+        ) {
             Ok(server) => server,
             Err(err) => {
                 eprintln!("openlore ui: {err}");

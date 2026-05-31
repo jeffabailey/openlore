@@ -25,7 +25,7 @@
 #![forbid(unsafe_code)]
 
 use maud::{html, Markup, DOCTYPE};
-use ports::{ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
+use ports::{CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
 
 /// One claim rendered as a row in the My Claims list view. The VIEW-model shape
 /// (nw-fp-domain-modeling §10): flat display strings + the numeric confidence
@@ -649,6 +649,193 @@ pub fn render_peer_origin(origin: &PeerOrigin) -> String {
 fn render_peer_empty_state() -> Markup {
     html! {
         p { "No federated claims yet." }
+    }
+}
+
+// =============================================================================
+// Live Scrape view (`GET`/`POST /scrape`, US-VIEW-005 / FR-VIEW-5)
+// =============================================================================
+
+/// The exact copy stating that NONE of the rendered candidates were signed or
+/// saved (BR-VIEW-2 / I-VIEW-1). Held in ONE place so the "nothing signed/saved"
+/// contract text is a single source of truth (a string mutation has exactly one
+/// site to attack — pinned by the unit test). It MUST contain both "nothing" and
+/// either "signed" or "saved" (the V-S1 acceptance assertion) AND direct the
+/// operator to the CLI to sign — signing stays in the CLI (BR-VIEW-1 / I-SCR-1).
+pub const SCRAPE_NOTHING_SAVED_NOTICE: &str =
+    "These are live proposals only — nothing here is signed or saved. To sign a \
+     candidate, use the openlore CLI.";
+
+/// The guided zero-candidates message shown when a target harvests successfully
+/// but derives NO candidates (AC-005.3 / FR-VIEW-7 / NFR-VIEW-6). Held in ONE
+/// place so the phrasing is a single source of truth; pinned by V-S3 + the unit
+/// test. Carries a suggested alternative so the operator's next step is obvious,
+/// never a blank result.
+pub const SCRAPE_NO_CANDIDATES_NOTICE: &str =
+    "No candidate claims could be derived from this target. Try a different \
+     public repository or user.";
+
+/// One LIVE-SCRAPE candidate proposal rendered as a row in the Live Scrape view
+/// (US-VIEW-005). The VIEW-model shape (nw-fp-domain-modeling §10): flat display
+/// strings + the numeric confidence + the DISPLAY-ONLY `derived_from` provenance.
+///
+/// `CandidateRowView` is the ONLY view-model that carries `derived_from`
+/// (WD-62 / I-VIEW-5): the persisted-claim view-models ([`ClaimRowView`],
+/// [`ClaimDetailView`], [`PeerClaimRowView`]) MUST NOT — provenance is surfaced
+/// ONLY on the live, never-persisted proposal. Projected from a
+/// [`ports::CandidateClaim`] by [`CandidateRowView::from_candidate`] (a total
+/// conversion — always succeeds; the candidate's non-empty source signals
+/// become the human-readable derived-from line).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateRowView {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    /// The conservative speculative default (`0.25`, WD-52). Rendered VERBATIM
+    /// via [`render_confidence`] (FR-VIEW-8).
+    pub confidence: f64,
+    /// DISPLAY-ONLY provenance (WD-62 / I-VIEW-5): the human-readable source
+    /// signal value(s) that produced this candidate. The ONLY view-model field
+    /// of its kind — NEVER present on a persisted-claim view-model.
+    pub derived_from: String,
+}
+
+impl CandidateRowView {
+    /// Project a boundary [`ports::CandidateClaim`] into the live-scrape
+    /// view-model. Total — never fails. The candidate's source signals (non-empty
+    /// by `CandidateClaim::try_new`, I-SCR-4) are joined into the display-only
+    /// `derived_from` provenance string.
+    pub fn from_candidate(candidate: &CandidateClaim) -> Self {
+        let derived_from = candidate
+            .source_signals()
+            .iter()
+            .map(|s| s.value.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        Self {
+            subject: candidate.subject.clone(),
+            predicate: candidate.predicate.clone(),
+            object: candidate.object.clone(),
+            confidence: candidate.confidence,
+            derived_from,
+        }
+    }
+}
+
+/// The state the Live Scrape page renders (the pure render input). An ADT over
+/// the three outcomes of a `/scrape` interaction so the renderer matches totally
+/// (nw-fp-domain-modeling §1): the empty GET form, a populated proposal list, or
+/// a guided message (zero-candidates / network-down). The effect shell builds
+/// this from the live resolve+harvest+derive result; the renderer is a pure
+/// total function over it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScrapeState {
+    /// `GET /scrape`: the empty target form, no candidates yet (AC-005.1 GET).
+    Form,
+    /// `POST /scrape` that derived >=1 candidate: render the proposal rows.
+    Proposals(Vec<CandidateRowView>),
+    /// `POST /scrape` that produced no rows to show — a guided message rather
+    /// than a blank result (zero candidates, AC-005.3; or network-down, AC-005.4).
+    Guidance(String),
+}
+
+/// Render the Live Scrape page (`GET`/`POST /scrape`, US-VIEW-005) as a complete
+/// HTML document (maud). PURE: a total function from the [`ScrapeState`] to an
+/// HTML string — no I/O, no network. ALWAYS renders the labeled target form (so
+/// the operator can submit / re-submit). On [`ScrapeState::Proposals`] it renders
+/// the candidate rows (subject, predicate, object, the VERBATIM confidence, and
+/// the DISPLAY-ONLY derived-from provenance on EACH row) plus the "nothing signed
+/// or saved + use the CLI to sign" notice; on [`ScrapeState::Guidance`] it renders
+/// the guided message. It renders NO sign/save control anywhere (BR-VIEW-1 /
+/// I-SCR-1 — signing stays in the CLI; the live view never offers a sign
+/// affordance).
+pub fn render_scrape_page(state: &ScrapeState) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "OpenLore — Live Scrape" }
+            }
+            body {
+                h1 { "Live Scrape" }
+                p { (READ_ONLY_NOTICE) }
+                (render_scrape_form())
+                (render_scrape_result(state))
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Render the labeled target form (`GET /scrape` and the top of every POST
+/// render). PURE. The form POSTs the `target` field back to `/scrape`. It carries
+/// NO sign/save control — only a "Scrape" submit that runs the live propose step
+/// (BR-VIEW-1 / I-SCR-1).
+fn render_scrape_form() -> Markup {
+    html! {
+        form method="post" action="/scrape" {
+            label for="target" { "GitHub target (owner/repo or user)" }
+            input type="text" id="target" name="target";
+            button type="submit" { "Scrape" }
+        }
+    }
+}
+
+/// Render the result region beneath the form for the given [`ScrapeState`]. PURE
+/// total match over the ADT: the GET form shows nothing yet; proposals show the
+/// candidate rows + the nothing-saved notice; guidance shows the guided message.
+fn render_scrape_result(state: &ScrapeState) -> Markup {
+    html! {
+        @match state {
+            ScrapeState::Form => {}
+            ScrapeState::Proposals(rows) => {
+                (render_candidate_table(rows))
+                p { (SCRAPE_NOTHING_SAVED_NOTICE) }
+            }
+            ScrapeState::Guidance(message) => {
+                p { (message) }
+            }
+        }
+    }
+}
+
+/// Render the live-scrape candidate table (one `<tr>` per proposal). Small,
+/// named, composable — the per-row markup is [`render_candidate_row`].
+fn render_candidate_table(rows: &[CandidateRowView]) -> Markup {
+    html! {
+        table {
+            thead {
+                tr {
+                    th { "Subject" }
+                    th { "Predicate" }
+                    th { "Object" }
+                    th { "Confidence" }
+                    th { "Derived-from" }
+                }
+            }
+            tbody {
+                @for row in rows {
+                    (render_candidate_row(row))
+                }
+            }
+        }
+    }
+}
+
+/// Render one live-scrape candidate row. The confidence cell goes through
+/// [`render_confidence`] (the VERBATIM rule lives in one place, FR-VIEW-8); the
+/// derived-from cell renders the DISPLAY-ONLY provenance (WD-62 / I-VIEW-5). NO
+/// sign/save control is rendered on the row (BR-VIEW-1 / I-SCR-1).
+fn render_candidate_row(row: &CandidateRowView) -> Markup {
+    html! {
+        tr {
+            td { (row.subject) }
+            td { (row.predicate) }
+            td { (row.object) }
+            td { (render_confidence(row.confidence)) }
+            td { "derived-from: " (row.derived_from) }
+        }
     }
 }
 
@@ -1458,6 +1645,238 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // =========================================================================
+    // Live Scrape view (`render_scrape_page`, US-VIEW-005) — unit + property.
+    // =========================================================================
+
+    /// Build a `CandidateClaim` from its display fields + a single source signal
+    /// (whose `value` becomes the candidate's derived-from). Routes through the
+    /// smart constructor so the non-empty-source invariant (I-SCR-4) holds.
+    fn candidate(
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f64,
+        signal_value: &str,
+    ) -> CandidateClaim {
+        let signal = ports::Signal {
+            kind: ports::SignalKind::DependencyManifestPinned,
+            value: signal_value.to_string(),
+            source_url: "https://github.com/rust-lang/cargo/blob/HEAD/Cargo.lock".to_string(),
+        };
+        CandidateClaim::try_new(
+            subject.to_string(),
+            predicate.to_string(),
+            object.to_string(),
+            vec![signal.source_url.clone()],
+            confidence,
+            vec![signal],
+        )
+        .expect("a candidate with one source signal must construct")
+    }
+
+    /// Behavior (AC-005.1): `GET /scrape` renders the labeled target form and NO
+    /// candidate rows. The form is how the operator submits a target.
+    #[test]
+    fn render_scrape_page_form_shows_labeled_target_input_and_no_candidates() {
+        let html = render_scrape_page(&ScrapeState::Form);
+        assert!(
+            html.contains("name=\"target\""),
+            "the GET form must carry a labeled target input; got:\n{html}"
+        );
+        assert!(
+            html.contains("GitHub target"),
+            "the target input must be labeled in domain language; got:\n{html}"
+        );
+        assert!(
+            !html.contains("<tr>"),
+            "the empty form must render NO candidate rows; got:\n{html}"
+        );
+    }
+
+    /// Behavior (AC-005.2 — the prime row-rendering mutation target): each
+    /// proposed candidate renders subject, predicate, object, the VERBATIM
+    /// confidence, AND its display-only derived-from provenance.
+    #[test]
+    fn render_scrape_page_proposals_show_every_field_plus_derived_from() {
+        let rows = vec![CandidateRowView::from_candidate(&candidate(
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            0.25,
+            "Cargo.lock committed (exact pins)",
+        ))];
+        let html = render_scrape_page(&ScrapeState::Proposals(rows));
+        for needle in [
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            "0.25",
+            "derived-from",
+            "Cargo.lock committed (exact pins)",
+        ] {
+            assert!(
+                html.contains(needle),
+                "live-scrape proposal row must render {needle:?}; got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (AC-005.2 — the derived-from PRESENCE branch): EVERY rendered
+    /// candidate carries a derived-from provenance value (not just the first).
+    #[test]
+    fn render_scrape_page_renders_derived_from_on_every_candidate() {
+        let rows = vec![
+            CandidateRowView::from_candidate(&candidate(
+                "github:rust-lang/cargo",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.dependency-pinning",
+                0.25,
+                "signal-one-value",
+            )),
+            CandidateRowView::from_candidate(&candidate(
+                "github:rust-lang/cargo",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.test-driven",
+                0.25,
+                "signal-two-value",
+            )),
+        ];
+        let html = render_scrape_page(&ScrapeState::Proposals(rows));
+        // The derived-from label appears once per row (here: twice).
+        assert_eq!(
+            html.matches("derived-from").count(),
+            2,
+            "each candidate row must carry its own derived-from; got:\n{html}"
+        );
+        for value in ["signal-one-value", "signal-two-value"] {
+            assert!(
+                html.contains(value),
+                "each candidate's source signal value {value:?} must render; got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (BR-VIEW-2 / I-SCR-1): the proposals page states nothing is
+    /// signed or saved AND directs the operator to the CLI to sign.
+    #[test]
+    fn render_scrape_page_proposals_state_nothing_saved_and_direct_to_cli() {
+        let rows = vec![CandidateRowView::from_candidate(&candidate(
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            0.25,
+            "Cargo.lock committed",
+        ))];
+        let html = render_scrape_page(&ScrapeState::Proposals(rows));
+        assert!(
+            html.contains("nothing")
+                && (html.contains("signed") || html.contains("saved")),
+            "the proposals page must state nothing is signed or saved; got:\n{html}"
+        );
+        assert!(
+            html.contains("sign") && html.contains("CLI"),
+            "the proposals page must direct the operator to the CLI to sign; got:\n{html}"
+        );
+    }
+
+    /// Behavior (BR-VIEW-1 / I-SCR-1 — the HARD human-gate guardrail): NO sign /
+    /// save control is rendered ANYWHERE on the live-scrape page (form, proposals,
+    /// or guidance). The live view may describe signing-via-CLI but never offers a
+    /// sign affordance. Pins the no-sign-control guarantee across every state.
+    #[test]
+    fn render_scrape_page_renders_no_sign_control_in_any_state() {
+        let proposals = ScrapeState::Proposals(vec![CandidateRowView::from_candidate(
+            &candidate(
+                "github:rust-lang/cargo",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.dependency-pinning",
+                0.25,
+                "Cargo.lock committed",
+            ),
+        )]);
+        for state in [
+            ScrapeState::Form,
+            proposals,
+            ScrapeState::Guidance("nothing to show".to_string()),
+        ] {
+            let html = render_scrape_page(&state);
+            for sign_control_marker in [
+                "name=\"sign\"",
+                "Sign claim",
+                "type=\"submit\" value=\"sign",
+            ] {
+                assert!(
+                    !html.contains(sign_control_marker),
+                    "the live-scrape page must render NO sign control ({sign_control_marker:?}) \
+                     in state {state:?}; got:\n{html}"
+                );
+            }
+        }
+    }
+
+    /// Behavior: the guidance state renders the supplied message (the guided
+    /// zero-candidates / network-down branch, NFR-VIEW-6) and still shows the
+    /// form so the operator can re-submit — never a blank result.
+    #[test]
+    fn render_scrape_page_guidance_shows_the_message_and_the_form() {
+        let html = render_scrape_page(&ScrapeState::Guidance(
+            SCRAPE_NO_CANDIDATES_NOTICE.to_string(),
+        ));
+        assert!(
+            html.contains(SCRAPE_NO_CANDIDATES_NOTICE),
+            "the guidance state must render the supplied message; got:\n{html}"
+        );
+        assert!(
+            html.contains("name=\"target\""),
+            "the guidance state must still render the target form; got:\n{html}"
+        );
+    }
+
+    /// Behavior (I-VIEW-5 / WD-62): `CandidateRowView` is the ONLY view-model
+    /// carrying derived-from. Projecting a candidate joins its source signal
+    /// values into the display-only provenance string.
+    #[test]
+    fn candidate_row_view_carries_derived_from_from_source_signals() {
+        let view = CandidateRowView::from_candidate(&candidate(
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            0.25,
+            "Cargo.lock committed (exact pins)",
+        ));
+        assert_eq!(view.derived_from, "Cargo.lock committed (exact pins)");
+        assert_eq!(view.confidence, 0.25);
+    }
+
+    proptest! {
+        /// Property (FR-VIEW-8 in the live-scrape view): for ANY confidence in
+        /// `[0.0, 1.0]`, a proposal row embeds the VERBATIM two-decimal confidence
+        /// and never a `%` sign — the same verbatim rule re-pinned at this surface.
+        #[test]
+        fn render_scrape_page_renders_candidate_confidence_verbatim(
+            confidence in 0.0f64..=1.0f64,
+        ) {
+            let rows = vec![CandidateRowView::from_candidate(&candidate(
+                "github:rust-lang/cargo",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.dependency-pinning",
+                confidence,
+                "Cargo.lock committed",
+            ))];
+            let html = render_scrape_page(&ScrapeState::Proposals(rows));
+            prop_assert!(
+                html.contains(&render_confidence(confidence)),
+                "proposal row must embed the verbatim confidence {:?}",
+                render_confidence(confidence)
+            );
+            prop_assert!(
+                !html.contains('%'),
+                "confidence must never render as a percentage in the live-scrape view"
+            );
         }
     }
 }

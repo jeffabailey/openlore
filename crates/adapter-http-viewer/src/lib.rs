@@ -30,11 +30,13 @@ use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use ports::{PageRequest, StoreReadPort};
+use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
+use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claims_page, render_error, render_landing,
-    render_peer_claims_page, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView,
+    render_peer_claims_page, render_scrape_page, CandidateRowView, ClaimDetailView, ClaimRowView,
+    PageView, PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -55,6 +57,19 @@ pub use probe::{viewer_store_unreadable_message, viewer_store_unreadable_refusal
 /// The read-only store the viewer serves, shared across the hyper accept loop's
 /// per-connection tasks (`Send + Sync` via the `StoreReadPort` supertrait).
 pub type SharedStore = Arc<dyn StoreReadPort>;
+
+/// The GitHub driving port the `/scrape` route reuses for the LIVE propose step
+/// (US-VIEW-005), shared across the hyper accept loop's per-connection tasks
+/// (`Send + Sync` via the `GithubPort` supertrait). This is the SLICE-02 port —
+/// the cli composition root wires a `GithubAdapter` (or, in tests, the seam hits
+/// the reused `FakeGithub` via `OPENLORE_GITHUB_API_BASE`); a NEW GitHub double
+/// is NOT built. `None` for store-only viewers that never serve `/scrape`.
+///
+/// CAPABILITY NOTE (I-VIEW-1/I-VIEW-3): a `GithubPort` reads ONLY public GitHub —
+/// it holds no signing/identity/PDS/write surface — so adding it to the viewer
+/// preserves the read-only, no-signing-key invariant. The viewer never persists
+/// anything from `/scrape` (BR-VIEW-2 / I-VIEW-1).
+pub type SharedGithub = Arc<dyn GithubPort>;
 
 /// The default page size for the My Claims list view (ADR-030). For the walking
 /// skeleton a single ordered read of the first page is enough; full pagination
@@ -79,6 +94,9 @@ pub struct ViewerServer {
     listener: TcpListener,
     local_addr: SocketAddr,
     store: SharedStore,
+    /// The slice-02 `GithubPort` the `/scrape` route reuses for the LIVE propose
+    /// step (US-VIEW-005). `None` for store-only viewers — `/scrape` then 404s.
+    github: Option<SharedGithub>,
 }
 
 impl ViewerServer {
@@ -91,11 +109,36 @@ impl ViewerServer {
         probe::run_probe(self.store.as_ref(), &self.local_addr, store_path)
     }
 
+    /// Bind the HTTP listener at `addr` over a read-only store ONLY (no `/scrape`
+    /// GitHub seam — store-only viewers: `/`, `/claims`, `/claims/{cid}`,
+    /// `/peer-claims`). `/scrape` 404s. See [`Self::bind_with_github`] for the
+    /// live-scrape-enabled viewer.
+    pub fn bind(addr: SocketAddr, store: SharedStore) -> Result<Self, ViewerServerError> {
+        Self::bind_inner(addr, store, None)
+    }
+
+    /// Bind the HTTP listener at `addr` over a read-only store AND the slice-02
+    /// `GithubPort`, enabling the LIVE `/scrape` route (US-VIEW-005). The viewer
+    /// reuses the supplied `GithubPort` for resolve+harvest; it persists nothing
+    /// (BR-VIEW-2 / I-VIEW-1) and still holds NO signing key (a `GithubPort`
+    /// reads only public GitHub). The cli composition root wires the adapter.
+    pub fn bind_with_github(
+        addr: SocketAddr,
+        store: SharedStore,
+        github: SharedGithub,
+    ) -> Result<Self, ViewerServerError> {
+        Self::bind_inner(addr, store, Some(github))
+    }
+
     /// Bind the HTTP listener at `addr` (use `:0` for an OS-assigned ephemeral
     /// port, read back via [`Self::local_addr`]). REFUSES any non-loopback
     /// address — the viewer is localhost-only (I-VIEW-4). Must be called inside a
     /// tokio runtime (the cli composition root provides one).
-    pub fn bind(addr: SocketAddr, store: SharedStore) -> Result<Self, ViewerServerError> {
+    fn bind_inner(
+        addr: SocketAddr,
+        store: SharedStore,
+        github: Option<SharedGithub>,
+    ) -> Result<Self, ViewerServerError> {
         if !addr.ip().is_loopback() {
             return Err(ViewerServerError::BindFailed {
                 message: format!(
@@ -126,6 +169,7 @@ impl ViewerServer {
             listener,
             local_addr,
             store,
+            github,
         })
     }
 
@@ -151,8 +195,11 @@ impl ViewerServer {
                     })?;
             let io = TokioIo::new(stream);
             let store = Arc::clone(&self.store);
+            let github = self.github.clone();
             tokio::task::spawn(async move {
-                let service = service_fn(move |req| route(req, Arc::clone(&store)));
+                let service = service_fn(move |req| {
+                    route(req, Arc::clone(&store), github.clone())
+                });
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
                     .await;
@@ -161,16 +208,27 @@ impl ViewerServer {
     }
 }
 
-/// Route one HTTP request. Serves `GET /` (the read-only landing page that states
-/// the view is read-only — AC-001.2 / NFR-VIEW-1) and `GET /claims` (the My Claims
-/// list); everything else is 404.
+/// Route one HTTP request. Serves the read-only GET surfaces (`/`, `/claims`,
+/// `/claims/{cid}`, `/peer-claims`) plus the Live Scrape view: the `GET /scrape`
+/// form and the `POST /scrape` live propose (US-VIEW-005). `POST /scrape` is the
+/// one non-GET route and the one route that touches the network; everything else
+/// is a 404.
 async fn route(
     req: Request<Incoming>,
     store: SharedStore,
+    github: Option<SharedGithub>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(str::to_string);
+
+    // `POST /scrape` — the LIVE propose step (US-VIEW-005). The ONLY non-GET
+    // route + the ONLY route that reaches the network. Reads the form body, runs
+    // resolve+harvest+derive via the reused `GithubPort`, and renders the
+    // proposals. Persists NOTHING (BR-VIEW-2 / I-VIEW-1).
+    if method == Method::POST && path == "/scrape" {
+        return Ok(scrape_post(req, github.as_deref()).await);
+    }
     if method != Method::GET {
         return Ok(not_found());
     }
@@ -181,6 +239,10 @@ async fn route(
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5).
         "/peer-claims" => Ok(peer_claims_page(store.as_ref())),
+        // `GET /scrape` — the empty target form (AC-005.1 GET). Pure render; no
+        // network, no store read. 200 even when no `GithubPort` is wired (the
+        // form is harmless; only a POST runs the live harvest).
+        "/scrape" => Ok(html_ok(render_scrape_page(&ScrapeState::Form))),
         _ => match path.strip_prefix("/claims/") {
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
@@ -280,6 +342,148 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str) -> Response<Full<Byte
         // back link, never a raw cause (NFR-VIEW-6).
         Ok(None) | Err(_) => html_not_found(render_error()),
     }
+}
+
+/// Handle `POST /scrape` — the LIVE propose step (US-VIEW-005 / AC-005.1). Reads
+/// the `target` form field, then runs the SLICE-02 propose pipeline LIVE through
+/// the reused `GithubPort`: `resolve_target` -> `harvest_repo`/`harvest_user` ->
+/// the PURE `scraper_domain::derive_candidates`. The derived `CandidateClaim`
+/// values are projected into the pure [`CandidateRowView`] view-model (the ONLY
+/// view-model carrying display-only `derived_from`, WD-62 / I-VIEW-5) and
+/// rendered. PERSISTS NOTHING (BR-VIEW-2 / I-VIEW-1 — the viewer holds no write
+/// surface) and renders NO sign control (BR-VIEW-1 / I-SCR-1).
+///
+/// Always returns `200` with a guided page (NFR-VIEW-6): a derive that yields
+/// candidates renders the proposal rows; any other outcome renders a guided
+/// message rather than a blank result or a stack trace.
+async fn scrape_post(
+    req: Request<Incoming>,
+    github: Option<&dyn GithubPort>,
+) -> Response<Full<Bytes>> {
+    let body = read_request_body(req).await;
+    let target = parse_form_target(&body);
+
+    // No `GithubPort` wired (a store-only viewer somehow received a POST) — render
+    // the guided message; the live propose step is unavailable.
+    let Some(github) = github else {
+        return html_ok(render_scrape_page(&ScrapeState::Guidance(
+            SCRAPE_NO_CANDIDATES_NOTICE.to_string(),
+        )));
+    };
+
+    let state = match propose_candidates(github, &target).await {
+        Ok(candidates) if !candidates.is_empty() => {
+            let rows = candidates
+                .iter()
+                .map(CandidateRowView::from_candidate)
+                .collect::<Vec<_>>();
+            ScrapeState::Proposals(rows)
+        }
+        // A successful harvest that derived nothing, OR a refusal / network
+        // failure: a guided message, never a blank result or a leaked cause
+        // (the specific zero-candidate + network-down copy lands in a later step).
+        Ok(_) | Err(_) => ScrapeState::Guidance(scrape_guidance_message()),
+    };
+    html_ok(render_scrape_page(&state))
+}
+
+/// Run the live propose step for `target`: resolve, harvest, derive. Returns the
+/// derived candidates (possibly empty) or the `GithubError` from resolve/harvest.
+/// PURE derivation (`derive_candidates`) wrapped around the two effectful port
+/// calls — the effect/pure split (ADR-007/009).
+async fn propose_candidates(
+    github: &dyn GithubPort,
+    target: &str,
+) -> Result<Vec<ports::CandidateClaim>, GithubError> {
+    let kind = github.resolve_target(target).await?;
+    let signals = match &kind {
+        TargetKind::Repo { owner, repo } => github.harvest_repo(owner, repo).await?,
+        TargetKind::User { user } => github.harvest_user(user).await?,
+    };
+    // The embedded SSOT snapshot is build-time-verified to parse; a parse failure
+    // degrades to zero candidates rather than panicking (railway discipline).
+    let Ok(mapping) = load_mapping(EMBEDDED_MAPPING_YAML) else {
+        return Ok(Vec::new());
+    };
+    let subject = subject_for(&kind);
+    Ok(derive_candidates(&subject, &signals, &mapping))
+}
+
+/// The `github:<owner>/<repo>` or `github:<user>` subject string each candidate
+/// carries (the `github_target` shared artifact — mirrors the cli verb).
+fn subject_for(kind: &TargetKind) -> String {
+    match kind {
+        TargetKind::Repo { owner, repo } => format!("github:{owner}/{repo}"),
+        TargetKind::User { user } => format!("github:{user}"),
+    }
+}
+
+/// The minimal guided message for a non-happy `/scrape` outcome at THIS step. The
+/// precise zero-candidate ([`SCRAPE_NO_CANDIDATES_NOTICE`]) and network-down copy
+/// land in a later step; here a non-proposal outcome renders a neutral guided
+/// line so the viewer never crashes or shows a blank result (NFR-VIEW-6).
+fn scrape_guidance_message() -> String {
+    "The live scrape did not produce any proposals to show.".to_string()
+}
+
+/// Read the full request body into a `String` (the `application/x-www-form-
+/// urlencoded` form). A read failure degrades to an empty body (the target then
+/// parses empty and the propose step guides the operator — never a crash).
+async fn read_request_body(req: Request<Incoming>) -> String {
+    use http_body_util::BodyExt;
+    match req.into_body().collect().await {
+        Ok(collected) => String::from_utf8_lossy(&collected.to_bytes()).into_owned(),
+        Err(_) => String::new(),
+    }
+}
+
+/// Extract the `target` field from an `application/x-www-form-urlencoded` body.
+/// PURE total function: splits on `&`, finds `target=`, and percent-decodes the
+/// value (`+` -> space, `%XX` -> byte). A missing field yields the empty string.
+fn parse_form_target(body: &str) -> String {
+    body.split('&')
+        .filter_map(|pair| pair.strip_prefix("target="))
+        .next()
+        .map(percent_decode_form)
+        .unwrap_or_default()
+}
+
+/// Percent-decode one `application/x-www-form-urlencoded` value: `+` decodes to a
+/// space and `%XX` to the byte `0xXX`; any malformed escape is passed through
+/// verbatim. PURE total function. A GitHub `owner/repo` / `user` target needs the
+/// `/` (`%2F`) decoded, so a hand-rolled decode keeps the adapter free of a new
+/// dependency edge.
+fn percent_decode_form(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi * 16 + lo) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A `200 OK` HTML response.
