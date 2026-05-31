@@ -21,7 +21,9 @@
       "id": "01",
       "name": "Store list view + read-only startup",
       "description": "Stand the viewer up end-to-end over the operator's own claims: the walking skeleton forces the two new crates (viewer-domain, adapter-http-viewer) and three extended crates (ports, adapter-duckdb, cli) into existence, then layers the read-only launch notice, the empty-state, and the startup store-readability refusal. After this phase, `openlore ui` binds loopback, serves GET /claims over the REAL DuckDB, and refuses to start (health.startup.refused) when the store is unreadable.",
-      "stories": ["US-VIEW-001"],
+      "stories": [
+        "US-VIEW-001"
+      ],
       "steps": [
         {
           "id": "01-01",
@@ -59,13 +61,29 @@
             "Cargo.toml"
           ],
           "implementation_scope": {
-            "new_crates": ["viewer-domain (PURE: view-models + render_claims_page)", "adapter-http-viewer (EFFECT: hyper serve loop + GET /claims handler + probe skeleton)"],
-            "extended_crates": ["ports (StoreReadPort trait + ClaimRow/PageRequest/Page/StoreReadError)", "adapter-duckdb (list_claims/count_claims over shared Arc<Mutex<Connection>>)", "cli (ui verb + dispatch, reuse build_tokio_runtime)", "xtask (maud allowlist + viewer-domain pure-core arm + viewer capability rule)"],
+            "new_crates": [
+              "viewer-domain (PURE: view-models + render_claims_page)",
+              "adapter-http-viewer (EFFECT: hyper serve loop + GET /claims handler + probe skeleton)"
+            ],
+            "extended_crates": [
+              "ports (StoreReadPort trait + ClaimRow/PageRequest/Page/StoreReadError)",
+              "adapter-duckdb (list_claims/count_claims over shared Arc<Mutex<Connection>>)",
+              "cli (ui verb + dispatch, reuse build_tokio_runtime)",
+              "xtask (maud allowlist + viewer-domain pure-core arm + viewer capability rule)"
+            ],
             "pure_core_surface": "viewer-domain::render_claims_page over PageView<ClaimRowView> -- load-bearing for the Phase-05 mutation gate."
           },
           "estimated_time": "1.5 days",
           "depends_on": [],
-          "mutation_note": "Adds the first pure-core render surface (render_claims_page). Establishes the viewer-domain in-crate unit/property tests that the >=80% mutation gate will hold accountable; the confidence-verbatim rendering branch is a prime survivor target."
+          "mutation_note": "Adds the first pure-core render surface (render_claims_page). Establishes the viewer-domain in-crate unit/property tests that the >=80% mutation gate will hold accountable; the confidence-verbatim rendering branch is a prime survivor target.",
+          "criteria": [
+            "Starting `openlore ui --port <P>` binds 127.0.0.1:<P> and emits a `viewer.serve.listening` event on stdout naming the bound loopback URL.",
+            "A GET /claims request returns 200 and an HTML body containing the seeded claim's subject 'rust-lang/rust', predicate 'is-maintained-by', object 'The Rust Project', the CID, and the confidence rendered verbatim as '0.90' (not '0.9', not '90%').",
+            "The rendered page is HTML (the operator reads it in a browser); the scenario never issues SQL.",
+            "The claims read comes from the REAL DuckDB seeded through the production `claim add` write path (BR-VIEW-4): same store the CLI writes.",
+            "viewer-domain depends on maud + ports only -- no duckdb/tokio/reqwest/hyper/keyring/atrium (enforced by xtask check-arch pure-core arm).",
+            "adapter-http-viewer holds a Box<dyn StoreReadPort> with no write/sign method; cli is the only crate that links adapter-http-viewer (xtask invariant 5)."
+          ]
         },
         {
           "id": "01-02",
@@ -91,12 +109,24 @@
             "crates/cli/src/verbs/ui.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["adapter-http-viewer (probe steps 2/3 + GET / landing render)", "viewer-domain (read-only banner / layout shell)", "cli (launch notice line + probe-before-serve)"],
+            "extended_crates": [
+              "adapter-http-viewer (probe steps 2/3 + GET / landing render)",
+              "viewer-domain (read-only banner / layout shell)",
+              "cli (launch notice line + probe-before-serve)"
+            ],
             "pure_core_surface": "viewer-domain layout/shell helper renders the read-only banner."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["01-01"],
-          "mutation_note": "Read-only banner + loopback-derived URL string are pure-core; assert the banner text and loopback formatting are pinned to kill string-mutation survivors."
+          "depends_on": [
+            "01-01"
+          ],
+          "mutation_note": "Read-only banner + loopback-derived URL string are pure-core; assert the banner text and loopback formatting are pinned to kill string-mutation survivors.",
+          "criteria": [
+            "On launch, stdout reports the bound URL and it is a loopback address (127.0.0.0/8 or ::1).",
+            "The launch output and the landing page (GET /) state the viewer is read-only.",
+            "No signing key, IdentityPort, or PdsPort is loaded by the ui verb wiring (structural: ViewerDeps holds only StoreReadPort + GithubPort).",
+            "The loopback self-probe refuses to start if the bound address is not loopback (I-VIEW-4)."
+          ]
         },
         {
           "id": "01-03",
@@ -118,12 +148,22 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (EmptyState::NoClaims + render_empty)", "adapter-http-viewer (claims handler dispatches to render_empty when total == 0)"],
+            "extended_crates": [
+              "viewer-domain (EmptyState::NoClaims + render_empty)",
+              "adapter-http-viewer (claims handler dispatches to render_empty when total == 0)"
+            ],
             "pure_core_surface": "viewer-domain::render_empty(NoClaims)."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["01-02"],
-          "mutation_note": "render_empty is pure; the NoClaims guided-message branch and the total==0 dispatch boundary are mutation targets (off-by-one on the empty/non-empty fork)."
+          "depends_on": [
+            "01-02"
+          ],
+          "mutation_note": "render_empty is pure; the NoClaims guided-message branch and the total==0 dispatch boundary are mutation targets (off-by-one on the empty/non-empty fork).",
+          "criteria": [
+            "With zero claims in the store, GET /claims returns 200 with a guided empty-state message directing the operator to sign claims with the CLI.",
+            "The empty page renders no pagination controls and no error/stack trace.",
+            "The store row count is unchanged by rendering the empty view (read-only)."
+          ]
         },
         {
           "id": "01-04",
@@ -147,12 +187,23 @@
             "crates/cli/src/verbs/ui.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["adapter-http-viewer (probe step 1: store-readability sentinel)", "cli (health.startup.refused emission + plain-language stderr; port-in-use suggests --port)"],
+            "extended_crates": [
+              "adapter-http-viewer (probe step 1: store-readability sentinel)",
+              "cli (health.startup.refused emission + plain-language stderr; port-in-use suggests --port)"
+            ],
             "pure_core_surface": "viewer-domain::render_error / plain-language cause formatting (no stack trace)."
           },
           "estimated_time": "0.75 day",
-          "depends_on": ["01-03"],
-          "mutation_note": "The probe pass/refuse fork and the no-stack-trace message construction are mutation targets; pin that the refusal path names the path + omits transport internals."
+          "depends_on": [
+            "01-03"
+          ],
+          "mutation_note": "The probe pass/refuse fork and the no-stack-trace message construction are mutation targets; pin that the refusal path names the path + omits transport internals.",
+          "criteria": [
+            "When the store is unreadable (file locked by another process), `openlore ui` exits without binding a serve loop.",
+            "A structured `health.startup.refused` event is emitted with the reason (store unreadable).",
+            "The stderr message is plain language, names the store path, mentions 'another process', and contains NO stack trace and NO raw error/exception type.",
+            "The refusal happens at startup (probe-before-serve), not as a per-request 500."
+          ]
         }
       ]
     },
@@ -160,7 +211,9 @@
       "id": "02",
       "name": "Claim detail view",
       "description": "Drill into a single own claim: full fields plus its evidence array, including the no-evidence state and the guided not-found for an unknown CID. Adds StoreReadPort::get_claim + render_claim_detail.",
-      "stories": ["US-VIEW-002"],
+      "stories": [
+        "US-VIEW-002"
+      ],
       "steps": [
         {
           "id": "02-01",
@@ -185,12 +238,25 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["ports (ClaimDetail = ClaimRow + evidence: Vec<String>)", "adapter-duckdb (get_claim: row by cid + claim_evidence ORDER BY ordinal)", "viewer-domain (ClaimDetailView + render_claim_detail)", "adapter-http-viewer (GET /claims/{cid} handler)"],
+            "extended_crates": [
+              "ports (ClaimDetail = ClaimRow + evidence: Vec<String>)",
+              "adapter-duckdb (get_claim: row by cid + claim_evidence ORDER BY ordinal)",
+              "viewer-domain (ClaimDetailView + render_claim_detail)",
+              "adapter-http-viewer (GET /claims/{cid} handler)"
+            ],
             "pure_core_surface": "viewer-domain::render_claim_detail including the evidence list."
           },
           "estimated_time": "0.75 day",
-          "depends_on": ["01-04"],
-          "mutation_note": "render_claim_detail's evidence-iteration and field rendering are pure-core; evidence ordering and the per-field render branches are mutation targets."
+          "depends_on": [
+            "01-04"
+          ],
+          "mutation_note": "render_claim_detail's evidence-iteration and field rendering are pure-core; evidence ordering and the per-field render branches are mutation targets.",
+          "criteria": [
+            "GET /claims/{cid} for an existing claim returns 200 with subject, predicate, object, confidence verbatim, author_did, composed_at, and CID.",
+            "Both evidence URLs render, one per row, in ordinal order.",
+            "Confidence is rendered verbatim from the stored f64 (FR-VIEW-8).",
+            "The detail read is read-only over the same DuckDB store; row counts unchanged."
+          ]
         },
         {
           "id": "02-02",
@@ -211,12 +277,21 @@
             "crates/viewer-domain/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (empty-evidence branch in render_claim_detail)"],
+            "extended_crates": [
+              "viewer-domain (empty-evidence branch in render_claim_detail)"
+            ],
             "pure_core_surface": "viewer-domain::render_claim_detail empty-evidence path."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["02-01"],
-          "mutation_note": "The empty-vs-non-empty evidence fork is a direct mutation target; pin the 'no evidence attached' literal and the branch condition."
+          "depends_on": [
+            "02-01"
+          ],
+          "mutation_note": "The empty-vs-non-empty evidence fork is a direct mutation target; pin the 'no evidence attached' literal and the branch condition.",
+          "criteria": [
+            "GET /claims/{cid} for a claim with no evidence returns 200 and renders 'no evidence attached' in the evidence section.",
+            "The page renders the claim's other fields normally; the evidence area is not blank/absent.",
+            "Read-only: row counts unchanged."
+          ]
         },
         {
           "id": "02-03",
@@ -239,12 +314,23 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (ErrorView + render_error guided-404 path)", "adapter-http-viewer (map get_claim None -> 404 render_error)"],
+            "extended_crates": [
+              "viewer-domain (ErrorView + render_error guided-404 path)",
+              "adapter-http-viewer (map get_claim None -> 404 render_error)"
+            ],
             "pure_core_surface": "viewer-domain::render_error (cause + next_step, no stack trace)."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["02-02"],
-          "mutation_note": "render_error and the Some/None dispatch are pure-core/handler mutation targets; pin the 404 status mapping and the back-link presence."
+          "depends_on": [
+            "02-02"
+          ],
+          "mutation_note": "render_error and the Some/None dispatch are pure-core/handler mutation targets; pin the 404 status mapping and the back-link presence.",
+          "criteria": [
+            "GET /claims/{cid} for an unknown CID returns 404 with a plain-language message 'No claim with that identifier in your store'.",
+            "The page includes a back link to the claims list.",
+            "No stack trace, no raw DB error, no leaked internals.",
+            "Read-only: row counts unchanged."
+          ]
         }
       ]
     },
@@ -252,7 +338,9 @@
       "id": "03",
       "name": "Peer claims view",
       "description": "Show federated peer claims on a distinct route with peer origin, including the no-peers empty state and the defensive unknown-origin render. Adds StoreReadPort::list_peer_claims/count_peer_claims + render_peer_claims_page.",
-      "stories": ["US-VIEW-003"],
+      "stories": [
+        "US-VIEW-003"
+      ],
       "steps": [
         {
           "id": "03-01",
@@ -278,12 +366,25 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["ports (PeerClaimRow + PeerOrigin boundary mapping)", "adapter-duckdb (list_peer_claims/count_peer_claims over peer_claims, single-table)", "viewer-domain (PeerClaimRowView + render_peer_claims_page)", "adapter-http-viewer (GET /peer-claims handler)"],
+            "extended_crates": [
+              "ports (PeerClaimRow + PeerOrigin boundary mapping)",
+              "adapter-duckdb (list_peer_claims/count_peer_claims over peer_claims, single-table)",
+              "viewer-domain (PeerClaimRowView + render_peer_claims_page)",
+              "adapter-http-viewer (GET /peer-claims handler)"
+            ],
             "pure_core_surface": "viewer-domain::render_peer_claims_page with the peer-origin column."
           },
           "estimated_time": "0.75 day",
-          "depends_on": ["02-03"],
-          "mutation_note": "render_peer_claims_page peer-origin rendering and the author_did projection are mutation targets; pin that origin renders and is not elided."
+          "depends_on": [
+            "02-03"
+          ],
+          "mutation_note": "render_peer_claims_page peer-origin rendering and the author_did projection are mutation targets; pin that origin renders and is not elided.",
+          "criteria": [
+            "GET /peer-claims returns 200 listing federated peer claims with subject, predicate, object, confidence verbatim, peer origin (author_did), fetched_from_pds, composed_at, and CID.",
+            "Peer claims render on a SEPARATE route from /claims; own vs federated is never ambiguous (BR-VIEW-5).",
+            "Each peer row projects author_did verbatim (attribution discipline carried forward).",
+            "Read-only over the same store; row counts unchanged."
+          ]
         },
         {
           "id": "03-02",
@@ -305,12 +406,22 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (EmptyState::NoPeers + render_empty branch)", "adapter-http-viewer (peer handler dispatches render_empty when total == 0)"],
+            "extended_crates": [
+              "viewer-domain (EmptyState::NoPeers + render_empty branch)",
+              "adapter-http-viewer (peer handler dispatches render_empty when total == 0)"
+            ],
             "pure_core_surface": "viewer-domain::render_empty(NoPeers)."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["03-01"],
-          "mutation_note": "The NoPeers empty-state branch and the total==0 fork are mutation targets."
+          "depends_on": [
+            "03-01"
+          ],
+          "mutation_note": "The NoPeers empty-state branch and the total==0 fork are mutation targets.",
+          "criteria": [
+            "With zero peer claims, GET /peer-claims returns 200 with a guided 'No federated claims yet' message.",
+            "No pagination controls and no error are rendered.",
+            "Read-only: row counts unchanged."
+          ]
         },
         {
           "id": "03-03",
@@ -334,12 +445,23 @@
             "crates/adapter-duckdb/src/store_read.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (PeerOrigin::Known | Unknown + render branch)", "adapter-duckdb (map blank/absent author_did -> PeerOrigin::Unknown defensively)"],
+            "extended_crates": [
+              "viewer-domain (PeerOrigin::Known | Unknown + render branch)",
+              "adapter-duckdb (map blank/absent author_did -> PeerOrigin::Unknown defensively)"
+            ],
             "pure_core_surface": "viewer-domain peer-origin render over PeerOrigin (Known/Unknown ADT)."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["03-02"],
-          "mutation_note": "The Known/Unknown ADT match is a high-value mutation target; pin that Unknown renders 'unknown' and the row is never filtered out."
+          "depends_on": [
+            "03-02"
+          ],
+          "mutation_note": "The Known/Unknown ADT match is a high-value mutation target; pin that Unknown renders 'unknown' and the row is never filtered out.",
+          "criteria": [
+            "A peer claim with blank/absent author_did still appears in the /peer-claims list (row count of rendered claims includes it).",
+            "Its origin renders as 'unknown' rather than the row being dropped or the page erroring.",
+            "All other fields of the claim render normally.",
+            "Read-only: row counts unchanged."
+          ]
         }
       ]
     },
@@ -347,7 +469,9 @@
       "id": "04",
       "name": "Pagination across large stores",
       "description": "Paginate the list routes with offset/limit, fixed page size 50, deterministic sort: the 'X-Y of N' indicator and ?page=N, last-page bounds (no Next), and the single-page case (no controls). Adds PageRequest/Page<T> + the PageView indicator.",
-      "stories": ["US-VIEW-004"],
+      "stories": [
+        "US-VIEW-004"
+      ],
       "steps": [
         {
           "id": "04-01",
@@ -374,12 +498,26 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["ports (PageRequest{page,page_size} + Page<T>{rows,total,page,page_size})", "adapter-duckdb (LIMIT/OFFSET over indexed composed_at,cid + COUNT(*))", "viewer-domain (PageView<T> start/end/total + prev/next + indicator render)", "adapter-http-viewer (parse ?page=N, build PageView)"],
+            "extended_crates": [
+              "ports (PageRequest{page,page_size} + Page<T>{rows,total,page,page_size})",
+              "adapter-duckdb (LIMIT/OFFSET over indexed composed_at,cid + COUNT(*))",
+              "viewer-domain (PageView<T> start/end/total + prev/next + indicator render)",
+              "adapter-http-viewer (parse ?page=N, build PageView)"
+            ],
             "pure_core_surface": "viewer-domain PageView arithmetic (start/end/prev/next) + indicator render -- the load-bearing pure pagination surface for the >=80% gate."
           },
           "estimated_time": "1 day",
-          "depends_on": ["03-03"],
-          "mutation_note": "Pagination arithmetic (start/end/prev/next, off-by-one boundaries) is the single richest mutation surface in viewer-domain. Add in-crate property tests over (total, page, page_size) so the >=80% mutation gate has live oracles."
+          "depends_on": [
+            "03-03"
+          ],
+          "mutation_note": "Pagination arithmetic (start/end/prev/next, off-by-one boundaries) is the single richest mutation surface in viewer-domain. Add in-crate property tests over (total, page, page_size) so the >=80% mutation gate has live oracles.",
+          "criteria": [
+            "GET /claims (page 1) over 312 claims renders at most 50 rows and the indicator '1-50 of 312'.",
+            "GET /claims?page=2 renders the indicator '51-100 of 312' and a different set of 50 rows.",
+            "Page boundaries are deterministic across requests (ORDER BY composed_at DESC, cid ASC).",
+            "start/end/total math: start = (page-1)*50+1, end = min(page*50, total), total = COUNT(*).",
+            "Read-only: row counts unchanged across paging."
+          ]
         },
         {
           "id": "04-02",
@@ -402,12 +540,23 @@
             "crates/viewer-domain/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (next-bound + page-clamp logic in PageView)"],
+            "extended_crates": [
+              "viewer-domain (next-bound + page-clamp logic in PageView)"
+            ],
             "pure_core_surface": "viewer-domain PageView next/clamp boundary arithmetic."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["04-01"],
-          "mutation_note": "end>=total -> next=None and the clamp ceiling are prime off-by-one mutation targets; property tests from 04-01 should already cover, assert the bound explicitly."
+          "depends_on": [
+            "04-01"
+          ],
+          "mutation_note": "end>=total -> next=None and the clamp ceiling are prime off-by-one mutation targets; property tests from 04-01 should already cover, assert the bound explicitly.",
+          "criteria": [
+            "GET /claims?page=7 over 312 claims renders the indicator '301-312 of 312'.",
+            "No Next link/control is rendered on the last page (end >= total).",
+            "A Prev link IS rendered (not page 1).",
+            "Requesting a page beyond the last is clamped to the last page rather than erroring.",
+            "Read-only: row counts unchanged."
+          ]
         },
         {
           "id": "04-03",
@@ -428,12 +577,21 @@
             "crates/viewer-domain/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (single-page no-controls branch in PageView render)"],
+            "extended_crates": [
+              "viewer-domain (single-page no-controls branch in PageView render)"
+            ],
             "pure_core_surface": "viewer-domain PageView single-page suppression branch."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["04-02"],
-          "mutation_note": "The total<=page_size 'render no controls' fork is a mutation target; pin both that the count shows and that prev/next are absent."
+          "depends_on": [
+            "04-02"
+          ],
+          "mutation_note": "The total<=page_size 'render no controls' fork is a mutation target; pin both that the count shows and that prev/next are absent.",
+          "criteria": [
+            "GET /claims over 12 claims renders all 12 rows and the indicator '1-12 of 12'.",
+            "No pagination controls (no Prev, no Next) are rendered when total <= page_size.",
+            "Read-only: row counts unchanged."
+          ]
         }
       ]
     },
@@ -441,7 +599,9 @@
       "id": "05",
       "name": "Live scrape proposal view",
       "description": "Add the ephemeral /scrape view: a target form + live propose reusing the slice-02 GithubPort + derive_candidates, rendering candidates with derived-from and NO sign control, plus the zero-candidates state and the network-down render (plain language, no transport internals). Persists nothing, signs nothing.",
-      "stories": ["US-VIEW-005"],
+      "stories": [
+        "US-VIEW-005"
+      ],
       "steps": [
         {
           "id": "05-01",
@@ -469,12 +629,26 @@
             "crates/cli/src/verbs/ui.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["adapter-http-viewer (GET/POST /scrape handlers; depend on scraper-domain for derive_candidates; take GithubPort as Box<dyn>)", "viewer-domain (CandidateRowView -- the ONLY view-model with derived_from -- + ScrapeState + render_scrape_page, no sign control)", "cli (ui verb builds GithubPort via GithubAdapter::from_env and injects it)"],
+            "extended_crates": [
+              "adapter-http-viewer (GET/POST /scrape handlers; depend on scraper-domain for derive_candidates; take GithubPort as Box<dyn>)",
+              "viewer-domain (CandidateRowView -- the ONLY view-model with derived_from -- + ScrapeState + render_scrape_page, no sign control)",
+              "cli (ui verb builds GithubPort via GithubAdapter::from_env and injects it)"
+            ],
             "pure_core_surface": "viewer-domain::render_scrape_page (candidates + derived-from + 'nothing signed/saved' guidance, NO sign affordance)."
           },
           "estimated_time": "1 day",
-          "depends_on": ["04-03"],
-          "mutation_note": "render_scrape_page candidate rendering + the derived-from presence branch + the no-sign-control guarantee are mutation targets. CandidateRowView is the only type carrying derived_from -- assert it renders here and that the page has no sign affordance."
+          "depends_on": [
+            "04-03"
+          ],
+          "mutation_note": "render_scrape_page candidate rendering + the derived-from presence branch + the no-sign-control guarantee are mutation targets. CandidateRowView is the only type carrying derived_from -- assert it renders here and that the page has no sign affordance.",
+          "criteria": [
+            "GET /scrape returns 200 with a labeled target form (no candidates).",
+            "POST /scrape with target 'rust-lang/cargo' returns 200 rendering candidate rows with subject, predicate, object, confidence, and a derived-from provenance value on each candidate.",
+            "The page states nothing was signed or saved and directs the operator to the CLI to sign.",
+            "NO sign/save control is rendered anywhere on the page (I-SCR-1).",
+            "POST /scrape persists nothing: claims and peer_claims row counts are unchanged (BR-VIEW-2 / I-VIEW-1).",
+            "The harvest reuses the slice-02 GithubPort/FakeGithub double via OPENLORE_GITHUB_API_BASE -- no new GitHub double built."
+          ]
         },
         {
           "id": "05-02",
@@ -496,12 +670,22 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (EmptyState::NoCandidates / ScrapeState::ZeroCandidates render)", "adapter-http-viewer (scrape handler dispatches zero-candidates state)"],
+            "extended_crates": [
+              "viewer-domain (EmptyState::NoCandidates / ScrapeState::ZeroCandidates render)",
+              "adapter-http-viewer (scrape handler dispatches zero-candidates state)"
+            ],
             "pure_core_surface": "viewer-domain::render_empty(NoCandidates) / ZeroCandidates render."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["05-01"],
-          "mutation_note": "The empty-candidates fork and the guided-message literal are mutation targets."
+          "depends_on": [
+            "05-01"
+          ],
+          "mutation_note": "The empty-candidates fork and the guided-message literal are mutation targets.",
+          "criteria": [
+            "POST /scrape for a target that yields zero candidates returns 200 with 'No candidate claims could be derived' and a suggested alternative.",
+            "No candidate rows and no sign control are rendered.",
+            "Persists nothing: row counts unchanged."
+          ]
         },
         {
           "id": "05-03",
@@ -525,12 +709,23 @@
             "crates/adapter-http-viewer/src/lib.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["viewer-domain (ScrapeState::NetworkDown render: plain-language cause + offline note, no transport detail)", "adapter-http-viewer (map GithubPort network failure -> NetworkDown state, sanitizing the cause)"],
+            "extended_crates": [
+              "viewer-domain (ScrapeState::NetworkDown render: plain-language cause + offline note, no transport detail)",
+              "adapter-http-viewer (map GithubPort network failure -> NetworkDown state, sanitizing the cause)"
+            ],
             "pure_core_surface": "viewer-domain NetworkDown render (the DESIGN nit resolution)."
           },
           "estimated_time": "0.5 day",
-          "depends_on": ["05-02"],
-          "mutation_note": "The network-failure -> NetworkDown mapping and the transport-sanitization (no status/refused/DNS/URL) are mutation targets; assert both the plain-language cause AND the absence of leaked internals."
+          "depends_on": [
+            "05-02"
+          ],
+          "mutation_note": "The network-failure -> NetworkDown mapping and the transport-sanitization (no status/refused/DNS/URL) are mutation targets; assert both the plain-language cause AND the absence of leaked internals.",
+          "criteria": [
+            "POST /scrape when GitHub is unreachable returns a page naming the cause in domain language: 'GitHub could not be reached'.",
+            "The page reassures that the offline store view still works (NFR-VIEW-7).",
+            "The render leaks NO transport internals: no HTTP status code, no 'connection refused'/'timed out'/'DNS', no raw URL, no stack trace (NFR-VIEW-6).",
+            "Persists nothing: row counts unchanged; the store views remain reachable."
+          ]
         }
       ]
     },
@@ -538,7 +733,12 @@
       "id": "06",
       "name": "Gold invariants (read-only / honesty / offline / no-key)",
       "description": "The behavioral guardrails, LAST by design (ADR-030 Earned-Trust step 2/3 + the acceptance-review one-at-a-time discipline). Several flip green for free once the routes they guard exist -- the correct signal that the structural invariants were designed in, not bolted on. For each, the step may be 'remove the @skip / confirm already-green' if the structural invariant holds; otherwise it adds the missing guardrail surface (capture_store_row_count_universe / assert_store_read_only helpers).",
-      "stories": ["US-VIEW-001", "US-VIEW-002", "US-VIEW-003", "US-VIEW-005"],
+      "stories": [
+        "US-VIEW-001",
+        "US-VIEW-002",
+        "US-VIEW-003",
+        "US-VIEW-005"
+      ],
       "steps": [
         {
           "id": "06-01",
@@ -560,12 +760,22 @@
             "tests/acceptance/support/mod.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["(expected: none -- already-green confirmation; if a leak is found, the fix lands in adapter-http-viewer / cli wiring, not viewer-domain)"],
+            "extended_crates": [
+              "(expected: none -- already-green confirmation; if a leak is found, the fix lands in adapter-http-viewer / cli wiring, not viewer-domain)"
+            ],
             "pure_core_surface": "none (behavioral guardrail over the driving port)."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["05-03"],
-          "mutation_note": "Guardrail, not a new pure surface. If it goes red, the regression is in a handler that mutates -- the fix, not the test, carries the mutation accountability."
+          "depends_on": [
+            "05-03"
+          ],
+          "mutation_note": "Guardrail, not a new pure surface. If it goes red, the regression is in a handler that mutates -- the fix, not the test, carries the mutation accountability.",
+          "criteria": [
+            "After exercising every route (GET /, /claims, /claims/{cid}, /peer-claims, GET/POST /scrape), the {claims.row_count, peer_claims.row_count} universe is identical to before.",
+            "The assertion uses the port-exposed universe names, never internal adapter fields (Mandate 8).",
+            "No route exposes a write/sign affordance.",
+            "If the invariant already holds (it should, structurally), the step is to remove the @skip and confirm GREEN -- not to add new production logic."
+          ]
         },
         {
           "id": "06-02",
@@ -586,12 +796,22 @@
             "tests/acceptance/viewer_invariants.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["(expected: none -- already-green via the type-level invariant)"],
+            "extended_crates": [
+              "(expected: none -- already-green via the type-level invariant)"
+            ],
             "pure_core_surface": "none (behavioral guardrail; the structural guarantee lives in the viewer-domain ADTs already)."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["06-01"],
-          "mutation_note": "Guardrail. The honesty contract is enforced at the type level (no derived_from slot on persisted view-models); the gold test proves it, mutation accountability rests on the view-model ADT shape from Phases 01-03."
+          "depends_on": [
+            "06-01"
+          ],
+          "mutation_note": "Guardrail. The honesty contract is enforced at the type level (no derived_from slot on persisted view-models); the gold test proves it, mutation accountability rests on the view-model ADT shape from Phases 01-03.",
+          "criteria": [
+            "POST /scrape renders derived-from on candidate rows.",
+            "GET /claims, GET /claims/{cid}, and GET /peer-claims render NO derived-from anywhere.",
+            "The absence is structural: persisted view-models (ClaimRowView/ClaimDetailView/PeerClaimRowView) have no derived_from slot.",
+            "If the type-level invariant holds, the step is to remove the @skip and confirm GREEN."
+          ]
         },
         {
           "id": "06-03",
@@ -612,12 +832,21 @@
             "tests/acceptance/support/mod.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["(expected: none -- offline by construction)"],
+            "extended_crates": [
+              "(expected: none -- offline by construction)"
+            ],
             "pure_core_surface": "none (behavioral guardrail over the store routes)."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["06-02"],
-          "mutation_note": "Guardrail. If red, a store handler reached the network -- the fix removes that dependency; the test pins offline reachability."
+          "depends_on": [
+            "06-02"
+          ],
+          "mutation_note": "Guardrail. If red, a store handler reached the network -- the fix removes that dependency; the test pins offline reachability.",
+          "criteria": [
+            "With the network unavailable, GET /claims, GET /claims/{cid}, and GET /peer-claims each return 200 and render their full content from the local store.",
+            "No store route makes a network call.",
+            "If offline-by-construction holds, the step is to remove the @skip and confirm GREEN."
+          ]
         },
         {
           "id": "06-04",
@@ -639,12 +868,23 @@
             "crates/xtask/src/check_arch.rs"
           ],
           "implementation_scope": {
-            "extended_crates": ["xtask (confirm/finalize the viewer-capability boundary rule)", "(otherwise: none -- structural no-key guarantee already in place)"],
+            "extended_crates": [
+              "xtask (confirm/finalize the viewer-capability boundary rule)",
+              "(otherwise: none -- structural no-key guarantee already in place)"
+            ],
             "pure_core_surface": "none (behavioral + structural guardrail)."
           },
           "estimated_time": "0.25 day",
-          "depends_on": ["06-03"],
-          "mutation_note": "Guardrail backed by the xtask capability rule (the structural orthogonal layer per principle 12). The behavioral gold test + the check-arch rule + Rust's type check (no write port in ViewerDeps) form the three-layer Earned-Trust defense; no new pure surface."
+          "depends_on": [
+            "06-03"
+          ],
+          "mutation_note": "Guardrail backed by the xtask capability rule (the structural orthogonal layer per principle 12). The behavioral gold test + the check-arch rule + Rust's type check (no write port in ViewerDeps) form the three-layer Earned-Trust defense; no new pure surface.",
+          "criteria": [
+            "Requesting every route renders NO sign/save control on any page.",
+            "Store row counts are unchanged across all requests (no write/sign occurred).",
+            "The xtask check-arch viewer-capability rule confirms adapter-http-viewer's transitive deps exclude adapter-atproto-pds and reach no signing IdentityPort surface; cli remains the only crate linking adapter-http-viewer.",
+            "If the structural guarantees hold, the step is to remove the @skip and confirm GREEN."
+          ]
         }
       ]
     }
