@@ -7454,6 +7454,13 @@ pub fn seed_peer_claim_with_blank_origin(env: &TestEnv) {
     .unwrap_or_else(|err| panic!("seed blank-origin peer_claims row: {err}"));
 }
 
+/// The two port-exposed slot NAMES that make up the I-VIEW-1 read-only
+/// universe (`viewer_is_read_only`). Kept as one source of truth so `capture`
+/// and the `universe` set never drift (Mandate 8 — observable count names,
+/// never an internal adapter field).
+pub const STORE_SLOT_CLAIMS: &str = "claims.row_count";
+pub const STORE_SLOT_PEER_CLAIMS: &str = "peer_claims.row_count";
+
 /// Capture the read-only universe: the row counts of BOTH persisted tables
 /// (`claims` + `peer_claims`) in the env's REAL DuckDB. Port-exposed observable
 /// names (`claims.row_count`, `peer_claims.row_count`) — NEVER an internal
@@ -7465,14 +7472,25 @@ pub fn seed_peer_claim_with_blank_origin(env: &TestEnv) {
 /// `peer_claims` (test-support is the only place raw SQL is acceptable; the
 /// VIEWER goes through the read-only `StoreReadPort`) into the universe HashMap.
 pub fn capture_store_row_count_universe(env: &TestEnv) -> std::collections::HashMap<String, u64> {
-    // SCAFFOLD: true (slice-06)
-    let _ = env;
-    todo!(
-        "DELIVER (slice-06): snapshot {{`claims.row_count`, `peer_claims.row_count`}} \
-         via `SELECT COUNT(*)` over the env's REAL DuckDB into a HashMap — the \
-         port-exposed read-only universe the `viewer_is_read_only` gold test \
-         asserts UNCHANGED across every route."
-    )
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for read-only universe capture: {err}",
+            db_path.display()
+        )
+    });
+
+    let count_of = |table: &str| -> u64 {
+        let total: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap_or_else(|err| panic!("query {table} row_count for read-only universe: {err}"));
+        total.max(0) as u64
+    };
+
+    let mut universe = std::collections::HashMap::new();
+    universe.insert(STORE_SLOT_CLAIMS.to_string(), count_of("claims"));
+    universe.insert(STORE_SLOT_PEER_CLAIMS.to_string(), count_of("peer_claims"));
+    universe
 }
 
 /// Universe-bound read-only assertion (Mandate 8): the persisted-store row counts
@@ -7486,14 +7504,19 @@ pub fn assert_store_read_only(
     before: &std::collections::HashMap<String, u64>,
     after: &std::collections::HashMap<String, u64>,
 ) {
-    // SCAFFOLD: true (slice-06)
-    let _ = (before, after);
-    todo!(
-        "DELIVER (slice-06): assert_state_delta(before, after, \
-         universe={{`claims.row_count`, `peer_claims.row_count`}}, \
-         expected=all-unchanged()) — the structural read-only proof (I-VIEW-1). \
-         Any row-count change is an UNSHIPPABLE read-only breach."
-    )
+    // The universe is the two port-exposed counts; every slot is implicit-
+    // unchanged (an EMPTY `Delta` → `assert_state_delta` pins each to byte-
+    // equality). Any row-count change is an UNSHIPPABLE read-only breach
+    // (I-VIEW-1).
+    let universe: std::collections::HashSet<String> =
+        [STORE_SLOT_CLAIMS, STORE_SLOT_PEER_CLAIMS]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+    let expected = state_delta::Delta::new();
+
+    state_delta::assert_state_delta(before, after, &universe, &expected);
 }
 
 /// Make the env's REAL store file UNREADABLE by the viewer (US-VIEW-001 Ex 3 /

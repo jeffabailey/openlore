@@ -83,15 +83,21 @@ fn viewer_is_read_only() {
     // names: `claims.row_count`, `peer_claims.row_count`).
     let before = capture_store_row_count_universe(&env);
 
-    // WHEN every route is exercised, INCLUDING the POST /scrape live harvest.
-    let viewer = ViewerServer::start_with_github(&env, github);
-    let _ = viewer.get("/");
-    let _ = viewer.get("/claims");
-    let _ = viewer.get(&format!("/claims/{own_cid}"));
-    let _ = viewer.get("/peer-claims");
-    let _ = viewer.get("/scrape");
-    let _ = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
-    let _ = viewer.get("/no-such-route"); // the guided 404 path too
+    // WHEN every route is exercised, INCLUDING the POST /scrape live harvest. The
+    // viewer is scoped so it is STOPPED (its exclusive DuckDB lock released) before
+    // the `after` snapshot — the persisted store is observed in the same way the
+    // operator would inspect it after the viewer exits, and the read-only proof is
+    // about what the viewer LEFT BEHIND, not the live lock.
+    {
+        let viewer = ViewerServer::start_with_github(&env, github);
+        let _ = viewer.get("/");
+        let _ = viewer.get("/claims");
+        let _ = viewer.get(&format!("/claims/{own_cid}"));
+        let _ = viewer.get("/peer-claims");
+        let _ = viewer.get("/scrape");
+        let _ = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
+        let _ = viewer.get("/no-such-route"); // the guided 404 path too
+    } // viewer dropped here — the `openlore ui` process is killed, releasing the lock
 
     // THEN the persisted-store row counts are UNCHANGED — every universe slot is
     // `unchanged` (the structural read-only proof; any change is UNSHIPPABLE).
@@ -260,14 +266,21 @@ fn web_process_holds_no_signing_key() {
         &[],
     );
     let before = capture_store_row_count_universe(&env);
-    let viewer = ViewerServer::start(&env);
 
     // WHEN every store route is requested (no GitHub seam — the store routes do not
-    // touch the network; the /scrape no-sign-control is asserted in V-S1).
-    let landing = viewer.get("/");
-    let claims = viewer.get("/claims");
-    let detail = viewer.get(&format!("/claims/{own_cid}"));
-    let peers = viewer.get("/peer-claims");
+    // touch the network; the /scrape no-sign-control is asserted in V-S1). The
+    // viewer is scoped so it is STOPPED (its exclusive DuckDB lock released) before
+    // the `after` snapshot — the persisted store is observed the way the operator
+    // would after the viewer exits (the no-write proof is about what the viewer LEFT
+    // BEHIND, not the live lock).
+    let (landing, claims, detail, peers) = {
+        let viewer = ViewerServer::start(&env);
+        let landing = viewer.get("/");
+        let claims = viewer.get("/claims");
+        let detail = viewer.get(&format!("/claims/{own_cid}"));
+        let peers = viewer.get("/peer-claims");
+        (landing, claims, detail, peers)
+    }; // viewer dropped here — the `openlore ui` process is killed, releasing the lock
 
     // THEN no store route renders a sign control (the human gate is structural —
     // I-SCR-1). Asserting the load-bearing ABSENCE of a sign affordance on every
