@@ -14,11 +14,10 @@
 //!   subject/predicate/object/confidence (the DOUBLE numeric, rendered VERBATIM
 //!   by the pure viewer core, FR-VIEW-8)/author_did/composed_at/cid. A FLAT,
 //!   serialization-friendly shape (DTO, not the rich `SignedClaim`).
-//! - [`PageRequest`] — the offset/limit pagination request. For the walking
-//!   skeleton (step 01-01) a simple ordered read suffices; full pagination
-//!   lands in step 04-01.
-//! - [`Page<T>`] — a page of rows plus the total count (so the renderer can
-//!   show the "N–M of TOTAL" position indicator later).
+//! - [`PageRequest`] — the offset/limit pagination request the viewer derives
+//!   from the `?page=N` query (page size 50, ADR-030).
+//! - [`Page<T>`] — a page of rows plus the total count, so the renderer can
+//!   show the "N–M of TOTAL" position indicator (FR-VIEW-6).
 //! - [`StoreReadError`] — read failures, surfaced as a plain-language error by
 //!   the viewer (NFR-VIEW-6), never a raw stack trace.
 
@@ -120,9 +119,9 @@ pub struct PeerClaimRow {
 }
 
 /// An offset/limit pagination request over the own-claim store. The viewer
-/// translates a `?page=N` query (page size 50, ADR-030) into one of these. For
-/// the walking skeleton a single ordered read is enough; full pagination
-/// (bounds, position indicator) lands in step 04-01.
+/// translates a `?page=N` query (page size 50, ADR-030) into one of these: the
+/// offset/limit selects one page, the bounds + position indicator are projected
+/// by the pure `viewer-domain` `PageView` over the returned [`Page::total`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRequest {
     /// Zero-based row offset into the ordered result set.
@@ -133,8 +132,7 @@ pub struct PageRequest {
 
 /// A page of rows plus the total matching count. `total` lets the renderer show
 /// the "N–M of TOTAL" position indicator + decide whether pagination controls
-/// are needed (step 04-01); the walking skeleton reads it but renders a single
-/// page.
+/// are needed (FR-VIEW-6) — it is the whole-set `COUNT(*)`, not `rows.len()`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page<T> {
     pub rows: Vec<T>,
@@ -162,8 +160,8 @@ pub enum StoreReadError {
 /// (I-VIEW-1). The adapter shares the CLI's connection (BR-VIEW-4).
 pub trait StoreReadPort: Send + Sync {
     /// List own claims ordered for display (composed_at DESC per ADR-030),
-    /// paginated by `request`. Read-only SQL only. The walking skeleton uses a
-    /// simple ordered read; full pagination lands in step 04-01.
+    /// paginated by `request` (the `?page=N` offset/limit). Read-only SQL only;
+    /// returns the page rows plus the whole-set `total` for the indicator.
     fn list_claims(&self, request: PageRequest) -> Result<Page<ClaimRow>, StoreReadError>;
 
     /// Total number of own claims in the store. Used by the store-readability
@@ -183,11 +181,10 @@ pub trait StoreReadPort: Send + Sync {
     /// (slice-03). Each row carries its peer ORIGIN ([`PeerOrigin`]: the peer's
     /// `author_did` + `fetched_from_pds`) so the viewer renders peers on a SEPARATE
     /// surface, "mine vs federated" never ambiguous (BR-VIEW-5).
-    fn list_peer_claims(&self, request: PageRequest)
-        -> Result<Page<PeerClaimRow>, StoreReadError>;
+    fn list_peer_claims(&self, request: PageRequest) -> Result<Page<PeerClaimRow>, StoreReadError>;
 
     /// Total number of federated peer claims in the store. The Peer Claims
-    /// position indicator + empty-state decision (US-VIEW-003 / step 04-01) read
-    /// this `COUNT(*)` over `peer_claims`.
+    /// position indicator + empty-state decision (US-VIEW-003) read this
+    /// `COUNT(*)` over `peer_claims`.
     fn count_peer_claims(&self) -> Result<usize, StoreReadError>;
 }

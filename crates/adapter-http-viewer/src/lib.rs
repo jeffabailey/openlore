@@ -34,9 +34,9 @@ use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claims_page, render_error, render_landing,
-    render_peer_claims_page, render_scrape_page, CandidateRowView, ClaimDetailView, ClaimRowView,
-    PageView, PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
+    render_claim_detail, render_claims_page, render_error, render_landing, render_peer_claims_page,
+    render_scrape_page, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
+    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -71,9 +71,10 @@ pub type SharedStore = Arc<dyn StoreReadPort>;
 /// anything from `/scrape` (BR-VIEW-2 / I-VIEW-1).
 pub type SharedGithub = Arc<dyn GithubPort>;
 
-/// The default page size for the My Claims list view (ADR-030). For the walking
-/// skeleton a single ordered read of the first page is enough; full pagination
-/// (the `?page=N` offset math) lands in step 04-01.
+/// The fixed rows-per-page for the My Claims list view (ADR-030). Drives the
+/// `?page=N` offset math (`OFFSET (page-1)*size LIMIT size`) in [`claims_page`]
+/// and the position-indicator + Next/Prev bounds the pure `viewer-domain`
+/// `PageView` projects (FR-VIEW-6).
 const DEFAULT_PAGE_SIZE: u64 = 50;
 
 /// Why the viewer server failed to bind / serve.
@@ -197,9 +198,7 @@ impl ViewerServer {
             let store = Arc::clone(&self.store);
             let github = self.github.clone();
             tokio::task::spawn(async move {
-                let service = service_fn(move |req| {
-                    route(req, Arc::clone(&store), github.clone())
-                });
+                let service = service_fn(move |req| route(req, Arc::clone(&store), github.clone()));
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
                     .await;
@@ -433,10 +432,12 @@ fn subject_for(kind: &TargetKind) -> String {
     }
 }
 
-/// The minimal guided message for a non-happy `/scrape` outcome at THIS step. The
-/// precise zero-candidate ([`SCRAPE_NO_CANDIDATES_NOTICE`]) and network-down copy
-/// land in a later step; here a non-proposal outcome renders a neutral guided
-/// line so the viewer never crashes or shows a blank result (NFR-VIEW-6).
+/// The neutral guided message for the CATCH-ALL non-network refusal classes
+/// (resolve/harvest errors that are NOT `GithubError::Network` — NotFound /
+/// NotPublic / RateLimited / TokenRejected / ApiShape). The zero-candidates and
+/// network-down outcomes route to their OWN typed [`ScrapeState`] arms (each with
+/// its own pinned copy); this line covers the remaining refusals so the viewer
+/// never crashes or shows a blank result (NFR-VIEW-6).
 fn scrape_guidance_message() -> String {
     "The live scrape did not produce any proposals to show.".to_string()
 }
@@ -501,21 +502,34 @@ fn percent_decode_form(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// A `200 OK` HTML response.
-fn html_ok(body: String) -> Response<Full<Bytes>> {
+/// The single `Content-Type` every viewer response carries — server-rendered
+/// HTML (maud), UTF-8. Held in ONE place so the content-type is a single site.
+const HTML_CONTENT_TYPE: &str = "text/html; charset=utf-8";
+
+/// Build an HTML response with the given `status` and `body`. The single
+/// construction site for every viewer response — applies [`HTML_CONTENT_TYPE`]
+/// and the well-formed-builder invariant in one place (the status + body are the
+/// only things that vary across the routes).
+fn html_response(status: StatusCode, body: Full<Bytes>) -> Response<Full<Bytes>> {
     Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/html; charset=utf-8")
-        .body(Full::new(Bytes::from(body)))
+        .status(status)
+        .header("content-type", HTML_CONTENT_TYPE)
+        .body(body)
         .expect("static response is well-formed")
 }
 
+/// A `200 OK` HTML response carrying a rendered page.
+fn html_ok(body: String) -> Response<Full<Bytes>> {
+    html_response(StatusCode::OK, Full::new(Bytes::from(body)))
+}
+
+/// The terse `404 Not Found` route-miss response (an unrouted path/method). The
+/// GUIDED not-found page (unknown CID) uses [`html_not_found`] instead.
 fn not_found() -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header("content-type", "text/html; charset=utf-8")
-        .body(Full::new(Bytes::from_static(b"<p>Not found.</p>")))
-        .expect("static response is well-formed")
+    html_response(
+        StatusCode::NOT_FOUND,
+        Full::new(Bytes::from_static(b"<p>Not found.</p>")),
+    )
 }
 
 /// A `404 Not Found` HTML response carrying a rendered `body` — used for the
@@ -523,9 +537,5 @@ fn not_found() -> Response<Full<Bytes>> {
 /// the operator a plain-language message + back link (NFR-VIEW-6) rather than the
 /// terse route-miss `not_found()` body.
 fn html_not_found(body: String) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header("content-type", "text/html; charset=utf-8")
-        .body(Full::new(Bytes::from(body)))
-        .expect("static response is well-formed")
+    html_response(StatusCode::NOT_FOUND, Full::new(Bytes::from(body)))
 }

@@ -37,17 +37,25 @@ impl DuckDbStoreReadAdapter {
     pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
+
+    /// Lock the shared connection, mapping a poisoned mutex to a plain-language
+    /// [`StoreReadError::Unreadable`]. The single site for the poison-recovery
+    /// rule — every read method acquires the connection through here so a
+    /// poisoned lock surfaces as a clean refusal (NFR-VIEW-6), never a panic.
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreReadError> {
+        self.conn.lock().map_err(|_| StoreReadError::Unreadable {
+            detail: "connection mutex poisoned".to_string(),
+        })
+    }
 }
 
 impl StoreReadPort for DuckDbStoreReadAdapter {
     fn list_claims(&self, request: PageRequest) -> Result<Page<ClaimRow>, StoreReadError> {
-        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self.lock_conn()?;
 
         // Ordered, paginated, read-only SELECT. composed_at DESC per ADR-030
-        // (most-recent first). Full pagination math lands in step 04-01; the
-        // walking skeleton reads the first page via the offset/limit request.
+        // (most-recent first). The `request` offset/limit selects one page; the
+        // total COUNT(*) below feeds the renderer's position indicator (FR-VIEW-6).
         let mut stmt = conn
             .prepare(
                 "SELECT cid, subject, predicate, object, confidence, author_did, composed_at \
@@ -97,9 +105,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
     }
 
     fn count_claims(&self) -> Result<usize, StoreReadError> {
-        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self.lock_conn()?;
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM claims", [], |row| row.get(0))
             .map_err(|err| StoreReadError::Unreadable {
@@ -109,9 +115,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
     }
 
     fn get_claim(&self, cid: &str) -> Result<Option<ClaimDetail>, StoreReadError> {
-        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self.lock_conn()?;
 
         // Read the scalar claim row (read-only). Missing CID -> Ok(None): a
         // guided not-found is the viewer's job, not an error (step 02-03).
@@ -154,9 +158,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // Read the evidence URLs ordered by ordinal ascending (the order they
         // were attached, FR-VIEW-3).
         let mut ev_stmt = conn
-            .prepare(
-                "SELECT evidence FROM claim_evidence WHERE cid = ? ORDER BY ordinal ASC",
-            )
+            .prepare("SELECT evidence FROM claim_evidence WHERE cid = ? ORDER BY ordinal ASC")
             .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("prepare get_claim evidence: {err}"),
             })?;
@@ -186,13 +188,8 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         }))
     }
 
-    fn list_peer_claims(
-        &self,
-        request: PageRequest,
-    ) -> Result<Page<PeerClaimRow>, StoreReadError> {
-        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })?;
+    fn list_peer_claims(&self, request: PageRequest) -> Result<Page<PeerClaimRow>, StoreReadError> {
+        let conn = self.lock_conn()?;
 
         // Ordered, paginated, read-only SELECT over the SAME shared connection's
         // slice-03 `peer_claims` table (BR-VIEW-4). composed_at DESC mirrors
@@ -264,9 +261,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
     }
 
     fn count_peer_claims(&self) -> Result<usize, StoreReadError> {
-        let conn = self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self.lock_conn()?;
         let total: i64 = conn
             .query_row("SELECT COUNT(*) FROM peer_claims", [], |row| row.get(0))
             .map_err(|err| StoreReadError::QueryFailed {
