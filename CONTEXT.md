@@ -11,9 +11,9 @@ The network INDEXER (ATProto AppView pattern): verified + attributed + anti-merg
 - Notable: chose hyper over axum (avoided deny.toml ban); found+fixed a real pre-existing slice-03 hard_purge DuckDB FK bug (bf6df62, slice-03 ATs still 10/10); seam release-gating closed a slice-03 carry-over (d6c8d9a).
 
 ## Open follow-ups (non-blocking, post-ship)
-- Pre-existing `clippy::manual_is_multiple_of` nit in adapter-atproto-did `decode_hex` (toolchain drift; not in the gate).
+- ~~Pre-existing `clippy::manual_is_multiple_of` nit in adapter-atproto-did `decode_hex`~~ FIXED: `!s.len().is_multiple_of(2)` (dfa8eca; clippy clean, 21/21 tests).
 - ~~adapter-system-clock parallel-race flaky unit test~~ FIXED: serialized the two OPENLORE_TEST_NOW env-var tests on a static Mutex (8/8 parallel runs green).
-- DESIGN-doc nit: component-boundaries.md ingest_decision prose mentions a `self_*` RejectReason not in the enum (4 variants: Unsigned/BadSignature/CidMismatch/SchemaUnknown).
+- ~~DESIGN-doc nit: component-boundaries.md ingest_decision prose mentions a `self_*` RejectReason not in the enum~~ FIXED: dropped phantom `self_*` from the comment (f5d59bc; enum has 4 variants: Unsigned/BadSignature/CidMismatch/SchemaUnknown).
 - No git remote configured → nothing pushed (by design).
 
 ## Proven mechanics (carry forward to future slices)
