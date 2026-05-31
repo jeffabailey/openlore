@@ -1,0 +1,242 @@
+schema_version: 1
+
+journey:
+  name: "operator-views-store"
+  goal: >
+    Let the OpenLore node operator inspect, in a browser and without writing SQL, what
+    their node actually holds (signed claims + federated peer claims) and browse live
+    GitHub-scrape proposals — strictly read-only, on localhost, signing stays in the CLI.
+  persona: "node-operator (e.g. Maria Santos) on localhost; read-only personal dashboard"
+  slice: "slice-06 (DELTA on slices 01/02/03)"
+
+  emotional_arc:
+    start: "blind / uneasy — 'I don't actually know what my node holds'"
+    middle: "curious then scanning — legible rows appear, triage feels easy"
+    end: "grounded / in control — node state is legible; nothing can write or sign"
+
+# ---- JOURNEY A: inspect my store (PRIMARY, Job 1, offline-capable) ----
+steps:
+  - id: 1
+    name: "Start the read-only viewer"
+    command: "openlore viewer"
+    job: "Job 1 (store inspection)"
+    tui_mockup: |
+      +-- $ openlore viewer --------------------------------------------+
+      | OpenLore viewer (read-only) on http://127.0.0.1:8788            |
+      | Store: ~/.openlore/store.duckdb (offline OK). Ctrl-C to stop.   |
+      +-----------------------------------------------------------------+
+    shared_artifacts:
+      - name: "duckdb_store"
+        source: "adapter-duckdb (local DuckDB file)"
+        displayed_as: "${duckdb_store}"
+        consumers: ["/claims", "/peer-claims"]
+    emotional_state:
+      entry: "blind / uneasy"
+      exit: "curious, reassured (read-only stated up front)"
+    integration_checkpoint: |
+      Viewer binds the SAME local DuckDB store the CLI uses; no signing key is loaded
+      into the process (I-SCR-1). Bind address is localhost only.
+    failure_modes:
+      - "Store file missing or locked by another process -> show path + 'is another process using it?'"
+      - "Port already in use -> report and suggest an alternative"
+    gherkin: |
+      Scenario: Operator starts the read-only viewer bound to localhost
+        Given Maria has an OpenLore store at ~/.openlore/store.duckdb
+        When she runs "openlore viewer"
+        Then the viewer reports it is listening on a localhost address
+        And it states the view is read-only
+        And no signing key is loaded into the viewer process
+
+  - id: 2
+    name: "View my signed claims"
+    command: "GET /claims"
+    job: "Job 1 (store inspection)"
+    tui_mockup: |
+      +== My Store — My Claims (read-only) ==============  312 total ==+
+      | subject         predicate         object       conf    cid     |
+      | rust-lang/rust  is-maintained-by  The Rust...   0.90  bafy..1  |
+      | tokio-rs/tokio  has-license       MIT           0.95  bafy..2  |
+      | [ 1-50 of 312 ]                          [ Next > ]  (page 1)  |
+      +----------------------------------------------------------------+
+    shared_artifacts:
+      - name: "claim_row"
+        source: "${duckdb_store}.claims (slice-01 schema)"
+        displayed_as: "${claim_row}"
+        consumers: ["/claims list", "/claims/{cid} detail"]
+    emotional_state:
+      entry: "curious"
+      exit: "scanning / grounded — 'I can finally see my store'"
+    integration_checkpoint: |
+      Every displayed field maps to a real persisted column in slice-01 `claims`.
+      confidence shown as stored numeric (0.90). NO derived-from here (not persisted, WD-62).
+    failure_modes:
+      - "Empty store -> 'You have not signed any claims yet' guidance pointing to CLI"
+      - "Large store -> must paginate; unbounded render would hang the page"
+    gherkin: |
+      Scenario: Operator reads their persisted signed claims with zero SQL
+        Given Maria has signed a claim ("rust-lang/rust","is-maintained-by","The Rust Project") with confidence 0.90
+        When she opens GET /claims in her browser
+        Then she sees that claim rendered as a row with subject, predicate, object, confidence 0.90, and its CID
+        And she did not write any SQL to see it
+
+  - id: 3
+    name: "View one claim's detail with evidence"
+    command: "GET /claims/{cid}"
+    job: "Job 1 (store inspection)"
+    tui_mockup: |
+      +== Claim detail (read-only) ====================================+
+      | subject rust-lang/rust   predicate is-maintained-by           |
+      | object The Rust Project  confidence 0.90                      |
+      | author did:plc:maria...  composed 2026-04-18T09:12:03Z        |
+      | cid    bafyrei...1                                            |
+      | evidence - https://github.com/rust-lang/rust                 |
+      |          - https://www.rust-lang.org/governance              |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "claim_row"
+        source: "${duckdb_store}.claims (full row incl evidence[])"
+        displayed_as: "${claim_row}"
+        consumers: ["/claims/{cid} detail"]
+    emotional_state:
+      entry: "scanning"
+      exit: "confident — every field legible, matches mental model"
+    integration_checkpoint: |
+      Detail page surfaces the full evidence[] array; CID in the URL resolves to exactly
+      one persisted claim.
+    failure_modes:
+      - "CID not found -> 'No claim with that identifier in your store'"
+      - "Claim has no evidence -> show 'no evidence attached' rather than blank"
+    gherkin: |
+      Scenario: Operator inspects the full evidence behind one claim
+        Given Maria's claim with CID bafyrei...1 has two evidence URLs
+        When she opens GET /claims/bafyrei...1
+        Then she sees all of the claim's fields including its two evidence URLs
+
+  - id: 4
+    name: "View federated peer claims"
+    command: "GET /peer-claims"
+    job: "Job 1 (store inspection)"
+    tui_mockup: |
+      +== Peer Claims (federated, read-only) =========  1,840 total ==+
+      | subject       predicate    object  conf  peer    cid          |
+      | axum/axum      has-license  MIT     0.88 peer-A  bafy..7      |
+      | [ 1-50 of 1840 ]                         [ Next > ] (page 1)  |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "peer_claim_row"
+        source: "${duckdb_store}.peer_claims (slice-03)"
+        displayed_as: "${peer_claim_row}"
+        consumers: ["/peer-claims list"]
+    emotional_state:
+      entry: "grounded"
+      exit: "in control — 'mine vs federated' is unambiguous"
+    integration_checkpoint: |
+      peer_claims rendered on a surface distinct from own claims; peer_origin shown so
+      authorship is never confused.
+    failure_modes:
+      - "No peers federated yet -> 'No federated claims yet' guidance"
+      - "peer_origin missing -> still render claim, label origin 'unknown'"
+    gherkin: |
+      Scenario: Operator distinguishes federated peer claims from their own
+        Given Maria has federated 1,840 peer_claims from 4 peers
+        When she opens GET /peer-claims
+        Then she sees federated claims with their peer origin shown
+        And they are clearly separate from her own signed claims
+
+# ---- JOURNEY B: browse scrape proposals (SECONDARY, Job 2, network-backed) ----
+  - id: 5
+    name: "Open the Live Scrape form"
+    command: "GET /scrape"
+    job: "Job 2 (live-scrape browsing)"
+    tui_mockup: |
+      +== Live Scrape (read-only proposals) ==========================+
+      | Browse scrape proposals (nothing is signed or saved)          |
+      | Target [ tokio-rs/tokio______ ]  [ Propose ]                  |
+      | To sign a candidate, use the CLI.                             |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "scrape_target"
+        source: "operator input (mirrors CLI `scrape github <target>` arg)"
+        displayed_as: "${scrape_target}"
+        consumers: ["live-scrape form", "result heading", "harvest call"]
+    emotional_state:
+      entry: "hopeful"
+      exit: "engaged — about to triage candidates"
+    integration_checkpoint: |
+      Target semantics/validation match the CLI exactly. Form has NO sign affordance.
+      This view requires network (unlike Journey A).
+    failure_modes:
+      - "Empty/invalid target submitted -> inline validation, no harvest attempted"
+    gherkin: |
+      Scenario: Operator opens the read-only live-scrape form
+        Given the viewer is running
+        When Maria opens GET /scrape
+        Then she sees a target input and a Propose action
+        And the page states that nothing is signed or saved
+        And there is no sign control on the page
+
+  - id: 6
+    name: "See proposed candidate claims (live, ephemeral)"
+    command: "Submit target -> render candidates"
+    job: "Job 2 (live-scrape browsing)"
+    tui_mockup: |
+      +== Proposals for tokio-rs/tokio (read-only) ===================+
+      | 7 candidate claims proposed — NONE are signed or saved.       |
+      | subject       predicate   object conf  derived-from           |
+      | tokio-rs/tokio has-license MIT    0.95 LICENSE @ HEAD         |
+      | tokio-rs/tokio written-in  Rust   0.99 Cargo.toml            |
+      | To sign: run `openlore scrape github tokio-rs/tokio --sign`   |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "candidate_claim"
+        source: "live slice-02 propose step (in-memory CandidateClaim, NOT persisted)"
+        displayed_as: "${candidate_claim}"
+        consumers: ["live-scrape result list"]
+      - name: "derived_from"
+        source: "slice-02 display-only provenance (WD-62, never persisted)"
+        displayed_as: "${derived_from}"
+        consumers: ["candidate row badge"]
+    emotional_state:
+      entry: "engaged"
+      exit: "calm / decided — 'I can triage, then sign in the CLI'"
+    integration_checkpoint: |
+      Candidates are ephemeral (die with the request); refresh re-harvests. NO candidate
+      is persisted; NO sign control is rendered; the process holds no signing key (I-SCR-1).
+      derived-from shown DISPLAY-ONLY and ONLY here (never on /claims).
+    failure_modes:
+      - "Target yields zero candidates -> 'No candidate claims could be derived' guidance"
+      - "Network unavailable -> error noting store view still works offline"
+      - "Harvest slow -> show progress/loading state; do not appear hung"
+    gherkin: |
+      Scenario: Operator browses live scrape proposals without signing anything
+        Given the live scrape for "tokio-rs/tokio" would propose 7 candidate claims
+        When Maria submits the target "tokio-rs/tokio"
+        Then she sees 7 candidate claims rendered with their derived-from provenance
+        And the page states none are signed or saved
+        And no candidate is persisted to her store
+        And she is directed to the CLI to sign any candidate
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "duckdb_store"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "Viewer must read the same local DuckDB store the CLI writes; a divergent store shows stale/empty data."
+    - artifact: "derived_from"
+      must_match_across: [6]
+      failure_message: "derived-from is display-only (WD-62) and must appear ONLY on live-scrape candidates, never on persisted /claims rows."
+    - artifact: "candidate_claim"
+      must_match_across: [6]
+      failure_message: "Candidate claims are ephemeral and unsigned; the view must never persist them or render a sign control (I-SCR-1)."
+
+invariants:
+  - "I-VIEW-1: every web endpoint is read-only — no route writes to the store or triggers signing."
+  - "I-VIEW-2: the viewer process never loads or holds the signing key."
+  - "I-VIEW-3 (inherits I-SCR-1): the human gate for signing remains exclusively in the CLI."
+  - "I-VIEW-4: the viewer binds localhost only; it is a personal operator dashboard, not a public surface."
+  - "I-VIEW-5: derived-from is display-only and surfaced only on live-scrape candidates (WD-62)."
+  - "I-VIEW-6 (inherits slice-01 KPI-5 local-first): the store view (Journey A) works fully offline."
+
+changelog:
+  - date: "2026-05-30"
+    feature: "htmx-scraper-viewer (slice-06)"
+    change: "Initial journey schema: store-inspection (primary) + live-scrape browsing (secondary), read-only/localhost, signing stays in CLI."
