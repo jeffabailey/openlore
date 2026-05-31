@@ -13,7 +13,7 @@
 //! can read the bound `:0` port back), then run the accept loop until killed.
 
 use adapter_duckdb::DuckDbStorageAdapter;
-use adapter_http_viewer::{SharedStore, ViewerServer};
+use adapter_http_viewer::{read_only_launch_banner, SharedStore, ViewerServer};
 use anyhow::{anyhow, Context, Result};
 use ports::{ProbeOutcome, StoreReadPort};
 use std::sync::Arc;
@@ -84,11 +84,18 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
         // Emit the bound address so a supervisor (the test harness) can read the
         // ephemeral `:0` port back (mirrors `indexer.serve.listening`). Structural
         // (an address; no claim content) — the DevOps observability contract.
+        let bound_addr = server.local_addr().to_string();
         let listening = serde_json::json!({
             "event": "viewer.serve.listening",
-            "addr": server.local_addr().to_string(),
+            "addr": bound_addr,
         });
         println!("{listening}");
+
+        // Read-only launch notice (AC-001.2): now that the loopback probe has
+        // passed, tell the operator — up front — the loopback listen URL, that the
+        // view is read-only, and that no signing key is loaded. The exact strings
+        // are a PURE `viewer-domain` formatting fn (unit/property-pinned).
+        println!("{}", read_only_launch_banner(&bound_addr));
         use std::io::Write;
         let _ = std::io::stdout().flush();
 

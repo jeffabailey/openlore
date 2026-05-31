@@ -158,6 +158,64 @@ pub fn render_confidence(confidence: f64) -> String {
     format!("{confidence:.2}")
 }
 
+/// The exact read-only assurance phrase the operator sees on both the launch
+/// banner AND the landing page (AC-001.2 / NFR-VIEW-1). Held in ONE place so the
+/// "read-only" contract text lives at a single source of truth (and so a string
+/// mutation has exactly one site to attack — pinned by the unit tests below).
+pub const READ_ONLY_NOTICE: &str =
+    "This viewer is read-only — nothing here can change your store.";
+
+/// Render the read-only launch banner the `openlore ui` verb prints to stdout at
+/// startup (AC-001.2). PURE: a total function from the bound loopback address to
+/// the human-readable launch notice. States, up front, (a) the loopback listen
+/// URL the operator opens in a browser, and (b) that the view is read-only and
+/// loads no signing key.
+///
+/// `bound_addr` is the address the server actually bound (e.g. `127.0.0.1:8080`);
+/// it is rendered as an `http://` loopback URL. Formatting lives here (not in the
+/// effect shell) so it is unit/property-testable and the exact strings are pinned
+/// against mutation.
+pub fn read_only_launch_banner(bound_addr: &str) -> String {
+    format!(
+        "OpenLore viewer listening on {} — {} No signing key is loaded.",
+        loopback_url(bound_addr),
+        READ_ONLY_NOTICE,
+    )
+}
+
+/// Format a bound socket address as the loopback URL the operator opens in a
+/// browser: `127.0.0.1:8080` -> `http://127.0.0.1:8080`. PURE. Kept tiny + named
+/// so the `http://` scheme prefix is pinned in one place (a mutation dropping the
+/// scheme fails the unit test).
+pub fn loopback_url(bound_addr: &str) -> String {
+    format!("http://{bound_addr}")
+}
+
+/// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
+/// PURE: a total function — no I/O. States the view is read-only (the operator is
+/// told, up front, that nothing here can change her store — NFR-VIEW-1) and links
+/// to the My Claims list. The read-only assurance text is [`READ_ONLY_NOTICE`],
+/// shared verbatim with the launch banner.
+pub fn render_landing() -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            head {
+                meta charset="utf-8";
+                title { "OpenLore — Viewer" }
+            }
+            body {
+                h1 { "OpenLore Viewer" }
+                p { (READ_ONLY_NOTICE) }
+                p {
+                    a href="/claims" { "View my claims" }
+                }
+            }
+        }
+    };
+    markup.into_string()
+}
+
 #[cfg(test)]
 mod tests {
     //! In-crate unit + property tests for the PURE viewer core. Port-to-port at
@@ -292,6 +350,77 @@ mod tests {
             html.contains("not signed any claims yet")
                 || html.contains("claims you sign with the CLI will appear here"),
             "empty My Claims page must guide the operator to the CLI; got:\n{html}"
+        );
+    }
+
+    /// Behavior (AC-001.2): a bound loopback socket address renders as an
+    /// `http://` loopback URL — the address the operator opens in a browser.
+    /// Pins the `http://` scheme prefix (a mutation dropping it fails here).
+    #[test]
+    fn loopback_url_prefixes_the_bound_address_with_http_scheme() {
+        assert_eq!(loopback_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(loopback_url("127.0.0.1:0"), "http://127.0.0.1:0");
+    }
+
+    /// Behavior (AC-001.2): the launch banner states the loopback listen URL, the
+    /// read-only assurance VERBATIM, and that no signing key is loaded. Pins all
+    /// three load-bearing strings so a mutation to any one is caught.
+    #[test]
+    fn launch_banner_states_loopback_url_read_only_and_no_signing_key() {
+        let banner = read_only_launch_banner("127.0.0.1:54321");
+        assert!(
+            banner.contains("http://127.0.0.1:54321"),
+            "launch banner must state the loopback listen URL; got:\n{banner}"
+        );
+        assert!(
+            banner.contains(READ_ONLY_NOTICE),
+            "launch banner must state the read-only assurance verbatim; got:\n{banner}"
+        );
+        assert!(
+            banner.contains("read-only"),
+            "launch banner must contain the literal \"read-only\"; got:\n{banner}"
+        );
+        assert!(
+            banner.contains("No signing key is loaded"),
+            "launch banner must state no signing key is loaded; got:\n{banner}"
+        );
+    }
+
+    // Property (AC-001.2): for ANY bound loopback host:port, the launch banner
+    // embeds the exact `http://<addr>` loopback URL. Generalizes the example
+    // across the port domain (Hebert ch.3 "Generalizing example tests").
+    proptest! {
+        #[test]
+        fn launch_banner_always_embeds_the_loopback_url(port in 0u16..=65535) {
+            let addr = format!("127.0.0.1:{port}");
+            let banner = read_only_launch_banner(&addr);
+            prop_assert!(
+                banner.contains(&format!("http://{addr}")),
+                "banner must embed http://{addr}; got:\n{banner}"
+            );
+            prop_assert!(
+                banner.contains("read-only"),
+                "banner must always state read-only; got:\n{banner}"
+            );
+        }
+    }
+
+    /// Behavior (AC-001.2 / NFR-VIEW-1): the landing page states the view is
+    /// read-only (VERBATIM assurance) and links back to the My Claims list.
+    #[test]
+    fn landing_page_states_read_only_and_links_to_claims() {
+        let html = render_landing();
+        assert!(
+            html.contains("read-only"),
+            "landing page must state the view is read-only; got:\n{html}"
+        );
+        assert!(
+            html.contains(READ_ONLY_NOTICE),
+            "landing page must carry the read-only assurance verbatim; got:\n{html}"
+        );
+        assert!(
+            html.contains("/claims"),
+            "landing page must link to the My Claims list; got:\n{html}"
         );
     }
 }

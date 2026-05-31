@@ -32,7 +32,13 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{PageRequest, StoreReadPort};
 use tokio::net::TcpListener;
-use viewer_domain::{render_claims_page, ClaimRowView, PageView};
+use viewer_domain::{render_claims_page, render_landing, ClaimRowView, PageView};
+
+/// Re-export the PURE read-only launch banner formatter so the `cli` composition
+/// root (which links this adapter but NOT `viewer-domain` directly) can print the
+/// startup notice without taking a new dependency edge. The formatting itself
+/// lives + is unit/property-tested in `viewer-domain` (AC-001.2).
+pub use viewer_domain::read_only_launch_banner;
 
 mod probe;
 
@@ -143,8 +149,9 @@ impl ViewerServer {
     }
 }
 
-/// Route one HTTP request. The walking skeleton serves `GET /` (a read-only
-/// landing page) and `GET /claims` (the My Claims list); everything else is 404.
+/// Route one HTTP request. Serves `GET /` (the read-only landing page that states
+/// the view is read-only — AC-001.2 / NFR-VIEW-1) and `GET /claims` (the My Claims
+/// list); everything else is 404.
 async fn route(
     req: Request<Incoming>,
     store: SharedStore,
@@ -155,9 +162,16 @@ async fn route(
         return Ok(not_found());
     }
     match path.as_str() {
+        "/" => Ok(landing_page()),
         "/claims" => Ok(claims_page(store.as_ref())),
         _ => Ok(not_found()),
     }
+}
+
+/// Render the read-only landing page (`GET /`). Pure render — needs no store read
+/// (the landing page states the read-only contract; it queries nothing).
+fn landing_page() -> Response<Full<Bytes>> {
+    html_ok(render_landing())
 }
 
 /// Render the My Claims page: read the read-only store (first page), project the
