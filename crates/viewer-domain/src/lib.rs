@@ -734,8 +734,17 @@ pub enum ScrapeState {
     Form,
     /// `POST /scrape` that derived >=1 candidate: render the proposal rows.
     Proposals(Vec<CandidateRowView>),
-    /// `POST /scrape` that produced no rows to show — a guided message rather
-    /// than a blank result (zero candidates, AC-005.3; or network-down, AC-005.4).
+    /// `POST /scrape` whose target harvested successfully but derived ZERO
+    /// candidates (AC-005.3 / V-S3): render the guided
+    /// [`SCRAPE_NO_CANDIDATES_NOTICE`] (the no-candidates message + a suggested
+    /// alternative) — never a blank result. A DISTINCT arm from
+    /// [`ScrapeState::Guidance`] so the zero-candidates failure mode and the
+    /// network-down one (V-S4) stay separate ADT arms — each with its own pinned,
+    /// single-site copy — rather than collapsing into one generic guidance string.
+    ZeroCandidates,
+    /// `POST /scrape` that produced no rows for another reason — a guided message
+    /// rather than a blank result (e.g. network-down, AC-005.4; specialized into
+    /// its own typed arm in a later step).
     Guidance(String),
 }
 
@@ -792,6 +801,12 @@ fn render_scrape_result(state: &ScrapeState) -> Markup {
             ScrapeState::Proposals(rows) => {
                 (render_candidate_table(rows))
                 p { (SCRAPE_NOTHING_SAVED_NOTICE) }
+            }
+            // Zero candidates (AC-005.3 / V-S3): the guided no-candidates message
+            // + suggested alternative, held verbatim in SCRAPE_NO_CANDIDATES_NOTICE
+            // (one pinned site) — NO candidate table, never a blank result.
+            ScrapeState::ZeroCandidates => {
+                p { (SCRAPE_NO_CANDIDATES_NOTICE) }
             }
             ScrapeState::Guidance(message) => {
                 p { (message) }
@@ -1834,6 +1849,60 @@ mod tests {
             html.contains("name=\"target\""),
             "the guidance state must still render the target form; got:\n{html}"
         );
+    }
+
+    /// Behavior (AC-005.3 / V-S3 — the zero-candidates fork): a target that
+    /// harvests successfully but derives NO candidates renders the EXACT guided
+    /// [`SCRAPE_NO_CANDIDATES_NOTICE`] ("No candidate claims could be derived..."
+    /// + a suggested alternative) — NOT a blank result, NOT the network-down copy
+    /// (V-S4 — a DISTINCT ADT arm). It renders NO candidate rows and (the form
+    /// aside) the result region carries no `<table>`. The typed `ZeroCandidates`
+    /// arm keeps this failure mode distinct from `NetworkDown`/`Guidance` so the
+    /// specific copy is a single, pinned mutation site.
+    #[test]
+    fn render_scrape_page_zero_candidates_shows_the_guided_no_candidates_message() {
+        let html = render_scrape_page(&ScrapeState::ZeroCandidates);
+        // (a) the EXACT zero-candidates copy + suggested alternative renders.
+        assert!(
+            html.contains(SCRAPE_NO_CANDIDATES_NOTICE),
+            "the zero-candidates state must render the guided no-candidates \
+             message + suggested alternative; got:\n{html}"
+        );
+        assert!(
+            html.contains("No candidate claims could be derived"),
+            "the zero-candidates message must state no candidates could be \
+             derived; got:\n{html}"
+        );
+        assert!(
+            html.contains("Try a different"),
+            "the zero-candidates message must offer a suggested alternative; \
+             got:\n{html}"
+        );
+        // (b) NO candidate rows / NO candidate table render in the zero-candidates
+        // state — only the form + the guided message (never a blank or partial
+        // table).
+        assert!(
+            !html.contains("<table"),
+            "the zero-candidates state must render NO candidate table; got:\n{html}"
+        );
+        assert!(
+            !html.contains("<tr>"),
+            "the zero-candidates state must render NO candidate rows; got:\n{html}"
+        );
+        // (c) the form still renders so the operator can try another target, and
+        // NO sign control is offered (BR-VIEW-1 / I-SCR-1).
+        assert!(
+            html.contains("name=\"target\""),
+            "the zero-candidates state must still render the target form so the \
+             operator can re-submit; got:\n{html}"
+        );
+        for sign_control_marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+            assert!(
+                !html.contains(sign_control_marker),
+                "the zero-candidates state must render NO sign control \
+                 ({sign_control_marker:?}); got:\n{html}"
+            );
+        }
     }
 
     /// Behavior (I-VIEW-5 / WD-62): `CandidateRowView` is the ONLY view-model

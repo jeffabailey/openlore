@@ -379,10 +379,16 @@ async fn scrape_post(
                 .collect::<Vec<_>>();
             ScrapeState::Proposals(rows)
         }
-        // A successful harvest that derived nothing, OR a refusal / network
-        // failure: a guided message, never a blank result or a leaked cause
-        // (the specific zero-candidate + network-down copy lands in a later step).
-        Ok(_) | Err(_) => ScrapeState::Guidance(scrape_guidance_message()),
+        // A successful harvest that derived NOTHING (AC-005.3 / V-S3): the typed
+        // zero-candidates state, which renders the guided "No candidate claims
+        // could be derived" message + a suggested alternative — never a blank
+        // result. DISTINCT from the network-down arm so the two failure modes do
+        // not collapse into one generic guidance string.
+        Ok(_) => ScrapeState::ZeroCandidates,
+        // A refusal / network failure: a guided message, never a leaked cause.
+        // The specific network-down copy (V-S4) lands in a later step; here a
+        // neutral guided line keeps the viewer from crashing (NFR-VIEW-6).
+        Err(_) => ScrapeState::Guidance(scrape_guidance_message()),
     };
     html_ok(render_scrape_page(&state))
 }
