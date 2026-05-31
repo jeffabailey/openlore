@@ -55,7 +55,11 @@ const BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 /// - `serde_yaml_ng`: pure YAML parse of the embedded `signal_predicate_mapping`
 ///   SSOT snapshot in `scraper-domain` (WD-65 / Q-DELIVER-1). The maintained
 ///   drop-in fork of the deprecated `serde_yaml`; no I/O, no async runtime.
-const PURE_CORE_ALLOWED_CRATES: &[&str] = &["unicode-normalization", "serde_yaml_ng"];
+/// - `maud` / `maud_macros`: pure compile-time HTML template macro used by the
+///   slice-06 `viewer-domain` read-only viewer core (ADR-029). The macro expands
+///   to string building at compile time — no I/O, no async runtime.
+const PURE_CORE_ALLOWED_CRATES: &[&str] =
+    &["unicode-normalization", "serde_yaml_ng", "maud", "maud_macros"];
 
 /// `ports` is async-shaped (PdsPort) so `async-trait` is the one allowed
 /// async dep; the runtime itself (tokio) and HTTP/DB I/O crates remain
@@ -628,6 +632,81 @@ pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation
     violations
 }
 
+// -----------------------------------------------------------------------------
+// Viewer capability-boundary rule — `viewer_holds_no_signing_surface`
+// (I-VIEW-3 / ADR-028/030)
+// -----------------------------------------------------------------------------
+//
+// The slice-06 `adapter-http-viewer` is the read-only `openlore ui` viewer's
+// HTTP shell. It holds a `Box<dyn StoreReadPort>` (no write/sign method) and
+// NOTHING that can sign or publish: the signing key never enters the viewer
+// process (I-VIEW-3). Encoded as the ABSENCE of the signing-identity + PDS-write
+// surfaces from the adapter's transitive dep graph. Additionally, `cli` is the
+// ONLY crate that may link the viewer adapter (the viewer capability invariant);
+// no pure core / other adapter / the indexer root may reach it.
+
+/// The viewer HTTP-shell adapter crate name.
+const VIEWER_ADAPTER: &str = "adapter-http-viewer";
+
+/// Dep classes the read-only viewer adapter MUST NOT reach (I-VIEW-3): the
+/// signing identity adapter + any PDS-write surface. The viewer reads a
+/// read-only store and renders HTML — it cannot sign, publish, or resolve
+/// peers. `adapter-duckdb` is intentionally NOT here: the viewer's read-only
+/// `StoreReadPort` is implemented in `adapter-duckdb`, but the viewer ADAPTER
+/// crate links only `ports` + `viewer-domain` (the cli wires the concrete
+/// `DuckDbStoreReadAdapter`), so `adapter-http-viewer` never reaches
+/// `adapter-duckdb` directly.
+const VIEWER_FORBIDDEN_DEPS: &[&str] = &["adapter-atproto-did", "adapter-atproto-pds"];
+
+/// Pure dep-graph check (I-VIEW-3 + the viewer capability invariant): the
+/// `adapter-http-viewer` crate's transitive dep graph excludes the signing
+/// identity + PDS-write surfaces, AND only the `cli` composition root links the
+/// viewer adapter. Returns one [`Violation`] per offending edge; empty vec =
+/// compliant. A missing viewer adapter crate is silently skipped (robust to
+/// incremental workspace changes).
+pub fn check_viewer_capability_boundary(workspace: &Workspace) -> Vec<Violation> {
+    let mut violations = Vec::new();
+
+    if workspace.members.contains(VIEWER_ADAPTER) {
+        let transitive = workspace.transitive_deps(VIEWER_ADAPTER);
+        for forbidden in VIEWER_FORBIDDEN_DEPS {
+            if transitive.contains(*forbidden) {
+                violations.push(Violation {
+                    package: VIEWER_ADAPTER.to_string(),
+                    forbidden: (*forbidden).to_string(),
+                    rule: "adapter-http-viewer MUST NOT depend on the signing identity / \
+                           PDS-write surface — the viewer holds no signing key (I-VIEW-3)",
+                });
+            }
+        }
+    }
+
+    // Only `cli` may link the viewer adapter (the viewer capability invariant).
+    // Every other member (pure cores, other adapters, the indexer root, but NOT
+    // the exempt tooling) that reaches `adapter-http-viewer` is a violation.
+    for member in &workspace.members {
+        if member == COMPOSITION_ROOT
+            || member == VIEWER_ADAPTER
+            || ADAPTER_DEPENDENT_EXEMPT_MEMBERS.contains(&member.as_str())
+        {
+            continue;
+        }
+        if workspace
+            .transitive_deps(member)
+            .contains(VIEWER_ADAPTER)
+        {
+            violations.push(Violation {
+                package: member.clone(),
+                forbidden: VIEWER_ADAPTER.to_string(),
+                rule: "only `cli` may link `adapter-http-viewer` (the viewer capability \
+                       invariant — the viewer is the single read-only surface)",
+            });
+        }
+    }
+
+    violations
+}
+
 /// Pure entry point — given a workspace shape, return every violation.
 /// Empty vec = healthy.
 pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
@@ -657,6 +736,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "appview-domain",
         "appview-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (WD-103/WD-104/ADR-026/I-AV-1/I-AV-2)",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "viewer-domain",
+        "viewer-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-029; pure read-only view-model + maud HTML, allowed deps: maud + ports)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -664,6 +748,9 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
     // boundary — `openlore-indexer` holds no signing/local-store; both
     // composition roots wire disjoint adapter sets.
     violations.extend(check_indexer_capability_boundary(workspace));
+    // Slice-06 (I-VIEW-3 / ADR-028/030): the viewer capability boundary —
+    // `adapter-http-viewer` holds no signing/PDS surface; only `cli` links it.
+    violations.extend(check_viewer_capability_boundary(workspace));
     violations
 }
 
@@ -1108,6 +1195,85 @@ mod tests {
         assert!(v
             .iter()
             .any(|x| x.package == "lexicon" && x.forbidden == "atrium-api"));
+    }
+
+    // --- slice-06 viewer: pure-core arm + capability boundary ----------
+
+    #[test]
+    fn viewer_domain_with_maud_and_ports_is_allowed() {
+        // ADR-029: `viewer-domain` is the slice-06 PURE read-only view-model +
+        // HTML core. Its only deps are `maud` (allowlisted pure compile-time
+        // template macro) + `ports`. The pure-core ban list must pass.
+        let w = ws(&[
+            ("viewer-domain", &["maud", "maud_macros", "ports"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "viewer-domain + maud must be an allowed pure-core shape (ADR-029), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn viewer_domain_depending_on_hyper_is_violation_via_tokio() {
+        // The pure-core ban list is in force for viewer-domain: a render core
+        // reaching the hyper/tokio runtime would mean HTML was served from the
+        // pure core, not the effect shell.
+        let w = ws(&[("viewer-domain", &["tokio"])]);
+        let v = check_workspace(&w);
+        assert!(
+            v.iter()
+                .any(|x| x.package == "viewer-domain" && x.forbidden == "tokio"),
+            "expected viewer-domain→tokio violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn viewer_adapter_depending_on_signing_identity_is_violation() {
+        // I-VIEW-3: the viewer holds no signing key — `adapter-http-viewer` must
+        // not reach the signing identity adapter.
+        let w = ws(&[
+            ("adapter-http-viewer", &["adapter-atproto-did"]),
+            ("adapter-atproto-did", &[]),
+        ]);
+        let v = check_viewer_capability_boundary(&w);
+        assert!(
+            v.iter().any(|x| {
+                x.package == "adapter-http-viewer" && x.forbidden == "adapter-atproto-did"
+            }),
+            "expected adapter-http-viewer→adapter-atproto-did (I-VIEW-3) violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn only_cli_may_link_the_viewer_adapter() {
+        // The viewer capability invariant: cli links it (OK); a pure core or the
+        // indexer root linking it is a violation.
+        let ok = ws(&[
+            ("cli", &["adapter-http-viewer"]),
+            ("adapter-http-viewer", &["ports", "viewer-domain"]),
+            ("viewer-domain", &["maud", "ports"]),
+            ("ports", &["claim-domain"]),
+        ]);
+        assert!(
+            check_viewer_capability_boundary(&ok).is_empty(),
+            "cli linking the viewer adapter must be allowed, got: {:?}",
+            check_viewer_capability_boundary(&ok)
+        );
+
+        let bad = ws(&[
+            ("openlore-indexer", &["adapter-http-viewer"]),
+            ("adapter-http-viewer", &[]),
+        ]);
+        let v = check_viewer_capability_boundary(&bad);
+        assert!(
+            v.iter().any(|x| {
+                x.package == "openlore-indexer" && x.forbidden == "adapter-http-viewer"
+            }),
+            "expected openlore-indexer→adapter-http-viewer (only-cli) violation, got: {v:?}"
+        );
     }
 
     // --- Invariant 3: ports may have async-trait, not tokio ------------

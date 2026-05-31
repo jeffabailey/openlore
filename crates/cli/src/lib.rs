@@ -91,6 +91,18 @@ pub enum Command {
         /// snapshot — I-AV-8). A positional argument the verb detects.
         link: Option<String>,
     },
+    /// Serve the read-only htmx viewer over localhost HTTP — slice-06 (ADR-028).
+    /// A long-running `openlore ui [--port <P>]` server bound to 127.0.0.1 ONLY,
+    /// with NO auth and NO signing key, that renders the operator's OWN node
+    /// store as server-rendered HTML over a READ-ONLY `StoreReadPort` (I-VIEW-1).
+    /// Signing stays EXCLUSIVELY in the CLI verbs (I-VIEW-3 / I-SCR-1).
+    Ui {
+        /// The localhost port to bind. Defaults to the ADR-028 value (8788). Use
+        /// `--port 0` for an OS-assigned ephemeral port (parallel-safe tests; the
+        /// bound address is reported as the `viewer.serve.listening` event).
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -483,6 +495,12 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
+        // Slice-06 (ADR-028/030): the read-only `openlore ui` viewer. A
+        // long-running localhost serve loop over a READ-ONLY `StoreReadPort`
+        // (I-VIEW-1) — it opens its own read handle on the SAME store the CLI
+        // wrote (BR-VIEW-4) and never holds the signing key (I-VIEW-3). Blocks
+        // until killed; returns the serve exit code.
+        Command::Ui { port } => verbs::ui::run(&wiring.paths, &verbs::ui::UiArgs { port }),
     }
 }
 

@@ -92,6 +92,16 @@ pub enum ProbeRefusalReason {
     /// budget-reporting path depends on were absent from the response.
     /// Emitted as `github.rate_limit_headers_missing`.
     GithubRateLimitHeadersMissing,
+
+    // -------- slice-06 additions (htmx viewer) --------
+    /// `adapter-http-viewer` store-readability probe failed — the read-only
+    /// store could not be read (locked by another process, missing). Per ADR-030
+    /// §Earned-Trust step 1; surfaced as a plain-language startup refusal naming
+    /// the store path, never a per-request crash (NFR-VIEW-6).
+    ViewerStoreUnreadable,
+    /// `adapter-http-viewer` loopback probe failed — the server bound a
+    /// non-loopback address (the viewer is localhost-only, I-VIEW-4).
+    ViewerNotLoopback,
 }
 
 // -----------------------------------------------------------------------------

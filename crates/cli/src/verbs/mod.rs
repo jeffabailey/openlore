@@ -34,6 +34,10 @@ pub mod scrape_github;
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario
 // in Phase 03/04 (AV-* scenarios register at 01-05).
 pub mod search;
+// Slice-06 (htmx viewer; ADR-028/030): the `openlore ui` read-only viewer verb.
+// A long-running localhost HTTP server over a READ-ONLY `StoreReadPort`; the
+// ONLY verb that links `adapter-http-viewer` (cli is its sole linker).
+pub mod ui;
 
 /// Strip a `#fragment` from a DID, returning the bare DID. A signed
 /// claim's `author` carries the verification-method fragment

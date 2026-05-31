@@ -1,0 +1,32 @@
+[package]
+name = "viewer-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure viewer domain: read-only view-model ADTs (ClaimRowView, PageView) + server-rendered HTML (render_claims_page) via maud. NO I/O (ADR-029)."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE (slice-06): the read-only viewer's view-model + HTML rendering core
+# (ADR-029). Holds the view-model ADTs the `/claims` route projects from the
+# read-only `StoreReadPort`, and the `render_claims_page` maud renderer. NO I/O,
+# NO persistence, NO knowledge of DuckDB/HTTP/hyper/the network.
+#
+# Depends ONLY on the pure `maud` compile-time HTML macro + `ports` (for the
+# boundary value types the view-model is projected from). `maud` is a pure
+# compile-time template crate — no I/O, no async runtime — allowlisted in the
+# `xtask check-arch` pure-core arm (mirrors slice-02's `serde_yaml_ng` for
+# `scraper-domain`).
+#
+# Forbidden (enforced by `cargo xtask check-arch` pure-core allowlist):
+# tokio, reqwest, duckdb, keyring, atrium-*, hyper, std::fs, std::net.
+[dependencies]
+maud = { workspace = true }
+ports = { path = "../ports" }
+
+[dev-dependencies]
+proptest = { workspace = true }

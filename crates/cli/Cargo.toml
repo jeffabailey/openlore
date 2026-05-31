@@ -60,8 +60,17 @@ scoring = { path = "../scoring" }
 # / ingest (`adapter-atproto-ingest`) crates (I-AV-3, enforced by xtask check-arch).
 adapter-index-query = { path = "../adapter-index-query" }
 appview-domain = { path = "../appview-domain" }
+# Slice-06 (htmx viewer; ADR-028/030). The composition root is the ONLY crate
+# allowed to link `adapter-http-viewer` — the `openlore ui` viewer's hyper HTTP
+# shell over a READ-ONLY `StoreReadPort` (I-VIEW-1). The capability invariant (cli
+# is the sole linker; the adapter holds no signing/identity/pds surface) is
+# enforced by `xtask check-arch`'s viewer capability rule.
+adapter-http-viewer = { path = "../adapter-http-viewer" }
 clap = { version = "4", features = ["derive"] }
-tokio = { workspace = true, features = ["macros", "rt"] }
+# Slice-06: the `openlore ui` serve loop binds a hyper listener; the accept loop
+# needs the `net` feature in addition to the existing macros/rt (the viewer reuses
+# `claim_publish::build_tokio_runtime`, a current-thread runtime).
+tokio = { workspace = true, features = ["macros", "rt", "net"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 anyhow = { workspace = true }

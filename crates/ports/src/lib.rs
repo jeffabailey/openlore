@@ -121,6 +121,22 @@ mod indexed_claim;
 mod ingest_source;
 
 pub use identity_resolve::{IdentityResolvePort, ResolveError};
+
+// -----------------------------------------------------------------------------
+// Slice-06 (htmx viewer) — the READ-ONLY store port + boundary ADTs (ADR-030)
+// -----------------------------------------------------------------------------
+//
+// `store_read` declares the `StoreReadPort` trait the `openlore ui` viewer reads
+// through — it exposes NO write/sign method, so a `Box<dyn StoreReadPort>` is
+// structurally incapable of mutating the store (I-VIEW-1). The adapter
+// (`adapter-duckdb`) implements it over the SAME shared connection the CLI
+// writes through (BR-VIEW-4). The boundary ADTs `ClaimRow`/`PageRequest`/
+// `Page<T>`/`StoreReadError` are FLAT DTOs the pure `viewer-domain` core
+// projects its view-model from.
+
+mod store_read;
+
+pub use store_read::{ClaimRow, Page, PageRequest, StoreReadError, StoreReadPort};
 pub use index_query::{
     IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
 };

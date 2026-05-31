@@ -7044,19 +7044,88 @@ impl ViewerServer {
     /// SCAFFOLD: true (slice-06) — body is `todo!()`; DELIVER materializes it the
     /// way `spawn_indexer_serve` materializes the indexer's long-running serve.
     fn start_inner(env: &TestEnv, github: Option<GithubServer>) -> Self {
-        // SCAFFOLD: true (slice-06)
-        let _ = (env, &github);
-        todo!(
-            "DELIVER (slice-06): spawn `openlore ui --port 0` via \
-             assert_cmd::cargo_bin(\"openlore\") with env_clear() + OPENLORE_HOME \
-             (REAL store, BR-VIEW-4) + OPENLORE_DID/OPENLORE_KEY_SEED_HEX/\
-             OPENLORE_PDS_ENDPOINT + (when `github` is Some) OPENLORE_GITHUB_API_BASE; \
-             read the bound 127.0.0.1:<port> back off the `viewer.serve.listening` \
-             stdout event (mirrors `indexer.serve.listening`), poll a TCP connect \
-             until the listener accepts (timeout ~5s), and return ViewerServer with \
-             base_url = http://127.0.0.1:<port>, the child process (killed on drop), \
-             and `_github` held alive for the /scrape seam."
-        )
+        use std::io::{BufRead, BufReader};
+
+        let bin = assert_cmd::cargo::cargo_bin("openlore");
+        let mut cmd = Command::new(&bin);
+        cmd.args(["ui", "--port", "0"])
+            .env_clear()
+            // OPENLORE_HOME so the viewer opens the env's REAL DuckDB — the SAME
+            // store the CLI verbs write (BR-VIEW-4, Pillar 3).
+            .env("OPENLORE_HOME", &env.home)
+            .env("OPENLORE_DID", env.identity.author_did())
+            .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+            .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // The `/scrape` route reaches GitHub through the OPENLORE_GITHUB_API_BASE
+        // seam (US-VIEW-005). Store-only scenarios pass `None` and never set it.
+        if let Some(github) = &github {
+            cmd.env("OPENLORE_GITHUB_API_BASE", github.base_url());
+        }
+
+        let mut child = cmd
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn `openlore ui --port 0` at {bin:?}: {e}"));
+
+        // Read the bound-address event off stdout. The serve process prints
+        // `{"event":"viewer.serve.listening","addr":"127.0.0.1:<port>"}` once
+        // bound (mirrors `indexer.serve.listening`).
+        let stdout = child.stdout.take().expect("openlore ui: stdout pipe");
+        let mut reader = BufReader::new(stdout);
+        let mut addr: Option<String> = None;
+        for _ in 0..50 {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // EOF — the viewer exited before binding
+                Ok(_) => {
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+                        if event["event"] == "viewer.serve.listening" {
+                            if let Some(a) = event["addr"].as_str() {
+                                addr = Some(a.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let addr = addr.unwrap_or_else(|| {
+            let _ = child.kill();
+            let mut err = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                use std::io::Read;
+                let _ = stderr.read_to_string(&mut err);
+            }
+            panic!("`openlore ui` did not report a bound address on stdout; stderr: {err}");
+        });
+
+        // Poll a TCP connect until the listener accepts (the readiness signal
+        // means bound; this confirms the accept loop is live before the first
+        // GET). ~5s budget.
+        let socket: std::net::SocketAddr = addr
+            .parse()
+            .unwrap_or_else(|e| panic!("viewer reported an unparseable addr {addr:?}: {e}"));
+        for _ in 0..50 {
+            if std::net::TcpStream::connect_timeout(
+                &socket,
+                std::time::Duration::from_millis(100),
+            )
+            .is_ok()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        Self {
+            base_url: format!("http://{addr}"),
+            child,
+            _github: github,
+        }
     }
 
     /// The `http://127.0.0.1:<ephemeral-port>` base URL the scenario issues HTTP
@@ -7072,13 +7141,17 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn get(&self, path: &str) -> ViewerResponse {
-        // SCAFFOLD: true (slice-06)
-        let _ = path;
-        todo!(
-            "DELIVER (slice-06): GET {{base_url}}{{path}} via a reqwest blocking \
-             client; return ViewerResponse {{ status, body }} where body is the \
-             rendered HTML. Assert on OBSERVABLE rendered text only."
-        )
+        let url = format!("{}{}", self.base_url, path);
+        let response = reqwest::blocking::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .unwrap_or_else(|e| panic!("read body of GET {url}: {e}"));
+        ViewerResponse { status, body }
     }
 
     /// Issue an HTTP `POST <base_url><path>` with `fields` as an
@@ -7088,13 +7161,18 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
-        // SCAFFOLD: true (slice-06)
-        let _ = (path, fields);
-        todo!(
-            "DELIVER (slice-06): POST {{base_url}}{{path}} with `fields` as a \
-             form-urlencoded body via a reqwest blocking client; return \
-             ViewerResponse {{ status, body }} (the re-rendered scrape page)."
-        )
+        let url = format!("{}{}", self.base_url, path);
+        let response = reqwest::blocking::Client::new()
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .form(fields)
+            .send()
+            .unwrap_or_else(|e| panic!("POST {url}: {e}"));
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .unwrap_or_else(|e| panic!("read body of POST {url}: {e}"));
+        ViewerResponse { status, body }
     }
 }
 
@@ -7141,14 +7219,69 @@ pub fn seed_own_claim_with_evidence(
     confidence: f64,
     evidence_urls: &[&str],
 ) -> String {
-    // SCAFFOLD: true (slice-06)
-    let _ = (env, subject, predicate, object, confidence, evidence_urls);
-    todo!(
-        "DELIVER (slice-06): drive `openlore claim add` for the given \
-         subject/predicate/object/confidence (+ evidence URLs) through the \
-         production write path; return the signed claim's CID (read back from \
-         stdout) so the `/claims/{{cid}}` detail scenarios can address it."
-    )
+    // Drive the PRODUCTION `openlore claim add` write path (Pillar 3 — the SAME
+    // store `openlore ui` reads, BR-VIEW-4). Build the arg vector with one
+    // `--evidence <url>` per URL (clap `Vec<String>`). A single `\n` on stdin
+    // confirms the SIGN prompt (Enter); EOF after that DECLINES the publish
+    // prompt — we want the claim signed + persisted locally, NOT published to
+    // the PDS (the viewer reads the local store; publication is irrelevant to
+    // V-1 and avoids depending on the fake-PDS round-trip).
+    let confidence_str = format!("{confidence}");
+    let mut args: Vec<&str> = vec![
+        "claim",
+        "add",
+        "--subject",
+        subject,
+        "--predicate",
+        predicate,
+        "--object",
+        object,
+        "--confidence",
+        &confidence_str,
+    ];
+    for url in evidence_urls {
+        args.push("--evidence");
+        args.push(url);
+    }
+
+    let outcome = run_openlore_with_stdin(env, &args, "\n");
+    if outcome.status != 0 {
+        panic!(
+            "seed_own_claim_with_evidence: `openlore claim add` failed (exit {}). \
+             stdout: {} stderr: {}",
+            outcome.status, outcome.stdout, outcome.stderr
+        );
+    }
+    // `claim add` prints `Computing claim CID <cid>` once the user confirms the
+    // sign prompt. Recover the CID from that line so the `/claims/{cid}` detail
+    // scenarios can address the exact record without hard-coding a CID.
+    signed_cid_from_stdout(&outcome.stdout)
+}
+
+/// Recover the signed claim's CID from the `claim add` stdout. The verb prints
+/// `Computing claim CID <cid>` after the sign prompt is confirmed (before the
+/// publish prompt), so the CID is recoverable even when the claim is NOT
+/// published (the V-1 seed path declines publish). Distinct from
+/// [`published_cid_from_stdout`], which parses the post-PUBLISH success block.
+pub fn signed_cid_from_stdout(stdout: &str) -> String {
+    // The sign prompt is written WITHOUT a trailing newline, so the
+    // `Computing claim CID <cid>` text shares a line with the prompt:
+    // `Press Enter to sign locally (...): Computing claim CID bafy...`.
+    // Find the marker anywhere in the line and take the first whitespace-
+    // delimited token after it as the CID.
+    const MARKER: &str = "Computing claim CID ";
+    for line in stdout.lines() {
+        if let Some(pos) = line.find(MARKER) {
+            let rest = &line[pos + MARKER.len()..];
+            if let Some(cid) = rest.split_whitespace().next() {
+                return cid.to_string();
+            }
+        }
+    }
+    panic!(
+        "could not find a 'Computing claim CID <cid>' line in stdout to recover \
+         the signed CID; \n--- stdout ---\n{stdout}"
+    );
 }
 
 /// Seed `count` peer claims (federated from `peer_did`) into the env's REAL

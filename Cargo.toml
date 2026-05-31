@@ -18,6 +18,8 @@ members = [
     "crates/scoring",
     "crates/scraper-domain",
     "crates/appview-domain",
+    # slice-06 (htmx viewer) — the PURE read-only view-model + HTML core (ADR-029).
+    "crates/viewer-domain",
     "crates/adapter-duckdb",
     "crates/adapter-atproto-did",
     "crates/adapter-atproto-pds",
@@ -28,6 +30,9 @@ members = [
     "crates/adapter-index-store",
     "crates/adapter-xrpc-query-server",
     "crates/adapter-index-query",
+    # slice-06 (htmx viewer) — the hyper EFFECT shell for `openlore ui`
+    # (ADR-028/030); linked ONLY by cli (xtask capability invariant).
+    "crates/adapter-http-viewer",
     # slice-05 (appview search) the SECOND composition root — step 01-04.
     "crates/openlore-indexer",
     "crates/cli",
@@ -62,6 +67,11 @@ proptest = "1"
 # Pure URL parser — no I/O. Used by slice-03 `PeerInfo.pds_endpoint`
 # + `PeerSubscription.peer_pds_endpoint` + `PdsPort::list_peer_records`.
 url = { version = "2", features = ["serde"] }
+# Pure compile-time HTML template macro (no I/O, no async runtime). Slice-06
+# (ADR-029): the read-only `openlore ui` viewer's server-rendered HTML. Used by
+# the PURE `viewer-domain` core; allowlisted in the `xtask check-arch` pure-core
+# arm (mirrors `serde_yaml_ng` for `scraper-domain`).
+maud = "0.27"
 
 [profile.release]
 lto = "thin"

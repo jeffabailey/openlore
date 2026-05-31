@@ -1,0 +1,37 @@
+[package]
+name = "adapter-http-viewer"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore `openlore ui` viewer HTTP shell: hand-rolled hyper 1.x server over a READ-ONLY StoreReadPort, serves server-rendered HTML (ADR-028/030). Binds 127.0.0.1 only; holds no write/sign surface."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT shell (slice-06; ADR-028/030). The read-only `openlore ui` viewer's
+# HTTP surface: a hand-rolled minimal hyper 1.x server (mirrors
+# `adapter-xrpc-query-server`) that binds 127.0.0.1 ONLY, reads a
+# `Box<dyn StoreReadPort>` (NO write/sign method on that port — I-VIEW-1), calls
+# the PURE `viewer-domain::render_claims_page`, and returns 200 text/html.
+#
+# CAPABILITY BOUNDARY (xtask check-arch): this crate MUST NOT depend on any
+# signing/identity/pds crate (adapter-atproto-did/-pds). It holds ONLY a
+# read-only store port. `cli` is the ONLY crate that links it.
+#
+# Depends on `ports` (StoreReadPort — the read side it serves), `viewer-domain`
+# (the pure render core), and the hyper stack (already a TRANSITIVE dep of
+# reqwest; NOT deny.toml-banned, unlike axum) reusing the same versions as
+# `adapter-xrpc-query-server`. The cli composition root owns the tokio runtime.
+[dependencies]
+ports = { path = "../ports" }
+viewer-domain = { path = "../viewer-domain" }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tokio = { workspace = true, features = ["rt", "net", "macros"] }

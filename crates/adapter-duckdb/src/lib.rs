@@ -56,8 +56,10 @@ mod peer_storage;
 mod probe;
 mod schema;
 mod schema_v3;
+mod store_read;
 
 pub use peer_storage::DuckDbPeerStorageAdapter;
+pub use store_read::DuckDbStoreReadAdapter;
 
 /// Embedded-DuckDB `StoragePort` adapter.
 ///
@@ -148,6 +150,15 @@ impl DuckDbStorageAdapter {
             self.peer_claims_root.clone(),
             local_did,
         )
+    }
+
+    /// Construct a `DuckDbStoreReadAdapter` SHARING this adapter's connection
+    /// handle (BR-VIEW-4 — the SAME store the CLI writes through; NO second
+    /// handle to the file is opened). The returned adapter exposes ONLY the
+    /// read-only `StoreReadPort` surface (no write/sign method), so the
+    /// `openlore ui` viewer that holds it is structurally read-only (I-VIEW-1).
+    pub fn read_adapter(&self) -> DuckDbStoreReadAdapter {
+        DuckDbStoreReadAdapter::from_shared(Arc::clone(&self.conn))
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
