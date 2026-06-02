@@ -1,0 +1,574 @@
+{
+  "roadmap": {
+    "project_id": "viewer-htmx-swaps",
+    "created_at": "2026-06-02T12:04:03Z",
+    "total_steps": 15
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Foundation + claims pagination (walking skeleton)",
+      "description": "Establish the entire progressive-enhancement mechanism on the My Claims route as the thinnest end-to-end thread: the HX-Request shape dispatch in the effect shell, the first pure render_*_fragment / recomposed render_*_page pair in viewer-domain, the vendored htmx asset + its /static route, and the chrome <script src> line. Once this phase is green, every later interaction reuses the same pattern.",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Claims table swaps in place under HX-Request (walking skeleton)",
+          "description": "Forces the whole mechanism into existence on GET /claims?page=N. In adapter-http-viewer (effect shell only): add Shape::from_request reading the HX-Request header ONCE in the route dispatch, fork the claims handler (fragment vs page) at the render call, and add the GET /static/htmx.min.js asset route served via include_str! of the newly vendored crates/adapter-http-viewer/assets/htmx.min.js (htmx 2.0.4, 0BSD). In viewer-domain (pure): add the shared swap-target id const, render_claims_table_fragment wrapping the table + position indicator + Prev/Next in a div id=\"claims-table\", and recompose render_claims_page as chrome (incl. the <script src=\"/static/htmx.min.js\"> line) wrapped around that fragment fn. Build-before-run: the AT spawns the real openlore bin, so cargo build must run before cargo test. viewer-domain stays pure (maud + ports only); no new crate dep; no deny.toml / check-arch change (htmx is a text asset, not a crate).",
+          "acceptance_criteria": [
+            "GET /claims?page=2 WITH the HX-Request header returns ONLY the #claims-table fragment (is_fragment, no DOCTYPE/<html> chrome) showing the page-2 rows, the \"51-100 of 312\" indicator, and Prev/Next, with confidence rendered verbatim as 0.90",
+            "The fragment is wrapped in a single element carrying the shared swap-target id #claims-table",
+            "GET /static/htmx.min.js returns 200 with the non-empty vendored htmx 2.0.4 bytes",
+            "render_claims_page composes chrome around render_claims_table_fragment and the chrome <head> emits exactly one <script src=\"/static/htmx.min.js\">",
+            "Header is the sole shape selector; no new data route is added (only the /static asset route)",
+            "Store row counts are unchanged by serving the route (read-only preserved)"
+          ],
+          "criteria": [
+            "GET /claims?page=2 WITH the HX-Request header returns ONLY the #claims-table fragment (is_fragment, no DOCTYPE/<html> chrome) showing the page-2 rows, the \"51-100 of 312\" indicator, and Prev/Next, with confidence rendered verbatim as 0.90",
+            "The fragment is wrapped in a single element carrying the shared swap-target id #claims-table",
+            "GET /static/htmx.min.js returns 200 with the non-empty vendored htmx 2.0.4 bytes",
+            "render_claims_page composes chrome around render_claims_table_fragment and the chrome <head> emits exactly one <script src=\"/static/htmx.min.js\">",
+            "Header is the sole shape selector; no new data route is added (only the /static asset route)",
+            "Store row counts are unchanged by serving the route (read-only preserved)"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "paging_claims_with_htmx_returns_only_the_table_fragment",
+          "h_scenarios": [
+            "H-1a"
+          ],
+          "estimated_time": "5-7 hours",
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/adapter-http-viewer/assets/htmx.min.js",
+            "crates/adapter-http-viewer/Cargo.toml"
+          ],
+          "mutation_note": "render_claims_table_fragment + the recomposed render_claims_page are load-bearing pure surface (indicator arithmetic, verbatim confidence, swap-id wrapping) — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "01-02",
+          "name": "No-JS full page + fragment/page parity + over-the-end clamp",
+          "description": "Closes the My Claims trio on the same route. No-JS arm (H-1b): a request WITHOUT the header returns the complete slice-06 full page (chrome + table region), byte-equivalent to slice-06 modulo the bounded chrome delta (the #claims-table wrapper + the one <script src> line). Parity (H-1c): the full page EMBEDS the same render_claims_table_fragment fn, so the fragment's rows + indicator + verbatim confidence are contained in the full page's table region (structural parity, no second renderer). Boundary (H-1d): an over-the-end ?page=99 clamps to the last page (\"301-312 of 312\") in BOTH shapes, never a blank result (slice-06 DV-5 clamp preserved by reusing clamp_page / PageView::paged).",
+          "acceptance_criteria": [
+            "GET /claims?page=2 WITHOUT the header returns the complete slice-06 full page (is_full_page: DOCTYPE + <html> chrome + the table region)",
+            "The fragment returned WITH the header is contained within the full page's #claims-table region for the same URL (rows + \"51-100 of 312\" indicator + verbatim 0.90 confidence)",
+            "GET /claims?page=99 (312 claims) shows \"301-312 of 312\" with no Next control in BOTH the fragment and full-page shapes, never a blank result",
+            "Store row counts are unchanged by serving either shape"
+          ],
+          "criteria": [
+            "GET /claims?page=2 WITHOUT the header returns the complete slice-06 full page (is_full_page: DOCTYPE + <html> chrome + the table region)",
+            "The fragment returned WITH the header is contained within the full page's #claims-table region for the same URL (rows + \"51-100 of 312\" indicator + verbatim 0.90 confidence)",
+            "GET /claims?page=99 (312 claims) shows \"301-312 of 312\" with no Next control in BOTH the fragment and full-page shapes, never a blank result",
+            "Store row counts are unchanged by serving either shape"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "paging_claims_without_htmx_returns_the_full_page",
+          "h_scenarios": [
+            "H-1b",
+            "H-1c",
+            "H-1d"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The page-composes-fragment recomposition + the clamp path are the parity/clamp pure surface — Phase-5 >=80% mutation gate applies."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Peer-claims pagination swap",
+      "description": "Apply the established shape-dispatch pattern to the Peer Claims route, reusing parse_page / PageView::paged / list_peer_claims. slice-06 served only page 1 of peer claims, so this phase ALSO threads ?page=N into the peer handler. The peer table fragment preserves each row's origin (peer DID), separable from own claims.",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Peer-claims table swaps in place under HX-Request",
+          "description": "Adds render_peer_claims_table_fragment (pure, wraps the peer table in the shared #claims-table id, inside #view-panel) and threads ?page=N into peer_claims_page in the effect shell (reuse parse_page + PageRequest offset math + PageView::paged + list_peer_claims). Fork the peer handler at the render call by Shape. Each peer row keeps its origin (peer DID) so My vs federated is never ambiguous.",
+          "acceptance_criteria": [
+            "GET /peer-claims?page=2 WITH the header returns ONLY the peer-table fragment (is_fragment) with the page-2 peer rows, each row's origin (peer DID), and the \"51-100 of N\" indicator",
+            "The fragment is separable from own claims (peer origin column present) and is NOT a full page",
+            "The peer handler honours ?page=N (page 2 shows the second page, not page 1)",
+            "Store row counts are unchanged"
+          ],
+          "criteria": [
+            "GET /peer-claims?page=2 WITH the header returns ONLY the peer-table fragment (is_fragment) with the page-2 peer rows, each row's origin (peer DID), and the \"51-100 of N\" indicator",
+            "The fragment is separable from own claims (peer origin column present) and is NOT a full page",
+            "The peer handler honours ?page=N (page 2 shows the second page, not page 1)",
+            "Store row counts are unchanged"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "paging_peer_claims_with_htmx_returns_only_the_peer_table_fragment",
+          "h_scenarios": [
+            "H-2a"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "render_peer_claims_table_fragment (origin rendering + paged indicator) is load-bearing pure surface — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "02-02",
+          "name": "Peer no-JS full page + parity + unknown-origin in fragment",
+          "description": "Closes the peer trio plus its boundary. No-JS (H-2b): WITHOUT the header returns the complete slice-06 peer-claims page (recompose render_peer_claims_page = chrome + render_peer_claims_table_fragment). Parity (H-2c): the full page embeds the same peer fragment fn (rows + indicator + origin contained). Boundary (H-2d): a peer claim with no recorded origin still renders in the fragment labeled \"unknown\", never dropped (defensive render).",
+          "acceptance_criteria": [
+            "GET /peer-claims?page=2 WITHOUT the header returns the complete slice-06 peer-claims full page (is_full_page)",
+            "The peer fragment is contained within the full page's peer-table region (rows + indicator + peer origin)",
+            "A peer claim with no recorded origin renders in the fragment labeled \"unknown\" and is never dropped",
+            "Store row counts are unchanged in both shapes"
+          ],
+          "criteria": [
+            "GET /peer-claims?page=2 WITHOUT the header returns the complete slice-06 peer-claims full page (is_full_page)",
+            "The peer fragment is contained within the full page's peer-table region (rows + indicator + peer origin)",
+            "A peer claim with no recorded origin renders in the fragment labeled \"unknown\" and is never dropped",
+            "Store row counts are unchanged in both shapes"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "paging_peer_claims_without_htmx_returns_the_full_page",
+          "h_scenarios": [
+            "H-2b",
+            "H-2c",
+            "H-2d"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The peer page-composes-fragment recomposition + the unknown-origin defensive branch are pure surface — Phase-5 >=80% mutation gate applies."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Scrape results fragment swap",
+      "description": "Apply shape dispatch to the live scrape interaction (POST /scrape). The results fragment carries candidates + their derived-from (the only view-model with display-only derived_from, WD-62), NO sign control, and reuses the slice-06 typed ScrapeState arms so error fragments leak no transport/stack internals. External GitHub is the reused slice-02 FakeGithub via OPENLORE_GITHUB_API_BASE.",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Scrape results swap in place under HX-Request (candidates)",
+          "description": "Adds render_scrape_results_fragment (pure, wraps the proposal rows in #scrape-results) and forks scrape_post by Shape at the render call. The fragment renders candidates + their derived-from and NO sign control. Reuses the slice-06 propose pipeline + FakeGithub seam unchanged.",
+          "acceptance_criteria": [
+            "POST /scrape WITH the header (post_form_htmx) for a target that proposes candidates returns ONLY the #scrape-results fragment (is_fragment) with the candidate rows and their derived-from",
+            "The results fragment renders NO sign control (the human signing gate stays in the CLI)",
+            "Nothing is persisted from the scrape and store row counts are unchanged",
+            "Confidence on each candidate renders verbatim"
+          ],
+          "criteria": [
+            "POST /scrape WITH the header (post_form_htmx) for a target that proposes candidates returns ONLY the #scrape-results fragment (is_fragment) with the candidate rows and their derived-from",
+            "The results fragment renders NO sign control (the human signing gate stays in the CLI)",
+            "Nothing is persisted from the scrape and store row counts are unchanged",
+            "Confidence on each candidate renders verbatim"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "submitting_scrape_with_htmx_returns_only_the_results_fragment",
+          "h_scenarios": [
+            "H-3a"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "render_scrape_results_fragment (candidate + derived-from rendering, no-sign-control shape) is load-bearing pure surface — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "03-02",
+          "name": "Scrape zero-candidates + network-down fragments (no leak)",
+          "description": "Routes the typed ScrapeState::ZeroCandidates and ScrapeState::NetworkDown arms through the fragment shape. Zero candidates (H-3b): the fragment shows \"No candidate claims could be derived\" with a suggested alternative. Network down (H-3c): the fragment states GitHub could not be reached, notes the store view still works offline, and leaks NO transport/stack internals (reuses the slice-06 payload-free typed states).",
+          "acceptance_criteria": [
+            "POST /scrape WITH the header for a target that derives no candidates returns a fragment showing \"No candidate claims could be derived\" with a suggestion",
+            "POST /scrape WITH the header when GitHub is unreachable returns a fragment stating GitHub could not be reached and noting the store view still works offline",
+            "The network-down fragment contains no raw HTTP status, no \"connection refused\"/DNS text, no URL, and no stack trace",
+            "Both error fragments are fragments (is_fragment), not full pages, and store row counts are unchanged"
+          ],
+          "criteria": [
+            "POST /scrape WITH the header for a target that derives no candidates returns a fragment showing \"No candidate claims could be derived\" with a suggestion",
+            "POST /scrape WITH the header when GitHub is unreachable returns a fragment stating GitHub could not be reached and noting the store view still works offline",
+            "The network-down fragment contains no raw HTTP status, no \"connection refused\"/DNS text, no URL, and no stack trace",
+            "Both error fragments are fragments (is_fragment), not full pages, and store row counts are unchanged"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "scrape_with_no_candidates_swaps_in_guidance_fragment",
+          "h_scenarios": [
+            "H-3b",
+            "H-3c"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The zero-candidates and network-down fragment renders are the no-leak pure surface (payload-free copy) — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "03-03",
+          "name": "Scrape no-JS full page + parity",
+          "description": "Closes the scrape trio. No-JS (H-3d): submitting the form WITHOUT the header (post_form) returns the complete slice-06 /scrape page with candidates below the form (recompose render_scrape_page = chrome + render_scrape_results_fragment). Parity (H-3e): the full page embeds the same results fragment fn, so candidates + derived-from + verbatim confidence are contained in the full page's results region.",
+          "acceptance_criteria": [
+            "POST /scrape WITHOUT the header returns the complete slice-06 /scrape full page (is_full_page) with the candidates below the form",
+            "The results fragment is contained within the full page's #scrape-results region (candidates + derived-from + verbatim confidence)",
+            "The full page renders NO sign control",
+            "Nothing is persisted and store row counts are unchanged in both shapes"
+          ],
+          "criteria": [
+            "POST /scrape WITHOUT the header returns the complete slice-06 /scrape full page (is_full_page) with the candidates below the form",
+            "The results fragment is contained within the full page's #scrape-results region (candidates + derived-from + verbatim confidence)",
+            "The full page renders NO sign control",
+            "Nothing is persisted and store row counts are unchanged in both shapes"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "submitting_scrape_without_htmx_returns_the_full_page",
+          "h_scenarios": [
+            "H-3d",
+            "H-3e"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The scrape page-composes-fragment recomposition is the parity pure surface — Phase-5 >=80% mutation gate applies."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Claim detail fragment swap",
+      "description": "Apply shape dispatch to the claim detail interaction (GET /claims/{cid}). The shape fork is AFTER the found/not-found decision, so the 404 carries through both shapes. Adds the detail fragment AND a not-found fragment, both reusing slice-06 guided copy.",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Claim detail loads inline under HX-Request",
+          "description": "Adds render_claim_detail_fragment (pure, wraps the detail region in #claim-detail) and forks claim_detail_page by Shape on the Some(detail) path. The fragment renders all fields + every evidence URL + verbatim confidence.",
+          "acceptance_criteria": [
+            "GET /claims/{cid} WITH the header for a known claim returns ONLY the #claim-detail fragment (is_fragment) with all fields and every evidence URL",
+            "Confidence renders verbatim as 0.90",
+            "The fragment is wrapped in the shared swap-target id #claim-detail and is NOT a full page",
+            "Store row counts are unchanged"
+          ],
+          "criteria": [
+            "GET /claims/{cid} WITH the header for a known claim returns ONLY the #claim-detail fragment (is_fragment) with all fields and every evidence URL",
+            "Confidence renders verbatim as 0.90",
+            "The fragment is wrapped in the shared swap-target id #claim-detail and is NOT a full page",
+            "Store row counts are unchanged"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "opening_a_claim_with_htmx_returns_only_the_detail_fragment",
+          "h_scenarios": [
+            "H-4a"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "render_claim_detail_fragment (field + evidence + verbatim confidence rendering) is load-bearing pure surface — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "04-02",
+          "name": "Detail no-JS full page + unknown-CID + no-evidence + parity",
+          "description": "Closes the detail set. No-JS (H-4b): WITHOUT the header returns the complete slice-06 detail page (recompose render_claim_detail page = chrome + render_claim_detail_fragment). Unknown CID (H-4c): adds render_claim_not_found_fragment so the 404 carries through BOTH shapes with \"No claim with that identifier in your store\" + a /claims back link. No evidence (H-4d): both shapes show \"no evidence attached\", never a blank section. Parity (H-4e): the full page embeds the same detail fragment fn.",
+          "acceptance_criteria": [
+            "GET /claims/{cid} WITHOUT the header for a known claim returns the complete slice-06 detail full page (is_full_page)",
+            "An unknown CID returns 404 in BOTH shapes with \"No claim with that identifier in your store\" and a /claims back link (a not-found fragment under the header, the guided not-found page without it)",
+            "A claim with no evidence shows \"no evidence attached\" in BOTH shapes, never a blank section",
+            "The detail fragment's fields + evidence + verbatim confidence are contained within the full page's #claim-detail region",
+            "Store row counts are unchanged across all paths"
+          ],
+          "criteria": [
+            "GET /claims/{cid} WITHOUT the header for a known claim returns the complete slice-06 detail full page (is_full_page)",
+            "An unknown CID returns 404 in BOTH shapes with \"No claim with that identifier in your store\" and a /claims back link (a not-found fragment under the header, the guided not-found page without it)",
+            "A claim with no evidence shows \"no evidence attached\" in BOTH shapes, never a blank section",
+            "The detail fragment's fields + evidence + verbatim confidence are contained within the full page's #claim-detail region",
+            "Store row counts are unchanged across all paths"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "opening_a_claim_without_htmx_returns_the_full_detail_page",
+          "h_scenarios": [
+            "H-4b",
+            "H-4c",
+            "H-4d",
+            "H-4e"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "render_claim_not_found_fragment + the no-evidence branch + the detail page-composes-fragment recomposition are pure surface — Phase-5 >=80% mutation gate applies."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "Tab / view-panel swap",
+      "description": "Switch My Claims <-> Peer Claims in place via the #view-panel swap. Tab anchors carry hx-get + hx-target=\"#view-panel\" + hx-swap + hx-push-url=\"true\" PLUS a real href (progressive enhancement). hx-push-url is client-side (the HTTP harness runs no JS), so the assertions pin the SERVER contract: each URL serves the right fragment under the header and the right full page without it.",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "View switch swaps the view-panel under HX-Request",
+          "description": "Adds the #view-panel fragment (the active list fragment for that view) and the tab anchors in the chrome carrying hx-get, hx-target=\"#view-panel\", hx-swap, hx-push-url=\"true\" and a real href. Forks /claims and /peer-claims so the header serves the view-panel fragment.",
+          "acceptance_criteria": [
+            "GET /peer-claims WITH the header (switching to Peer Claims) returns ONLY the view-panel fragment (is_fragment) with the Peer Claims list and each row's origin",
+            "The fragment is separable from own claims and is NOT a full page",
+            "Each tab anchor carries hx-get, hx-target=\"#view-panel\", hx-swap, hx-push-url=\"true\" AND a real href",
+            "Store row counts are unchanged"
+          ],
+          "criteria": [
+            "GET /peer-claims WITH the header (switching to Peer Claims) returns ONLY the view-panel fragment (is_fragment) with the Peer Claims list and each row's origin",
+            "The fragment is separable from own claims and is NOT a full page",
+            "Each tab anchor carries hx-get, hx-target=\"#view-panel\", hx-swap, hx-push-url=\"true\" AND a real href",
+            "Store row counts are unchanged"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "switching_to_peer_claims_with_htmx_returns_only_the_view_panel_fragment",
+          "h_scenarios": [
+            "H-6a"
+          ],
+          "estimated_time": "3-4 hours",
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The #view-panel fragment + the tab-anchor attribute emission (real href + hx-push-url) are load-bearing pure surface — Phase-5 >=80% mutation gate applies."
+        },
+        {
+          "id": "05-02",
+          "name": "Tab URLs serve correct full page; bookmark/reload re-enters; parity",
+          "description": "Closes the tab set on the server contract. No-JS per URL (H-6b): each tab URL (/claims, /peer-claims) WITHOUT the header returns the complete slice-06 full page for that view (URL convergence per ADR-034). Bookmark/reload (H-6c): a plain GET of the switched-to URL (no header) lands on the complete slice-06 /peer-claims page. Parity (H-6d): the view-panel fragment's rows + peer origin are contained in the full page's view-panel region.",
+          "acceptance_criteria": [
+            "GET /claims and GET /peer-claims WITHOUT the header each return the complete slice-06 full page for that view (is_full_page)",
+            "A plain GET (no header) of the switched-to /peer-claims URL lands on the complete slice-06 /peer-claims page",
+            "The view-panel fragment's rows + peer origin are contained within the full page's view-panel region",
+            "Store row counts are unchanged in both shapes"
+          ],
+          "criteria": [
+            "GET /claims and GET /peer-claims WITHOUT the header each return the complete slice-06 full page for that view (is_full_page)",
+            "A plain GET (no header) of the switched-to /peer-claims URL lands on the complete slice-06 /peer-claims page",
+            "The view-panel fragment's rows + peer origin are contained within the full page's view-panel region",
+            "Store row counts are unchanged in both shapes"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx.rs",
+          "scenario_name": "tab_switch_without_htmx_returns_the_full_page_per_url",
+          "h_scenarios": [
+            "H-6b",
+            "H-6c",
+            "H-6d"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "05-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The view-panel page-composes-fragment recomposition + the per-URL active-view selection are pure surface — Phase-5 >=80% mutation gate applies."
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "name": "Asset delivery + offline/read-only guardrails (release gate)",
+      "description": "Pin the offline asset guarantee and the cross-cutting invariants as the release gate. Confirms the /static/htmx.min.js route's content + integrity, that every page references only the local script (no CDN), that the asset route adds no write surface, that non-htmx responses stay byte-equivalent (with the slice-06 26-scenario suite green), that every htmx fragment route leaves the store read-only, and that no fragment renders a sign control.",
+      "steps": [
+        {
+          "id": "06-01",
+          "name": "htmx asset served locally; no CDN; asset route adds no write surface",
+          "description": "Confirms US-HX-005. Asset (H-5a): GET /static/htmx.min.js returns 200 with the vendored htmx JS (non-empty, looks like htmx), content-type application/javascript, and records the HTMX_SHA256 integrity test for the vendored 2.0.4 file. No-CDN (H-5b): every page-bearing route's script src is the local /static/htmx.min.js route and references no external CDN host. No-write (H-5c): the asset route is GET-only with no write surface and leaves store row counts unchanged.",
+          "acceptance_criteria": [
+            "GET /static/htmx.min.js returns 200, non-empty, looks like htmx, with content-type application/javascript",
+            "The vendored htmx file matches the recorded HTMX_SHA256 integrity constant (htmx 2.0.4, 0BSD)",
+            "Every page-bearing route references the local /static/htmx.min.js and no external CDN host (references_external_cdn is false)",
+            "Fetching the asset route leaves the claims + peer_claims row counts unchanged and introduces no write/sign route"
+          ],
+          "criteria": [
+            "GET /static/htmx.min.js returns 200, non-empty, looks like htmx, with content-type application/javascript",
+            "The vendored htmx file matches the recorded HTMX_SHA256 integrity constant (htmx 2.0.4, 0BSD)",
+            "Every page-bearing route references the local /static/htmx.min.js and no external CDN host (references_external_cdn is false)",
+            "Fetching the asset route leaves the claims + peer_claims row counts unchanged and introduces no write/sign route"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx_invariants.rs",
+          "scenario_name": "htmx_asset_served_locally",
+          "h_scenarios": [
+            "H-5a",
+            "H-5b",
+            "H-5c"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "05-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/adapter-http-viewer/assets/htmx.min.js"
+          ],
+          "mutation_note": "The SHA-256 integrity check + content-type are guardrail assertions; no new pure-core logic — standard coverage, not the >=80% mutation focus."
+        },
+        {
+          "id": "06-02",
+          "name": "Non-htmx byte-equivalence + slice-06 suite green (no-regression)",
+          "description": "H-INV-NoReg release gate: each enhanced route WITHOUT the header returns the complete slice-06 full page (chrome + content) with no CDN reference and no behavioral change beyond the bounded chrome delta (the swap-target div wrapper + the one <script src> line). Companion gate: the slice-06 26-scenario suite (viewer_store / viewer_scrape / viewer_invariants) MUST stay green when run alongside.",
+          "acceptance_criteria": [
+            "Each enhanced route (/claims, /peer-claims, /scrape, /claims/{cid}) WITHOUT the header returns the complete slice-06 full page (chrome + content), is_full_page",
+            "No non-htmx response references an external CDN",
+            "The full-page bodies differ from slice-06 only by the bounded chrome delta (the swap-target wrapper div + the single local <script src> line)",
+            "The slice-06 26-scenario suite (viewer_store / viewer_scrape / viewer_invariants) stays green when run alongside"
+          ],
+          "criteria": [
+            "Each enhanced route (/claims, /peer-claims, /scrape, /claims/{cid}) WITHOUT the header returns the complete slice-06 full page (chrome + content), is_full_page",
+            "No non-htmx response references an external CDN",
+            "The full-page bodies differ from slice-06 only by the bounded chrome delta (the swap-target wrapper div + the single local <script src> line)",
+            "The slice-06 26-scenario suite (viewer_store / viewer_scrape / viewer_invariants) stays green when run alongside"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx_invariants.rs",
+          "scenario_name": "non_htmx_responses_are_byte_equivalent_to_slice_06",
+          "h_scenarios": [
+            "H-INV-NoReg"
+          ],
+          "estimated_time": "2-3 hours",
+          "depends_on": [
+            "06-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "Release-gate guardrail over the unchanged full-page renderers; no new pure-core logic — standard coverage."
+        },
+        {
+          "id": "06-03",
+          "name": "Every htmx fragment route leaves the store read-only",
+          "description": "H-INV-ReadOnly: over a store seeded with own + peer claims and a reachable scrape target, exercise EVERY htmx fragment route (incl. POST /scrape via post_form_htmx) and assert the claims + peer_claims row counts are unchanged (universe-bound assert_store_read_only, Mandate 8).",
+          "acceptance_criteria": [
+            "After exercising every htmx fragment route (claims paging, peer paging, scrape via post_form_htmx, claim detail, view-panel switch), the claims row count is unchanged",
+            "The peer_claims row count is unchanged",
+            "The read-only assertion is universe-bound via assert_store_read_only (port-exposed counts, all unchanged)"
+          ],
+          "criteria": [
+            "After exercising every htmx fragment route (claims paging, peer paging, scrape via post_form_htmx, claim detail, view-panel switch), the claims row count is unchanged",
+            "The peer_claims row count is unchanged",
+            "The read-only assertion is universe-bound via assert_store_read_only (port-exposed counts, all unchanged)"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx_invariants.rs",
+          "scenario_name": "htmx_fragment_routes_leave_the_store_read_only",
+          "h_scenarios": [
+            "H-INV-ReadOnly"
+          ],
+          "estimated_time": "1-2 hours",
+          "depends_on": [
+            "06-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "Read-only universe guardrail; no new pure-core logic — standard coverage."
+        },
+        {
+          "id": "06-04",
+          "name": "No swap route adds a write or sign surface",
+          "description": "H-INV-NoWrite: over a populated store, request every htmx fragment route and assert no fragment renders a sign control (the human signing gate stays in the CLI; I-HX-3 / I-SCR-1).",
+          "acceptance_criteria": [
+            "No htmx fragment route (claims paging, peer paging, scrape, claim detail, view-panel switch) renders a sign control",
+            "No swap route introduces a write or sign surface",
+            "The signing gate remains exclusively in the CLI write side"
+          ],
+          "criteria": [
+            "No htmx fragment route (claims paging, peer paging, scrape, claim detail, view-panel switch) renders a sign control",
+            "No swap route introduces a write or sign surface",
+            "The signing gate remains exclusively in the CLI write side"
+          ],
+          "test_file": "tests/acceptance/viewer_htmx_invariants.rs",
+          "scenario_name": "no_swap_route_adds_a_write_or_sign_surface",
+          "h_scenarios": [
+            "H-INV-NoWrite"
+          ],
+          "estimated_time": "1-2 hours",
+          "depends_on": [
+            "06-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_htmx_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "No-write-surface guardrail over the fragment renderers; no new pure-core logic — standard coverage."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/viewer-domain/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/adapter-http-viewer/assets/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.snap"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-06-02T12:09:49Z"
+  }
+}
