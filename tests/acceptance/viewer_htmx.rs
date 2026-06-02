@@ -982,13 +982,66 @@ fn opening_a_claim_with_htmx_returns_only_the_detail_fragment() {
     // WHEN she opens `/claims/{cid}` WITH the header (get_htmx).
     // THEN the response is ONLY the `#claim-detail` fragment: it shows all fields +
     // both evidence URLs + verbatim 0.90, and is a fragment (no full-page chrome).
-    todo!(
-        "DELIVER H-4a: cid = seed_own_claim_with_evidence(&env, \"rust-lang/rust\", \
-         \"is-maintained-by\", \"The Rust Project\", 0.90, &[ev1, ev2]); \
-         frag = viewer.get_htmx(&format!(\"/claims/{{cid}}\")); assert frag.status==200, \
-         frag.is_fragment(), frag.body_contains(\"0.90\"), frag.body_contains(ev1), \
-         frag.body_contains(ev2)"
+    let env = TestEnv::initialized();
+    let ev1 = "https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT";
+    let ev2 = "https://github.com/rust-lang/rust/blob/HEAD/Cargo.toml";
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &[ev1, ev2],
     );
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx(&format!("/claims/{cid}"));
+
+    assert_eq!(
+        frag.status, 200,
+        "the htmx claim-detail request returns 200; got {}",
+        frag.status
+    );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the swap-target fragment (no full-page \
+         chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.is_full_page(),
+        "the HX-Request response must NOT carry full-page chrome (no <!DOCTYPE html>/\
+         <html>); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"claim-detail\""),
+        "the fragment must be wrapped in the swap-target element id=\"claim-detail\"; \
+         got:\n{}",
+        frag.body
+    );
+    // ALL claim fields render in the fragment (subject/predicate/object/CID).
+    for needle in ["rust-lang/rust", "is-maintained-by", "The Rust Project", &cid] {
+        assert!(
+            frag.body_contains(needle),
+            "the detail fragment must render the claim field {needle:?}; got:\n{}",
+            frag.body
+        );
+    }
+    assert!(
+        frag.body_contains("0.90"),
+        "the fragment renders confidence verbatim (0.90); got:\n{}",
+        frag.body
+    );
+    // EVERY evidence URL renders (ordinal order pinned by the viewer-domain unit
+    // test); here the acceptance pins both URLs are present in the fragment.
+    for ev in [ev1, ev2] {
+        assert!(
+            frag.body_contains(ev),
+            "the detail fragment must render every evidence URL ({ev:?}); got:\n{}",
+            frag.body
+        );
+    }
 }
 
 /// H-4b (US-HX-004 edge; AC no-JS full-page fallback): opening `/claims/{cid}`

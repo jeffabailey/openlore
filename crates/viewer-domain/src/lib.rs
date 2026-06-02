@@ -465,6 +465,38 @@ impl ClaimDetailView {
     }
 }
 
+/// The HTML `id` of the claim-detail swap-target element — the `<div>` the htmx
+/// detail fragment IS, and the region the full detail page wraps chrome around
+/// (slice-07 H-4a; ADR-032/033). Held in ONE place so the fragment fn and any
+/// future `hx-target`/`hx-swap` reference the SAME id (a mutation to the id has
+/// exactly one site to attack — pinned by the unit test). htmx swaps the element
+/// whose id matches; the no-JS full page embeds the SAME `<div id="claim-detail">`
+/// so the two shapes are structurally identical inside the swap target (I-HX-5
+/// parity by construction).
+pub const CLAIM_DETAIL_ID: &str = "claim-detail";
+
+/// Render the claim-detail swap-target FRAGMENT (slice-07 H-4a; ADR-032/033): the
+/// `<div id="claim-detail">` wrapping EVERY claim field (subject, predicate,
+/// object, the VERBATIM confidence, author_did, composed_at, CID) PLUS the
+/// COMPLETE `evidence[]` array, one URL per row in ordinal order (FR-VIEW-3 /
+/// AC-002.1) — and, for a claim with no evidence, the explicit "no evidence
+/// attached" state (step 02-02) rather than a blank section. PURE: a total
+/// function from the detail view-model to a `Markup` — NO full-page chrome (no
+/// `<!DOCTYPE>`, no `<html>`/`<head>`), so an `HX-Request` response carries ONLY
+/// this region (I-HX-1). [`render_claim_detail`] EMBEDS this SAME fn inside its
+/// chrome, so the fragment and the full page's detail region are byte-identical by
+/// construction (I-HX-5 parity — the field/evidence-rendering logic is NOT
+/// duplicated). This is the load-bearing slice-07 structural contract: page =
+/// chrome + fragment.
+pub fn render_claim_detail_fragment(claim: &ClaimDetailView) -> Markup {
+    html! {
+        div id=(CLAIM_DETAIL_ID) {
+            (render_claim_fields(claim))
+            (render_evidence_section(&claim.evidence))
+        }
+    }
+}
+
 /// Render one claim's detail page as a complete HTML document (maud). PURE: a
 /// total function from the detail view-model to an HTML string — no I/O. Shows
 /// EVERY claim field (subject, predicate, object, the VERBATIM confidence,
@@ -472,6 +504,13 @@ impl ClaimDetailView {
 /// per row in ordinal order (FR-VIEW-3 / AC-002.1). A claim with no evidence
 /// shows an explicit "no evidence attached" state (FR-VIEW-3, step 02-02) rather
 /// than a blank section.
+///
+/// COMPOSITION (slice-07 H-4a; ADR-032): the detail region is chrome wrapped
+/// AROUND [`render_claim_detail_fragment`] — the EXACT same fragment fn the htmx
+/// shape returns alone. The `<head>` emits exactly ONE local
+/// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2).
+/// Because the detail region is the SAME fn in both shapes, fragment/full-page
+/// parity is structural, not asserted by duplicating render logic (I-HX-5).
 pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
     let markup = html! {
         (DOCTYPE)
@@ -479,12 +518,12 @@ pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
             head {
                 meta charset="utf-8";
                 title { "OpenLore — Claim Detail" }
+                script src="/static/htmx.min.js" {}
             }
             body {
                 h1 { "Claim Detail" }
                 p { (READ_ONLY_NOTICE) }
-                (render_claim_fields(claim))
-                (render_evidence_section(&claim.evidence))
+                (render_claim_detail_fragment(claim))
                 p {
                     a href="/claims" { "Back to My Claims" }
                 }
@@ -1056,6 +1095,53 @@ mod tests {
         assert!(
             html.contains("no evidence attached"),
             "a claim with empty evidence must show \"no evidence attached\"; got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-07 H-4a; ADR-032/033): the claim-detail swap-target FRAGMENT
+    /// wraps the detail region in `<div id="claim-detail">`, renders EVERY claim
+    /// field + the VERBATIM confidence + every evidence URL in ordinal order, and
+    /// carries NO full-page chrome (no `<!DOCTYPE>`, no `<html>`/`<head>`) so an
+    /// `HX-Request` response is the region ALONE (I-HX-1). Pins the fragment's
+    /// load-bearing structure at the unit level (the prime mutation target).
+    #[test]
+    fn render_claim_detail_fragment_wraps_claim_detail_with_all_fields_and_evidence() {
+        let ev0 = "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE";
+        let ev1 = "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml";
+        let view = detail(&[ev0, ev1]);
+        let frag = render_claim_detail_fragment(&view).into_string();
+
+        // Wrapped in the swap-target id, the single source of truth (CLAIM_DETAIL_ID).
+        assert!(
+            frag.contains(&format!("id=\"{CLAIM_DETAIL_ID}\"")),
+            "the fragment must wrap the region in id=\"{CLAIM_DETAIL_ID}\"; got:\n{frag}"
+        );
+        // NO full-page chrome — the fragment is the region ALONE (I-HX-1).
+        assert!(
+            !frag.contains("<!DOCTYPE") && !frag.contains("<html"),
+            "the fragment must carry NO full-page chrome (no <!DOCTYPE>/<html>); got:\n{frag}"
+        );
+        // EVERY claim field + the VERBATIM confidence (0.95).
+        for needle in [
+            "tokio-rs/tokio",
+            "has-license",
+            "MIT",
+            "0.95",
+            "did:plc:maria",
+            "2026-05-30T12:00:00+00:00",
+            "bafytokio",
+        ] {
+            assert!(
+                frag.contains(needle),
+                "the fragment must render the field {needle:?}; got:\n{frag}"
+            );
+        }
+        // EVERY evidence URL, in ORDINAL order (ev0 before ev1).
+        let pos0 = frag.find(ev0).expect("fragment must contain ev0");
+        let pos1 = frag.find(ev1).expect("fragment must contain ev1");
+        assert!(
+            pos0 < pos1,
+            "the fragment must render evidence in ordinal order (ev0 before ev1); got:\n{frag}"
         );
     }
 

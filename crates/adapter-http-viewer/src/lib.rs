@@ -34,10 +34,11 @@ use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claims_page, render_claims_table_fragment, render_error,
-    render_landing, render_peer_claims_page, render_peer_claims_table_fragment, render_scrape_page,
-    render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
-    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
+    render_claim_detail, render_claim_detail_fragment, render_claims_page,
+    render_claims_table_fragment, render_error, render_landing, render_peer_claims_page,
+    render_peer_claims_table_fragment, render_scrape_page, render_scrape_results_fragment,
+    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
+    SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -295,7 +296,7 @@ async fn route(
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
             // else is 404.
-            Some(cid) if !cid.is_empty() => Ok(claim_detail_page(store.as_ref(), cid)),
+            Some(cid) if !cid.is_empty() => Ok(claim_detail_page(store.as_ref(), cid, shape)),
             _ => Ok(not_found()),
         },
     }
@@ -410,14 +411,30 @@ fn peer_claims_page(
 /// the GUIDED not-found page (the pure `render_error` — plain-language message +
 /// back link to /claims, FR-VIEW-3 / NFR-VIEW-6) at `404`. A read error degrades
 /// to the SAME guided page rather than leaking a raw cause (no stack trace).
-fn claim_detail_page(store: &dyn StoreReadPort, cid: &str) -> Response<Full<Bytes>> {
+///
+/// SHAPE fork (slice-07 H-4a; ADR-033): the fork is on the `Some(detail)` (found)
+/// path ONLY — the htmx swap returns ONLY the `#claim-detail` fragment
+/// ([`render_claim_detail_fragment`]); the no-JS / bookmark / direct-URL request
+/// returns the complete slice-06 detail full page ([`render_claim_detail`]). Both
+/// project the SAME [`ClaimDetailView`] — the full page EMBEDS the fragment fn, so
+/// the two shapes agree by construction (I-HX-5). The `None` / read-error
+/// not-found path is shape-independent here (still the guided `404` full page);
+/// its fragment shape is step 04-02.
+fn claim_detail_page(
+    store: &dyn StoreReadPort,
+    cid: &str,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
     match store.get_claim(cid) {
         Ok(Some(detail)) => {
             let view = ClaimDetailView::from_detail(&detail);
-            html_ok(render_claim_detail(&view))
+            match shape {
+                Shape::Fragment => html_ok(render_claim_detail_fragment(&view).into_string()),
+                Shape::FullPage => html_ok(render_claim_detail(&view)),
+            }
         }
         // Unknown CID / read failure: the GUIDED 404 (render_error) — message +
-        // back link, never a raw cause (NFR-VIEW-6).
+        // back link, never a raw cause (NFR-VIEW-6). Not-found shape fork is 04-02.
         Ok(None) | Err(_) => html_not_found(render_error()),
     }
 }
