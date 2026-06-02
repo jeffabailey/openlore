@@ -384,19 +384,54 @@ fn htmx_fragment_routes_leave_the_store_read_only() {
     // the viewer's exclusive DuckDB lock is released before the `after` snapshot.
     // THEN the persisted-store row counts are UNCHANGED — every universe slot
     // `unchanged` (assert_store_read_only; any change is UNSHIPPABLE — I-HX-3).
-    todo!(
-        "DELIVER H-INV-ReadOnly: own_cid = seed_own_claim_with_evidence(...); \
-         seed_cached_peer_claims(env, \"did:plc:peer-axum\", 60); \
-         github = for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); \
-         before = capture_store_row_count_universe(&env); \
-         in a scope: viewer = ViewerServer::start_with_github(&env, github); \
-         let _ = viewer.get_htmx(\"/claims?page=2\"); \
-         let _ = viewer.get_htmx(\"/peer-claims?page=2\"); \
-         let _ = viewer.get_htmx(&format!(\"/claims/{{own_cid}}\")); \
-         let _ = viewer.post_form_htmx(\"/scrape\", &[(\"target\",\"rust-lang/cargo\")]); drop viewer; \
-         after = capture_store_row_count_universe(&env); \
-         assert_store_read_only(&before, &after)"
+    let env = TestEnv::initialized();
+    // Seed own + peer claims through the production write paths so the paging and
+    // detail fragments render REAL content (the page-2 fragments need enough peer
+    // rows to span a second page, BR-HX-2). The own claim's CID addresses the
+    // `/claims/{cid}` detail fragment.
+    let own_cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/cargo",
+        "is-maintained-by",
+        "The Cargo Team",
+        0.90,
+        &["https://github.com/rust-lang/cargo/blob/HEAD/LICENSE-MIT"],
     );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 60);
+    // The REUSED slice-02 FakeGithub double serves the live POST /scrape htmx
+    // harvest — the ONLY mocked boundary — so the fragment harvest actually runs
+    // (and must STILL persist nothing, BR-HX-4).
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+
+    // Capture the read-only universe BEFORE exercising any fragment route
+    // (port-exposed names: `claims.row_count`, `peer_claims.row_count`).
+    let before = capture_store_row_count_universe(&env);
+
+    // WHEN every htmx FRAGMENT route is exercised (header-setting drivers). The
+    // viewer is scoped so it is STOPPED (its exclusive DuckDB lock released) before
+    // the `after` snapshot — the read-only proof is about what the viewer LEFT
+    // BEHIND, mirroring the slice-06 V-INV-1 `viewer_is_read_only` gold test.
+    {
+        let viewer = ViewerServer::start_with_github(&env, github);
+        // The tab/view-panel fragment (`/` under HX-Request) + the paging
+        // fragments + the detail fragment — every GET swap shape.
+        let _ = viewer.get_htmx("/");
+        let _ = viewer.get_htmx("/claims?page=2");
+        let _ = viewer.get_htmx("/peer-claims");
+        let _ = viewer.get_htmx("/peer-claims?page=2");
+        let _ = viewer.get_htmx(&format!("/claims/{own_cid}"));
+        // The POST /scrape htmx live harvest (the `#scrape-results` FRAGMENT) — the
+        // ONLY swap that touches the network; it must persist NOTHING (BR-HX-4).
+        let _ = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);
+    } // viewer dropped here — the `openlore ui` process is killed, releasing the lock
+
+    // THEN the persisted-store row counts are UNCHANGED — every universe slot is
+    // `unchanged` (the htmx-shape read-only proof; any change is UNSHIPPABLE).
+    let after = capture_store_row_count_universe(&env);
+    assert_store_read_only(&before, &after);
 }
 
 /// H-INV-NoWrite / GOLD `no_swap_route_adds_a_write_or_sign_surface` (I-HX-3 /
