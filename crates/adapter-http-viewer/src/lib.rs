@@ -35,8 +35,9 @@ use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claims_page, render_claims_table_fragment, render_error,
-    render_landing, render_peer_claims_page, render_scrape_page, CandidateRowView, ClaimDetailView,
-    ClaimRowView, PageView, PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
+    render_landing, render_peer_claims_page, render_peer_claims_table_fragment, render_scrape_page,
+    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
+    SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -284,8 +285,8 @@ async fn route(
         "/claims" => Ok(claims_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
-        // (BR-VIEW-5).
-        "/peer-claims" => Ok(peer_claims_page(store.as_ref())),
+        // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
+        "/peer-claims" => Ok(peer_claims_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /scrape` — the empty target form (AC-005.1 GET). Pure render; no
         // network, no store read. 200 even when no `GithubPort` is wired (the
         // form is harmless; only a POST runs the live harvest).
@@ -360,27 +361,46 @@ fn claims_page(
     }
 }
 
-/// Render the Peer Claims page (`GET /peer-claims`, US-VIEW-003): read the
-/// federated `peer_claims` over the read-only store (first page), project the
-/// boundary rows into the pure view-model, and render via `viewer-domain`. A
-/// SEPARATE surface from the My Claims page (BR-VIEW-5). A store read failure
-/// degrades to an empty guided page rather than a crash (the viewer never shows
-/// a raw stack trace; NFR-VIEW-6).
-fn peer_claims_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
+/// Render the Peer Claims page for `?page=N` (`GET /peer-claims`, US-VIEW-003 /
+/// slice-07 US-HX-002): parse + clamp the page (default 1), read THAT page from the
+/// read-only store (`OFFSET (page-1)*size LIMIT size`), project the boundary rows
+/// into the pure view-model, and render the position indicator + Next/Prev controls
+/// via `viewer-domain` (FR-VIEW-6). A SEPARATE surface from the My Claims page
+/// (BR-VIEW-5). A store read failure degrades to an empty guided page rather than a
+/// crash (the viewer never shows a raw stack trace; NFR-VIEW-6).
+///
+/// slice-07 (H-2a): threads `?page=N` through the SAME `parse_page` + offset math +
+/// `PageView::paged` + `list_peer_claims` machinery the My Claims handler uses
+/// (slice-06 served only page 1), then forks at the render call by `Shape` — the
+/// `HX-Request` swap returns ONLY the `#claims-table` peer fragment; the no-JS /
+/// bookmark / direct-URL request returns the complete slice-06 full page. Both
+/// project the SAME `PageView` (the full page EMBEDS the fragment fn, I-HX-5).
+fn peer_claims_page(
+    store: &dyn StoreReadPort,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
+    let page = parse_page(query);
     let request = PageRequest {
-        offset: 0,
+        offset: (page - 1) * DEFAULT_PAGE_SIZE,
         limit: DEFAULT_PAGE_SIZE,
     };
-    let rows = match store.list_peer_claims(request) {
-        Ok(page) => page
-            .rows
-            .iter()
-            .map(PeerClaimRowView::from_row)
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
+    let page_view = match store.list_peer_claims(request) {
+        Ok(read_page) => {
+            let rows = read_page
+                .rows
+                .iter()
+                .map(PeerClaimRowView::from_row)
+                .collect::<Vec<_>>();
+            PageView::paged(rows, page, DEFAULT_PAGE_SIZE, read_page.total)
+        }
+        // Degrade to an empty guided page (total 0) — no indicator, no controls.
+        Err(_) => PageView::paged(Vec::new(), page, DEFAULT_PAGE_SIZE, 0),
     };
-    let page_view = PageView::new(rows);
-    html_ok(render_peer_claims_page(&page_view))
+    match shape {
+        Shape::Fragment => html_ok(render_peer_claims_table_fragment(&page_view).into_string()),
+        Shape::FullPage => html_ok(render_peer_claims_page(&page_view)),
+    }
 }
 
 /// Render one claim's detail page (`GET /claims/{cid}`, US-VIEW-002): read the

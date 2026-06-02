@@ -352,11 +352,46 @@ fn paging_peer_claims_with_htmx_returns_only_the_peer_table_fragment() {
     // THEN the response is ONLY the peer-table fragment: it carries the peer's
     // origin (the peer DID) on the rows, shows the page-2 "51–100 of 120"
     // indicator, and is a fragment (NOT a full page).
-    todo!(
-        "DELIVER H-2a: seed_cached_peer_claims(env, \"did:plc:peer-axum\", 120); \
-         frag = viewer.get_htmx(\"/peer-claims?page=2\"); assert frag.status==200, \
-         frag.is_fragment(), frag.body_contains(\"did:plc:peer-axum\"), \
-         frag.body_contains(\"51–100 of 120\")"
+    let env = TestEnv::initialized();
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/peer-claims?page=2");
+
+    assert_eq!(
+        frag.status, 200,
+        "the htmx peer-claims request returns 200; got {}",
+        frag.status
+    );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the swap-target fragment (no full-page \
+         chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.is_full_page(),
+        "the HX-Request response must NOT carry full-page chrome (no <!DOCTYPE html>/\
+         <html>); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"claims-table\""),
+        "the peer fragment must be wrapped in the swap-target element \
+         id=\"claims-table\" (DESIGN §6: shared id, inside #view-panel); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("51\u{2013}100 of 120"),
+        "the peer fragment must show the page-2 indicator \"51\u{2013}100 of 120\" \
+         (EN DASH) — the peer handler must honour ?page=2, not serve page 1; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("did:plc:peer-axum"),
+        "each peer row must keep its origin (the peer DID) so My-vs-federated is \
+         never ambiguous; got:\n{}",
+        frag.body
     );
 }
 

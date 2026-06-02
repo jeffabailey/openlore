@@ -590,17 +590,13 @@ impl PeerClaimRowView {
 /// renders the guided "No federated claims yet" empty state (FR-VIEW-7) instead
 /// of a blank table.
 pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
-    let body = if page.rows.is_empty() {
-        render_peer_empty_state()
-    } else {
-        render_peer_claims_table(&page.rows)
-    };
     let markup = html! {
         (DOCTYPE)
         html {
             head {
                 meta charset="utf-8";
                 title { "OpenLore — Peer Claims" }
+                script src="/static/htmx.min.js" {}
             }
             body {
                 h1 { "Peer Claims" }
@@ -608,11 +604,41 @@ pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
                     "This is a read-only view of claims federated from your peers \
                      — these are NOT your own claims."
                 }
-                (body)
+                (render_peer_claims_table_fragment(page))
             }
         }
     };
     markup.into_string()
+}
+
+/// Render the Peer Claims swap-target FRAGMENT (slice-07; ADR-032/033 / H-2a): the
+/// `<div id="claims-table">` wrapping the peer-claims table (or the guided empty
+/// state) + the position indicator + Prev/Next controls. PURE: a total function
+/// from the view-model to an HTML string — NO full-page chrome (no `<!DOCTYPE>`,
+/// no `<html>`/`<head>`), so an `HX-Request` response carries ONLY this region
+/// (I-HX-1). [`render_peer_claims_page`] EMBEDS this SAME fn inside its chrome, so
+/// the fragment and the full page's table region are byte-identical by
+/// construction (I-HX-5 parity — the peer-table-rendering logic is NOT duplicated).
+///
+/// SWAP-TARGET id (DESIGN architecture-design.md §6): the peer table REUSES the
+/// shared [`CLAIMS_TABLE_ID`] (`#claims-table`, inside `#view-panel`) so the tab
+/// swap (US-HX-006) and the peer paging swap (US-HX-002) land on the SAME region;
+/// the id lives in ONE place shared by the own-claims fragment + this peer
+/// fragment + both pages. The Prev/Next controls reuse the SAME pure
+/// [`render_pagination`] arithmetic the My Claims fragment uses (generic over the
+/// row type) — peer paging threads `?page=N` through the identical machinery.
+pub fn render_peer_claims_table_fragment(page: &PageView<PeerClaimRowView>) -> Markup {
+    let body = if page.rows.is_empty() {
+        render_peer_empty_state()
+    } else {
+        render_peer_claims_table(&page.rows)
+    };
+    html! {
+        div id=(CLAIMS_TABLE_ID) {
+            (body)
+            (render_pagination(page))
+        }
+    }
 }
 
 /// Render the peer-claims table (one `<tr>` per federated claim). Small, named,
@@ -1594,6 +1620,59 @@ mod tests {
             html.contains("NOT your own"),
             "the peer view must state these are not the operator's own claims \
              (BR-VIEW-5); got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-07 H-2a; ADR-032/033): the Peer Claims swap-target FRAGMENT
+    /// wraps the peer table in the SHARED [`CLAIMS_TABLE_ID`] swap-target element
+    /// (DESIGN §6 — the peer table reuses `#claims-table`, inside `#view-panel`),
+    /// carries each row's peer ORIGIN (the author_did, VERBATIM) + the position
+    /// indicator, and emits NO full-page chrome (no `<!DOCTYPE>`, no `<html>`) so an
+    /// `HX-Request` response carries ONLY the swap region (I-HX-1). Pins the
+    /// load-bearing bits: the swap-target id, the page-2 indicator, the verbatim
+    /// origin, and the no-chrome fragment shape.
+    #[test]
+    fn render_peer_claims_table_fragment_wraps_swap_target_with_origin_and_indicator() {
+        // Page 2 of a 120-row peer set at size 50 (the H-2a fixture): the indicator
+        // reads "51–100 of 120"; the rows carry the peer DID verbatim.
+        let page = PageView::paged(
+            vec![peer_row(
+                "bafypeerpage2",
+                "github:peer/axum",
+                "endorses",
+                "an-object",
+                0.80,
+                known_origin("did:plc:peer-axum"),
+            )],
+            2,
+            50,
+            120,
+        );
+        let html = render_peer_claims_table_fragment(&page).into_string();
+
+        assert!(
+            html.contains("id=\"claims-table\""),
+            "the peer fragment must wrap the table in the shared swap-target \
+             id=\"claims-table\" (DESIGN §6); got:\n{html}"
+        );
+        assert_eq!(
+            CLAIMS_TABLE_ID, "claims-table",
+            "the peer fragment reuses the shared swap-target id const"
+        );
+        assert!(
+            html.contains("51\u{2013}100 of 120"),
+            "the peer fragment must render the page-2 indicator \"51\u{2013}100 of \
+             120\" (EN DASH); got:\n{html}"
+        );
+        assert!(
+            html.contains("did:plc:peer-axum"),
+            "the peer fragment must keep each row's origin (author_did verbatim) so \
+             My-vs-federated is never ambiguous; got:\n{html}"
+        );
+        // The fragment is ONLY the swap region — NO full-page chrome (I-HX-1).
+        assert!(
+            !html.contains("<!DOCTYPE") && !html.contains("<html"),
+            "the peer fragment must carry NO full-page chrome; got:\n{html}"
         );
     }
 
