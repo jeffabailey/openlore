@@ -10,7 +10,7 @@ slice-06 `htmx-scraper-viewer` — SHIPPED ✅ (full nWave pipeline DISCUSS→DE
 - Notable: found+fixed a real pagination clamp gap (?page beyond last); closed an xtask pds-exclusion unit-coverage gap; NetworkDown render is a unit ADT variant (cannot leak transport internals).
 
 ## Open follow-ups (non-blocking)
-- nWave tooling gap: roadmap scaffold/architect-fill uses `acceptance_criteria` but `verify_deliver_integrity` requires a per-step `criteria` field — had to mirror it post-hoc to unblock finalize. Future slices will hit this; consider fixing the scaffold or the architect template.
+- ~~nWave tooling gap: `verify_deliver_integrity` required a per-step `criteria` field while architects emit `acceptance_criteria`~~ FIXED: `RoadmapValidator` now accepts `acceptance_criteria` as an alias for `criteria` (helper `_field_satisfied`); patched all 4 `~/.claude` copies + regression test; end-to-end integrity passes on an alias-only roadmap. Lives in global tooling, not this repo. No upstream PR (trunk-based; see AGENTS.md).
 - No git remote configured → nothing pushed (by design).
 
 ## Proven mechanics (carry forward)
