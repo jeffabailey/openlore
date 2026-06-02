@@ -827,12 +827,64 @@ fn submitting_scrape_without_htmx_returns_the_full_page() {
     // THEN the response is the COMPLETE slice-06 `/scrape` full page
     // (`is_full_page()`) with the candidates (the same subject + derived-from)
     // rendered below the form.
-    todo!(
-        "DELIVER H-3d: github = for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); \
-         full = viewer.post_form(\"/scrape\", &[(\"target\", \"rust-lang/cargo\")]); \
-         assert full.status==200, full.is_full_page(), \
-         full.body_contains(\"rust-lang/cargo\"), full.body_contains(\"derived-from\")"
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    let full = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
+
+    assert_eq!(
+        full.status, 200,
+        "the no-header scrape POST returns 200; got {}",
+        full.status
     );
+    assert!(
+        full.is_full_page(),
+        "WITHOUT HX-Request the response must be the COMPLETE slice-06 /scrape full \
+         page (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("id=\"scrape-results\""),
+        "the full page must wrap the same swap-target region id=\"scrape-results\" \
+         below the form; got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("github:rust-lang/cargo"),
+        "the full page must render the candidate subject (github:rust-lang/cargo) \
+         below the form; got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("derived-from"),
+        "each candidate on the full page renders its display-only derived-from \
+         provenance; got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("0.25"),
+        "the conservative candidate confidence renders verbatim (0.25) on the full \
+         page; got:\n{}",
+        full.body
+    );
+    // NO sign CONTROL (BR-VIEW-1 / I-SCR-1): the full-page scrape shape offers no
+    // sign affordance either — signing stays in the CLI.
+    for marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+        assert!(
+            !full.body_contains(marker),
+            "the full-page scrape results must render NO sign control (signing stays \
+             in the CLI; BR-VIEW-1 / I-SCR-1); found {marker:?} in:\n{}",
+            full.body
+        );
+    }
+    // (Persistence-zero — nothing saved, row counts unchanged for BOTH shapes — is
+    // the read-only gold guardrail in viewer_htmx_invariants.rs, which snapshots the
+    // store row counts around every route incl. the no-header POST /scrape. Here we
+    // pin the SHAPE + the candidates below the form.)
 }
 
 /// H-3e (US-HX-003; AC parity, I-HX-5): the scrape-results fragment equals the
@@ -853,14 +905,55 @@ fn scrape_results_fragment_equals_the_full_page_results_region() {
     // THEN a known candidate's subject + "derived-from" + verbatim confidence appear
     // in BOTH the fragment and the full page (parity); the fragment is a fragment
     // and the full page is a full page.
-    todo!(
-        "DELIVER H-3e: github = for_public_repo(\"rust-lang/cargo\", fixture_cargo_five_signals()); \
-         frag = viewer.post_form_htmx(\"/scrape\", &[(\"target\",\"rust-lang/cargo\")]); \
-         full = viewer.post_form(\"/scrape\", &[(\"target\",\"rust-lang/cargo\")]); \
-         for needle in [\"rust-lang/cargo\", \"derived-from\"]: assert \
-         frag.body_contains(needle) && full.body_contains(needle); \
-         assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);
+    let full = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
+
+    assert_eq!(frag.status, 200, "the fragment scrape POST returns 200");
+    assert_eq!(full.status, 200, "the full-page scrape POST returns 200");
+
+    // The fragment is ONLY the swap-target region; the full page is chrome + form
+    // wrapped AROUND the SAME fragment fn (ADR-032) — so the two shapes agree
+    // empirically inside the #scrape-results region.
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request scrape response must be ONLY the fragment (no chrome); got:\n{}",
+        frag.body
     );
+    assert!(
+        full.is_full_page(),
+        "the no-header scrape response must be the complete full page; got:\n{}",
+        full.body
+    );
+
+    // PARITY (I-HX-5): the load-bearing rendered content of the results region —
+    // the swap-target id, the candidate subject, the display-only derived-from
+    // provenance, and the verbatim 0.25 confidence — is present in BOTH shapes,
+    // because the full page EMBEDS the SAME fragment fn beneath the form.
+    for needle in [
+        "id=\"scrape-results\"",
+        "github:rust-lang/cargo",
+        "derived-from",
+        "0.25",
+    ] {
+        assert!(
+            frag.body_contains(needle),
+            "the fragment must contain {needle:?} (scrape parity); got:\n{}",
+            frag.body
+        );
+        assert!(
+            full.body_contains(needle),
+            "the full page must contain the SAME {needle:?} in its results region \
+             (scrape parity); got:\n{}",
+            full.body
+        );
+    }
 }
 
 // =============================================================================
