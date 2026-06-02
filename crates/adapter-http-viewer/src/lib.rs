@@ -38,7 +38,7 @@ use viewer_domain::{
     render_claims_page, render_claims_view_panel_fragment, render_error, render_landing,
     render_peer_claims_page, render_peer_claims_view_panel_fragment, render_scrape_page,
     render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
-    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
+    PeerClaimRowView, ScrapeState, HTMX_ASSET_URL, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -88,9 +88,11 @@ const HTMX_ASSET: &str = include_str!("../assets/htmx.min.js");
 /// The pinned SHA-256 of the vendored htmx asset (htmx 2.0.4). The integrity unit
 /// test asserts `sha256(HTMX_ASSET) == HTMX_ASSET_SHA256` so the embedded bytes
 /// cannot silently change (a swapped/tampered/upgraded asset fails CI until the
-/// pin is deliberately updated alongside it).
-const HTMX_ASSET_SHA256: &str =
-    "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447";
+/// pin is deliberately updated alongside it). `#[cfg(test)]`: the pin is consumed
+/// ONLY by the integrity unit test — gating it here resolves the dead-code warning
+/// honestly (it genuinely has no non-test use) rather than masking it.
+#[cfg(test)]
+const HTMX_ASSET_SHA256: &str = "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447";
 
 /// The response SHAPE the viewer renders for a request (slice-07; ADR-033). The
 /// effect shell reads the `HX-Request` header ONCE in [`route`] and yields this
@@ -281,8 +283,10 @@ async fn route(
     match path.as_str() {
         "/" => Ok(landing_page()),
         // `GET /static/htmx.min.js` — serve the vendored htmx asset locally (no
-        // CDN; I-HX-2 offline-first). GET-only, loopback, no write surface.
-        "/static/htmx.min.js" => Ok(htmx_asset()),
+        // CDN; I-HX-2 offline-first). GET-only, loopback, no write surface. The
+        // route path is the SAME `HTMX_ASSET_URL` const the pure chrome references
+        // in its `<script src>` (one source of truth — served route == chrome ref).
+        HTMX_ASSET_URL => Ok(htmx_asset()),
         "/claims" => Ok(claims_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
@@ -434,11 +438,7 @@ fn peer_claims_page(
 /// no-JS request the full `404` page ([`render_error`]) — the `404` status + the
 /// guided message + back link carry through BOTH shapes (the fork is AFTER the
 /// not-found decision).
-fn claim_detail_page(
-    store: &dyn StoreReadPort,
-    cid: &str,
-    shape: Shape,
-) -> Response<Full<Bytes>> {
+fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Response<Full<Bytes>> {
     match store.get_claim(cid) {
         Ok(Some(detail)) => {
             let view = ClaimDetailView::from_detail(&detail);
@@ -715,7 +715,10 @@ mod tests {
             "the vendored htmx asset must be non-empty"
         );
         let digest = Sha256::digest(HTMX_ASSET.as_bytes());
-        let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let hex = digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
             hex, HTMX_ASSET_SHA256,
             "the embedded htmx asset SHA-256 must equal the pinned value — the \

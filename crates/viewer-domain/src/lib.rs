@@ -201,6 +201,41 @@ pub const MY_CLAIMS_URL: &str = "/claims";
 /// Held in ONE place so the tab anchor's three URL references stay identical.
 pub const PEER_CLAIMS_URL: &str = "/peer-claims";
 
+/// The LOCAL route the viewer serves the vendored htmx library from
+/// (`/static/htmx.min.js`) — served by the viewer ITSELF, NEVER a CDN
+/// (offline-first; I-HX-2 / ADR-031). Held in ONE place so the path the chrome
+/// references and the route the effect shell serves cannot drift apart.
+pub const HTMX_ASSET_URL: &str = "/static/htmx.min.js";
+
+/// Emit the SINGLE local htmx `<script src>` chrome line every enhanced page
+/// carries (`<script src="/static/htmx.min.js">`, offline-first — never a CDN;
+/// I-HX-2 / ADR-031). PURE total function. Extracted so the local-asset contract
+/// lives in ONE place: all five page renderers (landing / claims / detail / peer /
+/// scrape) embed THIS fn rather than each spelling out the `<script src>`, so a
+/// mutation to the asset reference has exactly one site to attack (pinned by the
+/// per-page chrome unit tests).
+fn htmx_script() -> Markup {
+    html! {
+        script src=(HTMX_ASSET_URL) {}
+    }
+}
+
+/// Emit the common full-page `<head>` chrome shared by the enhanced page renderers
+/// (landing / claims / detail / peer / scrape): the UTF-8 charset meta, the page
+/// `title`, and the single local [`htmx_script`] line. PURE total function over the
+/// per-page `title`. Extracted so the head shape + the offline-first htmx contract
+/// live in ONE place (page = `page_head(title)` + body), rather than being repeated
+/// verbatim across five renderers.
+fn page_head(title: &str) -> Markup {
+    html! {
+        head {
+            meta charset="utf-8";
+            title { (title) }
+            (htmx_script())
+        }
+    }
+}
+
 /// Render the My Claims ↔ Peer Claims TAB navigation (slice-07 H-6a; ADR-034).
 /// PURE total function — emits ordinary markup, header-unaware. Each tab is a real
 /// `<a href>` (the no-JS path: a plain link → full-page navigation that changes
@@ -307,11 +342,7 @@ pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — My Claims" }
-                script src="/static/htmx.min.js" {}
-            }
+            (page_head("OpenLore — My Claims"))
             body {
                 h1 { "My Claims" }
                 p { "This is a read-only view of the claims you have signed." }
@@ -424,8 +455,7 @@ pub fn render_confidence(confidence: f64) -> String {
 /// banner AND the landing page (AC-001.2 / NFR-VIEW-1). Held in ONE place so the
 /// "read-only" contract text lives at a single source of truth (and so a string
 /// mutation has exactly one site to attack — pinned by the unit tests below).
-pub const READ_ONLY_NOTICE: &str =
-    "This viewer is read-only — nothing here can change your store.";
+pub const READ_ONLY_NOTICE: &str = "This viewer is read-only — nothing here can change your store.";
 
 /// Render the read-only launch banner the `openlore ui` verb prints to stdout at
 /// startup (AC-001.2). PURE: a total function from the bound loopback address to
@@ -462,11 +492,7 @@ pub fn render_landing() -> String {
     let markup = html! {
         (DOCTYPE)
         html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — Viewer" }
-                script src="/static/htmx.min.js" {}
-            }
+            (page_head("OpenLore — Viewer"))
             body {
                 h1 { "OpenLore Viewer" }
                 p { (READ_ONLY_NOTICE) }
@@ -628,11 +654,7 @@ pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — Claim Detail" }
-                script src="/static/htmx.min.js" {}
-            }
+            (page_head("OpenLore — Claim Detail"))
             body {
                 h1 { "Claim Detail" }
                 p { (READ_ONLY_NOTICE) }
@@ -745,11 +767,7 @@ pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — Peer Claims" }
-                script src="/static/htmx.min.js" {}
-            }
+            (page_head("OpenLore — Peer Claims"))
             body {
                 h1 { "Peer Claims" }
                 p {
@@ -1040,11 +1058,7 @@ pub fn render_scrape_page(state: &ScrapeState) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — Live Scrape" }
-                script src="/static/htmx.min.js" {}
-            }
+            (page_head("OpenLore — Live Scrape"))
             body {
                 h1 { "Live Scrape" }
                 p { (READ_ONLY_NOTICE) }
@@ -1152,7 +1166,13 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn row(cid: &str, subject: &str, predicate: &str, object: &str, confidence: f64) -> ClaimRowView {
+    fn row(
+        cid: &str,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f64,
+    ) -> ClaimRowView {
         ClaimRowView {
             cid: cid.to_string(),
             subject: subject.to_string(),
@@ -1435,7 +1455,15 @@ mod tests {
     /// to the bounds arithmetic — only the counts matter).
     fn paged(n: usize, page: u64, page_size: u64, total: u64) -> PageView<ClaimRowView> {
         let rows: Vec<ClaimRowView> = (0..n)
-            .map(|i| row(&format!("c{i}"), &format!("s{i}"), "p", &format!("o{i}"), 0.90))
+            .map(|i| {
+                row(
+                    &format!("c{i}"),
+                    &format!("s{i}"),
+                    "p",
+                    &format!("o{i}"),
+                    0.90,
+                )
+            })
             .collect();
         PageView::paged(rows, page, page_size, total)
     }
@@ -1465,7 +1493,10 @@ mod tests {
         let last = paged(12, 7, 50, 312);
         assert_eq!(render_position_indicator(&last), "301\u{2013}312 of 312");
         assert!(last.has_prev(), "the last page has a Previous");
-        assert!(!last.has_next(), "the last page has no Next (bounded at total)");
+        assert!(
+            !last.has_next(),
+            "the last page has no Next (bounded at total)"
+        );
     }
 
     /// Behavior (AC-004.2 / AC-004.4 — page-beyond-last CLAMP): requesting a page
@@ -1532,8 +1563,14 @@ mod tests {
     #[test]
     fn a_middle_page_links_prev_and_next_to_adjacent_pages() {
         let html = render_claims_page(&paged(50, 4, 50, 312));
-        assert!(html.contains("?page=3"), "page 4 must link Prev to ?page=3; got:\n{html}");
-        assert!(html.contains("?page=5"), "page 4 must link Next to ?page=5; got:\n{html}");
+        assert!(
+            html.contains("?page=3"),
+            "page 4 must link Prev to ?page=3; got:\n{html}"
+        );
+        assert!(
+            html.contains("?page=5"),
+            "page 4 must link Next to ?page=5; got:\n{html}"
+        );
     }
 
     proptest! {
@@ -2273,12 +2310,18 @@ mod tests {
     fn render_scrape_page_loads_local_htmx_and_no_cdn() {
         let html = render_scrape_page(&ScrapeState::Form);
         assert_eq!(
-            html.matches(r#"<script src="/static/htmx.min.js">"#).count(),
+            html.matches(r#"<script src="/static/htmx.min.js">"#)
+                .count(),
             1,
             "the /scrape full page must emit EXACTLY ONE local htmx script src \
              (offline-first; H-3a/I-HX-2); got:\n{html}"
         );
-        for cdn in ["unpkg.com", "jsdelivr.net", "cdnjs.cloudflare.com", "//cdn."] {
+        for cdn in [
+            "unpkg.com",
+            "jsdelivr.net",
+            "cdnjs.cloudflare.com",
+            "//cdn.",
+        ] {
             assert!(
                 !html.contains(cdn),
                 "the /scrape full page must reference NO external CDN ({cdn:?}); got:\n{html}"
@@ -2357,8 +2400,7 @@ mod tests {
             );
         }
         assert!(
-            !html.to_lowercase().contains("<!doctype")
-                && !html.to_lowercase().contains("<html"),
+            !html.to_lowercase().contains("<!doctype") && !html.to_lowercase().contains("<html"),
             "the fragment must carry NO full-page chrome (no <!DOCTYPE>/<html>) so an \
              HX-Request response is ONLY the swap region (I-HX-1); got:\n{html}"
         );
@@ -2424,8 +2466,7 @@ mod tests {
         ))];
         let html = render_scrape_page(&ScrapeState::Proposals(rows));
         assert!(
-            html.contains("nothing")
-                && (html.contains("signed") || html.contains("saved")),
+            html.contains("nothing") && (html.contains("signed") || html.contains("saved")),
             "the proposals page must state nothing is signed or saved; got:\n{html}"
         );
         assert!(
@@ -2440,15 +2481,13 @@ mod tests {
     /// sign affordance. Pins the no-sign-control guarantee across every state.
     #[test]
     fn render_scrape_page_renders_no_sign_control_in_any_state() {
-        let proposals = ScrapeState::Proposals(vec![CandidateRowView::from_candidate(
-            &candidate(
-                "github:rust-lang/cargo",
-                "embodiesPhilosophy",
-                "org.openlore.philosophy.dependency-pinning",
-                0.25,
-                "Cargo.lock committed",
-            ),
-        )]);
+        let proposals = ScrapeState::Proposals(vec![CandidateRowView::from_candidate(&candidate(
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            0.25,
+            "Cargo.lock committed",
+        ))]);
         for state in [
             ScrapeState::Form,
             proposals,
@@ -2532,7 +2571,11 @@ mod tests {
             "the zero-candidates state must still render the target form so the \
              operator can re-submit; got:\n{html}"
         );
-        for sign_control_marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+        for sign_control_marker in [
+            "name=\"sign\"",
+            "Sign claim",
+            "type=\"submit\" value=\"sign",
+        ] {
             assert!(
                 !html.contains(sign_control_marker),
                 "the zero-candidates state must render NO sign control \
@@ -2609,7 +2652,11 @@ mod tests {
             "the network-down state must still render the target form so the \
              operator can re-submit; got:\n{html}"
         );
-        for sign_control_marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+        for sign_control_marker in [
+            "name=\"sign\"",
+            "Sign claim",
+            "type=\"submit\" value=\"sign",
+        ] {
             assert!(
                 !html.contains(sign_control_marker),
                 "the network-down state must render NO sign control \
@@ -2685,20 +2732,41 @@ mod tests {
             "fragment must be wrapped in <div id=\"{CLAIMS_TABLE_ID}\">; got:\n{html}"
         );
         // The table region + indicator (EN DASH) + controls are present.
-        assert!(html.contains("<table"), "fragment carries the claims table; got:\n{html}");
+        assert!(
+            html.contains("<table"),
+            "fragment carries the claims table; got:\n{html}"
+        );
         assert!(
             html.contains("51\u{2013}100 of 312"),
             "fragment shows the page-2 indicator \"51\u{2013}100 of 312\"; got:\n{html}"
         );
-        assert!(html.contains("?page=1"), "fragment links Prev to ?page=1; got:\n{html}");
-        assert!(html.contains("?page=3"), "fragment links Next to ?page=3; got:\n{html}");
+        assert!(
+            html.contains("?page=1"),
+            "fragment links Prev to ?page=1; got:\n{html}"
+        );
+        assert!(
+            html.contains("?page=3"),
+            "fragment links Next to ?page=3; got:\n{html}"
+        );
         // The verbatim confidence rule holds in the fragment (FR-VIEW-8).
-        assert!(html.contains("0.90"), "fragment renders confidence verbatim; got:\n{html}");
+        assert!(
+            html.contains("0.90"),
+            "fragment renders confidence verbatim; got:\n{html}"
+        );
         // NO full-page chrome: the fragment is ONLY the swap-target region.
         let lower = html.to_lowercase();
-        assert!(!lower.contains("<!doctype"), "fragment must carry no DOCTYPE; got:\n{html}");
-        assert!(!lower.contains("<html"), "fragment must carry no <html> chrome; got:\n{html}");
-        assert!(!lower.contains("<head"), "fragment must carry no <head> chrome; got:\n{html}");
+        assert!(
+            !lower.contains("<!doctype"),
+            "fragment must carry no DOCTYPE; got:\n{html}"
+        );
+        assert!(
+            !lower.contains("<html"),
+            "fragment must carry no <html> chrome; got:\n{html}"
+        );
+        assert!(
+            !lower.contains("<head"),
+            "fragment must carry no <head> chrome; got:\n{html}"
+        );
     }
 
     /// Behavior (ADR-032 / I-HX-5 — parity by construction): the full page is
@@ -2721,8 +2789,14 @@ mod tests {
         );
         // The page carries full-page chrome the fragment does not.
         let lower = page.to_lowercase();
-        assert!(lower.contains("<!doctype html>"), "the full page carries a DOCTYPE; got:\n{page}");
-        assert!(lower.contains("<html"), "the full page carries <html> chrome; got:\n{page}");
+        assert!(
+            lower.contains("<!doctype html>"),
+            "the full page carries a DOCTYPE; got:\n{page}"
+        );
+        assert!(
+            lower.contains("<html"),
+            "the full page carries <html> chrome; got:\n{page}"
+        );
         // EXACTLY ONE local htmx script, never a CDN.
         assert_eq!(
             page.matches("<script src=\"/static/htmx.min.js\">").count(),

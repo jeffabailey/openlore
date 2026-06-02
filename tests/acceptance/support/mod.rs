@@ -6991,8 +6991,6 @@ impl ViewerResponse {
     /// — it is just the swap-target `<div id=...>` region. This is the observable
     /// discriminator the slice-07 scenarios assert on (I-HX-1): a fragment must NOT
     /// be a full page, and a no-JS response MUST be a full page.
-    ///
-    /// SCAFFOLD: true (slice-07) — compiles now; classifies the body DELIVER renders.
     pub fn is_full_page(&self) -> bool {
         let lower = self.body.to_lowercase();
         lower.contains("<!doctype html>") && lower.contains("<html")
@@ -7002,8 +7000,6 @@ impl ViewerResponse {
     /// (no `<!DOCTYPE html>`, no `<html>`, no `<head>`/`<title>` shell). Asserting
     /// `is_fragment()` on an `HX-Request` response proves the swap target was
     /// returned ALONE (NFR-HX-6 in-place feel; I-HX-1 shape selection).
-    ///
-    /// SCAFFOLD: true (slice-07).
     pub fn is_fragment(&self) -> bool {
         !self.is_full_page()
     }
@@ -7013,13 +7009,17 @@ impl ViewerResponse {
     /// be served by the viewer ITSELF (loopback `/static/htmx.min.js` or inlined) —
     /// NEVER a CDN. This scans for the well-known htmx CDN hosts; a `true` result is
     /// an offline-guarantee breach. Used by the no-CDN gold scenario.
-    ///
-    /// SCAFFOLD: true (slice-07).
     pub fn references_external_cdn(&self) -> bool {
         let lower = self.body.to_lowercase();
-        ["unpkg.com", "cdn.jsdelivr.net", "jsdelivr", "cdnjs", "//cdn."]
-            .iter()
-            .any(|host| lower.contains(host))
+        [
+            "unpkg.com",
+            "cdn.jsdelivr.net",
+            "jsdelivr",
+            "cdnjs",
+            "//cdn.",
+        ]
+        .iter()
+        .any(|host| lower.contains(host))
     }
 
     /// Does the response's `Content-Type` advertise JavaScript? The browser keys
@@ -7162,11 +7162,8 @@ impl ViewerServer {
             .parse()
             .unwrap_or_else(|e| panic!("viewer reported an unparseable addr {addr:?}: {e}"));
         for _ in 0..50 {
-            if std::net::TcpStream::connect_timeout(
-                &socket,
-                std::time::Duration::from_millis(100),
-            )
-            .is_ok()
+            if std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(100))
+                .is_ok()
             {
                 break;
             }
@@ -7247,12 +7244,7 @@ impl ViewerServer {
     ///
     /// The companion no-header [`get`](Self::get) stays the no-JS / full-page driver
     /// (curl / bookmark / direct URL / JS-off), so the slice-06 corpus that uses it
-    /// is byte-unaffected (I-HX-4). This helper body COMPILES now (it only adds a
-    /// header to the existing reqwest call); the FRAGMENT behavior is unimplemented
-    /// until DELIVER, so the slice-07 scenarios fail at RUNTIME (correct RED).
-    ///
-    /// SCAFFOLD: true (slice-07) — the method is materialized; the fragment shape it
-    /// drives is the production behavior DELIVER implements.
+    /// is byte-unaffected (I-HX-4).
     pub fn get_htmx(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
         let response = reqwest::blocking::Client::new()
@@ -7281,8 +7273,6 @@ impl ViewerServer {
     /// candidate / network-down guidance), with NO surrounding chrome and NO sign
     /// control (BR-HX-4 / I-SCR-1). The companion no-header [`post_form`](Self::post_form)
     /// stays the no-JS full-page driver.
-    ///
-    /// SCAFFOLD: true (slice-07).
     pub fn post_form_htmx(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
         let response = reqwest::blocking::Client::new()
@@ -7650,11 +7640,10 @@ pub fn assert_store_read_only(
     // unchanged (an EMPTY `Delta` → `assert_state_delta` pins each to byte-
     // equality). Any row-count change is an UNSHIPPABLE read-only breach
     // (I-VIEW-1).
-    let universe: std::collections::HashSet<String> =
-        [STORE_SLOT_CLAIMS, STORE_SLOT_PEER_CLAIMS]
-            .into_iter()
-            .map(String::from)
-            .collect();
+    let universe: std::collections::HashSet<String> = [STORE_SLOT_CLAIMS, STORE_SLOT_PEER_CLAIMS]
+        .into_iter()
+        .map(String::from)
+        .collect();
 
     let expected = state_delta::Delta::new();
 

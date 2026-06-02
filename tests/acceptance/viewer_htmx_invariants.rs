@@ -48,11 +48,6 @@
 //! drivers are byte-unchanged (ADR-035 / I-HX-4). DELIVER runs both suites as the gate.
 //!
 //! Covers: US-HX-005 (H-5a/b/c) + I-HX-2/3/4 cross-cutting guardrails.
-//
-// SCAFFOLD: true (slice-07) — every test body is `todo!()`; the `get_htmx` /
-// `post_form_htmx` / `references_external_cdn` / `is_full_page` harness seams
-// COMPILE now, so each scenario fails at RUNTIME for a business reason (the asset
-// route / fragment shape is unimplemented) — correct RED, not BROKEN.
 
 mod support;
 
@@ -483,7 +478,13 @@ fn no_swap_route_adds_a_write_or_sign_surface() {
     // live POST /scrape candidates fragment — every swap shape on the surface.
     let detail = format!("/claims/{own_cid}");
     let mut fragments = Vec::new();
-    for path in ["/", "/claims", "/claims?page=1", "/peer-claims", detail.as_str()] {
+    for path in [
+        "/",
+        "/claims",
+        "/claims?page=1",
+        "/peer-claims",
+        detail.as_str(),
+    ] {
         fragments.push((path.to_string(), viewer.get_htmx(path)));
     }
     // The POST /scrape htmx live harvest returns the `#scrape-results` FRAGMENT

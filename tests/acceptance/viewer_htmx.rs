@@ -56,12 +56,6 @@
 //! - US-HX-006: tab switch /claims <-> /peer-claims — fragment into #view-panel
 //!   (H-6a) + no-JS full page per URL (H-6b) + bookmark/reload re-enters full page
 //!   (H-6c) + parity (H-6d)
-//
-// SCAFFOLD: true (slice-07) — every test body is `todo!()`; the `get_htmx` /
-// `post_form_htmx` harness seam COMPILES now (it only adds a header to the existing
-// reqwest call), so each scenario fails at RUNTIME for a business reason (the
-// fragment shape is unimplemented) — correct RED, not BROKEN. DELIVER fills the
-// bodies one scenario at a time.
 
 mod support;
 
@@ -104,7 +98,11 @@ fn paging_claims_with_htmx_returns_only_the_table_fragment() {
 
     let page = viewer.get_htmx("/claims?page=2");
 
-    assert_eq!(page.status, 200, "the htmx claims request returns 200; got {}", page.status);
+    assert_eq!(
+        page.status, 200,
+        "the htmx claims request returns 200; got {}",
+        page.status
+    );
     assert!(
         page.is_fragment(),
         "the HX-Request response must be ONLY the swap-target fragment (no full-page \
@@ -290,8 +288,14 @@ fn over_the_end_page_clamps_in_both_shapes() {
     let frag = viewer.get_htmx("/claims?page=99");
     let full = viewer.get("/claims?page=99");
 
-    assert_eq!(frag.status, 200, "the over-the-end fragment request returns 200");
-    assert_eq!(full.status, 200, "the over-the-end full-page request returns 200");
+    assert_eq!(
+        frag.status, 200,
+        "the over-the-end fragment request returns 200"
+    );
+    assert_eq!(
+        full.status, 200,
+        "the over-the-end full-page request returns 200"
+    );
 
     // The slice-06 DV-5 clamp (PageView::paged) resolves ?page=99 to the LAST page,
     // so BOTH shapes show "301–312 of 312" — never a blank result (I-HX-4 / I-HX-5).
@@ -635,7 +639,11 @@ fn submitting_scrape_with_htmx_returns_only_the_results_fragment() {
     // NO sign CONTROL (BR-VIEW-1 / I-SCR-1): no sign form field and no sign button.
     // (The "nothing is signed or saved — use the openlore CLI to sign" guidance
     // notice is EXPECTED — it points to the CLI; it is not a sign affordance.)
-    for marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+    for marker in [
+        "name=\"sign\"",
+        "Sign claim",
+        "type=\"submit\" value=\"sign",
+    ] {
         assert!(
             !frag.body_contains(marker),
             "the results fragment must render NO sign control (signing stays in the \
@@ -873,7 +881,11 @@ fn submitting_scrape_without_htmx_returns_the_full_page() {
     );
     // NO sign CONTROL (BR-VIEW-1 / I-SCR-1): the full-page scrape shape offers no
     // sign affordance either — signing stays in the CLI.
-    for marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+    for marker in [
+        "name=\"sign\"",
+        "Sign claim",
+        "type=\"submit\" value=\"sign",
+    ] {
         assert!(
             !full.body_contains(marker),
             "the full-page scrape results must render NO sign control (signing stays \
@@ -1021,7 +1033,12 @@ fn opening_a_claim_with_htmx_returns_only_the_detail_fragment() {
         frag.body
     );
     // ALL claim fields render in the fragment (subject/predicate/object/CID).
-    for needle in ["rust-lang/rust", "is-maintained-by", "The Rust Project", &cid] {
+    for needle in [
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        &cid,
+    ] {
         assert!(
             frag.body_contains(needle),
             "the detail fragment must render the claim field {needle:?}; got:\n{}",
@@ -1092,7 +1109,12 @@ fn opening_a_claim_without_htmx_returns_the_full_detail_page() {
         full.body
     );
     // ALL claim fields render in the full page (subject/predicate/object/CID).
-    for needle in ["rust-lang/rust", "is-maintained-by", "The Rust Project", &cid] {
+    for needle in [
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        &cid,
+    ] {
         assert!(
             full.body_contains(needle),
             "the detail full page must render the claim field {needle:?}; got:\n{}",
@@ -1221,7 +1243,10 @@ fn claim_with_no_evidence_renders_clearly_in_both_shapes() {
     let full = viewer.get(&format!("/claims/{cid}"));
 
     assert_eq!(frag.status, 200, "the no-evidence htmx request returns 200");
-    assert_eq!(full.status, 200, "the no-evidence no-header request returns 200");
+    assert_eq!(
+        full.status, 200,
+        "the no-evidence no-header request returns 200"
+    );
 
     for r in [&frag, &full] {
         assert!(
@@ -1537,7 +1562,10 @@ fn view_panel_fragment_equals_the_full_page_view_panel_region() {
     let frag = viewer.get_htmx("/peer-claims");
     let full = viewer.get("/peer-claims");
 
-    assert_eq!(frag.status, 200, "the view-panel fragment request returns 200");
+    assert_eq!(
+        frag.status, 200,
+        "the view-panel fragment request returns 200"
+    );
     assert_eq!(full.status, 200, "the full-page request returns 200");
 
     // The fragment is ONLY the swap-target view-panel region; the full page is chrome
