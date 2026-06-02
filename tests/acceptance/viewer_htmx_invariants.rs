@@ -84,10 +84,30 @@ fn htmx_asset_served_locally() {
     // htmx marker, e.g. the "htmx" identifier the library defines). The exact
     // content-type assertion is a DELIVER detail (application/javascript); here the
     // observable surface is "the local route serves the library".
-    todo!(
-        "DELIVER H-5a: viewer = ViewerServer::start(&env); \
-         asset = viewer.get(\"/static/htmx.min.js\"); assert asset.status==200, \
-         !asset.body.is_empty(), asset.body_contains(\"htmx\")"
+    let env = TestEnv::initialized();
+    let viewer = ViewerServer::start(&env);
+
+    let asset = viewer.get("/static/htmx.min.js");
+
+    assert_eq!(
+        asset.status, 200,
+        "the local htmx asset route must return 200; got {}",
+        asset.status
+    );
+    assert!(
+        !asset.body.is_empty(),
+        "the asset route must serve the non-empty vendored htmx library; got an empty body"
+    );
+    assert!(
+        asset.body_contains("htmx"),
+        "the served asset must look like htmx (carry the \"htmx\" identifier the \
+         library defines); got a body that does not mention htmx"
+    );
+    assert!(
+        asset.content_type_looks_like_javascript(),
+        "the asset must be served with a JavaScript content-type (the browser keys \
+         script execution off it; FR-HX-6); got content-type {:?}",
+        asset.content_type
     );
 }
 
@@ -113,12 +133,45 @@ fn no_viewer_page_references_an_external_cdn() {
     // for each) AND each carries the local `/static/htmx.min.js` script src. This is
     // a universal invariant over the page set (marked @property for the reader; it
     // stays example-pinned at this layer per Mandate 9/11).
-    todo!(
-        "DELIVER H-5b: seed own + peer; viewer = ViewerServer::start(&env); \
-         for path in [\"/\", \"/claims\", &format!(\"/claims/{{cid}}\"), \"/peer-claims\"]: \
-         p = viewer.get(path); assert !p.references_external_cdn(); \
-         assert p.body_contains(\"/static/htmx.min.js\")"
+    let env = TestEnv::initialized();
+    // Seed own + peer claims through the production write paths so the list,
+    // detail, and peer pages render REAL content (not empty-state chrome).
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &["https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT"],
     );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 3);
+    let viewer = ViewerServer::start(&env);
+
+    // Every page-bearing route (full pages, no header — the script src lives in the
+    // chrome, which only the full page carries). The detail route is addressed by
+    // the seeded claim's real CID.
+    let detail = format!("/claims/{cid}");
+    let pages = ["/", "/claims", detail.as_str(), "/peer-claims"];
+    for path in pages {
+        let page = viewer.get(path);
+        assert_eq!(
+            page.status, 200,
+            "page-bearing route {path:?} must return 200; got {}",
+            page.status
+        );
+        assert!(
+            !page.references_external_cdn(),
+            "page {path:?} must NOT reference an external CDN to load htmx (the \
+             offline guarantee; I-HX-2); got:\n{}",
+            page.body
+        );
+        assert!(
+            page.body_contains("/static/htmx.min.js"),
+            "page {path:?} must reference the LOCAL `/static/htmx.min.js` script \
+             src (offline-first; US-HX-005); got:\n{}",
+            page.body
+        );
+    }
 }
 
 /// H-5c / GOLD `serving_the_asset_adds_no_write_surface` (US-HX-005 / I-HX-3 /
@@ -141,12 +194,47 @@ fn serving_the_asset_adds_no_write_surface() {
     // about what the viewer LEFT BEHIND, mirroring V-INV-1).
     // THEN the store row counts are UNCHANGED (universe-bound assert_store_read_only,
     // Mandate 8) and the asset body renders no sign control.
-    todo!(
-        "DELIVER H-5c: seed own claim; before = capture_store_row_count_universe(&env); \
-         in a scope: viewer = ViewerServer::start(&env); assert viewer.base_url().contains(127.0.0.1); \
-         let _ = viewer.get(/static/htmx.min.js); drop viewer; \
-         after = capture_store_row_count_universe(&env); assert_store_read_only(&before, &after)"
+    let env = TestEnv::initialized();
+    // A populated store so the read-only delta is over a non-trivial universe.
+    let _cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &["https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT"],
     );
+
+    let before = capture_store_row_count_universe(&env);
+
+    // Fetch the asset inside a scope so the viewer's exclusive DuckDB lock is
+    // released (on drop) BEFORE the `after` snapshot re-opens the store — the
+    // no-write proof is about what the viewer LEFT BEHIND (mirrors V-INV-1).
+    let asset = {
+        let viewer = ViewerServer::start(&env);
+        assert!(
+            viewer.base_url().contains("127.0.0.1"),
+            "the viewer must bind loopback-only (I-VIEW-4); got base_url {:?}",
+            viewer.base_url()
+        );
+        viewer.get("/static/htmx.min.js")
+    };
+
+    let after = capture_store_row_count_universe(&env);
+
+    // The asset route renders NO sign control — it is fixed JS bytes, not a page
+    // with affordances (I-SCR-1; signing stays in the CLI).
+    for marker in ["name=\"sign\"", "Sign claim", "value=\"sign\""] {
+        assert!(
+            !asset.body_contains(marker),
+            "the asset route must render NO sign control (it is GET-only fixed \
+             bytes; I-HX-3 / I-SCR-1); found {marker:?}"
+        );
+    }
+
+    // The store row counts are UNCHANGED — every universe slot `unchanged`
+    // (any change is an UNSHIPPABLE write-surface breach; I-HX-3).
+    assert_store_read_only(&before, &after);
 }
 
 // =============================================================================

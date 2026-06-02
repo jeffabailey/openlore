@@ -465,6 +465,7 @@ pub fn render_landing() -> String {
             head {
                 meta charset="utf-8";
                 title { "OpenLore — Viewer" }
+                script src="/static/htmx.min.js" {}
             }
             body {
                 h1 { "OpenLore Viewer" }
@@ -1735,6 +1736,15 @@ mod tests {
         assert!(
             html.contains("/claims"),
             "landing page must link to the My Claims list; got:\n{html}"
+        );
+        // Slice-07 (H-5b / I-HX-2): every page-bearing route — including the
+        // landing page — loads htmx from the LOCAL `/static/htmx.min.js` route,
+        // NEVER a CDN (offline-first). Pins the chrome `<script src>` line on the
+        // landing page so it cannot silently drop the local asset reference.
+        assert!(
+            html.contains(r#"<script src="/static/htmx.min.js">"#),
+            "landing page must reference the local htmx asset (offline-first; \
+             I-HX-2); got:\n{html}"
         );
     }
 

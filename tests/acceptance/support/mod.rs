@@ -6970,6 +6970,11 @@ pub struct ViewerResponse {
     pub status: u16,
     /// The rendered HTML body the browser displays.
     pub body: String,
+    /// The response `Content-Type` header, lowercased (empty when absent). The
+    /// asset route (`/static/htmx.min.js`) serves a JS content-type; the page
+    /// routes serve `text/html` — H-5a asserts the asset's JS-ish type on this
+    /// observable header (the browser keys script execution off it).
+    pub content_type: String,
 }
 
 impl ViewerResponse {
@@ -7015,6 +7020,16 @@ impl ViewerResponse {
         ["unpkg.com", "cdn.jsdelivr.net", "jsdelivr", "cdnjs", "//cdn."]
             .iter()
             .any(|host| lower.contains(host))
+    }
+
+    /// Does the response's `Content-Type` advertise JavaScript? The browser keys
+    /// `<script src>` execution off the served type, so the local htmx asset MUST
+    /// arrive as a JS-ish content-type (`application/javascript` or the legacy
+    /// `text/javascript`) — H-5a (US-HX-005 / FR-HX-6). The optional `; charset`
+    /// suffix is tolerated (we match the media-type prefix).
+    pub fn content_type_looks_like_javascript(&self) -> bool {
+        self.content_type.contains("application/javascript")
+            || self.content_type.contains("text/javascript")
     }
 }
 
@@ -7185,10 +7200,15 @@ impl ViewerServer {
             .send()
             .unwrap_or_else(|e| panic!("GET {url}: {e}"));
         let status = response.status().as_u16();
+        let content_type = content_type_of(&response);
         let body = response
             .text()
             .unwrap_or_else(|e| panic!("read body of GET {url}: {e}"));
-        ViewerResponse { status, body }
+        ViewerResponse {
+            status,
+            body,
+            content_type,
+        }
     }
 
     /// Issue an HTTP `POST <base_url><path>` with `fields` as an
@@ -7206,10 +7226,15 @@ impl ViewerServer {
             .send()
             .unwrap_or_else(|e| panic!("POST {url}: {e}"));
         let status = response.status().as_u16();
+        let content_type = content_type_of(&response);
         let body = response
             .text()
             .unwrap_or_else(|e| panic!("read body of POST {url}: {e}"));
-        ViewerResponse { status, body }
+        ViewerResponse {
+            status,
+            body,
+            content_type,
+        }
     }
 
     /// Issue an HTTP `GET <base_url><path>` WITH the `HX-Request: true` header —
@@ -7237,10 +7262,15 @@ impl ViewerServer {
             .send()
             .unwrap_or_else(|e| panic!("GET (htmx) {url}: {e}"));
         let status = response.status().as_u16();
+        let content_type = content_type_of(&response);
         let body = response
             .text()
             .unwrap_or_else(|e| panic!("read body of GET (htmx) {url}: {e}"));
-        ViewerResponse { status, body }
+        ViewerResponse {
+            status,
+            body,
+            content_type,
+        }
     }
 
     /// Issue an HTTP `POST <base_url><path>` form-urlencoded WITH the
@@ -7263,11 +7293,29 @@ impl ViewerServer {
             .send()
             .unwrap_or_else(|e| panic!("POST (htmx) {url}: {e}"));
         let status = response.status().as_u16();
+        let content_type = content_type_of(&response);
         let body = response
             .text()
             .unwrap_or_else(|e| panic!("read body of POST (htmx) {url}: {e}"));
-        ViewerResponse { status, body }
+        ViewerResponse {
+            status,
+            body,
+            content_type,
+        }
     }
+}
+
+/// Read the `Content-Type` header off a blocking reqwest response, lowercased
+/// (empty when absent). Called BEFORE `.text()` consumes the response. The
+/// asset route (H-5a) is the only place this is load-bearing today; pulled out
+/// so all four drivers populate `ViewerResponse::content_type` identically.
+fn content_type_of(response: &reqwest::blocking::Response) -> String {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase()
 }
 
 impl Drop for ViewerServer {
