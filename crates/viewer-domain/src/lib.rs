@@ -1032,7 +1032,10 @@ pub fn render_scrape_results_fragment(state: &ScrapeState) -> Markup {
 /// wrapped AROUND [`render_scrape_results_fragment`] — the EXACT same fragment fn
 /// the htmx shape returns alone. Because the results region is the SAME fn in both
 /// shapes, fragment/full-page parity is structural, not asserted by duplicating
-/// render logic (I-HX-5).
+/// render logic (I-HX-5). The `<head>` emits exactly ONE local
+/// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2) —
+/// the SAME chrome line every other enhanced page carries, so the form's
+/// `hx-post` swap (H-3a) works in-browser instead of falling back to a full POST.
 pub fn render_scrape_page(state: &ScrapeState) -> String {
     let markup = html! {
         (DOCTYPE)
@@ -1040,6 +1043,7 @@ pub fn render_scrape_page(state: &ScrapeState) -> String {
             head {
                 meta charset="utf-8";
                 title { "OpenLore — Live Scrape" }
+                script src="/static/htmx.min.js" {}
             }
             body {
                 h1 { "Live Scrape" }
@@ -2257,6 +2261,29 @@ mod tests {
             !html.contains("<tr>"),
             "the empty form must render NO candidate rows; got:\n{html}"
         );
+    }
+
+    /// Behavior (slice-07 H-3a / H-5b / I-HX-2): the `/scrape` FULL page emits the
+    /// SAME single local `<script src="/static/htmx.min.js">` chrome line as every
+    /// other enhanced page — its `hx-post` form swap needs htmx loaded in-browser,
+    /// or the form falls back to a full POST. Pins EXACTLY ONE local script src and
+    /// NO off-host CDN (offline-first), so the chrome can neither drop the asset nor
+    /// reach a CDN.
+    #[test]
+    fn render_scrape_page_loads_local_htmx_and_no_cdn() {
+        let html = render_scrape_page(&ScrapeState::Form);
+        assert_eq!(
+            html.matches(r#"<script src="/static/htmx.min.js">"#).count(),
+            1,
+            "the /scrape full page must emit EXACTLY ONE local htmx script src \
+             (offline-first; H-3a/I-HX-2); got:\n{html}"
+        );
+        for cdn in ["unpkg.com", "jsdelivr.net", "cdnjs.cloudflare.com", "//cdn."] {
+            assert!(
+                !html.contains(cdn),
+                "the /scrape full page must reference NO external CDN ({cdn:?}); got:\n{html}"
+            );
+        }
     }
 
     /// Behavior (AC-005.2 — the prime row-rendering mutation target): each

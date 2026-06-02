@@ -149,9 +149,11 @@ fn no_viewer_page_references_an_external_cdn() {
 
     // Every page-bearing route (full pages, no header — the script src lives in the
     // chrome, which only the full page carries). The detail route is addressed by
-    // the seeded claim's real CID.
+    // the seeded claim's real CID. `/scrape` is INCLUDED: its `hx-post` form swap
+    // (H-3a) needs htmx loaded in-browser, so its chrome must carry the SAME local
+    // script src as every other enhanced page (the GET form needs no GitHub call).
     let detail = format!("/claims/{cid}");
-    let pages = ["/", "/claims", detail.as_str(), "/peer-claims"];
+    let pages = ["/", "/claims", detail.as_str(), "/peer-claims", "/scrape"];
     for path in pages {
         let page = viewer.get(path);
         assert_eq!(
@@ -336,23 +338,20 @@ fn non_htmx_responses_are_byte_equivalent_to_slice_06() {
             r.body
         );
         // The bounded chrome delta vs slice-06: where a CDN script line WOULD be,
-        // the full page references only the LOCAL `/static/htmx.min.js`. The
-        // store-backed pages (`/`, `/claims`, `/peer-claims`, `/claims/{cid}`) carry
-        // this chrome line (the htmx-driven tab/paging swaps need the library
-        // loaded); the `/scrape` page drives its swap from the POSTed form and
-        // carries only the `#scrape-results` swap-target wrapper (no head script in
-        // its slice-06 chrome — H-5b's no-CDN gold gate likewise scopes the local
-        // script src to the store-backed page set). The universal guarantee across
-        // EVERY route is the no-CDN invariant asserted above.
-        if !path.starts_with("/scrape") && path != "POST /scrape" {
-            assert!(
-                r.body_contains("/static/htmx.min.js"),
-                "enhanced route {path:?} full page must reference the LOCAL \
-                 `/static/htmx.min.js` script src (the bounded chrome delta; \
-                 offline-first US-HX-005); body was:\n{}",
-                r.body
-            );
-        }
+        // the full page references only the LOCAL `/static/htmx.min.js`. EVERY
+        // enhanced full page carries this chrome line — the store-backed pages
+        // (`/`, `/claims`, `/peer-claims`, `/claims/{cid}`) for their tab/paging
+        // swaps, AND the `/scrape` page (GET + POST full-page arm) because its
+        // `hx-post` form swap (H-3a) likewise needs the library loaded in-browser.
+        // No route is exempt: the local script src is universal across the enhanced
+        // page set (matching H-5b's no-CDN gold gate).
+        assert!(
+            r.body_contains("/static/htmx.min.js"),
+            "enhanced route {path:?} full page must reference the LOCAL \
+             `/static/htmx.min.js` script src (the bounded chrome delta; \
+             offline-first US-HX-005); body was:\n{}",
+            r.body
+        );
     }
 }
 
