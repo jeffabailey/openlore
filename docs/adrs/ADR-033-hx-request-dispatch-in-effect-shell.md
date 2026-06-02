@@ -1,6 +1,6 @@
 # ADR-033: `HX-Request` Shape Dispatch Lives in the Effect Shell — One Decision Point per Route, Pure Core Stays Header-Unaware
 
-- **Status**: Accepted (DESIGN — slice-07 viewer-htmx-swaps)
+- **Status**: Accepted / shipped (slice-07 viewer-htmx-swaps, DELIVER 2026-06-02)
 - **Date**: 2026-06-02
 - **Deciders**: Morgan (nw-solution-architect), per OD-HX-5 for viewer-htmx-swaps (slice-07).
 - **Feature**: viewer-htmx-swaps (slice-07)

@@ -1,6 +1,6 @@
 # ADR-031: htmx Asset Delivery — Vendored, `include_str!`-Embedded, Served from One Cached `GET /static/htmx.min.js` Route
 
-- **Status**: Accepted (DESIGN — slice-07 viewer-htmx-swaps)
+- **Status**: Accepted / shipped (slice-07 viewer-htmx-swaps, DELIVER 2026-06-02)
 - **Date**: 2026-06-02
 - **Deciders**: Morgan (nw-solution-architect), per OD-HX-1 for viewer-htmx-swaps (slice-07). **The mechanism (vendored static route) is the USER DECISION; this ADR records it, its provenance, and the rejected alternatives.**
 - **Feature**: viewer-htmx-swaps (slice-07)

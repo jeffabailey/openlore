@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-05-31  # slice-06 (htmx-scraper-viewer) KPI-VIEW-1..5 recorded at finalize
+last_updated: 2026-06-02  # slice-07 (viewer-htmx-swaps) KPI-HX-1..4 + KPI-HX-G1..G3 recorded at finalize
 
 kpis:
   - id: KPI-1
@@ -379,6 +379,83 @@ kpis:
     baseline_at_ga: "MET — the store views render fully with the network disabled as of slice-06 ship (the viewer reads the local DuckDB store only; only the live /scrape view requires the network, by design)."
     notes: "Guardrail. Inherits/reinforces slice-01 KPI-5 (local-first). Any release that makes a store view require the network is blocked. The live /scrape view is the sole network-requiring route (explicitly out of the offline guarantee, by design)."
 
+  # --- slice-07 (viewer-htmx-swaps), recorded at finalize 2026-06-02 ---
+  # htmx partial-swaps as progressive enhancement on the slice-06 read-only
+  # `openlore ui` viewer (J-001 legibility, DELTA on slice-06). Persona is P-001
+  # (the node operator, "Maria"). KPIs measure the observable response SHAPE
+  # (fragment vs full page, keyed on HX-Request) against the real `openlore ui`;
+  # no new persisted data, loopback only. KPI-HX-G1/G2/G3 are guardrails.
+
+  - id: KPI-HX-1
+    name: "Paging in-place swap (Prev/Next returns a table-only fragment, not a full reload)"
+    type: leading
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% of htmx Prev/Next requests on /claims + /peer-claims return a table-only fragment (not a full page); non-htmx return the full slice-06 page; an htmx page request's payload is a fraction of the full-page bytes (table region only, no chrome)"
+    measurement_method: "request the route WITH and WITHOUT HX-Request against the real `openlore ui`; assert fragment shape vs full page (viewer_htmx); compare bytes-transferred (fragment vs full page) per release"
+    baseline_at_ga: "per-feature GREEN (viewer_htmx: /claims + /peer-claims Prev/Next return a table-only fragment under HX-Request and the full slice-06 page without it, as of slice-07 ship); bytes-transferred per-release comparison YELLOW pending the DEVOPS measure. Baseline before slice-07: every Prev/Next is a full-page reload (whole document re-sent)."
+    notes: "North star of slice-07 (paging is the most-used, highest-pain interaction on a real-sized store; the heart of 'navigate without reloads' and the walking-skeleton outcome). Inherits the slice-06 KPI-VIEW-1 legibility outcome — the swap removes the per-click reload jolt."
+
+  - id: KPI-HX-2
+    name: "Scrape in-place swap (POST /scrape returns a results-only fragment, form preserved)"
+    type: leading
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% of htmx POST /scrape requests return a results-only fragment (form preserved); non-htmx return the full page; no sign control, nothing persisted in either shape"
+    measurement_method: "POST /scrape with/without HX-Request against the real `openlore ui`; assert results-only fragment + no sign control + no persisted candidate (route audit, viewer_htmx)"
+    baseline_at_ga: "MET (per-feature GREEN) — POST /scrape returns a results-only fragment with the form preserved under htmx and the full page without, no sign control, nothing persisted, as of slice-07 ship. The browser-path script defect (the /scrape page lacked the local htmx script) was found + fixed (commit bcf9007, DV-6). Baseline before slice-07: every submit reloads the whole /scrape page."
+    notes: "Leading indicator. Preserves the slice-02 human-gate (KPI-SCR-2) + slice-06 KPI-VIEW-4 across the swap — the browser proposes, the CLI signs; the swap rides the existing POST /scrape with no new write surface (KPI-HX-G3)."
+
+  - id: KPI-HX-3
+    name: "Detail inline swap (GET /claims/{cid} returns a detail-panel fragment, list preserved)"
+    type: leading
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% of htmx GET /claims/{cid} requests return a detail-panel fragment (list preserved); non-htmx return the full detail page"
+    measurement_method: "GET /claims/{cid} with/without HX-Request against the real `openlore ui`; assert detail-panel fragment vs full detail page (viewer_htmx)"
+    baseline_at_ga: "per-feature GREEN — GET /claims/{cid} returns a detail-panel fragment (list preserved) under htmx and the full detail page without, as of slice-07 ship. Baseline before slice-07: opening a claim navigates away from the list."
+    notes: "Leading (secondary) indicator. The unknown-CID guided render carries through both shapes (ADR-033). Confidence stays shown verbatim (FR-VIEW-8) in fragment + page."
+
+  - id: KPI-HX-4
+    name: "Tab switch in-place (My<->Peer view-panel fragment + URL updated / bookmarkable)"
+    type: leading
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% of htmx My<->Peer tab switches return a view-panel fragment AND update the URL (hx-push-url) so the view is bookmarkable / Back works; non-htmx return the full page"
+    measurement_method: "tab switch with/without HX-Request against the real `openlore ui`; assert view-panel fragment + URL/history update after a swap (viewer_htmx)"
+    baseline_at_ga: "per-feature GREEN — My<->Peer returns a view-panel fragment AND updates the URL via hx-push-url (bookmarkable / Back works) under htmx, full page without, as of slice-07 ship. Baseline before slice-07: every tab switch is a full-page reload."
+    notes: "Leading (secondary) indicator. hx-push-url converges the htmx path with the no-JS path (ADR-034); the #view-panel wrapper lets the tab-swap and the pagination-swap coexist on one page."
+
+  - id: KPI-HX-G1
+    name: "No-JS no-regression (every route serves a complete slice-06 full page when HX-Request is absent)"
+    type: guardrail
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% of routes serve a complete slice-06 full page when HX-Request is absent; non-htmx responses byte-equivalent to slice-06 (beyond the bounded chrome delta); the slice-06 26-scenario corpus GREEN"
+    measurement_method: "withhold HX-Request per route + run the slice-06 acceptance corpus (viewer_store 15/15, viewer_scrape 5/5, viewer_invariants 6/6) + the no-regression gold test (viewer_htmx_invariants)"
+    baseline_at_ga: "MET (release-blocking) — the slice-06 26-scenario corpus stays GREEN as of slice-07 ship; non-htmx responses byte-equivalent beyond the bounded chrome delta (the added local htmx script tag + swap attributes)."
+    notes: "Guardrail / cardinal. Progressive enhancement (I-HX-1/I-HX-4): a swap is a nicety, never a requirement. Any slice-06 corpus regression OR any route that fails to serve a full page without HX-Request is a release blocker (UNSHIPPABLE)."
+
+  - id: KPI-HX-G2
+    name: "Offline / no-CDN (every store view AND swap works network-down; zero CDN references)"
+    type: guardrail
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "100% offline — every store view AND every swap works with the network down; 0 CDN references (no page references an off-host htmx URL)"
+    measurement_method: "offline harness (network down) + a property scan of served HTML for off-host htmx URLs (references_external_cdn, viewer_htmx_invariants) + the vendored asset SHA-256 integrity pin"
+    baseline_at_ga: "MET (release-blocking) — htmx is vendored (2.0.4, 0BSD) and served from GET /static/htmx.min.js (include_str!-embedded, pinned sha256 e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447); the offline harness + references_external_cdn scan are green (0 off-host htmx URLs) as of slice-07 ship."
+    notes: "Guardrail / cardinal. Inherits slice-06 KPI-VIEW-5 + slice-01 KPI-5 (local-first). A CDN <script src> was rejected (DV-3, ADR-031) because it would break offline. Any off-host htmx reference is a release blocker. The live /scrape view remains the sole network-requiring route (its swap is local; the upstream GitHub fetch is by design)."
+
+  - id: KPI-HX-G3
+    name: "Read-only / no new write surface (no swap adds a write/sign route; no key; loopback only)"
+    type: guardrail
+    feature_origin: viewer-htmx-swaps
+    persona: P-001
+    target: "0 new write/sign routes; 0 signing-key reads in the web process; bind stays loopback-only"
+    measurement_method: "route inventory (no new write/sign route; swaps ride GET + the existing POST /scrape) + key-access audit (zero key reads) + loopback-bind assertion (viewer_htmx_invariants); carries the slice-06 KPI-VIEW-2 three-layer enforcement (StoreReadPort no-mutation type + xtask viewer capability rule + behavioral gold)"
+    baseline_at_ga: "MET (release-blocking) — the swaps ride GET + the existing POST /scrape; no new write/sign route, zero key reads in the web process, loopback-only bind, as of slice-07 ship."
+    notes: "Guardrail / cardinal. Carries the slice-06 KPI-VIEW-2 (read-only / no key) cardinal gate verbatim across the new swap surface. A single new reachable write/sign route, any key read, or any non-loopback bind is a release blocker (UNSHIPPABLE)."
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -417,6 +494,16 @@ kpis:
 #   three-layer enforced (StoreReadPort no-mutation type + xtask viewer capability
 #   rule + behavioral V-INV-1/2 gold tests through the real `openlore ui` binary).
 #
+#   Slice-07 guardrails: KPI-HX-G1 (no-JS no-regression — every route serves a
+#   complete slice-06 full page when HX-Request is absent; slice-06 corpus GREEN),
+#   KPI-HX-G2 (offline / no-CDN — every store view AND swap works network-down;
+#   htmx vendored + SHA-256-pinned; zero off-host htmx URLs) and KPI-HX-G3
+#   (read-only / no new write surface — carries slice-06 KPI-VIEW-2). All three MET
+#   at GA; all three are release-blocking per the slice-07 disprovers in
+#   docs/feature/viewer-htmx-swaps/discuss/outcome-kpis.md. They encode the
+#   load-bearing progressive-enhancement + offline + read-only contracts of the
+#   htmx swap layer.
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
@@ -424,11 +511,13 @@ kpis:
 #   - Per-feature KPI rationale (slice-04): docs/feature/openlore-scoring-graph/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-05): docs/feature/openlore-appview-search/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-06): docs/feature/htmx-scraper-viewer/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-07): docs/feature/viewer-htmx-swaps/discuss/outcome-kpis.md
 #   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Slice-04 evolution archive: docs/evolution/openlore-scoring-graph-evolution.md
 #   - Slice-05 evolution archive: docs/evolution/openlore-appview-search-evolution.md
 #   - Slice-06 evolution archive: docs/evolution/htmx-scraper-viewer-evolution.md
+#   - Slice-07 evolution archive: docs/evolution/viewer-htmx-swaps-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml

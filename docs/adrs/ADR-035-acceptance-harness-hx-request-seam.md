@@ -1,6 +1,6 @@
 # ADR-035: Acceptance-Harness Seam for Driving Both Shapes — `get_htmx` / `post_form_htmx` Set `HX-Request`
 
-- **Status**: Accepted (DESIGN — slice-07 viewer-htmx-swaps). **Specifies the seam; materialization is a DISTILL/DELIVER concern.**
+- **Status**: Accepted / shipped (slice-07 viewer-htmx-swaps, DELIVER 2026-06-02). Seam materialized in DISTILL/DELIVER (the `get_htmx` / `post_form_htmx` + `is_fragment` / `is_full_page` / `references_external_cdn` harness seams).
 - **Date**: 2026-06-02
 - **Deciders**: Morgan (nw-solution-architect), per OD-HX-6 for viewer-htmx-swaps (slice-07).
 - **Feature**: viewer-htmx-swaps (slice-07)

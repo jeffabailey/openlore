@@ -1,6 +1,6 @@
 # ADR-034: Tab-Switch History — `hx-push-url` Keeps the Real URLs, Converging the htmx Path with the No-JS Path
 
-- **Status**: Accepted (DESIGN — slice-07 viewer-htmx-swaps)
+- **Status**: Accepted / shipped (slice-07 viewer-htmx-swaps, DELIVER 2026-06-02)
 - **Date**: 2026-06-02
 - **Deciders**: Morgan (nw-solution-architect), per OD-HX-4 for viewer-htmx-swaps (slice-07).
 - **Feature**: viewer-htmx-swaps (slice-07)

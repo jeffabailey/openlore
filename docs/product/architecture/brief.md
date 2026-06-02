@@ -59,6 +59,43 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **slice-07 (viewer-htmx-swaps): SHIPPED 2026-06-02 — IN-PLACE EXTENSION, ZERO
+  new crates (workspace stays at 21 members).** Layers an **htmx
+  progressive-enhancement layer** onto the slice-06 `openlore ui` read-only viewer
+  (J-001 legibility): paging, scraping, opening a claim, and switching views update
+  *in place* via htmx partial-swaps instead of full-page reloads — **without
+  sacrificing the slice-06 read-only / offline / no-JS guarantees**. The same route
+  serves a FULL slice-06 page when `HX-Request` is absent (no-JS / bookmark / curl)
+  and a FRAGMENT of the same content when present. Enhances 4 interactions (`GET
+  /claims` + `GET /peer-claims` pagination, `POST /scrape` results, `GET
+  /claims/{cid}` detail-inline) plus the My↔Peer tab switch. **Zero new crate, zero
+  new persisted type, zero new write/sign route, zero new `deny.toml` or `check-arch`
+  rule.** Extends the two slice-06 viewer crates in place:
+  - **`crates/viewer-domain` (PURE)**: adds a pure `render_*_fragment()` per region;
+    each `render_*_page()` composes the SAME fragment (page = chrome + fragment →
+    **structural parity**, I-HX-5, ADR-032). The `HX-Request` dispatch is a `Shape`
+    projection consumed by the effect shell; the pure core stays header-unaware
+    (ADR-033). Still `maud` + `ports` only (pure-core allowlist unchanged).
+  - **`crates/adapter-http-viewer` (EFFECT)**: reads `HX-Request` ONCE per route
+    (`Shape::from_request`) and forks fragment-vs-page at the render call; adds the
+    cached `GET /static/htmx.min.js` route serving a vendored htmx 2.0.4 (0BSD) asset
+    `include_str!`-embedded from `assets/htmx.min.js` with a pinned SHA-256 integrity
+    test (`sha256 e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447`);
+    a shared `page_head()` / `htmx_script()` helper makes every page load the local
+    asset from ONE source. **No CDN — offline by construction** (ADR-031). Tabs use
+    `hx-push-url` to keep real URLs (ADR-034).
+  - **htmx is a TEXT asset, not a crate** — no new workspace member, no new
+    production dependency (`sha2` is dev-only, for the integrity test).
+  - **Invariants I-HX-1..5** (progressive enhancement; offline / no-CDN; read-only /
+    no new write surface; no-regression byte-equivalence beyond the bounded chrome
+    delta; structural fragment/page parity) — slice-07-scoped; all INHERIT the
+    slice-06 I-VIEW-1..6.
+  - **ADRs ADR-031..035** (vendored htmx asset + static route; fragment/page
+    rendering split; `HX-Request` dispatch in the effect shell; `hx-push-url` tab
+    history; acceptance-harness `HX-Request` seam).
+  - See ADR-031..ADR-035, `docs/evolution/viewer-htmx-swaps-evolution.md`, and
+    `docs/feature/viewer-htmx-swaps/design/`.
+
 - **slice-06 (htmx-scraper-viewer): SHIPPED 2026-05-31 — TWO-CRATE ADDITIVE
   EXTENSION (the read-only localhost htmx store viewer).** Makes the node
   operator's node LEGIBLE (J-001): a new `openlore ui [--port <P>]` verb (default
@@ -284,7 +321,9 @@ WD-59); slice-03 was EXTENSION ONLY (zero new crates, WD-26); slice-04 adds 1 pu
 crate (`scoring`); slice-05 adds 6 (1 pure `appview-domain` + 4 effect adapters + 1
 binary `openlore-indexer`, the indexer subsystem); slice-06 adds 2 (1 pure
 `viewer-domain` + 1 effect `adapter-http-viewer`, the read-only localhost htmx
-viewer). Cumulative: 19 production + 1 test-support + 1 xtask = 21 workspace
+viewer); slice-07 (viewer-htmx-swaps) is an IN-PLACE EXTENSION (zero new crates —
+extends the two slice-06 viewer crates + adds a vendored htmx TEXT asset, NOT a
+crate). Cumulative: 19 production + 1 test-support + 1 xtask = 21 workspace
 members.**
 
 ## CLI surface (cumulative)
@@ -428,16 +467,20 @@ that generalizes it.
 
 ## Pointers
 
-- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-027-*.md`
+- ADRs: `docs/adrs/ADR-001-*.md` through `docs/adrs/ADR-035-*.md`
   (ADR-013..016 accepted with openlore-federated-read; ADR-017..019 accepted/
   shipped with openlore-github-scraper, both shipped 2026-05-28; ADR-020..022
   accepted/shipped with openlore-scoring-graph 2026-05-28; ADR-023..027 accepted/
-  shipped with openlore-appview-search 2026-05-29)
+  shipped with openlore-appview-search 2026-05-29; ADR-028..030 accepted/shipped
+  with htmx-scraper-viewer 2026-05-31; ADR-031..035 accepted/shipped with
+  viewer-htmx-swaps 2026-06-02)
 - Slice-01 evolution: `docs/evolution/openlore-foundation-evolution.md`
 - Slice-02 evolution: `docs/evolution/openlore-github-scraper-evolution.md`
 - Slice-03 evolution: `docs/evolution/openlore-federated-read-evolution.md`
 - Slice-04 evolution: `docs/evolution/openlore-scoring-graph-evolution.md`
 - Slice-05 evolution: `docs/evolution/openlore-appview-search-evolution.md`
+- Slice-06 evolution: `docs/evolution/htmx-scraper-viewer-evolution.md`
+- Slice-07 evolution: `docs/evolution/viewer-htmx-swaps-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
 - Slice-02 architecture design:
   `docs/feature/openlore-github-scraper/design/architecture-design.md`
