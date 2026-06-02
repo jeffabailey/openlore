@@ -410,10 +410,34 @@ fn paging_peer_claims_without_htmx_returns_the_full_page() {
     // WHEN she requests `/peer-claims?page=2` WITHOUT the header (the unchanged get).
     // THEN the response is the COMPLETE slice-06 full page (`is_full_page()`) with
     // the same peer table region (the page-2 indicator + the peer origin).
-    todo!(
-        "DELIVER H-2b: seed_cached_peer_claims(env, \"did:plc:peer-axum\", 120); \
-         full = viewer.get(\"/peer-claims?page=2\"); assert full.status==200, \
-         full.is_full_page(), full.body_contains(\"51–100 of 120\")"
+    let env = TestEnv::initialized();
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let full = viewer.get("/peer-claims?page=2");
+
+    assert_eq!(
+        full.status, 200,
+        "the no-header peer-claims request returns 200; got {}",
+        full.status
+    );
+    assert!(
+        full.is_full_page(),
+        "WITHOUT HX-Request the response must be the COMPLETE slice-06 peer-claims \
+         full page (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("51\u{2013}100 of 120"),
+        "the full page must show the page-2 indicator \"51\u{2013}100 of 120\" (EN DASH) \
+         in its peer-table region; got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("did:plc:peer-axum"),
+        "the full page's peer-table region must keep each row's origin (the peer DID); \
+         got:\n{}",
+        full.body
     );
 }
 
@@ -434,12 +458,46 @@ fn peer_claims_fragment_equals_the_full_page_peer_table_region() {
     // THEN the page-2 indicator + a known peer row's origin/subject appear in BOTH
     // the fragment and the full page (parity); the fragment is a fragment and the
     // full page is a full page.
-    todo!(
-        "DELIVER H-2c: seed 120 peer rows; frag = viewer.get_htmx(\"/peer-claims?page=2\"); \
-         full = viewer.get(\"/peer-claims?page=2\"); for needle in [\"51–100 of 120\", \
-         peer DID, a known subject]: assert frag.body_contains(needle) && \
-         full.body_contains(needle); assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/peer-claims?page=2");
+    let full = viewer.get("/peer-claims?page=2");
+
+    assert_eq!(frag.status, 200, "the peer fragment request returns 200");
+    assert_eq!(full.status, 200, "the peer full-page request returns 200");
+
+    // The fragment is ONLY the swap-target peer-table region; the full page is chrome
+    // wrapped AROUND the SAME fragment fn (ADR-032) — so the two shapes agree.
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the peer fragment (no chrome); got:\n{}",
+        frag.body
     );
+    assert!(
+        full.is_full_page(),
+        "the no-header response must be the complete peer full page; got:\n{}",
+        full.body
+    );
+
+    // PARITY: the page-2 indicator, a page-2 row's seeded subject (rows are
+    // "subject-{i}"; page 2 covers i=50..=99, so "subject-50" is on this page), and
+    // the peer origin (DID) appear in BOTH shapes — the full page wraps chrome around
+    // the SAME peer fragment fn (I-HX-5). Asserted on the observable rendered text.
+    for needle in ["51\u{2013}100 of 120", "did:plc:peer-axum", "subject-50"] {
+        assert!(
+            frag.body_contains(needle),
+            "the peer fragment must contain {needle:?} (page-2 parity); got:\n{}",
+            frag.body
+        );
+        assert!(
+            full.body_contains(needle),
+            "the full page must contain the SAME {needle:?} in its peer-table region \
+             (page-2 parity); got:\n{}",
+            full.body
+        );
+    }
 }
 
 /// H-2d (US-HX-002 boundary; AC unknown origin still renders): a peer row with NO
@@ -459,10 +517,36 @@ fn peer_claim_with_unknown_origin_still_renders_in_the_fragment() {
     // WHEN Maria pages the Peer Claims list WITH the header (get_htmx).
     // THEN the row still renders in the fragment labeled "unknown" — never dropped —
     // and the response is a fragment (no full-page chrome).
-    todo!(
-        "DELIVER H-2d: seed_peer_claim_with_blank_origin(&env); \
-         frag = viewer.get_htmx(\"/peer-claims\"); assert frag.is_fragment(), \
-         frag.body_contains(\"unknown\")"
+    let env = TestEnv::initialized();
+    seed_peer_claim_with_blank_origin(&env);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/peer-claims");
+
+    assert_eq!(
+        frag.status, 200,
+        "the htmx peer-claims request returns 200; got {}",
+        frag.status
+    );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the peer fragment (no full-page chrome); \
+         got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("unknown"),
+        "a peer claim with absent origin must render in the FRAGMENT labeled \
+         \"unknown\" (not be dropped — slice-06 V-10 carried into the fragment shape); \
+         got:\n{}",
+        frag.body
+    );
+    // The row is rendered in full, not dropped: its seeded subject is present too.
+    assert!(
+        frag.body_contains("github:peer/orphan-repo"),
+        "the blank-origin row must still render its other fields (never dropped); \
+         got:\n{}",
+        frag.body
     );
 }
 
