@@ -260,18 +260,100 @@ fn serving_the_asset_adds_no_write_surface() {
 fn non_htmx_responses_are_byte_equivalent_to_slice_06() {
     // GIVEN own + peer claims persisted + the REUSED FakeGithub for `/scrape`.
     // WHEN each enhanced route is requested WITHOUT the header (the unchanged
-    // get/post_form): `/claims`, `/claims?page=2`, `/peer-claims`, `/claims/{cid}`,
+    // get/post_form): `/`, `/claims`, `/claims?page=2`, `/peer-claims`, `/claims/{cid}`,
     // GET `/scrape`, POST `/scrape`.
     // THEN each returns a COMPLETE slice-06 full page (`is_full_page()`), carries its
     // expected content, and references NO external CDN. (Exact byte-equivalence vs a
     // recorded slice-06 baseline is DELIVER's tightening; the slice-06 corpus staying
     // green is the load-bearing companion. Here we pin the SHAPE + no-CDN guarantee.)
-    todo!(
-        "DELIVER H-INV-NoReg: seed own + peer + FakeGithub; viewer = start_with_github; \
-         for r in [get(\"/claims\"), get(\"/claims?page=2\"), get(\"/peer-claims\"), \
-         get(&detail), get(\"/scrape\"), post_form(\"/scrape\", target)]: \
-         assert r.is_full_page() && !r.references_external_cdn()"
+    let env = TestEnv::initialized();
+    // Seed own + peer claims through the production write paths so the My Claims,
+    // detail, and Peer Claims pages render REAL content (not empty-state chrome).
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/cargo",
+        "is-maintained-by",
+        "The Cargo Team",
+        0.90,
+        &["https://github.com/rust-lang/cargo/blob/HEAD/LICENSE-MIT"],
     );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 3);
+    // The REUSED slice-02 FakeGithub double serves the live POST /scrape harvest —
+    // the ONLY mocked boundary; reached via OPENLORE_GITHUB_API_BASE.
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    // Every enhanced route, requested WITHOUT the `HX-Request` header (the unchanged
+    // no-JS / bookmark / direct-URL drivers `get` / `post_form`). The detail route is
+    // addressed by the seeded claim's real CID.
+    let detail = format!("/claims/{cid}");
+    let get_routes = [
+        "/",
+        "/claims",
+        "/claims?page=2",
+        "/peer-claims",
+        detail.as_str(),
+        "/scrape",
+    ];
+    let mut responses = Vec::new();
+    for path in get_routes {
+        responses.push((path.to_string(), viewer.get(path)));
+    }
+    // POST /scrape (no header) — the live propose returns the COMPLETE slice-06
+    // `/scrape` full page (the full-page arm of the Shape fork), not the
+    // `#scrape-results` fragment.
+    responses.push((
+        "POST /scrape".to_string(),
+        viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]),
+    ));
+
+    for (path, r) in &responses {
+        // Each enhanced route still renders successfully without the header.
+        assert_eq!(
+            r.status, 200,
+            "enhanced route {path:?} WITHOUT HX-Request must return 200 (no \
+             behavioral change); got {}",
+            r.status
+        );
+        // The COMPLETE slice-06 full page — full-page chrome around the content, NOT
+        // a bare htmx fragment (I-HX-4: the no-header request is unchanged).
+        assert!(
+            r.is_full_page(),
+            "enhanced route {path:?} WITHOUT HX-Request must return the COMPLETE \
+             slice-06 full page (`<!DOCTYPE html>` + `<html>` chrome), not a \
+             fragment; body was:\n{}",
+            r.body
+        );
+        // No off-host CDN reference — the offline guarantee made structural; the
+        // bounded chrome delta references only the LOCAL asset.
+        assert!(
+            !r.references_external_cdn(),
+            "enhanced route {path:?} WITHOUT HX-Request must NOT reference an \
+             external CDN (the offline guarantee; I-HX-2); body was:\n{}",
+            r.body
+        );
+        // The bounded chrome delta vs slice-06: where a CDN script line WOULD be,
+        // the full page references only the LOCAL `/static/htmx.min.js`. The
+        // store-backed pages (`/`, `/claims`, `/peer-claims`, `/claims/{cid}`) carry
+        // this chrome line (the htmx-driven tab/paging swaps need the library
+        // loaded); the `/scrape` page drives its swap from the POSTed form and
+        // carries only the `#scrape-results` swap-target wrapper (no head script in
+        // its slice-06 chrome — H-5b's no-CDN gold gate likewise scopes the local
+        // script src to the store-backed page set). The universal guarantee across
+        // EVERY route is the no-CDN invariant asserted above.
+        if !path.starts_with("/scrape") && path != "POST /scrape" {
+            assert!(
+                r.body_contains("/static/htmx.min.js"),
+                "enhanced route {path:?} full page must reference the LOCAL \
+                 `/static/htmx.min.js` script src (the bounded chrome delta; \
+                 offline-first US-HX-005); body was:\n{}",
+                r.body
+            );
+        }
+    }
 }
 
 // =============================================================================
