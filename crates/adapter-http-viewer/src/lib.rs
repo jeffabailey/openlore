@@ -34,11 +34,11 @@ use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claim_detail_fragment, render_claims_page,
-    render_claims_table_fragment, render_error, render_landing, render_peer_claims_page,
-    render_peer_claims_table_fragment, render_scrape_page, render_scrape_results_fragment,
-    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
-    SCRAPE_NO_CANDIDATES_NOTICE,
+    render_claim_detail, render_claim_detail_fragment, render_claim_not_found_fragment,
+    render_claims_page, render_claims_table_fragment, render_error, render_landing,
+    render_peer_claims_page, render_peer_claims_table_fragment, render_scrape_page,
+    render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
+    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -418,8 +418,11 @@ fn peer_claims_page(
 /// returns the complete slice-06 detail full page ([`render_claim_detail`]). Both
 /// project the SAME [`ClaimDetailView`] — the full page EMBEDS the fragment fn, so
 /// the two shapes agree by construction (I-HX-5). The `None` / read-error
-/// not-found path is shape-independent here (still the guided `404` full page);
-/// its fragment shape is step 04-02.
+/// not-found path ALSO forks by `Shape` (slice-07 H-4c): the htmx swap returns the
+/// `#claim-detail` not-found fragment ([`render_claim_not_found_fragment`]), the
+/// no-JS request the full `404` page ([`render_error`]) — the `404` status + the
+/// guided message + back link carry through BOTH shapes (the fork is AFTER the
+/// not-found decision).
 fn claim_detail_page(
     store: &dyn StoreReadPort,
     cid: &str,
@@ -433,9 +436,17 @@ fn claim_detail_page(
                 Shape::FullPage => html_ok(render_claim_detail(&view)),
             }
         }
-        // Unknown CID / read failure: the GUIDED 404 (render_error) — message +
-        // back link, never a raw cause (NFR-VIEW-6). Not-found shape fork is 04-02.
-        Ok(None) | Err(_) => html_not_found(render_error()),
+        // Unknown CID / read failure: the GUIDED 404 — message + back link, never a
+        // raw cause (NFR-VIEW-6). SHAPE fork (slice-07 H-4c; ADR-033) is AFTER the
+        // not-found decision, so the `404` status carries through BOTH shapes: the
+        // htmx swap returns ONLY the `#claim-detail` not-found fragment
+        // ([`render_claim_not_found_fragment`]); the no-JS / bookmark / direct-URL
+        // request returns the complete full 404 page ([`render_error`]). Both carry
+        // the SAME guided message + `/claims` back link (I-HX-5).
+        Ok(None) | Err(_) => match shape {
+            Shape::Fragment => html_not_found(render_claim_not_found_fragment().into_string()),
+            Shape::FullPage => html_not_found(render_error()),
+        },
     }
 }
 

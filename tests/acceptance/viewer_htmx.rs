@@ -1059,11 +1059,58 @@ fn opening_a_claim_without_htmx_returns_the_full_detail_page() {
     // WHEN she opens `/claims/{cid}` WITHOUT the header (the unchanged get).
     // THEN the response is the COMPLETE slice-06 detail full page (`is_full_page()`)
     // with the same detail region (all fields + evidence).
-    todo!(
-        "DELIVER H-4b: cid = seed_own_claim_with_evidence(...); \
-         full = viewer.get(&format!(\"/claims/{{cid}}\")); assert full.status==200, \
-         full.is_full_page(), full.body_contains(\"The Rust Project\")"
+    let env = TestEnv::initialized();
+    let ev1 = "https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT";
+    let ev2 = "https://github.com/rust-lang/rust/blob/HEAD/Cargo.toml";
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &[ev1, ev2],
     );
+    let viewer = ViewerServer::start(&env);
+
+    let full = viewer.get(&format!("/claims/{cid}"));
+
+    assert_eq!(
+        full.status, 200,
+        "the no-header claim-detail request returns 200; got {}",
+        full.status
+    );
+    assert!(
+        full.is_full_page(),
+        "WITHOUT HX-Request the response must be the COMPLETE slice-06 detail full \
+         page (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        full.body
+    );
+    assert!(
+        full.body_contains("id=\"claim-detail\""),
+        "the full page must wrap the same swap-target region id=\"claim-detail\"; \
+         got:\n{}",
+        full.body
+    );
+    // ALL claim fields render in the full page (subject/predicate/object/CID).
+    for needle in ["rust-lang/rust", "is-maintained-by", "The Rust Project", &cid] {
+        assert!(
+            full.body_contains(needle),
+            "the detail full page must render the claim field {needle:?}; got:\n{}",
+            full.body
+        );
+    }
+    assert!(
+        full.body_contains("0.90"),
+        "the full page renders confidence verbatim (0.90); got:\n{}",
+        full.body
+    );
+    for ev in [ev1, ev2] {
+        assert!(
+            full.body_contains(ev),
+            "the detail full page must render every evidence URL ({ev:?}); got:\n{}",
+            full.body
+        );
+    }
 }
 
 /// H-4c (US-HX-004 error; AC unknown CID in both shapes): an unknown CID returns the
@@ -1084,11 +1131,63 @@ fn unknown_cid_guides_the_operator_in_both_shapes() {
     // THEN the fragment shows the guided not-found message + a `/claims` back link
     // and is a fragment; the full page shows the SAME guided message + back link and
     // is a full page; the not-found status (404) carries through both shapes.
-    todo!(
-        "DELIVER H-4c: seed one real claim; frag = viewer.get_htmx(\"/claims/bafyrei-zzz\"); \
-         full = viewer.get(\"/claims/bafyrei-zzz\"); for r in [&frag,&full]: assert \
-         r.body_contains(\"No claim with that identifier in your store\") && \
-         r.body_contains(\"/claims\"); assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_own_claim_with_evidence(
+        &env,
+        "serde-rs/serde",
+        "is-maintained-by",
+        "dtolnay",
+        0.80,
+        &[],
+    );
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/claims/bafyrei-zzz");
+    let full = viewer.get("/claims/bafyrei-zzz");
+
+    // The not-found status (404; AC-002.3) carries through BOTH shapes — the shape
+    // fork is AFTER the not-found decision (DESIGN component-boundaries).
+    assert_eq!(
+        frag.status, 404,
+        "the unknown-CID htmx request returns 404; got {}",
+        frag.status
+    );
+    assert_eq!(
+        full.status, 404,
+        "the unknown-CID no-header request returns 404; got {}",
+        full.status
+    );
+
+    // BOTH shapes carry the guided message + the `/claims` back link, and leak no
+    // raw internals (NFR-VIEW-6).
+    for r in [&frag, &full] {
+        assert!(
+            r.body_contains("No claim with that identifier in your store"),
+            "the guided not-found response must carry the plain-language message; \
+             got:\n{}",
+            r.body
+        );
+        assert!(
+            r.body_contains("/claims"),
+            "the guided not-found response must link back to the My Claims list; \
+             got:\n{}",
+            r.body
+        );
+    }
+
+    // The fragment is ONLY the swap-target region (no full-page chrome); the no-JS
+    // request is the COMPLETE full 404 page (I-HX-1).
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request not-found response must be ONLY the fragment (no full-page \
+         chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        full.is_full_page(),
+        "WITHOUT HX-Request the not-found response must be the COMPLETE full 404 page \
+         (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        full.body
     );
 }
 
@@ -1107,13 +1206,42 @@ fn claim_with_no_evidence_renders_clearly_in_both_shapes() {
     // WHEN she opens `/claims/{cid}` WITH (get_htmx) and WITHOUT (get) the header.
     // THEN both shapes show the explicit "no evidence attached" state; the fragment
     // is a fragment and the full page is a full page.
-    todo!(
-        "DELIVER H-4d: cid = seed_own_claim_with_evidence(&env, \"serde-rs/serde\", \
-         \"is-maintained-by\", \"dtolnay\", 0.80, &[]); \
-         frag = viewer.get_htmx(&format!(\"/claims/{{cid}}\")); \
-         full = viewer.get(&format!(\"/claims/{{cid}}\")); for r in [&frag,&full]: \
-         assert r.body_contains(\"no evidence attached\"); \
-         assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "serde-rs/serde",
+        "is-maintained-by",
+        "dtolnay",
+        0.80,
+        &[],
+    );
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx(&format!("/claims/{cid}"));
+    let full = viewer.get(&format!("/claims/{cid}"));
+
+    assert_eq!(frag.status, 200, "the no-evidence htmx request returns 200");
+    assert_eq!(full.status, 200, "the no-evidence no-header request returns 200");
+
+    for r in [&frag, &full] {
+        assert!(
+            r.body_contains("no evidence attached"),
+            "an evidence-less claim must show the explicit \"no evidence attached\" \
+             state, never a blank section; got:\n{}",
+            r.body
+        );
+    }
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request no-evidence response must be ONLY the fragment (no chrome); \
+         got:\n{}",
+        frag.body
+    );
+    assert!(
+        full.is_full_page(),
+        "WITHOUT HX-Request the no-evidence response must be the COMPLETE full page; \
+         got:\n{}",
+        full.body
     );
 }
 
@@ -1134,13 +1262,64 @@ fn claim_detail_fragment_equals_the_full_page_detail_region() {
     // THEN the fields (subject/predicate/object), both evidence URLs, and the
     // verbatim 0.90 appear in BOTH the fragment and the full page (parity); the
     // fragment is a fragment and the full page is a full page.
-    todo!(
-        "DELIVER H-4e: cid = seed_own_claim_with_evidence(... 0.90, &[ev1, ev2]); \
-         frag = viewer.get_htmx(&format!(\"/claims/{{cid}}\")); \
-         full = viewer.get(&format!(\"/claims/{{cid}}\")); for needle in \
-         [\"rust-lang/rust\", \"0.90\", ev1, ev2]: assert frag.body_contains(needle) \
-         && full.body_contains(needle); assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    let ev1 = "https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT";
+    let ev2 = "https://github.com/rust-lang/rust/blob/HEAD/Cargo.toml";
+    let cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &[ev1, ev2],
     );
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx(&format!("/claims/{cid}"));
+    let full = viewer.get(&format!("/claims/{cid}"));
+
+    assert_eq!(frag.status, 200, "the detail fragment request returns 200");
+    assert_eq!(full.status, 200, "the detail full-page request returns 200");
+
+    // The fragment is ONLY the swap-target region; the full page is chrome wrapped
+    // AROUND the SAME fragment fn (ADR-032) — so the two shapes agree empirically
+    // inside the #claim-detail region.
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request detail response must be ONLY the fragment (no chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        full.is_full_page(),
+        "the no-header detail response must be the complete full page; got:\n{}",
+        full.body
+    );
+
+    // PARITY (I-HX-5): the load-bearing rendered content of the #claim-detail region
+    // — the swap-target id, the claim fields, the verbatim 0.90 confidence, and both
+    // evidence URLs — is present in BOTH shapes, because the full page EMBEDS the
+    // SAME fragment fn.
+    for needle in [
+        "id=\"claim-detail\"",
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        "0.90",
+        ev1,
+        ev2,
+    ] {
+        assert!(
+            frag.body_contains(needle),
+            "the fragment must contain {needle:?} (detail parity); got:\n{}",
+            frag.body
+        );
+        assert!(
+            full.body_contains(needle),
+            "the full page must contain the SAME {needle:?} in its detail region \
+             (detail parity); got:\n{}",
+            full.body
+        );
+    }
 }
 
 // =============================================================================

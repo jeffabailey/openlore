@@ -419,6 +419,27 @@ pub fn render_error() -> String {
     markup.into_string()
 }
 
+/// Render the guided not-found swap-target FRAGMENT for an unknown CID (slice-07
+/// H-4c; ADR-032/033). The `<div id="claim-detail">` wrapping the plain-language
+/// [`CLAIM_NOT_FOUND_NOTICE`] + a `/claims` back link — the SAME region a found
+/// detail would swap into, so an `HX-Request` 404 replaces the detail panel with
+/// the guidance in place. PURE: a total function — no I/O, takes no error value
+/// (it never echoes a raw cause; NFR-VIEW-6). NO full-page chrome (no `<!DOCTYPE>`,
+/// no `<html>`/`<head>`), so the htmx 404 carries ONLY this region (I-HX-1). The
+/// effect shell maps both shapes' not-found body to a `404` status; the no-JS
+/// shape uses the full-page [`render_error`] instead, which carries the SAME
+/// message + back link so the two shapes agree (I-HX-5).
+pub fn render_claim_not_found_fragment() -> Markup {
+    html! {
+        div id=(CLAIM_DETAIL_ID) {
+            p { (CLAIM_NOT_FOUND_NOTICE) }
+            p {
+                a href="/claims" { "Back to My Claims" }
+            }
+        }
+    }
+}
+
 /// One claim's FULL detail, shaped for the `/claims/{cid}` detail render
 /// (US-VIEW-002). The VIEW-model (nw-fp-domain-modeling §10): flat display
 /// strings + the numeric confidence the renderer formats VERBATIM + the
@@ -1652,6 +1673,53 @@ mod tests {
             assert!(
                 !html.contains(leaked),
                 "the guided 404 must leak no raw internals ({leaked:?}); got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (slice-07 H-4c; ADR-032/033 / AC-002.3 / NFR-VIEW-6): the guided
+    /// not-found FRAGMENT carries the EXACT plain-language message + a `/claims`
+    /// back link (so the operator's next step is obvious), is wrapped in the
+    /// `#claim-detail` swap target (it swaps INTO the same region a found detail
+    /// would), carries NO full-page chrome (no `<!DOCTYPE>`, no `<html>`/`<head>`
+    /// — an `HX-Request` 404 returns ONLY this region, I-HX-1), and leaks NO raw
+    /// internals. Pins the four mutation targets for the `get_claim -> None`
+    /// fragment render.
+    #[test]
+    fn render_claim_not_found_fragment_guides_without_chrome_or_leak() {
+        let html = render_claim_not_found_fragment().into_string();
+        assert!(
+            html.contains(CLAIM_NOT_FOUND_NOTICE),
+            "the not-found fragment must carry the plain-language message; got:\n{html}"
+        );
+        assert!(
+            html.contains("/claims"),
+            "the not-found fragment must link back to the My Claims list; got:\n{html}"
+        );
+        assert!(
+            html.contains(CLAIM_DETAIL_ID),
+            "the not-found fragment must be wrapped in the #claim-detail swap target \
+             (it swaps into the SAME region a found detail would); got:\n{html}"
+        );
+        // NO full-page chrome — an HX-Request 404 returns ONLY this region (I-HX-1).
+        let lower = html.to_lowercase();
+        assert!(
+            !lower.contains("<!doctype") && !lower.contains("<html") && !lower.contains("<head"),
+            "the not-found fragment must carry NO full-page chrome (no <!DOCTYPE>/\
+             <html>/<head>); got:\n{html}"
+        );
+        for leaked in [
+            "panicked at",
+            "RUST_BACKTRACE",
+            "stack backtrace",
+            "IO Error",
+            "StoreReadError",
+            "Error:",
+        ] {
+            assert!(
+                !html.contains(leaked),
+                "the not-found fragment must leak no raw internals ({leaked:?}); \
+                 got:\n{html}"
             );
         }
     }
