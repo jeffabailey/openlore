@@ -36,8 +36,8 @@ use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claims_page, render_claims_table_fragment, render_error,
     render_landing, render_peer_claims_page, render_peer_claims_table_fragment, render_scrape_page,
-    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
-    SCRAPE_NO_CANDIDATES_NOTICE,
+    render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
+    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -272,7 +272,7 @@ async fn route(
     // resolve+harvest+derive via the reused `GithubPort`, and renders the
     // proposals. Persists NOTHING (BR-VIEW-2 / I-VIEW-1).
     if method == Method::POST && path == "/scrape" {
-        return Ok(scrape_post(req, github.as_deref()).await);
+        return Ok(scrape_post(req, github.as_deref(), shape).await);
     }
     if method != Method::GET {
         return Ok(not_found());
@@ -434,9 +434,18 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str) -> Response<Full<Byte
 /// Always returns `200` with a guided page (NFR-VIEW-6): a derive that yields
 /// candidates renders the proposal rows; any other outcome renders a guided
 /// message rather than a blank result or a stack trace.
+///
+/// SHAPE fork (slice-07 H-3a; ADR-033): the htmx swap returns ONLY the
+/// `#scrape-results` fragment ([`render_scrape_results_fragment`]); the no-JS /
+/// bookmark / direct-URL POST returns the complete slice-06 `/scrape` full page
+/// ([`render_scrape_page`]). Both project the SAME [`ScrapeState`] — the full page
+/// EMBEDS the fragment fn, so the two shapes agree by construction (I-HX-5). The
+/// fork is at the render call ONLY: the resolve+harvest+derive pipeline is
+/// shape-independent (it persists nothing and renders no sign control either way).
 async fn scrape_post(
     req: Request<Incoming>,
     github: Option<&dyn GithubPort>,
+    shape: Shape,
 ) -> Response<Full<Bytes>> {
     let body = read_request_body(req).await;
     let target = parse_form_target(&body);
@@ -444,9 +453,10 @@ async fn scrape_post(
     // No `GithubPort` wired (a store-only viewer somehow received a POST) — render
     // the guided message; the live propose step is unavailable.
     let Some(github) = github else {
-        return html_ok(render_scrape_page(&ScrapeState::Guidance(
-            SCRAPE_NO_CANDIDATES_NOTICE.to_string(),
-        )));
+        return render_scrape(
+            &ScrapeState::Guidance(SCRAPE_NO_CANDIDATES_NOTICE.to_string()),
+            shape,
+        );
     };
 
     let state = match propose_candidates(github, &target).await {
@@ -477,7 +487,21 @@ async fn scrape_post(
         // viewer never crashes or shows a blank result (NFR-VIEW-6).
         Err(_) => ScrapeState::Guidance(scrape_guidance_message()),
     };
-    html_ok(render_scrape_page(&state))
+    render_scrape(&state, shape)
+}
+
+/// Render a [`ScrapeState`] to a `200` HTML response, forking by [`Shape`]
+/// (slice-07 H-3a; ADR-033): the htmx swap returns ONLY the `#scrape-results`
+/// fragment; the no-JS / bookmark / direct-URL request returns the complete
+/// slice-06 `/scrape` full page. Both project the SAME state — the full page
+/// EMBEDS the fragment fn (I-HX-5 parity by construction). Held in ONE place so
+/// every `POST /scrape` exit (the no-`GithubPort` guard + the post-derive arms)
+/// forks identically.
+fn render_scrape(state: &ScrapeState, shape: Shape) -> Response<Full<Bytes>> {
+    match shape {
+        Shape::Fragment => html_ok(render_scrape_results_fragment(state).into_string()),
+        Shape::FullPage => html_ok(render_scrape_page(state)),
+    }
 }
 
 /// Run the live propose step for `target`: resolve, harvest, derive. Returns the

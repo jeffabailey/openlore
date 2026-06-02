@@ -835,6 +835,35 @@ pub enum ScrapeState {
     Guidance(String),
 }
 
+/// The HTML `id` of the Live Scrape swap-target element — the `<div>` the htmx
+/// scrape-results fragment IS, and the region the full `/scrape` page wraps chrome
+/// (+ the form) around (slice-07; ADR-032/033). Held in ONE place so the fragment
+/// fn and any future `hx-target`/`hx-swap` reference the SAME id (a mutation to the
+/// id has exactly one site to attack — pinned by the unit test). htmx swaps the
+/// element whose id matches; the no-JS full page embeds the SAME
+/// `<div id="scrape-results">` so the two shapes are structurally identical inside
+/// the swap target (I-HX-5 parity by construction).
+pub const SCRAPE_RESULTS_ID: &str = "scrape-results";
+
+/// Render the Live Scrape swap-target FRAGMENT (slice-07 H-3a; ADR-032/033): the
+/// `<div id="scrape-results">` wrapping the proposal/candidate rows (or the guided
+/// zero-candidates / network-down / catch-all message) for the given
+/// [`ScrapeState`]. PURE: a total function from the view-model to a `Markup` — NO
+/// full-page chrome (no `<!DOCTYPE>`, no `<html>`/`<head>`) and NO form, so an
+/// `HX-Request` response carries ONLY this results region (I-HX-1). Renders NO
+/// sign/save affordance (BR-VIEW-1 / I-SCR-1 — signing stays in the CLI).
+/// [`render_scrape_page`] EMBEDS this SAME fn beneath the form, so the fragment
+/// and the full page's results region are byte-identical by construction (I-HX-5
+/// parity — the results-rendering logic is NOT duplicated). This is the
+/// load-bearing slice-07 structural contract: page = chrome + form + fragment.
+pub fn render_scrape_results_fragment(state: &ScrapeState) -> Markup {
+    html! {
+        div id=(SCRAPE_RESULTS_ID) {
+            (render_scrape_result(state))
+        }
+    }
+}
+
 /// Render the Live Scrape page (`GET`/`POST /scrape`, US-VIEW-005) as a complete
 /// HTML document (maud). PURE: a total function from the [`ScrapeState`] to an
 /// HTML string — no I/O, no network. ALWAYS renders the labeled target form (so
@@ -845,6 +874,12 @@ pub enum ScrapeState {
 /// the guided message. It renders NO sign/save control anywhere (BR-VIEW-1 /
 /// I-SCR-1 — signing stays in the CLI; the live view never offers a sign
 /// affordance).
+///
+/// COMPOSITION (slice-07 H-3a; ADR-032): the results region is chrome + form
+/// wrapped AROUND [`render_scrape_results_fragment`] — the EXACT same fragment fn
+/// the htmx shape returns alone. Because the results region is the SAME fn in both
+/// shapes, fragment/full-page parity is structural, not asserted by duplicating
+/// render logic (I-HX-5).
 pub fn render_scrape_page(state: &ScrapeState) -> String {
     let markup = html! {
         (DOCTYPE)
@@ -857,7 +892,7 @@ pub fn render_scrape_page(state: &ScrapeState) -> String {
                 h1 { "Live Scrape" }
                 p { (READ_ONLY_NOTICE) }
                 (render_scrape_form())
-                (render_scrape_result(state))
+                (render_scrape_results_fragment(state))
             }
         }
     };
@@ -1885,6 +1920,68 @@ mod tests {
             assert!(
                 html.contains(needle),
                 "live-scrape proposal row must render {needle:?}; got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (slice-07 H-3a; ADR-032/033): the scrape-results swap-target
+    /// FRAGMENT wraps the proposal rows in the `#scrape-results` swap-target
+    /// element, renders each candidate's subject/predicate/object + the VERBATIM
+    /// confidence + the display-only derived-from provenance, emits NO full-page
+    /// chrome (no `<!DOCTYPE>`, no `<html>`) so an `HX-Request` response carries
+    /// ONLY the swap region (I-HX-1), and renders NO sign affordance (BR-VIEW-1 /
+    /// I-SCR-1 — signing stays in the CLI). Pins the load-bearing bits: the
+    /// swap-target id, the verbatim confidence, the derived-from, the no-chrome
+    /// fragment shape, and the no-sign-control guarantee.
+    #[test]
+    fn render_scrape_results_fragment_wraps_swap_target_with_candidates_and_no_sign() {
+        let rows = vec![CandidateRowView::from_candidate(&candidate(
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            0.25,
+            "Cargo.lock committed (exact pins)",
+        ))];
+        let html = render_scrape_results_fragment(&ScrapeState::Proposals(rows)).into_string();
+
+        assert!(
+            html.contains("id=\"scrape-results\""),
+            "the scrape-results fragment must wrap its rows in the swap-target \
+             id=\"scrape-results\" (DESIGN swap map); got:\n{html}"
+        );
+        assert_eq!(
+            SCRAPE_RESULTS_ID, "scrape-results",
+            "the fragment reuses the shared swap-target id const"
+        );
+        for needle in [
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+            "0.25",
+            "derived-from",
+            "Cargo.lock committed (exact pins)",
+        ] {
+            assert!(
+                html.contains(needle),
+                "the scrape-results fragment row must render {needle:?}; got:\n{html}"
+            );
+        }
+        assert!(
+            !html.to_lowercase().contains("<!doctype")
+                && !html.to_lowercase().contains("<html"),
+            "the fragment must carry NO full-page chrome (no <!DOCTYPE>/<html>) so an \
+             HX-Request response is ONLY the swap region (I-HX-1); got:\n{html}"
+        );
+        for sign_control_marker in [
+            "name=\"sign\"",
+            "Sign claim",
+            "type=\"submit\" value=\"sign",
+        ] {
+            assert!(
+                !html.contains(sign_control_marker),
+                "the scrape-results fragment must render NO sign control \
+                 ({sign_control_marker:?}) — signing stays in the CLI \
+                 (BR-VIEW-1 / I-SCR-1); got:\n{html}"
             );
         }
     }

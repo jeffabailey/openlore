@@ -584,15 +584,69 @@ fn submitting_scrape_with_htmx_returns_only_the_results_fragment() {
     // their subject + derived-from provenance, NO sign control marker appears, and
     // the response is a fragment (no full-page chrome). Persistence-zero is the
     // read-only gold guardrail (viewer_htmx_invariants.rs); here we pin the SHAPE.
-    todo!(
-        "DELIVER H-3a: github = GithubServer::start(FakeGithub::for_public_repo(\
-         \"rust-lang/cargo\", fixture_cargo_five_signals())); \
-         viewer = ViewerServer::start_with_github(&env, github); \
-         frag = viewer.post_form_htmx(\"/scrape\", &[(\"target\", \"rust-lang/cargo\")]); \
-         assert frag.status==200, frag.is_fragment(), \
-         frag.body_contains(\"rust-lang/cargo\"), frag.body_contains(\"derived-from\"); \
-         for m in [\"name=\\\"sign\\\"\", \"Sign claim\"]: assert !frag.body_contains(m)"
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);
+
+    assert_eq!(
+        frag.status, 200,
+        "the htmx scrape POST returns 200; got {}",
+        frag.status
     );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the swap-target fragment (no full-page \
+         chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.is_full_page(),
+        "the HX-Request response must NOT carry full-page chrome (no <!DOCTYPE html>/\
+         <html>); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"scrape-results\""),
+        "the fragment must be wrapped in the swap-target element id=\"scrape-results\"; \
+         got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("github:rust-lang/cargo"),
+        "the fragment must render the candidate subject (github:rust-lang/cargo); \
+         got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("derived-from"),
+        "each candidate renders its display-only derived-from provenance; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("0.25"),
+        "the conservative candidate confidence renders verbatim (0.25); got:\n{}",
+        frag.body
+    );
+    // NO sign CONTROL (BR-VIEW-1 / I-SCR-1): no sign form field and no sign button.
+    // (The "nothing is signed or saved — use the openlore CLI to sign" guidance
+    // notice is EXPECTED — it points to the CLI; it is not a sign affordance.)
+    for marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+        assert!(
+            !frag.body_contains(marker),
+            "the results fragment must render NO sign control (signing stays in the \
+             CLI; BR-VIEW-1 / I-SCR-1); found {marker:?} in:\n{}",
+            frag.body
+        );
+    }
+    // (Persistence-zero is the read-only gold guardrail in viewer_htmx_invariants.rs
+    // — it snapshots the store row counts around EVERY route incl. POST /scrape htmx,
+    // releasing the viewer's exclusive DuckDB lock before the `after` snapshot. Here
+    // we pin the SHAPE; the no-write proof lives in that universe-bound gold test.)
 }
 
 /// H-3b (US-HX-003 edge; AC zero candidates): a target that derives NO candidates
