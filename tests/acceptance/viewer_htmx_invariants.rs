@@ -455,12 +455,75 @@ fn no_swap_route_adds_a_write_or_sign_surface() {
     // `value="sign"`) — the load-bearing ABSENCE of a sign affordance on every swap
     // surface (I-SCR-1, signing stays in the CLI; the read-only delta is the
     // companion H-INV-ReadOnly).
-    todo!(
-        "DELIVER H-INV-NoWrite: own_cid = seed_own_claim_with_evidence(...); \
-         seed_cached_peer_claims(...); github = for_public_repo(...); \
-         viewer = start_with_github; collect frags from get_htmx(\"/claims?page=1\"), \
-         get_htmx(\"/peer-claims\"), get_htmx(&format!(\"/claims/{{own_cid}}\")), \
-         post_form_htmx(\"/scrape\", target); for frag in frags: for m in \
-         [\"name=\\\"sign\\\"\", \"Sign claim\", \"value=\\\"sign\\\"\"]: assert !frag.body_contains(m)"
+    let env = TestEnv::initialized();
+    // Seed own + peer claims through the production write paths so EVERY fragment
+    // shape renders REAL content (not empty-state chrome) — the tab/view-panel
+    // fragment (`/`), the paging fragments (`/claims` + `/peer-claims`), and the
+    // detail fragment (`/claims/{cid}`, addressed by the seeded own claim's CID).
+    let own_cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/cargo",
+        "is-maintained-by",
+        "The Cargo Team",
+        0.90,
+        &["https://github.com/rust-lang/cargo/blob/HEAD/LICENSE-MIT"],
     );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 3);
+    // The REUSED slice-02 FakeGithub double serves the live POST /scrape htmx
+    // harvest — the ONLY mocked boundary — so the `#scrape-results` fragment
+    // actually renders its candidates (and must STILL carry no sign control).
+    let github = GithubServer::start(FakeGithub::for_public_repo(
+        "rust-lang/cargo",
+        fixture_cargo_five_signals(),
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    // WHEN every htmx FRAGMENT route is requested (header-setting drivers): the
+    // tab/view-panel swap (`/`), the paging fragments, the detail fragment, and the
+    // live POST /scrape candidates fragment — every swap shape on the surface.
+    let detail = format!("/claims/{own_cid}");
+    let mut fragments = Vec::new();
+    for path in ["/", "/claims", "/claims?page=1", "/peer-claims", detail.as_str()] {
+        fragments.push((path.to_string(), viewer.get_htmx(path)));
+    }
+    // The POST /scrape htmx live harvest returns the `#scrape-results` FRAGMENT
+    // (candidates / zero-candidate / network-down guidance) — it renders NO sign
+    // control either (BR-HX-4 / I-SCR-1).
+    fragments.push((
+        "POST /scrape".to_string(),
+        viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]),
+    ));
+
+    // THEN NO fragment renders a sign/save affordance. The human signing gate stays
+    // in the CLI (I-HX-3 / I-SCR-1); the web swap surface is observe-only. We scan
+    // for every sign-affordance marker a fragment could leak — the form-control
+    // markers reused from the slice-06 V-INV-4 / slice-07 H-5c gold gates
+    // (`name="sign"`, `value="sign"`) PLUS the human-readable sign/publish button
+    // labels — across EVERY fragment response. Any hit is an UNSHIPPABLE
+    // write/sign-surface breach.
+    let sign_markers = [
+        "name=\"sign\"",
+        "value=\"sign\"",
+        "Sign claim",
+        "Sign &amp; publish",
+        "Sign and publish",
+        "Publish claim",
+    ];
+    for (path, frag) in &fragments {
+        assert_eq!(
+            frag.status, 200,
+            "htmx fragment route {path:?} must render successfully (200) so the \
+             no-sign-control assertion is over REAL content; got {}",
+            frag.status
+        );
+        for marker in sign_markers {
+            assert!(
+                !frag.body_contains(marker),
+                "htmx fragment route {path:?} must render NO sign control — the \
+                 human signing gate stays in the CLI (I-HX-3 / I-SCR-1); found \
+                 {marker:?} in:\n{}",
+                frag.body
+            );
+        }
+    }
 }
