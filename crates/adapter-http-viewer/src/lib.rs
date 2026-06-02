@@ -35,8 +35,8 @@ use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claim_detail_fragment, render_claim_not_found_fragment,
-    render_claims_page, render_claims_table_fragment, render_error, render_landing,
-    render_peer_claims_page, render_peer_claims_table_fragment, render_scrape_page,
+    render_claims_page, render_claims_view_panel_fragment, render_error, render_landing,
+    render_peer_claims_page, render_peer_claims_view_panel_fragment, render_scrape_page,
     render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
     PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
@@ -352,12 +352,15 @@ fn claims_page(
         // Degrade to an empty guided page (total 0) — no indicator, no controls.
         Err(_) => PageView::paged(Vec::new(), page, DEFAULT_PAGE_SIZE, 0),
     };
-    // SHAPE fork (ADR-033): the htmx swap returns ONLY the `#claims-table`
-    // fragment; the no-JS / bookmark / direct-URL request returns the complete
-    // slice-06 full page. Both project the SAME `PageView` — the full page EMBEDS
-    // the fragment fn, so the two shapes agree by construction (I-HX-5).
+    // SHAPE fork (ADR-033): the htmx swap returns ONLY the `#view-panel` fragment
+    // (the active My Claims list, which wraps the inner `#claims-table` region —
+    // DESIGN §6 / ADR-034); the no-JS / bookmark / direct-URL request returns the
+    // complete slice-06 full page. Both project the SAME `PageView` — the full page
+    // EMBEDS the SAME view-panel fragment fn, so the two shapes agree by
+    // construction (I-HX-5). The tab switch targets `#view-panel`; paging targets
+    // the NESTED `#claims-table` (H-1a) — both land on this one response.
     match shape {
-        Shape::Fragment => html_ok(render_claims_table_fragment(&page_view).into_string()),
+        Shape::Fragment => html_ok(render_claims_view_panel_fragment(&page_view).into_string()),
         Shape::FullPage => html_ok(render_claims_page(&page_view)),
     }
 }
@@ -398,8 +401,16 @@ fn peer_claims_page(
         // Degrade to an empty guided page (total 0) — no indicator, no controls.
         Err(_) => PageView::paged(Vec::new(), page, DEFAULT_PAGE_SIZE, 0),
     };
+    // SHAPE fork (ADR-033 / ADR-034): the htmx swap returns ONLY the `#view-panel`
+    // fragment (the active Peer Claims list, wrapping the inner `#claims-table`
+    // region — DESIGN §6); the no-JS / bookmark / direct-URL request returns the
+    // complete slice-06 full page (both embed the SAME view-panel fragment fn,
+    // I-HX-5). The tab switch (H-6a) targets `#view-panel`; peer paging (H-2a)
+    // targets the NESTED `#claims-table` — both land on this one response.
     match shape {
-        Shape::Fragment => html_ok(render_peer_claims_table_fragment(&page_view).into_string()),
+        Shape::Fragment => {
+            html_ok(render_peer_claims_view_panel_fragment(&page_view).into_string())
+        }
         Shape::FullPage => html_ok(render_peer_claims_page(&page_view)),
     }
 }

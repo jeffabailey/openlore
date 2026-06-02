@@ -178,6 +178,96 @@ impl<T> PageView<T> {
 /// construction).
 pub const CLAIMS_TABLE_ID: &str = "claims-table";
 
+/// The HTML `id` of the active VIEW-PANEL swap-target element (slice-07 H-6a;
+/// ADR-034 / DESIGN §6) — the OUTER container the My Claims ↔ Peer Claims tab
+/// switch lands on (`hx-target="#view-panel"`). It WRAPS the inner
+/// [`CLAIMS_TABLE_ID`] region, so the two swap behaviors compose: the tab switch
+/// replaces the panel's inner content (the active list) while paging targets the
+/// nested `#claims-table` (UNCHANGED — H-1a/H-2a still land). Held in ONE place so
+/// the fragment fn, the page slot, and the tab anchors' `hx-target` all reference
+/// the SAME id (a mutation has exactly one site to attack — pinned by the unit
+/// test). The full page embeds the SAME view-panel fragment fn, so the fragment
+/// and the full page's panel region are structurally identical (I-HX-5 parity).
+pub const VIEW_PANEL_ID: &str = "view-panel";
+
+/// The real route the My Claims tab links to (`/claims`) — the no-JS `href`, the
+/// htmx `hx-get`, AND the URL `hx-push-url` pushes into history are ALL this one
+/// path (ADR-034: one source of truth for "where am I"). Held in ONE place so the
+/// tab anchor's three URL references can never drift apart.
+pub const MY_CLAIMS_URL: &str = "/claims";
+
+/// The real route the Peer Claims tab links to (`/peer-claims`) — the no-JS
+/// `href`, the htmx `hx-get`, AND the pushed URL are ALL this one path (ADR-034).
+/// Held in ONE place so the tab anchor's three URL references stay identical.
+pub const PEER_CLAIMS_URL: &str = "/peer-claims";
+
+/// Render the My Claims ↔ Peer Claims TAB navigation (slice-07 H-6a; ADR-034).
+/// PURE total function — emits ordinary markup, header-unaware. Each tab is a real
+/// `<a href>` (the no-JS path: a plain link → full-page navigation that changes
+/// the browser URL natively) ENHANCED with htmx attributes on the SAME anchor:
+/// `hx-get` (= the same URL it links to), `hx-target="#view-panel"` (the tab swaps
+/// the active view panel, NOT the inner `#claims-table` — that is paging),
+/// `hx-swap="innerHTML"` (replace the panel's inner content), and
+/// `hx-push-url="true"` (htmx pushes the fetched URL into history, so the address
+/// bar shows the real route — bookmark/Back/reload all behave like a direct
+/// navigation, ADR-034 / FR-HX-4). The `href` == `hx-get` == the pushed URL, so
+/// there is ONE source of truth for the current view (the path); reloading that
+/// URL re-enters the FULL page (no `HX-Request`, ADR-033). The pure core stays
+/// unaware of HTTP — these are static attribute strings shared by both pages.
+pub fn render_tab_nav() -> Markup {
+    html! {
+        nav {
+            a href=(MY_CLAIMS_URL)
+              hx-get=(MY_CLAIMS_URL)
+              hx-target=(format!("#{VIEW_PANEL_ID}"))
+              hx-swap="innerHTML"
+              hx-push-url="true" { "My Claims" }
+            a href=(PEER_CLAIMS_URL)
+              hx-get=(PEER_CLAIMS_URL)
+              hx-target=(format!("#{VIEW_PANEL_ID}"))
+              hx-swap="innerHTML"
+              hx-push-url="true" { "Peer Claims" }
+        }
+    }
+}
+
+/// Render the My Claims VIEW-PANEL swap-target FRAGMENT (slice-07 H-6a; ADR-034 /
+/// DESIGN §6): the `<div id="view-panel">` wrapping the My Claims active list
+/// (the inner [`render_claims_table_fragment`], itself the `#claims-table`
+/// region). This is what an `HX-Request` tab switch to `/claims` lands on
+/// (`hx-target="#view-panel"`, `hx-swap="innerHTML"`). PURE total function — NO
+/// full-page chrome (I-HX-1). Because it EMBEDS the same `#claims-table` fragment
+/// fn, the inner paging swap (`hx-target="#claims-table"`, H-1a) still lands on the
+/// nested region — the two swap behaviors compose without conflict. The full page
+/// EMBEDS this SAME view-panel fn, so the fragment and the page's panel region are
+/// byte-identical by construction (I-HX-5 parity — no duplicated render logic).
+pub fn render_claims_view_panel_fragment(page: &PageView<ClaimRowView>) -> Markup {
+    html! {
+        div id=(VIEW_PANEL_ID) {
+            (render_claims_table_fragment(page))
+        }
+    }
+}
+
+/// Render the Peer Claims VIEW-PANEL swap-target FRAGMENT (slice-07 H-6a; ADR-034 /
+/// DESIGN §6): the `<div id="view-panel">` wrapping the Peer Claims active list
+/// (the inner [`render_peer_claims_table_fragment`], itself the `#claims-table`
+/// region). This is what an `HX-Request` tab switch to `/peer-claims` lands on
+/// (`hx-target="#view-panel"`, `hx-swap="innerHTML"`) — the contract H-6a pins.
+/// PURE total function — NO full-page chrome (I-HX-1). Because it EMBEDS the same
+/// `#claims-table` peer fragment fn, the inner peer paging swap
+/// (`hx-target="#claims-table"`, H-2a) still lands on the nested region — the tab
+/// switch (outer `#view-panel`) and paging (inner `#claims-table`) compose without
+/// conflict (DESIGN §6: the peer table is "inside #view-panel"). The full page
+/// EMBEDS this SAME view-panel fn, so fragment/page parity is structural (I-HX-5).
+pub fn render_peer_claims_view_panel_fragment(page: &PageView<PeerClaimRowView>) -> Markup {
+    html! {
+        div id=(VIEW_PANEL_ID) {
+            (render_peer_claims_table_fragment(page))
+        }
+    }
+}
+
 /// Render the My Claims swap-target FRAGMENT (slice-07; ADR-032/033): the
 /// `<div id="claims-table">` wrapping the claims table (or the guided empty
 /// state) + the position indicator + Prev/Next controls. PURE: a total function
@@ -225,7 +315,8 @@ pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
             body {
                 h1 { "My Claims" }
                 p { "This is a read-only view of the claims you have signed." }
-                (render_claims_table_fragment(page))
+                (render_tab_nav())
+                (render_claims_view_panel_fragment(page))
             }
         }
     };
@@ -664,7 +755,8 @@ pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
                     "This is a read-only view of claims federated from your peers \
                      — these are NOT your own claims."
                 }
-                (render_peer_claims_table_fragment(page))
+                (render_tab_nav())
+                (render_peer_claims_view_panel_fragment(page))
             }
         }
     };
@@ -1862,6 +1954,113 @@ mod tests {
         assert!(
             !html.contains("<!DOCTYPE") && !html.contains("<html"),
             "the peer fragment must carry NO full-page chrome; got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-07 H-6a; ADR-034 / DESIGN §6): the Peer Claims VIEW-PANEL
+    /// fragment — the swap target the tab switch lands on — wraps the active peer
+    /// list region in `<div id="view-panel">` (the tab's `hx-target`) AND contains
+    /// the inner `#claims-table` fragment (so peer paging, which targets
+    /// `#claims-table`, still lands). It carries the peer origin and NO full-page
+    /// chrome (I-HX-1). Pins the `#view-panel` ⊃ `#claims-table` composition — the
+    /// load-bearing tab-swap structure — at the unit level.
+    #[test]
+    fn render_peer_claims_view_panel_fragment_wraps_view_panel_around_the_table() {
+        let page = PageView::paged(
+            vec![peer_row(
+                "bafypeerpanel",
+                "github:peer/axum",
+                "endorses",
+                "an-object",
+                0.80,
+                known_origin("did:plc:peer-axum"),
+            )],
+            1,
+            50,
+            120,
+        );
+        let html = render_peer_claims_view_panel_fragment(&page).into_string();
+
+        // Wrapped in the tab swap-target id (VIEW_PANEL_ID), the single source of truth.
+        assert!(
+            html.contains(&format!("id=\"{VIEW_PANEL_ID}\"")),
+            "the view-panel fragment must wrap the region in id=\"{VIEW_PANEL_ID}\" \
+             (ADR-034: the tab targets #view-panel); got:\n{html}"
+        );
+        assert_eq!(
+            VIEW_PANEL_ID, "view-panel",
+            "the tab swap-target id const is \"view-panel\""
+        );
+        // The inner #claims-table fragment is nested inside the view panel, so the
+        // peer paging swap (which targets #claims-table) still lands (DESIGN §6).
+        assert!(
+            html.contains(&format!("id=\"{CLAIMS_TABLE_ID}\"")),
+            "the view-panel fragment must contain the inner id=\"{CLAIMS_TABLE_ID}\" \
+             (peer paging targets #claims-table, inside #view-panel); got:\n{html}"
+        );
+        // It is the PEER list — the peer origin renders so My-vs-federated is clear.
+        assert!(
+            html.contains("did:plc:peer-axum"),
+            "the view-panel fragment must carry the peer origin (author_did); got:\n{html}"
+        );
+        // The fragment is ONLY the swap region — NO full-page chrome (I-HX-1).
+        assert!(
+            !html.contains("<!DOCTYPE") && !html.contains("<html"),
+            "the view-panel fragment must carry NO full-page chrome; got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-07 H-6a; ADR-034): the page chrome's tab navigation carries
+    /// BOTH tab anchors (My Claims → `/claims`, Peer Claims → `/peer-claims`), and
+    /// each anchor carries a real `href` (the no-JS path) PLUS the htmx attributes
+    /// `hx-get` (= the same URL), `hx-target="#view-panel"`, `hx-swap`, and
+    /// `hx-push-url="true"` (so the swap pushes the real URL — bookmarkable, Back
+    /// works). Pins the progressive-enhancement contract: one anchor, two modes.
+    #[test]
+    fn tab_nav_anchors_carry_href_plus_htmx_attributes_with_push_url() {
+        let html = render_tab_nav().into_string();
+
+        // Both tabs present, each with its real href (the no-JS fallback path).
+        assert!(
+            html.contains(&format!("href=\"{MY_CLAIMS_URL}\"")),
+            "the tab nav must carry a real href to the My Claims URL \
+             {MY_CLAIMS_URL:?} (no-JS path); got:\n{html}"
+        );
+        assert!(
+            html.contains(&format!("href=\"{PEER_CLAIMS_URL}\"")),
+            "the tab nav must carry a real href to the Peer Claims URL \
+             {PEER_CLAIMS_URL:?} (no-JS path); got:\n{html}"
+        );
+        // The htmx enhancement on the SAME anchors: hx-get = the same URL.
+        assert!(
+            html.contains(&format!("hx-get=\"{PEER_CLAIMS_URL}\"")),
+            "the Peer Claims tab must carry hx-get={PEER_CLAIMS_URL:?} (= its href); \
+             got:\n{html}"
+        );
+        assert!(
+            html.contains(&format!("hx-get=\"{MY_CLAIMS_URL}\"")),
+            "the My Claims tab must carry hx-get={MY_CLAIMS_URL:?} (= its href); got:\n{html}"
+        );
+        // The tab swap targets the view panel (NOT #claims-table — that's paging).
+        assert!(
+            html.contains(&format!("hx-target=\"#{VIEW_PANEL_ID}\"")),
+            "each tab must target hx-target=\"#{VIEW_PANEL_ID}\" (ADR-034); got:\n{html}"
+        );
+        // hx-push-url=true: the swap pushes the real URL into history (bookmark/Back).
+        assert!(
+            html.contains("hx-push-url=\"true\""),
+            "each tab must carry hx-push-url=\"true\" so the active view is \
+             bookmarkable and Back works (ADR-034); got:\n{html}"
+        );
+        // An hx-swap is declared (the panel's inner region is replaced).
+        assert!(
+            html.contains("hx-swap="),
+            "each tab must declare an hx-swap; got:\n{html}"
+        );
+        // Both tab labels render.
+        assert!(
+            html.contains("My Claims") && html.contains("Peer Claims"),
+            "both tab labels (My Claims / Peer Claims) must render; got:\n{html}"
         );
     }
 

@@ -1353,11 +1353,47 @@ fn switching_to_peer_claims_with_htmx_returns_only_the_view_panel_fragment() {
     // WHEN she switches to Peer Claims WITH the header (`viewer.get_htmx("/peer-claims")`).
     // THEN the response is ONLY the view-panel fragment for the Peer Claims list: it
     // carries the peer origin (the peer DID), and is a fragment (no full-page chrome).
-    todo!(
-        "DELIVER H-6a: seed_own_claim_with_evidence(...); \
-         seed_cached_peer_claims(env, \"did:plc:peer-axum\", 120); \
-         frag = viewer.get_htmx(\"/peer-claims\"); assert frag.status==200, \
-         frag.is_fragment(), frag.body_contains(\"did:plc:peer-axum\")"
+    let env = TestEnv::initialized();
+    seed_own_claim_with_evidence(
+        &env,
+        "github:openlore/core",
+        "is-maintained-by",
+        "The Maintainers",
+        0.90,
+        &["https://example.test/evidence/1"],
+    );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/peer-claims");
+
+    assert_eq!(
+        frag.status, 200,
+        "the htmx tab-switch to Peer Claims returns 200; got {}",
+        frag.status
+    );
+    // The tab swap (US-HX-006 / ADR-034) targets `#view-panel`, so the swap-target
+    // returned under `HX-Request` is the VIEW-PANEL fragment (the active list region
+    // wrapped in `<div id="view-panel">`, DESIGN §6) — not a full page.
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request tab switch must return ONLY the view-panel fragment (no \
+         full-page chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"view-panel\""),
+        "the tab-switch fragment must be wrapped in the swap-target element \
+         id=\"view-panel\" (DESIGN §6 / ADR-034: the tab targets #view-panel); got:\n{}",
+        frag.body
+    );
+    // It is the PEER list (separable from her own claims): the peer origin (the peer
+    // DID) renders in the panel.
+    assert!(
+        frag.body_contains("did:plc:peer-axum"),
+        "the view-panel fragment must carry the peer origin (the peer DID) so the \
+         Peer Claims list is separable from her own; got:\n{}",
+        frag.body
     );
 }
 
