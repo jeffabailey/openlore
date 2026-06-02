@@ -34,9 +34,9 @@ use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claims_page, render_error, render_landing, render_peer_claims_page,
-    render_scrape_page, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
-    PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
+    render_claim_detail, render_claims_page, render_claims_table_fragment, render_error,
+    render_landing, render_peer_claims_page, render_scrape_page, CandidateRowView, ClaimDetailView,
+    ClaimRowView, PageView, PeerClaimRowView, ScrapeState, SCRAPE_NO_CANDIDATES_NOTICE,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -76,6 +76,47 @@ pub type SharedGithub = Arc<dyn GithubPort>;
 /// and the position-indicator + Next/Prev bounds the pure `viewer-domain`
 /// `PageView` projects (FR-VIEW-6).
 const DEFAULT_PAGE_SIZE: u64 = 50;
+
+/// The vendored htmx library bytes (htmx 2.0.4, 0BSD), embedded at compile time
+/// and served at `GET /static/htmx.min.js` (slice-07; ADR-031). Served LOCALLY by
+/// the viewer itself — NEVER a CDN (I-HX-2 offline-first). The embedded bytes are
+/// pinned against silent drift by [`HTMX_ASSET_SHA256`] + the integrity unit test.
+const HTMX_ASSET: &str = include_str!("../assets/htmx.min.js");
+
+/// The pinned SHA-256 of the vendored htmx asset (htmx 2.0.4). The integrity unit
+/// test asserts `sha256(HTMX_ASSET) == HTMX_ASSET_SHA256` so the embedded bytes
+/// cannot silently change (a swapped/tampered/upgraded asset fails CI until the
+/// pin is deliberately updated alongside it).
+const HTMX_ASSET_SHA256: &str =
+    "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447";
+
+/// The response SHAPE the viewer renders for a request (slice-07; ADR-033). The
+/// effect shell reads the `HX-Request` header ONCE in [`route`] and yields this
+/// typed choice; the PURE `viewer-domain` core stays header-unaware. `Fragment`
+/// returns ONLY the swap-target region (htmx in-place swap, I-HX-1); `FullPage`
+/// returns the complete slice-06 document (no-JS / bookmark / direct URL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// An `HX-Request` request — return ONLY the swap-target fragment.
+    Fragment,
+    /// No `HX-Request` header — return the complete full page (no-JS fallback).
+    FullPage,
+}
+
+impl Shape {
+    /// Read the response shape from the request's headers — the SOLE shape
+    /// selector (ADR-033): the PRESENCE of the `HX-Request` header (case-insensitive
+    /// name; the value is not load-bearing) selects [`Shape::Fragment`], its
+    /// absence [`Shape::FullPage`]. The header is read ONCE here so the pure core
+    /// never sees it. PURE total function over the header map.
+    fn from_request(req: &Request<Incoming>) -> Self {
+        if req.headers().contains_key("HX-Request") {
+            Shape::Fragment
+        } else {
+            Shape::FullPage
+        }
+    }
+}
 
 /// Why the viewer server failed to bind / serve.
 #[derive(Debug, thiserror::Error)]
@@ -220,6 +261,10 @@ async fn route(
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(str::to_string);
+    // Read the response SHAPE once (ADR-033): `HX-Request` present -> Fragment,
+    // absent -> FullPage. The sole shape selector; the pure core stays
+    // header-unaware. NO new data route keys on it — only the render fork.
+    let shape = Shape::from_request(&req);
 
     // `POST /scrape` — the LIVE propose step (US-VIEW-005). The ONLY non-GET
     // route + the ONLY route that reaches the network. Reads the form body, runs
@@ -233,7 +278,10 @@ async fn route(
     }
     match path.as_str() {
         "/" => Ok(landing_page()),
-        "/claims" => Ok(claims_page(store.as_ref(), query.as_deref())),
+        // `GET /static/htmx.min.js` — serve the vendored htmx asset locally (no
+        // CDN; I-HX-2 offline-first). GET-only, loopback, no write surface.
+        "/static/htmx.min.js" => Ok(htmx_asset()),
+        "/claims" => Ok(claims_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5).
@@ -280,7 +328,11 @@ fn parse_page(query: Option<&str>) -> u64 {
 /// view-model, and render the position indicator + Next/Prev controls via
 /// `viewer-domain` (FR-VIEW-6). A store read failure degrades to an empty guided
 /// page rather than a crash (the viewer never shows a raw stack trace; NFR-VIEW-6).
-fn claims_page(store: &dyn StoreReadPort, query: Option<&str>) -> Response<Full<Bytes>> {
+fn claims_page(
+    store: &dyn StoreReadPort,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
     let page = parse_page(query);
     let request = PageRequest {
         offset: (page - 1) * DEFAULT_PAGE_SIZE,
@@ -298,7 +350,14 @@ fn claims_page(store: &dyn StoreReadPort, query: Option<&str>) -> Response<Full<
         // Degrade to an empty guided page (total 0) — no indicator, no controls.
         Err(_) => PageView::paged(Vec::new(), page, DEFAULT_PAGE_SIZE, 0),
     };
-    html_ok(render_claims_page(&page_view))
+    // SHAPE fork (ADR-033): the htmx swap returns ONLY the `#claims-table`
+    // fragment; the no-JS / bookmark / direct-URL request returns the complete
+    // slice-06 full page. Both project the SAME `PageView` — the full page EMBEDS
+    // the fragment fn, so the two shapes agree by construction (I-HX-5).
+    match shape {
+        Shape::Fragment => html_ok(render_claims_table_fragment(&page_view).into_string()),
+        Shape::FullPage => html_ok(render_claims_page(&page_view)),
+    }
 }
 
 /// Render the Peer Claims page (`GET /peer-claims`, US-VIEW-003): read the
@@ -523,6 +582,19 @@ fn html_ok(body: String) -> Response<Full<Bytes>> {
     html_response(StatusCode::OK, Full::new(Bytes::from(body)))
 }
 
+/// Serve the vendored htmx asset (`GET /static/htmx.min.js`) — `200` with the
+/// non-empty embedded bytes and a JavaScript content-type (slice-07; ADR-031 /
+/// I-HX-2 offline-first). The bytes are compile-time-embedded ([`HTMX_ASSET`]) so
+/// the viewer never reaches a CDN; their integrity is pinned by the SHA-256 unit
+/// test. GET-only, loopback, no write surface.
+fn htmx_asset() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/javascript; charset=utf-8")
+        .body(Full::new(Bytes::from_static(HTMX_ASSET.as_bytes())))
+        .expect("static htmx asset response is well-formed")
+}
+
 /// The terse `404 Not Found` route-miss response (an unrouted path/method). The
 /// GUIDED not-found page (unknown CID) uses [`html_not_found`] instead.
 fn not_found() -> Response<Full<Bytes>> {
@@ -538,4 +610,33 @@ fn not_found() -> Response<Full<Bytes>> {
 /// terse route-miss `not_found()` body.
 fn html_not_found(body: String) -> Response<Full<Bytes>> {
     html_response(StatusCode::NOT_FOUND, Full::new(Bytes::from(body)))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Adapter-level unit tests for the slice-07 htmx surface. The asset integrity
+    //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
+
+    use super::{HTMX_ASSET, HTMX_ASSET_SHA256};
+    use sha2::{Digest, Sha256};
+
+    /// Behavior (ADR-031 — vendored-asset integrity): the embedded
+    /// `assets/htmx.min.js` bytes hash to the pinned [`HTMX_ASSET_SHA256`]
+    /// (htmx 2.0.4, 0BSD). If the asset is swapped, tampered with, or upgraded
+    /// without updating the pin, this test fails — so the bytes the viewer serves
+    /// at `/static/htmx.min.js` can never silently change.
+    #[test]
+    fn vendored_htmx_asset_matches_the_pinned_sha256() {
+        assert!(
+            !HTMX_ASSET.is_empty(),
+            "the vendored htmx asset must be non-empty"
+        );
+        let digest = Sha256::digest(HTMX_ASSET.as_bytes());
+        let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(
+            hex, HTMX_ASSET_SHA256,
+            "the embedded htmx asset SHA-256 must equal the pinned value — the \
+             vendored bytes drifted (update the pin deliberately if the asset changed)"
+        );
+    }
 }

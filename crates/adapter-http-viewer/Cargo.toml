@@ -43,3 +43,11 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 tokio = { workspace = true, features = ["rt", "net", "macros"] }
+
+# TEST-ONLY: `sha2` pins the vendored htmx asset's SHA-256 in the integrity unit
+# test (slice-07; ADR-031) so the embedded bytes cannot silently drift. A
+# dev-dependency only — the production viewer takes NO hashing edge (capability
+# surface unchanged; xtask check-arch untouched). Pinned crate-locally at the same
+# `0.10` line `claim-domain` uses (no workspace `sha2` entry exists).
+[dev-dependencies]
+sha2 = "0.10"

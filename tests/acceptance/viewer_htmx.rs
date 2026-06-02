@@ -98,11 +98,51 @@ fn paging_claims_with_htmx_returns_only_the_table_fragment() {
     // 312" and the page-3 Prev/Next anchors, it carries NO full-page chrome
     // (`response.is_fragment()` / NOT `is_full_page()`), and it renders confidence
     // verbatim (0.90). DELIVER materializes this first (walking skeleton).
-    todo!(
-        "DELIVER H-1a: seed 312 own claims via seed_own_claims_via_cli; start \
-         ViewerServer; let page = viewer.get_htmx(\"/claims?page=2\"); assert \
-         page.status==200, page.is_fragment(), page.body_contains(\"51–100 of 312\"), \
-         NOT page.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 312);
+    let viewer = ViewerServer::start(&env);
+
+    let page = viewer.get_htmx("/claims?page=2");
+
+    assert_eq!(page.status, 200, "the htmx claims request returns 200; got {}", page.status);
+    assert!(
+        page.is_fragment(),
+        "the HX-Request response must be ONLY the swap-target fragment (no full-page \
+         chrome); got:\n{}",
+        page.body
+    );
+    assert!(
+        !page.is_full_page(),
+        "the HX-Request response must NOT carry full-page chrome (no <!DOCTYPE html>/\
+         <html>); got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("51\u{2013}100 of 312"),
+        "the fragment must show the page-2 indicator \"51\u{2013}100 of 312\" (EN DASH); \
+         got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("id=\"claims-table\""),
+        "the fragment must be wrapped in the swap-target element id=\"claims-table\"; \
+         got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("0.90"),
+        "the fragment renders confidence verbatim (0.90); got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("?page=1"),
+        "page 2 links Previous to ?page=1; got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("?page=3"),
+        "page 2 links Next to ?page=3; got:\n{}",
+        page.body
     );
 }
 

@@ -168,29 +168,64 @@ impl<T> PageView<T> {
     }
 }
 
-/// Render the My Claims page as a complete HTML document (maud). PURE: a total
-/// function from the view-model to an HTML string — no I/O. Each seeded claim
-/// renders as a row carrying subject/predicate/object, the VERBATIM confidence
-/// (`0.90`, FR-VIEW-8), and its CID. An empty page renders the guided empty
-/// state (FR-VIEW-7) instead of a blank table.
-pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
+/// The HTML `id` of the My Claims swap-target element — the `<div>` the htmx
+/// fragment IS, and the region the full page wraps chrome around (slice-07;
+/// ADR-032/033). Held in ONE place so the fragment fn and any future
+/// `hx-target`/`hx-swap` reference the SAME id (a mutation to the id has exactly
+/// one site to attack — pinned by the unit test). htmx swaps the element whose id
+/// matches; the no-JS full page embeds the SAME `<div id="claims-table">` so the
+/// two shapes are structurally identical inside the swap target (I-HX-5 parity by
+/// construction).
+pub const CLAIMS_TABLE_ID: &str = "claims-table";
+
+/// Render the My Claims swap-target FRAGMENT (slice-07; ADR-032/033): the
+/// `<div id="claims-table">` wrapping the claims table (or the guided empty
+/// state) + the position indicator + Prev/Next controls. PURE: a total function
+/// from the view-model to an HTML string — NO full-page chrome (no `<!DOCTYPE>`,
+/// no `<html>`/`<head>`), so an `HX-Request` response carries ONLY this region
+/// (I-HX-1). [`render_claims_page`] EMBEDS this SAME fn inside its chrome, so the
+/// fragment and the full page's table region are byte-identical by construction
+/// (I-HX-5 parity — the table-rendering logic is NOT duplicated). This is the
+/// load-bearing slice-07 structural contract: page = chrome + fragment.
+pub fn render_claims_table_fragment(page: &PageView<ClaimRowView>) -> Markup {
     let body = if page.rows.is_empty() {
         render_empty_state()
     } else {
         render_claims_table(&page.rows)
     };
+    html! {
+        div id=(CLAIMS_TABLE_ID) {
+            (body)
+            (render_pagination(page))
+        }
+    }
+}
+
+/// Render the My Claims page as a complete HTML document (maud). PURE: a total
+/// function from the view-model to an HTML string — no I/O. Each seeded claim
+/// renders as a row carrying subject/predicate/object, the VERBATIM confidence
+/// (`0.90`, FR-VIEW-8), and its CID. An empty page renders the guided empty
+/// state (FR-VIEW-7) instead of a blank table.
+///
+/// COMPOSITION (slice-07; ADR-032): the page is chrome wrapped AROUND
+/// [`render_claims_table_fragment`] — the EXACT same fragment fn the htmx shape
+/// returns alone. The `<head>` emits exactly ONE local
+/// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2).
+/// Because the table region is the SAME fn in both shapes, fragment/full-page
+/// parity is structural, not asserted by duplicating render logic (I-HX-5).
+pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
             head {
                 meta charset="utf-8";
                 title { "OpenLore — My Claims" }
+                script src="/static/htmx.min.js" {}
             }
             body {
                 h1 { "My Claims" }
                 p { "This is a read-only view of the claims you have signed." }
-                (body)
-                (render_pagination(page))
+                (render_claims_table_fragment(page))
             }
         }
     };
@@ -2058,6 +2093,109 @@ mod tests {
                 !html.contains('%'),
                 "confidence must never render as a percentage in the live-scrape view"
             );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // htmx swap-target fragment (slice-07; ADR-032/033 / US-HX-001 / I-HX-1/5).
+    // The fragment fn is the swap-target region returned alone under HX-Request;
+    // the full page EMBEDS the same fn, so parity is structural (not duplicated).
+    // -------------------------------------------------------------------------
+
+    /// Behavior (H-1a / I-HX-1): the swap-target FRAGMENT wraps the table + the
+    /// position indicator + Prev/Next inside ONE `<div id="claims-table">`,
+    /// carries every row field + the VERBATIM confidence, and carries NO
+    /// full-page chrome (no `<!DOCTYPE>`, no `<html>`/`<head>`). This is what an
+    /// `HX-Request` response returns alone. Pins the exact page-2-of-312 fixture
+    /// (`51–100 of 312`, EN DASH) the H-1a acceptance test asserts on.
+    #[test]
+    fn claims_table_fragment_wraps_the_swap_target_with_no_chrome() {
+        let view = paged(50, 2, 50, 312);
+        let html = render_claims_table_fragment(&view).into_string();
+
+        // Wrapped in exactly the swap-target id.
+        assert!(
+            html.contains(&format!("id=\"{CLAIMS_TABLE_ID}\"")),
+            "fragment must be wrapped in <div id=\"{CLAIMS_TABLE_ID}\">; got:\n{html}"
+        );
+        // The table region + indicator (EN DASH) + controls are present.
+        assert!(html.contains("<table"), "fragment carries the claims table; got:\n{html}");
+        assert!(
+            html.contains("51\u{2013}100 of 312"),
+            "fragment shows the page-2 indicator \"51\u{2013}100 of 312\"; got:\n{html}"
+        );
+        assert!(html.contains("?page=1"), "fragment links Prev to ?page=1; got:\n{html}");
+        assert!(html.contains("?page=3"), "fragment links Next to ?page=3; got:\n{html}");
+        // The verbatim confidence rule holds in the fragment (FR-VIEW-8).
+        assert!(html.contains("0.90"), "fragment renders confidence verbatim; got:\n{html}");
+        // NO full-page chrome: the fragment is ONLY the swap-target region.
+        let lower = html.to_lowercase();
+        assert!(!lower.contains("<!doctype"), "fragment must carry no DOCTYPE; got:\n{html}");
+        assert!(!lower.contains("<html"), "fragment must carry no <html> chrome; got:\n{html}");
+        assert!(!lower.contains("<head"), "fragment must carry no <head> chrome; got:\n{html}");
+    }
+
+    /// Behavior (ADR-032 / I-HX-5 — parity by construction): the full page is
+    /// chrome wrapped AROUND the SAME `render_claims_table_fragment` fn. The
+    /// fragment's exact bytes therefore appear verbatim inside the full page (the
+    /// table region is not re-rendered by a divergent path), the page carries the
+    /// full-page chrome the fragment lacks, and the `<head>` emits EXACTLY ONE
+    /// local `<script src="/static/htmx.min.js">` (offline-first, never a CDN;
+    /// I-HX-2). Guards against the table logic being duplicated/diverging.
+    #[test]
+    fn claims_page_embeds_the_fragment_and_emits_one_local_htmx_script() {
+        let view = paged(50, 2, 50, 312);
+        let fragment = render_claims_table_fragment(&view).into_string();
+        let page = render_claims_page(&view);
+
+        // The full page EMBEDS the fragment verbatim (parity by construction).
+        assert!(
+            page.contains(&fragment),
+            "the full page must embed the SAME fragment bytes; fragment:\n{fragment}\n\npage:\n{page}"
+        );
+        // The page carries full-page chrome the fragment does not.
+        let lower = page.to_lowercase();
+        assert!(lower.contains("<!doctype html>"), "the full page carries a DOCTYPE; got:\n{page}");
+        assert!(lower.contains("<html"), "the full page carries <html> chrome; got:\n{page}");
+        // EXACTLY ONE local htmx script, never a CDN.
+        assert_eq!(
+            page.matches("<script src=\"/static/htmx.min.js\">").count(),
+            1,
+            "the <head> must emit exactly one local <script src=\"/static/htmx.min.js\">; got:\n{page}"
+        );
+        for cdn in ["unpkg.com", "jsdelivr", "cdnjs", "//cdn."] {
+            assert!(
+                !lower.contains(cdn),
+                "the htmx asset must be local, never a CDN ({cdn}); got:\n{page}"
+            );
+        }
+    }
+
+    proptest! {
+        /// Property (I-HX-5 — parity across the page domain): for ANY non-empty
+        /// page within bounds, the fragment's bytes are contained verbatim in the
+        /// full page, AND the fragment carries no full-page chrome while the page
+        /// does. Generalizes the example: page = chrome + the SAME fragment fn for
+        /// every (total, size, page), so the two shapes can never diverge.
+        #[test]
+        fn fragment_is_always_embedded_verbatim_in_the_full_page(
+            (total, page_size, page) in (1u64..=1000)
+                .prop_flat_map(|total| (Just(total), 1u64..=100))
+                .prop_flat_map(|(total, page_size)| {
+                    let last_page = total.div_ceil(page_size);
+                    (Just(total), Just(page_size), 1u64..=last_page)
+                }),
+        ) {
+            let view = PageView::paged(Vec::new(), page, page_size, total);
+            let fragment = render_claims_table_fragment(&view).into_string();
+            let full = render_claims_page(&view);
+            prop_assert!(
+                full.contains(&fragment),
+                "the full page must embed the fragment verbatim for page {page}/{page_size}/{total}"
+            );
+            let frag_lower = fragment.to_lowercase();
+            prop_assert!(!frag_lower.contains("<html"), "the fragment carries no chrome");
+            prop_assert!(full.to_lowercase().contains("<html"), "the page carries chrome");
         }
     }
 }
