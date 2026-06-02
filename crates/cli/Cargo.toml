@@ -320,3 +320,32 @@ harness = true
 name = "viewer_invariants"
 path = "../../tests/acceptance/viewer_invariants.rs"
 harness = true
+
+# Slice-07 (viewer-htmx-swaps; DISTILL) subprocess + real-I/O acceptance: htmx
+# partial-swaps as a PROGRESSIVE ENHANCEMENT over the slice-06 read-only viewer
+# (US-HX-001..004 + US-HX-006; ADR-031/032/033/034/035). Drives the REAL `openlore
+# ui` verb via `ViewerServer` + in-test HTTP, sending/withholding the `HX-Request`
+# header (the ADR-035 `get`/`get_htmx` + `post_form`/`post_form_htmx` pair) to drive
+# both shapes against the same running viewer. EVERY interaction story carries htmx
+# fragment + no-JS full page + parity. GitHub (only on POST /scrape) is the REUSED
+# slice-02 `FakeGithub`; DuckDB is REAL (BR-VIEW-4). DISTILL registers + materializes
+# the harness so the H-* scenarios classify RED (panic at `todo!()`); H-* stay RED
+# until DELIVER's per-scenario phases.
+[[test]]
+name = "viewer_htmx"
+path = "../../tests/acceptance/viewer_htmx.rs"
+harness = true
+
+# Slice-07 (viewer-htmx-swaps; DISTILL) GOLD / guardrail invariants: the htmx asset
+# served locally (US-HX-005 — `GET /static/htmx.min.js` 200 + no-CDN offline
+# guarantee, I-HX-2/FR-HX-6/BR-HX-6), the no-regression byte-equivalence of non-htmx
+# responses (I-HX-4 — the slice-06 26-scenario suite is the companion release gate),
+# and the read-only/no-new-write-surface guardrails over the htmx fragment routes
+# (I-HX-3 — `assert_store_read_only` universe-bound state-delta, Mandate 8; no sign
+# control on any fragment). Drives the REAL `openlore ui` via `ViewerServer`. Per
+# Mandate 11 the sad/property paths are example-based, never PBT-generated at this
+# layer. DISTILL registers + RED gate; H-5*/H-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_htmx_invariants"
+path = "../../tests/acceptance/viewer_htmx_invariants.rs"
+harness = true

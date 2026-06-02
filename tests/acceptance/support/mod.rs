@@ -6979,6 +6979,43 @@ impl ViewerResponse {
     pub fn body_contains(&self, needle: &str) -> bool {
         self.body.contains(needle)
     }
+
+    /// Does this response carry full-page CHROME? slice-06 full pages are complete
+    /// maud documents that emit `<!DOCTYPE html>` + `<html>` + the `<title>OpenLore`
+    /// chrome (viewer-domain `render_*_page`). An htmx FRAGMENT carries NONE of that
+    /// — it is just the swap-target `<div id=...>` region. This is the observable
+    /// discriminator the slice-07 scenarios assert on (I-HX-1): a fragment must NOT
+    /// be a full page, and a no-JS response MUST be a full page.
+    ///
+    /// SCAFFOLD: true (slice-07) — compiles now; classifies the body DELIVER renders.
+    pub fn is_full_page(&self) -> bool {
+        let lower = self.body.to_lowercase();
+        lower.contains("<!doctype html>") && lower.contains("<html")
+    }
+
+    /// The inverse discriminator: a true htmx FRAGMENT has no full-page chrome
+    /// (no `<!DOCTYPE html>`, no `<html>`, no `<head>`/`<title>` shell). Asserting
+    /// `is_fragment()` on an `HX-Request` response proves the swap target was
+    /// returned ALONE (NFR-HX-6 in-place feel; I-HX-1 shape selection).
+    ///
+    /// SCAFFOLD: true (slice-07).
+    pub fn is_fragment(&self) -> bool {
+        !self.is_full_page()
+    }
+
+    /// Does the rendered HTML reference an OFF-HOST URL to load the htmx library?
+    /// The offline-first guarantee (I-HX-2 / US-HX-005) requires the htmx asset to
+    /// be served by the viewer ITSELF (loopback `/static/htmx.min.js` or inlined) —
+    /// NEVER a CDN. This scans for the well-known htmx CDN hosts; a `true` result is
+    /// an offline-guarantee breach. Used by the no-CDN gold scenario.
+    ///
+    /// SCAFFOLD: true (slice-07).
+    pub fn references_external_cdn(&self) -> bool {
+        let lower = self.body.to_lowercase();
+        ["unpkg.com", "cdn.jsdelivr.net", "jsdelivr", "cdnjs", "//cdn."]
+            .iter()
+            .any(|host| lower.contains(host))
+    }
 }
 
 /// A handle to a REAL long-running `openlore ui --port 0` process bound to a
@@ -7172,6 +7209,63 @@ impl ViewerServer {
         let body = response
             .text()
             .unwrap_or_else(|e| panic!("read body of POST {url}: {e}"));
+        ViewerResponse { status, body }
+    }
+
+    /// Issue an HTTP `GET <base_url><path>` WITH the `HX-Request: true` header —
+    /// the slice-07 htmx (FRAGMENT) shape driver (ADR-035, OD-HX-6). A mirror of
+    /// [`get`](Self::get); the ONLY delta is the added header. The header is what
+    /// the htmx library sets on swap-driven requests; ADR-033's `Shape::from_request`
+    /// keys on its PRESENCE (the value `"true"` matches real htmx for fidelity, but
+    /// is not load-bearing). Under this header the viewer returns ONLY the swap-
+    /// target region (no chrome, no `<!DOCTYPE html>`), per I-HX-1.
+    ///
+    /// The companion no-header [`get`](Self::get) stays the no-JS / full-page driver
+    /// (curl / bookmark / direct URL / JS-off), so the slice-06 corpus that uses it
+    /// is byte-unaffected (I-HX-4). This helper body COMPILES now (it only adds a
+    /// header to the existing reqwest call); the FRAGMENT behavior is unimplemented
+    /// until DELIVER, so the slice-07 scenarios fail at RUNTIME (correct RED).
+    ///
+    /// SCAFFOLD: true (slice-07) — the method is materialized; the fragment shape it
+    /// drives is the production behavior DELIVER implements.
+    pub fn get_htmx(&self, path: &str) -> ViewerResponse {
+        let url = format!("{}{}", self.base_url, path);
+        let response = reqwest::blocking::Client::new()
+            .get(&url)
+            .header("HX-Request", "true")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .unwrap_or_else(|e| panic!("GET (htmx) {url}: {e}"));
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .unwrap_or_else(|e| panic!("read body of GET (htmx) {url}: {e}"));
+        ViewerResponse { status, body }
+    }
+
+    /// Issue an HTTP `POST <base_url><path>` form-urlencoded WITH the
+    /// `HX-Request: true` header — the slice-07 htmx scrape-results (FRAGMENT) shape
+    /// driver (ADR-035, US-HX-003). A mirror of [`post_form`](Self::post_form); the
+    /// ONLY delta is the added header. Under this header `POST /scrape` returns ONLY
+    /// the `#scrape-results` region swapped below the form (candidates / zero-
+    /// candidate / network-down guidance), with NO surrounding chrome and NO sign
+    /// control (BR-HX-4 / I-SCR-1). The companion no-header [`post_form`](Self::post_form)
+    /// stays the no-JS full-page driver.
+    ///
+    /// SCAFFOLD: true (slice-07).
+    pub fn post_form_htmx(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
+        let url = format!("{}{}", self.base_url, path);
+        let response = reqwest::blocking::Client::new()
+            .post(&url)
+            .header("HX-Request", "true")
+            .timeout(std::time::Duration::from_secs(10))
+            .form(fields)
+            .send()
+            .unwrap_or_else(|e| panic!("POST (htmx) {url}: {e}"));
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .unwrap_or_else(|e| panic!("read body of POST (htmx) {url}: {e}"));
         ViewerResponse { status, body }
     }
 }
