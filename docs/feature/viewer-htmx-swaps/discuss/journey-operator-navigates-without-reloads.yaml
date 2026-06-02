@@ -1,0 +1,283 @@
+schema_version: 1
+
+# DELTA on slice-06 (htmx-scraper-viewer). Adds htmx partial-swaps as a progressive
+# enhancement over the SAME read-only routes. HTTP surface unchanged; only the response
+# shape varies by the HX-Request header. No-JS / offline / curl / bookmark always get the
+# full slice-06 page. htmx asset is served locally (never CDN) for offline-first.
+
+journey:
+  name: "operator-navigates-without-reloads"
+  goal: "Navigate the local viewer (page, scrape, open a claim, switch tabs) with in-place updates — no full-page reload, no scroll reset, no flash — while a no-JS / offline / direct-URL operator still gets the exact slice-06 full-page experience."
+  persona: "Maria Santos — node operator browsing her own node at http://127.0.0.1:8788 (loopback only, no auth)."
+
+  emotional_arc:
+    start: "Settled — slice-06 works, I can see my store — but every click jolts (full reload, scroll jump, flash)."
+    middle: "Smooth — Prev/Next, scrape submit, claim open, tab switch swap only the changed region; the page holds still."
+    end: "Fluid and trusting — feels like one place I move around in, and it still works with JS off, offline, and from a bookmark."
+
+  inherited_invariants:
+    - "I-VIEW-1: read-only — no route writes or signs (carried; swaps ride existing GET + existing POST /scrape)."
+    - "I-VIEW-2: no signing key in the web process."
+    - "I-VIEW-3: human signing gate stays exclusively in the CLI (I-SCR-1); /scrape renders no sign control."
+    - "I-VIEW-4: loopback-only bind (127.0.0.1)."
+    - "I-VIEW-5: derived-from display-only, only on /scrape candidates (WD-62)."
+    - "I-VIEW-6: store views work fully offline (KPI-5 local-first)."
+    - "FR-VIEW-8: confidence shown verbatim (no reformat)."
+
+  new_invariants:
+    - "I-HX-1: progressive enhancement — every route serves a COMPLETE navigable full page when HX-Request is absent (no-JS, direct URL, bookmark, view-source, curl). htmx requests (HX-Request header) get the fragment of the SAME content. No new data routes; only response shape varies by header."
+    - "I-HX-2: htmx served locally — the htmx library is served by the viewer itself (vendored asset or inlined), NEVER from a CDN; the dashboard works fully offline (inherits I-VIEW-6 / KPI-5)."
+    - "I-HX-3: read-only preserved — swaps add NO write/sign surface; the web process holds no signing key (I-VIEW-1/2 unchanged)."
+    - "I-HX-4: no-regression — non-htmx responses are byte-equivalent to slice-06; the slice-06 acceptance suite stays green."
+    - "I-HX-5: fragment/full-page parity — the fragment returned under HX-Request is the SAME content as the corresponding region of the full page (same rows, position indicator, verbatim confidence)."
+
+steps:
+  - id: 1
+    name: "Pagination swaps the list in place (WALKING SKELETON)"
+    command: "GET /claims?page=N  (and GET /peer-claims?page=N) — Prev/Next"
+    tui_mockup: |
+      +-- My Claims ---------------------- [My Claims] [Peer Claims] --+
+      | Read-only · 127.0.0.1:8788 · 312 claims                       |
+      |  ┌──── swap target: #claims-table ──────────────────────────┐ |
+      |  │ rust-lang/rust  is-maintained-by  The Rust Pr…  0.90 bafy1 │ |
+      |  │ …                                                         │ |
+      |  │ 51–100 of 312    [ Prev ]                 [ Next ]        │ |
+      |  └───────────────────────────────────────────────────────────┘ |
+      +---------------------------------------------------------------+
+      chrome + nav stay put · scroll preserved · no flash
+    shared_artifacts:
+      - name: "hx_request_header"
+        source: "incoming HTTP request header HX-Request (set by the htmx library)"
+        displayed_as: "${hx_request_header}"
+        consumers: ["all four route handlers (claims, peer-claims, claims/{cid}, scrape) decide fragment vs full page"]
+      - name: "swap_target"
+        source: "page-chrome / layout shell in viewer-domain (the id attributes on the swap regions)"
+        displayed_as: "${swap_target}  (#claims-table here)"
+        consumers: ["full page (defines the region) + fragment response (targets the same id)"]
+      - name: "position_indicator"
+        source: "viewer-domain render_position_indicator / PageView (start/end/total) — slice-06"
+        displayed_as: "51–100 of 312"
+        consumers: ["full /claims page", "claims-table fragment"]
+    emotional_state:
+      entry: "Settled but braced for the per-click jolt."
+      exit: "Relieved — Next changed only the table; I kept my place."
+    integration_checkpoint: |
+      The claims-table fragment returned under HX-Request MUST match the table region of the
+      full /claims?page=N page (same rows, same 'X–Y of N', same Prev/Next bounds). Full page
+      for non-htmx is byte-equivalent to slice-06 (I-HX-4). Pagination clamp (slice-06 DV-5)
+      preserved in both shapes.
+    failure_modes:
+      - "No-JS operator clicks Next and gets a fragment instead of a full page (I-HX-1 violation)."
+      - "Fragment table diverges from full-page table (I-HX-5 violation)."
+      - "Over-the-end ?page returns a blank fragment instead of clamping to the last page (regress slice-06 DV-5)."
+    gherkin: |
+      Scenario: Paging the claims list updates only the table, in place
+        Given Maria has 312 signed claims rendered 50 per page on the My Claims view
+        And she is viewing page 1 with her scroll position partway down
+        When her browser requests page 2 as an htmx request (HX-Request present)
+        Then the response is just the claims-table fragment showing 51–100 of 312
+        And the page chrome, nav, and scroll position are unchanged
+        And no full-page reload occurs
+      Scenario: The same page works as a full page without JavaScript
+        Given JavaScript is disabled in Maria's browser
+        When she clicks Next on the My Claims view (a plain link to /claims?page=2)
+        Then the server returns the complete /claims?page=2 page
+        And it is byte-equivalent to the slice-06 full page
+
+  - id: 2
+    name: "Live scrape form swaps results below the form"
+    command: "POST /scrape (existing route)"
+    tui_mockup: |
+      +-- Live Scrape -------------------- [My Claims] [Peer Claims] --+
+      | Target: [ tokio-rs/tokio        ]  [ Propose ]  ← form STAYS   |
+      |  ┌──── swap target: #scrape-results ────────────────────────┐  |
+      |  │ 7 candidates · NOTHING signed/saved · sign in the CLI    │  |
+      |  │ tokio-rs/tokio  has-license  MIT  0.95  LICENSE @ HEAD   │  |
+      |  └───────────────────────────────────────────────────────────┘ |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "fragment"
+        source: "viewer-domain render fns rendering only the results region (split out of render_scrape_page)"
+        displayed_as: "${fragment}  (#scrape-results)"
+        consumers: ["POST /scrape under HX-Request"]
+      - name: "swap_target"
+        source: "page chrome (id #scrape-results)"
+        displayed_as: "${swap_target}"
+        consumers: ["full /scrape page", "scrape-results fragment"]
+    emotional_state:
+      entry: "Curious, ready to triage candidates."
+      exit: "Focused — results appeared below; form kept its value; nothing reloaded."
+    integration_checkpoint: |
+      The scrape-results fragment (candidates, OR zero-candidates, OR network-down guidance)
+      MUST match the corresponding region of the full /scrape page. NO sign control in either
+      shape (I-VIEW-3 / I-SCR-1). Nothing persisted (BR-VIEW-2). Network-down message still
+      notes the store view works offline (NFR-VIEW-7).
+    failure_modes:
+      - "A sign control leaks into the fragment (I-VIEW-3 violation)."
+      - "A candidate is persisted on submit (BR-VIEW-2 violation)."
+      - "Network-down fragment drops the 'store view still works offline' guidance."
+      - "No-JS submit returns a fragment instead of the full /scrape page (I-HX-1)."
+    gherkin: |
+      Scenario: Submitting a scrape target swaps in the proposals without reloading
+        Given Maria is on the Live Scrape view with network available
+        And a live scrape of "tokio-rs/tokio" would propose 7 candidate claims
+        When she submits the target as an htmx request (HX-Request present)
+        Then only the results region updates to show the 7 candidates with derived-from
+        And the form and its target value remain in place
+        And the results state that nothing is signed or saved and direct her to the CLI
+        And no candidate is persisted
+        And no sign control is rendered
+      Scenario: Network failure swaps in guidance that the store view still works offline
+        Given Maria cannot reach GitHub
+        When she submits "tokio-rs/tokio" as an htmx request
+        Then the results region shows that GitHub could not be reached
+        And it states her store view still works offline
+      Scenario: Scrape submit works as a full page without JavaScript
+        Given JavaScript is disabled
+        When Maria submits the scrape form (plain POST /scrape)
+        Then the server returns the complete /scrape page with the candidates below the form
+
+  - id: 3
+    name: "Claim detail loads inline"
+    command: "GET /claims/{cid} (existing route)"
+    tui_mockup: |
+      +-- My Claims --------------------------------------------------+
+      | … claims table … (row bafy1 clicked)                          |
+      |  ┌──── swap target: #claim-detail ──────────────────────────┐ |
+      |  │ rust-lang/rust · is-maintained-by · The Rust Project 0.90 │ |
+      |  │ author did:plc:maria… · composed 2026-04-18T09:12:03Z     │ |
+      |  │ evidence: github.com/rust-lang/rust · crates.io/…         │ |
+      |  └───────────────────────────────────────────────────────────┘ |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "fragment"
+        source: "viewer-domain render fn rendering only the detail region (split out of render_claim_detail)"
+        displayed_as: "${fragment}  (#claim-detail)"
+        consumers: ["GET /claims/{cid} under HX-Request"]
+      - name: "full_page"
+        source: "viewer-domain render_claim_detail (full page) — slice-06"
+        displayed_as: "${full_page}"
+        consumers: ["GET /claims/{cid} without HX-Request (direct URL / bookmark / no-JS)"]
+    emotional_state:
+      entry: "Interested in one claim's evidence."
+      exit: "Satisfied — detail appeared inline; I did not lose the list."
+    integration_checkpoint: |
+      The detail fragment MUST match the detail region of the full /claims/{cid} page (all
+      fields + complete evidence[], verbatim confidence). Unknown CID and no-evidence states
+      render guided messages in both shapes. Detail renders offline.
+    failure_modes:
+      - "Unknown CID returns a broken/empty fragment instead of guided not-found."
+      - "No-JS click navigates to a fragment instead of the full detail page (I-HX-1)."
+      - "Confidence reformatted in the fragment but verbatim in the full page (FR-VIEW-8 / I-HX-5)."
+    gherkin: |
+      Scenario: Opening a claim loads its detail inline without leaving the list
+        Given Maria is on the My Claims view and her claim bafyrei...1 has two evidence URLs
+        When she opens that claim as an htmx request (HX-Request present)
+        Then the detail region updates to show all claim fields and both evidence URLs
+        And the claims list remains in place
+        And the confidence is shown verbatim as 0.90
+      Scenario: Opening a claim works as a full page without JavaScript
+        Given JavaScript is disabled
+        When Maria clicks a claim row (a plain link to /claims/bafyrei...1)
+        Then the server returns the complete claim detail page (slice-06 behavior)
+      Scenario: An unknown claim id guides the operator in both shapes
+        Given no claim with CID bafyrei...zzz exists in the store
+        When Maria opens that claim (htmx or full page)
+        Then she sees "No claim with that identifier in your store" with a link back to the list
+
+  - id: 4
+    name: "My Claims <-> Peer Claims tab switches in place"
+    command: "GET /claims  and  GET /peer-claims (existing routes)"
+    tui_mockup: |
+      +-- [ My Claims ]  [*Peer Claims*] -----------------------------+
+      |  ┌──── swap target: #view-panel ────────────────────────────┐ |
+      |  │ Peer Claims · 1,840 from 4 peers                         │ |
+      |  │ axum/axum  has-license  MIT  0.88  origin: peer-A        │ |
+      |  └───────────────────────────────────────────────────────────┘ |
+      +---------------------------------------------------------------+
+    shared_artifacts:
+      - name: "swap_target"
+        source: "page chrome (id #view-panel)"
+        displayed_as: "${swap_target}"
+        consumers: ["full /claims & /peer-claims pages", "the tab-panel fragment"]
+      - name: "full_page"
+        source: "viewer-domain render_claims_page / render_peer_claims_page (full page) — slice-06"
+        displayed_as: "${full_page}"
+        consumers: ["GET /claims & GET /peer-claims without HX-Request"]
+    emotional_state:
+      entry: "Wants to compare own vs federated claims."
+      exit: "Oriented — switched views in place; the URL still reflects where I am, Back works."
+    integration_checkpoint: |
+      The tab-panel fragment for /claims and /peer-claims MUST match the view-panel region of
+      the respective full page (peer rows still show origin, separable from own claims —
+      KPI-VIEW-3 carried). The browser URL/history updates so the active view is bookmarkable
+      and Back works (mechanism is OD-HX, e.g. hx-push-url). Non-htmx tab click = full page.
+    failure_modes:
+      - "Tab swap does not update the URL, breaking bookmark/Back (history strategy gap — OD-HX)."
+      - "Peer rows lose origin or become indistinguishable from own claims in the fragment (KPI-VIEW-3)."
+      - "No-JS tab click returns a fragment instead of the full page (I-HX-1)."
+    gherkin: |
+      Scenario: Switching to Peer Claims swaps the view panel in place
+        Given Maria is on the My Claims view with 1,840 federated peer claims from 4 peers
+        When she switches to Peer Claims as an htmx request (HX-Request present)
+        Then only the view panel updates to the Peer Claims list showing each row's origin
+        And the peer rows are separable from her own claims
+        And the browser URL reflects /peer-claims so the view is bookmarkable and Back works
+      Scenario: The tabs work as full-page navigation without JavaScript
+        Given JavaScript is disabled
+        When Maria clicks the Peer Claims tab (a plain link to /peer-claims)
+        Then the server returns the complete /peer-claims page (slice-06 behavior)
+
+  - id: 5
+    name: "htmx asset served locally (offline-first)"
+    command: "Page chrome references htmx served by THIS process (OD-HX-1: GET /static/htmx.min.js OR inlined)"
+    tui_mockup: |
+      Page chrome (slice-06 layout shell, extended)
+        └─ references htmx ──► served from 127.0.0.1 (vendored asset or inlined)
+                               NEVER a CDN
+      offline test: pull the network → every swap + every store view still works
+    shared_artifacts:
+      - name: "htmx_asset"
+        source: "vendored asset in the viewer (or inlined script) — single source; OD-HX-1 picks the exact mechanism"
+        displayed_as: "${htmx_asset}"
+        consumers: ["every page's chrome references the one local source (no CDN, no second copy)"]
+    emotional_state:
+      entry: "Expects the dashboard to keep working offline (slice-06 promise)."
+      exit: "Trusting — swaps work with the network pulled; nothing reaches out to a CDN."
+    integration_checkpoint: |
+      The htmx asset has ONE source; every page references that one source. Offline test is
+      the gate: with the network down, every store view AND every swap still work (I-HX-2 /
+      I-VIEW-6 / KPI-5). No request leaves loopback to fetch the library.
+    failure_modes:
+      - "htmx loaded from a CDN — swaps break offline (I-HX-2 / I-VIEW-6 violation)."
+      - "Two copies of the asset drift (single-source violation)."
+    gherkin: |
+      Scenario: htmx-powered swaps keep working with no network
+        Given Maria's machine has no network access
+        When she loads any viewer route and triggers a swap (page, open a claim, switch tabs)
+        Then the htmx library loads from the viewer process itself (not a CDN)
+        And every store view and every swap still works fully offline
+      @property
+      Scenario: No viewer page references an external CDN for htmx
+        Given the viewer is serving any route
+        Then no served page references an off-host URL to load the htmx library
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "hx_request_header"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "A handler that ignores HX-Request will return the wrong shape (full page to htmx, or a fragment to a no-JS/curl/bookmark request) — breaks I-HX-1."
+    - artifact: "swap_target"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "If a fragment targets an id the full-page chrome does not define (or vice versa), the swap lands nowhere — full page and fragment must agree on #claims-table / #scrape-results / #claim-detail / #view-panel."
+    - artifact: "fragment vs full_page parity"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "If the fragment's content diverges from the full page's corresponding region (rows, position indicator, verbatim confidence, peer origin), the two shapes disagree — breaks I-HX-5."
+    - artifact: "htmx_asset"
+      must_match_across: [5]
+      failure_message: "If htmx is loaded from a CDN or duplicated, swaps break offline — breaks I-HX-2 / I-VIEW-6 / KPI-5."
+
+changelog:
+  - date: "2026-06-01"
+    feature: "viewer-htmx-swaps (slice-07)"
+    change: "Initial DISCUSS journey: htmx partial-swaps as progressive enhancement over the slice-06 read-only routes; HX-Request header drives fragment-vs-full-page; htmx served locally for offline-first; no-JS/curl/bookmark always get the slice-06 full page."
