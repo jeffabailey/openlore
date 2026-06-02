@@ -662,16 +662,59 @@ fn submitting_scrape_with_htmx_returns_only_the_results_fragment() {
 #[test]
 fn scrape_with_no_candidates_swaps_in_guidance_fragment() {
     // GIVEN a public repo that harvests successfully but yields NO derivable
-    // candidates (the REUSED FakeGithub with no signals).
+    // candidates — the REUSED slice-02 `FakeGithub::for_public_repo` with an EMPTY
+    // signal list (the same zero-candidate posture slice-06 V-S3 used; NO new
+    // double), reached through `start_with_github` (the OPENLORE_GITHUB_API_BASE
+    // seam).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo("some-org/empty-repo", vec![]));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
     // WHEN Maria submits the target WITH the header (post_form_htmx).
-    // THEN the results fragment shows the guided zero-candidates message — and is a
-    // fragment (no full-page chrome).
-    todo!(
-        "DELIVER H-3b: github = GithubServer::start(FakeGithub::for_public_repo(\
-         \"some-org/empty-repo\", vec![])); viewer = start_with_github; \
-         frag = viewer.post_form_htmx(\"/scrape\", &[(\"target\", \"some-org/empty-repo\")]); \
-         assert frag.is_fragment(), frag.body_contains(\"No candidate claims could be derived\")"
+    let frag = viewer.post_form_htmx("/scrape", &[("target", "some-org/empty-repo")]);
+
+    // THEN the results fragment shows the guided zero-candidates message + its
+    // suggested alternative (the typed `ScrapeState::ZeroCandidates` arm renders
+    // `SCRAPE_NO_CANDIDATES_NOTICE`), wrapped in the `#scrape-results` swap target,
+    // and is a fragment (no full-page chrome) — never a blank region, never a page.
+    assert_eq!(
+        frag.status, 200,
+        "the htmx zero-candidate scrape POST returns 200; got {}",
+        frag.status
     );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request zero-candidate response must be ONLY the swap-target fragment \
+         (no full-page chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.is_full_page(),
+        "the HX-Request zero-candidate response must NOT carry full-page chrome (no \
+         <!DOCTYPE html>/<html>); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"scrape-results\""),
+        "the zero-candidate fragment must be wrapped in the swap-target element \
+         id=\"scrape-results\"; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("No candidate claims could be derived"),
+        "a target yielding no candidates must show the guided zero-candidates message \
+         in the fragment (SCRAPE_NO_CANDIDATES_NOTICE), not a blank region; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("Try a different"),
+        "the guided zero-candidates fragment must carry a suggested alternative so \
+         the operator's next step is obvious; got:\n{}",
+        frag.body
+    );
+    // (Persistence-zero is the read-only gold guardrail in viewer_htmx_invariants.rs
+    // — it snapshots the store row counts around POST /scrape htmx and pins the
+    // delta all-`unchanged`. Here we pin the SHAPE + the guided copy.)
 }
 
 /// H-3c (US-HX-003 error; AC network down): GitHub unreachable. Submitting WITH
@@ -688,21 +731,83 @@ fn scrape_with_no_candidates_swaps_in_guidance_fragment() {
 #[test]
 fn scrape_network_down_swaps_in_offline_guidance_fragment_without_leaking() {
     // GIVEN GitHub is unreachable (the REUSED slice-02 `FakeGithub::offline()`
-    // posture — the established network-down double).
-    // WHEN Maria submits a target WITH the header (post_form_htmx).
+    // posture — the established network-down double; NO new double), reached
+    // through `start_with_github` (the OPENLORE_GITHUB_API_BASE seam).
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::offline());
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    // WHEN Maria submits a target WITH the header (post_form_htmx). The adapter maps
+    // `GithubError::Network` to the typed payload-free `ScrapeState::NetworkDown`
+    // unit variant, whose render emits ONLY the fixed SCRAPE_NETWORK_DOWN_NOTICE.
+    let frag = viewer.post_form_htmx("/scrape", &[("target", "tokio-rs/tokio")]);
+
     // THEN the results fragment names the cause in domain language ("GitHub could
-    // not be reached"), reassures the store view still works offline, is a fragment,
-    // and leaks NO transport internals (no status codes, no "connection refused",
-    // no raw URLs, no stack trace) — the same no-leak set the slice-06 V-S4 pins.
-    todo!(
-        "DELIVER H-3c: github = GithubServer::start(FakeGithub::offline()); \
-         viewer = start_with_github; frag = viewer.post_form_htmx(\"/scrape\", \
-         &[(\"target\", \"tokio-rs/tokio\")]); assert frag.is_fragment(), \
-         frag.body_contains(\"GitHub could not be reached\"), \
-         frag.body_contains(\"store view still works offline\"); for leaked in \
-         [\"connection refused\",\"timed out\",\"503\",\"http://\",\"panicked at\"]: \
-         assert !frag.body.to_lowercase().contains(leaked)"
+    // not be reached"), reassures the store view still works offline (NFR-VIEW-7),
+    // is wrapped in the `#scrape-results` swap target, and is a fragment (no
+    // full-page chrome) — never a blank region, never a page.
+    assert_eq!(
+        frag.status, 200,
+        "the htmx network-down scrape POST still renders a guided 200; got {}",
+        frag.status
     );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request network-down response must be ONLY the swap-target fragment \
+         (no full-page chrome); got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.is_full_page(),
+        "the HX-Request network-down response must NOT carry full-page chrome (no \
+         <!DOCTYPE html>/<html>); got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("id=\"scrape-results\""),
+        "the network-down fragment must be wrapped in the swap-target element \
+         id=\"scrape-results\"; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("GitHub could not be reached"),
+        "the network-down fragment must name the cause in domain language; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.body_contains("store view still works offline"),
+        "the network-down fragment must reassure that the store view works offline \
+         (NFR-VIEW-7); got:\n{}",
+        frag.body
+    );
+
+    // NO-LEAK (NFR-VIEW-6, carrying the slice-06 V-S4 / DV-4 payload-free pattern):
+    // the payload-free `NetworkDown` unit variant CANNOT interpolate the raw
+    // transport error, so the fragment leaks NO HTTP status code, NO socket/DNS
+    // jargon, NO raw URL, and NO stack-trace marker. Assert the negatives
+    // explicitly — the same no-leak set the slice-06 V-S4 pins.
+    for leaked_internal in [
+        "connection refused",
+        "connecterror",
+        "timed out",
+        "dns",
+        "503",
+        "502",
+        "500",
+        "http://",
+        "https://api.github",
+        "panicked at",
+    ] {
+        assert!(
+            !frag.body.to_lowercase().contains(leaked_internal),
+            "the network-down fragment must leak NO transport internals \
+             ({leaked_internal:?}) — plain-language cause + offline-store note only \
+             (NFR-VIEW-6); got:\n{}",
+            frag.body
+        );
+    }
+    // (Persistence-zero is the read-only gold guardrail in viewer_htmx_invariants.rs.
+    // Here we pin the SHAPE + the guided copy + the no-leak negatives.)
 }
 
 /// H-3d (US-HX-003 edge; AC no-JS full-page fallback): submitting the scrape form
