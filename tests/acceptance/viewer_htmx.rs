@@ -1416,11 +1416,58 @@ fn tab_switch_without_htmx_returns_the_full_page_per_url() {
     // THEN each response is the COMPLETE slice-06 full page for that view
     // (`is_full_page()`): My Claims renders the own claim; Peer Claims renders the
     // peer origin. The two URLs converge with the no-JS real-URL path (ADR-034).
-    todo!(
-        "DELIVER H-6b: seed own + seed_cached_peer_claims; \
-         mine = viewer.get(\"/claims\"); peers = viewer.get(\"/peer-claims\"); \
-         assert mine.is_full_page() && peers.is_full_page(); \
-         assert peers.body_contains(\"did:plc:peer-axum\")"
+    let env = TestEnv::initialized();
+    seed_own_claim_with_evidence(
+        &env,
+        "github:openlore/core",
+        "is-maintained-by",
+        "The Maintainers",
+        0.90,
+        &["https://example.test/evidence/1"],
+    );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let mine = viewer.get("/claims");
+    let peers = viewer.get("/peer-claims");
+
+    assert_eq!(
+        mine.status, 200,
+        "the no-header My Claims tab returns 200; got {}",
+        mine.status
+    );
+    assert_eq!(
+        peers.status, 200,
+        "the no-header Peer Claims tab returns 200; got {}",
+        peers.status
+    );
+    // Each URL serves the COMPLETE slice-06 full page for its view (I-HX-1; the
+    // htmx and no-JS real-URL paths converge per ADR-034).
+    assert!(
+        mine.is_full_page(),
+        "WITHOUT HX-Request the /claims tab must return the COMPLETE slice-06 My \
+         Claims full page (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        mine.body
+    );
+    assert!(
+        peers.is_full_page(),
+        "WITHOUT HX-Request the /peer-claims tab must return the COMPLETE slice-06 \
+         Peer Claims full page (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        peers.body
+    );
+    // My Claims renders her own claim; Peer Claims renders the peer origin — the
+    // two views are the correct, distinct surfaces for their URLs.
+    assert!(
+        mine.body_contains("The Maintainers"),
+        "the My Claims full page must render her own claim (\"The Maintainers\"); \
+         got:\n{}",
+        mine.body
+    );
+    assert!(
+        peers.body_contains("did:plc:peer-axum"),
+        "the Peer Claims full page must render the peer origin (the peer DID); \
+         got:\n{}",
+        peers.body
     );
 }
 
@@ -1441,10 +1488,29 @@ fn bookmark_of_the_switched_view_re_enters_via_the_full_page() {
     // reload — no `HX-Request` header).
     // THEN the response is the COMPLETE slice-06 `/peer-claims` full page
     // (`is_full_page()`) — the bookmark re-enters the real URL, not a stray fragment.
-    todo!(
-        "DELIVER H-6c: seed_cached_peer_claims(env, \"did:plc:peer-axum\", 120); \
-         page = viewer.get(\"/peer-claims\"); assert page.status==200, \
-         page.is_full_page(), page.body_contains(\"did:plc:peer-axum\")"
+    let env = TestEnv::initialized();
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let page = viewer.get("/peer-claims");
+
+    assert_eq!(
+        page.status, 200,
+        "the bookmark/reload of /peer-claims (plain GET) returns 200; got {}",
+        page.status
+    );
+    assert!(
+        page.is_full_page(),
+        "a bookmark/reload (plain GET, no HX-Request) of /peer-claims must re-enter \
+         the COMPLETE slice-06 full page (<!DOCTYPE html> + <html> chrome), not a \
+         stray fragment (ADR-034 URL convergence); got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("did:plc:peer-axum"),
+        "the re-entered /peer-claims full page must render the peer origin (the peer \
+         DID); got:\n{}",
+        page.body
     );
 }
 
@@ -1464,11 +1530,48 @@ fn view_panel_fragment_equals_the_full_page_view_panel_region() {
     // WHEN both shapes of `/peer-claims` are fetched (get_htmx + get).
     // THEN a known peer row's origin/subject appears in BOTH the fragment and the
     // full page (parity); the fragment is a fragment and the full page is a full page.
-    todo!(
-        "DELIVER H-6d: seed_cached_peer_claims(env, \"did:plc:peer-axum\", 120); \
-         frag = viewer.get_htmx(\"/peer-claims\"); full = viewer.get(\"/peer-claims\"); \
-         for needle in [\"did:plc:peer-axum\", a known subject]: assert \
-         frag.body_contains(needle) && full.body_contains(needle); \
-         assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 120);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/peer-claims");
+    let full = viewer.get("/peer-claims");
+
+    assert_eq!(frag.status, 200, "the view-panel fragment request returns 200");
+    assert_eq!(full.status, 200, "the full-page request returns 200");
+
+    // The fragment is ONLY the swap-target view-panel region; the full page is chrome
+    // wrapped AROUND the SAME view-panel fragment fn (ADR-032) — so the two shapes
+    // agree empirically in the running viewer (the Earned-Trust parity check, I-HX-5).
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the view-panel fragment (no chrome); \
+         got:\n{}",
+        frag.body
     );
+    assert!(
+        full.is_full_page(),
+        "the no-header response must be the complete full page; got:\n{}",
+        full.body
+    );
+
+    // PARITY: a known page-1 peer row's load-bearing content — the peer origin (DID)
+    // and the first row's seeded subject (`subject-119`, the newest of the 120 seeded
+    // rows; the page renders newest-first, so this is guaranteed on page 1) — is
+    // contained in BOTH shapes. The full page composes the SAME view-panel fragment
+    // fn, so the fragment equals the full page's `#view-panel` region on the text the
+    // operator sees.
+    for needle in ["did:plc:peer-axum", "subject-119"] {
+        assert!(
+            frag.body_contains(needle),
+            "the view-panel fragment must contain {needle:?} (peer parity); got:\n{}",
+            frag.body
+        );
+        assert!(
+            full.body_contains(needle),
+            "the full page must contain the SAME {needle:?} in its view-panel region \
+             (peer parity); got:\n{}",
+            full.body
+        );
+    }
 }
