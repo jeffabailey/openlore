@@ -165,10 +165,34 @@ fn paging_claims_without_htmx_returns_the_full_page() {
     // (carries `<!DOCTYPE html>` + `<html>` + the My Claims chrome) AND the same
     // table region ("51–100 of 312"). Byte-equivalence vs slice-06 is the
     // guardrail in viewer_htmx_invariants.rs; here we pin the SHAPE (full page).
-    todo!(
-        "DELIVER H-1b: seed 312; viewer.get(\"/claims?page=2\"); assert \
-         page.status==200, page.is_full_page(), \
-         page.body_contains(\"51–100 of 312\")"
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 312);
+    let viewer = ViewerServer::start(&env);
+
+    let page = viewer.get("/claims?page=2");
+
+    assert_eq!(
+        page.status, 200,
+        "the no-header claims request returns 200; got {}",
+        page.status
+    );
+    assert!(
+        page.is_full_page(),
+        "WITHOUT HX-Request the response must be the COMPLETE slice-06 full page \
+         (<!DOCTYPE html> + <html> chrome); got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("51\u{2013}100 of 312"),
+        "the full page must show the page-2 indicator \"51\u{2013}100 of 312\" (EN DASH) \
+         in its table region; got:\n{}",
+        page.body
+    );
+    assert!(
+        page.body_contains("id=\"claims-table\""),
+        "the full page must wrap the same swap-target region id=\"claims-table\"; \
+         got:\n{}",
+        page.body
     );
 }
 
@@ -192,12 +216,53 @@ fn claims_fragment_equals_the_full_page_table_region() {
     // first row's subject/predicate/object, the verbatim 0.90 confidence) is also
     // present in the full page — the full page is chrome wrapped around the SAME
     // fragment. Parity asserted on the observable rendered text the operator sees.
-    todo!(
-        "DELIVER H-1c: seed 312; frag = viewer.get_htmx(\"/claims?page=2\"); \
-         full = viewer.get(\"/claims?page=2\"); for needle in the page-2 indicator + \
-         a known row's fields + \"0.90\": assert frag.body_contains(needle) && \
-         full.body_contains(needle); assert frag.is_fragment() && full.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 312);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/claims?page=2");
+    let full = viewer.get("/claims?page=2");
+
+    assert_eq!(frag.status, 200, "the fragment request returns 200");
+    assert_eq!(full.status, 200, "the full-page request returns 200");
+
+    // The fragment is ONLY the swap-target region; the full page is chrome wrapped
+    // AROUND the SAME fragment fn (ADR-032) — so the two shapes agree empirically.
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request response must be ONLY the fragment (no chrome); got:\n{}",
+        frag.body
     );
+    assert!(
+        full.is_full_page(),
+        "the no-header response must be the complete full page; got:\n{}",
+        full.body
+    );
+
+    // PARITY: the load-bearing rendered content of the page-2 fragment is also
+    // present in the full page's table region. Every page-2 row shares the seeded
+    // predicate/object/confidence; the indicator + swap-target id are exact. These
+    // needles are guaranteed present on any non-empty page (seed fields are fixed),
+    // so parity is asserted behaviorally on the text the operator sees.
+    for needle in [
+        "51\u{2013}100 of 312",
+        "id=\"claims-table\"",
+        "is-maintained-by",
+        "The Maintainers",
+        "0.90",
+    ] {
+        assert!(
+            frag.body_contains(needle),
+            "the fragment must contain {needle:?} (page-2 parity); got:\n{}",
+            frag.body
+        );
+        assert!(
+            full.body_contains(needle),
+            "the full page must contain the SAME {needle:?} in its table region \
+             (page-2 parity); got:\n{}",
+            full.body
+        );
+    }
 }
 
 /// H-1d (US-HX-001 boundary; AC over-the-end clamp): a request past the last page
@@ -218,11 +283,39 @@ fn over_the_end_page_clamps_in_both_shapes() {
     // THEN the fragment shows "301–312 of 312" (and is a fragment) AND the full page
     // shows "301–312 of 312" (and is a full page) — neither is blank. The clamp is
     // the slice-06 DV-5 behavior, preserved across both shapes (I-HX-4 / I-HX-5).
-    todo!(
-        "DELIVER H-1d: seed 312; frag = viewer.get_htmx(\"/claims?page=99\"); \
-         full = viewer.get(\"/claims?page=99\"); assert \
-         frag.body_contains(\"301–312 of 312\") && frag.is_fragment(); \
-         assert full.body_contains(\"301–312 of 312\") && full.is_full_page()"
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 312);
+    let viewer = ViewerServer::start(&env);
+
+    let frag = viewer.get_htmx("/claims?page=99");
+    let full = viewer.get("/claims?page=99");
+
+    assert_eq!(frag.status, 200, "the over-the-end fragment request returns 200");
+    assert_eq!(full.status, 200, "the over-the-end full-page request returns 200");
+
+    // The slice-06 DV-5 clamp (PageView::paged) resolves ?page=99 to the LAST page,
+    // so BOTH shapes show "301–312 of 312" — never a blank result (I-HX-4 / I-HX-5).
+    assert!(
+        frag.body_contains("301\u{2013}312 of 312"),
+        "the clamped fragment must show the last-page indicator \
+         \"301\u{2013}312 of 312\" (EN DASH), not a blank result; got:\n{}",
+        frag.body
+    );
+    assert!(
+        frag.is_fragment(),
+        "the HX-Request clamped response must still be ONLY the fragment; got:\n{}",
+        frag.body
+    );
+    assert!(
+        full.body_contains("301\u{2013}312 of 312"),
+        "the clamped full page must show the last-page indicator \
+         \"301\u{2013}312 of 312\" (EN DASH), not a blank result; got:\n{}",
+        full.body
+    );
+    assert!(
+        full.is_full_page(),
+        "the no-header clamped response must still be the complete full page; got:\n{}",
+        full.body
     );
 }
 
