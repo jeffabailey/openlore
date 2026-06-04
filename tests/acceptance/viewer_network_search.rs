@@ -929,14 +929,39 @@ fn unreachable_index_degrades_to_a_calm_full_page_notice() {
     // THEN status 200 (a guided page, NOT a crash), the body states the index is
     // unavailable AND that local store views still work, and it leaks NO transport
     // internals (assert_search_html_leaks_no_transport_internals).
-    let _: fn(&TestEnv, &ClosedIndexerPort) -> ViewerServer =
-        ViewerServer::start_with_unreachable_indexer;
-    todo!(
-        "DELIVER N-13: ClosedIndexerPort::reserve(); \
-         ViewerServer::start_with_unreachable_indexer; get(\"/search?object=...\"); \
-         assert status 200, is_full_page(), body states index unavailable + local \
-         store views still work, and assert_search_html_leaks_no_transport_internals"
-    )
+    let env = TestEnv::initialized();
+    let closed = ClosedIndexerPort::reserve();
+    let viewer = ViewerServer::start_with_unreachable_indexer(&env, &closed);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "N-13: an UNREACHABLE configured index must degrade to a guided 200 page, \
+         NOT a crash/5xx; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_full_page(),
+        "N-13: the no-JS shape must return the COMPLETE full page (chrome + form + \
+         results region); body:\n{}",
+        response.body
+    );
+    // The fixed plain-language Unavailable guidance: the index is unavailable AND
+    // the operator's LOCAL store views still work (SearchState::Unavailable — a
+    // payload-free unit variant, WD-NS-4).
+    let lowered = response.body.to_ascii_lowercase();
+    for guidance_needle in ["unavailable", "local store"] {
+        assert!(
+            lowered.contains(guidance_needle),
+            "N-13 (I-NS-2): the unreachable full page must show the fixed \
+             Unavailable guidance — expected {guidance_needle:?}; body:\n{}",
+            response.body
+        );
+    }
+    // …and it leaks NO transport internals (no HTTP status, no "connection \
+    // refused"/timeout/DNS, no raw URL, no stack trace).
+    assert_search_html_leaks_no_transport_internals(&response.body);
 }
 
 /// N-14 (US-NS-004 error; AC-004.4 / I-NS-2): the SAME unreachable degradation holds
@@ -960,11 +985,37 @@ fn unreachable_index_degrades_to_a_calm_fragment_notice() {
     // notice (index unavailable + local store views still work), and leaks NO
     // transport internals (assert_search_html_leaks_no_transport_internals) — the
     // SAME notice as the full-page N-13 (degradation parity).
-    todo!(
-        "DELIVER N-14: ClosedIndexerPort + start_with_unreachable_indexer; \
-         get_htmx(\"/search?object=...\"); assert is_fragment(), body states index \
-         unavailable + local store works, assert_search_html_leaks_no_transport_internals"
-    )
+    let env = TestEnv::initialized();
+    let closed = ClosedIndexerPort::reserve();
+    let viewer = ViewerServer::start_with_unreachable_indexer(&env, &closed);
+
+    let response = viewer.get_htmx(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "N-14: an UNREACHABLE configured index must degrade to a guided 200 \
+         fragment, NOT a crash/5xx; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_fragment(),
+        "N-14: under HX-Request the viewer must return ONLY the #search-results \
+         fragment (no chrome / no <!DOCTYPE html>); body:\n{}",
+        response.body
+    );
+    // The SAME fixed Unavailable guidance as the full-page N-13 (degradation parity
+    // — the unit-variant render is identical across both shapes, WD-NS-4).
+    let lowered = response.body.to_ascii_lowercase();
+    for guidance_needle in ["unavailable", "local store"] {
+        assert!(
+            lowered.contains(guidance_needle),
+            "N-14 (I-NS-2): the unreachable fragment must show the fixed Unavailable \
+             guidance — expected {guidance_needle:?}; body:\n{}",
+            response.body
+        );
+    }
+    // …and the fragment leaks NO transport internals either (reused no-leak gate).
+    assert_search_html_leaks_no_transport_internals(&response.body);
 }
 
 /// N-15 (US-NS-004 error; AC-004.4 / I-NS-2): an UNCONFIGURED index (the
