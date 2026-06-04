@@ -1,6 +1,6 @@
 # ADR-038: `GET /search` — Its Own Route, a Bookmarkable GET Form, a Third Nav Link, and the slice-05 Config Reuse (with the `viewer-domain → appview-domain` check-arch Allowlist)
 
-- **Status**: Accepted (DESIGN — viewer-network-search, slice-08)
+- **Status**: Accepted / shipped (slice-08 viewer-network-search, DELIVER 2026-06-04). The `GET /search` route + bookmarkable GET form (object/contributor/subject dimension selector — completed at step 02-03, DV-NS-3) + third nav link + slice-05 config reuse shipped; the 2 `xtask check-arch` deltas (the `viewer-domain → appview-domain` pure-core allowlist entry + the extended viewer capability rule) landed; `check-arch` reports 21 workspace members.
 - **Date**: 2026-06-04
 - **Deciders**: Morgan (nw-solution-architect), resolving OD-NS-4 + OD-NS-5 for viewer-network-search (slice-08).
 - **Feature**: viewer-network-search (slice-08)

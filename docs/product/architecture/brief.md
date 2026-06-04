@@ -59,6 +59,52 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **slice-08 (viewer-network-search): SHIPPED 2026-06-04 — IN-PLACE EXTENSION, ZERO
+  new crates (workspace stays at 21 members).** Adds a **`GET /search`
+  network-discovery view** to the slice-06/07 `openlore ui` read-only viewer — the
+  **browser UI for `openlore search`** (J-005). A `/search` route serves a GET form
+  (dimension selector object/contributor/subject + a value input); on submit the
+  viewer queries the slice-05 network indexer over HTTP (`OPENLORE_INDEXER_URL`,
+  `org.openlore.appview.searchClaims`) and renders **verified + attributed** network
+  results as HTML, with an htmx fragment swap (like `/scrape`). It is a **read-only
+  network READ** — the viewer signs/writes/persists nothing and holds no key; the new
+  outbound `IndexQueryPort` is the **only** addition. Following a discovered author
+  stays a deliberate CLI `openlore peer add <did>` (the view shows it as guidance
+  text, never an executable control). **Zero new crate, zero new persisted type, zero
+  new write/sign route, zero new `deny.toml` rule.** REUSES the slice-05
+  `IndexQueryPort` + `adapter-index-query` (public-data READ) + `appview-domain::
+  compose_results` (verification + per-author anti-merging — NOT reimplemented), and
+  the slice-07 `Shape` fork + page = chrome + fragment + the vendored offline htmx
+  asset. Extends in place:
+  - **`crates/viewer-domain` (PURE)**: a `SearchState` ADT (`Form | Results |
+    NoResults | Unavailable` — `Unavailable` is a payload-free unit variant that
+    structurally cannot leak transport internals, mirroring `ScrapeState::NetworkDown`)
+    + `render_search_results_fragment` / `render_search_page` (page = chrome +
+    fragment) PROJECTING the `appview-domain` result types into HTML; a third `/search`
+    nav link. Takes a NEW pure→pure dependency on `appview-domain` (ADR-037).
+  - **`crates/adapter-http-viewer` (EFFECT)**: the `GET /search` handler — parse
+    dimension+value, call `IndexQueryPort`, map outcomes to `SearchState`, fork by
+    `Shape::from_request`; an `Option<SharedIndexQuery>` field on `ViewerServer`.
+    Persists nothing; renders no write control (ADR-038).
+  - **`crates/cli` (DRIVER)**: the `ui` verb (the viewer composition root) wires the
+    read-only `HttpIndexQueryAdapter` and SOFT-probes it (informational, never a
+    startup refusal). Still NO signing key in the viewer surface (ADR-036).
+  - **`xtask`**: 2 `check-arch` deltas — the `viewer-domain → appview-domain` pure-core
+    dependency allowlist entry (pure → pure edge) + the confirmed/extended viewer
+    capability rule admitting `IndexQueryPort` (read-only) while still FORBIDDING any
+    signing/identity/PDS + the indexer SERVER/store/ingest crates (ADR-038).
+  - **Invariants I-NS-1..9** (read-only / no key; graceful degradation; anti-merging at
+    network scale; verified-by-construction; public-data framing; progressive
+    enhancement; offline chrome; loopback / zero-persisted; confidence verbatim) —
+    slice-08-scoped; all INHERIT the slice-05 AV-* + slice-06 I-VIEW-1..6 + slice-07
+    I-HX-1..5. slice-08 mints NO new KPI — it REALIZES the inherited KPI-AV-1/2/3/4/5 +
+    KPI-VIEW-2 + KPI-HX-G1/2/3 on the browser surface.
+  - **ADRs ADR-036..038** (viewer index-query port + capability boundary; `SearchState`
+    ADT + `viewer-domain` projection + payload-free degradation; `GET /search` route +
+    GET form + nav link + slice-05 config reuse + the 2 check-arch deltas).
+  - See ADR-036..ADR-038, `docs/evolution/viewer-network-search-evolution.md`, and
+    `docs/feature/viewer-network-search/feature-delta.md`.
+
 - **slice-07 (viewer-htmx-swaps): SHIPPED 2026-06-02 — IN-PLACE EXTENSION, ZERO
   new crates (workspace stays at 21 members).** Layers an **htmx
   progressive-enhancement layer** onto the slice-06 `openlore ui` read-only viewer
@@ -323,8 +369,10 @@ binary `openlore-indexer`, the indexer subsystem); slice-06 adds 2 (1 pure
 `viewer-domain` + 1 effect `adapter-http-viewer`, the read-only localhost htmx
 viewer); slice-07 (viewer-htmx-swaps) is an IN-PLACE EXTENSION (zero new crates —
 extends the two slice-06 viewer crates + adds a vendored htmx TEXT asset, NOT a
-crate). Cumulative: 19 production + 1 test-support + 1 xtask = 21 workspace
-members.**
+crate); slice-08 (viewer-network-search) is an IN-PLACE EXTENSION (zero new crates —
+extends `viewer-domain` + `adapter-http-viewer` + `cli` + `xtask`, REUSING the
+slice-05 `IndexQueryPort` + `adapter-index-query` + `appview-domain`). Cumulative: 19
+production + 1 test-support + 1 xtask = 21 workspace members.**
 
 ## CLI surface (cumulative)
 
@@ -481,6 +529,7 @@ that generalizes it.
 - Slice-05 evolution: `docs/evolution/openlore-appview-search-evolution.md`
 - Slice-06 evolution: `docs/evolution/htmx-scraper-viewer-evolution.md`
 - Slice-07 evolution: `docs/evolution/viewer-htmx-swaps-evolution.md`
+- Slice-08 evolution: `docs/evolution/viewer-network-search-evolution.md`
 - Slice-01 architecture design: `docs/feature/openlore-foundation/design/architecture-design.md`
 - Slice-02 architecture design:
   `docs/feature/openlore-github-scraper/design/architecture-design.md`

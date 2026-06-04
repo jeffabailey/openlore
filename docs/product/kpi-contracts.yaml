@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-06-02  # slice-07 (viewer-htmx-swaps) KPI-HX-1..4 + KPI-HX-G1..G3 recorded at finalize
+last_updated: 2026-06-04  # slice-08 (viewer-network-search) realizes KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on the browser /search surface (no new KPI minted)
 
 kpis:
   - id: KPI-1
@@ -456,6 +456,51 @@ kpis:
     baseline_at_ga: "MET (release-blocking) — the swaps ride GET + the existing POST /scrape; no new write/sign route, zero key reads in the web process, loopback-only bind, as of slice-07 ship."
     notes: "Guardrail / cardinal. Carries the slice-06 KPI-VIEW-2 (read-only / no key) cardinal gate verbatim across the new swap surface. A single new reachable write/sign route, any key read, or any non-loopback bind is a release blocker (UNSHIPPABLE)."
 
+  # --- slice-08 (viewer-network-search), recorded at finalize 2026-06-04 ---
+  # The browser network-discovery `GET /search` view on the read-only `openlore ui`
+  # viewer (J-005, DELTA on slices 05/06/07). Persona is P-001 (the node operator,
+  # "Maria", wearing the network-discovery hat). slice-08 mints NO new KPI ID — it
+  # is a NEW SURFACE for the slice-05 job and REALIZES the inherited KPIs on the
+  # browser surface (per the slice-08 DISCUSS Outcome-KPIs decision in
+  # docs/feature/viewer-network-search/feature-delta.md, which intentionally did NOT
+  # duplicate a per-feature outcome-kpis.md — lean):
+  #   - KPI-AV-1 (non-obvious-author discovery, north star): now reachable from the
+  #     browser /search; per-feature GREEN (N-1/N-17), cohort YELLOW pending the
+  #     viewer-side unfollowed-author-hit telemetry + day-30 study (DEVOPS).
+  #   - KPI-AV-2 (anti-merging at network scale, guardrail): MET — the viewer REUSES
+  #     appview-domain::compose_results (no viewer-side grouping path), so every
+  #     browser row carries one author_did, identical-content-two-authors = two rows,
+  #     no merged row, counter shown-not-applied (N-4/8/12 GREEN). Release-blocking.
+  #   - KPI-AV-3 (verified-before-index, guardrail): MET — every browser row
+  #     [verified] by construction (the indexer is the verify gate; the viewer has no
+  #     second verification path); N-INV-Verified GREEN. Release-blocking.
+  #   - KPI-AV-4 (discovery -> federation funnel, leading): per-feature GREEN — the
+  #     unfollowed-author row shows `openlore peer add <did>` guidance TEXT (run in
+  #     the CLI; follow stays a deliberate CLI action, read-only); cohort YELLOW
+  #     pending the search->peer-add funnel telemetry (DEVOPS).
+  #   - KPI-AV-5 (public-data framing comprehension, leading): per-feature GREEN — the
+  #     /search page states up front it indexes only PUBLIC signed claims verified
+  #     before indexing (N-11); cohort YELLOW pending the day-30 comprehension prompt.
+  #   - KPI-VIEW-2 (read-only, guardrail): MET — /search adds no write/sign/subscribe
+  #     route; zero key reads in the viewer process; the IndexQueryPort holds no
+  #     signing/identity/PDS surface; follow is render-only TEXT (N-1b/N-17/
+  #     N-INV-NoWrite + route + key audit). Carried verbatim across the new surface.
+  #   - KPI-HX-G1 (no-JS no-regression, guardrail): MET — GET /search serves a
+  #     complete full page without HX-Request; render_search_page embeds the fragment
+  #     (parity, N-2/3/7/9); the slice-05/06/07 corpora stay GREEN.
+  #   - KPI-HX-G2 (offline / no-CDN chrome, guardrail): MET — the /search page
+  #     references only the vendored local htmx asset; zero off-host references
+  #     (N-INV-OfflineChrome). The SEARCH itself needs the network (like /scrape).
+  #   - KPI-HX-G3 (read-only / no new write surface, guardrail): MET — carries
+  #     KPI-VIEW-2 across /search (no new write/sign route, no key, loopback bind).
+  #   - KPI-5 (local-first, guardrail): REINFORCED — the new outbound READ adds no
+  #     dependency to offline compose/sign; an unreachable/unconfigured indexer
+  #     degrades gracefully (payload-free SearchState::Unavailable, both shapes),
+  #     never a block; the viewer stays loopback-only.
+  # No KPI entry is added or modified above; this block records the realization on
+  # the browser surface. The slice-08 invariants I-NS-1..9 carry the AV-* + I-VIEW-* +
+  # I-HX-* contracts forward (see the slice-08 evolution archive).
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release
@@ -504,6 +549,16 @@ kpis:
 #   load-bearing progressive-enhancement + offline + read-only contracts of the
 #   htmx swap layer.
 #
+#   Slice-08 (viewer-network-search): mints NO new KPI — it realizes the inherited
+#   KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/G2/G3 + KPI-5 on the browser /search
+#   surface (slice-08 block above). The cardinal guardrails carried onto /search are
+#   KPI-AV-2 (anti-merging at network scale — REUSE compose_results, no viewer-side
+#   grouping), KPI-AV-3 (every row verified by construction), KPI-VIEW-2 / KPI-HX-G3
+#   (read-only — zero write/sign route, zero key) and KPI-HX-G1/G2 (no-JS
+#   no-regression + offline chrome). All MET at GA; all release-blocking. The
+#   slice-08 disprovers live in docs/feature/viewer-network-search/feature-delta.md
+#   (Outcome KPIs section; no per-feature outcome-kpis.md was duplicated — lean).
+#
 # Pointers:
 #   - Per-feature KPI rationale (slice-01): docs/feature/openlore-foundation/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-02): docs/feature/openlore-github-scraper/discuss/outcome-kpis.md
@@ -512,12 +567,14 @@ kpis:
 #   - Per-feature KPI rationale (slice-05): docs/feature/openlore-appview-search/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-06): docs/feature/htmx-scraper-viewer/discuss/outcome-kpis.md
 #   - Per-feature KPI rationale (slice-07): docs/feature/viewer-htmx-swaps/discuss/outcome-kpis.md
+#   - Per-feature KPI rationale (slice-08): docs/feature/viewer-network-search/feature-delta.md (Outcome KPIs section; inherited KPI-AV-*/VIEW-2/HX-G* on the browser surface — no separate outcome-kpis.md, lean)
 #   - Slice-02 evolution archive: docs/evolution/openlore-github-scraper-evolution.md
 #   - Slice-03 evolution archive: docs/evolution/openlore-federated-read-evolution.md
 #   - Slice-04 evolution archive: docs/evolution/openlore-scoring-graph-evolution.md
 #   - Slice-05 evolution archive: docs/evolution/openlore-appview-search-evolution.md
 #   - Slice-06 evolution archive: docs/evolution/htmx-scraper-viewer-evolution.md
 #   - Slice-07 evolution archive: docs/evolution/viewer-htmx-swaps-evolution.md
+#   - Slice-08 evolution archive: docs/evolution/viewer-network-search-evolution.md
 #   - Telemetry policy: docs/adrs/ADR-010-telemetry-opt-in-policy.md
 #   - Release policy: docs/adrs/ADR-011-release-matrix-and-channels.md
 #   - Personas: docs/product/personas/senior-engineer-solo-builder.yaml

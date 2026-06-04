@@ -1,6 +1,6 @@
 # ADR-036: The Viewer's Indexer-Query Capability — Reuse the slice-05 `IndexQueryPort` Behind the Viewer Composition Root, Public-Data READ Only
 
-- **Status**: Accepted (DESIGN — viewer-network-search, slice-08)
+- **Status**: Accepted / shipped (slice-08 viewer-network-search, DELIVER 2026-06-04). The slice-05 `IndexQueryPort` + `HttpIndexQueryAdapter` reused behind the viewer composition root (`Option<Arc<dyn IndexQueryPort>>`, public-data READ only, no signing/identity/PDS surface, SOFT-probed at startup); `OPENLORE_INDEXER_URL` config reuse; the viewer capability rule confirmed/extended in `xtask check-arch`.
 - **Date**: 2026-06-04
 - **Deciders**: Morgan (nw-solution-architect), resolving OD-NS-1 + OD-NS-6 for viewer-network-search (slice-08).
 - **Feature**: viewer-network-search (slice-08; brownfield DELTA on slices 05/06/07)

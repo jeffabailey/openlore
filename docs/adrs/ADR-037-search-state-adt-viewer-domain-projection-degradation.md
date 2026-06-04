@@ -1,6 +1,6 @@
 # ADR-037: The `/search` Render — A New Pure `viewer-domain` Projection of the `appview-domain` Composition, a `SearchState` ADT, and a Payload-Free `Unavailable` Degradation Variant
 
-- **Status**: Accepted (DESIGN — viewer-network-search, slice-08)
+- **Status**: Accepted / shipped (slice-08 viewer-network-search, DELIVER 2026-06-04). The pure `viewer-domain` `SearchState` ADT (`Form | Results | NoResults | Unavailable`) + `render_search_*` projection of the reused `appview-domain` composition shipped; the payload-free `Unavailable` unit variant (both shapes, unreachable + unconfigured) materialized; 100% mutation kill on the production functions.
 - **Date**: 2026-06-04
 - **Deciders**: Morgan (nw-solution-architect), resolving OD-NS-2 + OD-NS-3 for viewer-network-search (slice-08).
 - **Feature**: viewer-network-search (slice-08)
