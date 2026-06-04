@@ -1183,6 +1183,14 @@ pub const SEARCH_URL: &str = "/search";
 /// counts these per author row.
 pub const SEARCH_VERIFIED_MARKER: &str = "[verified]";
 
+/// The inline counter-annotation prefix a countered row carries (OD-AV-7 / I-NS-3 —
+/// shown, NEVER applied): `countered by <K.author> (<K.cid>)`. Held in ONE place so
+/// the shown-not-applied annotation text the browser surface renders is a single
+/// source of truth. The counter is an ANNOTATION on the still-rendered countered
+/// row — it never filters, merges, or over-rides the claim (the viewer inherits the
+/// slice-05 CLI counter-render discipline).
+pub const SEARCH_COUNTERED_BY_PREFIX: &str = "countered by";
+
 /// The public-data framing banner the `/search` page states UP FRONT (I-NS-5):
 /// discovery indexes only PUBLIC signed claims, verified before indexing; nothing
 /// private is read. Held in ONE place so the framing is a single source of truth.
@@ -1427,6 +1435,18 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
             span { (row.subject) " " (row.predicate) " " (row.object) }
             " "
             span { (render_confidence(row.confidence)) }
+            // OD-AV-7 / I-NS-3: when this row was COUNTERED, show the counter inline
+            // (`countered by <K.author> (<K.cid>)`). The claim above is still
+            // rendered VERBATIM — the counter is an ANNOTATION, never applied as a
+            // filter/merge/override (the viewer reuses the slice-05 shown-not-applied
+            // discipline; the annotation is conditional on `Some`).
+            @if let Some(counter) = &row.counter_annotation {
+                " "
+                span {
+                    (SEARCH_COUNTERED_BY_PREFIX) " " (counter.counter_author.0)
+                    " (" (counter.referencing_cid.0) ")"
+                }
+            }
         }
     }
 }
@@ -3520,5 +3540,91 @@ mod tests {
                  (object / contributor / subject); got:\n{html}"
             );
         }
+    }
+
+    /// Behavior (N-12 / OD-AV-7 / I-NS-3 — counter SHOWN, not applied): a row whose
+    /// `counter_annotation` is `Some` renders an INLINE annotation naming the
+    /// countering author (`countered by <K.author>`) AND still renders the claim
+    /// VERBATIM (its triple + author DID + `[verified]` marker stay present). The
+    /// counter is an ANNOTATION, never a filter/merge/override — the load-bearing
+    /// shown-not-applied render gate the browser surface inherits from slice-05.
+    #[test]
+    fn search_fragment_shows_the_counter_annotation_inline_never_applied() {
+        // C — the countered row (Priya); annotated as countered by K (Sven).
+        let mut countered = search_row(
+            "did:plc:priya-test#org.openlore.application",
+            "bafycountered",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        );
+        countered.counter_annotation = Some(appview_domain::CounterRef {
+            referencing_cid: ports::claim_domain::Cid("bafycounter".to_string()),
+            counter_author: ports::claim_domain::Did(
+                "did:plc:sven-test#org.openlore.application".to_string(),
+            ),
+            ref_type: ports::claim_domain::ReferenceType::Counters,
+        });
+
+        let result = NetworkSearchResult {
+            by_author: vec![(
+                ports::claim_domain::Did("did:plc:priya-test#org.openlore.application".to_string()),
+                vec![countered],
+            )],
+            distinct_author_count: 1,
+            total_claims: 1,
+            suggestion: None,
+        };
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
+
+        // The counter is SHOWN inline — the annotation names the countering author.
+        assert!(
+            html.contains("countered by did:plc:sven-test#org.openlore.application"),
+            "OD-AV-7: the row must carry an INLINE counter-annotation naming the \
+             countering author (countered by <K.author>); got:\n{html}"
+        );
+        // …and the countered claim is STILL shown verbatim (NOT filtered/merged):
+        // its author DID, its triple, and the [verified] marker remain present.
+        assert!(
+            html.contains("[verified]"),
+            "the countered row must STILL carry the [verified] marker (shown, not \
+             applied); got:\n{html}"
+        );
+        assert!(
+            html.contains("did:plc:priya-test#org.openlore.application")
+                && html.contains("org.openlore.philosophy.reproducible-builds"),
+            "the countered claim must STILL render verbatim (its author DID + object \
+             stay present — the counter is an annotation, not a filter); got:\n{html}"
+        );
+    }
+
+    /// Behavior (N-12 negative — no counter): a row whose `counter_annotation` is
+    /// `None` renders NO counter-annotation line (the annotation is conditional on
+    /// the `Some` — an uncountered claim carries no `countered by` text). Pins the
+    /// mutation that would unconditionally emit the annotation.
+    #[test]
+    fn search_fragment_omits_the_counter_annotation_when_uncountered() {
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafyplain",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        )]);
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
+
+        assert!(
+            !html.contains("countered by"),
+            "an UNCOUNTERED row (counter_annotation == None) must render NO \
+             'countered by' annotation; got:\n{html}"
+        );
     }
 }

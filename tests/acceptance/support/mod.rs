@@ -7797,6 +7797,63 @@ pub fn assert_search_html_has_no_merged_consensus_row(body: &str) {
     }
 }
 
+/// Assert a slice-08 `/search` rendered body (fragment OR full page) shows the
+/// counter SHOWN-not-applied (OD-AV-7 / I-NS-3) on the browser surface: the
+/// countered claim C STILL renders verbatim (its author DID + object + the
+/// `[verified]` marker are present — NOT filtered, merged, or over-ridden) AND C's
+/// row carries an inline counter-annotation NAMING the countering author DID
+/// (`countered by <K.author>`). The HTML counterpart of the slice-05 CLI gate
+/// [`assert_counter_annotation_shown_not_applied`]: same shown-not-applied
+/// discipline, projected to the viewer's rendered markup. No filter/down-weight
+/// language appears.
+///
+/// SCAFFOLD: true (slice-08).
+pub fn assert_search_html_counter_shown_not_applied(
+    body: &str,
+    countered_author: &str,
+    countered_object: &str,
+    counter_author: &str,
+) {
+    // 1. C is STILL shown verbatim — its author attribution, its object, and the
+    //    `[verified]` marker are all present (the counter never removes/merges C).
+    assert!(
+        body.contains(countered_author),
+        "I-NS-3: the countered claim's author row must STILL be attributed \
+         ({countered_author:?}) — counter SHOWN, never applied; body was:\n{body}"
+    );
+    assert!(
+        body.contains(countered_object),
+        "I-NS-3: the countered claim must STILL be shown verbatim (object \
+         {countered_object:?} present — NOT filtered/merged/over-ridden); body \
+         was:\n{body}"
+    );
+    assert!(
+        body.contains("[verified]"),
+        "I-NS-4: the countered row must STILL carry the [verified] marker (it is a \
+         verified attributed result; the counter is an annotation, not a filter); \
+         body was:\n{body}"
+    );
+
+    // 2. C's row carries an INLINE counter-annotation naming the COUNTERING author
+    //    (`countered by <K.author>`) — the counter is SHOWN on the countered row.
+    assert!(
+        body.contains(&format!("countered by {counter_author}")),
+        "I-NS-3 / OD-AV-7: the countered row must carry an inline counter-annotation \
+         'countered by {counter_author}' (counter SHOWN, never applied); body \
+         was:\n{body}"
+    );
+
+    // 3. The counter is SHOWN, NEVER applied: no filter/down-weight language.
+    let lowered = body.to_ascii_lowercase();
+    for banned in ["filtered out", "down-weighted", "suppressed", "hidden by counter"] {
+        assert!(
+            !lowered.contains(banned),
+            "I-NS-3: the counter must be SHOWN, never APPLIED — found {banned:?} in \
+             the rendered body (OD-AV-7 shown-not-applied); body was:\n{body}"
+        );
+    }
+}
+
 /// Assert a slice-08 `/search` rendered body (fragment OR full page) leaks NO
 /// transport internals — the degradation no-leak gate (I-NS-2). The viewer counter-
 /// part of the slice-06 `/scrape` V-S4 negative-needle scan: a down/unconfigured

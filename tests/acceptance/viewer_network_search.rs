@@ -795,12 +795,59 @@ fn the_search_page_states_what_it_indexes_up_front() {
     // the author DID (assert_search_html_every_row_verified_and_attributed). The
     // framing precedes the results region in the rendered chrome (banner-before-
     // results — the full-page arm shows it on Form + Results).
-    todo!(
-        "DELIVER N-11: reachable index; get full-page /search?object=...; assert the \
-         body carries the public-data framing (only PUBLIC signed claims, verified \
-         before indexing, nothing private) AND \
-         assert_search_html_every_row_verified_and_attributed over the rendered rows"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET full-page /search over a reachable seeded index must be 200; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_full_page(),
+        "the no-JS shape must return the COMPLETE full page (form + framing + \
+         results); body:\n{}",
+        response.body
+    );
+    // The public-data framing is stated UP FRONT (I-NS-5): discovery indexes only
+    // PUBLIC signed claims, verified before indexing, and nothing private is read.
+    for framing_needle in [
+        "public signed claims",
+        "verified before indexing",
+        "nothing private",
+    ] {
+        assert!(
+            response.body.contains(framing_needle),
+            "N-11 (I-NS-5): the /search full page must state the public-data framing \
+             up front — expected {framing_needle:?}; body:\n{}",
+            response.body
+        );
+    }
+    // The framing precedes the results region in the rendered chrome (banner-before-
+    // results): the public-data notice appears earlier in the document than the
+    // first result row's [verified] marker.
+    let framing_at = response
+        .body
+        .find("public signed claims")
+        .expect("framing needle present (asserted above)");
+    let first_result_at = response
+        .body
+        .find("[verified]")
+        .expect("at least one verified result row is rendered");
+    assert!(
+        framing_at < first_result_at,
+        "N-11: the public-data framing must precede the results region (banner- \
+         before-results); body:\n{}",
+        response.body
+    );
+    // …and every result row she later sees carries [verified] + the author DID.
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID]);
 }
 
 /// N-12 (US-NS-004 edge; AC-004.3 / I-NS-3): a result row for a claim another author
@@ -827,13 +874,36 @@ fn a_countered_claim_is_shown_with_its_counter_never_applied() {
     // a counter-annotation inline naming the countering author (Sven / K). C is NOT
     // filtered, merged, or down-weighted (counter SHOWN, never APPLIED — I-NS-3).
     // The original claim is still attributed + verified (no merge).
-    let _ = (PRIYA_DID, SVEN_DID);
-    todo!(
-        "DELIVER N-12: seed_network_index(CounteredClaimPlusCounter); get the shared \
-         object search; assert C's row still present + attributed to Priya + \
-         [verified]; assert a counter-annotation naming the countering author is \
-         shown inline; assert C is NOT removed/merged (counter shown-not-applied)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::CounteredClaimPlusCounter);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    // The indexed `author_did`s carry the app-identity fragment (the SAME shape the
+    // viewer renders): C is attributed to Priya, the counter (K) to Sven.
+    let priya_app = format!("{PRIYA_DID}#org.openlore.application");
+    let sven_app = format!("{SVEN_DID}#org.openlore.application");
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search over the countered-claim-plus-counter index must be 200; body:\n{}",
+        response.body
+    );
+    // The OD-AV-7 / I-NS-3 render gate on the browser surface: C's row is STILL
+    // shown verbatim (Priya, the object, [verified]) AND carries an inline
+    // counter-annotation naming the countering author (Sven). C is NOT filtered,
+    // merged, or down-weighted — the counter is SHOWN, never APPLIED.
+    assert_search_html_counter_shown_not_applied(
+        &response.body,
+        &priya_app,
+        OBJECT_REPRODUCIBLE_BUILDS,
+        &sven_app,
+    );
+    // Both rows survive as verified attributed results (anti-merging preserved —
+    // C the countered + K the countering author both appear).
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[&priya_app, &sven_app]);
+    assert_search_html_has_no_merged_consensus_row(&response.body);
 }
 
 /// N-13 (US-NS-004 error; AC-004.4 / I-NS-2 / SearchState::Unavailable): an
