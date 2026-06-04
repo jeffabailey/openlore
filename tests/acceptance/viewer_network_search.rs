@@ -1039,11 +1039,38 @@ fn unconfigured_index_degrades_to_a_calm_full_page_notice() {
     // THEN status 200 (no crash), the body shows the fixed unavailable notice
     // (index unavailable + local store views still work), and leaks NO transport
     // internals (assert_search_html_leaks_no_transport_internals).
-    todo!(
-        "DELIVER N-15: ViewerServer::start(env) (no indexer configured); \
-         get(\"/search?object=...\"); assert status 200, is_full_page(), body states \
-         index unavailable + local store works, assert_search_html_leaks_no_transport_internals"
-    )
+    let env = TestEnv::initialized();
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "N-15: an UNCONFIGURED index must degrade to a guided 200 page, NOT a \
+         crash/5xx; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_full_page(),
+        "N-15: the no-JS shape must return the COMPLETE full page (chrome + form + \
+         results region); body:\n{}",
+        response.body
+    );
+    // The SAME fixed plain-language Unavailable guidance as the unreachable arm
+    // (degradation parity — the unit-variant render is identical for unconfigured
+    // and unreachable, WD-NS-4).
+    let lowered = response.body.to_ascii_lowercase();
+    for guidance_needle in ["unavailable", "local store"] {
+        assert!(
+            lowered.contains(guidance_needle),
+            "N-15 (I-NS-2): the unconfigured full page must show the fixed \
+             Unavailable guidance — expected {guidance_needle:?}; body:\n{}",
+            response.body
+        );
+    }
+    // …and the unconfigured path leaks NO transport internals either (no network
+    // call was attempted, so there is nothing to leak — the reused no-leak gate).
+    assert_search_html_leaks_no_transport_internals(&response.body);
 }
 
 /// N-16 (US-NS-004 error; AC-004.4 / I-NS-2): the SAME unconfigured degradation holds
@@ -1064,11 +1091,36 @@ fn unconfigured_index_degrades_to_a_calm_fragment_notice() {
     // WHEN Maria submits a fragment object search (get_htmx, HX-Request).
     // THEN the response `is_fragment()`, carries the fixed unavailable notice, and
     // leaks NO transport internals — the SAME notice as the full-page N-15.
-    todo!(
-        "DELIVER N-16: ViewerServer::start(env) (no indexer); \
-         get_htmx(\"/search?object=...\"); assert is_fragment(), body states index \
-         unavailable + local store works, assert_search_html_leaks_no_transport_internals"
-    )
+    let env = TestEnv::initialized();
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get_htmx(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "N-16: an UNCONFIGURED index must degrade to a guided 200 fragment, NOT a \
+         crash/5xx; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_fragment(),
+        "N-16: under HX-Request the viewer must return ONLY the #search-results \
+         fragment (no chrome / no <!DOCTYPE html>); body:\n{}",
+        response.body
+    );
+    // The SAME fixed Unavailable guidance as the full-page N-15 (degradation parity
+    // across shapes for the unconfigured arm too).
+    let lowered = response.body.to_ascii_lowercase();
+    for guidance_needle in ["unavailable", "local store"] {
+        assert!(
+            lowered.contains(guidance_needle),
+            "N-16 (I-NS-2): the unconfigured fragment must show the fixed Unavailable \
+             guidance — expected {guidance_needle:?}; body:\n{}",
+            response.body
+        );
+    }
+    // …and the fragment leaks NO transport internals either (reused no-leak gate).
+    assert_search_html_leaks_no_transport_internals(&response.body);
 }
 
 /// N-17 (US-NS-004 edge; AC-004.5 / I-NS-1 / WD-NS-3): a result row by an author
@@ -1093,11 +1145,48 @@ fn an_unfollowed_author_row_shows_cli_follow_guidance_text_only() {
     // control — no `<button>`/`<form>`/`hx-*` "follow"/"subscribe" affordance
     // (`name="follow"`, `Subscribe`, `hx-post` follow). Following stays a CLI action
     // (WD-NS-3 / I-NS-1).
-    let _ = PRIYA_DID;
-    todo!(
-        "DELIVER N-17: reachable reproducible-builds index; get the object search; \
-         assert body contains \\\"openlore peer add did:plc:priya-test\\\" guidance TEXT; \
-         assert body carries NO executable follow/subscribe control (no name=\\\"follow\\\", \
-         Subscribe button, hx-post follow)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "N-17: a reachable seeded index must render verified rows at 200; body:\n{}",
+        response.body
+    );
+    // THE render-only follow GUIDANCE: the row by the UNFOLLOWED author Priya shows
+    // the slice-03 `openlore peer add <bare-did>` command as TEXT so the operator can
+    // follow her FROM THE CLI. The bare DID (the slice-03 verb accepts the bare form)
+    // names the author the guidance points at.
+    let follow_guidance = format!("openlore peer add {PRIYA_DID}");
+    assert!(
+        response.body.contains(&follow_guidance),
+        "N-17 (AC-004.5 / WD-NS-3): an unfollowed-author row must show the render-only \
+         CLI follow guidance TEXT {follow_guidance:?}; body:\n{}",
+        response.body
+    );
+    // …and the guidance is TEXT ONLY — there is NO executable follow/subscribe
+    // control anywhere on the surface. Following stays a deliberate CLI action; the
+    // viewer is read-only and holds no key (I-NS-1 / WD-NS-3). No `name="follow"`
+    // input, no `Subscribe` affordance, no `>Follow<` button label, no `hx-post`
+    // follow swap.
+    let lowered = response.body.to_ascii_lowercase();
+    for banned in [
+        "name=\"follow\"",
+        "subscribe",
+        ">follow<",
+        "hx-post",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "N-17 (I-NS-1): the follow guidance must be TEXT ONLY — NO executable \
+             follow/subscribe control; found {banned:?} in body:\n{}",
+            response.body
+        );
+    }
 }

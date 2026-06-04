@@ -25,7 +25,7 @@
 #![forbid(unsafe_code)]
 
 use maud::{html, Markup, DOCTYPE};
-use ports::{CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
+use ports::{AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
 
 /// One claim rendered as a row in the My Claims list view. The VIEW-model shape
 /// (nw-fp-domain-modeling §10): flat display strings + the numeric confidence
@@ -1221,6 +1221,17 @@ pub const SEARCH_UNAVAILABLE_NOTICE: &str =
 pub const SEARCH_CONTRIBUTOR_FOOTER: &str =
     "This is one developer's reasoning trail, not a community consensus.";
 
+/// The render-only follow GUIDANCE prefix an UNFOLLOWED network-author row carries
+/// (N-17 / AC-004.5 / WD-NS-3 / I-NS-1): the viewer surfaces the slice-03
+/// `openlore peer add <bare-did>` command as TEXT so the operator can follow the
+/// author FROM THE CLI. It is GUIDANCE ONLY — there is NO executable follow /
+/// subscribe control and NO auto-subscribe path; following stays a deliberate CLI
+/// action and the read-only viewer holds no key. Held in ONE place (the SAME slice-03
+/// verb the CLI `search` follow affordance emits) so the guidance is a single source
+/// of truth + a single mutation site. The bare DID (the slice-03 `peer add` verb's
+/// accepted form) is appended by [`render_follow_guidance`].
+pub const SEARCH_FOLLOW_GUIDANCE_PREFIX: &str = "Follow this author from the CLI: openlore peer add";
+
 /// The state the network-search results region renders (the pure render input). An
 /// ADT over the four outcomes of a `/search` interaction so the renderer matches
 /// totally (nw-fp-domain-modeling §1): the empty GET form, a populated per-author
@@ -1447,7 +1458,29 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
                     " (" (counter.referencing_cid.0) ")"
                 }
             }
+            // N-17 / AC-004.5 / WD-NS-3 / I-NS-1: when this row's author is NOT yet
+            // followed, show the render-only `openlore peer add <bare-did>` CLI follow
+            // GUIDANCE as TEXT (never an executable control). Following stays a
+            // deliberate CLI action; the read-only viewer holds no key.
+            @if matches!(row.relationship, AuthorRelationship::NetworkUnfollowed) {
+                (render_follow_guidance(&row.author_did.0))
+            }
         }
+    }
+}
+
+/// Render the render-only CLI follow GUIDANCE for an UNFOLLOWED network author
+/// (N-17 / AC-004.5 / WD-NS-3 / I-NS-1) as plain TEXT inside a `<p>` — the slice-03
+/// `openlore peer add <bare-did>` command the operator runs to follow the author.
+/// It is GUIDANCE ONLY: NO `<button>`/`<form>`/`hx-*` control, NO auto-subscribe.
+/// The BARE DID (the slice-03 `peer add` verb's accepted form) is derived by
+/// stripping any app-identity `#…` fragment, mirroring the CLI `search` follow
+/// affordance. PURE total function.
+fn render_follow_guidance(author_did: &str) -> Markup {
+    let bare = author_did.split('#').next().unwrap_or(author_did);
+    html! {
+        " "
+        p { (SEARCH_FOLLOW_GUIDANCE_PREFIX) " " (bare) }
     }
 }
 
@@ -3468,6 +3501,47 @@ mod tests {
             assert!(
                 !lowered.contains(banned),
                 "the results fragment must carry NO sign/follow control; found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (N-17 / AC-004.5 / WD-NS-3 / I-NS-1): a row by an UNFOLLOWED network
+    /// author renders the render-only `openlore peer add <bare-did>` CLI follow
+    /// GUIDANCE as TEXT (so the operator can follow from the CLI) — and renders NO
+    /// executable follow/subscribe control. Following stays a deliberate CLI action;
+    /// the viewer is read-only and holds no key. The guidance names the BARE DID (the
+    /// slice-03 `peer add` verb accepts the bare form), stripping any app-identity
+    /// `#…` fragment.
+    #[test]
+    fn search_fragment_unfollowed_row_shows_cli_follow_guidance_text_only() {
+        // The composed row carries the app-qualified author DID; the guidance must
+        // name the BARE DID the slice-03 `peer add` verb accepts.
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        )]);
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
+
+        // The render-only follow guidance TEXT names the BARE DID.
+        assert!(
+            html.contains("openlore peer add did:plc:priya-test"),
+            "an unfollowed-author row must show the render-only CLI follow guidance \
+             `openlore peer add <bare-did>` as TEXT; got:\n{html}"
+        );
+        // …and the guidance is TEXT ONLY — no executable follow/subscribe control.
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["name=\"follow\"", "subscribe", ">follow<", "<button", "<form", "hx-post"] {
+            assert!(
+                !lowered.contains(banned),
+                "the follow guidance must be TEXT ONLY — NO control element; found \
+                 {banned:?} in:\n{html}"
             );
         }
     }
