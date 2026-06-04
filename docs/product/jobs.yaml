@@ -648,3 +648,24 @@ changelog:
       source-of-truth preserved (the AppView is a READ/discovery surface only).
       J-005 retains primary=false at umbrella scope but is the walking-skeleton job
       for openlore-appview-search.
+  - date: "2026-06-04"
+    feature: viewer-network-search
+    change: >
+      slice-08 (viewer-network-search) DISCUSS traces to J-005 (no new job, no new
+      sub-job). It is the BROWSER UI for J-005: a read-only /search view on the
+      `openlore ui` viewer (slices 06/07) that queries the slice-05 network indexer
+      over HTTP and renders verified + attributed results as HTML with an htmx
+      fragment swap — the UI for `openlore search`. Persona is P-001 (the viewer
+      operator, "Maria") wearing the network-discovery hat; slice-05 framed P-002
+      primary for the CLI surface, but the browser viewer is P-001's surface.
+      Stories US-NS-002/003 realize J-005a (search by philosophy/subject/contributor
+      at network scale) in the browser; US-NS-001/004 realize J-005b (render only
+      signature-verified, attributed claims — the indexer remains the verify gate;
+      the viewer re-verifies nothing); US-NS-004 realizes J-005c as render-only
+      guidance text (the discovery->follow funnel reuses the slice-03/05 `peer add`
+      CLI verb verbatim — the read-only viewer never executes a follow). Cardinal
+      invariants carried in unchanged: read-only / no signing key (KPI-VIEW-2),
+      anti-merging at network scale (KPI-AV-2), verified-before-index (KPI-AV-3),
+      public-data framing (KPI-AV-5), progressive enhancement + offline chrome
+      (KPI-HX-G1/G2), graceful degradation (KPI-5). No new KPI IDs minted — slice-08
+      realizes the inherited KPI-AV-* / KPI-VIEW-* / KPI-HX-* on a new surface.
