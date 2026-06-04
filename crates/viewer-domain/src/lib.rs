@@ -1202,6 +1202,17 @@ pub const SEARCH_PUBLIC_DATA_NOTICE: &str =
 pub const SEARCH_UNAVAILABLE_NOTICE: &str =
     "The network index is unavailable. Your local store views still work.";
 
+/// The honest-framing FOOTER the CONTRIBUTOR dimension renders beneath a
+/// developer's verified trail (US-NS-003 / AC-003.2): a contributor search surfaces
+/// ONE developer's reasoning — it is NOT a community consensus, and the footer says
+/// so up front so the per-author trail can never be mistaken for an aggregate
+/// verdict. Held in ONE place (the SAME wording the slice-05 CLI `--contributor`
+/// render emits) so the honesty promise is a single source of truth + a single
+/// mutation site. It is a PROMISE, not a merged row — the anti-merging scan
+/// (`assert_search_html_has_no_merged_consensus_row`) excludes it by construction.
+pub const SEARCH_CONTRIBUTOR_FOOTER: &str =
+    "This is one developer's reasoning trail, not a community consensus.";
+
 /// The state the network-search results region renders (the pure render input). An
 /// ADT over the four outcomes of a `/search` interaction so the renderer matches
 /// totally (nw-fp-domain-modeling §1): the empty GET form, a populated per-author
@@ -1218,8 +1229,20 @@ pub enum SearchState {
     /// A REACHABLE index returned ≥1 verified row: render the per-author groups.
     /// Carries the REUSED `appview-domain::compose_results` output VERBATIM — the
     /// viewer holds NO second grouping/verification path (anti-merging is the pure
-    /// core's job; the renderer only projects it).
-    Results(appview_domain::NetworkSearchResult),
+    /// core's job; the renderer only projects it). The `dimension` the search ran
+    /// along is carried alongside so the renderer can add the dimension-specific
+    /// honest-framing footer (the CONTRIBUTOR dimension surfaces ONE developer's
+    /// trail + the "not a community consensus" footer, US-NS-003 / AC-003.2); the
+    /// per-author projection itself is dimension-independent.
+    Results {
+        /// The REUSED per-author `compose_results` output (anti-merging by
+        /// construction — there is no merged "network consensus" row).
+        result: appview_domain::NetworkSearchResult,
+        /// The dimension the search ran along — selects the dimension-specific
+        /// footer (CONTRIBUTOR → the honest-framing "not a community consensus"
+        /// line; OBJECT/SUBJECT → none). The grouping is unaffected.
+        dimension: appview_domain::SearchDimension,
+    },
     /// A REACHABLE index returned ZERO rows for the queried dimension+value
     /// (US-NS-002 Ex 4 / SearchState::NoResults): render a guided plain-language
     /// "no claims found" empty state naming the queried value — never a blank
@@ -1324,8 +1347,9 @@ fn render_search_result(state: &SearchState) -> Markup {
     html! {
         @match state {
             SearchState::Form => {}
-            SearchState::Results(result) => {
+            SearchState::Results { result, dimension } => {
                 (render_search_author_groups(result))
+                (render_search_footer(*dimension))
             }
             // No-results (US-NS-002 Ex 4): the guided plain-language empty state
             // naming the queried value — never a blank region or a crash.
@@ -1358,6 +1382,22 @@ fn render_search_author_groups(result: &appview_domain::NetworkSearchResult) -> 
                     (render_search_result_row(row))
                 }
             }
+        }
+    }
+}
+
+/// Render the dimension-specific honest-framing footer beneath the per-author
+/// groups. PURE total match over the dimension: the CONTRIBUTOR dimension surfaces
+/// ONE developer's reasoning trail, so it emits the [`SEARCH_CONTRIBUTOR_FOOTER`]
+/// "not a community consensus" line (US-NS-003 / AC-003.2) — the same honesty
+/// promise the slice-05 CLI `--contributor` render emits. The OBJECT + SUBJECT
+/// dimensions render NO footer (their per-author survey speaks for itself; the
+/// honesty promise is contributor-specific). The footer is a PROMISE, never a
+/// merged row, so it does not collide with the anti-merging guarantee.
+fn render_search_footer(dimension: appview_domain::SearchDimension) -> Markup {
+    html! {
+        @if matches!(dimension, appview_domain::SearchDimension::Contributor) {
+            p { (SEARCH_CONTRIBUTOR_FOOTER) }
         }
     }
 }
@@ -3130,7 +3170,11 @@ mod tests {
             0.85,
         )]);
 
-        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
 
         assert!(
             html.contains("[verified]"),
@@ -3171,7 +3215,11 @@ mod tests {
             ),
         ]);
 
-        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
 
         assert!(html.contains("did:plc:priya-test#org.openlore.application"));
         assert!(html.contains("did:plc:sven-test#org.openlore.application"));
@@ -3196,7 +3244,10 @@ mod tests {
             "org.openlore.philosophy.reproducible-builds",
             0.85,
         )]);
-        let state = SearchState::Results(result);
+        let state = SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        };
 
         let fragment = render_search_results_fragment(&state).into_string();
         let page = render_search_page(&state);
@@ -3215,6 +3266,93 @@ mod tests {
         );
     }
 
+    /// Behavior (US-NS-003 / AC-003.2 — the CONTRIBUTOR render path): a CONTRIBUTOR
+    /// search renders ONE developer's verified trail under a SINGLE author DID, every
+    /// row carrying `[verified]` + the author DID + the VERBATIM confidence, AND the
+    /// honest-framing footer "not a community consensus" beneath the trail — never a
+    /// merged consensus row. Pins the dimension-specific footer (the prime mutation
+    /// target: a `Contributor`→`_` mutant drops the footer; the per-author projection
+    /// + verbatim confidence carry through unchanged).
+    #[test]
+    fn contributor_results_render_one_author_trail_with_the_honesty_footer() {
+        // One developer's trail: TWO verified claims under the SINGLE Priya
+        // app-identity DID (the slice-05 handle→DID resolved form).
+        let priya = "did:plc:priya-test#org.openlore.application";
+        let result = search_result(&[
+            (priya, "bafyone", "org.openlore.philosophy.reproducible-builds", 0.82),
+            (priya, "bafytwo", "org.openlore.philosophy.hermetic-builds", 0.79),
+        ]);
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Contributor,
+        })
+        .into_string();
+
+        // The honest-framing footer is present (the contributor-specific promise).
+        assert!(
+            html.contains(SEARCH_CONTRIBUTOR_FOOTER),
+            "the contributor render must carry the honesty footer; got:\n{html}"
+        );
+        assert!(
+            html.to_ascii_lowercase().contains("not a community consensus"),
+            "the footer states the trail is not a community consensus; got:\n{html}"
+        );
+        // ONE author group — every row attributed to the SINGLE Priya DID, [verified],
+        // with the VERBATIM confidence carried through.
+        assert!(
+            html.contains(priya),
+            "the trail is attributed to the single author DID; got:\n{html}"
+        );
+        assert_eq!(
+            html.matches("[verified]").count(),
+            2,
+            "both verified rows render under the one author; got:\n{html}"
+        );
+        for verbatim in ["0.82", "0.79"] {
+            assert!(
+                html.contains(verbatim),
+                "confidence renders VERBATIM ({verbatim}); got:\n{html}"
+            );
+        }
+        // …and NO merged "network consensus" row (the footer is a PROMISE, never an
+        // aggregate verdict — the per-author shape is the only output).
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["network consensus", "the network thinks", "authors agree"] {
+            assert!(
+                !lowered.contains(banned),
+                "the contributor render must show NO merged consensus row; \
+                 found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (US-NS-002 — the OBJECT/SUBJECT render path carries NO contributor
+    /// footer): the honest-framing footer is CONTRIBUTOR-specific, so an OBJECT
+    /// search renders the per-author survey WITHOUT the "not a community consensus"
+    /// line. Pins the dimension fork the other direction (a `_`→always mutant would
+    /// wrongly stamp the footer on every dimension).
+    #[test]
+    fn object_results_render_without_the_contributor_footer() {
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        )]);
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
+
+        assert!(
+            !html.contains(SEARCH_CONTRIBUTOR_FOOTER),
+            "the OBJECT dimension must NOT render the contributor footer; got:\n{html}"
+        );
+    }
+
     /// Behavior (I-NS-1 / WD-NS-3): the results fragment renders NO sign/follow/
     /// subscribe control — following stays a CLI action; the viewer is read-only.
     #[test]
@@ -3226,7 +3364,11 @@ mod tests {
             0.85,
         )]);
 
-        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Object,
+        })
+        .into_string();
         let lowered = html.to_ascii_lowercase();
 
         for banned in [

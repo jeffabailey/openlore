@@ -560,7 +560,7 @@ async fn resolve_search_state(
     index_query: Option<&dyn IndexQueryPort>,
     query: Option<&str>,
 ) -> SearchState {
-    let Some((dimension, value)) = parse_search_dimension(query) else {
+    let Some((dimension, query_value, display_value)) = parse_search_dimension(query) else {
         // No dimension value supplied — the empty form (the bare `GET /search`).
         return SearchState::Form;
     };
@@ -569,17 +569,24 @@ async fn resolve_search_state(
     let Some(index_query) = index_query else {
         return SearchState::Unavailable;
     };
-    match index_query.search(dimension, &value, None).await {
+    match index_query.search(dimension, &query_value, None).await {
         Ok(raw) if raw.results.is_empty() => SearchState::NoResults {
-            queried_value: value,
+            // Name the DISPLAY value the operator typed (the handle for the
+            // contributor dimension, the verbatim value otherwise) — never the
+            // resolved DID (AV-17 / the slice-05 precedent).
+            queried_value: display_value,
         },
         Ok(raw) => {
             // REUSE the pure anti-merging core: map the flat attributed transport
             // rows into `IndexedClaim`s and re-compose per-author (no merge, counter
-            // kept). The viewer holds NO second grouping/verification path.
+            // kept). The viewer holds NO second grouping/verification path. The
+            // `dimension` is carried into the state so the renderer adds the
+            // dimension-specific honest-framing footer (CONTRIBUTOR → "not a
+            // community consensus", US-NS-003 / AC-003.2); the grouping is identical
+            // across dimensions.
             let claims = raw.results.into_iter().map(to_indexed_claim).collect();
             let result: NetworkSearchResult = compose_results(claims, dimension);
-            SearchState::Results(result)
+            SearchState::Results { result, dimension }
         }
         // SOFT, non-fatal (I-NS-2 / WD-116): an unreachable/malformed/not-found
         // index degrades to the FIXED Unavailable notice — never a crash, never a
@@ -591,17 +598,66 @@ async fn resolve_search_state(
     }
 }
 
-/// Parse the search dimension + value from the `/search` query string. The OBJECT
-/// dimension is the walking-skeleton dimension (slice-08 step 01-01); the
-/// contributor/subject inputs land in later steps. Returns `None` when no
-/// recognized dimension value is present (a bare `GET /search` → the empty form).
-/// PURE total function. An empty value (e.g. `?object=`) is treated as "no value".
-fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, String)> {
-    let value = query_param(query, "object")?;
-    if value.is_empty() {
-        return None;
+/// Parse the search dimension from the `/search` query string, returning a triple
+/// `(dimension, query_value, display_value)`:
+///
+/// - `query_value` is what the wire query matches against. For OBJECT it is the
+///   typed value verbatim; for CONTRIBUTOR it is the RESOLVED app-identity DID the
+///   indexed `author_did` carries (`github:priya` → `did:plc:priya-test#org.openlore.application`).
+/// - `display_value` is what the operator typed — surfaced verbatim in the
+///   NoResults empty state (the contributor handle, never the resolved DID; AV-17).
+///
+/// The OBJECT dimension is the walking-skeleton dimension (step 01-01); the
+/// CONTRIBUTOR dimension lands here (step 02-01) reusing the slice-05 handle→DID
+/// resolution; the SUBJECT dimension lands in a later step. The OBJECT param is
+/// checked FIRST so a query carrying both keys is unambiguous. Returns `None` when
+/// no recognized dimension value is present (a bare `GET /search` → the empty
+/// form). PURE total function. An empty value (e.g. `?object=`) is "no value".
+fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, String, String)> {
+    if let Some(object) = query_param(query, "object").filter(|v| !v.is_empty()) {
+        return Some((SearchDimension::Object, object.clone(), object));
     }
-    Some((SearchDimension::Object, value))
+    if let Some(contributor) = query_param(query, "contributor").filter(|v| !v.is_empty()) {
+        // REUSE the slice-05 handle→DID resolution: the wire query matches the
+        // indexed `author_did` EXACTLY, so query with the RESOLVED app-identity DID;
+        // the empty state names the ORIGINAL handle the operator typed (AV-17).
+        let query_value = resolve_contributor_to_did(&contributor);
+        return Some((SearchDimension::Contributor, query_value, contributor));
+    }
+    None
+}
+
+/// The app-identity verification-method fragment every signed/indexed claim's
+/// `author_did` carries (`did:plc:X#org.openlore.application`). The contributor
+/// query matches the indexed `author_did` exactly, so a resolved bare DID is lifted
+/// to this app identity before the wire query (mirrors the slice-05 CLI
+/// `search --contributor` resolver — the SAME handle→DID convention).
+const APP_IDENTITY_FRAGMENT: &str = "#org.openlore.application";
+
+/// Resolve a `?contributor=` value to the author's app-identity DID the indexed
+/// `author_did` carries — the slice-05 handle→DID resolution REUSED on the viewer's
+/// `/search` surface (US-NS-003 / AC-003.2). PURE total function — no I/O.
+///
+/// - A `github:<handle>` argument resolves via the slice-02/04 handle→DID convention
+///   (`github:priya` → `did:plc:priya-test`) then lifts to the app identity
+///   (`…#org.openlore.application`).
+/// - A bare DID (`did:plc:…`) lifts the app-identity fragment if it lacks one; an
+///   already-fragmented DID passes through unchanged.
+///
+/// The query matches the indexed `author_did` exactly (`author_did = ?`), so the
+/// resolved value MUST carry the app-identity fragment.
+fn resolve_contributor_to_did(contributor: &str) -> String {
+    let bare = match contributor.strip_prefix("github:") {
+        // `github:priya` → `did:plc:priya-test` (the slice-02/04 handle→DID mapping).
+        Some(handle) => format!("did:plc:{handle}-test"),
+        // Already a DID — use as-is (the bare form below lifts the fragment).
+        None => contributor.to_string(),
+    };
+    if bare.contains('#') {
+        bare
+    } else {
+        format!("{bare}{APP_IDENTITY_FRAGMENT}")
+    }
 }
 
 /// Extract a single query parameter's percent-decoded value by `key`. PURE total

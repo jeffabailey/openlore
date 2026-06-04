@@ -482,14 +482,35 @@ fn contributor_search_renders_one_authors_trail_with_honesty_footer() {
     // body carries the honesty footer ("not a community consensus"), and there is
     // NO merged row.
     let _ = PRIYA_DID;
-    todo!(
-        "DELIVER N-6: seed_network_index(PriyaEightClaimsSixSubjects); \
-         get(\"/search?contributor=github:priya\"); \
-         assert_search_html_every_row_verified_and_attributed(body, \
-         &[\"did:plc:priya-test#org.openlore.application\"]); assert body contains \
-         the \\\"not a community consensus\\\" footer; \
-         assert_search_html_has_no_merged_consensus_row"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get("/search?contributor=github:priya");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search?contributor=github:priya over a reachable seeded index must be \
+         200; body:\n{}",
+        response.body
+    );
+    // Every rendered row is attributed to the SINGLE Priya app-identity DID
+    // (`github:priya` resolves to `did:plc:priya-test#org.openlore.application` via
+    // the REUSED slice-05 handle→DID resolver), each carrying `[verified]`.
+    assert_search_html_every_row_verified_and_attributed(
+        &response.body,
+        &["did:plc:priya-test#org.openlore.application"],
+    );
+    // The honest-framing footer: one developer's trail is NOT a community consensus.
+    assert!(
+        response.body.contains("not a community consensus"),
+        "the contributor render must carry the \"not a community consensus\" footer; \
+         body:\n{}",
+        response.body
+    );
+    // …and there is NO merged / faceless consensus row (the footer is a PROMISE, not
+    // an aggregate verdict — the viewer REUSES the per-author `compose_results`).
+    assert_search_html_has_no_merged_consensus_row(&response.body);
 }
 
 /// N-7 (US-NS-003 parity contributor; AC-003.5 / I-NS-6): the contributor search
@@ -511,11 +532,45 @@ fn contributor_search_fragment_equals_the_full_page_results_region() {
     // THEN the fragment `is_fragment()`, the full page `is_full_page()`, and the
     // load-bearing needles (Priya's author DID, `[verified]`, the honesty footer)
     // are present in BOTH bodies (parity by construction).
-    todo!(
-        "DELIVER N-7: reachable Priya index; frag = get_htmx(contributor), full = \
-         get(same); assert frag.is_fragment(), full.is_full_page(), and the trail \
-         needles (Priya DID, [verified], footer) present in BOTH"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let path = "/search?contributor=github:priya";
+    let fragment = viewer.get_htmx(path);
+    let full_page = viewer.get(path);
+
+    assert!(
+        fragment.is_fragment(),
+        "the htmx shape must return ONLY the #search-results fragment; body:\n{}",
+        fragment.body
+    );
+    assert!(
+        full_page.is_full_page(),
+        "the no-JS shape must return the COMPLETE full page; body:\n{}",
+        full_page.body
+    );
+    // Parity (I-NS-6): every load-bearing needle the contributor fragment renders —
+    // Priya's resolved author DID, the `[verified]` marker, and the honest-framing
+    // footer — is ALSO present in the full page's results region (the full page is
+    // chrome + form wrapped around the SAME fragment fn, so parity is by construction).
+    for needle in [
+        "did:plc:priya-test#org.openlore.application",
+        "[verified]",
+        "not a community consensus",
+    ] {
+        assert!(
+            fragment.body.contains(needle),
+            "I-NS-6: the contributor fragment must carry {needle:?}; body:\n{}",
+            fragment.body
+        );
+        assert!(
+            full_page.body.contains(needle),
+            "I-NS-6: the full page's results region must carry the SAME {needle:?} \
+             the fragment renders (parity by construction); body:\n{}",
+            full_page.body
+        );
+    }
 }
 
 /// N-8 (US-NS-003 happy subject; AC-003.3 / I-NS-3): a subject search renders the
