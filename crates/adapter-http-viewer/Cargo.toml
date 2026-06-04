@@ -36,6 +36,20 @@ viewer-domain = { path = "../viewer-domain" }
 # `Box<dyn GithubPort>`, so this crate never links another adapter (I-3) and
 # never reaches the signing/PDS surface (I-VIEW-3).
 scraper-domain = { path = "../scraper-domain" }
+# `appview-domain` is the PURE slice-05 anti-merging search core (NOT an adapter).
+# The `/search` route (slice-08; ADR-037) calls the REUSED `compose_results` to
+# group the flat attributed rows the read-only `IndexQueryPort` returns into the
+# per-author `NetworkSearchResult` the pure `viewer-domain` renderer projects — no
+# second grouping/verification path lives in the viewer. The `IndexQueryPort` trait
+# itself lives in `ports` (already a dep); the CONCRETE `adapter-index-query` is
+# wired by the cli composition root and passed in as `Arc<dyn IndexQueryPort>`, so
+# this crate never links another adapter (I-3) and reaches no signing/PDS surface
+# (I-NS-1 / I-VIEW-3 — a read-only index query holds no signing key).
+appview-domain = { path = "../appview-domain" }
+# `claim-domain` provides the `Cid`/`Did`/`KeyId` value types the raw transport
+# rows carry; the handler maps `NetworkResultRowRaw -> IndexedClaim` before
+# composing. Pure value types — no I/O edge.
+claim-domain = { path = "../claim-domain" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 hyper = { version = "1", features = ["server", "http1"] }

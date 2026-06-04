@@ -27,6 +27,13 @@ path = "src/lib.rs"
 [dependencies]
 maud = { workspace = true }
 ports = { path = "../ports" }
+# PURE → PURE (slice-08; ADR-036/037/038): the network-search view-model projects
+# `appview-domain`'s per-author `NetworkSearchResult` / `NetworkResultRow` (the
+# REUSED anti-merging `compose_results` output) into the `#search-results`
+# fragment. `appview-domain` is itself a pure core (no I/O, allowlisted pure-→pure
+# edge in `xtask check-arch`), so this keeps `viewer-domain` pure: no second
+# grouping/verification path lives here.
+appview-domain = { path = "../appview-domain" }
 
 [dev-dependencies]
 proptest = { workspace = true }

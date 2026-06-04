@@ -58,8 +58,12 @@ const BANNED_IO_PREFIXES: &[&str] = &["atrium-"];
 /// - `maud` / `maud_macros`: pure compile-time HTML template macro used by the
 ///   slice-06 `viewer-domain` read-only viewer core (ADR-029). The macro expands
 ///   to string building at compile time — no I/O, no async runtime.
-const PURE_CORE_ALLOWED_CRATES: &[&str] =
-    &["unicode-normalization", "serde_yaml_ng", "maud", "maud_macros"];
+const PURE_CORE_ALLOWED_CRATES: &[&str] = &[
+    "unicode-normalization",
+    "serde_yaml_ng",
+    "maud",
+    "maud_macros",
+];
 
 /// `ports` is async-shaped (PdsPort) so `async-trait` is the one allowed
 /// async dep; the runtime itself (tokio) and HTTP/DB I/O crates remain
@@ -648,15 +652,30 @@ pub fn check_indexer_capability_boundary(workspace: &Workspace) -> Vec<Violation
 /// The viewer HTTP-shell adapter crate name.
 const VIEWER_ADAPTER: &str = "adapter-http-viewer";
 
-/// Dep classes the read-only viewer adapter MUST NOT reach (I-VIEW-3): the
-/// signing identity adapter + any PDS-write surface. The viewer reads a
-/// read-only store and renders HTML — it cannot sign, publish, or resolve
-/// peers. `adapter-duckdb` is intentionally NOT here: the viewer's read-only
-/// `StoreReadPort` is implemented in `adapter-duckdb`, but the viewer ADAPTER
-/// crate links only `ports` + `viewer-domain` (the cli wires the concrete
-/// `DuckDbStoreReadAdapter`), so `adapter-http-viewer` never reaches
-/// `adapter-duckdb` directly.
-const VIEWER_FORBIDDEN_DEPS: &[&str] = &["adapter-atproto-did", "adapter-atproto-pds"];
+/// Dep classes the read-only viewer adapter MUST NOT reach (I-VIEW-3 / I-NS-1):
+/// the signing identity adapter + any PDS-write surface, AND the indexer-side
+/// SERVER / store / ingest crates (slice-08; ADR-036/037). The viewer reads a
+/// read-only store, queries a READ-ONLY network index, and renders HTML — it
+/// cannot sign, publish, resolve peers, NOR host/build the index. `adapter-duckdb`
+/// is intentionally NOT here: the viewer's read-only `StoreReadPort` is implemented
+/// in `adapter-duckdb`, but the viewer ADAPTER crate links only `ports` +
+/// `viewer-domain` + the pure `appview-domain`/`scraper-domain` cores (the cli
+/// wires the concrete `DuckDbStoreReadAdapter`), so `adapter-http-viewer` never
+/// reaches `adapter-duckdb` directly. `adapter-index-query` (the read-only index
+/// CLIENT) is ALSO intentionally NOT here — the viewer MAY hold the read-only
+/// `IndexQueryPort` for the `/search` route (the cli wires the concrete
+/// `HttpIndexQueryAdapter` and passes it in as `Arc<dyn IndexQueryPort>`), so the
+/// viewer adapter links only the trait (via `ports`), never the client adapter
+/// directly. What it must NOT reach is the indexer's SERVER/store/ingest surface
+/// (`adapter-xrpc-query-server`, `adapter-index-store`, `adapter-atproto-ingest`) —
+/// the viewer is a query CLIENT, never the indexer itself (I-NS-1 / disjoint roots).
+const VIEWER_FORBIDDEN_DEPS: &[&str] = &[
+    "adapter-atproto-did",
+    "adapter-atproto-pds",
+    "adapter-xrpc-query-server",
+    "adapter-index-store",
+    "adapter-atproto-ingest",
+];
 
 /// Pure dep-graph check (I-VIEW-3 + the viewer capability invariant): the
 /// `adapter-http-viewer` crate's transitive dep graph excludes the signing
@@ -675,7 +694,9 @@ pub fn check_viewer_capability_boundary(workspace: &Workspace) -> Vec<Violation>
                     package: VIEWER_ADAPTER.to_string(),
                     forbidden: (*forbidden).to_string(),
                     rule: "adapter-http-viewer MUST NOT depend on the signing identity / \
-                           PDS-write surface — the viewer holds no signing key (I-VIEW-3)",
+                           PDS-write surface NOR the indexer SERVER/store/ingest crates — \
+                           the viewer holds no signing key and is a read-only query CLIENT, \
+                           never the indexer (I-VIEW-3 / I-NS-1)",
                 });
             }
         }
@@ -691,10 +712,7 @@ pub fn check_viewer_capability_boundary(workspace: &Workspace) -> Vec<Violation>
         {
             continue;
         }
-        if workspace
-            .transitive_deps(member)
-            .contains(VIEWER_ADAPTER)
-        {
+        if workspace.transitive_deps(member).contains(VIEWER_ADAPTER) {
             violations.push(Violation {
                 package: member.clone(),
                 forbidden: VIEWER_ADAPTER.to_string(),
@@ -1313,6 +1331,79 @@ mod tests {
             }),
             "expected openlore-indexer→adapter-http-viewer (only-cli) violation, got: {v:?}"
         );
+    }
+
+    // --- slice-08 network-search: pure→pure edge + read-only IndexQueryPort -----
+
+    #[test]
+    fn viewer_domain_depending_on_appview_domain_is_an_allowed_pure_to_pure_edge() {
+        // slice-08 delta (a) / ADR-037: `viewer-domain` projects the pure slice-05
+        // `appview-domain` `NetworkSearchResult` into the `#search-results` fragment
+        // (REUSING `compose_results`). `appview-domain` is itself a pure core
+        // (claim-domain + pure chrono/serde), so the edge introduces NO banned I/O —
+        // the pure-core arm must still pass for `viewer-domain`.
+        let w = ws(&[
+            ("viewer-domain", &["maud", "ports", "appview-domain"]),
+            ("appview-domain", &["claim-domain", "serde", "chrono"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "viewer-domain → appview-domain must be an allowed pure→pure edge (ADR-037), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn viewer_adapter_may_hold_the_read_only_index_query_client() {
+        // slice-08 delta (b) / I-NS-1: the viewer adapter MAY reach the read-only
+        // index-query CLIENT (`adapter-index-query`) — it holds the read-only
+        // `IndexQueryPort` for the `/search` route. That is NOT a capability breach
+        // (the cli wires the concrete adapter and passes `Arc<dyn IndexQueryPort>`;
+        // in practice the viewer adapter links only the trait via `ports`, but even
+        // a direct client edge is permitted — the client is read-only, holds no
+        // signing key). The pure `appview-domain` search-core edge is also allowed.
+        let ok = ws(&[
+            ("cli", &["adapter-http-viewer", "adapter-index-query"]),
+            (
+                "adapter-http-viewer",
+                &["ports", "viewer-domain", "appview-domain"],
+            ),
+            ("adapter-index-query", &["ports", "reqwest"]),
+            ("viewer-domain", &["maud", "ports", "appview-domain"]),
+            ("appview-domain", &["claim-domain"]),
+            ("ports", &["claim-domain"]),
+        ]);
+        assert!(
+            check_viewer_capability_boundary(&ok).is_empty(),
+            "the viewer adapter holding the read-only IndexQueryPort client must be allowed \
+             (I-NS-1), got: {:?}",
+            check_viewer_capability_boundary(&ok)
+        );
+    }
+
+    #[test]
+    fn viewer_adapter_reaching_the_indexer_server_store_or_ingest_is_a_violation() {
+        // slice-08 delta (b) / I-NS-1: the viewer is a read-only query CLIENT, NEVER
+        // the indexer. Reaching the indexer's HTTP SERVER / store / ingest surface is
+        // a capability breach (the viewer would then host/build the index). Pin each
+        // of the three indexer-side crates independently so weakening any single
+        // entry of VIEWER_FORBIDDEN_DEPS is caught.
+        for forbidden in [
+            "adapter-xrpc-query-server",
+            "adapter-index-store",
+            "adapter-atproto-ingest",
+        ] {
+            let w = ws(&[("adapter-http-viewer", &[forbidden]), (forbidden, &[])]);
+            let v = check_viewer_capability_boundary(&w);
+            assert!(
+                v.iter()
+                    .any(|x| x.package == "adapter-http-viewer" && x.forbidden == forbidden),
+                "expected adapter-http-viewer→{forbidden} (I-NS-1 indexer-server breach) \
+                 violation, got: {v:?}"
+            );
+        }
     }
 
     // --- Invariant 3: ports may have async-trait, not tokio ------------

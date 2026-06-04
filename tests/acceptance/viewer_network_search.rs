@@ -122,16 +122,30 @@ fn search_by_object_with_htmx_returns_only_the_verified_results_fragment() {
     // NOT a full page), and it renders the matching claims as per-author attributed
     // rows — each carrying `[verified]` + the author DID + verbatim confidence — with
     // NO merged consensus row. (Observable rendered surface only.)
-    let _ = (OBJECT_REPRODUCIBLE_BUILDS, PRIYA_DID);
-    let _: fn(&TestEnv, IndexerHandle) -> ViewerServer = ViewerServer::start_with_indexer;
-    todo!(
-        "DELIVER N-1: seed the reproducible-builds index (seed_network_index → \
-         NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed); \
-         ViewerServer::start_with_indexer; get_htmx(\"/search?object=...\"); assert \
-         status 200, is_fragment(), and \
-         assert_search_html_every_row_verified_and_attributed + \
-         assert_search_html_has_no_merged_consensus_row over the fragment body"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get_htmx(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search WITH HX-Request over a reachable seeded index must be 200; body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_fragment(),
+        "the htmx shape must return ONLY the #search-results fragment (no full-page \
+         chrome); body:\n{}",
+        response.body
+    );
+    // Per-author attributed rows, each carrying [verified] + the author DID + the
+    // verbatim confidence — Priya (UNFOLLOWED) is in the headline corpus.
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID]);
+    assert_search_html_has_no_merged_consensus_row(&response.body);
 }
 
 /// N-1b (US-NS-001; AC-001.2/AC-001.3 — the capability holds no write/sign surface):

@@ -15,11 +15,12 @@
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
 use adapter_http_viewer::{
-    read_only_launch_banner, viewer_store_unreadable_refusal, SharedGithub, SharedStore,
-    ViewerServer,
+    read_only_launch_banner, viewer_store_unreadable_refusal, SharedGithub, SharedIndexQuery,
+    SharedStore, ViewerServer,
 };
+use adapter_index_query::HttpIndexQueryAdapter;
 use anyhow::{anyhow, Result};
-use ports::{ProbeOutcome, StoreReadPort};
+use ports::{IndexQueryPort, ProbeOutcome, StoreReadPort};
 use std::sync::Arc;
 
 use crate::paths::OpenLorePaths;
@@ -85,6 +86,30 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     // `/scrape` route persists nothing (BR-VIEW-2).
     let github: SharedGithub = Arc::new(GithubAdapter::from_env());
 
+    // Wire the slice-05 READ-ONLY `IndexQueryPort` (adapter-index-query) for the
+    // slice-08 `/search` NETWORK-SEARCH route (US-NS-001..004; ADR-036/037). The
+    // indexer URL is resolved from the SAME slice-05 seam the `openlore search` CLI
+    // verb reads (`OPENLORE_INDEXER_URL` / `[appview] indexer_url`, OD-NS-6); an
+    // UNSET/empty seam yields `None` so `/search` renders the fixed Unavailable
+    // notice WITHOUT a network call (I-NS-2). CAPABILITY (I-NS-1): an
+    // `IndexQueryPort` is read-only by construction — NO signing key / IdentityPort
+    // / PdsPort enters the viewer process; the viewer still holds only a read-only
+    // store + a public-read GitHub port + this read-only index query. The `/search`
+    // route persists NOTHING (WD-NS-7).
+    let index_query: Option<SharedIndexQuery> = resolve_index_query();
+
+    // A startup soft-probe of the index is INFORMATIONAL (KPI-5 / WD-116): an
+    // unreachable indexer must NOT refuse viewer startup. The probe does no network
+    // round-trip; we surface its outcome as an event for DevOps but never gate on it.
+    if let Some(index_query) = &index_query {
+        let outcome = index_query.probe();
+        let probe_event = serde_json::json!({
+            "event": "viewer.index_query.probe",
+            "refused": matches!(outcome, ProbeOutcome::Refused { .. }),
+        });
+        println!("{probe_event}");
+    }
+
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
         .parse()
         .map_err(|err| anyhow!("invalid viewer listen address: {err}"))?;
@@ -95,10 +120,11 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
     // bind happens inside it.
     let runtime = build_tokio_runtime();
     let code = runtime.block_on(async move {
-        let server = match ViewerServer::bind_with_github(
+        let server = match ViewerServer::bind_with_index_query(
             addr,
             Arc::clone(&store),
-            Arc::clone(&github),
+            Some(Arc::clone(&github)),
+            index_query.clone(),
         ) {
             Ok(server) => server,
             Err(err) => {
@@ -175,8 +201,32 @@ fn emit_startup_refused(outcome: &ProbeOutcome) {
     eprintln!("openlore ui: refusing to serve — {detail}");
 }
 
-/// Force-link the `StoreReadPort` trait into this module's import graph so the
-/// capability-boundary intent reads clearly at the call site (the viewer holds a
-/// read-only store and nothing else). No-op at runtime.
+/// The env-var seam the viewer composition root reads for the self-hosted indexer
+/// URL (ADR-036 / OD-NS-6) — the SAME seam the `openlore search` CLI verb reads.
+/// Production resolves `[appview] indexer_url` from the config; the acceptance
+/// harness sets this env var to the localhost `openlore-indexer serve` port. An
+/// empty/unset value ⇒ the index is UNCONFIGURED (the SOFT `/search` Unavailable
+/// degradation WITHOUT a network call, I-NS-2).
+const INDEXER_URL_ENV: &str = "OPENLORE_INDEXER_URL";
+
+/// Resolve the READ-ONLY `IndexQueryPort` for the `/search` route from the slice-05
+/// indexer-URL seam (OD-NS-6). Returns `Some(adapter)` wired at the configured URL,
+/// or `None` when the seam is unset/empty (the UNCONFIGURED case — `/search` then
+/// renders the fixed Unavailable notice WITHOUT any network call, I-NS-2). NO
+/// signing key / IdentityPort / PdsPort is involved — the index query is read-only
+/// by construction (I-NS-1).
+fn resolve_index_query() -> Option<SharedIndexQuery> {
+    let url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
+    if url.is_empty() {
+        return None;
+    }
+    let adapter: SharedIndexQuery = Arc::new(HttpIndexQueryAdapter::for_url(url));
+    Some(adapter)
+}
+
+/// Force-link the `StoreReadPort` + read-only `IndexQueryPort` traits into this
+/// module's import graph so the capability-boundary intent reads clearly at the
+/// call site (the viewer holds a read-only store + a read-only index query and
+/// nothing that can sign). No-op at runtime.
 #[allow(dead_code)]
-fn _capability_marker(_store: &dyn StoreReadPort) {}
+fn _capability_marker(_store: &dyn StoreReadPort, _index: &dyn IndexQueryPort) {}

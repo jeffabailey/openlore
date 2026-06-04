@@ -1156,6 +1156,233 @@ fn render_candidate_row(row: &CandidateRowView) -> Markup {
     }
 }
 
+// =============================================================================
+// Network Search view (`GET /search`, US-NS-001..004 / ADR-036/037/038)
+// =============================================================================
+
+/// The HTML `id` of the network-search swap-target element — the `<div>` the htmx
+/// `#search-results` fragment IS, and the region the full `/search` page wraps
+/// chrome (+ the dimension form) around (slice-08; ADR-037 / mirrors
+/// [`SCRAPE_RESULTS_ID`]). Held in ONE place so the fragment fn and any future
+/// `hx-target`/`hx-swap` reference the SAME id (a mutation to the id has exactly
+/// one site to attack — pinned by the unit test). The no-JS full page embeds the
+/// SAME `<div id="search-results">`, so the fragment and the full page's results
+/// region are structurally identical (I-NS-6 parity by construction).
+pub const SEARCH_RESULTS_ID: &str = "search-results";
+
+/// The real route the network-search view is served at (`/search`) — the no-JS
+/// `href`/form `action`, the htmx `hx-get`, AND the nav link all reference this
+/// one path (one source of truth for "where the search lives"). Held in ONE place
+/// so the chrome's nav link and the form's action can never drift apart.
+pub const SEARCH_URL: &str = "/search";
+
+/// The `[verified]` marker every rendered network-search row carries (I-NS-4 —
+/// verification is an ingest precondition; there is no unverified state on the
+/// viewer surface). Held in ONE place so the marker text is a single mutation
+/// site. The acceptance gate (`assert_search_html_every_row_verified_and_attributed`)
+/// counts these per author row.
+pub const SEARCH_VERIFIED_MARKER: &str = "[verified]";
+
+/// The public-data framing banner the `/search` page states UP FRONT (I-NS-5):
+/// discovery indexes only PUBLIC signed claims, verified before indexing; nothing
+/// private is read. Held in ONE place so the framing is a single source of truth.
+pub const SEARCH_PUBLIC_DATA_NOTICE: &str =
+    "Discovery indexes only public signed claims, verified before indexing — \
+     nothing private is read.";
+
+/// The fixed plain-language notice the `SearchState::Unavailable` arm renders when
+/// the configured network index is unreachable OR unconfigured (I-NS-2 / WD-NS-4).
+/// Held in ONE place AND emitted as a fixed constant (NEVER interpolated from a
+/// transport error) so the degradation message is a single source of truth AND
+/// structurally cannot leak internals: it states the index is unavailable and that
+/// the operator's LOCAL store views still work, with NO HTTP status, "connection
+/// refused", raw URL, or stack-trace marker (the `Unavailable` arm is a UNIT
+/// variant precisely so no transport string can be threaded in). Pinned by the
+/// leak-absence unit test + the N-13..N-16 acceptance gate.
+pub const SEARCH_UNAVAILABLE_NOTICE: &str =
+    "The network index is unavailable. Your local store views still work.";
+
+/// The state the network-search results region renders (the pure render input). An
+/// ADT over the four outcomes of a `/search` interaction so the renderer matches
+/// totally (nw-fp-domain-modeling §1): the empty GET form, a populated per-author
+/// result, a guided no-results empty state, or the fixed unavailable notice. The
+/// effect shell builds this from the index-query outcome (REACHABLE-with-results →
+/// `Results`; reachable-zero → `NoResults`; unreachable/unconfigured →
+/// `Unavailable`; the bare `GET /search` with no dimension → `Form`); the renderer
+/// is a pure total function over it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SearchState {
+    /// `GET /search` with no dimension supplied: the empty dimension form, no
+    /// query run yet.
+    Form,
+    /// A REACHABLE index returned ≥1 verified row: render the per-author groups.
+    /// Carries the REUSED `appview-domain::compose_results` output VERBATIM — the
+    /// viewer holds NO second grouping/verification path (anti-merging is the pure
+    /// core's job; the renderer only projects it).
+    Results(appview_domain::NetworkSearchResult),
+    /// A REACHABLE index returned ZERO rows for the queried dimension+value
+    /// (US-NS-002 Ex 4 / SearchState::NoResults): render a guided plain-language
+    /// "no claims found" empty state naming the queried value — never a blank
+    /// region or a crash.
+    NoResults {
+        /// The queried value, named in the guided empty state (so the operator
+        /// sees WHAT was searched). E.g. a typo'd object or an absent contributor.
+        queried_value: String,
+    },
+    /// The configured index is UNREACHABLE or UNCONFIGURED (I-NS-2): render the
+    /// FIXED [`SEARCH_UNAVAILABLE_NOTICE`]. A UNIT variant — it carries NO
+    /// transport detail, so the raw error/URL/status CANNOT be interpolated,
+    /// guaranteeing no leaked internals (I-NS-2) by construction.
+    Unavailable,
+}
+
+/// Render the network-search swap-target FRAGMENT (slice-08; ADR-037): the
+/// `<div id="search-results">` wrapping the per-author result groups (or the guided
+/// no-results / fixed unavailable notice) for the given [`SearchState`]. PURE: a
+/// total function from the view-model to a `Markup` — NO full-page chrome (no
+/// `<!DOCTYPE>`, no `<html>`/`<head>`) and NO dimension form, so an `HX-Request`
+/// response carries ONLY this results region (I-NS-6). Renders NO sign/follow
+/// control (I-NS-1 / WD-NS-3 — following stays a CLI action). [`render_search_page`]
+/// EMBEDS this SAME fn beneath the form, so the fragment and the full page's results
+/// region are byte-identical by construction (I-NS-6 parity — the results-rendering
+/// logic is NOT duplicated). This is the slice-08 structural contract: page =
+/// chrome + form + fragment.
+///
+/// The result rows PROJECT `appview-domain`'s per-author [`NetworkSearchResult`] —
+/// each group keyed by its author DID, every row carrying the `[verified]` marker
+/// + the author DID + the VERBATIM confidence (via [`render_confidence`]) — and
+/// there is NO merged "network consensus" row (the per-author shape is the only
+/// output of the REUSED `compose_results`; the viewer never re-groups).
+pub fn render_search_results_fragment(state: &SearchState) -> Markup {
+    html! {
+        div id=(SEARCH_RESULTS_ID) {
+            (render_search_result(state))
+        }
+    }
+}
+
+/// Render the network-search page (`GET /search`, US-NS-001..004) as a complete
+/// HTML document (maud). PURE: a total function from the [`SearchState`] to an HTML
+/// string — no I/O, no network. ALWAYS renders the public-data framing banner UP
+/// FRONT (I-NS-5), a nav link back to the other views, and the labeled dimension
+/// form (so the operator can submit / re-submit), THEN the results region. Renders
+/// NO sign/follow control anywhere (I-NS-1 / WD-NS-3 — following stays a CLI
+/// action; the only "follow" surface is the render-only `openlore peer add <did>`
+/// guidance TEXT on an unfollowed row).
+///
+/// COMPOSITION (slice-08; ADR-037): the results region is chrome + framing + form
+/// wrapped AROUND [`render_search_results_fragment`] — the EXACT same fragment fn
+/// the htmx shape returns alone. Because the results region is the SAME fn in both
+/// shapes, fragment/full-page parity is structural, not asserted by duplicating
+/// render logic (I-NS-6). The `<head>` emits exactly ONE local
+/// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-NS-7) — the
+/// SAME chrome line every other enhanced page carries, so the form's `hx-get` swap
+/// works in-browser instead of falling back to a full GET.
+pub fn render_search_page(state: &SearchState) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            (page_head("OpenLore — Network Search"))
+            body {
+                h1 { "Network Search" }
+                p { (SEARCH_PUBLIC_DATA_NOTICE) }
+                nav {
+                    a href=(MY_CLAIMS_URL) { "My Claims" }
+                }
+                (render_search_form())
+                (render_search_results_fragment(state))
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Render the labeled dimension form (`GET /search` and the top of every results
+/// render). PURE. The form GETs the `object` field back to `/search` (the object
+/// dimension is the walking-skeleton dimension; later steps add the
+/// contributor/subject inputs). It carries NO sign/follow control. Enhanced with
+/// `hx-get`/`hx-target` so an in-browser submit swaps ONLY the `#search-results`
+/// region; the no-JS path is a plain `GET` to `/search`.
+fn render_search_form() -> Markup {
+    html! {
+        form method="get" action=(SEARCH_URL)
+             hx-get=(SEARCH_URL)
+             hx-target=(format!("#{SEARCH_RESULTS_ID}"))
+             hx-swap="innerHTML" {
+            label for="object" { "Philosophy / object URI" }
+            input type="text" id="object" name="object";
+            button type="submit" { "Search" }
+        }
+    }
+}
+
+/// Render the results region beneath the form for the given [`SearchState`]. PURE
+/// total match over the ADT: the GET form shows nothing yet; results show the
+/// per-author groups; no-results shows the guided empty state; unavailable shows
+/// the fixed notice.
+fn render_search_result(state: &SearchState) -> Markup {
+    html! {
+        @match state {
+            SearchState::Form => {}
+            SearchState::Results(result) => {
+                (render_search_author_groups(result))
+            }
+            // No-results (US-NS-002 Ex 4): the guided plain-language empty state
+            // naming the queried value — never a blank region or a crash.
+            SearchState::NoResults { queried_value } => {
+                p {
+                    "No claims found for " (queried_value) "."
+                }
+            }
+            // Unavailable (I-NS-2): the FIXED plain-language notice ONLY — the unit
+            // variant carries no transport detail, so nothing can leak.
+            SearchState::Unavailable => {
+                p { (SEARCH_UNAVAILABLE_NOTICE) }
+            }
+        }
+    }
+}
+
+/// Render the per-author result groups (anti-merging, I-NS-3): one section per
+/// author DID, each holding that author's verified rows. PROJECTS the REUSED
+/// `appview-domain::compose_results` output — there is NO merged "network
+/// consensus" row because the per-author shape is the only thing the pure core
+/// produces. Each group is keyed by its author DID (rendered VERBATIM —
+/// attribution is never elided).
+fn render_search_author_groups(result: &appview_domain::NetworkSearchResult) -> Markup {
+    html! {
+        @for (author_did, rows) in &result.by_author {
+            section {
+                h2 { "Author: " (author_did.0) }
+                @for row in rows {
+                    (render_search_result_row(row))
+                }
+            }
+        }
+    }
+}
+
+/// Render one network-search result row (a verified, attributed claim). Carries the
+/// `[verified]` marker (I-NS-4 — there is no unverified state on the surface), the
+/// author DID (attribution, I-NS-3), the claim triple, and the VERBATIM confidence
+/// (via [`render_confidence`] — `0.85`, never `0.9`/`90%`; FR-VIEW-8). Renders NO
+/// sign/follow control (I-NS-1). The per-row markup is small + named so the
+/// load-bearing marker + attribution + verbatim-confidence each have one site to
+/// pin against mutation.
+fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
+    html! {
+        div {
+            span { (SEARCH_VERIFIED_MARKER) }
+            " "
+            span { (row.author_did.0) }
+            " "
+            span { (row.subject) " " (row.predicate) " " (row.object) }
+            " "
+            span { (render_confidence(row.confidence)) }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! In-crate unit + property tests for the PURE viewer core. Port-to-port at
@@ -2836,6 +3063,230 @@ mod tests {
             let frag_lower = fragment.to_lowercase();
             prop_assert!(!frag_lower.contains("<html"), "the fragment carries no chrome");
             prop_assert!(full.to_lowercase().contains("<html"), "the page carries chrome");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Network Search view (slice-08; ADR-037) — `render_search_results_fragment`
+    // -------------------------------------------------------------------------
+
+    use appview_domain::{NetworkResultRow, NetworkSearchResult};
+    use ports::AuthorRelationship;
+
+    /// Build a verified network result row for the search-fragment tests. The CID
+    /// is caller-supplied so distinct rows stay distinct; `verified_against` is
+    /// non-empty (verified-before-index drives the `[verified]` marker).
+    fn search_row(author: &str, cid: &str, object: &str, confidence: f64) -> NetworkResultRow {
+        NetworkResultRow {
+            author_did: ports::claim_domain::Did(author.to_string()),
+            cid: ports::claim_domain::Cid(cid.to_string()),
+            subject: "github:bazelbuild/bazel".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+            confidence,
+            verified_against: ports::claim_domain::KeyId(format!(
+                "{author}#org.openlore.application"
+            )),
+            relationship: AuthorRelationship::NetworkUnfollowed,
+            counter_annotation: None,
+        }
+    }
+
+    /// Build a per-author `NetworkSearchResult` from `(author, cid, object, conf)`
+    /// rows — mirrors the `compose_results` per-author shape (each author its own
+    /// group). Used to drive the render-fragment tests at the view-model boundary.
+    fn search_result(rows: &[(&str, &str, &str, f64)]) -> NetworkSearchResult {
+        use std::collections::BTreeMap;
+        let mut by: BTreeMap<String, (ports::claim_domain::Did, Vec<NetworkResultRow>)> =
+            BTreeMap::new();
+        for (author, cid, object, conf) in rows {
+            let row = search_row(author, cid, object, *conf);
+            by.entry(author.to_string())
+                .or_insert_with(|| (ports::claim_domain::Did(author.to_string()), Vec::new()))
+                .1
+                .push(row);
+        }
+        let by_author: Vec<_> = by.into_values().collect();
+        let distinct = by_author.len() as u32;
+        let total = rows.len() as u32;
+        NetworkSearchResult {
+            by_author,
+            distinct_author_count: distinct,
+            total_claims: total,
+            suggestion: None,
+        }
+    }
+
+    /// Behavior (N-1 / AC-001.2): the results fragment renders per-author groups —
+    /// every row carries the `[verified]` marker, the author DID (attribution), and
+    /// the VERBATIM confidence (`0.85`, never `0.9`/`90%`). The prime mutation
+    /// target: the marker, the DID, and the verbatim confidence are each pinned.
+    #[test]
+    fn search_fragment_renders_verified_attributed_rows_with_verbatim_confidence() {
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.85,
+        )]);
+
+        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+
+        assert!(
+            html.contains("[verified]"),
+            "every rendered row carries the [verified] marker; got:\n{html}"
+        );
+        assert!(
+            html.contains("did:plc:priya-test#org.openlore.application"),
+            "the row is attributed to its author DID (verbatim); got:\n{html}"
+        );
+        assert!(
+            html.contains("0.85"),
+            "the confidence renders VERBATIM as 0.85; got:\n{html}"
+        );
+        assert!(
+            !html.contains("0.9") && !html.contains("90%"),
+            "the confidence must NOT be rounded to 0.9/90%; got:\n{html}"
+        );
+    }
+
+    /// Behavior (anti-merging, I-NS-3): two DIFFERENT authors claiming the SAME
+    /// object render as TWO attributed rows under two author groups — never one
+    /// merged "network consensus" row. The fragment projects the REUSED per-author
+    /// `compose_results` shape; there is no second grouping path in the viewer.
+    #[test]
+    fn search_fragment_renders_two_author_groups_never_a_merged_row() {
+        let result = search_result(&[
+            (
+                "did:plc:priya-test#org.openlore.application",
+                "bafypriya",
+                "phil.deppin",
+                0.70,
+            ),
+            (
+                "did:plc:sven-test#org.openlore.application",
+                "bafysven",
+                "phil.deppin",
+                0.65,
+            ),
+        ]);
+
+        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+
+        assert!(html.contains("did:plc:priya-test#org.openlore.application"));
+        assert!(html.contains("did:plc:sven-test#org.openlore.application"));
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["network consensus", "the network thinks", "authors agree"] {
+            assert!(
+                !lowered.contains(banned),
+                "the fragment must show NO merged consensus row; found {banned:?} in:\n{html}"
+            );
+        }
+        assert_eq!(html.matches("[verified]").count(), 2, "two verified rows");
+    }
+
+    /// Behavior (I-NS-6 parity by construction): the full `/search` page EMBEDS the
+    /// results fragment VERBATIM, and the fragment carries NO full-page chrome while
+    /// the page does. So the two shapes can never diverge for a given state.
+    #[test]
+    fn search_full_page_embeds_the_results_fragment_verbatim() {
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.85,
+        )]);
+        let state = SearchState::Results(result);
+
+        let fragment = render_search_results_fragment(&state).into_string();
+        let page = render_search_page(&state);
+
+        assert!(
+            page.contains(&fragment),
+            "the full page must embed the results fragment verbatim;\nfragment:\n{fragment}\npage:\n{page}"
+        );
+        assert!(
+            !fragment.to_lowercase().contains("<html"),
+            "the fragment carries no full-page chrome; got:\n{fragment}"
+        );
+        assert!(
+            page.to_lowercase().contains("<html"),
+            "the full page carries chrome; got:\n{page}"
+        );
+    }
+
+    /// Behavior (I-NS-1 / WD-NS-3): the results fragment renders NO sign/follow/
+    /// subscribe control — following stays a CLI action; the viewer is read-only.
+    #[test]
+    fn search_fragment_renders_no_sign_or_follow_control() {
+        let result = search_result(&[(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.85,
+        )]);
+
+        let html = render_search_results_fragment(&SearchState::Results(result)).into_string();
+        let lowered = html.to_ascii_lowercase();
+
+        for banned in [
+            "name=\"sign\"",
+            "name=\"follow\"",
+            "subscribe",
+            "<button",
+            "<form",
+        ] {
+            assert!(
+                !lowered.contains(banned),
+                "the results fragment must carry NO sign/follow control; found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (US-NS-002 Ex 4 / NoResults): a reachable index that returned zero
+    /// rows renders a guided plain-language empty state NAMING the queried value —
+    /// never a blank region.
+    #[test]
+    fn search_fragment_no_results_names_the_queried_value() {
+        let html = render_search_results_fragment(&SearchState::NoResults {
+            queried_value: "org.openlore.philosophy.reprducible".to_string(),
+        })
+        .into_string();
+
+        assert!(
+            html.contains("No claims found"),
+            "the NoResults arm renders a guided empty state; got:\n{html}"
+        );
+        assert!(
+            html.contains("org.openlore.philosophy.reprducible"),
+            "the empty state NAMES the queried value; got:\n{html}"
+        );
+    }
+
+    /// Behavior (I-NS-2 / WD-NS-4): the `Unavailable` arm renders the FIXED notice
+    /// and leaks NO transport internals — the unit variant cannot interpolate a
+    /// transport string, so no HTTP status / "connection refused" / raw URL leaks.
+    #[test]
+    fn search_fragment_unavailable_is_fixed_and_leaks_no_internals() {
+        let html = render_search_results_fragment(&SearchState::Unavailable).into_string();
+        let lowered = html.to_ascii_lowercase();
+
+        assert!(
+            html.contains(SEARCH_UNAVAILABLE_NOTICE),
+            "the Unavailable arm renders the fixed notice; got:\n{html}"
+        );
+        for leaked in [
+            "connection refused",
+            "timed out",
+            "http://127.0.0.1",
+            "503",
+            "500",
+            "panicked at",
+        ] {
+            assert!(
+                !lowered.contains(&leaked.to_lowercase()),
+                "the Unavailable render must leak no transport internals; found {leaked:?} in:\n{html}"
+            );
         }
     }
 }

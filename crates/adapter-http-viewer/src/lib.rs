@@ -25,20 +25,26 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use appview_domain::{compose_results, NetworkSearchResult};
+use claim_domain::{Cid, Did, KeyId};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use ports::{GithubError, GithubPort, PageRequest, StoreReadPort, TargetKind};
+use ports::{
+    AuthorRelationship, GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim,
+    NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadPort, TargetKind,
+};
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claim_detail_fragment, render_claim_not_found_fragment,
     render_claims_page, render_claims_view_panel_fragment, render_error, render_landing,
     render_peer_claims_page, render_peer_claims_view_panel_fragment, render_scrape_page,
-    render_scrape_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
-    PeerClaimRowView, ScrapeState, HTMX_ASSET_URL, SCRAPE_NO_CANDIDATES_NOTICE,
+    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
+    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
+    SearchState, HTMX_ASSET_URL, SCRAPE_NO_CANDIDATES_NOTICE, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -72,6 +78,22 @@ pub type SharedStore = Arc<dyn StoreReadPort>;
 /// preserves the read-only, no-signing-key invariant. The viewer never persists
 /// anything from `/scrape` (BR-VIEW-2 / I-VIEW-1).
 pub type SharedGithub = Arc<dyn GithubPort>;
+
+/// The READ-ONLY network index-query port the `/search` route reuses (slice-08;
+/// ADR-036/037). Shared across the hyper accept loop's per-connection tasks
+/// (`Send + Sync` via the `IndexQueryPort` supertrait). This is the SLICE-05 port
+/// (`adapter-index-query::HttpIndexQueryAdapter`) — the cli composition root
+/// resolves the indexer URL from the `OPENLORE_INDEXER_URL` / `[appview]
+/// indexer_url` seam and wires it; a NEW transport is NOT built. `None` for viewers
+/// that never serve `/search`, AND for an UNCONFIGURED viewer (the env-var seam is
+/// unset) — the handler then yields [`SearchState::Unavailable`] WITHOUT any
+/// network call (I-NS-2).
+///
+/// CAPABILITY NOTE (I-NS-1 / I-VIEW-3): an `IndexQueryPort` is READ-ONLY by
+/// construction — it holds no signing/identity/PDS/write surface and there is no
+/// sign/write method on it — so adding it to the viewer preserves the read-only,
+/// no-signing-key invariant. The viewer persists NOTHING from `/search` (WD-NS-7).
+pub type SharedIndexQuery = Arc<dyn IndexQueryPort>;
 
 /// The fixed rows-per-page for the My Claims list view (ADR-030). Drives the
 /// `?page=N` offset math (`OFFSET (page-1)*size LIMIT size`) in [`claims_page`]
@@ -143,6 +165,10 @@ pub struct ViewerServer {
     /// The slice-02 `GithubPort` the `/scrape` route reuses for the LIVE propose
     /// step (US-VIEW-005). `None` for store-only viewers — `/scrape` then 404s.
     github: Option<SharedGithub>,
+    /// The slice-05 READ-ONLY `IndexQueryPort` the `/search` route reuses (slice-08;
+    /// ADR-037). `None` for an UNCONFIGURED viewer — `/search` then renders the
+    /// fixed [`SearchState::Unavailable`] notice WITHOUT any network call (I-NS-2).
+    index_query: Option<SharedIndexQuery>,
 }
 
 impl ViewerServer {
@@ -160,7 +186,7 @@ impl ViewerServer {
     /// `/peer-claims`). `/scrape` 404s. See [`Self::bind_with_github`] for the
     /// live-scrape-enabled viewer.
     pub fn bind(addr: SocketAddr, store: SharedStore) -> Result<Self, ViewerServerError> {
-        Self::bind_inner(addr, store, None)
+        Self::bind_inner(addr, store, None, None)
     }
 
     /// Bind the HTTP listener at `addr` over a read-only store AND the slice-02
@@ -173,7 +199,25 @@ impl ViewerServer {
         store: SharedStore,
         github: SharedGithub,
     ) -> Result<Self, ViewerServerError> {
-        Self::bind_inner(addr, store, Some(github))
+        Self::bind_inner(addr, store, Some(github), None)
+    }
+
+    /// Bind the HTTP listener at `addr` over a read-only store, the slice-02
+    /// `GithubPort` (for `/scrape`), AND the slice-05 READ-ONLY `IndexQueryPort`,
+    /// enabling the `GET /search` route (US-NS-001..004; slice-08; ADR-037). The
+    /// viewer reuses the supplied `IndexQueryPort` (resolve+query); it persists
+    /// NOTHING (WD-NS-7) and holds NO signing key (an `IndexQueryPort` is read-only
+    /// by construction — I-NS-1). The cli composition root resolves the indexer URL
+    /// from the `OPENLORE_INDEXER_URL` / `[appview] indexer_url` seam and wires the
+    /// adapter; an UNCONFIGURED viewer passes `index_query = None` and `/search`
+    /// renders the fixed `Unavailable` notice WITHOUT a network call (I-NS-2).
+    pub fn bind_with_index_query(
+        addr: SocketAddr,
+        store: SharedStore,
+        github: Option<SharedGithub>,
+        index_query: Option<SharedIndexQuery>,
+    ) -> Result<Self, ViewerServerError> {
+        Self::bind_inner(addr, store, github, index_query)
     }
 
     /// Bind the HTTP listener at `addr` (use `:0` for an OS-assigned ephemeral
@@ -184,6 +228,7 @@ impl ViewerServer {
         addr: SocketAddr,
         store: SharedStore,
         github: Option<SharedGithub>,
+        index_query: Option<SharedIndexQuery>,
     ) -> Result<Self, ViewerServerError> {
         if !addr.ip().is_loopback() {
             return Err(ViewerServerError::BindFailed {
@@ -216,6 +261,7 @@ impl ViewerServer {
             local_addr,
             store,
             github,
+            index_query,
         })
     }
 
@@ -242,8 +288,11 @@ impl ViewerServer {
             let io = TokioIo::new(stream);
             let store = Arc::clone(&self.store);
             let github = self.github.clone();
+            let index_query = self.index_query.clone();
             tokio::task::spawn(async move {
-                let service = service_fn(move |req| route(req, Arc::clone(&store), github.clone()));
+                let service = service_fn(move |req| {
+                    route(req, Arc::clone(&store), github.clone(), index_query.clone())
+                });
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, service)
                     .await;
@@ -261,6 +310,7 @@ async fn route(
     req: Request<Incoming>,
     store: SharedStore,
     github: Option<SharedGithub>,
+    index_query: Option<SharedIndexQuery>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
@@ -279,6 +329,15 @@ async fn route(
     }
     if method != Method::GET {
         return Ok(not_found());
+    }
+    // `GET /search` — the slice-08 network-search route (US-NS-001..004; ADR-037).
+    // The ONLY GET route that reaches the network (the read-only `IndexQueryPort`).
+    // Async (it `.await`s the index query), so it forks here before the synchronous
+    // store-read match. Reuses the SAME `Shape` fork (fragment vs full page) every
+    // other enhanced route uses (ADR-033). Reads ONLY public signed claims; persists
+    // NOTHING (WD-NS-7); holds NO signing key (I-NS-1).
+    if path == SEARCH_URL {
+        return Ok(search_page(index_query.as_deref(), query.as_deref(), shape).await);
     }
     match path.as_str() {
         "/" => Ok(landing_page()),
@@ -458,6 +517,126 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Resp
             Shape::Fragment => html_not_found(render_claim_not_found_fragment().into_string()),
             Shape::FullPage => html_not_found(render_error()),
         },
+    }
+}
+
+/// Render the network-search page (`GET /search`, US-NS-001..004; slice-08;
+/// ADR-037). Parses the dimension + value from the query string (the OBJECT
+/// dimension for the walking skeleton), queries the read-only `IndexQueryPort`,
+/// re-composes the flat attributed rows per-author via the REUSED pure
+/// `appview_domain::compose_results` (NO second grouping path in the viewer), maps
+/// the outcome to a [`SearchState`], and renders — forking by [`Shape`] (ADR-033):
+/// the htmx swap returns ONLY the `#search-results` fragment; the no-JS / bookmark /
+/// direct-URL request returns the complete `/search` full page. Both project the
+/// SAME state — the full page EMBEDS the fragment fn (I-NS-6 parity by
+/// construction).
+///
+/// Graceful degradation (I-NS-2): an UNCONFIGURED viewer (`index_query == None`)
+/// renders the fixed `Unavailable` notice WITHOUT any network call; an UNREACHABLE
+/// configured index maps the SOFT `IndexQueryError::Unreachable` (and any other
+/// transport error) to the SAME fixed `Unavailable` notice — never a crash/hang and
+/// never a leaked transport internal (the `Unavailable` arm is a unit variant). A
+/// bare `GET /search` with no dimension value renders the empty `Form`.
+async fn search_page(
+    index_query: Option<&dyn IndexQueryPort>,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
+    let state = resolve_search_state(index_query, query).await;
+    match shape {
+        Shape::Fragment => html_ok(render_search_results_fragment(&state).into_string()),
+        Shape::FullPage => html_ok(render_search_page(&state)),
+    }
+}
+
+/// Resolve the [`SearchState`] for a `/search` request (the pure-ish decision over
+/// the parsed query + the index outcome; the only effect is the `IndexQueryPort`
+/// call). No dimension value → [`SearchState::Form`]. No configured index →
+/// [`SearchState::Unavailable`] (no network call, I-NS-2). A reachable index with
+/// rows → [`SearchState::Results`] (the REUSED `compose_results` output); zero rows
+/// → [`SearchState::NoResults`]; any transport error → [`SearchState::Unavailable`]
+/// (graceful degradation, never a leak).
+async fn resolve_search_state(
+    index_query: Option<&dyn IndexQueryPort>,
+    query: Option<&str>,
+) -> SearchState {
+    let Some((dimension, value)) = parse_search_dimension(query) else {
+        // No dimension value supplied — the empty form (the bare `GET /search`).
+        return SearchState::Form;
+    };
+    // UNCONFIGURED index (the env seam was unset): the fixed Unavailable notice,
+    // WITHOUT attempting any network call (I-NS-2 / US-NS-001 Ex 2).
+    let Some(index_query) = index_query else {
+        return SearchState::Unavailable;
+    };
+    match index_query.search(dimension, &value, None).await {
+        Ok(raw) if raw.results.is_empty() => SearchState::NoResults {
+            queried_value: value,
+        },
+        Ok(raw) => {
+            // REUSE the pure anti-merging core: map the flat attributed transport
+            // rows into `IndexedClaim`s and re-compose per-author (no merge, counter
+            // kept). The viewer holds NO second grouping/verification path.
+            let claims = raw.results.into_iter().map(to_indexed_claim).collect();
+            let result: NetworkSearchResult = compose_results(claims, dimension);
+            SearchState::Results(result)
+        }
+        // SOFT, non-fatal (I-NS-2 / WD-116): an unreachable/malformed/not-found
+        // index degrades to the FIXED Unavailable notice — never a crash, never a
+        // leaked transport internal (the error VALUE is discarded; the sanitized
+        // copy lives entirely in `viewer-domain`).
+        Err(IndexQueryError::Unreachable { .. })
+        | Err(IndexQueryError::BadResponse { .. })
+        | Err(IndexQueryError::NotFound { .. }) => SearchState::Unavailable,
+    }
+}
+
+/// Parse the search dimension + value from the `/search` query string. The OBJECT
+/// dimension is the walking-skeleton dimension (slice-08 step 01-01); the
+/// contributor/subject inputs land in later steps. Returns `None` when no
+/// recognized dimension value is present (a bare `GET /search` → the empty form).
+/// PURE total function. An empty value (e.g. `?object=`) is treated as "no value".
+fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, String)> {
+    let value = query_param(query, "object")?;
+    if value.is_empty() {
+        return None;
+    }
+    Some((SearchDimension::Object, value))
+}
+
+/// Extract a single query parameter's percent-decoded value by `key`. PURE total
+/// function over the raw query string (`a=1&object=x`). Returns `None` when the key
+/// is absent. Reuses [`percent_decode_form`] so an encoded NSID/handle (`%2F` etc.)
+/// decodes correctly.
+fn query_param(query: Option<&str>, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    query
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .filter_map(|pair| pair.strip_prefix(prefix.as_str()))
+        .next()
+        .map(percent_decode_form)
+}
+
+/// Map one flat attributed transport row ([`NetworkResultRowRaw`]) into the
+/// [`IndexedClaim`] the pure `compose_results` consumes. Carries every load-bearing
+/// field through unchanged — `author_did` (anti-merging, WD-103) and
+/// `verified_against` (the `[verified]` marker, WD-104) are preserved byte-equal.
+/// The relationship is `NetworkUnfollowed` by default (the viewer is per-user-
+/// neutral at this step; the per-user relationship label lands in a later step).
+fn to_indexed_claim(row: NetworkResultRowRaw) -> IndexedClaim {
+    IndexedClaim {
+        author_did: Did(row.author_did.0),
+        cid: Cid(row.cid.0),
+        subject: row.subject,
+        predicate: row.predicate,
+        object: row.object,
+        confidence: row.confidence,
+        composed_at: row.composed_at,
+        verified_against: KeyId(row.verified_against.0),
+        evidence: row.evidence,
+        references: row.references,
+        relationship: AuthorRelationship::NetworkUnfollowed,
     }
 }
 
