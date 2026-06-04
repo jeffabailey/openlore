@@ -368,13 +368,29 @@ fn identical_content_two_authors_renders_two_rows_never_a_merged_row() {
     // THEN the body attributes a row to BOTH Priya AND Sven
     // (assert_search_html_every_row_verified_and_attributed with both DIDs) and
     // carries NO merged consensus row (assert_search_html_has_no_merged_consensus_row).
-    let _ = (PRIYA_DID, SVEN_DID);
-    todo!(
-        "DELIVER N-4: seed_network_index(DenoDependencyPinningTwoUnfollowedAuthors); \
-         get the matching object/subject search; \
-         assert_search_html_every_row_verified_and_attributed(body, &[PRIYA_DID, SVEN_DID]) \
-         + assert_search_html_has_no_merged_consensus_row(body)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::DenoDependencyPinningTwoUnfollowedAuthors,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    // The deno corpus keys both authors' identical content on this object NSID
+    // (`org.openlore.philosophy.dependency-pinning`).
+    let response = viewer.get("/search?object=org.openlore.philosophy.dependency-pinning");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search over the deno two-author seeded index must be 200; body:\n{}",
+        response.body
+    );
+    // BOTH unfollowed authors get an attributed row — TWO author groups, each row
+    // [verified]. The helper proves at least one [verified] marker per author DID.
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID, SVEN_DID]);
+    // …and NO merged / faceless "network consensus" row collapses the two (I-NS-3 —
+    // the viewer REUSES the slice-05 per-author `compose_results`, no second
+    // grouping path).
+    assert_search_html_has_no_merged_consensus_row(&response.body);
 }
 
 /// N-5 (US-NS-002 boundary; AC-002.5 / SearchState::NoResults): an object no
@@ -397,11 +413,42 @@ fn object_with_no_network_claims_renders_a_guided_empty_state() {
     // guided message), and the body contains a plain-language "no claims found"
     // guidance (the dimension-aware NoResults arm; the near-match suggestion is an
     // optional DESIGN nicety, OD-NS-3).
-    todo!(
-        "DELIVER N-5: reachable index; get(\"/search?object=org.openlore.philosophy.reprducible\"); \
-         assert status 200, NOT is empty/blank, body contains a plain-language \
-         \\\"no claims found\\\"-style NoResults guidance (never a blank region or crash)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    // A typo'd object NSID no indexed author claimed — the reachable index returns
+    // zero rows → SearchState::NoResults.
+    let typo = "org.openlore.philosophy.reprducible";
+    let response = viewer.get(&format!("/search?object={typo}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search for a no-match object over a reachable index must be 200 \
+         (NoResults, not a crash); body:\n{}",
+        response.body
+    );
+    assert!(
+        !response.body.trim().is_empty(),
+        "the NoResults render must NOT be a blank region; body:\n{}",
+        response.body
+    );
+    // The guided plain-language empty state NAMES the queried value (the dimension-
+    // aware NoResults arm) — never a fake row, never a blank region.
+    assert!(
+        response.body.contains("No claims found"),
+        "the NoResults arm must render plain-language `No claims found` guidance; \
+         body:\n{}",
+        response.body
+    );
+    assert!(
+        response.body.contains(typo),
+        "the NoResults guidance must NAME the queried value {typo:?}; body:\n{}",
+        response.body
+    );
 }
 
 // =============================================================================
