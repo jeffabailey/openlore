@@ -317,12 +317,59 @@ fn the_search_page_chrome_stays_offline_no_cdn() {
     // THEN NO page references an external CDN (`references_external_cdn()` is false)
     // AND each carries the local `/static/htmx.min.js` script src (the offline
     // guarantee for the chrome; the search itself reaching the network is expected).
-    todo!(
-        "DELIVER N-INV-OfflineChrome: reachable index; for path in [\"/search\", \
-         \"/search?object=...\"] {{ page = get(path); assert \
-         !page.references_external_cdn() AND \
-         page.body_contains(\"/static/htmx.min.js\") }}"
-    )
+    let env = TestEnv::initialized();
+
+    // The bare `/search` Form page AND a result-bearing `/search?object=...` page —
+    // BOTH full pages (the no-header `get`, so the chrome `<head>` is present). The
+    // object value is the `PriyaEightClaimsSixSubjects` headline query the other gold
+    // tests drive, so the results page is the production Form+Results chrome shape,
+    // not the empty Form arm. Inspecting both proves the offline-chrome invariant
+    // holds whether or not the page carries result rows.
+    let object = "org.openlore.philosophy.reproducible-builds";
+    let object_path = format!("/search?object={object}");
+
+    let pages = {
+        let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+        let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+        let mut pages = Vec::new();
+        for path in ["/search", object_path.as_str()] {
+            pages.push((path.to_string(), viewer.get(path)));
+        }
+        // `viewer` (and `indexer`) drop here.
+        pages
+    };
+
+    for (path, page) in &pages {
+        // Each /search full page renders successfully (200) so the chrome assertion
+        // is over REAL served HTML.
+        assert_eq!(
+            page.status, 200,
+            "GET {path:?} (full page) over a reachable seeded index must render \
+             successfully (200) so the chrome scan is over REAL HTML; got {}",
+            page.status
+        );
+        // NO off-host CDN reference — the htmx library is served by the viewer
+        // ITSELF, never a CDN (offline-first; I-NS-7 / KPI-HX-G2). Reuses the slice-07
+        // `references_external_cdn` discriminator VERBATIM. Any hit is an UNSHIPPABLE
+        // offline-guarantee breach.
+        assert!(
+            !page.references_external_cdn(),
+            "/search full page {path:?} must reference NO external CDN — the page \
+             chrome stays offline-capable (I-NS-7 / KPI-HX-G2); body:\n{}",
+            page.body
+        );
+        // The ONLY script src is the LOCAL `/static/htmx.min.js` (the shared
+        // page_head/htmx_script chrome emits it; GREEN by construction). The offline
+        // guarantee for the chrome — the search itself reaching the network is
+        // expected and orthogonal.
+        assert!(
+            page.body_contains("/static/htmx.min.js"),
+            "/search full page {path:?} must reference the LOCAL `/static/htmx.min.js` \
+             script src (offline-first chrome; I-NS-7); body:\n{}",
+            page.body
+        );
+    }
 }
 
 // =============================================================================
