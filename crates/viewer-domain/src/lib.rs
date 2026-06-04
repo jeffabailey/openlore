@@ -3353,6 +3353,65 @@ mod tests {
         );
     }
 
+    /// Behavior (US-NS-003 / AC-003.3 — the SUBJECT render path): a SUBJECT search
+    /// surveys ONE project's claims grouped BY AUTHOR — N distinct author rows, each
+    /// `[verified]` — with NO merged "the network thinks X about it" consensus row
+    /// AND NO contributor footer (the honesty footer is contributor-specific; a
+    /// subject survey speaks for itself). Pins the SUBJECT arm of the dimension fork
+    /// (a `Contributor`→`_` mutant would wrongly stamp the footer on a subject
+    /// survey; a merge mutant would collapse the N author rows into one).
+    #[test]
+    fn subject_results_render_n_author_groups_without_a_footer_or_merge() {
+        let result = search_result(&[
+            (
+                "did:plc:priya-test#org.openlore.application",
+                "bafypriya",
+                "org.openlore.philosophy.reproducible-builds",
+                0.82,
+            ),
+            (
+                "did:plc:sven-test#org.openlore.application",
+                "bafysven",
+                "org.openlore.philosophy.hermetic-builds",
+                0.71,
+            ),
+            (
+                "did:plc:tobias-test#org.openlore.application",
+                "bafytobias",
+                "org.openlore.philosophy.dependency-pinning",
+                0.66,
+            ),
+        ]);
+
+        let html = render_search_results_fragment(&SearchState::Results {
+            result,
+            dimension: appview_domain::SearchDimension::Subject,
+        })
+        .into_string();
+
+        // N distinct author groups, each attributed + verified (no merge).
+        assert!(html.contains("did:plc:priya-test#org.openlore.application"));
+        assert!(html.contains("did:plc:sven-test#org.openlore.application"));
+        assert!(html.contains("did:plc:tobias-test#org.openlore.application"));
+        assert_eq!(
+            html.matches("[verified]").count(),
+            3,
+            "three verified author rows (one per distinct author); got:\n{html}"
+        );
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["network consensus", "the network thinks", "authors agree"] {
+            assert!(
+                !lowered.contains(banned),
+                "the SUBJECT survey must show NO merged consensus row; found {banned:?} in:\n{html}"
+            );
+        }
+        // …and NO contributor footer (the honesty footer is contributor-specific).
+        assert!(
+            !html.contains(SEARCH_CONTRIBUTOR_FOOTER),
+            "the SUBJECT dimension must NOT render the contributor footer; got:\n{html}"
+        );
+    }
+
     /// Behavior (I-NS-1 / WD-NS-3): the results fragment renders NO sign/follow/
     /// subscribe control — following stays a CLI action; the viewer is read-only.
     #[test]

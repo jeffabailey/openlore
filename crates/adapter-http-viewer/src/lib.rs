@@ -609,10 +609,11 @@ async fn resolve_search_state(
 ///
 /// The OBJECT dimension is the walking-skeleton dimension (step 01-01); the
 /// CONTRIBUTOR dimension lands here (step 02-01) reusing the slice-05 handle→DID
-/// resolution; the SUBJECT dimension lands in a later step. The OBJECT param is
-/// checked FIRST so a query carrying both keys is unambiguous. Returns `None` when
-/// no recognized dimension value is present (a bare `GET /search` → the empty
-/// form). PURE total function. An empty value (e.g. `?object=`) is "no value".
+/// resolution; the SUBJECT dimension lands here (step 02-02). The OBJECT param is
+/// checked FIRST so a query carrying multiple keys is unambiguous (object, then
+/// contributor, then subject). Returns `None` when no recognized dimension value is
+/// present (a bare `GET /search` → the empty form). PURE total function. An empty
+/// value (e.g. `?object=`) is "no value".
 fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, String, String)> {
     if let Some(object) = query_param(query, "object").filter(|v| !v.is_empty()) {
         return Some((SearchDimension::Object, object.clone(), object));
@@ -623,6 +624,16 @@ fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, Strin
         // the empty state names the ORIGINAL handle the operator typed (AV-17).
         let query_value = resolve_contributor_to_did(&contributor);
         return Some((SearchDimension::Contributor, query_value, contributor));
+    }
+    if let Some(subject) = query_param(query, "subject").filter(|v| !v.is_empty()) {
+        // The SUBJECT value (`github:bazelbuild/bazel`) matches the indexed `subject`
+        // field VERBATIM — no DID/handle resolution (a subject is a project target,
+        // not an identity). `compose_results` groups the matching claims BY AUTHOR
+        // (N distinct author groups, anti-merging, WD-103) and the renderer adds NO
+        // contributor footer (the honesty footer is contributor-specific; a subject
+        // survey speaks for itself — US-NS-003 / AC-003.3). Both the wire query and
+        // the empty-state display value are the verbatim subject (no resolution).
+        return Some((SearchDimension::Subject, subject.clone(), subject));
     }
     None
 }

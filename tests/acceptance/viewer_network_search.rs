@@ -594,12 +594,41 @@ fn subject_search_renders_n_author_groups_never_a_consensus_row() {
     // `[verified]` (assert_search_html_every_row_verified_and_attributed over the 5
     // DIDs), and carries NO merged consensus row
     // (assert_search_html_has_no_merged_consensus_row).
-    todo!(
-        "DELIVER N-8: seed_network_index(BazelFiveDistinctAuthors); \
-         get(\"/search?subject=github:bazelbuild/bazel\"); \
-         assert_search_html_every_row_verified_and_attributed over the 5 distinct \
-         author DIDs; assert_search_html_has_no_merged_consensus_row"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::BazelFiveDistinctAuthors);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get("/search?subject=github:bazelbuild/bazel");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search?subject=github:bazelbuild/bazel over a reachable seeded index \
+         must be 200; body:\n{}",
+        response.body
+    );
+    // Each of the 5 DISTINCT authors who claim something about bazel is attributed
+    // its OWN row under its OWN app-identity DID, each `[verified]` — N author
+    // groups, no merge (I-NS-3 / anti-merging on the subject dimension).
+    assert_search_html_every_row_verified_and_attributed(
+        &response.body,
+        &[
+            "did:plc:priya-test#org.openlore.application",
+            "did:plc:sven-test#org.openlore.application",
+            "did:plc:tobias-test#org.openlore.application",
+            "did:plc:aanya-test#org.openlore.application",
+            "did:plc:lena-test#org.openlore.application",
+        ],
+    );
+    // …and there is NO merged "the network thinks X about bazel" consensus row — the
+    // subject survey REUSES the per-author `compose_results` (no second grouping
+    // path) and renders NO contributor footer either (subject is not contributor).
+    assert_search_html_has_no_merged_consensus_row(&response.body);
+    assert!(
+        !response.body.contains("not a community consensus"),
+        "the SUBJECT dimension must NOT render the contributor honesty footer (it is \
+         contributor-specific); body:\n{}",
+        response.body
+    );
 }
 
 /// N-9 (US-NS-003 parity subject; AC-003.5 / I-NS-6): the subject search forks by
@@ -620,11 +649,41 @@ fn subject_search_fragment_equals_the_full_page_results_region() {
     // (get_htmx + get).
     // THEN the fragment `is_fragment()`, the full page `is_full_page()`, and the
     // load-bearing needles (an author DID, `[verified]`) are present in BOTH bodies.
-    todo!(
-        "DELIVER N-9: reachable bazel index; frag = get_htmx(subject), full = \
-         get(same); assert frag.is_fragment(), full.is_full_page(), and the survey \
-         needles (an author DID, [verified]) present in BOTH"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::BazelFiveDistinctAuthors);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let path = "/search?subject=github:bazelbuild/bazel";
+    let fragment = viewer.get_htmx(path);
+    let full_page = viewer.get(path);
+
+    assert!(
+        fragment.is_fragment(),
+        "the htmx shape must return ONLY the #search-results fragment; body:\n{}",
+        fragment.body
+    );
+    assert!(
+        full_page.is_full_page(),
+        "the no-JS shape must return the COMPLETE full page; body:\n{}",
+        full_page.body
+    );
+    // Parity (I-NS-6): every load-bearing survey needle the subject fragment renders
+    // — one of the distinct author DIDs and the `[verified]` marker — is ALSO present
+    // in the full page's results region (the full page is chrome + form wrapped
+    // around the SAME fragment fn, so parity is by construction).
+    for needle in ["did:plc:priya-test#org.openlore.application", "[verified]"] {
+        assert!(
+            fragment.body.contains(needle),
+            "I-NS-6: the subject fragment must carry {needle:?}; body:\n{}",
+            fragment.body
+        );
+        assert!(
+            full_page.body.contains(needle),
+            "I-NS-6: the full page's results region must carry the SAME {needle:?} \
+             the fragment renders (parity by construction); body:\n{}",
+            full_page.body
+        );
+    }
 }
 
 /// N-10 (US-NS-003 edge; AC-003.4 / SearchState::NoResults): a contributor handle no
