@@ -1,7 +1,16 @@
 # OpenLore — Resume Context
 
 ## Current Task
-slice-07 `viewer-htmx-swaps` — SHIPPED ✅ (full nWave pipeline). htmx partial-swaps as progressive enhancement on the slice-06 `openlore ui` viewer (pagination, peer pagination, live-scrape results, claim-detail inline, My↔Peer tab). 7 slices now complete.
+slice-08 `viewer-network-search` — SHIPPED ✅ (full nWave pipeline). A `GET /search` view in `openlore ui` querying the slice-05 indexer over HTTP (object/contributor/subject) and rendering verified+attributed results — the browser UI for `openlore search` (J-005). 8 slices now complete.
+
+## slice-08 — SHIPPED
+- NO new crates (reuse slice-05 IndexQueryPort + adapter-index-query + appview-domain::compose_results; extend viewer-domain + adapter-http-viewer + cli + xtask). Workspace stays 21. Pure `SearchState` ADT (Form|Results|NoResults|Unavailable) + render_search_* projecting NetworkResultRow (verified+attributed, per-author anti-merging — NOT reimplemented); effect-shell `/search` handler + Shape fragment/page fork + nav link; cli wires the read-only IndexQueryPort (no key) from OPENLORE_INDEXER_URL. 2 xtask check-arch deltas (viewer-domain→appview-domain pure edge; capability rule admits read-only IndexQueryPort, forbids signing/identity/PDS + indexer server/store/ingest).
+- 24 N-scenarios GREEN (20 + 4 gold); slice-05/06/07 no-regression; 63 viewer-domain tests. Gates: review APPROVED (0 blockers, 0 testing theater), mutation 100% (81/81 viable), integrity 13/13, check-arch OK (21). ADR-036..038. Invariants I-NS-1..9 inherit I-VIEW/I-HX/AV. Realizes KPI-AV-1/3/4/5 on the browser. Evolution: docs/evolution/viewer-network-search-evolution.md. New harness seam: ViewerServer::start_with_indexer (spawns a REAL openlore-indexer serve).
+- Read-only network READ (no key; follow is render-only `peer add <did>` TEXT); graceful degradation = payload-free SearchState::Unavailable (unreachable AND unconfigured, no transport leak, both shapes); counter shown-not-applied; confidence verbatim; progressive enhancement + offline chrome reused from slice-07.
+- Notable: 02-03 caught a real gap (the search form only had the object input → extended to all 3 dimensions); resolve_contributor_to_did is a deliberate viewer-local mirror of the slice-05 resolver (refactor declined — hoisting the github-handle test convention into the domain would be worse coupling); a 04-04 branch-vs-trunk slip was corrected by fast-forwarding main per AGENTS.md.
+
+## slice-07 — SHIPPED
+htmx partial-swaps as progressive enhancement on the slice-06 `openlore ui` viewer (pagination, peer pagination, live-scrape results, claim-detail inline, My↔Peer tab).
 
 ## slice-07 — SHIPPED
 - NO new crates (extended PURE `viewer-domain` + EFFECT `adapter-http-viewer`; vendored `assets/htmx.min.js`). Workspace stays 21 members. Each region got a pure `render_*_fragment()`; each `render_*_page()` composes the SAME fragment (page = chrome + fragment → structural parity I-HX-5). Effect shell reads `HX-Request` ONCE (`Shape::from_request`) and forks fragment vs full page; pure core header-unaware. htmx 2.0.4 (0BSD) at `GET /static/htmx.min.js` via include_str! + SHA-256 integrity test; tabs `hx-push-url`; `#view-panel` wraps `#claims-table`. Shared `page_head()`/`htmx_script()` helper (refactor) → every page loads the local asset.
