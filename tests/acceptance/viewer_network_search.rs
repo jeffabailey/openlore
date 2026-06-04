@@ -707,11 +707,61 @@ fn absent_contributor_renders_a_named_no_suggestion_empty_state() {
     // (`github:nobody-here`), shows a plain-language "no claims for that
     // contributor" empty state, and offers NO near-match suggestion (no "did you
     // mean" phrasing — an absent contributor is not a typo).
-    todo!(
-        "DELIVER N-10: reachable index; get(\"/search?contributor=github:nobody-here\"); \
-         assert status 200, body NAMES \\\"github:nobody-here\\\" with a plain-language \
-         empty state, and contains NO near-match suggestion (no \\\"did you mean\\\")"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get("/search?contributor=github:nobody-here");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search?contributor=github:nobody-here over a reachable seeded index \
+         must be 200 (the NoResults arm, never a crash); body:\n{}",
+        response.body
+    );
+    // The empty state NAMES the queried handle VERBATIM (`github:nobody-here`, the
+    // handle the operator typed — never the resolved DID; AV-17) so she sees WHAT
+    // was searched.
+    assert!(
+        response.body.contains("github:nobody-here"),
+        "the NoResults empty state must NAME the queried contributor handle \
+         (`github:nobody-here`); body:\n{}",
+        response.body
+    );
+    // …with a plain-language "no claims found" empty state (the dimension-aware
+    // NoResults arm) — not a blank region.
+    assert!(
+        response.body.contains("No claims found"),
+        "the absent-contributor render must show a plain-language empty state; \
+         body:\n{}",
+        response.body
+    );
+    // …and offers NO near-match suggestion — an absent contributor is NOT a typo
+    // (the slice-05 `EmptyPolicy::NoSuggestion` precedent), so no "did you mean"
+    // phrasing appears.
+    assert!(
+        !response.body.to_ascii_lowercase().contains("did you mean"),
+        "an absent contributor is not a typo — the empty state must offer NO \
+         near-match suggestion (no \"did you mean\"); body:\n{}",
+        response.body
+    );
+    // …and the page carries the dimension-selector form offering ALL THREE
+    // dimensions (object / contributor / subject) so the operator can re-submit
+    // along any dimension (the form is present on every `/search` render).
+    assert!(
+        response.body.contains("action=\"/search\""),
+        "the absent-contributor page must carry the dimension form (a `<form ... \
+         action=\"/search\">`); body:\n{}",
+        response.body
+    );
+    for dimension_field in ["name=\"object\"", "name=\"contributor\"", "name=\"subject\""] {
+        assert!(
+            response.body.contains(dimension_field),
+            "the dimension-selector form must offer the {dimension_field} input \
+             (object / contributor / subject); body:\n{}",
+            response.body
+        );
+    }
 }
 
 // =============================================================================

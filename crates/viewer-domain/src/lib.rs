@@ -1321,9 +1321,13 @@ pub fn render_search_page(state: &SearchState) -> String {
 }
 
 /// Render the labeled dimension form (`GET /search` and the top of every results
-/// render). PURE. The form GETs the `object` field back to `/search` (the object
-/// dimension is the walking-skeleton dimension; later steps add the
-/// contributor/subject inputs). It carries NO sign/follow control. Enhanced with
+/// render). PURE. The form GETs back to `/search` with a labeled input for EACH
+/// dimension the handler parses — `object` (philosophy / object URI, the
+/// walking-skeleton dimension), `contributor` (a developer handle, US-NS-003), and
+/// `subject` (a project target, US-NS-003) — so the operator can submit / re-submit
+/// along ANY dimension. The handler checks the fields in object → contributor →
+/// subject order (see `parse_search_dimension`), so an empty field is simply "not
+/// this dimension". It carries NO sign/follow control. Enhanced with
 /// `hx-get`/`hx-target` so an in-browser submit swaps ONLY the `#search-results`
 /// region; the no-JS path is a plain `GET` to `/search`.
 fn render_search_form() -> Markup {
@@ -1334,6 +1338,10 @@ fn render_search_form() -> Markup {
              hx-swap="innerHTML" {
             label for="object" { "Philosophy / object URI" }
             input type="text" id="object" name="object";
+            label for="contributor" { "Contributor handle" }
+            input type="text" id="contributor" name="contributor";
+            label for="subject" { "Project / subject" }
+            input type="text" id="subject" name="subject";
             button type="submit" { "Search" }
         }
     }
@@ -3487,6 +3495,29 @@ mod tests {
             assert!(
                 !lowered.contains(&leaked.to_lowercase()),
                 "the Unavailable render must leak no transport internals; found {leaked:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (US-NS-003 / AC-003.4 — the dimension-selector form offers ALL THREE
+    /// dimensions): the `/search` form GETs back to `/search` and exposes an input
+    /// for EACH dimension the handler parses (object / contributor / subject), so the
+    /// operator can submit / re-submit along any dimension. Pins the form against a
+    /// regression that drops the contributor or subject input (the handler parses all
+    /// three — the form must offer all three).
+    #[test]
+    fn search_form_offers_all_three_dimension_inputs() {
+        let html = render_search_page(&SearchState::Form);
+
+        assert!(
+            html.contains(&format!("action=\"{SEARCH_URL}\"")),
+            "the form GETs back to /search; got:\n{html}"
+        );
+        for dimension_field in ["name=\"object\"", "name=\"contributor\"", "name=\"subject\""] {
+            assert!(
+                html.contains(dimension_field),
+                "the dimension form must offer the {dimension_field} input \
+                 (object / contributor / subject); got:\n{html}"
             );
         }
     }
