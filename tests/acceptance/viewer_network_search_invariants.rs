@@ -98,14 +98,75 @@ fn every_search_route_leaves_the_store_read_only() {
     // viewer LEFT BEHIND, mirroring V-INV-1).
     // THEN the persisted-store row counts are UNCHANGED (assert_store_read_only;
     // any change is an UNSHIPPABLE write-surface breach — I-NS-8 / WD-NS-7).
-    todo!(
-        "DELIVER N-INV-ReadOnly: seed own claims; seed_network_index(a corpus with \
-         object+contributor+subject matches); before = \
-         capture_store_row_count_universe(env); {{ viewer = \
-         start_with_indexer(env, indexer); exercise get + get_htmx for \
-         /search?object=..., /search?contributor=..., /search?subject=... }}; after = \
-         capture_store_row_count_universe(env); assert_store_read_only(&before, &after)"
-    )
+    let env = TestEnv::initialized();
+
+    // Seed BOTH persisted tables through the production write paths so the
+    // read-only universe is NON-TRIVIAL (a `0 == 0` delta would not prove the
+    // viewer leaves a populated store untouched): one OWN signed claim lands a
+    // `claims` row, and a cache of peer claims lands `peer_claims` rows.
+    let _own_cid = seed_own_claim_with_evidence(
+        &env,
+        "rust-lang/rust",
+        "is-maintained-by",
+        "The Rust Project",
+        0.90,
+        &["https://github.com/rust-lang/rust/blob/HEAD/LICENSE-MIT"],
+    );
+    seed_cached_peer_claims(&env, "did:plc:peer-axum", 3);
+
+    // Capture the read-only universe (the two port-exposed counts) BEFORE any
+    // /search route runs.
+    let before = capture_store_row_count_universe(&env);
+
+    // The headline query VALUES — one per dimension — that the single seeded index
+    // matches: the `PriyaEightClaimsSixSubjects` corpus is keyed on Priya and holds
+    // `reproducible-builds` claims about `github:bazelbuild/bazel`, so ONE reachable
+    // index returns real verified+attributed rows for ALL THREE dimensions. Using a
+    // result-bearing query for every dimension means the read path is genuinely
+    // exercised (not the empty Form arm), making the read-only proof load-bearing.
+    let object = "org.openlore.philosophy.reproducible-builds";
+    let object_path = format!("/search?object={object}");
+    let contributor_path = "/search?contributor=github:priya";
+    let subject_path = "/search?subject=github:bazelbuild/bazel";
+
+    // Exercise EVERY /search route inside a scope so the viewer's exclusive DuckDB
+    // lock is RELEASED (on drop) BEFORE the `after` snapshot re-opens the store —
+    // the read-only proof is about what the viewer LEFT BEHIND (mirrors the slice-06
+    // V-INV-1 / slice-07 H-INV-ReadOnly gold tests).
+    {
+        let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+        let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+        // Every dimension (object / contributor / subject) in BOTH shapes — the
+        // no-header full page (`get`) AND the htmx fragment (`get_htmx`). Each is a
+        // network READ that must persist NOTHING locally.
+        for path in [object_path.as_str(), contributor_path, subject_path] {
+            let full_page = viewer.get(path);
+            assert_eq!(
+                full_page.status, 200,
+                "GET {path:?} (full page) over a reachable seeded index must be 200; \
+                 body:\n{}",
+                full_page.body
+            );
+            let fragment = viewer.get_htmx(path);
+            assert_eq!(
+                fragment.status, 200,
+                "GET {path:?} (htmx fragment) over a reachable seeded index must be \
+                 200; body:\n{}",
+                fragment.body
+            );
+        }
+        // `viewer` (and `indexer`) drop here — the viewer's `openlore ui` process is
+        // killed and its exclusive DuckDB lock released before the `after` snapshot.
+    }
+
+    // Capture the read-only universe AFTER every route ran.
+    let after = capture_store_row_count_universe(&env);
+
+    // The persisted-store row counts are UNCHANGED — every universe slot
+    // `unchanged` (any change is an UNSHIPPABLE write-surface breach; I-NS-8 /
+    // WD-NS-7). The network READ computed results per query and persisted nothing.
+    assert_store_read_only(&before, &after);
 }
 
 // =============================================================================
