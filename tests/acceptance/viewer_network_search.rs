@@ -171,11 +171,44 @@ fn the_search_capability_exposes_no_write_or_sign_surface() {
     // add <did>` TEXT, asserted in N-17). The viewer holds no key (the no-key audit
     // is structural — xtask check-arch — and the STORE read-only delta is the gold
     // guardrail).
-    todo!(
-        "DELIVER N-1b: reachable index; full-page GET /search?object=...; assert the \
-         rendered body carries NO write/sign/subscribe control marker (name=\\\"sign\\\", \
-         Sign claim, Sign & publish, Subscribe, type=\\\"submit\\\" follow)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search over a reachable seeded index must be 200; body:\n{}",
+        response.body
+    );
+    // We are inspecting a REAL result surface (verified+attributed rows), not the
+    // empty form — Priya (UNFOLLOWED) is in the headline corpus.
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID]);
+    // …and that surface carries NO write/sign/subscribe affordance (I-NS-1 /
+    // WD-NS-3 — the capability is a public-data READ; signing/following stays in
+    // the CLI). The only "follow" surface is the render-only `openlore peer add
+    // <did>` guidance TEXT (asserted in N-17), which is neither a control element
+    // nor a bare ">Follow<" label.
+    let lowered = response.body.to_ascii_lowercase();
+    for banned in [
+        "name=\"sign\"",
+        "sign claim",
+        "sign & publish",
+        "sign &amp; publish",
+        "subscribe",
+        ">follow<",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "I-NS-1 / WD-NS-3: the `/search` surface must expose NO write/sign/\
+             subscribe control; found {banned:?} in body:\n{}",
+            response.body
+        );
+    }
 }
 
 // =============================================================================
@@ -206,12 +239,48 @@ fn search_by_object_without_htmx_returns_the_full_page_with_form_and_results() {
     // attributed rows ([verified] + author DID + verbatim confidence). Verbatim
     // confidence is asserted on a fixture value (e.g. the corpus carries a `0.82`/
     // `0.88` row rendered byte-for-byte, never `0.9`/`90%` — I-NS-9).
-    todo!(
-        "DELIVER N-2: reachable index; get(\"/search?object=...\"); assert status 200, \
-         is_full_page(), body contains action=\\\"/search\\\" (the dimension form), \
-         assert_search_html_every_row_verified_and_attributed, and a verbatim \
-         confidence value (e.g. \\\"0.82\\\") with no \\\"90%\\\"/\\\"0.9 \\\" rounding"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let response = viewer.get(&format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    assert_eq!(
+        response.status, 200,
+        "GET /search WITHOUT HX-Request over a reachable seeded index must be 200; \
+         body:\n{}",
+        response.body
+    );
+    assert!(
+        response.is_full_page(),
+        "the no-JS shape must return the COMPLETE full page (DOCTYPE + <html> \
+         chrome); body:\n{}",
+        response.body
+    );
+    assert!(
+        response.body.contains("action=\"/search\""),
+        "the full page must carry the dimension form (a `<form ... \
+         action=\"/search\">`); body:\n{}",
+        response.body
+    );
+    // Per-author attributed rows — Priya (UNFOLLOWED) is in the headline corpus.
+    assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID]);
+    // Verbatim confidence: Priya's row is 0.82, rendered byte-for-byte (I-NS-9) —
+    // never rounded to `0.9`/`90%`.
+    assert!(
+        response.body.contains("0.82"),
+        "I-NS-9: confidence must render VERBATIM (the corpus carries a `0.82` row); \
+         body:\n{}",
+        response.body
+    );
+    assert!(
+        !response.body.contains("90%") && !response.body.contains("0.9 "),
+        "I-NS-9: confidence must NOT be rounded to `0.9`/`90%`; body:\n{}",
+        response.body
+    );
 }
 
 /// N-3 (US-NS-002 parity; AC-002.4 / I-NS-6): for the SAME object query, the htmx
@@ -237,12 +306,44 @@ fn object_search_fragment_equals_the_full_page_results_region() {
     // confidence value) are ALSO present in the full page's results region — parity
     // asserted behaviorally on the observable text the operator sees (the full page
     // is chrome + form wrapped around the SAME fragment fn).
-    todo!(
-        "DELIVER N-3: reachable index; frag = get_htmx(\"/search?object=...\"), full = \
-         get(same); assert frag.is_fragment(), full.is_full_page(), and every \
-         load-bearing needle (author DID, [verified], verbatim confidence) present in \
-         BOTH bodies (parity by construction)"
-    )
+    let env = TestEnv::initialized();
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
+    let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+    let path = format!("/search?object={OBJECT_REPRODUCIBLE_BUILDS}");
+    let fragment = viewer.get_htmx(&path);
+    let full_page = viewer.get(&path);
+
+    assert!(
+        fragment.is_fragment(),
+        "the htmx shape must return ONLY the #search-results fragment; body:\n{}",
+        fragment.body
+    );
+    assert!(
+        full_page.is_full_page(),
+        "the no-JS shape must return the COMPLETE full page; body:\n{}",
+        full_page.body
+    );
+    // Parity (I-NS-6): every load-bearing needle the fragment renders — an author
+    // DID, the `[verified]` marker, and the verbatim confidence (Priya's 0.82) —
+    // is ALSO present in the full page's results region (the full page is chrome +
+    // form wrapped around the SAME fragment fn, so parity is by construction).
+    for needle in [PRIYA_DID, "[verified]", "0.82"] {
+        assert!(
+            fragment.body.contains(needle),
+            "I-NS-6: the fragment must carry {needle:?}; body:\n{}",
+            fragment.body
+        );
+        assert!(
+            full_page.body.contains(needle),
+            "I-NS-6: the full page's results region must carry the SAME {needle:?} \
+             the fragment renders (parity by construction); body:\n{}",
+            full_page.body
+        );
+    }
 }
 
 /// N-4 (US-NS-002 edge; AC-002.3 / I-NS-3): identical content by two DIFFERENT
