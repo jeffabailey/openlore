@@ -21,6 +21,7 @@ non-deterministic = fake).
 | `openlore` CLI `search` verb (`--object/--contributor/--subject/--show/--share`) | subprocess via `assert_cmd::cargo_bin("openlore")` | slice-05; the ONLY network verb; degrades gracefully when the indexer is unreachable |
 | `openlore-indexer` binary (`ingest` / `serve`) | subprocess via `assert_cmd::cargo_bin("openlore-indexer")`; `serve` bound to ephemeral `:0` (read back, parallel-safe) | slice-05; the SECOND composition root; signing-incapable; holds no local store |
 | pure domain functions (`claim_domain::verify`, `scoring::score`, `appview_domain::ingest_decision` / `compose_results`) | direct in-process invocation (the function signature IS the port at domain scope) | layer-2 `@property`; no subprocess |
+| `openlore` CLI `ui` verb (the read-only viewer; `GET /` `/claims` `/peer-claims` `/scrape` `/search` `/static/htmx.min.js`) | long-running subprocess `openlore ui --port 0` via `assert_cmd::cargo_bin("openlore")`, bound ephemeral `:0` (read back from `viewer.serve.listening`), driven over HTTP (`ViewerServer::get`/`get_htmx`/`post_form`); HX-Request fork | slice-06/07/08; loopback-only; holds NO signing key; slice-08 adds `GET /search` |
 
 ## Driven internal (real)
 
@@ -28,7 +29,7 @@ non-deterministic = fake).
 |---|---|---|
 | `StoragePort` (`adapter-duckdb`, the user's `openlore.duckdb`) | real DuckDB file under `OPENLORE_HOME`; seeded via the real `claim add` / `peer add` / `peer pull` verbs | slice-01/03/04; the source of truth; the indexer NEVER touches it (slice-05 ADR-023) |
 | `IndexStorePort` (`adapter-index-store`, the SEPARATE `index.duckdb`) | real SEPARATE DuckDB file (non-Option `author_did`; NO merged schema); seeded via the slice-05 ingest harness | slice-05; xtask check-arch extends `no_cross_table_join_elides_author` to the index-store SQL |
-| `adapter-xrpc-query-server` + `adapter-index-query` (the B1 CLI↔indexer XRPC boundary) | real `openlore-indexer serve` over localhost ephemeral port + real CLI HTTP/XRPC client | slice-05; the response carries per-result `author_did` (D-D36 consumer-driven contract) |
+| `adapter-xrpc-query-server` + `adapter-index-query` (the B1 CLI↔indexer XRPC boundary) | real `openlore-indexer serve` over localhost ephemeral port + real CLI HTTP/XRPC client | slice-05; the response carries per-result `author_did` (D-D36 consumer-driven contract). slice-08: the `openlore ui` viewer is a SECOND consumer of the SAME `IndexQueryPort` (wired via `ViewerServer::start_with_indexer` → `OPENLORE_INDEXER_URL`); unreachable = `ClosedIndexerPort` (freed port), unconfigured = env unset → `SearchState::Unavailable` |
 | `claim-domain` verify + compute_cid + `decode_ed25519_multibase` (pure core) | real pure core (reused at ingest; NO second verification path) | slice-01 verify/CID; slice-05 adds the ADR-026 production PLC `z6Mk` decode |
 | `scoring` / `appview-domain` (pure cores) | direct in-process invocation (no adapter; no probe) | layer-2 `@property` + DELIVER mutation testing is the Earned-Trust analog |
 

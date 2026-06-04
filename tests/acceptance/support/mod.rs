@@ -7061,6 +7061,16 @@ pub struct ViewerServer {
     /// `None` for store-only scenarios that never exercise `/scrape`. Held so the
     /// double's port stays bound; dropped (releasing it) with the handle.
     _github: Option<GithubServer>,
+    /// The `IndexerHandle` for the slice-08 `/search` route's network index
+    /// (slice-05 reuse). Kept alive for the viewer process's lifetime so the
+    /// REAL `openlore-indexer serve` the viewer queries (via
+    /// `OPENLORE_INDEXER_URL`) stays bound. `None` for store-only / `/scrape`
+    /// scenarios that never exercise `/search`, AND for the slice-08
+    /// `Unavailable` scenarios that point the viewer at a CLOSED port (the env
+    /// var carries a freed `ClosedIndexerPort` URL, but no live serve is held).
+    /// Held so the indexer's port stays bound; dropped (releasing it) with the
+    /// handle.
+    _indexer: Option<IndexerHandle>,
 }
 
 impl ViewerServer {
@@ -7071,7 +7081,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None)
+        Self::start_inner(env, None, None, None)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7082,7 +7092,46 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
-        Self::start_inner(env, Some(github))
+        Self::start_inner(env, Some(github), None, None)
+    }
+
+    /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
+    /// NEW slice-08 `/search` route at the supplied REAL network index — by
+    /// threading the slice-05 `OPENLORE_INDEXER_URL` seam (the SAME env-var the
+    /// `openlore search` CLI verb reads, `run_openlore_search`) at the
+    /// `IndexerHandle`'s ephemeral serve URL. The handle owns a REAL
+    /// `openlore-indexer serve` over a seeded `index.duckdb` (`seed_network_index`);
+    /// it is kept alive for the viewer's lifetime so the index the viewer queries
+    /// stays bound. Used by the REACHABLE-indexer `/search` scenarios (US-NS-001/
+    /// 002/003 + the trust framing of US-NS-004). Mirrors `start_with_github` — the
+    /// ONLY delta is the env-var seam wired.
+    ///
+    /// The indexer is the ONLY mocked-boundary surface (a REAL slice-05 binary over
+    /// a fixture corpus — NOT a hand-rolled HTTP double; the verified/attributed
+    /// rows come from the production ingest+serve path). The local DuckDB store
+    /// stays REAL and UNTOUCHED by `/search` (read-only — proven by the gold
+    /// guardrail). NO signing key enters the viewer process (I-NS-1).
+    ///
+    /// SCAFFOLD: true (slice-08) — `start_inner` is `todo!()`; DELIVER materializes
+    /// the spawn + readiness exactly as it does for `start_with_github`, adding only
+    /// the `OPENLORE_INDEXER_URL` env-var thread.
+    pub fn start_with_indexer(env: &TestEnv, indexer: IndexerHandle) -> Self {
+        let url = indexer.indexer_url();
+        Self::start_inner(env, None, Some(url), Some(indexer))
+    }
+
+    /// Start a `openlore ui --port 0` viewer whose `/search` route is wired to an
+    /// UNREACHABLE indexer: `OPENLORE_INDEXER_URL` is set to the supplied
+    /// `ClosedIndexerPort`'s FREED localhost port (connect-refused by construction —
+    /// no live serve, no hang). This is the slice-08 graceful-degradation seam for
+    /// the `SearchState::Unavailable` arm when the index is configured-but-down
+    /// (US-NS-004 Example 3). The handler must map the soft `Unreachable` outcome to
+    /// the fixed plain-language `Unavailable` notice — never a crash/hang/leak. The
+    /// closed port is reserved by the CALLER and kept alive for the URL's lifetime.
+    ///
+    /// SCAFFOLD: true (slice-08).
+    pub fn start_with_unreachable_indexer(env: &TestEnv, closed: &ClosedIndexerPort) -> Self {
+        Self::start_inner(env, None, Some(closed.indexer_url().to_string()), None)
     }
 
     /// Shared spawn + readiness core. Spawns the REAL `openlore ui --port 0`
@@ -7095,7 +7144,12 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06) — body is `todo!()`; DELIVER materializes it the
     /// way `spawn_indexer_serve` materializes the indexer's long-running serve.
-    fn start_inner(env: &TestEnv, github: Option<GithubServer>) -> Self {
+    fn start_inner(
+        env: &TestEnv,
+        github: Option<GithubServer>,
+        indexer_url: Option<String>,
+        indexer: Option<IndexerHandle>,
+    ) -> Self {
         use std::io::{BufRead, BufReader};
 
         let bin = assert_cmd::cargo::cargo_bin("openlore");
@@ -7116,6 +7170,17 @@ impl ViewerServer {
         // seam (US-VIEW-005). Store-only scenarios pass `None` and never set it.
         if let Some(github) = &github {
             cmd.env("OPENLORE_GITHUB_API_BASE", github.base_url());
+        }
+        // The NEW slice-08 `/search` route reaches the network index through the
+        // OPENLORE_INDEXER_URL seam (the SAME slice-05 env-var seam the `openlore
+        // search` CLI verb reads — OD-NS-6). When `indexer_url` is `Some`, the
+        // viewer's index-query port resolves to that URL: a REAL serve (reachable)
+        // or a freed/closed port (unreachable → SearchState::Unavailable). When
+        // `None`, the env var is UNSET — the UNCONFIGURED degradation case
+        // (US-NS-001 Ex 2 / US-NS-004): the handler must yield Unavailable WITHOUT
+        // attempting a network call (I-NS-2).
+        if let Some(url) = &indexer_url {
+            cmd.env("OPENLORE_INDEXER_URL", url);
         }
 
         let mut child = cmd
@@ -7174,6 +7239,7 @@ impl ViewerServer {
             base_url: format!("http://{addr}"),
             child,
             _github: github,
+            _indexer: indexer,
         }
     }
 
@@ -7648,6 +7714,122 @@ pub fn assert_store_read_only(
     let expected = state_delta::Delta::new();
 
     state_delta::assert_state_delta(before, after, &universe, &expected);
+}
+
+// =============================================================================
+// slice-08 (viewer-network-search) `/search` render assertions — the HTML
+// counterparts to the slice-05 stdout assertions (`assert_verified_marker_is_
+// universal` / `assert_network_result_preserves_attribution`). The slice-05
+// helpers parse `author_did:`-prefixed stdout LINES; the viewer renders HTML, so
+// these scan the rendered BODY for the same OBSERVABLE facts (Mandate 8 universe
+// = port-exposed rendered surface, never an internal struct field). Reused across
+// the htmx-fragment + no-JS-full-page shapes (parity by construction).
+// =============================================================================
+
+/// Assert the slice-08 `/search` rendered HTML carries a `[verified]` marker for
+/// every attributed author row and NEVER an `[unverified]` / "unknown signature"
+/// state (I-NS-4 — verified-by-construction; the indexer is the verify gate, the
+/// viewer has no second verification path). The HTML counterpart of
+/// [`assert_verified_marker_is_universal`]. Universe (port-exposed rendered
+/// surface): the rendered body contains `[verified]`; it never contains
+/// `[unverified]` / "unknown signature". Each `expected_author` DID appears in the
+/// body AND the `[verified]` marker count is at least the number of expected
+/// author rows (every row carries it).
+///
+/// SCAFFOLD: true (slice-08).
+pub fn assert_search_html_every_row_verified_and_attributed(body: &str, expected_authors: &[&str]) {
+    // Every expected author DID is rendered (attribution — non-Option author_did,
+    // I-NS-3; the viewer renders the SAME `did:plc:…#org.openlore.application`
+    // shape the CLI search renders).
+    for did in expected_authors {
+        assert!(
+            body.contains(did),
+            "I-NS-3: the `/search` render must attribute a row to {did:?} (every \
+             row carries its author_did); body was:\n{body}"
+        );
+    }
+    // The `[verified]` marker is present at least once per expected author row
+    // (verified-by-construction; I-NS-4) — and there are at least as many markers
+    // as author rows so no rendered row is missing it.
+    let verified_count = body.matches("[verified]").count();
+    assert!(
+        verified_count >= expected_authors.len() && verified_count > 0,
+        "I-NS-4: every rendered result row must carry a [verified] marker \
+         (expected at least {} markers, one per author row); found {verified_count}:\n{body}",
+        expected_authors.len()
+    );
+    // There is NO unverified state on the surface (I-NS-4 — the viewer cannot
+    // render an unverified result).
+    for banned in ["[unverified]", "unknown signature"] {
+        assert!(
+            !body.contains(banned),
+            "I-NS-4: the `/search` render must never show {banned:?} (verification \
+             is an ingest precondition — there is no unverified state in the \
+             viewer); body was:\n{body}"
+        );
+    }
+}
+
+/// Assert the slice-08 `/search` rendered HTML contains NO merged / faceless
+/// "network consensus" row (I-NS-3 — anti-merging at network scale; the viewer
+/// REUSES the slice-05 per-author `compose_results` with no second grouping
+/// path). The HTML counterpart of the anti-merging scan inside
+/// [`assert_network_result_preserves_attribution`]. Universe (port-exposed
+/// rendered surface): the rendered body contains none of the merged-consensus
+/// phrasings. The honesty FOOTER ("not a community consensus") is a PROMISE, not a
+/// merged row, so it is excluded by scanning only for the merge ASSERTION
+/// phrasings.
+///
+/// SCAFFOLD: true (slice-08).
+pub fn assert_search_html_has_no_merged_consensus_row(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "authors agree",
+        "the network says",
+        "the network thinks",
+        "network consensus",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-NS-3 (anti-merging): the `/search` render must show NO merged / \
+             faceless consensus row; found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+/// Assert a slice-08 `/search` rendered body (fragment OR full page) leaks NO
+/// transport internals — the degradation no-leak gate (I-NS-2). The viewer counter-
+/// part of the slice-06 `/scrape` V-S4 negative-needle scan: a down/unconfigured
+/// index renders the FIXED plain-language `Unavailable` notice and NEVER an HTTP
+/// status, "connection refused" / "timed out" / "DNS" jargon, a raw URL, or a
+/// stack trace. Universe (port-exposed rendered surface): the body contains NONE
+/// of the leaked-internal needles. Reused for BOTH shapes (the unit-variant render
+/// is identical across fragment + full page — I-NS-2 / WD-NS-4).
+///
+/// SCAFFOLD: true (slice-08).
+pub fn assert_search_html_leaks_no_transport_internals(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for leaked_internal in [
+        "connection refused",
+        "connecterror",
+        "timed out",
+        "dns",
+        "503",
+        "502",
+        "500",
+        "http://127.0.0.1",
+        "panicked at",
+        "no such host",
+        "econnrefused",
+    ] {
+        assert!(
+            !lowered.contains(&leaked_internal.to_lowercase()),
+            "I-NS-2: the `/search` Unavailable render must leak NO transport \
+             internals ({leaked_internal:?}) — a fixed plain-language notice only \
+             (the SearchState::Unavailable unit variant cannot interpolate a \
+             transport string); body was:\n{body}"
+        );
+    }
 }
 
 /// Make the env's REAL store file UNREADABLE by the viewer (US-VIEW-001 Ex 3 /

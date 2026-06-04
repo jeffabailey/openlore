@@ -349,3 +349,42 @@ harness = true
 name = "viewer_htmx_invariants"
 path = "../../tests/acceptance/viewer_htmx_invariants.rs"
 harness = true
+
+# Slice-08 (viewer-network-search; DISTILL) subprocess + real-I/O acceptance: the
+# `openlore ui` NETWORK-SEARCH view (US-NS-001..004; ADR-036/037/038). A new
+# `GET /search` route forks by `Shape` (slice-07 HX-Request fork) and queries the
+# slice-05 network index over HTTP through the REUSED `IndexQueryPort` +
+# `HttpIndexQueryAdapter`, rendering verified + attributed `NetworkSearchResult`s as
+# HTML (object/contributor/subject dimensions; per-author, anti-merge, counter
+# shown-not-applied; SearchState Form|Results|NoResults|Unavailable). Drives the
+# REAL `openlore ui` verb via `ViewerServer` + in-test HTTP (get/get_htmx). The
+# network index is the ONLY mocked boundary — a REAL slice-05 `openlore-indexer
+# serve` over a seeded corpus, wired via the NEW `ViewerServer::start_with_indexer`
+# (the slice-05 `OPENLORE_INDEXER_URL` seam; OD-NS-6), with reachable / unreachable
+# (ClosedIndexerPort) / unconfigured postures. DuckDB store is REAL + UNTOUCHED
+# (read-only; WD-NS-7). Per Mandate 9/11 the sad paths (no results, unreachable,
+# unconfigured) are example-based, never PBT-generated at this layer.
+# Build-before-run: `cargo build` BOTH the `openlore` and `openlore-indexer` bins.
+# DISTILL registers + materializes the harness so the N-* scenarios classify RED
+# (panic at `todo!()`); N-* stay RED until DELIVER's per-scenario phases.
+[[test]]
+name = "viewer_network_search"
+path = "../../tests/acceptance/viewer_network_search.rs"
+harness = true
+
+# Slice-08 (viewer-network-search; DISTILL) GOLD / guardrail invariants over the
+# whole `/search` surface (cross-cutting I-NS-1/4/7/8): every_search_route_leaves_
+# the_store_read_only (read-only state-delta, Mandate 8 — results computed per
+# query, nothing persisted), no_search_response_adds_a_write_or_sign_control (no
+# sign/publish/subscribe/executable-follow control on any shape — follow is render-
+# only TEXT), the_search_page_chrome_stays_offline_no_cdn (local /static/htmx.min.js,
+# no CDN — the chrome stays offline even though the search needs the network), and
+# every_rendered_search_row_is_verified_by_construction ([verified] + attributed
+# across object/contributor/subject). Drives the REAL `openlore ui` via
+# `ViewerServer` over a REAL store with the REUSED slice-05 indexer serve as the only
+# mocked boundary. Per Mandate 9/11 example-based, never PBT-generated at this layer.
+# DISTILL registers + RED gate; N-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_network_search_invariants"
+path = "../../tests/acceptance/viewer_network_search_invariants.rs"
+harness = true

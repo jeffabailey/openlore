@@ -1128,3 +1128,101 @@ Rules to enforce (additions):
   (indexer + composition + transport), ADR-028/029/030 (viewer server + pure core + read-only store port),
   ADR-031/032/033/034/035 (htmx asset + fragment/page split + `HX-Request` fork + nav history + acceptance seam).
 - slice-05 DESIGN: `docs/feature/openlore-appview-search/design/architecture-design.md` + `component-boundaries.md`.
+
+---
+
+## Wave: DISTILL / [REF] Inherited commitments
+
+> Wave: **DISTILL** · Acceptance Designer: Quinn (nw-acceptance-designer) · Date: 2026-06-04
+> Lang: Rust (polyglot matrix — proptest / std `#[test]` / `#[ignore]` skip). `[lang-mode] rust`.
+> Policy: `docs/architecture/atdd-infrastructure-policy.md` PRESENT (`[policy-mode] inherit`).
+> State-delta port: `tests/common/state_delta.rs` PRESENT (`[port-mode] inherit`).
+> Reconciliation HARD GATE: **PASSED — 0 contradictions** (DESIGN OD-NS-1..6 adopt the DISCUSS recommended-leans verbatim; ADR-036/037/038 carry I-NS-1..9 forward; no DEVOPS contradiction).
+> Tier: Tier-1 (lean). Tier B NOT emitted (rationale below).
+
+| Origin | Commitment | DDD | Impact |
+|--------|------------|-----|--------|
+| DISCUSS#WD-NS-3 | Viewer stays READ-ONLY: `/search` is a READ; no write/sign/subscribe route; follow is render-only TEXT | n/a | N-1b + N-17 + gold N-INV-NoWrite assert no sign/follow control on any shape; render-only `peer add` TEXT is the only follow affordance |
+| DISCUSS#WD-NS-4 / DESIGN#I-NS-2 | Graceful degradation: unreachable OR unconfigured index → fixed plain-language `Unavailable` notice, no leak, both shapes | n/a | N-13/14 (unreachable full+fragment) + N-15/16 (unconfigured full+fragment) assert the fixed notice + `assert_search_html_leaks_no_transport_internals` |
+| DISCUSS#WD-NS-5 / DESIGN#I-NS-3/4 | Verified + attributed; counter shown-not-applied; verbatim confidence; no merged row | n/a | N-1/2/4/6/8 + gold N-INV-Verified assert `[verified]` + author_did per row; N-4/8 anti-merging; N-12 counter shown-not-applied; verbatim `0.82` (no `90%`) |
+| DISCUSS#WD-NS-6 / DESIGN#I-NS-6 | Progressive enhancement: full page without `HX-Request`, same results-region fragment with it | n/a | N-1/14/16 fragment shape; N-2/13/15 full-page shape; N-3/7/9 parity (fragment ⊆ full page) |
+| DISCUSS#WD-NS-7 / DESIGN#I-NS-8 | Zero new persisted types; results computed per query; loopback bind | n/a | gold N-INV-ReadOnly: `assert_store_read_only` over every dimension + both shapes leaves `claims`/`peer_claims` row counts unchanged |
+| DESIGN#I-NS-7 | Offline/no-CDN chrome — local `/static/htmx.min.js`, search itself needs network | n/a | gold N-INV-OfflineChrome: `/search` page references only the local asset, no CDN |
+| DESIGN#OD-NS-1/6 | REUSE slice-05 `IndexQueryPort` + `OPENLORE_INDEXER_URL` seam | ADR-036 | indexer double = REUSED slice-05 `IndexerHandle` (`seed_network_index`) wired via NEW `ViewerServer::start_with_indexer` (the `OPENLORE_INDEXER_URL` thread) |
+
+## Wave: DISTILL / [REF] Scenario list with tags
+
+Two `[[test]]` files; `N-`/`N-INV-` id convention. All bodies `todo!()` → RED (MISSING_FUNCTIONALITY). Driving port = the REAL `openlore ui` subprocess over HTTP (`ViewerServer`); indexer = the only mocked boundary (REAL slice-05 `openlore-indexer serve`).
+
+### `tests/acceptance/viewer_network_search.rs` (Tier A — 20 scenarios)
+
+| N-id | Scenario fn | US trace | Header / posture | SearchState arm | Tags |
+|---|---|---|---|---|---|
+| N-1 | `search_by_object_with_htmx_returns_only_the_verified_results_fragment` | US-NS-001 (WS) | HX-Request · reachable | Results | `@walking_skeleton @driving_adapter @real-io @htmx-fragment @i-ns-3/4/6 @kpi-av-1` |
+| N-1b | `the_search_capability_exposes_no_write_or_sign_surface` | US-NS-001 | no header · reachable | Results | `@infrastructure @real-io @read-only @i-ns-1` |
+| N-2 | `search_by_object_without_htmx_returns_the_full_page_with_form_and_results` | US-NS-002 | no header · reachable | Results | `@driving_adapter @real-io @no-js @full-page @i-ns-6/9` |
+| N-3 | `object_search_fragment_equals_the_full_page_results_region` | US-NS-002 | both · reachable | Results | `@real-io @parity @i-ns-6` |
+| N-4 | `identical_content_two_authors_renders_two_rows_never_a_merged_row` | US-NS-002 | no header · reachable | Results | `@real-io @anti-merging @i-ns-3` |
+| N-5 | `object_with_no_network_claims_renders_a_guided_empty_state` | US-NS-002 | no header · reachable-zero | NoResults | `@real-io @empty-state @boundary` |
+| N-6 | `contributor_search_renders_one_authors_trail_with_honesty_footer` | US-NS-003 | no header · reachable | Results | `@driving_adapter @real-io @contributor @i-ns-3` |
+| N-7 | `contributor_search_fragment_equals_the_full_page_results_region` | US-NS-003 | both · reachable | Results | `@real-io @parity @contributor @i-ns-6` |
+| N-8 | `subject_search_renders_n_author_groups_never_a_consensus_row` | US-NS-003 | no header · reachable | Results | `@real-io @anti-merging @subject @i-ns-3` |
+| N-9 | `subject_search_fragment_equals_the_full_page_results_region` | US-NS-003 | both · reachable | Results | `@real-io @parity @subject @i-ns-6` |
+| N-10 | `absent_contributor_renders_a_named_no_suggestion_empty_state` | US-NS-003 | no header · reachable-zero | NoResults | `@real-io @empty-state @no-suggestion @edge` |
+| N-11 | `the_search_page_states_what_it_indexes_up_front` | US-NS-004 | no header · reachable | Form/Results | `@real-io @public-data-framing @i-ns-5/4` |
+| N-12 | `a_countered_claim_is_shown_with_its_counter_never_applied` | US-NS-004 | no header · reachable | Results | `@real-io @counter-shown-not-applied @i-ns-3 @edge` |
+| N-13 | `unreachable_index_degrades_to_a_calm_full_page_notice` | US-NS-004 | no header · unreachable | Unavailable | `@real-io @network-failure @i-ns-2 @no-js @full-page @error` |
+| N-14 | `unreachable_index_degrades_to_a_calm_fragment_notice` | US-NS-004 | HX-Request · unreachable | Unavailable | `@real-io @network-failure @i-ns-2 @htmx-fragment @error` |
+| N-15 | `unconfigured_index_degrades_to_a_calm_full_page_notice` | US-NS-004 | no header · unconfigured | Unavailable | `@real-io @unconfigured @i-ns-2 @no-js @full-page @error` |
+| N-16 | `unconfigured_index_degrades_to_a_calm_fragment_notice` | US-NS-004 | HX-Request · unconfigured | Unavailable | `@real-io @unconfigured @i-ns-2 @htmx-fragment @error` |
+| N-17 | `an_unfollowed_author_row_shows_cli_follow_guidance_text_only` | US-NS-004 | no header · reachable | Results | `@real-io @follow-guidance @read-only @i-ns-1 @edge` |
+
+### `tests/acceptance/viewer_network_search_invariants.rs` (gold guardrails — 4 scenarios)
+
+| N-id | Scenario fn | US trace | Invariant guarded | Tags |
+|---|---|---|---|---|
+| N-INV-ReadOnly | `every_search_route_leaves_the_store_read_only` | US-NS-001/002/003 | I-NS-8 / WD-NS-7 — every dimension + both shapes leaves store row counts unchanged (`assert_store_read_only`, Mandate 8) | `@property @real-io @read-only @i-ns-8 @gold` |
+| N-INV-NoWrite | `no_search_response_adds_a_write_or_sign_control` | US-NS-001/004 | I-NS-1 / WD-NS-3 / I-SCR-1 — no sign/publish/subscribe/executable-follow control on any shape | `@property @real-io @read-only @i-ns-1 @gold` |
+| N-INV-OfflineChrome | `the_search_page_chrome_stays_offline_no_cdn` | US-NS-004 | I-NS-7 / KPI-HX-G2 — only local `/static/htmx.min.js`, no CDN | `@property @real-io @offline @no-cdn @i-ns-7 @gold` |
+| N-INV-Verified | `every_rendered_search_row_is_verified_by_construction` | US-NS-002/003 | I-NS-4 / KPI-AV-3 — every row `[verified]` + attributed across all dimensions | `@property @real-io @verified @i-ns-4 @gold` |
+
+**Error/edge ratio**: of 24 scenarios, 9 are error/edge/degradation (N-5, N-10, N-12, N-13, N-14, N-15, N-16 + the negative-assertion gold N-INV-NoWrite, N-INV-Verified-as-no-unverified) ≈ **38–46%** (degradation is the dominant risk surface — 4 dedicated Unavailable scenarios across the unreachable × unconfigured × full-page × fragment matrix).
+
+## Wave: DISTILL / [REF] Indexer test-double mechanism + `start_with_indexer` seam
+
+**REUSED, not net-new** (per the DESIGN handoff "REUSE the slice-05 verified/attributed fixtures"). The slice-05 harness already spawns a REAL `openlore-indexer serve`:
+
+- **Reachable-with-results**: `seed_network_index(env, NetworkIndexFixture::<fixture>)` → ingests a fixture corpus into a REAL `index.duckdb`, spawns a REAL `openlore-indexer serve` on an ephemeral localhost port, returns an `IndexerHandle`. Fixtures reused: `ReproducibleBuildsNineAuthorsUnfollowed` (N-1/2/3/11/17), `DenoDependencyPinningTwoUnfollowedAuthors` (N-4 identical-content), `PriyaEightClaimsSixSubjects` (N-6/7 contributor), `BazelFiveDistinctAuthors` (N-8/9 subject), `CounteredClaimPlusCounter` (N-12).
+- **Reachable-zero-results**: a reachable index queried for an object/contributor no indexed author matched (N-5 typo'd object, N-10 absent contributor) → `SearchState::NoResults`.
+- **Unreachable/offline**: `ClosedIndexerPort::reserve()` (slice-05 — a freed localhost port, connect-refused by construction, no hang) → `SearchState::Unavailable` (N-13/14).
+- **Unconfigured**: `ViewerServer::start(env)` leaves `OPENLORE_INDEXER_URL` unset → `SearchState::Unavailable` without a network call (N-15/16).
+
+**The NEW seam** (`tests/acceptance/support/mod.rs`): `ViewerServer::start_with_indexer(env, indexer: IndexerHandle)` mirrors `start_with_github` — it threads the `IndexerHandle::indexer_url()` to the spawned `openlore ui` via the slice-05 `OPENLORE_INDEXER_URL` env-var seam (OD-NS-6) and keeps the handle alive for the viewer's lifetime. Companion `start_with_unreachable_indexer(env, &ClosedIndexerPort)` wires the closed-port URL. `start_inner` gains two params (`indexer_url: Option<String>`, `indexer: Option<IndexerHandle>`); `ViewerServer` gains an `_indexer: Option<IndexerHandle>` RAII field. No new HTTP double was built — the indexer is a REAL slice-05 binary, so the verified/attributed rows come from the production ingest+serve path (not synthetic JSON).
+
+**New shared render assertions** (HTML counterparts of the slice-05 stdout asserts): `assert_search_html_every_row_verified_and_attributed` (I-NS-3/4), `assert_search_html_has_no_merged_consensus_row` (I-NS-3 anti-merging), `assert_search_html_leaks_no_transport_internals` (I-NS-2 no-leak, the V-S4 negative-needle pattern). Read-only gold reuses the slice-06 `capture_store_row_count_universe` + `assert_store_read_only` (Mandate 8 universe = `claims.row_count` + `peer_claims.row_count`).
+
+## Wave: DISTILL / [REF] `[[test]]` registrations + adapter / driving-port coverage
+
+Registered in `crates/cli/Cargo.toml` (after `viewer_htmx_invariants`): `viewer_network_search` + `viewer_network_search_invariants` (both `harness = true`, paths under `../../tests/acceptance/`).
+
+| Driving / driven boundary | Exercised by | Real I/O? |
+|---|---|---|
+| Driving: `openlore ui` CLI → `GET /search` (HTTP, HX-Request fork) | every N-* / N-INV-* via `ViewerServer::get`/`get_htmx` | real subprocess + real HTTP |
+| Driven (external, mocked): `IndexQueryPort` → indexer XRPC (`searchClaims`) | reachable: `start_with_indexer`; unreachable: `ClosedIndexerPort`; unconfigured: unset env | REAL slice-05 `openlore-indexer serve` (the only mocked boundary) |
+| Driven (internal, real): `StoreReadPort` (DuckDB) — read-only | gold N-INV-ReadOnly (row-count delta) | real DuckDB, untouched |
+
+Every DESIGN entry point (`GET /search`, the three dimensions, both shapes) has ≥1 subprocess+HTTP scenario. The indexer (the one NEW driven edge) has reachable + unreachable + unconfigured coverage.
+
+## Wave: DISTILL / [REF] Tier-B decision + RED classification + build-before-run
+
+**Tier B NOT emitted** (per Mandate 10 skip rule): the `/search` journey is a single-shot query→render surface, not a ≥3-chained-scenario stateful journey (`Given` of N does not chain on `Given+When` of N-1 — each scenario is an independent query posture). The input space IS domain-rich, but the SUT is not a state-machine model (no command/postcondition transitions to explore); per Hebert ch.11 the trigger is model-shape, not input richness. The generative exploration of the pure `compose_results` + `render_search_*` core is a layer-1/2 DELIVER concern (mutation testing per the DESIGN enforcement section), out of the layer-3 acceptance scope. Tier A (24 example-pinned subprocess scenarios) covers the journey.
+
+**RED classification (pre-DELIVER fail-for-the-right-reason gate)**: both targets COMPILE green (`cargo test --no-run` — only pre-existing warnings). All 24 scenarios FAIL via `todo!()` panic = **MISSING_FUNCTIONALITY** (correct RED), NOT BROKEN — no ImportError/collection-error/fixture-bug. The only "passed" lines in each binary are the bundled `support::state_delta::tests::*` port unit tests (every viewer binary includes the support module). Verified: `cargo test -p cli --test viewer_network_search --test viewer_network_search_invariants` → 22 N-*/N-INV-* failures via `not yet implemented`.
+
+**Build-before-run note** (DELIVER roadmap): `cargo test` does NOT rebuild a spawned binary. The run MUST `cargo build` BOTH the `openlore` (viewer) AND `openlore-indexer` (seeded serve) bins before running these ATs, so `start_with_indexer` spawns the CURRENT viewer over a CURRENT indexer (mirrors the slice-05/06/07 viewer + indexer AT precedent).
+
+## Wave: DISTILL / [REF] Handoff (DISTILL → DELIVER)
+
+- Read: the User Stories section (UAT per story), the DESIGN sections + ADR-036/037/038, and the two `.feature`-equivalent Rust scenario files (`viewer_network_search.rs` + `..._invariants.rs`) — the executable scenario SSOT.
+- Implement one scenario at a time (unskip is N/A — these are `todo!()`, not `#[ignore]`; replace each `todo!()` body with the GIVEN/WHEN/THEN it documents, drive GREEN). Start with N-1 (the walking skeleton — proves the `start_with_indexer` seam + the `/search` route + the verified-fragment render end-to-end).
+- Mandate compliance evidence: CM-A (all scenarios enter via `ViewerServer` HTTP, zero `viewer-domain` direct imports); CM-B (pure domain language — DIDs, `[verified]`, "peer add", "index unavailable"; zero HTTP/JSON/status-code terms in scenario names); CM-E (gold N-INV-ReadOnly uses `assert_store_read_only` state-delta with port-exposed universe); CM-F/H (layer-3 example-only, no PBT machinery imported); CM-G (Tier B correctly skipped, rationale above).
