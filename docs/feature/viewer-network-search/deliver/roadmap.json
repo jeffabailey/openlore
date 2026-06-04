@@ -1,0 +1,517 @@
+{
+  "roadmap": {
+    "project_id": "viewer-network-search",
+    "created_at": "2026-06-04T12:50:20Z",
+    "total_steps": 13
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Foundation + search-by-object (walking skeleton)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only IndexQueryPort into the viewer and render the verified object-search fragment",
+          "description": "The thick foundational walking-skeleton step (US-NS-001 capability + US-NS-002 render, N-1). Wire the slice-05 HttpIndexQueryAdapter (IndexQueryPort) into the `openlore ui` composition root in cli, resolving the indexer URL from the slice-05 seam (OPENLORE_INDEXER_URL / [appview] indexer_url, OD-NS-6, ADR-036) with NO signing key entering the viewer process. Add ViewerServer's Option<SharedIndexQuery> field + a bind_with_* constructor and thread it through the route table. Add GET /search to the route table with the Shape::from_request fork (read once). Add the pure SearchState ADT (Form | Results | NoResults | Unavailable) to viewer-domain plus render_search_results_fragment (the #search-results region, projecting appview-domain NetworkResultRow via the REUSED compose_results — per-author groups, verified + attributed, no merge) and render_search_page (chrome + public-data banner + GET form + the SAME fragment fn + the third nav link). Add the two xtask check-arch deltas: (a) add viewer-domain -> appview-domain to the pure-core dependency allowlist (pure->pure edge); (b) extend/confirm the viewer capability rule to admit the read-only IndexQueryPort (and, via cli, adapter-index-query) for adapter-http-viewer + viewer-domain while still forbidding any signing/identity/PDS crate and the indexer SERVER/store/ingest crates (adapter-xrpc-query-server / adapter-index-store / adapter-atproto-ingest). Add the start_with_indexer harness seam (mirrors start_with_github): seed_network_index(env, fixture) spawns a REAL slice-05 openlore-indexer serve and threads its url to the spawned openlore ui. Outcome: a reachable indexer + HX-Request -> ONLY the verified+attributed #search-results fragment. BUILD-BEFORE-RUN: the AT spawns BOTH the openlore (viewer) bin AND the openlore-indexer bin, so the run must cargo build both before executing these ATs.",
+          "criteria": [
+            "GET /search with HX-Request over a reachable seeded indexer (object dimension, org.openlore.philosophy.reproducible-builds) returns 200 text/html containing ONLY the #search-results region fragment (no page chrome, no <head>).",
+            "The fragment renders per-author groups; every row carries the author_did, the [verified] marker, and verbatim confidence (e.g. 0.85, never 0.9 or 90%) projected from appview-domain via the REUSED compose_results (no viewer-side grouping/verification path).",
+            "The openlore ui composition root resolves the indexer URL from OPENLORE_INDEXER_URL / [appview] indexer_url, wires HttpIndexQueryAdapter as Option<Arc<dyn IndexQueryPort>>, and holds NO signing key (no signing/identity/PDS surface enters the viewer process).",
+            "xtask check-arch passes with the two deltas: viewer-domain -> appview-domain is allowlisted as a pure->pure edge, and the viewer capability rule admits IndexQueryPort / adapter-index-query while still failing the build if adapter-http-viewer or viewer-domain links any signing/identity/PDS crate or the indexer SERVER/store/ingest crates.",
+            "viewer-domain remains pure (maud + ports + appview-domain only; no duckdb/tokio/reqwest/std::fs/std::net/SystemTime); the index-query soft probe at startup is informational and an unreachable indexer does NOT refuse viewer startup.",
+            "The start_with_indexer seam spawns a REAL openlore-indexer serve over the seeded fixture corpus and threads OPENLORE_INDEXER_URL to the spawned viewer; both the openlore and openlore-indexer bins are built before the AT runs."
+          ],
+          "acceptance_criteria": [
+            "GET /search with HX-Request over a reachable seeded indexer (object dimension, org.openlore.philosophy.reproducible-builds) returns 200 text/html containing ONLY the #search-results region fragment (no page chrome, no <head>).",
+            "The fragment renders per-author groups; every row carries the author_did, the [verified] marker, and verbatim confidence (e.g. 0.85, never 0.9 or 90%) projected from appview-domain via the REUSED compose_results (no viewer-side grouping/verification path).",
+            "The openlore ui composition root resolves the indexer URL from OPENLORE_INDEXER_URL / [appview] indexer_url, wires HttpIndexQueryAdapter as Option<Arc<dyn IndexQueryPort>>, and holds NO signing key (no signing/identity/PDS surface enters the viewer process).",
+            "xtask check-arch passes with the two deltas: viewer-domain -> appview-domain is allowlisted as a pure->pure edge, and the viewer capability rule admits IndexQueryPort / adapter-index-query while still failing the build if adapter-http-viewer or viewer-domain links any signing/identity/PDS crate or the indexer SERVER/store/ingest crates.",
+            "viewer-domain remains pure (maud + ports + appview-domain only; no duckdb/tokio/reqwest/std::fs/std::net/SystemTime); the index-query soft probe at startup is informational and an unreachable indexer does NOT refuse viewer startup.",
+            "The start_with_indexer seam spawns a REAL openlore-indexer serve over the seeded fixture corpus and threads OPENLORE_INDEXER_URL to the spawned viewer; both the openlore and openlore-indexer bins are built before the AT runs."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "search_by_object_with_htmx_returns_only_the_verified_results_fragment",
+          "n_scenarios": [
+            "N-1"
+          ],
+          "us_trace": [
+            "US-NS-001",
+            "US-NS-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/cli/src/verbs/ui.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "crates/xtask/src/check_arch.rs",
+            "crates/cli/Cargo.toml"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (SearchState ADT + render_search_results_fragment projection over compose_results). Extend nightly mutation testing to this projection (verified marker, verbatim confidence, per-author no-merge) toward the Phase-5 >=80% gate."
+        },
+        {
+          "id": "01-02",
+          "name": "No-write surface, no-JS full page, and fragment/full-page parity",
+          "description": "Complete the walking-skeleton render contract (N-1b / N-2 / N-3). (N-1b) Assert the search capability exposes no write/sign surface on a Results response — no new write/sign/subscribe route, no executable follow control, no signing key in the process. (N-2) GET /search WITHOUT HX-Request serves a complete full page (chrome + public-data banner + GET dimension form + the embedded results region) for the no-JS no-regression path. (N-3) The #search-results fragment is structurally identical to the same region inside the full page (parity by construction — render_search_page EMBEDS render_search_results_fragment). This is the htmx + no-JS + parity trio of US-NS-001/002 collapsed into one TDD move.",
+          "criteria": [
+            "A reachable object search with no HX-Request returns a complete full HTML page: <head>, page chrome, the public-data framing banner before results, the GET dimension form, and the embedded #search-results region.",
+            "The capability/response exposes NO write/sign surface: no new write/sign/subscribe route in the route inventory, no signing key read in the viewer process (I-NS-1).",
+            "The #search-results fragment returned under HX-Request is structurally identical to the results region embedded in the full page for the same query (parity by construction, I-NS-6).",
+            "The full-page response renders rows with the same author_did + [verified] + verbatim confidence as the fragment (no divergence between shapes)."
+          ],
+          "acceptance_criteria": [
+            "A reachable object search with no HX-Request returns a complete full HTML page: <head>, page chrome, the public-data framing banner before results, the GET dimension form, and the embedded #search-results region.",
+            "The capability/response exposes NO write/sign surface: no new write/sign/subscribe route in the route inventory, no signing key read in the viewer process (I-NS-1).",
+            "The #search-results fragment returned under HX-Request is structurally identical to the results region embedded in the full page for the same query (parity by construction, I-NS-6).",
+            "The full-page response renders rows with the same author_did + [verified] + verbatim confidence as the fragment (no divergence between shapes)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "search_by_object_without_htmx_returns_the_full_page_with_form_and_results",
+          "n_scenarios": [
+            "N-1b",
+            "N-2",
+            "N-3"
+          ],
+          "us_trace": [
+            "US-NS-001",
+            "US-NS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "Anti-merging for identical content and a guided no-results empty state",
+          "description": "Close out Phase 01 with the two correctness edges of US-NS-002 (N-4 / N-5). (N-4) Two different authors claiming identical content render as TWO rows under two author groups, never one merged consensus row — guaranteed structurally by REUSING compose_results (no viewer-side merge path). (N-5) A typo'd / unmatched object yields SearchState::NoResults rendering a plain-language guided empty state, never a blank region or crash.",
+          "criteria": [
+            "An object search where two distinct authors publish identical-content verified claims renders TWO attributed rows (two author groups); NO merged or consensus row appears (anti-merging, I-NS-3).",
+            "Both rows carry their own author_did + [verified] marker; the rendering reuses compose_results (no second grouping/merge path exists in viewer-domain).",
+            "A reachable index queried for an object no indexed author matched yields SearchState::NoResults and renders a plain-language guided empty state.",
+            "The no-results state is not a blank region and does not crash or hang the viewer (boundary)."
+          ],
+          "acceptance_criteria": [
+            "An object search where two distinct authors publish identical-content verified claims renders TWO attributed rows (two author groups); NO merged or consensus row appears (anti-merging, I-NS-3).",
+            "Both rows carry their own author_did + [verified] marker; the rendering reuses compose_results (no second grouping/merge path exists in viewer-domain).",
+            "A reachable index queried for an object no indexed author matched yields SearchState::NoResults and renders a plain-language guided empty state.",
+            "The no-results state is not a blank region and does not crash or hang the viewer (boundary)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "identical_content_two_authors_renders_two_rows_never_a_merged_row",
+          "n_scenarios": [
+            "N-4",
+            "N-5"
+          ],
+          "us_trace": [
+            "US-NS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The NoResults arm + the anti-merge projection are load-bearing pure logic; cover with mutation testing (the no-merged-row and guided-empty-state branches)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Search dimensions (contributor + subject)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Contributor search renders one author's verified trail with the honesty footer",
+          "description": "US-NS-003 contributor dimension (N-6 / N-7). Extend the dimension selector + handler to the contributor dimension, reusing the slice-05 handle->DID resolution (github:priya -> did:plc:priya-test#org.openlore.application). Render one developer's verified claims under a SINGLE author DID with the 'one developer's reasoning trail, not a community consensus' footer. The fragment/full-page parity move (N-7) is folded in.",
+          "criteria": [
+            "A contributor search (github:priya) over a reachable index renders that one author's verified claims under a SINGLE author_did.",
+            "The contributor result shows the footer 'one developer's reasoning trail, not a community consensus'.",
+            "Every contributor row carries [verified] + the author DID + verbatim confidence (reusing the slice-05 handle->DID resolution, no new resolution path).",
+            "The contributor fragment (HX-Request) is structurally identical to the contributor results region in the full page (parity, I-NS-6)."
+          ],
+          "acceptance_criteria": [
+            "A contributor search (github:priya) over a reachable index renders that one author's verified claims under a SINGLE author_did.",
+            "The contributor result shows the footer 'one developer's reasoning trail, not a community consensus'.",
+            "Every contributor row carries [verified] + the author DID + verbatim confidence (reusing the slice-05 handle->DID resolution, no new resolution path).",
+            "The contributor fragment (HX-Request) is structurally identical to the contributor results region in the full page (parity, I-NS-6)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "contributor_search_renders_one_authors_trail_with_honesty_footer",
+          "n_scenarios": [
+            "N-6",
+            "N-7"
+          ],
+          "us_trace": [
+            "US-NS-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The contributor projection (single-author-DID grouping + honesty footer) is pure render logic; cover with mutation testing."
+        },
+        {
+          "id": "02-02",
+          "name": "Subject search renders N author groups, never a consensus row",
+          "description": "US-NS-003 subject dimension (N-8 / N-9). Add the subject dimension; render a project's claims grouped BY AUTHOR (N distinct authors), each row [verified], with no merged 'the network thinks X about <subject>' consensus row (anti-merging guaranteed by reusing compose_results). The fragment/full-page parity move (N-9) is folded in.",
+          "criteria": [
+            "A subject search (github:bazelbuild/bazel) over a reachable index renders N author groups (the distinct authors who claimed something about the subject).",
+            "Every subject row carries [verified] + its author DID; NO merged or consensus row about the subject appears (anti-merging, I-NS-3).",
+            "The grouping reuses compose_results (no viewer-side merge/grouping path).",
+            "The subject fragment (HX-Request) is structurally identical to the subject results region in the full page (parity, I-NS-6)."
+          ],
+          "acceptance_criteria": [
+            "A subject search (github:bazelbuild/bazel) over a reachable index renders N author groups (the distinct authors who claimed something about the subject).",
+            "Every subject row carries [verified] + its author DID; NO merged or consensus row about the subject appears (anti-merging, I-NS-3).",
+            "The grouping reuses compose_results (no viewer-side merge/grouping path).",
+            "The subject fragment (HX-Request) is structurally identical to the subject results region in the full page (parity, I-NS-6)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "subject_search_renders_n_author_groups_never_a_consensus_row",
+          "n_scenarios": [
+            "N-8",
+            "N-9"
+          ],
+          "us_trace": [
+            "US-NS-003"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "02-03",
+          "name": "Absent contributor renders a named no-suggestion empty state",
+          "description": "US-NS-003 absent-contributor edge (N-10) plus completing the dimension-selector form. A contributor handle no indexed author matches yields SearchState::NoResults that NAMES the queried handle with a plain-language empty state and offers NO near-match suggestion (an absent contributor is not a typo, unlike the object no-match in N-5). Finalize the GET form's dimension selector covering object / contributor / subject.",
+          "criteria": [
+            "A contributor search (github:nobody-here) no indexed author matches yields SearchState::NoResults that names the queried handle in a plain-language empty state.",
+            "The absent-contributor empty state offers NO near-match suggestion (distinct from the object no-results state).",
+            "The /search GET form offers all three dimensions (object/philosophy, contributor, subject) and degrades to a plain navigation without JS.",
+            "The empty state does not crash or render a blank region (boundary)."
+          ],
+          "acceptance_criteria": [
+            "A contributor search (github:nobody-here) no indexed author matches yields SearchState::NoResults that names the queried handle in a plain-language empty state.",
+            "The absent-contributor empty state offers NO near-match suggestion (distinct from the object no-results state).",
+            "The /search GET form offers all three dimensions (object/philosophy, contributor, subject) and degrades to a plain navigation without JS.",
+            "The empty state does not crash or render a blank region (boundary)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "absent_contributor_renders_a_named_no_suggestion_empty_state",
+          "n_scenarios": [
+            "N-10"
+          ],
+          "us_trace": [
+            "US-NS-003"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The dimension-aware NoResults branch (no-suggestion for contributor vs guided for object) is pure logic; cover with mutation testing."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Trust framing + graceful degradation",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Public-data framing visible and counter-annotation shown-not-applied",
+          "description": "US-NS-004 trust surface (N-11 / N-12). (N-11) The /search page states up front, before any results, that discovery indexes only PUBLIC signed claims verified before indexing; every row carries [verified] + the author DID. (N-12) A claim that another author countered SHOWS its counter-annotation inline while the original claim is still rendered verbatim and is NOT merged or over-ridden (anti-merging — counter shown, never applied).",
+          "criteria": [
+            "GET /search renders the public-data framing ('Discovery indexes only PUBLIC signed claims, verified before indexing. Nothing private is read.') before any results (I-NS-5).",
+            "Every rendered result row carries [verified] + the author DID (I-NS-3/4).",
+            "A row whose claim another author countered SHOWS the counter-annotation inline (e.g. 'countered by did:plc:maria').",
+            "The countered claim is still shown verbatim and is NOT merged, filtered, or over-ridden (counter shown-not-applied, I-NS-3)."
+          ],
+          "acceptance_criteria": [
+            "GET /search renders the public-data framing ('Discovery indexes only PUBLIC signed claims, verified before indexing. Nothing private is read.') before any results (I-NS-5).",
+            "Every rendered result row carries [verified] + the author DID (I-NS-3/4).",
+            "A row whose claim another author countered SHOWS the counter-annotation inline (e.g. 'countered by did:plc:maria').",
+            "The countered claim is still shown verbatim and is NOT merged, filtered, or over-ridden (counter shown-not-applied, I-NS-3)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "the_search_page_states_what_it_indexes_up_front",
+          "n_scenarios": [
+            "N-11",
+            "N-12"
+          ],
+          "us_trace": [
+            "US-NS-004"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The counter-annotation shown-not-applied branch is load-bearing pure logic; cover with mutation testing (counter rendered AND claim not filtered)."
+        },
+        {
+          "id": "03-02",
+          "name": "Unreachable indexer degrades to a calm payload-free notice in both shapes",
+          "description": "US-NS-004 degradation on an unreachable index (N-13 / N-14). A configured-but-unreachable indexer (ClosedIndexerPort, connection refused by construction) maps Err(Unreachable)/Err(_) to SearchState::Unavailable — a payload-free unit variant rendering the single pinned plain-language notice. Asserted in BOTH the full-page (N-13) and fragment (N-14) shapes, with no transport leak.",
+          "criteria": [
+            "A configured-but-unreachable indexer (ClosedIndexerPort) maps to SearchState::Unavailable and renders the fixed plain-language notice ('The network index is unavailable... Your local store views still work.') in the FULL page (N-13).",
+            "The same posture under HX-Request renders the SAME fixed notice in the #search-results FRAGMENT (N-14).",
+            "Neither shape leaks transport internals: no HTTP status, no 'connection refused', no raw URL, no stack trace (assert_search_html_leaks_no_transport_internals).",
+            "The viewer does not crash or hang; SearchState::Unavailable is a payload-free unit variant (no transport string interpolated)."
+          ],
+          "acceptance_criteria": [
+            "A configured-but-unreachable indexer (ClosedIndexerPort) maps to SearchState::Unavailable and renders the fixed plain-language notice ('The network index is unavailable... Your local store views still work.') in the FULL page (N-13).",
+            "The same posture under HX-Request renders the SAME fixed notice in the #search-results FRAGMENT (N-14).",
+            "Neither shape leaks transport internals: no HTTP status, no 'connection refused', no raw URL, no stack trace (assert_search_html_leaks_no_transport_internals).",
+            "The viewer does not crash or hang; SearchState::Unavailable is a payload-free unit variant (no transport string interpolated)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "unreachable_index_degrades_to_a_calm_full_page_notice",
+          "n_scenarios": [
+            "N-13",
+            "N-14"
+          ],
+          "us_trace": [
+            "US-NS-004"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The Unavailable mapping (Err(_) -> payload-free Unavailable) is load-bearing no-leak logic; cover with mutation testing (the error arm collapses to the unit variant)."
+        },
+        {
+          "id": "03-03",
+          "name": "Unconfigured indexer degrades, and unfollowed authors get CLI follow-guidance text",
+          "description": "US-NS-004 unconfigured degradation (N-15 / N-16) + read-only follow affordance (N-17). (N-15/16) An unconfigured indexer (OPENLORE_INDEXER_URL unset, no network call attempted) maps to SearchState::Unavailable rendering the same fixed notice in BOTH the full-page and fragment shapes. (N-17) An unfollowed-author row shows the 'openlore peer add <did>' guidance as plain TEXT and NO clickable/executable follow or subscribe control (the viewer stays read-only).",
+          "criteria": [
+            "With OPENLORE_INDEXER_URL unset, a search renders SearchState::Unavailable (the fixed notice) WITHOUT attempting a network call, in the FULL page (N-15).",
+            "The same unconfigured posture under HX-Request renders the SAME fixed notice in the #search-results fragment (N-16).",
+            "Neither unconfigured shape leaks transport internals and the viewer does not crash (I-NS-2).",
+            "An unfollowed-author result row shows the 'openlore peer add <did>' guidance as plain TEXT and renders NO clickable/executable follow or subscribe control (I-NS-1 / WD-NS-3, N-17)."
+          ],
+          "acceptance_criteria": [
+            "With OPENLORE_INDEXER_URL unset, a search renders SearchState::Unavailable (the fixed notice) WITHOUT attempting a network call, in the FULL page (N-15).",
+            "The same unconfigured posture under HX-Request renders the SAME fixed notice in the #search-results fragment (N-16).",
+            "Neither unconfigured shape leaks transport internals and the viewer does not crash (I-NS-2).",
+            "An unfollowed-author result row shows the 'openlore peer add <did>' guidance as plain TEXT and renders NO clickable/executable follow or subscribe control (I-NS-1 / WD-NS-3, N-17)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search.rs",
+          "scenario_name": "unconfigured_index_degrades_to_a_calm_full_page_notice",
+          "n_scenarios": [
+            "N-15",
+            "N-16",
+            "N-17"
+          ],
+          "us_trace": [
+            "US-NS-004"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The unconfigured (None index_query) -> Unavailable branch and the render-only follow-text helper are pure logic; cover with mutation testing."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Gold guardrail invariants",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Gold: every search route leaves the store read-only",
+          "description": "N-INV-ReadOnly (I-NS-8 / WD-NS-7). Exercise EVERY /search route across EVERY dimension (object / contributor / subject) AND both shapes (full page + htmx fragment) over a reachable index, and assert the local DuckDB store row counts (claims + peer_claims) are UNCHANGED via the slice-06 universe-bound assert_store_read_only (Mandate 8). Network READ persists nothing.",
+          "criteria": [
+            "Exercising /search across all three dimensions (object, contributor, subject) and both shapes (full page + fragment) over a reachable index leaves claims.row_count UNCHANGED.",
+            "The same exercise leaves peer_claims.row_count UNCHANGED.",
+            "The assertion uses the slice-06 capture_store_row_count_universe + assert_store_read_only (Mandate 8 universe = the two port-exposed counts, all 'unchanged').",
+            "No /search code path issues a store write (results computed per query; zero new persisted types)."
+          ],
+          "acceptance_criteria": [
+            "Exercising /search across all three dimensions (object, contributor, subject) and both shapes (full page + fragment) over a reachable index leaves claims.row_count UNCHANGED.",
+            "The same exercise leaves peer_claims.row_count UNCHANGED.",
+            "The assertion uses the slice-06 capture_store_row_count_universe + assert_store_read_only (Mandate 8 universe = the two port-exposed counts, all 'unchanged').",
+            "No /search code path issues a store write (results computed per query; zero new persisted types)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search_invariants.rs",
+          "scenario_name": "every_search_route_leaves_the_store_read_only",
+          "n_scenarios": [
+            "N-INV-ReadOnly"
+          ],
+          "us_trace": [
+            "US-NS-001",
+            "US-NS-002",
+            "US-NS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ]
+        },
+        {
+          "id": "04-02",
+          "name": "Gold: no search response adds a write or sign control",
+          "description": "N-INV-NoWrite (I-NS-1 / WD-NS-3 / I-SCR-1). Assert that no /search response shape (full page or fragment, over a reachable index) renders a sign / publish / subscribe / executable-follow control on the observable rendered surface across every shape. The only follow affordance is the render-only 'peer add' TEXT (asserted in N-17).",
+          "criteria": [
+            "No /search full-page response renders a sign, publish, subscribe, or executable-follow control (no <button>/<form>/hx-* follow affordance).",
+            "No /search fragment response renders any such control.",
+            "The assertion holds over a reachable index across the observable rendered surface for every shape.",
+            "The only follow affordance present anywhere is the render-only 'openlore peer add <did>' TEXT (the human gate stays in the CLI, I-NS-1)."
+          ],
+          "acceptance_criteria": [
+            "No /search full-page response renders a sign, publish, subscribe, or executable-follow control (no <button>/<form>/hx-* follow affordance).",
+            "No /search fragment response renders any such control.",
+            "The assertion holds over a reachable index across the observable rendered surface for every shape.",
+            "The only follow affordance present anywhere is the render-only 'openlore peer add <did>' TEXT (the human gate stays in the CLI, I-NS-1)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search_invariants.rs",
+          "scenario_name": "no_search_response_adds_a_write_or_sign_control",
+          "n_scenarios": [
+            "N-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-NS-001",
+            "US-NS-004"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ]
+        },
+        {
+          "id": "04-03",
+          "name": "Gold: the search page chrome stays offline (no CDN)",
+          "description": "N-INV-OfflineChrome (I-NS-7 / KPI-HX-G2). Assert the /search full page references ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN reference — the page chrome stays offline-capable even though the search itself needs the network (exactly like /scrape).",
+          "criteria": [
+            "The /search full page's only <script src> is the local /static/htmx.min.js (the vendored, SHA-256-pinned slice-07 asset).",
+            "The /search page contains NO off-host / CDN script or asset reference.",
+            "The offline-chrome guarantee holds independent of whether the search itself reaches the network."
+          ],
+          "acceptance_criteria": [
+            "The /search full page's only <script src> is the local /static/htmx.min.js (the vendored, SHA-256-pinned slice-07 asset).",
+            "The /search page contains NO off-host / CDN script or asset reference.",
+            "The offline-chrome guarantee holds independent of whether the search itself reaches the network."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search_invariants.rs",
+          "scenario_name": "the_search_page_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "N-INV-OfflineChrome"
+          ],
+          "us_trace": [
+            "US-NS-004"
+          ],
+          "estimate_hours": 2,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search_invariants.rs"
+          ]
+        },
+        {
+          "id": "04-04",
+          "name": "Gold: every rendered search row is verified by construction",
+          "description": "N-INV-Verified (I-NS-4 / KPI-AV-3). Across the dimension surface (object / contributor / subject) over a reachable index, assert EVERY rendered result row carries [verified] + an author DID and NO [unverified] / 'unknown signature' state ever appears — verified-by-construction (the indexer is the verify gate; the viewer has no second verification path).",
+          "criteria": [
+            "Across object, contributor, and subject searches over a reachable index, every rendered result row carries the [verified] marker AND an author DID.",
+            "No rendered row ever shows an [unverified] / 'unknown signature' / unverified state (no such state exists in the viewer).",
+            "The assertion uses assert_search_html_every_row_verified_and_attributed across all dimensions.",
+            "Verification is by construction (the viewer renders already-verified indexer results; there is no second verification path)."
+          ],
+          "acceptance_criteria": [
+            "Across object, contributor, and subject searches over a reachable index, every rendered result row carries the [verified] marker AND an author DID.",
+            "No rendered row ever shows an [unverified] / 'unknown signature' / unverified state (no such state exists in the viewer).",
+            "The assertion uses assert_search_html_every_row_verified_and_attributed across all dimensions.",
+            "Verification is by construction (the viewer renders already-verified indexer results; there is no second verification path)."
+          ],
+          "test_file": "tests/acceptance/viewer_network_search_invariants.rs",
+          "scenario_name": "every_rendered_search_row_is_verified_by_construction",
+          "n_scenarios": [
+            "N-INV-Verified"
+          ],
+          "us_trace": [
+            "US-NS-002",
+            "US-NS-003"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_network_search_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/cli/src/verbs/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "crates/xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-06-04T12:55:36Z"
+  }
+}
