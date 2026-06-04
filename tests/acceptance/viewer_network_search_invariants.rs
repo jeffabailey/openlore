@@ -403,10 +403,58 @@ fn every_rendered_search_row_is_verified_by_construction() {
     // unverified state (I-NS-4). This pins the universal verified-marker invariant
     // across the dimension surface (marked @property for the reader; example-pinned
     // at this layer per Mandate 9/11).
-    todo!(
-        "DELIVER N-INV-Verified: reachable index; for each dimension (object/\
-         contributor/subject) get the results page and call \
-         assert_search_html_every_row_verified_and_attributed(body, &[expected DIDs \
-         for that dimension])"
-    )
+    let env = TestEnv::initialized();
+
+    // The headline query VALUES — one per dimension — that the SINGLE seeded index
+    // (`PriyaEightClaimsSixSubjects`, the same corpus the sibling N-INV-* gold tests
+    // drive) matches across ALL THREE dimensions: it holds Priya's verified
+    // `reproducible-builds` + `bazelbuild/bazel` claims, so ONE reachable index
+    // returns REAL verified+attributed rows for object, contributor, AND subject.
+    // Every row in this corpus is authored by `did:plc:priya-test` (the contributor
+    // trail), so PRIYA_DID is the expected attribution on every dimension — the
+    // viewer renders the `did:plc:priya-test#org.openlore.application` app-identity
+    // shape, which `contains(PRIYA_DID)` matches (mirrors the story-level
+    // `viewer_network_search.rs` attribution assertions over this corpus).
+    let object = "org.openlore.philosophy.reproducible-builds";
+    let object_path = format!("/search?object={object}");
+    let contributor_path = "/search?contributor=github:priya";
+    let subject_path = "/search?subject=github:bazelbuild/bazel";
+
+    // Collect each dimension's full-page results body over the reachable seeded
+    // index, inside a scope so the viewer's exclusive DuckDB lock is released on
+    // drop (mirrors the sibling gold tests' driving discipline). Full page is
+    // sufficient here — fragment/full parity is the story-level concern; this gold
+    // pins the verified-by-construction invariant across the DIMENSION surface.
+    let results = {
+        let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+        let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+        let mut results = Vec::new();
+        for path in [object_path.as_str(), contributor_path, subject_path] {
+            results.push((path.to_string(), viewer.get(path)));
+        }
+        // `viewer` (and `indexer`) drop here.
+        results
+    };
+
+    // For EACH dimension's rendered results body: every row carries `[verified]` +
+    // the author DID, and NO `[unverified]` / "unknown signature" state ever appears
+    // (I-NS-4 / KPI-AV-3). Verified-by-construction — the indexer is the verify gate
+    // and the viewer REUSES the slice-05 `compose_results` with no second
+    // verification path, so this holds across the whole dimension surface.
+    for (path, response) in &results {
+        // Each dimension renders successfully (200) so the verified-marker assertion
+        // is over REAL result content (not the empty Form arm).
+        assert_eq!(
+            response.status, 200,
+            "GET {path:?} (full page) over a reachable seeded index must render \
+             successfully (200) so the verified-by-construction scan is over REAL \
+             result rows; got {}",
+            response.status
+        );
+        // Every rendered row [verified] + attributed to PRIYA_DID, never an
+        // unverified state. The single-author Priya corpus attributes every row on
+        // every dimension to `did:plc:priya-test`.
+        assert_search_html_every_row_verified_and_attributed(&response.body, &[PRIYA_DID]);
+    }
 }
