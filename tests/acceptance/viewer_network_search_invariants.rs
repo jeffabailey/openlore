@@ -196,18 +196,97 @@ fn no_search_response_adds_a_write_or_sign_control() {
     // the dimensions).
     // THEN NO response renders a sign/publish/subscribe/executable-follow control —
     // scan for `name="sign"`, `value="sign"`, `Sign claim`, `Sign & publish`,
-    // `Publish claim`, `name="follow"`, `Subscribe`, and an `hx-post`/`<form>`
+    // `Publish claim`, `name="follow"`, `Subscribe`, `>Follow<`, and an `hx-post`
     // "follow"/"subscribe" affordance — across EVERY response. Any hit is an
     // UNSHIPPABLE write/sign/follow-surface breach (I-NS-1 / WD-NS-3). The render-
     // only `openlore peer add <did>` TEXT is NOT a control (it carries no
     // form/button/hx-* attribute) and is the N-17 story's PRESENCE assertion.
-    todo!(
-        "DELIVER N-INV-NoWrite: reachable index; collect full-page + fragment \
-         responses across object/contributor/subject; assert NONE contains a \
-         sign/publish/subscribe/executable-follow control marker (name=\\\"sign\\\", \
-         value=\\\"sign\\\", Sign claim, Sign & publish, Publish claim, name=\\\"follow\\\", \
-         Subscribe button, hx-post follow)"
-    )
+    let env = TestEnv::initialized();
+
+    // The headline query VALUES — one per dimension — that the SINGLE seeded index
+    // (`PriyaEightClaimsSixSubjects`, the same corpus N-INV-ReadOnly drives) matches
+    // across ALL THREE dimensions, so every /search route below renders REAL verified
+    // rows. A result-bearing query per dimension makes the no-control scan
+    // load-bearing (over populated result rows, not the empty Form arm) — exactly the
+    // surface an unfollowed-author follow affordance (N-17) WOULD leak onto.
+    let object = "org.openlore.philosophy.reproducible-builds";
+    let object_path = format!("/search?object={object}");
+    let contributor_path = "/search?contributor=github:priya";
+    let subject_path = "/search?subject=github:bazelbuild/bazel";
+
+    // Collect EVERY /search response shape — each dimension (object / contributor /
+    // subject) in BOTH shapes (the no-header full page `get` AND the htmx fragment
+    // `get_htmx`) — over the reachable seeded index. The scan runs across the whole
+    // /search surface, mirroring the slice-07 H-INV-NoWrite collection discipline.
+    let mut responses = Vec::new();
+    {
+        let indexer = seed_network_index(&env, NetworkIndexFixture::PriyaEightClaimsSixSubjects);
+        let viewer = ViewerServer::start_with_indexer(&env, indexer);
+
+        for path in [object_path.as_str(), contributor_path, subject_path] {
+            responses.push((format!("GET {path} (full page)"), viewer.get(path)));
+            responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(path)));
+        }
+        // `viewer` (and `indexer`) drop here.
+    }
+
+    // THEN NO response renders a sign / publish / subscribe / executable-follow
+    // control. Two scan groups:
+    //
+    // 1. The SIGN/PUBLISH markers — reused VERBATIM from the slice-07 H-INV-NoWrite /
+    //    H-5c gold gates (the form-control markers `name="sign"` / `value="sign"`
+    //    plus the human-readable sign/publish button labels). The human signing gate
+    //    stays in the CLI; the web surface is observe-only (I-SCR-1).
+    let sign_markers = [
+        "name=\"sign\"",
+        "value=\"sign\"",
+        "Sign claim",
+        "Sign &amp; publish",
+        "Sign and publish",
+        "Publish claim",
+    ];
+    // 2. The executable-FOLLOW / SUBSCRIBE markers — reused from the N-17 story
+    //    scenario's TEXT-ONLY scan: an executable follow control would be a
+    //    `name="follow"` input, a `Subscribe` affordance, a `>Follow<` button label,
+    //    or an `hx-post` follow swap. Matched case-insensitively (the row's
+    //    `openlore peer add <did>` guidance is render-only TEXT carrying NONE of
+    //    these attributes — its PRESENCE is N-17's assertion, not this gold's).
+    let follow_markers = ["name=\"follow\"", "subscribe", ">follow<", "hx-post"];
+
+    for (label, r) in &responses {
+        // Each /search route renders successfully (200) so the no-control assertion
+        // is over REAL verified result content.
+        assert_eq!(
+            r.status, 200,
+            "/search route {label:?} over a reachable seeded index must render \
+             successfully (200) so the no-control scan is over REAL content; got {}",
+            r.status
+        );
+        // No sign/publish control on ANY shape.
+        for marker in sign_markers {
+            assert!(
+                !r.body_contains(marker),
+                "/search response {label:?} must render NO sign/publish control — the \
+                 human signing gate stays in the CLI (I-NS-1 / WD-NS-3 / I-SCR-1); \
+                 found {marker:?} in:\n{}",
+                r.body
+            );
+        }
+        // No executable follow/subscribe control on ANY shape (case-insensitive). The
+        // render-only `openlore peer add <did>` TEXT is NOT a control — it carries no
+        // form/button/hx-* attribute — so it does not trip any banned marker.
+        let lowered = r.body.to_ascii_lowercase();
+        for marker in follow_markers {
+            assert!(
+                !lowered.contains(&marker.to_ascii_lowercase()),
+                "/search response {label:?} must render NO executable follow/subscribe \
+                 control — following stays a deliberate CLI action via the render-only \
+                 `openlore peer add <did>` guidance TEXT (I-NS-1 / WD-NS-3); found \
+                 {marker:?} in:\n{}",
+                r.body
+            );
+        }
+    }
 }
 
 // =============================================================================
