@@ -1291,8 +1291,8 @@ pub enum SearchState {
 /// chrome + form + fragment.
 ///
 /// The result rows PROJECT `appview-domain`'s per-author [`NetworkSearchResult`] —
-/// each group keyed by its author DID, every row carrying the `[verified]` marker
-/// + the author DID + the VERBATIM confidence (via [`render_confidence`]) — and
+/// each group keyed by its author DID, every row carrying the `[verified]` marker,
+/// the author DID, and the VERBATIM confidence (via [`render_confidence`]) — and
 /// there is NO merged "network consensus" row (the per-author shape is the only
 /// output of the REUSED `compose_results`; the viewer never re-groups).
 pub fn render_search_results_fragment(state: &SearchState) -> Markup {
@@ -1341,8 +1341,8 @@ pub fn render_search_page(state: &SearchState) -> String {
 
 /// Render the labeled dimension form (`GET /search` and the top of every results
 /// render). PURE. The form GETs back to `/search` with a labeled input for EACH
-/// dimension the handler parses — `object` (philosophy / object URI, the
-/// walking-skeleton dimension), `contributor` (a developer handle, US-NS-003), and
+/// dimension the handler parses — `object` (philosophy / object URI),
+/// `contributor` (a developer handle, US-NS-003), and
 /// `subject` (a project target, US-NS-003) — so the operator can submit / re-submit
 /// along ANY dimension. The handler checks the fields in object → contributor →
 /// subject order (see `parse_search_dimension`), so an empty field is simply "not

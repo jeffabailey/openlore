@@ -521,8 +521,8 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Resp
 }
 
 /// Render the network-search page (`GET /search`, US-NS-001..004; slice-08;
-/// ADR-037). Parses the dimension + value from the query string (the OBJECT
-/// dimension for the walking skeleton), queries the read-only `IndexQueryPort`,
+/// ADR-037). Parses the dimension + value from the query string (object /
+/// contributor / subject), queries the read-only `IndexQueryPort`,
 /// re-composes the flat attributed rows per-author via the REUSED pure
 /// `appview_domain::compose_results` (NO second grouping path in the viewer), maps
 /// the outcome to a [`SearchState`], and renders — forking by [`Shape`] (ADR-033):
@@ -607,13 +607,13 @@ async fn resolve_search_state(
 /// - `display_value` is what the operator typed — surfaced verbatim in the
 ///   NoResults empty state (the contributor handle, never the resolved DID; AV-17).
 ///
-/// The OBJECT dimension is the walking-skeleton dimension (step 01-01); the
-/// CONTRIBUTOR dimension lands here (step 02-01) reusing the slice-05 handle→DID
-/// resolution; the SUBJECT dimension lands here (step 02-02). The OBJECT param is
-/// checked FIRST so a query carrying multiple keys is unambiguous (object, then
-/// contributor, then subject). Returns `None` when no recognized dimension value is
-/// present (a bare `GET /search` → the empty form). PURE total function. An empty
-/// value (e.g. `?object=`) is "no value".
+/// All three dimensions are parsed here: OBJECT (the typed value verbatim),
+/// CONTRIBUTOR (reusing the slice-05 handle→DID resolution), and SUBJECT (a project
+/// target matched verbatim — no identity resolution). The params are checked in a
+/// FIXED priority order — object, then contributor, then subject — so a query
+/// carrying multiple keys is unambiguous. Returns `None` when no recognized
+/// dimension value is present (a bare `GET /search` → the empty form). PURE total
+/// function. An empty value (e.g. `?object=`) is "no value".
 fn parse_search_dimension(query: Option<&str>) -> Option<(SearchDimension, String, String)> {
     if let Some(object) = query_param(query, "object").filter(|v| !v.is_empty()) {
         return Some((SearchDimension::Object, object.clone(), object));
@@ -689,8 +689,10 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
 /// [`IndexedClaim`] the pure `compose_results` consumes. Carries every load-bearing
 /// field through unchanged — `author_did` (anti-merging, WD-103) and
 /// `verified_against` (the `[verified]` marker, WD-104) are preserved byte-equal.
-/// The relationship is `NetworkUnfollowed` by default (the viewer is per-user-
-/// neutral at this step; the per-user relationship label lands in a later step).
+/// The relationship is always `NetworkUnfollowed`: the read-only viewer is
+/// per-user-neutral (it holds no follow-graph state), so every network-author row
+/// carries the render-only `openlore peer add <did>` follow GUIDANCE (N-17 / WD-NS-3
+/// — following stays a deliberate CLI action).
 fn to_indexed_claim(row: NetworkResultRowRaw) -> IndexedClaim {
     IndexedClaim {
         author_did: Did(row.author_did.0),
