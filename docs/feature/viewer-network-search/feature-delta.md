@@ -769,3 +769,362 @@ PO defines; acceptance-designer enforces at DISTILL→DELIVER.
   read-only invariants (no write/sign route, no key, no executable follow control); counter
   shown-not-applied. Reuse the slice-05 verified/attributed fixtures + the slice-07 htmx
   shape-fork harness.
+
+---
+
+## Wave: DESIGN / [REF] Application Architecture Overview
+
+> Wave: **DESIGN** · Architect: Morgan (nw-solution-architect) · Date: 2026-06-04
+> Style: Hexagonal (Ports + Adapters), Modular Monolith — UNCHANGED (inherits ADR-009)
+> Paradigm: Functional Rust — pure core / effect shell — LOCKED (ADR-007; not relitigated)
+> Extends: slice-05 (`openlore-appview-search`) + slice-06 (`htmx-scraper-viewer`) + slice-07 (`viewer-htmx-swaps`)
+> Proposes: **ADR-036** (viewer index-query port + capability boundary), **ADR-037** (`SearchState` ADT + `viewer-domain` projection + degradation), **ADR-038** (`GET /search` route + GET form + nav + config reuse)
+
+slice-08 is an **additive render surface**, not a re-architecture. It introduces
+**exactly ONE new capability** in the viewer process — an outbound public-data
+index READ — and reuses everything else: the slice-05 query path
+(`IndexQueryPort` + `HttpIndexQueryAdapter`), the slice-05 pure composition
+(`appview-domain::compose_results` + `NetworkResultRow`/`NetworkSearchResult`), and
+the slice-06/07 viewer render pattern (`viewer-domain` maud, the `Shape` fork, page
+= chrome + fragment, the vendored htmx asset).
+
+No new binary, no new architectural STYLE, no new persisted type, no new
+cross-process boundary (the indexer + its XRPC contract already exist from
+slice-05). The work is: wire the existing read-only query adapter into the viewer's
+composition root, add a pure `viewer-domain` HTML projection of the existing result
+types, and add one `GET /search` route that forks by `Shape`.
+
+### Quality-attribute drivers (priority order; from the I-NS-* invariants + KPIs)
+
+| # | Quality (ISO 25010) | Driver | Architectural response |
+|---|---|---|---|
+| 1 | **Security / no-key** (confidentiality, integrity) — viewer holds no signing surface | WD-NS-3 / I-NS-1 / KPI-VIEW-2 | Reuse `IndexQueryPort` (read-only by construction — NO sign/write method, type-level); wire it like the slice-06 `GithubPort` capability boundary; no new write/sign/subscribe route; follow is render-only TEXT. Enforced by `xtask check-arch` (ADR-036/038). |
+| 2 | **Reliability** (fault tolerance, recoverability) — never crash/hang/leak on a down index | WD-NS-4 / I-NS-2 / KPI-5 | A payload-free `SearchState::Unavailable` unit variant (mirrors `ScrapeState::NetworkDown`) — no-leak STRUCTURAL; soft `IndexQueryError::Unreachable` maps to it; both shapes; viewer startup soft-probes the index (never refuses) (ADR-036/037). |
+| 3 | **Functional suitability** (correctness) — verified + attributed, anti-merging | WD-NS-5 / I-NS-3/4/9 / KPI-AV-2/3 | REUSE `appview-domain::compose_results` + non-`Option` `author_did` rows; no second verification/grouping path; `counter_annotation` shown-not-applied; confidence verbatim via the existing `render_confidence` (ADR-037). |
+| 4 | **Usability** (operability, accessibility) — works without JS, bookmarkable | WD-NS-6 / I-NS-6/7 | `GET /search` serves a full page without `HX-Request` and the same results-region fragment with it (page = chrome + fragment, ADR-032/033); GET form → a shareable/bookmarkable URL; offline/vendored htmx chrome (ADR-031/038). |
+| 5 | **Maintainability** (modularity, reusability, testability) | inherits ADR-007/009 | One outbound query path workspace-wide; the new render is the symmetric counterpart to `ScrapeState`/`render_scrape_*`; the `Arc<dyn IndexQueryPort>` + `FakeIndexQuery` seam keeps the handler driveable by DISTILL. |
+
+### Existing-system reuse (the "no existing alternative" justification, per principle 5)
+
+| Concern | Existing component REUSED | New work |
+|---|---|---|
+| Outbound index query | `ports::IndexQueryPort` + `adapter-index-query::HttpIndexQueryAdapter` (slice-05) | NONE — wired into the viewer composition root (ADR-036) |
+| Result composition (per-author, anti-merge, counter) | `appview-domain::{compose_results, NetworkResultRow, NetworkSearchResult}` (slice-05) | NONE — consumed as a pure dep of `viewer-domain` |
+| Indexer URL config | `[appview] indexer_url` + `OPENLORE_INDEXER_URL` seam (slice-05) | NONE — same resolution (OD-NS-6) |
+| HTML render core | `viewer-domain` maud + `page_head`/`htmx_script`/`render_tab_nav`/`render_confidence` (slice-06/07) | NEW `SearchState` ADT + `render_search_*` projection (ADR-037) |
+| `Shape` fork + page=chrome+fragment | `Shape::from_request` + the ADR-032/033 split (slice-07) | NONE — `/search` reuses it |
+| Degradation discipline | `ScrapeState::NetworkDown` unit-variant pattern (slice-07) | NEW `SearchState::Unavailable` unit variant (same shape) |
+| HTTP route table + capability wiring | `adapter-http-viewer::route` + the `Option<SharedGithub>` thread (slice-06/07) | NEW `GET /search` handler + `Option<SharedIndexQuery>` thread (ADR-038) |
+
+---
+
+## Wave: DESIGN / [REF] Resolved Open Decisions (OD-NS-1..6)
+
+All six reviewer-recommended answers ADOPTED; no deviations.
+
+| ID | Decision | Resolution | ADR |
+|---|---|---|---|
+| **OD-NS-1** | Indexer-query port shape | **REUSE** the slice-05 `IndexQueryPort` + `HttpIndexQueryAdapter` behind the viewer composition root — ONE query path, public-data READ only, NO signing/identity/PDS surface (mirrors the slice-06 `GithubPort` boundary). Wired as `Option<Arc<dyn IndexQueryPort>>` like `GithubPort`. | ADR-036 |
+| **OD-NS-2** | Result rendering | **NEW pure `viewer-domain` projection** of the `appview-domain` result types into HTML — REUSE the composition (`compose_results`, per-author grouping, anti-merging, verified/attributed/counter), NOT the CLI stdout text renderer. | ADR-037 |
+| **OD-NS-3** | Degradation UX | A **fixed results-region `Unavailable` message** (payload-free unit variant, mirrors `ScrapeState::NetworkDown` — structurally cannot leak transport internals); BOTH shapes; covers unreachable AND unconfigured. | ADR-037 |
+| **OD-NS-4** | Route placement | Its **OWN route `GET /search`** (distinct corpus = the network index, not the local store); added to the nav as a **third link** alongside My Claims / Peer Claims. | ADR-038 |
+| **OD-NS-5** | Form + verb | A **GET form** (`/search?<dimension>=<value>`, dimensions object/contributor/subject) → bookmarkable/shareable URL + plain no-JS navigation; htmx fragment fork via `HX-Request` + `hx-push-url` (slice-07 pattern). | ADR-038 |
+| **OD-NS-6** | Config surface | **REUSE** the slice-05 indexer-URL resolution (`[appview] indexer_url` + `OPENLORE_INDEXER_URL`) — one source of truth. | ADR-036 |
+
+---
+
+## Wave: DESIGN / [REF] Component Boundaries (DELTA on slices 05/06/07)
+
+slice-08 EXTENDS three existing crates and adds ZERO new crates. No new binary, no
+new port (the `IndexQueryPort` exists), no new persisted type.
+
+| Crate | Kind | Status | slice-08 delta |
+|---|---|---|---|
+| `crates/ports` | PURE | UNCHANGED | `IndexQueryPort` + `NetworkSearchResultRaw`/`NetworkResultRowRaw` already shipped (slice-05). No change. |
+| `crates/appview-domain` | PURE | UNCHANGED | `compose_results` + `NetworkResultRow`/`NetworkSearchResult` reused as-is. Becomes a NEW pure dependency of `viewer-domain`. No change to its own surface. |
+| `crates/adapter-index-query` | EFFECT | UNCHANGED | `HttpIndexQueryAdapter` + its `probe()` reused verbatim. The viewer composition root wires it (via `cli`). |
+| `crates/viewer-domain` | PURE | **EXTENDED** | NEW: `SearchState` ADT (`Form \| Results \| NoResults \| Unavailable`); `NetworkSearchResultView` view-model projecting `NetworkSearchResult`; `render_search_results_fragment` + `render_search_page` (chrome + fragment); `SEARCH_RESULTS_ID`, `SEARCH_UNAVAILABLE_NOTICE`, the public-data banner constant, the `peer add` guidance helper; `render_tab_nav` gains a third `/search` link. Takes a NEW pure dep on `appview-domain`. (ADR-037) |
+| `crates/adapter-http-viewer` | EFFECT | **EXTENDED** | NEW: `GET /search` handler (`search_get`) — parse dimension+value, call `IndexQueryPort`, map outcomes to `SearchState`, fork by `Shape`; `ViewerServer` gains an `Option<SharedIndexQuery>` field + a `bind_with_*` constructor; the `route` fn threads it. Persists nothing; renders no write control. (ADR-038) |
+| `crates/cli` | DRIVER | **EXTENDED** | The `ui` verb (the viewer's composition root) wires `HttpIndexQueryAdapter` into the `ViewerServer` and SOFT-probes it (informational, never a startup refusal). Still holds NO signing key in the viewer surface. (ADR-036) |
+| `xtask` | tooling | **EXTENDED** | ADD `viewer-domain → appview-domain` to the pure-core dependency allowlist (pure→pure edge); CONFIRM/EXTEND the viewer capability rule admits `IndexQueryPort` (read-only) for `adapter-http-viewer`/`viewer-domain` and still FORBIDS any signing/identity/PDS + the indexer SERVER/store/ingest crates. `check-probes` unchanged (the reused `IndexQueryPort` already has a non-stub probe). (ADR-038) |
+
+### Composition-root wiring (the viewer `ui` verb — extends slice-06)
+
+```text
+fn ui(cfg) -> ExitCode {                                  // crates/cli — the viewer composition root
+    // WIRE: read-only store + (optional) GithubPort (slice-06) + (NEW) read-only index-query client
+    let store    = DuckDbStorageAdapter::open(&cfg.storage_path)?;        // StoreReadPort (read-only)
+    let github   = cfg.scrape.then(|| GithubAdapter::new(...));           // GithubPort (public READ)
+    let index_q  = HttpIndexQueryAdapter::new(resolve_indexer_url(&cfg)); // IndexQueryPort (public READ); ADR-036/OD-NS-6
+    let server   = ViewerServer::bind_with(addr, store, github, index_q)?;
+
+    // PROBE: store/loopback HARD-probe (ADR-028, unchanged); index_q is SOFT (KPI-5 / I-NS-2)
+    if let Err(refused) = server.probe(&store_path) { emit(refused); return ExitCode::from(2); }
+    let _ = index_q_soft_probe();   // informational only — an unreachable indexer MUST NOT block startup
+
+    // USE: serve. NO signing key in this process (I-NS-1). Loopback-only (I-NS-8).
+    runtime.block_on(server.serve())
+}
+```
+
+The viewer composition root wires NO signing identity and NO PDS-write surface — it
+holds `StoreReadPort` + `GithubPort` + `IndexQueryPort`, all read-only by
+construction. The `cli` crate MUST NOT link `adapter-xrpc-query-server` /
+`adapter-index-store` / `adapter-atproto-ingest` into the viewer surface (the
+indexer-internal crates) — those belong to the `openlore-indexer` binary (ADR-023).
+
+---
+
+## Wave: DESIGN / [REF] Data Flow — `GET /search`
+
+```text
+Browser ──GET /search?object=org.openlore.philosophy.reproducible-builds──▶ adapter-http-viewer::route
+                                                                              │  Shape::from_request (HX-Request? — ADR-033)
+                                                                              ▼
+                                                                         search_get(index_query, query, shape)
+   parse_search_query(query) ──▶ Some((Object, value))  │  None ──▶ SearchState::Form
+                                       │
+                                       ▼
+   index_query: None ──▶ SearchState::Unavailable        (unconfigured — ADR-036/037)
+   Some(iq).search(dim, value, None).await   [adapter-index-query → indexer XRPC org.openlore.appview.searchClaims]
+        │
+        ├─ Err(Unreachable{..}) / Err(_) ──▶ SearchState::Unavailable          (payload DISCARDED — no leak, I-NS-2)
+        ├─ Ok(raw) raw.results.is_empty() ──▶ SearchState::NoResults(view)     (guided empty; suggestion per dimension)
+        └─ Ok(raw) ──▶ compose_results(rows, dim)  [appview-domain PURE: per-author, no merge, counter kept]
+                          │
+                          ▼
+                     project(NetworkSearchResult) ──▶ SearchState::Results(view)
+                                       │
+                                       ▼
+   match shape {  Fragment ──▶ render_search_results_fragment(&state)   (#search-results region only — I-HX-1)
+                  FullPage ──▶ render_search_page(&state)               (chrome + banner + form + the SAME fragment fn — I-HX-5) }
+                                       │
+                                       ▼
+                               html_ok(body)  ──▶ 200 text/html ──▶ Browser
+```
+
+Read-only: the only port called is `IndexQueryPort::search` (no write method
+exists). Persists nothing. The composition is the slice-05 pure core; the viewer
+adds only the HTML projection + the `Shape` fork.
+
+---
+
+## Wave: DESIGN / [REF] C4 — Container + Component View
+
+### C4 Level 2 — Containers (DELTA: the viewer gains ONE read-only outbound edge)
+
+```mermaid
+C4Container
+    title Container Diagram — openlore ui viewer + the network index (slice-08 DELTA on slices 05/06/07)
+
+    Person(maria, "P-001 Maria (node operator)", "Browses her read-only viewer; now discovers verified network claims via /search")
+
+    System_Boundary(cli_bin, "openlore (CLI binary — the viewer's composition root)") {
+        Container(ui, "ViewerServer (adapter-http-viewer, EFFECT)", "Rust + hyper", "EXTENDED: adds GET /search; holds StoreReadPort + GithubPort + (NEW) IndexQueryPort — all READ-only; NO signing key; loopback-only bind")
+        Container(vdom, "viewer-domain (PURE core)", "Rust + maud", "EXTENDED: SearchState ADT + render_search_* projecting appview-domain result types; third nav link; payload-free Unavailable")
+        Container(advdom, "appview-domain (PURE core)", "Rust", "REUSED: compose_results + NetworkResultRow/NetworkSearchResult (per-author, anti-merge, counter). NEW pure dep of viewer-domain.")
+        Container(adpq, "adapter-index-query (EFFECT)", "Rust + reqwest", "REUSED: HttpIndexQueryAdapter implements IndexQueryPort; Unreachable is SOFT; carries probe()")
+        Container(adpstore, "adapter-duckdb (EFFECT)", "Rust + duckdb-rs", "UNCHANGED: the LOCAL read-only store the viewer reads")
+    }
+
+    System_Ext(indexer, "openlore-indexer (slice-05 binary)", "Self-hostable network service; verifies signature+CID before indexing; signing-INCAPABLE. Serves org.openlore.appview.searchClaims.")
+    ContainerDb_Ext(localdb, "openlore.duckdb", "Embedded DuckDB (read-only to the viewer)", "The operator's own + peer claims")
+
+    Rel(maria, ui, "Opens /search in a browser (loopback)", "HTTP GET (HX-Request fork)")
+    Rel(ui, vdom, "Builds SearchState + calls render_search_*", "pure calls")
+    Rel(vdom, advdom, "Projects NetworkSearchResult into HTML view-model", "pure calls")
+    Rel(ui, adpq, "Queries the network index (READ-only; degrades gracefully)", "IndexQueryPort::search")
+    Rel(adpq, indexer, "org.openlore.appview.searchClaims (graceful if unreachable)", "HTTP/XRPC")
+    Rel(ui, adpstore, "Reads the local store (UNCHANGED, read-only)", "StoreReadPort")
+    Rel(ui, advdom, "Re-composes flat rows per-author (no merge)", "compose_results (pure)")
+```
+
+What changed from slice-07's L2: the `ViewerServer` gains ONE read-only outbound
+edge to the slice-05 indexer (via the reused `adapter-index-query`), and
+`viewer-domain` gains a pure dependency on `appview-domain`. The viewer still holds
+no signing key, binds loopback-only, and persists nothing.
+
+### C4 Level 3 — Component view of `GET /search` (the one new surface)
+
+```mermaid
+C4Component
+    title Component Diagram — the GET /search surface (slice-08 NEW)
+
+    Container_Boundary(shell, "adapter-http-viewer (EFFECT shell)") {
+        Component(route, "route", "fn", "Reads HX-Request ONCE -> Shape (ADR-033); threads Option<SharedIndexQuery>; dispatches GET /search")
+        Component(handler, "search_get", "async fn", "parse_search_query; call IndexQueryPort::search; map outcome -> SearchState; fork by Shape at the render call; persists nothing; no write control")
+        Component(parse, "parse_search_query", "pure fn", "?object=/?contributor=/?subject= -> Option<(SearchDimension, value)>; unknown/missing -> None (Form); never crashes")
+    }
+    Container_Boundary(core, "viewer-domain (PURE core)") {
+        Component(state, "SearchState", "ADT", "Form | Results(view) | NoResults(view) | Unavailable (payload-free unit variant — no-leak by construction)")
+        Component(frag, "render_search_results_fragment", "pure fn", "the #search-results region only (I-HX-1)")
+        Component(page, "render_search_page", "pure fn", "chrome + public-data banner + GET form + the SAME fragment fn (I-HX-5)")
+        Component(proj, "project / NetworkSearchResultView", "pure fn", "per-author groups -> rows: author_did + [verified] + verbatim confidence + counter shown-not-applied + peer-add guidance text")
+    }
+    Container_Ext(adv, "appview-domain", "compose_results + NetworkResultRow/NetworkSearchResult (per-author, anti-merge)")
+    Container_Ext(iq, "IndexQueryPort (adapter-index-query)", "search(dim,value,None) -> NetworkSearchResultRaw | Unreachable(SOFT)")
+
+    Rel(route, handler, "dispatches GET /search with Shape + Option<IndexQueryPort>", "")
+    Rel(handler, parse, "parses the dimension+value", "")
+    Rel(handler, iq, "READ-only query (graceful on Unreachable)", "IndexQueryPort::search")
+    Rel(handler, adv, "re-composes flat rows per-author", "compose_results")
+    Rel(handler, state, "builds the SearchState", "")
+    Rel(handler, frag, "Shape::Fragment", "")
+    Rel(handler, page, "Shape::FullPage", "")
+    Rel(page, frag, "EMBEDS (parity by construction, I-HX-5)", "")
+    Rel(frag, proj, "projects NetworkSearchResult -> rows", "")
+    Rel(proj, adv, "consumes NetworkResultRow / NetworkSearchResult", "")
+```
+
+---
+
+## Wave: DESIGN / [REF] Route and Handler Design
+
+| Aspect | Decision | Invariant |
+|---|---|---|
+| Route | `GET /search` — its own route (OD-NS-4) | distinct network corpus vs local store |
+| Form | GET `<form method="get" action="/search">`: dimension selector (object/contributor/subject) + value input; JS: `hx-get="/search"` + `hx-target="#search-results"` + `hx-push-url="true"` (OD-NS-5) | I-NS-6 (PE); I-AV-8 spirit (bookmarkable) |
+| Shape fork | `Shape::from_request` read ONCE in `route` (ADR-033); the handler forks ONLY at the render call | I-NS-6; no new data routes keyed on the header |
+| `SearchState` arms | `Form` (no network call) · `Results` (>=1 row) · `NoResults` (guided empty, dimension-aware suggestion) · `Unavailable` (payload-free) | I-NS-2; ScrapeState parity |
+| Degradation | `Err(Unreachable)`/`Err(_)`/no-indexer-wired → `SearchState::Unavailable` (fixed notice, results region, both shapes) | I-NS-2 / WD-NS-4; no-leak structural |
+| Public-data framing | banner in page chrome, shown before results on `Form`+`Results` | I-NS-5 |
+| Follow affordance | render-only `openlore peer add <did>` TEXT on an unfollowed-author row; no `<button>`/`<form>`/`hx-*` | I-NS-1 / WD-NS-3 |
+| Persistence | none — computed per query | I-NS-8 / WD-NS-7 |
+| Config | `[appview] indexer_url` + `OPENLORE_INDEXER_URL` (OD-NS-6) | one source of truth |
+
+---
+
+## Wave: DESIGN / [REF] Inherited + Carried Invariants (I-NS-*) — structural guarantees
+
+How each cardinal invariant is structurally guaranteed by the design (not merely intended):
+
+| I-NS-* | Guarantee mechanism (structural) | Enforcement layer(s) |
+|---|---|---|
+| **I-NS-1 read-only / no key** | `IndexQueryPort` has NO sign/write/publish method (type-level); the viewer composition root wires no signing identity/PDS; `/search` is a GET with no write side; follow is a text node, not a control. | TYPE (no write method on the port) + STRUCTURAL (`xtask check-arch` viewer capability rule: no signing/identity/PDS, no indexer SERVER/store/ingest crates) + BEHAVIORAL (DISTILL: route inventory + key-access audit show zero write/sign route, zero key reads) |
+| **I-NS-2 graceful degradation** | `SearchState::Unavailable` is a UNIT variant — no payload to interpolate, so no HTTP status/URL/error/stack-trace can leak; the single pinned `SEARCH_UNAVAILABLE_NOTICE`; both shapes fork identically; `IndexQueryError::Unreachable` is SOFT (never a startup refusal). | TYPE (unit variant) + STRUCTURAL (one pinned notice constant) + BEHAVIORAL (DISTILL: down/unconfigured indexer → fixed message, no leak, no crash, both shapes) |
+| **I-NS-3 anti-merging** | `NetworkResultRow.author_did` is non-`Option`; `compose_results` returns `by_author: Vec<(Did, Vec<…>)>` with no merged-row API; the viewer REUSES it (no second grouping path); `counter_annotation` is rendered, never filtered. | TYPE (non-`Option` author_did; no merged-row API) + STRUCTURAL (reuse — no viewer-side grouping) + BEHAVIORAL (DISTILL: identical-content-different-author = two rows; no consensus row; counter shown) |
+| **I-NS-4 verified display** | every row carries `verified_against` (never empty), driving `[verified]`; the indexer is the verify gate (slice-05 I-AV-1); the viewer has NO second verification path. | TYPE (`verified_against` non-empty) + BEHAVIORAL (DISTILL: every row `[verified]` by construction; no unverified state exists) |
+| **I-NS-6 progressive enhancement** | `render_search_page` EMBEDS `render_search_results_fragment` (page = chrome + fragment); the no-`HX-Request` request gets the full page; the `HX-Request` request gets the same region. | STRUCTURAL (the page embeds the fragment fn — parity by construction) + BEHAVIORAL (DISTILL: fragment vs full-page parity under `HX-Request`) |
+| **I-NS-7 offline chrome** | the page emits the SAME single vendored `<script src="/static/htmx.min.js">` (ADR-031); zero off-host references; only the SEARCH needs the network. | STRUCTURAL (the shared `htmx_script` fn + the SHA-256-pinned asset) + BEHAVIORAL (DISTILL: zero off-host references) |
+| **I-NS-8 zero new persisted types / loopback** | the handler computes the result per query and renders it; nothing is written; `ViewerServer::bind` still refuses non-loopback (ADR-028, unchanged). | TYPE (no new persisted type) + STRUCTURAL (no store-write call in the path; loopback bind guard unchanged) |
+| **I-NS-9 confidence verbatim** | rows render confidence through the EXISTING `render_confidence` (`{:.2}`) — `0.90`, never `0.9`/`90%`. | STRUCTURAL (one `render_confidence` site, reused) + BEHAVIORAL (DISTILL/unit: verbatim assertion) |
+
+---
+
+## Wave: DESIGN / [REF] Earned Trust (slice-08)
+
+Per principle 12, every dependency the viewer does not probe is an act of faith made
+for the user. slice-08 adds ONE new dependency edge in the viewer process — the
+outbound index READ — and it is PROBED by the existing slice-05 contract:
+
+| Dependency | Probe (REUSED from slice-05) | The "what if it lies?" check |
+|---|---|---|
+| `IndexQueryPort` (via `HttpIndexQueryAdapter`) | the slice-05 `probe()`: (a) a reachable fixture indexer returns the expected XRPC shape with `author_did` present; (b) the inverted/degradation check — an UNREACHABLE indexer yields `Unreachable` (SOFT, non-fatal), NOT a refusal. | the index lies by being unreachable mid-session → the viewer maps it to `Unavailable` (no crash/leak); the index lies by dropping `author_did` → the transport type is non-`Option`, so a dropped attribution is a `BadResponse`/compile-shaped contract violation, never a silent merge. |
+
+The viewer probe (`ViewerServer::probe`, ADR-028) is UNCHANGED — store readable +
+loopback bind. The new index-query probe is SOFT at startup (informational; an
+unreachable indexer must not block the viewer — KPI-5 / I-NS-2). `viewer-domain` and
+`appview-domain` are PURE (no `probe()`); their Earned-Trust analog is property +
+mutation testing of the projection + the reused composition (the no-merge,
+verified-marker, verbatim-confidence, counter-shown properties).
+
+The composition-root invariant holds: **wire → (soft-)probe → use**. An adapter that
+fails its HARD probe (store/loopback) still refuses startup with
+`health.startup.refused`; the index-query soft probe is informational by design.
+
+---
+
+## Wave: DESIGN / [REF] Architecture Enforcement (for software-crafter — DELIVER)
+
+```markdown
+Style: Hexagonal + Modular Monolith (UNCHANGED). Language: Rust (functional, ADR-007 — pure cores: viewer-domain + appview-domain).
+Tools (slice-01..07 + slice-08 deltas):
+  - cargo xtask check-arch:
+      * ADD viewer-domain -> appview-domain to the pure-core dependency allowlist (pure -> pure; never reverses)
+      * CONFIRM/EXTEND the viewer capability rule: adapter-http-viewer + viewer-domain MUST NOT depend on any
+        signing/identity/PDS crate, nor adapter-xrpc-query-server / adapter-index-store / adapter-atproto-ingest;
+        MAY hold IndexQueryPort (read-only) + (via cli) adapter-index-query — exactly as they MAY hold GithubPort
+      * viewer-domain stays on the pure-core allowlist (no I/O crate enters it via the appview-domain edge)
+  - cargo xtask check-probes: UNCHANGED — the reused IndexQueryPort already carries a non-stub probe(); viewer-domain is pure (no probe)
+  - cargo deny: no new dependency (adapter-index-query/reqwest already in-workspace; maud/hyper unchanged)
+  - mutation testing (nightly): extend to viewer-domain render_search_* + the projection (verified marker, verbatim confidence, no-merge, counter-shown, Unavailable no-leak)
+
+Rules to enforce (additions):
+- viewer-domain MAY depend on appview-domain (pure) and MUST NOT depend on duckdb/tokio/reqwest/std::fs/std::net/SystemTime or any adapter crate
+- adapter-http-viewer MUST NOT link a signing/identity/PDS crate or any indexer SERVER/store/ingest crate; MAY hold IndexQueryPort
+- The viewer composition root (cli ui verb) wires NO signing key; index_query.probe() is SOFT (never gates startup)
+- GET /search persists nothing; renders no sign/write/subscribe control; the follow affordance is render-only TEXT
+- SearchState::Unavailable is a UNIT variant; the degradation notice is one pinned constant (no transport string interpolated)
+- render_search_page EMBEDS render_search_results_fragment (page = chrome + fragment; parity by construction)
+- ViewerServer::bind still refuses non-loopback (UNCHANGED)
+```
+
+---
+
+## Wave: DESIGN / [REF] Handoff (DESIGN → DISTILL / DEVOPS)
+
+### To DISTILL (nw-acceptance-designer)
+- Read: the User Stories section (UAT per story) + these DESIGN sections + ADR-036/037/038.
+- Observable contracts to assert (all behavioral — no implementation coupling):
+  - `GET /search` (no `HX-Request`) → full page with the dimension form + the public-data banner before any results.
+  - A philosophy/object submit → per-author groups; each row shows `author_did`, `[verified]`, verbatim confidence (`0.85`, not `0.9`/`90%`).
+  - Identical-content-different-author → TWO rows (no merge); a countered claim SHOWS its counter-annotation, claim still shown.
+  - Same submit with `HX-Request` → ONLY the `#search-results` fragment, structurally identical to the full page's results region.
+  - Contributor → one author's trail under one `author_did` + the "one developer's reasoning trail, not a community consensus" footer; absent contributor → named, NO-suggestion empty state. Subject → N author groups, no consensus row.
+  - No-results (typo'd object/subject) → guided empty state (optional near-match), never blank/crash.
+  - Unreachable OR unconfigured indexer → the fixed `Unavailable` message in BOTH shapes; no HTTP status / "connection refused" / raw URL / stack trace; no crash/hang.
+  - Read-only: route inventory shows no new write/sign route; key-access audit shows zero key reads in the viewer process; an unfollowed-author row shows `openlore peer add <did>` TEXT and no executable follow control.
+- REUSE the slice-05 verified/attributed fixtures + the slice-07 htmx shape-fork harness (ADR-035 `HX-Request` seam).
+
+### To DEVOPS (nw-platform-architect)
+- **External integration annotation (principle 10)**: the viewer → indexer XRPC
+  (`org.openlore.appview.searchClaims`) is a cross-process boundary the viewer now
+  CONSUMES (the CLI was the only consumer before). **Contract tests recommended**:
+  the existing slice-05 consumer-driven contract (the CLI is the consumer, the
+  indexer's query server is the provider, pinning that every result carries
+  `author_did` and no merged/consensus object) COVERS the viewer too — the viewer
+  reuses the SAME `IndexQueryPort` + `HttpIndexQueryAdapter` + the SAME XRPC shape.
+  No new contract; confirm the slice-05 Pact-style contract is exercised in CI and
+  note the viewer as a second consumer of the same contract.
+- Viewer-side `/search` telemetry mirroring the slice-05 CLI events: search by
+  dimension, unfollowed-author hits (KPI-AV-1), search→`peer add` funnel (KPI-AV-4)
+  — privacy-preserving (structural counts + DIDs the user already saw, never claim
+  contents). Confirm the new outbound READ adds no dependency to the local-first
+  flows (offline compose/sign unchanged) and the viewer stays loopback-only.
+
+### Open items for DELIVER (within the locked contracts)
+1. Exact `SearchState`/view-model field shapes + whether `NetworkSearchResultView`
+   reuses `NetworkResultRow` directly or a thinner view struct (ADR-037 fixes the ADT
+   arms + the no-leak unit variant; field-level shaping is DELIVER's, subject to the
+   render tests).
+2. The exact `parse_search_query` grammar (`?object=`/`?contributor=`/`?subject=`,
+   percent-decoding via the existing `percent_decode_form` helper) + the malformed →
+   `Form` mapping (ADR-038 fixes the contract; exact parser is DELIVER's, mirroring
+   `parse_page`).
+3. The `ViewerServer` constructor shape for wiring the optional `IndexQueryPort`
+   (a `bind_with_*` vs a small builder) — ADR-036 fixes the `Option<Arc<dyn …>>`
+   field + the soft probe; the constructor ergonomics are DELIVER's.
+4. The dimension-selector form widget (radio vs `<select>`) — ADR-038 fixes GET +
+   the three dimensions; the widget is DELIVER's against the DISTILL form scenarios.
+5. Whether the contributor handle→DID resolution (`github:priya` →
+   `did:plc:priya-test#org.openlore.application`) runs viewer-side (reusing the
+   slice-05 `resolve_contributor_to_did` pure helper) or is passed through — recommend
+   reusing the slice-05 pure resolver; DELIVER confirms.
+6. The exact `xtask check-arch` rule edits (allowlist entry + capability-rule scope) —
+   ADR-038 fixes the intent; the rule wiring is DELIVER's, run from CI.
+
+### Open items explicitly LOCKED (out of scope)
+- Any write/sign/subscribe affordance in the viewer (read-only; follow stays a CLI action).
+- A standalone web AppView application (slice-05 OD-AV-6 holds; this is a render surface on `openlore ui`).
+- Persisting search results or relationship state (computed per query; I-NS-8 / WD-NS-7).
+- Re-verifying claims in the viewer (the indexer is the verify gate; I-NS-4).
+- A browser shareable-link control beyond the bookmarkable GET URL (the URL IS the artifact; a copy affordance is additive/deferred).
+
+### References
+- ADRs: `docs/adrs/ADR-036-viewer-index-query-port-capability-boundary.md`,
+  `docs/adrs/ADR-037-search-state-adt-viewer-domain-projection-degradation.md`,
+  `docs/adrs/ADR-038-search-route-get-form-nav-config-reuse.md`.
+- Inherited: ADR-007 (functional), ADR-009 (hexagonal + wire→probe→use), ADR-023/025/027
+  (indexer + composition + transport), ADR-028/029/030 (viewer server + pure core + read-only store port),
+  ADR-031/032/033/034/035 (htmx asset + fragment/page split + `HX-Request` fork + nav history + acceptance seam).
+- slice-05 DESIGN: `docs/feature/openlore-appview-search/design/architecture-design.md` + `component-boundaries.md`.
