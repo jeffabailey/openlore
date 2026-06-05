@@ -724,4 +724,357 @@ Notes:
 - **KPIs**: realizes inherited **KPI-GRAPH-1..6 / KPI-VIEW-2 / KPI-HX-G1/2/3 / KPI-4 /
   KPI-5** in `docs/product/kpi-contracts.yaml` on a new browser surface — NO new KPI IDs.
 - **Persona**: **P-001** (`docs/product/personas/senior-engineer-solo-builder.yaml`).
+
+---
+
+## Wave: DESIGN / [REF] Application Architecture Overview
+
+> Wave: **DESIGN** · Architect: Morgan (nw-solution-architect) · Date: 2026-06-05
+> Style: Hexagonal (Ports + Adapters), Modular Monolith — UNCHANGED (inherits ADR-009)
+> Paradigm: Functional Rust — pure core / effect shell — LOCKED (ADR-007; not relitigated)
+> Extends: slice-04 (`openlore-scoring-graph`) + slice-06 (`htmx-scraper-viewer`) + slice-07 (`viewer-htmx-swaps`) + slice-08 (`viewer-network-search`)
+> Proposes: **ADR-039** (read-only local contributor-scoring read seam + pure-scorer reuse), **ADR-040** (`ScoreState` ADT + `viewer-domain` projection + transparent breakdown table), **ADR-041** (`GET /score` route + GET form + always-weighted params + arch enforcement)
+
+slice-09 is an **additive render surface**, not a re-architecture. It introduces
+**exactly ONE new capability** in the viewer process — a LOCAL contributor-scoring
+READ (a read-only store read + a PURE compute) — and reuses everything else: the
+slice-04 PURE `scoring` core (`score` + `WeightedView`/`WeightedPairing`/
+`Contribution`/`WeightBucket` + `ScoringConfig::DEFAULT`), the slice-04
+`AttributedClaim` feed contract, and the slice-06/07/08 viewer render pattern
+(`viewer-domain` maud, the `Shape` fork, page = chrome + fragment, the vendored htmx
+asset).
+
+No new binary, no new architectural STYLE, no new persisted type, no new outbound
+network edge (the score is LOCAL + offline — distinct from `/scrape` + `/search`).
+The work is: add ONE read-only method to the existing `StoreReadPort` (returning the
+slice-04 `AttributedClaim` feed) impl'd in `adapter-duckdb`; run the REUSED pure
+`scoring::score` on the feed in the effect shell; add a pure `viewer-domain` HTML
+projection of the existing `WeightedView` (a `ScoreState` ADT + a transparent
+per-claim breakdown table); and add one `GET /score` route that forks by `Shape`.
+
+### Quality-attribute drivers (priority order; from the I-CS-* invariants + KPIs)
+
+| # | Quality (ISO 25010) | Driver | Architectural response |
+|---|---|---|---|
+| 1 | **Functional suitability** (correctness) — transparent, reproduce-by-hand, anti-merging | WD-CS-4 / I-CS-2/I-CS-10 / KPI-GRAPH-3/2 | The headline weight + the per-claim breakdown are projected from the SAME `WeightedPairing` (`weight` + `contributions()`), so "the breakdown sums to the weight" holds by construction (Gate 2 in the pure core); each `Contribution` is one table row under its own `author_did` (two authors = two rows, never merged). The math is the REUSED pure `scoring` core — no second formula (ADR-039/040). |
+| 2 | **Functional suitability** (epistemic honesty) — sparse renders sparse, never opaque | WD-CS-5 / I-CS-3 / KPI-GRAPH-4 | `[SPARSE]` + the "treat as a lead, not a conclusion" honesty counts are PROJECTED from the pure core's `WeightBucket::Sparse` + the pairing's `claim_count`/`distinct_author_count` — the viewer recomputes NO bucket (the breadth guard is the pure core's). No opaque (number-only) mode exists (OD-CS-5). (ADR-040) |
+| 3 | **Security / no-key** (confidentiality, integrity) — viewer holds no signing surface | WD-CS-3 / I-CS-1 / KPI-VIEW-2 | The new read is a method on `StoreReadPort` (which has NO mutation method — ADR-030); the viewer holds no `StoragePort`, no key, no write/sign route. `scoring` is a PURE core (not a signing/identity/PDS surface). Enforced by `xtask check-arch` (capability rule UNCHANGED; the read is read-only). (ADR-039/041) |
+| 4 | **Reliability** (fault tolerance) + local-first/offline — never crash/hang; works offline | WD-CS-8 / I-CS-5 / KPI-5 | The feed is read over the LOCAL DuckDB store ONLY — no network; `/score` works fully offline (distinct from `/search`). An empty feed → the guided `NoClaims` state; a read error → the SAME guided state (never a crash/stack trace). (ADR-039/040) |
+| 5 | **Usability** (operability) — works without JS, bookmarkable, verbatim numbers | WD-CS-7/WD-CS-9 / I-CS-6/I-CS-7/I-CS-8 | `GET /score` serves a full page without `HX-Request` and the same results-region fragment with it (page = chrome + fragment, ADR-032/033); GET form → a shareable/bookmarkable URL; confidence + weight render VERBATIM via the existing `render_confidence` (one site); offline/vendored htmx chrome (ADR-031). (ADR-040/041) |
+| 6 | **Maintainability** (modularity, reusability, testability) | inherits ADR-007/009 | One scoring SSOT workspace-wide (the pure `scoring` core); the new render is the symmetric counterpart to slice-08's `SearchState`/`render_search_*`; the read runs over the existing probed `StoreReadPort` connection; the handler is sync (local read + pure compute) and driveable by DISTILL. |
+
+### Existing-system reuse (the "no existing alternative" justification, per principle 5)
+
+| Concern | Existing component REUSED | New work |
+|---|---|---|
+| Scoring math (the weight + breakdown + bucket) | `scoring::{score, ScoringConfig, WeightedView, WeightedPairing, Contribution, WeightBucket}` (slice-04, ADR-022) | NONE — consumed verbatim; becomes a pure dep of `viewer-domain` + a build dep of the shell |
+| The attributed scoring feed contract | `ports::AttributedClaim` (slice-04, already in `ports`) | NONE — returned by the new read-only `StoreReadPort` method |
+| Contributor-feed SQL | the slice-04 `query_by_contributor` UNION-ALL-with-`author_did` SQL pattern (anti-merging; ADR-020) | NEW read-only sibling in `adapter-duckdb` (no mutation; LOCAL only) |
+| HTML render core | `viewer-domain` maud + `page_head`/`htmx_script`/`render_tab_nav`/`render_confidence` (slice-06/07/08) | NEW `ScoreState` ADT + `render_score_*` breakdown-table projection (ADR-040) |
+| `Shape` fork + page=chrome+fragment | `Shape::from_request` + the ADR-032/033 split (slice-07) | NONE — `/score` reuses it |
+| Empty/guided-state discipline | `SearchState::NoResults` / `ScrapeState::ZeroCandidates` (slice-07/08) | NEW `ScoreState::NoClaims` (same pinned-message shape) |
+| HTTP route table + Shape threading | `adapter-http-viewer::route` + the slice-07/08 GET-form routes (`/search`) | NEW `GET /score` handler (reads the EXISTING store; no new `Option<Shared*>` field) |
+
+---
+
+## Wave: DESIGN / [REF] Resolved Open Decisions (OD-CS-1..6)
+
+All six reviewer/PO-recommended answers ADOPTED; no deviations.
+
+| ID | Decision | Resolution | ADR |
+|---|---|---|---|
+| **OD-CS-1** | Route shape | Its **OWN GET-form route `GET /score?contributor=<did>`** — bookmarkable/shareable URL, plain no-JS navigation, htmx fragment fork via `HX-Request` + `hx-push-url` (slice-07/08 pattern). NOT a `/contributor/{did}` page, NOT a bare tab. | ADR-041 |
+| **OD-CS-2** | Local-score read shape | **ADD ONE read-only method to `StoreReadPort`** (`query_contributor_scoring_feed(&Did) -> Vec<AttributedClaim>`) impl'd in `adapter-duckdb` — REUSES the slice-04 `AttributedClaim` feed contract; NO mutation method, NO key, NO network (LOCAL store only). Then run the REUSED pure `scoring::score` on the feed. NOT the full `StoragePort` (it carries writes). | ADR-039 |
+| **OD-CS-3** | Breakdown render | A **per-claim breakdown TABLE** beneath each pairing's weight + bucket label: one row per `Contribution` (author DID + cid + verbatim base confidence + bonuses + subtotal), with a running sum that equals the displayed weight (reproduce-by-hand, KPI-GRAPH-3). NEVER an opaque number; an expandable `<details>` is an allowed DELIVER nicety. | ADR-040 |
+| **OD-CS-4** | Entry points | `/score` is reached **DIRECTLY by the form/URL (the contract)**; DESIGN ADDS an OPTIONAL render-only "score" `<a href="/score?contributor=<did>">` link from `/claims`//peer-claims author rows (+ an optional nav link) — navigation TEXT, never an executable control; the link is deferrable. | ADR-041 |
+| **OD-CS-5** | Param surface | **ALWAYS weighted + breakdown** — the explain/weighted output is the DEFAULT; NO opaque (number-only) mode, NO `--weighted` toggle (transparency is non-optional; J-002c). `--depth` is a `--traverse` concern, OUT of scope (uses the slice-04 default, unsurfaced). | ADR-041 |
+| **OD-CS-6** | Empty/no-claims state | A **fixed `ScoreState::NoClaims` results-region message** ("No local claims for that contributor.") — a guided state for a contributor with no local claims, in BOTH shapes (mirrors `SearchState::NoResults` / `/scrape` guided states). The `[SPARSE]` marker + honesty line (for thin-but-present evidence) is a PROPERTY of a `Scored` pairing, projected from the pure core's `WeightBucket`. | ADR-040 |
+
+---
+
+## Wave: DESIGN / [REF] Component Boundaries (DELTA on slices 04/06/07/08)
+
+slice-09 EXTENDS existing crates and adds ZERO new crates. No new binary, no new
+architectural style, no new persisted type, no new outbound network edge.
+
+| Crate | Kind | Status | slice-09 delta |
+|---|---|---|---|
+| `crates/scoring` | PURE | UNCHANGED | `score` + `ScoringConfig::DEFAULT` + `WeightedView`/`WeightedPairing`/`Contribution`/`WeightBucket` REUSED verbatim. Becomes a NEW pure dependency of `viewer-domain` + a build dep of the effect shell. No change to its own surface (WD-CS-6 / I-CS-6). |
+| `crates/ports` | PURE | **EXTENDED** | ADD ONE read-only method to `StoreReadPort`: `query_contributor_scoring_feed(&Did) -> Result<Vec<AttributedClaim>, StoreReadError>` (NO mutation method — I-CS-1). `AttributedClaim` already lives in `ports` (slice-04) — NO new boundary type. (ADR-039) |
+| `crates/adapter-duckdb` | EFFECT | **EXTENDED** | NEW `query_contributor_scoring_feed` impl on `DuckDbStoreReadAdapter`: read-only SQL over the SAME shared connection (`claims` ∪ local `peer_claims`, explicit `author_did` projection — NEVER a merging JOIN; the read-only sibling of the slice-04 `query_by_contributor`). LOCAL only — no network. (ADR-039) |
+| `crates/viewer-domain` | PURE | **EXTENDED** | NEW: `ScoreState` ADT (`Form \| Scored{contributor, view} \| NoClaims{contributor}`); `render_score_results_fragment` + `render_score_page` (chrome + form + fragment); the per-claim breakdown TABLE projection of `WeightedView`; `SCORE_RESULTS_ID`, `SCORE_URL`, `SCORE_NO_LOCAL_CLAIMS_NOTICE`, the `[SPARSE]` honesty-line constant + a weight formatter (sibling of `render_confidence`); optional author-row "score" link + nav link. Takes a NEW pure dep on `scoring`. (ADR-040) |
+| `crates/adapter-http-viewer` | EFFECT | **EXTENDED** | NEW: `GET /score` handler (`score_page`) — parse `?contributor=`, read the local feed via `StoreReadPort`, run PURE `scoring::score`, map to `ScoreState`, fork by `Shape`. Reads the store the `ViewerServer` ALREADY holds — NO new `Option<Shared*>` field. Persists nothing; renders no write control. Gains a build dep on `scoring` (pure). (ADR-041) |
+| `crates/cli` | DRIVER | UNCHANGED (wiring) | The `ui` verb (the viewer composition root) needs NO new wiring — `/score` reads the read-only store it already wires + probes (slice-06). Still holds NO signing key. |
+| `xtask` | tooling | **EXTENDED** | ADD `viewer-domain → scoring` to the pure-core dependency allowlist (pure→pure edge — SAME shape as slice-08's `viewer-domain → appview-domain`); CONFIRM the pure-core no-I/O arm still passes for `viewer-domain` with the scoring edge; NO capability-rule change (the read is read-only; `scoring` is pure — not a `VIEWER_FORBIDDEN_DEPS` surface). `check-probes` UNCHANGED. (ADR-041) |
+
+### Composition-root wiring (the viewer `ui` verb — UNCHANGED from slice-08)
+
+```text
+fn ui(cfg) -> ExitCode {                                  // crates/cli — the viewer composition root
+    // WIRE: read-only store (slice-06) + optional GithubPort (slice-06) + optional IndexQueryPort (slice-08).
+    // slice-09 adds NOTHING here — /score reads the read-only store ALREADY wired + probed.
+    let store    = DuckDbStorageAdapter::open(&cfg.storage_path)?;        // StoreReadPort (read-only) — also serves /score
+    let github   = cfg.scrape.then(|| GithubAdapter::new(...));           // GithubPort (public READ)
+    let index_q  = cfg.indexer.then(|| HttpIndexQueryAdapter::new(...));  // IndexQueryPort (public READ)
+    let server   = ViewerServer::bind_with_index_query(addr, store, github, index_q)?;
+
+    // PROBE: store/loopback HARD-probe (ADR-028, UNCHANGED). /score reads the SAME probed connection.
+    if let Err(refused) = server.probe(&store_path) { emit(refused); return ExitCode::from(2); }
+
+    // USE: serve. NO signing key (I-CS-1). Loopback-only (I-CS-9). /score is LOCAL + offline (I-CS-5).
+    runtime.block_on(server.serve())
+}
+```
+
+The viewer composition root wires NO new capability for `/score`: the score is a
+read over the read-only store it already holds + a PURE compute. No new outbound
+edge, no key, loopback-only — unchanged.
+
+---
+
+## Wave: DESIGN / [REF] Data Flow — `GET /score`
+
+```text
+Browser ──GET /score?contributor=did:plc:priya-test──▶ adapter-http-viewer::route
+                                                          │  Shape::from_request (HX-Request? — ADR-033)
+                                                          ▼
+                                                     score_page(store, query, shape)
+   parse_contributor(query) ──▶ Some(did)  │  None ──▶ ScoreState::Form
+                                   │
+                                   ▼
+   store.query_contributor_scoring_feed(&Did(did))   [adapter-duckdb → LOCAL DuckDB, read-only SQL, NO network — I-CS-5]
+        │
+        ├─ Err(_) ──────────────────────▶ ScoreState::NoClaims{contributor}   (degrade to guided state — never a stack trace)
+        ├─ Ok(feed) feed.is_empty() ────▶ ScoreState::NoClaims{contributor}   (guided empty — OD-CS-6)
+        └─ Ok(feed) ──▶ scoring::score(&feed, &ScoringConfig::DEFAULT)  [scoring PURE: aggregate in Rust, NEVER SQL — Gate 2]
+                          │
+                          ▼
+                     ScoreState::Scored{contributor, view}   (the ranked WeightedView — REUSED verbatim)
+                                   │
+                                   ▼
+   match shape {  Fragment ──▶ render_score_results_fragment(&state)   (#score-results region only — I-CS-7)
+                  FullPage ──▶ render_score_page(&state)               (chrome + form + the SAME fragment fn — I-CS-7) }
+                                   │
+                                   ▼
+                           html_ok(body)  ──▶ 200 text/html ──▶ Browser
+```
+
+Read-only: the only port called is `StoreReadPort::query_contributor_scoring_feed`
+(no write method exists on the port). LOCAL + offline (no network). The aggregation
+happens in the PURE `scoring` core (Rust), NEVER in SQL — so the weight always
+decomposes into its `Contribution` rows (I-CS-2 / Gate 2). Persists nothing
+(I-CS-4). The handler is SYNC (local read + pure compute — no `.await`, unlike
+`/search`).
+
+---
+
+## Wave: DESIGN / [REF] C4 — Container + Component View
+
+### C4 Level 2 — Containers (DELTA: the viewer gains a LOCAL score read + pure-compute, NO new network edge)
+
+```mermaid
+C4Container
+    title Container Diagram — openlore ui viewer + the LOCAL contributor score (slice-09 DELTA on slices 04/06/07/08)
+
+    Person(maria, "P-001 Maria (node operator)", "Browses her read-only viewer; now scores a contributor's local claims with a transparent breakdown via /score")
+
+    System_Boundary(cli_bin, "openlore (CLI binary — the viewer's composition root)") {
+        Container(ui, "ViewerServer (adapter-http-viewer, EFFECT)", "Rust + hyper", "EXTENDED: adds GET /score; reads StoreReadPort + calls PURE scoring::score; holds NO signing key; loopback-only bind; /score is LOCAL + offline")
+        Container(vdom, "viewer-domain (PURE core)", "Rust + maud", "EXTENDED: ScoreState ADT + render_score_* projecting the slice-04 WeightedView into a transparent per-claim breakdown table; [SPARSE] projected from WeightBucket")
+        Container(score, "scoring (PURE core)", "Rust", "REUSED verbatim: score + WeightedView/WeightedPairing/Contribution/WeightBucket + ScoringConfig::DEFAULT (the no-ML, reproduce-by-hand formula SSOT). NEW pure dep of viewer-domain + build dep of the shell.")
+        Container(adpstore, "adapter-duckdb (EFFECT)", "Rust + duckdb-rs", "EXTENDED: query_contributor_scoring_feed — read-only SQL over the LOCAL store, returning the slice-04 AttributedClaim feed (UNION ALL, explicit author_did — anti-merging)")
+    }
+
+    ContainerDb(localdb, "openlore.duckdb", "Embedded DuckDB (read-only to the viewer)", "The operator's own + already-pulled peer claims — read LOCALLY, no network")
+
+    Rel(maria, ui, "Opens /score?contributor=<did> in a browser (loopback)", "HTTP GET (HX-Request fork)")
+    Rel(ui, adpstore, "Reads the contributor's LOCAL attributed feed (READ-only)", "StoreReadPort::query_contributor_scoring_feed")
+    Rel(adpstore, localdb, "Read-only SQL (own ∪ local peer claims; no network)", "SELECT … UNION ALL")
+    Rel(ui, score, "Runs the PURE scorer on the feed (aggregate in Rust)", "scoring::score")
+    Rel(ui, vdom, "Builds ScoreState + calls render_score_*", "pure calls")
+    Rel(vdom, score, "Projects the WeightedView/Contribution into the breakdown table", "pure calls")
+```
+
+What changed from slice-08's L2: the `ViewerServer` gains a LOCAL read +
+pure-compute path (`query_contributor_scoring_feed` → `scoring::score`) and
+`viewer-domain` gains a pure dependency on `scoring`. The viewer adds NO new
+network edge (unlike slice-08's indexer edge) — `/score` is LOCAL + offline. The
+viewer still holds no signing key, binds loopback-only, and persists nothing.
+
+### C4 Level 3 — Component view of `GET /score` (the one new surface)
+
+```mermaid
+C4Component
+    title Component Diagram — the GET /score surface (slice-09 NEW)
+
+    Container_Boundary(shell, "adapter-http-viewer (EFFECT shell)") {
+        Component(route, "route", "fn", "Reads HX-Request ONCE -> Shape (ADR-033); dispatches GET /score (sync, after the store-read match)")
+        Component(handler, "score_page", "fn", "parse_contributor; read the LOCAL feed via StoreReadPort; run PURE scoring::score; map outcome -> ScoreState; fork by Shape at the render call; persists nothing; no write control")
+        Component(parse, "parse_contributor", "pure fn", "?contributor=<did> -> Option<did> (reuses query_param + percent_decode_form); missing -> None (Form); never crashes")
+    }
+    Container_Boundary(core, "viewer-domain (PURE core)") {
+        Component(state, "ScoreState", "ADT", "Form | Scored{contributor, view} | NoClaims{contributor} (Sparse is a per-pairing PROPERTY of Scored, never a separate arm)")
+        Component(frag, "render_score_results_fragment", "pure fn", "the #score-results region only (I-CS-7)")
+        Component(page, "render_score_page", "pure fn", "chrome + contributor form + the SAME fragment fn (I-CS-7)")
+        Component(proj, "render_score_pairing / breakdown table", "pure fn", "per pairing: subject -> weight (verbatim) + WeightBucket label; a row per Contribution (author_did + cid + verbatim base + bonuses + subtotal); running sum == the displayed weight; [SPARSE] + honesty counts projected from the pure core")
+    }
+    Container_Ext(sc, "scoring (PURE core)", "score(&feed, &DEFAULT) -> WeightedView; WeightedPairing/Contribution/WeightBucket (reused verbatim)")
+    Container_Ext(store, "StoreReadPort (adapter-duckdb)", "query_contributor_scoring_feed(&Did) -> Vec<AttributedClaim> (read-only, LOCAL)")
+
+    Rel(route, handler, "dispatches GET /score with Shape", "")
+    Rel(handler, parse, "parses the contributor DID", "")
+    Rel(handler, store, "READ-only LOCAL feed read (no network)", "StoreReadPort::query_contributor_scoring_feed")
+    Rel(handler, sc, "aggregates the feed in PURE Rust (never SQL)", "scoring::score")
+    Rel(handler, state, "builds the ScoreState", "")
+    Rel(handler, frag, "Shape::Fragment", "")
+    Rel(handler, page, "Shape::FullPage", "")
+    Rel(page, frag, "EMBEDS (parity by construction, I-CS-7)", "")
+    Rel(frag, proj, "projects WeightedView -> breakdown table", "")
+    Rel(proj, sc, "consumes WeightedPairing / Contribution / WeightBucket", "")
+```
+
+---
+
+## Wave: DESIGN / [REF] Route and Handler Design
+
+| Aspect | Decision | Invariant |
+|---|---|---|
+| Route | `GET /score` — its own route (OD-CS-1) | LOCAL contributor-score corpus vs network/store reads |
+| Form | GET `<form method="get" action="/score">`: ONE `contributor` input; JS: `hx-get="/score"` + `hx-target="#score-results"` + `hx-push-url="true"` (OD-CS-1/5) | I-CS-7 (PE); bookmarkable |
+| Params | ALWAYS weighted + breakdown — no opaque mode, no `--weighted` toggle; `--depth` out of scope (slice-04 default, unsurfaced) (OD-CS-5) | I-CS-2 (transparency non-optional) |
+| Shape fork | `Shape::from_request` read ONCE in `route` (ADR-033); the handler forks ONLY at the render call | I-CS-7; no new data routes keyed on the header |
+| `ScoreState` arms | `Form` (no read) · `Scored{contributor, view}` (>=1 pairing; Sparse is a per-pairing property) · `NoClaims{contributor}` (guided empty) | I-CS-3 (sparse per pairing); OD-CS-6 |
+| Read | `StoreReadPort::query_contributor_scoring_feed` (read-only, LOCAL, no network) | I-CS-1 / I-CS-5 |
+| Compute | PURE `scoring::score(&feed, &ScoringConfig::DEFAULT)` in the shell — aggregate in Rust, never SQL | I-CS-2/I-CS-6 / Gate 2 |
+| Breakdown | per-claim TABLE under each weight; running sum == the displayed weight; projected from the SAME `WeightedPairing` (OD-CS-3) | I-CS-2 / KPI-GRAPH-3 |
+| Sparse | `[SPARSE]` + "based on N claim(s) by M author(s) — treat as a lead, not a conclusion" PROJECTED from `WeightBucket::Sparse` + counts | I-CS-3 / KPI-GRAPH-4 |
+| Empty | `Err(_)` / empty feed → `ScoreState::NoClaims` (fixed notice, results region, both shapes) (OD-CS-6) | reliability; no-leak |
+| Entry points | form/URL (contract) + OPTIONAL render-only author-row "score" link + nav link (OD-CS-4) | I-CS-1 (no executable control) |
+| Persistence | none — computed per query | I-CS-4 |
+| Wiring | NO new `ViewerServer` field — reads the store it already holds | simplest-solution |
+
+---
+
+## Wave: DESIGN / [REF] Inherited + Carried Invariants (I-CS-*) — structural guarantees
+
+How each cardinal invariant is structurally guaranteed by the design (not merely intended):
+
+| I-CS-* | Guarantee mechanism (structural) | Enforcement layer(s) |
+|---|---|---|
+| **I-CS-1 read-only / no key** | the new read is a method on `StoreReadPort`, which declares NO mutation method (a `Box<dyn StoreReadPort>` cannot mutate — ADR-030); the viewer holds no `StoragePort`, no key; `/score` is a GET with no write side; the author-row "score" link + nav link are text nodes, not controls. | TYPE (no mutation method on the port) + STRUCTURAL (`xtask check-arch` viewer capability rule UNCHANGED: no signing/identity/PDS/indexer surface; `scoring` is pure, not forbidden) + BEHAVIORAL (DISTILL: route inventory shows zero write/sign route; key-access audit shows zero key reads) |
+| **I-CS-2 transparency / anti-merging** | the headline `weight` + the breakdown table are projected from the SAME `WeightedPairing` (`weight` + `contributions()`), so the running sum == the displayed weight by construction (Gate 2: `weight == Σ subtotal` in the pure core); each `Contribution` is one row under its own non-`Option` `author_did` (two authors = two rows, never merged). The renderer takes a `&WeightedPairing` and renders both — an opaque number is structurally impossible. | TYPE (non-`Option` `author_did`; non-empty `contributions` smart constructor) + STRUCTURAL (one projection fn renders weight + breakdown from one value; the weight aggregates in Rust, never SQL) + BEHAVIORAL (DISTILL: running-sum == weight; identical-content-different-author = two rows; no opaque number) |
+| **I-CS-3 sparse renders sparse** | `[SPARSE]` + the honesty counts are PROJECTED from the pure core's `WeightBucket::Sparse` + the pairing's `claim_count`/`distinct_author_count`; the viewer recomputes NO bucket; Sparse is a per-pairing property (matched per pairing), so a mixed view renders each pairing's true bucket. | STRUCTURAL (the renderer projects `WeightBucket` + counts — never recomputes the breadth guard, which is the pure core's `weight_bucket`) + BEHAVIORAL (DISTILL: thin pairing = `[SPARSE]` regardless of weight magnitude; sparse-vs-Strong at the same weight decided by breadth) |
+| **I-CS-4 display-only / zero new persisted types** | `ScoreState` (with its `WeightedView`) is built per query and never written; no new persisted type; the score is recomputed each request. | TYPE (no new persisted type) + STRUCTURAL (no store-write call in the path — the only port is the read-only `StoreReadPort`) + BEHAVIORAL (DISTILL: persistence audit shows zero derived score written) |
+| **I-CS-5 local-first / offline** | the feed is read over the LOCAL DuckDB store via read-only SQL — NO network call in the `/score` path; the network being down never degrades `/score` (distinct from `/search`). | STRUCTURAL (the only effect is a local DuckDB read; no outbound edge in the path) + BEHAVIORAL (DISTILL: `/score` renders fully offline; no network call observed) |
+| **I-CS-6 confidence + weight verbatim** | base confidence renders through the EXISTING `render_confidence` (`{:.2}`); the displayed weight is the consumed `WeightedPairing.weight` (no bucket-midpoint rounding) via a sibling weight formatter — both one site. | STRUCTURAL (one `render_confidence` site + one weight formatter, reused) + BEHAVIORAL (DISTILL/unit: `0.90` not `0.9`/`90%`; weight is the exact consumed value) |
+| **I-CS-7 progressive enhancement** | `render_score_page` EMBEDS `render_score_results_fragment` (page = chrome + form + fragment); the no-`HX-Request` request gets the full page; the `HX-Request` request gets the same region. | STRUCTURAL (the page embeds the fragment fn — parity by construction) + BEHAVIORAL (DISTILL: fragment vs full-page parity under `HX-Request`) |
+| **I-CS-8 offline chrome** | the page emits the SAME single vendored `<script src="/static/htmx.min.js">` (ADR-031); zero off-host references; `/score` needs no network at all (chrome AND data are local). | STRUCTURAL (the shared `htmx_script` fn + the SHA-256-pinned asset) + BEHAVIORAL (DISTILL: zero off-host references; `/score` fully offline) |
+| **I-CS-9 loopback / no write route** | `ViewerServer::bind` still refuses non-loopback (ADR-028, unchanged); `/score` is GET-only, key-less; no new write/sign route. | STRUCTURAL (loopback bind guard unchanged; no write route added) + BEHAVIORAL (DISTILL: route inventory + bind audit) |
+| **I-CS-10 attribution preserved** | every breakdown row names its `Contribution.author_did` + `cid` (non-`Option`); the score is auditable back to the attributed claims it aggregates (the breakdown IS the audit trail). | TYPE (non-`Option` `author_did`/`cid` on `Contribution`) + BEHAVIORAL (DISTILL: every breakdown row carries its author DID + cid) |
+
+---
+
+## Wave: DESIGN / [REF] Earned Trust (slice-09)
+
+Per principle 12, every dependency the viewer does not probe is an act of faith made
+for the user. slice-09 adds NO new outbound dependency edge in the viewer process —
+the score is a LOCAL read over the store the viewer ALREADY probes + a PURE compute:
+
+| Dependency | Probe | The "what if it lies?" check |
+|---|---|---|
+| `StoreReadPort::query_contributor_scoring_feed` (via `adapter-duckdb`) | the EXISTING `ViewerServer::probe` (ADR-028) — store readable (sentinel `count_claims`) + loopback bind — runs over the SAME shared connection the new read uses. UNCHANGED; no new probe. | the store lies by becoming unreadable mid-session (poisoned lock / read error) → the feed read returns `Err`, which the handler maps to the guided `NoClaims` state (no crash/hang/stack trace). The store "lies" by dropping `author_did` → impossible: `AttributedClaim.author_did` is non-`Option` (a missing attribution is a decode error, never a silent merge). |
+| `scoring::score` (PURE) | NO `probe()` (pure core). Earned-Trust analog = property + mutation testing of the REUSED scorer (slice-04's existing suite) + the new projection. | the scorer "lies" by mis-bucketing thin evidence → caught by the slice-04 breadth-guard property tests (`breadth_guard_each_dimension_lifts_out_of_sparse_at_high_weight`) AND the slice-09 render property (the projected `[SPARSE]` tracks `WeightBucket::Sparse`); a breakdown that doesn't sum → caught by the Gate-2 property (`weight == Σ subtotal`) + the slice-09 running-sum render assertion. |
+| `viewer-domain` render (PURE) | NO `probe()`. Earned-Trust analog = property + mutation testing of `render_score_*` (running-sum == weight, `[SPARSE]` projection, verbatim numbers, no-merge rows, `NoClaims` no-leak). | the renderer "lies" by emitting a weight without its breakdown → impossible by construction (the projection fn takes a `&WeightedPairing` and renders both the weight and its contributions from it); mutation testing pins the running-sum + per-row attribution. |
+
+The composition-root invariant holds: **wire → probe → use** — the existing
+store/loopback HARD probe (ADR-028) gates startup; the new read needs no new probe
+(it runs over the already-probed connection). Asking *"what happens if the store
+lies?"* is answered: the read degrades to the guided `NoClaims` state, never a crash.
+
+---
+
+## Wave: DESIGN / [REF] Architecture Enforcement (for software-crafter — DELIVER)
+
+```markdown
+Style: Hexagonal + Modular Monolith (UNCHANGED). Language: Rust (functional, ADR-007 — pure cores: viewer-domain + scoring).
+Tools (slice-01..08 + slice-09 deltas):
+  - cargo xtask check-arch:
+      * ADD viewer-domain -> scoring to the pure-core dependency allowlist (pure -> pure; never reverses) —
+        the SAME shape as the slice-08 viewer-domain -> appview-domain edge (ADR-037/038).
+      * CONFIRM the pure-core no-I/O arm still PASSES for viewer-domain WITH the scoring edge (scoring's
+        non-pure-core deps are ports + claim-domain + pure chrono/serde — no I/O enters viewer-domain).
+      * NO capability-rule change: query_contributor_scoring_feed is read-only (a method on StoreReadPort,
+        which has NO mutation method — ADR-030); scoring is a PURE core, NOT in VIEWER_FORBIDDEN_DEPS;
+        adapter-http-viewer MAY link scoring (pure) exactly as it MAY link viewer-domain/appview-domain.
+  - cargo xtask check-probes: UNCHANGED — no new adapter/port with a probe; the read runs over the existing
+    probed StoreReadPort connection (ADR-028).
+  - cargo deny: no new external dependency (scoring/ports/claim-domain/maud are all in-workspace).
+  - mutation testing (nightly): extend to viewer-domain render_score_* + the WeightedView projection
+    (running-sum == displayed weight, [SPARSE] projection, verbatim confidence/weight, no-merge rows, NoClaims no-leak).
+
+Rules to enforce (slice-09 additions):
+- viewer-domain MAY depend on scoring (pure) and MUST NOT depend on duckdb/tokio/reqwest/std::fs/std::net/SystemTime or any adapter crate
+- StoreReadPort gains query_contributor_scoring_feed (read-only — NO mutation method added to the port)
+- adapter-http-viewer MAY link scoring (pure); it still holds no signing/identity/PDS surface, no key
+- GET /score persists nothing; renders no sign/write control; the author-row "score" link + nav link are render-only navigation TEXT
+- render_score_page EMBEDS render_score_results_fragment (page = chrome + form + fragment; parity by construction)
+- the breakdown sums to the displayed weight (projected from the SAME WeightedPairing — Gate 2 carried)
+- [SPARSE] + the honesty counts are PROJECTED from the pure core's WeightBucket + counts (no viewer recompute)
+- ViewerServer::bind still refuses non-loopback (UNCHANGED)
+```
+
+---
+
+## Wave: DESIGN / [REF] Handoff (DESIGN → DISTILL / DEVOPS)
+
+### To DISTILL (nw-acceptance-designer)
+- Read: the User Stories section (UAT per story) + these DESIGN sections + ADR-039/040/041.
+- Observable contracts to assert (all behavioral — no implementation coupling):
+  - `GET /score` (no `HX-Request`, no `contributor`) → full page with the contributor form (the `Form` state); no store read.
+  - `GET /score?contributor=<did>` (no `HX-Request`) → full page with the form + the score region; each subject pairing renders its weight + `WeightBucket` label AND a per-claim breakdown TABLE naming every contribution's author DID + cid + verbatim confidence + bonuses + subtotal.
+  - The running sum of a pairing's per-claim subtotals EQUALS that pairing's displayed weight (reproduce-by-hand; KPI-GRAPH-3); no score renders without its breakdown.
+  - Conflicting/identical-subject claims by different authors → SEPARATE rows under their own author DIDs (no merge; I-CS-2/I-CS-10).
+  - Multiple pairings → ranked by weight (slice-04 order), each with its own breakdown; no pairing collapsed into another.
+  - A single-claim/single-author/no-cross-project-span pairing → `[SPARSE]` + "based on N claim(s) by M author(s) — treat as a lead, not a conclusion", regardless of weight magnitude (I-CS-3 / KPI-GRAPH-4); sparse-vs-Strong at the same weight decided by BREADTH, not magnitude.
+  - Confidence renders verbatim (`0.90`, not `0.9`/`90%`); the displayed weight is the exact consumed value (no bucket-midpoint rounding) (I-CS-6 / KPI-4).
+  - A contributor with NO local claims → the guided "No local claims for that contributor." state in BOTH shapes — no blank region, no crash, no stack trace, no network call (OD-CS-6 / I-CS-5).
+  - Same `?contributor=<did>` submit with `HX-Request` → ONLY the `#score-results` fragment, structurally identical to the full page's score region (I-CS-7).
+  - Read-only / local-first: route inventory shows no new write/sign route; key-access audit shows zero key reads; `/score` renders fully offline (no network call); an author-row "score" link (if present) is TEXT/navigation, never an executable control.
+- REUSE the slice-04 `scoring` fixtures (the priya rich-trail + bjorn sparse + nobody-local empty examples in US-CS-001/002/003) + the slice-07 htmx shape-fork harness (ADR-035 `HX-Request` seam).
+
+### To DEVOPS (nw-platform-architect)
+- **External integration annotation (principle 10)**: slice-09 adds NO external
+  integration — `/score` is a LOCAL read + a PURE compute, fully offline (distinct
+  from `/scrape`'s GitHub edge and `/search`'s indexer edge). There is NO new
+  cross-process boundary and therefore NO new contract test recommended. (The
+  existing slice-04/05/08 contract tests are unaffected.)
+- Viewer-side `/score` telemetry mirroring the slice-04 CLI events: contributor-score
+  renders, breakdown-expanded events, sparse-bucket renders — privacy-preserving
+  (structural counts + DIDs the operator already typed/saw, never claim contents).
+  Confirm `/score` adds no dependency to the local-first flows (offline compose/sign
+  unchanged) and the viewer stays loopback-only.
+
+### Open items for DELIVER (within the locked contracts)
+1. Whether `query_contributor_scoring_feed` takes a bare `&Did` (recommended — the
+   only dimension is contributor, OD-CS-5) or the slice-04 `&ScoringFilter` (for
+   slice-04 symmetry); the RETURN type (`Vec<AttributedClaim>`) is identical either
+   way (ADR-039 fixes the read-only feed contract).
+2. Whether the LOCAL feed spans `claims` only or `claims ∪ peer_claims` (both are
+   local; recommended: UNION-ALL like slice-04 `query_by_contributor` so already-pulled
+   peer rows are included, with NO network) — ADR-039 fixes "local + no network".
+3. The exact `ScoreState`/breakdown-table field shapes + whether the table reuses a
+   thin view-row struct or projects `Contribution` directly (ADR-040 fixes the ADT
+   arms + the per-claim-row + running-sum contract; field-level shaping is DELIVER's,
+   subject to the render tests).
+4. The exact weight formatter (the sibling of `render_confidence` for the displayed
+   weight — verbatim, no rounding) — ADR-040 fixes "verbatim weight"; the formatter
+   precision/format is DELIVER's against the I-CS-6 scenarios.
+5. Whether to add the OPTIONAL author-row "score" link + the nav link in this slice or
+   defer (ADR-041 fixes the form/URL as the contract; the link is a deferrable nicety,
+   OD-CS-4) — recommend adding the nav link, deferring the author-row link unless a
+   DISTILL scenario needs it.
+6. Whether `<details>`-wrap the breakdown table (a collapsed/expandable affordance) —
+   ADR-040 fixes the table as the contract; the affordance is DELIVER's.
+7. The exact `xtask check-arch` rule edit (the `viewer-domain → scoring` allowlist
+   entry) — ADR-041 fixes the intent; the rule wiring is DELIVER's, run from CI.
 </content>
