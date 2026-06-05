@@ -388,3 +388,47 @@ harness = true
 name = "viewer_network_search_invariants"
 path = "../../tests/acceptance/viewer_network_search_invariants.rs"
 harness = true
+
+# Slice-09 (viewer-contributor-scoring; DISTILL): the `openlore ui` CONTRIBUTOR-SCORE
+# view (US-CS-001..003; ADR-039/040/041). The NEW `GET /score?contributor=<did>` route
+# reads the contributor's LOCAL attributed feed over the read-only DuckDB store
+# (`StoreReadPort::query_contributor_scoring_feed` — claims ∪ local peer_claims, NO
+# network), runs the REUSED slice-04 PURE `scoring::score`, and renders the ranked
+# `WeightedView` as HTML: per pairing the verbatim weight + `WeightBucket` label + a
+# per-claim breakdown TABLE (author DID + cid + verbatim confidence + bonuses +
+# subtotal) whose running sum EQUALS the displayed weight (reproduce-by-hand;
+# KPI-GRAPH-3). `[SPARSE]` + the honesty line are PROJECTED from `WeightBucket::Sparse`
+# (never recomputed); an empty feed → the guided `NoClaims` state. Forks by `Shape`
+# (slice-07 HX-Request): full page WITHOUT `HX-Request`, the `#score-results` fragment
+# WITH it. Drives the REAL `openlore ui` verb via `ViewerServer` + in-test HTTP
+# (get/get_htmx) over a REAL seeded local store — `/score` is LOCAL + OFFLINE (no
+# indexer, no network; distinct from /scrape + /search). Seeding postures (production
+# write paths): RICH trail (a contributor across distinct subjects → a real weight +
+# multi-row breakdown), SPARSE (single claim/author/subject → `[SPARSE]` at any
+# confidence), EMPTY (no local claims → `NoClaims`). Per Mandate 9/11 the sad paths
+# (sparse/empty) are example-based, never PBT-generated at this layer. Build-before-run:
+# `cargo build` the `openlore` bin (the viewer) before running. DISTILL registers +
+# materializes the harness so the C-* scenarios classify RED (panic at `todo!()`); C-*
+# stay RED until DELIVER's per-scenario RED→GREEN→COMMIT phases.
+[[test]]
+name = "viewer_contributor_scoring"
+path = "../../tests/acceptance/viewer_contributor_scoring.rs"
+harness = true
+
+# Slice-09 (viewer-contributor-scoring; DISTILL) GOLD / guardrail invariants over the
+# whole `/score` surface (cross-cutting I-CS-1/2/4/5/8): every_score_route_leaves_the_
+# store_read_only (read-only state-delta, Mandate 8 — score computed per query, nothing
+# persisted), no_score_response_adds_a_write_or_sign_control (no sign/publish/follow
+# control on any shape), the_score_page_chrome_stays_offline_no_cdn (local
+# /static/htmx.min.js, no CDN), the_score_surface_works_fully_offline (LOCAL read — no
+# network even for the DATA, distinct from /search), and the cardinal
+# transparency-by-construction gold a_rendered_score_is_never_shown_without_its_
+# breakdown_summing_to_the_weight (the J-002c reproduce-by-hand release gate). Drives
+# the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO mocked
+# boundary (the score is a LOCAL read + PURE compute). Per Mandate 9/11 example-based,
+# never PBT-generated at this layer. DISTILL registers + RED gate; C-INV-* stay RED
+# (`todo!()`).
+[[test]]
+name = "viewer_contributor_scoring_invariants"
+path = "../../tests/acceptance/viewer_contributor_scoring_invariants.rs"
+harness = true

@@ -7962,3 +7962,292 @@ pub fn run_openlore_ui_expecting_startup_refusal(env: &TestEnv) -> CliOutcome {
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
 }
+
+// =============================================================================
+// slice-09 (viewer-contributor-scoring) — LOCAL contributor-score seeding +
+// render assertions. The `/score` route reads the contributor's LOCAL attributed
+// feed (claims ∪ local peer_claims) over the read-only DuckDB store via
+// `StoreReadPort::query_contributor_scoring_feed(&Did)` (NO network — I-CS-5),
+// runs the REUSED slice-04 PURE `scoring::score`, and renders the ranked
+// `WeightedView` as HTML. These seeders land the contributor's LOCAL trail
+// through the PRODUCTION federation write path (`peer add` + `peer pull` — the
+// SAME store the viewer reads, Pillar 3), in three postures mirroring the
+// slice-04 priya-rich / bjorn-sparse / nobody-empty fixtures:
+//
+//   - RICH  → `seed_contributor_rich_trail`  : a contributor across DISTINCT
+//             subjects on a shared object (cross-project span ≥ 2 → lifts out of
+//             Sparse; a real weight + a multi-row breakdown that decomposes).
+//   - SPARSE→ `seed_contributor_sparse_trail`: a single claim by a single author
+//             on a single subject (claim_count=1, distinct_author=1, span=1 →
+//             `[SPARSE]` regardless of confidence magnitude — the breadth guard).
+//   - EMPTY → no seeding: a DID with zero local rows → the guided `NoClaims`
+//             state (no crash, no network).
+//
+// The contributor is identified by `author_did`. The seeders write `peer_claims`
+// rows attributed to the contributor DID (a contributor whose claims the operator
+// has already pulled locally), which the `claims ∪ peer_claims` feed read returns.
+// =============================================================================
+
+/// The canonical slice-09 contributor DIDs — the rich / sparse fixtures (mirrors
+/// the slice-04 priya-rich + bjorn-sparse shape; the empty case uses a DID that is
+/// never seeded). Kept as one source of truth so the seed call + the rendered-row
+/// assertions never drift on the DID string.
+pub const CONTRIBUTOR_RICH_DID: &str = "did:plc:priya-test";
+pub const CONTRIBUTOR_SPARSE_DID: &str = "did:plc:bjorn-test";
+pub const CONTRIBUTOR_EMPTY_DID: &str = "did:plc:nobody-local";
+
+/// The headline object NSID the rich/sparse contributor trails assert on (the
+/// slice-04 reproducible-builds philosophy). One source of truth so the score
+/// pairing's object + the assertions never drift.
+pub const SCORE_OBJECT_REPRODUCIBLE_BUILDS: &str = "org.openlore.philosophy.reproducible-builds";
+
+/// Seed a RICH local trail for `contributor_did` through the PRODUCTION federation
+/// write path (`peer add` + `peer pull` against a `PeerPds` double — the SAME
+/// store `openlore ui` opens, Pillar 3 / BR-VIEW-4). The contributor asserts the
+/// SAME object (reproducible-builds) across SEVERAL DISTINCT subjects, so the pure
+/// scorer's breadth guard sees `cross_project_span >= 2` (lifting the pairing OUT
+/// of `[SPARSE]`) and the contributor's feed decomposes into a multi-row breakdown
+/// whose subtotals sum to the displayed weight (reproduce-by-hand; KPI-GRAPH-3).
+/// Confidences vary per claim so the verbatim-render scenarios have distinct
+/// numbers to assert (`0.86`, `0.90`, …).
+///
+/// SCAFFOLD: true (slice-09) — DELIVER materializes it via the EXISTING
+/// `seed_peer_authored_graph` (`peer add` + `peer pull`), passing one `SeedPeer`
+/// for `contributor_did` whose `triples` are several DISTINCT subjects on the
+/// shared reproducible-builds object at varied confidences. No new mechanism — the
+/// rows land in the REAL `peer_claims` table the viewer's local feed read returns.
+pub fn seed_contributor_rich_trail(env: &TestEnv, contributor_did: &str) {
+    // DELIVER: derive a deterministic Ed25519 seed from `contributor_did` (as the
+    // slice-08 seeders do), build several DISTINCT-subject triples on the shared
+    // reproducible-builds object at varied confidences, and drive
+    // `seed_peer_authored_graph(env, &[SeedPeer{ peer_did: contributor_did, seed,
+    // triples }])` so the contributor's multi-project trail lands in the REAL
+    // `peer_claims` table (claim_count >= 4, cross_project_span >= 2 — a non-sparse
+    // pairing whose breakdown decomposes). LOCAL only — no network.
+    let _ = (env, contributor_did, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
+    todo!(
+        "slice-09 DELIVER: seed a RICH local trail for {contributor_did} (several \
+         distinct subjects on the shared reproducible-builds object, varied \
+         confidences) via the production `peer add` + `peer pull` path so the \
+         contributor's local feed scores to a real weight + multi-row breakdown"
+    )
+}
+
+/// Seed a SPARSE local trail for `contributor_did`: EXACTLY ONE claim, by that one
+/// author, on ONE subject (claim_count=1, distinct_author_count=1,
+/// cross_project_span=1) — through the PRODUCTION federation write path. The pure
+/// core's breadth guard buckets this `[SPARSE]` regardless of how HIGH the single
+/// claim's confidence is (the load-bearing epistemic-honesty fixture, US-CS-003 /
+/// KPI-GRAPH-4). The confidence is intentionally HIGH (`0.95`) so the scenario
+/// proves magnitude does not dress a thin opinion up as Strong.
+///
+/// SCAFFOLD: true (slice-09) — DELIVER materializes it via `seed_peer_authored_
+/// graph` with ONE `SeedPeer` carrying a SINGLE triple (one subject, the shared
+/// object, confidence 0.95).
+pub fn seed_contributor_sparse_trail(env: &TestEnv, contributor_did: &str) {
+    // DELIVER: one `SeedPeer{ peer_did: contributor_did, seed, triples: &[(one
+    // subject, reproducible-builds, 0.95)] }` via `seed_peer_authored_graph` so
+    // exactly ONE `peer_claims` row lands — a single-claim/single-author/no-span
+    // feed the pure core buckets `[SPARSE]` at any confidence. LOCAL only.
+    let _ = (env, contributor_did, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
+    todo!(
+        "slice-09 DELIVER: seed a SPARSE local trail for {contributor_did} (exactly \
+         one claim, one author, one subject, confidence 0.95) via the production \
+         `peer add` + `peer pull` path so the pure core buckets it [SPARSE] \
+         regardless of the high confidence"
+    )
+}
+
+/// Seed a trail where TWO DISTINCT authors assert the SAME (subject, object) at
+/// DIFFERENT confidences, so the contributor's feed for that pairing decomposes
+/// into TWO separate `Contribution` rows under their OWN author DIDs — never
+/// averaged/merged into one faceless consensus row (the anti-merging guarantee,
+/// US-CS-002 Example 4 / I-CS-2 / I-CS-10). Returns the two author DIDs (in seeded
+/// order) so the scenario can assert both rows are present + attributed.
+///
+/// SCAFFOLD: true (slice-09) — DELIVER materializes it via `seed_own_plus_peer_
+/// graph` (the GQE-2 identical-content-two-authors fixture shape): the local user
+/// (`You`) + a pulled peer both assert the same (subject, reproducible-builds) at
+/// different confidences, landing two attributed rows on one pairing.
+pub fn seed_contributor_conflicting_authors(env: &TestEnv) -> (String, String) {
+    // DELIVER: reuse the `seed_own_plus_peer_graph` identical-content shape — own
+    // claim (You) + one pulled peer on the SAME (subject, reproducible-builds) at
+    // distinct confidences (e.g. 0.40 own + 0.55 peer) so the contributor-scope
+    // feed yields one pairing decomposing into TWO attributed Contribution rows.
+    let _ = (env, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
+    todo!(
+        "slice-09 DELIVER: seed two distinct authors asserting the same \
+         (subject, reproducible-builds) at different confidences so the pairing \
+         decomposes into two attributed rows (anti-merging; I-CS-2/I-CS-10)"
+    )
+}
+
+/// The `#score-results` swap-target id the `/score` fragment renders under (the
+/// sibling of slice-08's `#search-results`). Asserting it appears in BOTH the
+/// fragment and the full-page score region proves the parity-by-construction
+/// embedding (I-CS-7). One source of truth so the scenarios never drift.
+pub const SCORE_RESULTS_ID: &str = "score-results";
+
+/// Assert a rendered `/score` body (fragment OR full page) shows a pairing's
+/// transparent breakdown: the displayed weight AND a per-claim breakdown that
+/// NAMES every expected contributing author DID + carries a verbatim confidence —
+/// and NO opaque-number / merged-consensus render. The OBSERVABLE counterpart of
+/// the slice-04 `--explain` decomposition (I-CS-2 / I-CS-10 / KPI-GRAPH-3); scans
+/// the rendered HTML only (Mandate 8 universe = port-exposed rendered surface,
+/// never an internal struct field).
+///
+/// SCAFFOLD: true (slice-09) — DELIVER asserts: every `expected_author` DID is in
+/// the body (per-row attribution); each `expected_confidence_verbatim` string is
+/// present byte-for-byte (`0.86`, never `0.9`/`86%`); and NO merged-consensus
+/// phrasing appears (the breakdown is per-claim, not a faceless aggregate).
+pub fn assert_score_html_breakdown_attributed_and_verbatim(
+    body: &str,
+    expected_authors: &[&str],
+    expected_confidences_verbatim: &[&str],
+) {
+    // Every contributing author DID is rendered (per-row attribution — non-Option
+    // author_did, I-CS-10).
+    for did in expected_authors {
+        assert!(
+            body.contains(did),
+            "I-CS-10: the `/score` breakdown must attribute a row to {did:?} (every \
+             contribution carries its author DID); body was:\n{body}"
+        );
+    }
+    // Each confidence is rendered VERBATIM — the exact stored `f64` string, never a
+    // truncated `0.9` or a `%`-formatted value (I-CS-6 / KPI-4).
+    for conf in expected_confidences_verbatim {
+        assert!(
+            body.contains(conf),
+            "I-CS-6: the `/score` breakdown must render the confidence {conf:?} \
+             verbatim (never 0.9 / 90%); body was:\n{body}"
+        );
+    }
+    // The score is NEVER a faceless merged consensus number — the breakdown is
+    // per-claim (anti-merging in aggregates, I-CS-2).
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "authors agree",
+        "the network says",
+        "consensus score",
+        "community consensus",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-CS-2 (anti-merging): the `/score` render must show NO merged / \
+             faceless consensus row; found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+/// Assert the rendered `/score` body marks a pairing `[SPARSE]` and carries the
+/// "treat as a lead, not a conclusion" honesty line — the projected breadth-guard
+/// state for thin evidence (I-CS-3 / KPI-GRAPH-4). Scans the OBSERVABLE rendered
+/// surface only; the `[SPARSE]` decision is the pure core's (`WeightBucket::
+/// Sparse`), the viewer PROJECTS it (never recomputes). Also asserts the pairing
+/// is NOT labelled `Strong` (a thin opinion is never dressed up by magnitude).
+///
+/// SCAFFOLD: true (slice-09).
+pub fn assert_score_html_renders_sparse_honesty(body: &str) {
+    assert!(
+        body.contains("[SPARSE]"),
+        "I-CS-3: a thin (single-claim/single-author/no-span) pairing must render \
+         the `[SPARSE]` marker; body was:\n{body}"
+    );
+    let lowered = body.to_ascii_lowercase();
+    assert!(
+        lowered.contains("treat as a lead"),
+        "I-CS-3: a `[SPARSE]` pairing must carry the \"treat as a lead, not a \
+         conclusion\" honesty line; body was:\n{body}"
+    );
+    // The thin pairing is NEVER labelled Strong, regardless of confidence magnitude
+    // (the breadth guard, not the weight, decides the bucket).
+    assert!(
+        !body.contains("Strong"),
+        "I-CS-3: a thin pairing must NOT be labelled Strong (magnitude does not \
+         dress a single opinion up as well-supported); body was:\n{body}"
+    );
+}
+
+/// Assert the rendered `/score` body shows the guided `NoClaims` empty state for a
+/// contributor with no local claims — the fixed plain-language "No local claims for
+/// that contributor." notice, naming nothing fake (OD-CS-6 / I-CS-5). Asserts the
+/// queried DID is named (so the operator knows WHO was looked up) and that NO score
+/// / weight / `[SPARSE]` / stack-trace leaks (emptiness is not a zero score).
+///
+/// SCAFFOLD: true (slice-09).
+pub fn assert_score_html_renders_no_claims(body: &str, queried_did: &str) {
+    let lowered = body.to_ascii_lowercase();
+    assert!(
+        lowered.contains("no local claims"),
+        "OD-CS-6: an unknown contributor must render the guided \"No local claims \
+         for that contributor.\" notice; body was:\n{body}"
+    );
+    assert!(
+        body.contains(queried_did),
+        "OD-CS-6: the empty state must name the queried DID {queried_did:?} so the \
+         operator knows who was looked up; body was:\n{body}"
+    );
+    // Emptiness is NOT a zero score — no fabricated weight/bucket appears, and no
+    // raw error/stack trace leaks (I-CS-5 reliability).
+    for banned in ["[SPARSE]", "weight", "panicked", "RUST_BACKTRACE", "thread 'main'"] {
+        assert!(
+            !body.contains(banned),
+            "OD-CS-6: the empty state must show NO fabricated score and NO leaked \
+             error internals; found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+/// Assert the running sum of a pairing's per-claim subtotals EQUALS its displayed
+/// weight, READ FROM THE RENDERED HTML (the J-002c reproduce-by-hand release gate,
+/// KPI-GRAPH-3 / I-CS-2). This is the cardinal transparency-by-construction
+/// assertion: it parses the headline weight + the per-row subtotals out of the
+/// rendered breakdown TABLE and checks `Σ subtotal == weight` (within an epsilon) —
+/// proving the operator can reproduce the number by hand from what she SEES, not by
+/// trusting the pure core off-screen.
+///
+/// SCAFFOLD: true (slice-09) — DELIVER parses the rendered weight value + the
+/// per-row subtotal values out of the breakdown markup (the table the renderer
+/// emits) and asserts the row subtotals sum to the displayed weight (|Σ − weight| <
+/// 1e-9). The PARSE shape is DELIVER's against the render tests; the CONTRACT
+/// (rendered subtotals sum to the rendered weight) is fixed here.
+pub fn assert_score_html_breakdown_sums_to_displayed_weight(body: &str) {
+    // DELIVER: extract the displayed pairing weight + each rendered Contribution
+    // subtotal from the breakdown table markup, then assert their running sum
+    // equals the displayed weight (reproduce-by-hand). The assertion reads ONLY the
+    // rendered surface (Mandate 8 universe = port-exposed rendered HTML), never the
+    // in-process `WeightedPairing` — the whole point is that the HTML itself is
+    // self-consistent.
+    let _ = body;
+    todo!(
+        "slice-09 DELIVER: parse the rendered weight + the per-row subtotals out of \
+         the breakdown table and assert Σ subtotal == displayed weight (the J-002c \
+         reproduce-by-hand gate; KPI-GRAPH-3)"
+    )
+}
+
+/// Assert a rendered `/score` body carries NO sign / publish / follow / subscribe
+/// control — the read-only-surface guarantee on the score view (I-CS-1 / WD-CS-3).
+/// The sibling of the slice-08 search no-write assertion. Scans the OBSERVABLE
+/// rendered surface for control elements + bare control labels.
+///
+/// SCAFFOLD: true (slice-09).
+pub fn assert_score_html_has_no_write_or_sign_control(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "name=\"sign\"",
+        "sign claim",
+        "sign & publish",
+        "sign &amp; publish",
+        "subscribe",
+        ">follow<",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-CS-1 / WD-CS-3: the `/score` surface must render NO sign / publish / \
+             follow / subscribe control (the score is a read + pure compute; \
+             signing/following stays in the CLI); found {banned:?} in body:\n{body}"
+        );
+    }
+}

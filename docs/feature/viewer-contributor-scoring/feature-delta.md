@@ -1077,4 +1077,178 @@ Rules to enforce (slice-09 additions):
    ADR-040 fixes the table as the contract; the affordance is DELIVER's.
 7. The exact `xtask check-arch` rule edit (the `viewer-domain → scoring` allowlist
    entry) — ADR-041 fixes the intent; the rule wiring is DELIVER's, run from CI.
-</content>
+
+---
+
+## Wave: DISTILL / [REF] Reconciliation + Pre-requisites
+
+> Wave: **DISTILL** (lean Tier-1) · Acceptance designer: Quinn (nw-acceptance-designer) · Date: 2026-06-05
+> Mandates: 1 (hexagonal — drive the `openlore ui` driving port over HTTP), 3 (complete user journeys), 7 (RED scaffolds), 8 (universe-bound read-only delta), 9/11 (layer-3/5 example-only; sad paths enumerated, never PBT-generated).
+
+**Wave-Decision Reconciliation HARD GATE — PASSED (0 contradictions).** DISCUSS
+WD-CS-1..10 and the DESIGN sections (ADR-039/040/041, `ScoreState` ADT, the
+`GET /score` route, I-CS-1..10) were authored consistently: read-only (WD-CS-3 ↔
+I-CS-1, `StoreReadPort` has no mutation method), transparency/breakdown (WD-CS-4 ↔
+I-CS-2 + Gate-2), sparse-renders-sparse (WD-CS-5 ↔ I-CS-3), pure-scorer reuse
+(WD-CS-6 ↔ `scoring` reused verbatim + xtask allowlist), verbatim (WD-CS-7 ↔
+I-CS-6), local-first/offline (WD-CS-8 ↔ I-CS-5, no network edge, sync handler),
+progressive enhancement (WD-CS-9 ↔ I-CS-7, `Shape` fork), attribution/zero-persist
+(WD-CS-10 ↔ I-CS-4/I-CS-9/I-CS-10). Route `GET /score?contributor=<did>`: DISCUSS
+OD-CS-1 recommendation ↔ DESIGN ADR-041 adoption, exact match. No DEVOPS
+wave-decisions file for this slice; DESIGN handoff confirms NO new external
+integration (`/score` is LOCAL + offline) — graceful-degradation default applied
+(no env-matrix branching needed; the single LOCAL posture covers it).
+
+**Pre-requisites (all SHIPPED / inherited):**
+- slice-04 PURE `scoring` core — `score(&feed, &ScoringConfig::DEFAULT) ->
+  WeightedView`, `WeightedPairing` (`weight` / `bucket` / `contributions()` /
+  `claim_count` / `distinct_author_count` / `cross_project_span`), `WeightBucket`
+  (`Strong`/`Moderate`/`Sparse`), `Contribution` (non-`Option` `author_did` + `cid`
+  + `base` + bonuses + `subtotal`), and the Gate-2 `weight == Σ subtotal` property.
+- slice-06 `ViewerServer` harness (`start`/`get`/`get_htmx`, `is_fragment`/
+  `is_full_page`/`references_external_cdn`) + the production seed paths (`peer add` +
+  `peer pull` via `seed_peer_authored_graph` / `seed_own_plus_peer_graph`).
+- slice-07 `Shape::from_request` HX-Request fork (the `get`/`get_htmx` pair).
+- slice-08 `/search` render-assertion + read-only-gold precedent (mirrored shapes).
+
+**Lang + infra:** `[lang-mode] rust` (proptest / std `#[test]` / `#[ignore]`).
+`[policy-mode] inherit` — `docs/architecture/atdd-infrastructure-policy.md` present
+(the `ui` driving-port row annotated with `/score`: LOCAL read + PURE
+`scoring::score`, NO network). `[port-mode] inherit` — `tests/common/state_delta.rs`
+present (read-only gold reuses `assert_store_read_only` over it).
+
+**Build-before-run:** `cargo build --bin openlore` before running the ATs
+(`ViewerServer::start` spawns the CURRENT viewer). NO second binary — `/score` is a
+LOCAL read (unlike slice-08's `openlore-indexer`).
+
+---
+
+## Wave: DISTILL / [REF] Scenario List + Tags
+
+The `.feature` SSOT is the executable Rust corpus (Rust polyglot row: `#[test]`
+fns driving the REAL `openlore ui` subprocess over HTTP). Two files:
+`tests/acceptance/viewer_contributor_scoring.rs` (C-* story scenarios) +
+`tests/acceptance/viewer_contributor_scoring_invariants.rs` (C-INV-* gold). Every
+interaction gets htmx-fragment + no-JS-full-page + (where applicable) parity,
+mirroring slice-08.
+
+### Story scenarios (`viewer_contributor_scoring.rs`)
+
+| C-id | Scenario | US trace | Header condition | `ScoreState` arm | Tags |
+|---|---|---|---|---|---|
+| **C-1** | rich contributor + htmx → ONLY the `#score-results` breakdown fragment (walking skeleton) | US-CS-001/002 | `HX-Request` | `Scored` | `@walking_skeleton @driving_port @driving_adapter @real-io @htmx-fragment @i-cs-2 @i-cs-7 @i-cs-10 @kpi-graph-3 @happy` |
+| **C-1b** | the score capability exposes no write/sign/follow control | US-CS-001 | no header | `Scored` | `@infrastructure @driving_port @real-io @read-only @i-cs-1 @happy` |
+| **C-1c** | scoring a no-claims contributor never crashes the viewer | US-CS-001 | no header | `NoClaims` | `@driving_port @real-io @i-cs-5 @error` |
+| **C-2** | rich contributor, no-JS → full page (chrome + form + score region) | US-CS-002 | no header | `Scored` | `@driving_port @real-io @no-js @full-page @i-cs-7 @happy` |
+| **C-3** | fragment vs full-page render the SAME `#score-results` region (parity) | US-CS-002 | both | `Scored` | `@driving_port @real-io @htmx-fragment @full-page @parity @i-cs-7 @happy` |
+| **C-4** | the weight renders WITH a per-claim breakdown (never opaque; author DID + cid + verbatim) | US-CS-002 | no header | `Scored` | `@driving_port @real-io @i-cs-2 @i-cs-10 @i-cs-6 @kpi-graph-2 @happy` |
+| **C-5** | rendered breakdown subtotals SUM to the displayed weight (reproduce-by-hand) | US-CS-002 | no header | `Scored` | `@driving_port @real-io @reproduce-by-hand @i-cs-2 @kpi-graph-3 @happy` |
+| **C-6** | conflicting claims by different authors → TWO attributed rows (anti-merging) | US-CS-002 | no header | `Scored` | `@driving_port @real-io @anti-merging @i-cs-2 @i-cs-10 @kpi-graph-2 @boundary` |
+| **C-7** | thin single-claim contributor → `[SPARSE]` + honesty line at ANY confidence | US-CS-003 | no header | `Scored` (Sparse pairing) | `@driving_port @real-io @sparse @i-cs-3 @kpi-graph-4 @happy` |
+| **C-8** | confidence + weight rendered VERBATIM (`0.90`, never `0.9`/`90%`) | US-CS-003 | no header | `Scored` | `@driving_port @real-io @verbatim @i-cs-6 @kpi-4 @edge` |
+| **C-9** | unknown contributor → guided `NoClaims` (names the DID, no fake score) in BOTH shapes | US-CS-003 | both | `NoClaims` | `@driving_port @real-io @empty-state @i-cs-5 @od-cs-6 @error` |
+| **C-10** | breadth (not magnitude) decides sparse-vs-Strong on the browser surface | US-CS-003 | no header | `Scored` | `@driving_port @real-io @sparse @breadth-guard @i-cs-3 @kpi-graph-4 @boundary` |
+
+### Gold guardrails (`viewer_contributor_scoring_invariants.rs`)
+
+| C-id | Scenario | Invariant guarded | Tags |
+|---|---|---|---|
+| **C-INV-ReadOnly** | every /score route (rich/sparse/empty × full/fragment) leaves `claims` + `peer_claims` row counts UNCHANGED (`assert_store_read_only`, Mandate 8 universe = two port-exposed counts) | I-CS-4 / WD-CS-3 / KPI-VIEW-2 | `@property @driving_port @real-io @read-only @i-cs-4 @gold` |
+| **C-INV-NoWrite** | no /score response shape renders a sign/publish/subscribe/follow control | I-CS-1 / WD-CS-3 | `@property @driving_port @real-io @read-only @i-cs-1 @gold` |
+| **C-INV-OfflineChrome** | the /score page's only script src is the local `/static/htmx.min.js`, no CDN | I-CS-8 / KPI-HX-G2 | `@property @driving_port @real-io @offline @no-cdn @i-cs-8 @gold` |
+| **C-INV-Offline** | /score renders fully with NO network seam wired (LOCAL read — distinct from /search + /scrape) | I-CS-5 / KPI-5 | `@property @driving_port @real-io @offline @local-first @i-cs-5 @kpi-5 @gold` |
+| **C-INV-Transparency** (CARDINAL) | the rendered breakdown subtotals sum to the displayed weight (reproduce-by-hand, J-002c) AND the score is NEVER shown without its breakdown | I-CS-2 / KPI-GRAPH-3 / J-002c | `@property @driving_port @real-io @reproduce-by-hand @anti-opaque @i-cs-2 @kpi-graph-3 @gold` |
+
+**Error/edge ratio:** of 17 scenarios, 8 are error/edge/boundary/sparse/empty
+(C-1c, C-6, C-7, C-8, C-9, C-10 + the C-INV-NoWrite/Offline guardrails as
+negative-space invariants) → ≥ 47%, clearing the 40% Mandate-3/Dim-1 bar. The
+sad paths (sparse, empty, no-write, offline) are EXAMPLE-based (Mandate 11), never
+PBT-generated at this layer-3/5 subprocess surface.
+
+---
+
+## Wave: DISTILL / [REF] Seeding Postures + New Helpers
+
+The `/score?contributor=<did>` handler reads the LOCAL store (`claims ∪
+peer_claims`) for that contributor's `author_did` and runs the pure scorer. Three
+postures, seeded through the PRODUCTION federation write path (Pillar 3 — the SAME
+store the viewer opens; NO hand-inserted rows), added to `tests/acceptance/
+support/mod.rs`:
+
+| Posture | Helper (new) | Shape | Pure-core outcome |
+|---|---|---|---|
+| **RICH** | `seed_contributor_rich_trail(env, CONTRIBUTOR_RICH_DID)` | a contributor across DISTINCT subjects on the shared reproducible-builds object (varied confidences) | a real weight + multi-row breakdown; `cross_project_span ≥ 2` → NOT `[SPARSE]` |
+| **SPARSE** | `seed_contributor_sparse_trail(env, CONTRIBUTOR_SPARSE_DID)` | ONE claim / one author / one subject @ 0.95 | `WeightBucket::Sparse` (breadth guard) regardless of confidence magnitude |
+| **EMPTY** | (no seeding for `CONTRIBUTOR_EMPTY_DID`) | zero local rows | empty `WeightedView` → `ScoreState::NoClaims` |
+| **CONFLICTING** | `seed_contributor_conflicting_authors(env)` | two authors assert the SAME (subject, object) @ different confidences | one pairing decomposing into TWO attributed `Contribution` rows (anti-merging) |
+
+These reuse the existing seams (`seed_peer_authored_graph` for peer-authored
+trails; `seed_own_plus_peer_graph` for the identical-content two-author shape) and
+mirror the slice-04 priya-rich / bjorn-sparse / nobody-empty fixture DIDs
+(`did:plc:priya-test`, `did:plc:bjorn-test`, `did:plc:nobody-local`). The DELIVER
+crafter materializes the `todo!()` bodies via those seams (no NEW seeding mechanism).
+
+**New render-assertion helpers** (scan the OBSERVABLE rendered HTML only — Mandate
+8 universe = port-exposed rendered surface):
+`assert_score_html_breakdown_attributed_and_verbatim` (author DID + cid +
+verbatim confidence + no merged-consensus row), `assert_score_html_renders_sparse_
+honesty` (`[SPARSE]` + the lead-not-conclusion line + never Strong),
+`assert_score_html_renders_no_claims` (guided empty state names the DID, no fake
+score / stack trace), `assert_score_html_breakdown_sums_to_displayed_weight` (the
+CARDINAL reproduce-by-hand parse — `todo!()`, DELIVER parses the rendered weight +
+row subtotals), `assert_score_html_has_no_write_or_sign_control`. Read-only gold
+reuses the inherited `assert_store_read_only` + `capture_store_row_count_universe`.
+
+---
+
+## Wave: DISTILL / [REF] Driving-Port + Adapter Coverage
+
+**Driving adapter (Mandate 1 / RCA-P1):** every scenario enters through the REAL
+`openlore ui` subprocess (`ViewerServer::start` → HTTP `GET /score`, with/without
+`HX-Request`). C-1 (walking skeleton) is `@driving_adapter` — it exercises the
+user's actual invocation path (subprocess + HTTP GET + the HX-Request fork) and
+verifies status (200) + output (the rendered `#score-results` fragment) + arg
+handling (`?contributor=<did>`). No scenario calls the `viewer-domain`
+`render_score_*` fns OR the `scoring` crate directly.
+
+**Driven-port coverage:** slice-09 adds NO new driven adapter — `/score` reads the
+EXISTING read-only `StoreReadPort` over the LOCAL DuckDB (the `query_contributor_
+scoring_feed` method is a read-only sibling on an already-real adapter, seeded via
+the production `peer pull` path) and the PURE `scoring` core (direct in-process,
+the Earned-Trust analog is the slice-04 property suite + DELIVER render mutation
+testing, per the policy). There is NO external/network boundary (the
+distinguishing slice-09 fact — `/score` is LOCAL + offline). The real-I/O coverage
+is the LOCAL DuckDB read, exercised by EVERY scenario over a REAL seeded store
+(C-INV-Offline pins the no-network-seam posture explicitly).
+
+---
+
+## Wave: DISTILL / [REF] RED Classification + Tier-B Decision
+
+**`[[test]]` registrations** (`crates/cli/Cargo.toml`): `viewer_contributor_
+scoring` + `viewer_contributor_scoring_invariants`, both `harness = true`.
+
+**RED classification CONFIRMED** (Mandate 7): both targets COMPILE-GREEN (`cargo
+test --no-run` succeeds — the ATs spawn the bin + HTTP and import nothing unbuilt;
+the new `seed_contributor_*` + `assert_score_html_*` helpers compile, driving
+existing seams or `todo!()` themselves). All 17 C-*/C-INV-* scenarios CLASSIFY RED
+— each body is `todo!()` → panics with `not yet implemented` →
+MISSING_FUNCTIONALITY, NOT BROKEN (no ImportError / collection error / setup
+failure). The `openlore` bin builds; `ViewerServer::start` spawns the CURRENT
+viewer. Sibling slice-06/07/08 viewer targets still compile (no regression from the
+support/mod.rs additions). They stay RED until DELIVER's per-scenario
+RED→GREEN→COMMIT cycles (ADR-025).
+
+**Tier-B (state-machine PBT) decision: SKIP.** Per Mandate 10, Tier B is added only
+when the journey is ≥3 chained scenarios AND the input space is domain-rich. The
+`/score` journey is a SINGLE-SHOT read+compute+render (open `/score?contributor=
+<did>` → see the score → expand the breakdown), NOT a stateful multi-step journey
+with chained `Given`s mutating state across scenarios — each scenario is an
+independent query over a seeded store (no state transition to model as
+`@rule`/`@precondition`/`@invariant`). The only observable is "what does the
+rendered score HTML show", with no cross-request state machine. Tier A (the C-*
+example scenarios over the production composition root) covers the space; the
+generative exploration that WOULD justify Tier B (arbitrary feeds → score
+invariants) already lives at layer-1/2 in the slice-04 `scoring` property suite
+(`weight_equals_sum_of_subtotals`, the breadth-guard property) + the DELIVER
+`render_score_*` render units. No Tier-B file is emitted.
