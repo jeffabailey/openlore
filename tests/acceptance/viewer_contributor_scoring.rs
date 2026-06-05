@@ -185,12 +185,27 @@ fn the_score_capability_exposes_no_write_or_sign_surface() {
     // THEN it carries NO sign/publish/subscribe/follow affordance (I-CS-1 /
     // WD-CS-3); the viewer holds no key (the no-key audit is structural — xtask
     // check-arch — and the STORE read-only delta is the gold guardrail).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-1b: seed_contributor_rich_trail + ViewerServer::start; \
-         get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); assert 200 + a real \
-         score surface + assert_score_html_has_no_write_or_sign_control(body)"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-1b: GET /score for a rich contributor must return 200; body was:\n{}",
+        response.body
+    );
+    // A REAL score surface rendered (the weight + per-claim breakdown), so the
+    // no-write/sign assertion is over a populated score view, not an empty page.
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &response.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    // The score surface carries NO sign / publish / follow / subscribe control —
+    // the new capability is a READ + pure compute only (I-CS-1 / WD-CS-3).
+    assert_score_html_has_no_write_or_sign_control(&response.body);
 }
 
 /// C-1c (US-CS-001 Example 3 / AC-001.4 — scoring a contributor with no local
@@ -238,13 +253,44 @@ fn score_a_rich_contributor_without_htmx_serves_a_full_page_with_form_and_score(
     // GIVEN a rich-trail local store. WHEN `get` (no HX-Request). THEN
     // `is_full_page()` (chrome present) AND the body carries the contributor form
     // AND the score region (weight + breakdown).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-2: seed_contributor_rich_trail + ViewerServer::start; \
-         get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); assert 200 + \
-         is_full_page() + the contributor form + assert_score_html_breakdown_\
-         attributed_and_verbatim(body, …)"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-2: GET /score (no HX-Request) for a rich contributor must return 200; \
+         body was:\n{}",
+        response.body
+    );
+    // WITHOUT the HX-Request header the viewer returns the COMPLETE full page — the
+    // no-JS no-regression contract (I-CS-7 / KPI-HX-G1).
+    assert!(
+        response.is_full_page(),
+        "C-2: a no-JS `/score` response must be a complete full page (chrome \
+         present); body was:\n{}",
+        response.body
+    );
+    // The full page carries the contributor form (the no-JS submit/re-submit path).
+    assert!(
+        response.body_contains("name=\"contributor\""),
+        "C-2: the no-JS full page must carry the contributor form; body was:\n{}",
+        response.body
+    );
+    // AND the score region — the weight + per-claim breakdown attributing every
+    // contribution to its author DID with verbatim confidence.
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-2: the full page must carry the `#score-results` region; body was:\n{}",
+        response.body
+    );
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &response.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
 }
 
 /// C-3 (US-CS-002 Example 3 / AC-002.6 — fragment-vs-full-page parity): the SAME
@@ -265,12 +311,44 @@ fn the_score_fragment_and_full_page_render_the_same_score_region() {
     // THEN `get` is_full_page(), `get_htmx` is_fragment(), and the `#score-results`
     // region is the same in both (the full page embeds the fragment — parity by
     // construction; I-CS-7).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-3 parity: seed_contributor_rich_trail + ViewerServer::start; \
-         compare get vs get_htmx for /score?contributor={CONTRIBUTOR_RICH_DID}; \
-         assert full-page vs fragment shapes + identical #score-results region"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let full = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+    let fragment = viewer.get_htmx(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(full.status, 200, "C-3: the no-JS request must return 200");
+    assert_eq!(fragment.status, 200, "C-3: the htmx request must return 200");
+    // The shapes differ only in chrome: the no-JS request is a full page, the
+    // HX-Request response is the bare fragment (no chrome) — I-CS-7.
+    assert!(
+        full.is_full_page(),
+        "C-3: the no-JS response must be a full page; body was:\n{}",
+        full.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "C-3: the HX-Request response must be a bare fragment (no chrome); body \
+         was:\n{}",
+        fragment.body
+    );
+    // The fragment IS the `#score-results` region; the full page EMBEDS the SAME
+    // fragment fn, so the fragment body appears verbatim inside the full page —
+    // parity by construction (the score region is identical between them; I-CS-7).
+    assert!(
+        fragment.body.contains(SCORE_RESULTS_ID),
+        "C-3: the fragment must carry the `#score-results` region; body was:\n{}",
+        fragment.body
+    );
+    assert!(
+        full.body.contains(fragment.body.trim()),
+        "C-3: the full page's `#score-results` region must be identical to the \
+         fragment (parity by construction; the page embeds the fragment fn). \
+         fragment:\n{}\nfull page:\n{}",
+        fragment.body,
+        full.body
+    );
 }
 
 /// C-4 (US-CS-002 / AC-002.2/AC-002.4 — the breakdown TABLE renders WITH the weight,
