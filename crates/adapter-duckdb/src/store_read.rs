@@ -18,11 +18,14 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use claim_domain::{Cid, Did};
 use duckdb::Connection;
 use ports::{
-    ClaimDetail, ClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin, StoreReadError,
-    StoreReadPort,
+    AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, Page, PageRequest, PeerClaimRow,
+    PeerOrigin, StoreReadError, StoreReadPort,
 };
+
+use crate::bare_did;
 
 /// Read-only view over the SAME shared DuckDB connection the CLI writes through.
 /// Constructed via [`crate::DuckDbStorageAdapter::read_adapter`] so no second
@@ -269,4 +272,118 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             })?;
         Ok(total as usize)
     }
+
+    fn query_contributor_scoring_feed(
+        &self,
+        contributor: &Did,
+    ) -> Result<Vec<AttributedClaim>, StoreReadError> {
+        let conn = self.lock_conn()?;
+
+        // The set of DIDs with a currently-ACTIVE peer subscription (`removed_at IS
+        // NULL`) — drives the `SubscribedPeer` vs `UnsubscribedCache` relationship
+        // on each peer row (slice-03 reuse). Read once, read-only.
+        let active_peers = active_subscription_dids(&conn)?;
+
+        // READ-ONLY cross-store SELECT for the contributor's LOCAL attributed feed:
+        // own `claims` UNION ALL local `peer_claims`, EXPLICIT `author_did`
+        // projection (NEVER a merging JOIN/GROUP BY — `xtask check-arch::
+        // no_cross_table_join_elides_author` enforces it), LOCAL only (no network).
+        // Own claims store the `#fragment` signing locator on `author_did`, so the
+        // contributor filter matches the bare DID via a `LIKE '<bare>%'` prefix.
+        // Aggregation (the weight) is the PURE `scoring::score` core's job in Rust —
+        // this query returns one row per signed claim (the aggregate's
+        // decomposition, I-GRAPH-2 / WD-73).
+        let sql = "SELECT author_did, cid, subject, predicate, object, confidence, \
+                   composed_at, source_table \
+                   FROM ( \
+                     SELECT c.author_did AS author_did, c.cid AS cid, c.subject AS subject, \
+                            c.predicate AS predicate, c.object AS object, \
+                            c.confidence AS confidence, c.composed_at AS composed_at, \
+                            'Own' AS source_table \
+                     FROM claims c \
+                     WHERE c.author_did LIKE ? \
+                     UNION ALL \
+                     SELECT pc.author_did AS author_did, pc.cid AS cid, pc.subject AS subject, \
+                            pc.predicate AS predicate, pc.object AS object, \
+                            pc.confidence AS confidence, pc.composed_at AS composed_at, \
+                            'Peer' AS source_table \
+                     FROM peer_claims pc \
+                     WHERE pc.author_did LIKE ? \
+                   ) ORDER BY subject, source_table, cid";
+
+        let param = format!("{}%", bare_did(&contributor.0));
+
+        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("prepare query_contributor_scoring_feed: {err}"),
+        })?;
+        let row_iter = stmt
+            .query_map(duckdb::params![param, param], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, DateTime<Utc>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map query_contributor_scoring_feed: {err}"),
+            })?;
+
+        let mut feed = Vec::new();
+        for row in row_iter {
+            let (author_did, cid, subject, predicate, object, confidence, composed_at, source_table) =
+                row.map_err(|err| StoreReadError::QueryFailed {
+                    detail: format!("row decode query_contributor_scoring_feed: {err}"),
+                })?;
+            let bare_author = bare_did(&author_did);
+            let relationship = match source_table.as_str() {
+                "Own" => AuthorRelationship::You,
+                _ if active_peers.contains(&bare_author) => AuthorRelationship::SubscribedPeer,
+                _ => AuthorRelationship::UnsubscribedCache,
+            };
+            feed.push(AttributedClaim {
+                author_did: Did(bare_author),
+                cid: Cid(cid),
+                subject,
+                predicate,
+                object,
+                confidence,
+                composed_at,
+                relationship,
+            });
+        }
+        Ok(feed)
+    }
+}
+
+/// The set of DIDs with a currently-ACTIVE peer subscription (`removed_at IS
+/// NULL`). Read-only helper over the SAME shared connection (mirrors the slice-04
+/// `graph_query` helper; takes the locked connection so it runs inside the
+/// read-only `query_contributor_scoring_feed` shell). A peer row whose author is in
+/// this set is a `SubscribedPeer`; otherwise an `UnsubscribedCache` (soft-removed
+/// residue, ADR-014).
+fn active_subscription_dids(
+    conn: &Connection,
+) -> Result<std::collections::HashSet<String>, StoreReadError> {
+    let mut stmt = conn
+        .prepare("SELECT peer_did FROM peer_subscriptions WHERE removed_at IS NULL")
+        .map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("prepare active_subscription_dids: {err}"),
+        })?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("query active_subscription_dids: {err}"),
+        })?;
+    let mut dids = std::collections::HashSet::new();
+    for row in rows {
+        dids.insert(row.map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("row decode active_subscription_dids: {err}"),
+        })?);
+    }
+    Ok(dids)
 }

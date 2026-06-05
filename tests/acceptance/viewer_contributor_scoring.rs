@@ -125,13 +125,43 @@ fn score_a_rich_contributor_with_htmx_returns_only_the_breakdown_fragment() {
     // a full page), rendering the headline weight + bucket AND the per-claim
     // breakdown — each contribution attributed to its author DID + carrying a
     // verbatim confidence. (Observable rendered surface only.)
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-1 walking skeleton: seed_contributor_rich_trail(&env, \
-         CONTRIBUTOR_RICH_DID); ViewerServer::start(&env); get_htmx(\"/score?\
-         contributor={CONTRIBUTOR_RICH_DID}\"); assert status 200 + is_fragment() + \
-         assert_score_html_breakdown_attributed_and_verbatim(body, &[…], &[…])"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get_htmx(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-1: GET /score for a rich contributor must return 200; body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.content_type.contains("text/html"),
+        "C-1: the score fragment must be served as text/html; content-type was {:?}",
+        response.content_type
+    );
+    // WITH the HX-Request header the viewer returns ONLY the `#score-results`
+    // fragment — no full-page chrome (I-CS-7 / I-HX-1).
+    assert!(
+        response.is_fragment(),
+        "C-1: an HX-Request `/score` response must be ONLY the fragment (no chrome); \
+         body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-1: the fragment must carry the `#score-results` swap-target id; body was:\n{}",
+        response.body
+    );
+    // The headline weight + per-claim breakdown: every contribution attributed to
+    // the contributor's author DID, each confidence rendered VERBATIM (`0.86` not
+    // `0.9`/`86%`).
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &response.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
 }
 
 /// C-1b (US-CS-001; AC-001.2 — the capability holds no signing/identity/PDS

@@ -8017,20 +8017,30 @@ pub const SCORE_OBJECT_REPRODUCIBLE_BUILDS: &str = "org.openlore.philosophy.repr
 /// shared reproducible-builds object at varied confidences. No new mechanism — the
 /// rows land in the REAL `peer_claims` table the viewer's local feed read returns.
 pub fn seed_contributor_rich_trail(env: &TestEnv, contributor_did: &str) {
-    // DELIVER: derive a deterministic Ed25519 seed from `contributor_did` (as the
-    // slice-08 seeders do), build several DISTINCT-subject triples on the shared
-    // reproducible-builds object at varied confidences, and drive
-    // `seed_peer_authored_graph(env, &[SeedPeer{ peer_did: contributor_did, seed,
-    // triples }])` so the contributor's multi-project trail lands in the REAL
-    // `peer_claims` table (claim_count >= 4, cross_project_span >= 2 — a non-sparse
-    // pairing whose breakdown decomposes). LOCAL only — no network.
-    let _ = (env, contributor_did, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
-    todo!(
-        "slice-09 DELIVER: seed a RICH local trail for {contributor_did} (several \
-         distinct subjects on the shared reproducible-builds object, varied \
-         confidences) via the production `peer add` + `peer pull` path so the \
-         contributor's local feed scores to a real weight + multi-row breakdown"
-    )
+    // The contributor asserts the SHARED reproducible-builds object across FOUR
+    // DISTINCT subjects (projects) at varied confidences, so the pure scorer sees
+    // `cross_project_span >= 2` (lifting the pairing OUT of `[SPARSE]`) and the
+    // feed decomposes into a multi-row breakdown. Confidences vary per claim so the
+    // verbatim-render scenarios have distinct numbers to assert (`0.86`, `0.90`,
+    // `0.74`, `0.62`). DISTINCT subjects keep the canonical CIDs distinct (the
+    // store keys on cid; identical triples would collide into one row). Materialized
+    // through the PRODUCTION federation write path (`peer add` + `peer pull`) so the
+    // rows land in the REAL `peer_claims` table the viewer's LOCAL feed read returns
+    // — no network at score time (Pillar 3 / BR-VIEW-4 / I-CS-5).
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: contributor_did,
+            seed: [23u8; 32],
+            triples: &[
+                ("github:bazelbuild/bazel", repro, 0.86),
+                ("github:NixOS/nixpkgs", repro, 0.90),
+                ("github:reproducible-builds/diffoscope", repro, 0.74),
+                ("github:GNOME/meson", repro, 0.62),
+            ],
+        }],
+    );
 }
 
 /// Seed a SPARSE local trail for `contributor_did`: EXACTLY ONE claim, by that one

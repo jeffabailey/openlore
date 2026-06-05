@@ -34,6 +34,22 @@ ports = { path = "../ports" }
 # edge in `xtask check-arch`), so this keeps `viewer-domain` pure: no second
 # grouping/verification path lives here.
 appview-domain = { path = "../appview-domain" }
+# PURE → PURE (slice-09; ADR-039/040/041): the contributor-score view-model
+# projects the REUSED slice-04 `scoring` core's `WeightedView` (the ranked
+# `WeightedPairing`s + their per-claim `Contribution` decomposition) into the
+# `#score-results` fragment. `scoring` is itself a pure closed-form weight core
+# (no I/O, allowlisted pure-→pure edge in `xtask check-arch` — mirrors the
+# `viewer-domain → appview-domain` edge), so this keeps `viewer-domain` pure: the
+# scoring math is REUSED, never reimplemented here.
+scoring = { path = "../scoring" }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# TEST-ONLY: the `/score` render unit/property tests build an `AttributedClaim`
+# feed and run the REUSED pure `scoring::score` to obtain a real `WeightedView`
+# (not a hand-rolled one) before rendering it — so they need the `Cid`/`Did` value
+# types + `chrono` for the claim `composed_at`. Dev-dependencies only; the
+# production viewer-domain capability surface is unchanged (xtask check-arch
+# untouched — these are not in `[dependencies]`).
+claim-domain = { path = "../claim-domain" }
+chrono = { workspace = true }

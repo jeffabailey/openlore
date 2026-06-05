@@ -46,9 +46,20 @@ scraper-domain = { path = "../scraper-domain" }
 # this crate never links another adapter (I-3) and reaches no signing/PDS surface
 # (I-NS-1 / I-VIEW-3 — a read-only index query holds no signing key).
 appview-domain = { path = "../appview-domain" }
+# `scoring` is the PURE slice-04 closed-form adherence-weight core (NOT an adapter).
+# The `/score` route (slice-09; ADR-039/040/041) runs the REUSED
+# `scoring::score(&feed, &ScoringConfig::DEFAULT)` over the LOCAL attributed feed the
+# read-only `StoreReadPort::query_contributor_scoring_feed` returns, in the effect
+# shell, then renders the ranked `WeightedView` via the pure `viewer-domain`
+# `render_score_*` projection. The weight is computed in Rust (the pure core), NEVER
+# in SQL. The handler holds NO signing key (the score is a read + pure compute —
+# I-CS-1 / WD-CS-3); `scoring` is a pure core (no I/O), so the capability surface is
+# unchanged (xtask check-arch untouched).
+scoring = { path = "../scoring" }
 # `claim-domain` provides the `Cid`/`Did`/`KeyId` value types the raw transport
 # rows carry; the handler maps `NetworkResultRowRaw -> IndexedClaim` before
-# composing. Pure value types — no I/O edge.
+# composing, and lifts the `?contributor=` query into a `Did` for the scoring feed.
+# Pure value types — no I/O edge.
 claim-domain = { path = "../claim-domain" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }

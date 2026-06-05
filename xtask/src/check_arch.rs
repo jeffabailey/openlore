@@ -757,7 +757,7 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
     violations.extend(check_pure_core_no_io(
         workspace,
         "viewer-domain",
-        "viewer-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-029; pure read-only view-model + maud HTML, allowed deps: maud + ports)",
+        "viewer-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-029; pure read-only view-model + maud HTML, allowed deps: maud + ports + the pure appview-domain/scoring cores)",
     ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
@@ -1351,6 +1351,30 @@ mod tests {
         assert!(
             check_workspace(&w).is_empty(),
             "viewer-domain → appview-domain must be an allowed pure→pure edge (ADR-037), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
+    fn viewer_domain_depending_on_scoring_is_an_allowed_pure_to_pure_edge() {
+        // slice-09 delta / ADR-039/040/041: `viewer-domain` projects the REUSED
+        // slice-04 `scoring` core's `WeightedView` (ranked `WeightedPairing`s + their
+        // per-claim `Contribution` decomposition) into the `#score-results` fragment
+        // (the `/score` contributor-score view). `scoring` is itself a pure
+        // closed-form weight core (ports + claim-domain + pure chrono/serde — no
+        // banned I/O, WD-71/WD-82/ADR-022), so the edge introduces NO I/O — the
+        // pure-core arm must still pass for `viewer-domain`. Mirrors the
+        // `viewer-domain → appview-domain` pure→pure edge above.
+        let w = ws(&[
+            ("viewer-domain", &["maud", "ports", "appview-domain", "scoring"]),
+            ("scoring", &["ports", "claim-domain", "serde", "chrono"]),
+            ("appview-domain", &["claim-domain", "serde", "chrono"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "viewer-domain → scoring must be an allowed pure→pure edge (ADR-039/040/041), got: {:?}",
             check_workspace(&w)
         );
     }

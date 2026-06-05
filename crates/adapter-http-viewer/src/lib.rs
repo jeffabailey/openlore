@@ -41,10 +41,11 @@ use tokio::net::TcpListener;
 use viewer_domain::{
     render_claim_detail, render_claim_detail_fragment, render_claim_not_found_fragment,
     render_claims_page, render_claims_view_panel_fragment, render_error, render_landing,
-    render_peer_claims_page, render_peer_claims_view_panel_fragment, render_scrape_page,
-    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
-    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScrapeState,
-    SearchState, HTMX_ASSET_URL, SCRAPE_NO_CANDIDATES_NOTICE, SEARCH_URL,
+    render_peer_claims_page, render_peer_claims_view_panel_fragment, render_score_page,
+    render_score_results_fragment, render_scrape_page, render_scrape_results_fragment,
+    render_search_page, render_search_results_fragment, CandidateRowView, ClaimDetailView,
+    ClaimRowView, PageView, PeerClaimRowView, ScoreState, ScrapeState, SearchState, HTMX_ASSET_URL,
+    SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -347,6 +348,12 @@ async fn route(
         // in its `<script src>` (one source of truth — served route == chrome ref).
         HTMX_ASSET_URL => Ok(htmx_asset()),
         "/claims" => Ok(claims_page(store.as_ref(), query.as_deref(), shape)),
+        // `GET /score` — the contributor-score view (slice-09; ADR-039/040/041).
+        // Reads the contributor's LOCAL attributed feed over the read-only store the
+        // viewer ALREADY holds (NO new field, NO network — I-CS-5), runs the REUSED
+        // pure `scoring::score` in the shell, and renders the ranked `WeightedView`.
+        // Forks by `Shape` (ADR-033). Holds NO signing key (a read + pure compute).
+        SCORE_URL => Ok(score_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
@@ -425,6 +432,61 @@ fn claims_page(
     match shape {
         Shape::Fragment => html_ok(render_claims_view_panel_fragment(&page_view).into_string()),
         Shape::FullPage => html_ok(render_claims_page(&page_view)),
+    }
+}
+
+/// Render the contributor-score page (`GET /score`, US-CS-001..003; slice-09 /
+/// ADR-039/040/041). Parses `?contributor=<did>` from the query, reads that
+/// contributor's LOCAL attributed feed over the read-only store the viewer ALREADY
+/// holds (`query_contributor_scoring_feed` — claims ∪ local peer_claims, NO network
+/// / I-CS-5), runs the REUSED PURE `scoring::score(&feed, &ScoringConfig::DEFAULT)`
+/// in the effect shell, maps the outcome to a [`ScoreState`], and renders — forking
+/// by [`Shape`] (ADR-033): the htmx swap returns ONLY the `#score-results` fragment;
+/// the no-JS / bookmark / direct-URL request returns the complete `/score` full
+/// page. Both project the SAME state — the full page EMBEDS the fragment fn (I-CS-7
+/// parity by construction).
+///
+/// SANDWICH (ADR-007): read (impure store call) → decide (PURE `scoring::score`) →
+/// render (pure). The handler holds NO signing key — the score is a read + pure
+/// compute (I-CS-1 / WD-CS-3); it renders NO write/sign/follow control. A bare `GET
+/// /score` with no `?contributor` renders the empty `Form`. A contributor with no
+/// local rows → the guided `NoClaims` state (naming the queried DID; OD-CS-6). A
+/// store read failure degrades to the SAME guided empty state rather than a crash
+/// (NFR-VIEW-6 — never a raw stack trace).
+fn score_page(
+    store: &dyn StoreReadPort,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
+    let state = resolve_score_state(store, query);
+    match shape {
+        Shape::Fragment => html_ok(render_score_results_fragment(&state).into_string()),
+        Shape::FullPage => html_ok(render_score_page(&state)),
+    }
+}
+
+/// Resolve the [`ScoreState`] for a `/score` request (the read + pure-compute
+/// decision over the parsed `?contributor=`). No contributor value → [`ScoreState::
+/// Form`]. A contributor with ≥1 local claim → [`ScoreState::Scored`] (the REUSED
+/// `scoring::score` output). A contributor with zero local rows OR a store read
+/// failure → [`ScoreState::NoClaims`] naming the queried DID (graceful degradation;
+/// emptiness is never a fabricated zero score, and a read error never leaks).
+fn resolve_score_state(store: &dyn StoreReadPort, query: Option<&str>) -> ScoreState {
+    let Some(contributor) = query_param(query, "contributor").filter(|v| !v.is_empty()) else {
+        // Bare `GET /score` — the empty contributor form.
+        return ScoreState::Form;
+    };
+    match store.query_contributor_scoring_feed(&Did(contributor.clone())) {
+        // ≥1 local claim: run the PURE scorer over the feed and render the ranked
+        // WeightedView. The weight is computed HERE in Rust (the pure core), NEVER
+        // in SQL — so the aggregate decomposes into the per-claim breakdown.
+        Ok(feed) if !feed.is_empty() => {
+            let view = scoring::score(&feed, &scoring::ScoringConfig::DEFAULT);
+            ScoreState::Scored { view }
+        }
+        // Zero local rows OR a read failure: the guided NoClaims state naming the
+        // queried DID (OD-CS-6 / I-CS-5) — never a blank region, never a stack trace.
+        Ok(_) | Err(_) => ScoreState::NoClaims { contributor },
     }
 }
 

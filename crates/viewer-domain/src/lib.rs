@@ -26,6 +26,11 @@
 
 use maud::{html, Markup, DOCTYPE};
 use ports::{AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
+// The PURE slice-04 `scoring` core is REUSED for the `/score` view-model
+// projection (ADR-039): the renderer projects the `WeightedView` (ranked
+// `WeightedPairing`s + their per-claim `Contribution` decomposition) + the
+// display-only `WeightBucket`, referenced via the `scoring::` path. The scoring
+// math is the pure core's job — never reimplemented here.
 
 /// One claim rendered as a row in the My Claims list view. The VIEW-model shape
 /// (nw-fp-domain-modeling §10): flat display strings + the numeric confidence
@@ -1481,6 +1486,262 @@ fn render_follow_guidance(author_did: &str) -> Markup {
     html! {
         " "
         p { (SEARCH_FOLLOW_GUIDANCE_PREFIX) " " (bare) }
+    }
+}
+
+// =============================================================================
+// Contributor-Score view (slice-09; ADR-039/040/041) — `GET /score`
+// =============================================================================
+//
+// The `/score` route reads the contributor's LOCAL attributed feed over the
+// read-only `StoreReadPort::query_contributor_scoring_feed`, runs the REUSED
+// slice-04 PURE `scoring::score(&feed, &ScoringConfig::DEFAULT)` in the effect
+// shell, maps the outcome to a [`ScoreState`], and renders it here. This crate
+// holds NO scoring math — it PROJECTS the `scoring::WeightedView` (the ranked
+// `WeightedPairing`s + their per-claim `Contribution` decomposition). The
+// headline weight + the per-claim breakdown are rendered from the SAME
+// `WeightedPairing`, so the breakdown subtotals sum to the weight BY
+// CONSTRUCTION (Gate 2 / KPI-GRAPH-3 reproduce-by-hand). A score is NEVER shown
+// without its breakdown (the J-002c thesis, I-CS-2).
+
+/// The HTML `id` of the `/score` results swap-target region (slice-09; the
+/// sibling of slice-08's [`SEARCH_RESULTS_ID`]). htmx swaps the element whose id
+/// matches; the no-JS full page EMBEDS the SAME `<div id="score-results">` so the
+/// fragment and the full-page score region are structurally identical (I-CS-7
+/// parity by construction). Held in ONE place so the fragment fn, the page slot,
+/// and the form's `hx-target` all reference the SAME id (one mutation site).
+pub const SCORE_RESULTS_ID: &str = "score-results";
+
+/// The real route the `/score` form GETs back to (`/score`) — the no-JS `action`,
+/// the htmx `hx-get`, AND the nav link all reference this one path (ADR-034: one
+/// source of truth for "where am I"). Held in ONE place so the references can
+/// never drift apart.
+pub const SCORE_URL: &str = "/score";
+
+/// The honesty line a `[SPARSE]` pairing carries beneath its bucket label (I-CS-3
+/// / KPI-GRAPH-4): thin evidence is a LEAD, not a conclusion. PROJECTED from the
+/// pure core's [`scoring::WeightBucket::Sparse`] — the viewer recomputes NO bucket
+/// (WD-CS-6). Held in ONE place so the honesty promise is a single source of truth
+/// + a single mutation site.
+pub const SCORE_SPARSE_HONESTY_NOTICE: &str =
+    "Sparse evidence — treat as a lead, not a conclusion.";
+
+/// The fixed plain-language notice the [`ScoreState::NoClaims`] arm renders when a
+/// contributor has NO claims in the local store (OD-CS-6 / I-CS-5). Held in ONE
+/// place AND emitted as a fixed constant so emptiness is recognized as emptiness —
+/// never a fabricated zero score, never a leaked error internal. The queried DID
+/// is named alongside it so the operator knows WHO was looked up.
+pub const SCORE_NO_CLAIMS_NOTICE: &str = "No local claims for that contributor.";
+
+/// The state the contributor-score results region renders (the pure render
+/// input). An ADT over the three outcomes of a `/score` interaction so the
+/// renderer matches totally (nw-fp-domain-modeling §1): the empty GET form, a
+/// scored contributor (the REUSED `scoring::WeightedView`), or the guided
+/// no-claims empty state. The effect shell builds this from the LOCAL feed read +
+/// the pure `scoring::score` outcome (a bare `GET /score` with no `?contributor`
+/// → `Form`; a non-empty feed → `Scored`; an empty feed → `NoClaims`); the
+/// renderer is a pure total function over it.
+///
+/// `PartialEq` (not `Eq`) because the embedded `WeightedView` carries `f64`
+/// weights.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScoreState {
+    /// `GET /score` with no `?contributor` supplied: the empty contributor form,
+    /// no score run yet.
+    Form,
+    /// The contributor's LOCAL feed scored to ≥1 ranked pairing: render each
+    /// pairing's headline weight + `WeightBucket` label + the per-claim breakdown
+    /// TABLE. Carries the REUSED `scoring::score` output VERBATIM — the viewer
+    /// holds NO scoring math (the weight + decomposition are the pure core's job;
+    /// the renderer only projects them).
+    Scored {
+        /// The REUSED ranked `WeightedView` (the `WeightedPairing`s + their
+        /// per-claim `Contribution` decomposition — anti-merging by construction).
+        view: scoring::WeightedView,
+    },
+    /// The contributor has NO claims in the LOCAL store (OD-CS-6 / I-CS-5): render
+    /// the guided [`SCORE_NO_CLAIMS_NOTICE`] naming the queried DID — never a blank
+    /// region, never a fabricated zero score, never a crash.
+    NoClaims {
+        /// The queried contributor DID, named in the guided empty state (so the
+        /// operator sees WHO was looked up).
+        contributor: String,
+    },
+}
+
+/// Render the contributor-score swap-target FRAGMENT (slice-09; ADR-039/040/041):
+/// the `<div id="score-results">` wrapping the ranked pairings (or the guided
+/// no-claims notice) for the given [`ScoreState`]. PURE: a total function from the
+/// view-model to a `Markup` — NO full-page chrome (no `<!DOCTYPE>`, no
+/// `<html>`/`<head>`) and NO form, so an `HX-Request` response carries ONLY this
+/// results region (I-CS-7). Renders NO sign/publish/follow control (I-CS-1 /
+/// WD-CS-3 — the score is a read + pure compute; signing/following stays a CLI
+/// action). [`render_score_page`] EMBEDS this SAME fn beneath the form, so the
+/// fragment and the full page's score region are byte-identical by construction
+/// (I-CS-7 parity — the score-rendering logic is NOT duplicated).
+pub fn render_score_results_fragment(state: &ScoreState) -> Markup {
+    html! {
+        div id=(SCORE_RESULTS_ID) {
+            (render_score_result(state))
+        }
+    }
+}
+
+/// Render the contributor-score page (`GET /score`, US-CS-001..003) as a complete
+/// HTML document (maud). PURE: a total function from the [`ScoreState`] to an HTML
+/// string — no I/O, no network. Renders the page chrome (incl. the local
+/// offline-first htmx `<script src>` + a nav link back to the other views), the
+/// labeled contributor form, THEN the score results region.
+///
+/// COMPOSITION (slice-09; ADR-041): the results region is chrome + nav + form
+/// wrapped AROUND [`render_score_results_fragment`] — the EXACT same fragment fn
+/// the htmx shape returns alone. Because the results region is the SAME fn in both
+/// shapes, fragment/full-page parity is structural, not asserted by duplicating
+/// render logic (I-CS-7). The `<head>` emits exactly ONE local
+/// `<script src="/static/htmx.min.js">` (offline-first, never a CDN) so the form's
+/// `hx-get` swap works in-browser instead of falling back to a full GET.
+pub fn render_score_page(state: &ScoreState) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            (page_head("OpenLore — Contributor Score"))
+            body {
+                h1 { "Contributor Score" }
+                nav {
+                    a href=(MY_CLAIMS_URL) { "My Claims" }
+                }
+                (render_score_form())
+                (render_score_results_fragment(state))
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Render the labeled contributor form (`GET /score` and the top of every score
+/// render). PURE. The form GETs back to `/score` with a labeled input for the
+/// `contributor` DID so the operator can submit / re-submit. It carries NO
+/// sign/follow control. Enhanced with `hx-get`/`hx-target` so an in-browser submit
+/// swaps ONLY the `#score-results` region; the no-JS path is a plain `GET` to
+/// `/score`.
+fn render_score_form() -> Markup {
+    html! {
+        form method="get" action=(SCORE_URL)
+             hx-get=(SCORE_URL)
+             hx-target=(format!("#{SCORE_RESULTS_ID}"))
+             hx-swap="innerHTML" {
+            label for="contributor" { "Contributor DID" }
+            input type="text" id="contributor" name="contributor";
+            button type="submit" { "Score" }
+        }
+    }
+}
+
+/// Render the results region beneath the form for the given [`ScoreState`]. PURE
+/// total match over the ADT: the GET form shows nothing yet; a scored contributor
+/// shows the ranked pairings; no-claims shows the guided empty state naming the
+/// queried DID.
+fn render_score_result(state: &ScoreState) -> Markup {
+    html! {
+        @match state {
+            ScoreState::Form => {}
+            ScoreState::Scored { view } => {
+                @for pairing in &view.ranked {
+                    (render_score_pairing(pairing))
+                }
+            }
+            // No-claims (OD-CS-6 / I-CS-5): the guided plain-language empty state
+            // naming the queried DID — never a blank region or a crash.
+            ScoreState::NoClaims { contributor } => {
+                p { (SCORE_NO_CLAIMS_NOTICE) " (" (contributor) ")" }
+            }
+        }
+    }
+}
+
+/// Render ONE ranked `(subject, object)` pairing: its headline weight + the
+/// `WeightBucket` label, then the per-claim breakdown TABLE. The headline weight
+/// AND the breakdown rows are projected from the SAME [`scoring::WeightedPairing`],
+/// so the rendered subtotals sum to the rendered weight BY CONSTRUCTION (Gate 2 /
+/// KPI-GRAPH-3 reproduce-by-hand). The weight is rendered VERBATIM (the exact
+/// consumed `f64`, two decimals — never a bucket-midpoint rounding). A score is
+/// NEVER shown without its breakdown (I-CS-2; the J-002c thesis).
+fn render_score_pairing(pairing: &scoring::WeightedPairing) -> Markup {
+    html! {
+        section {
+            h2 { (pairing.subject) " — " (pairing.object) }
+            p {
+                "Weight: " (render_weight(pairing.weight))
+                " " (render_weight_bucket(pairing.bucket))
+            }
+            // A `[SPARSE]` pairing carries the honesty line PROJECTED from the pure
+            // core's `WeightBucket::Sparse` (I-CS-3 / KPI-GRAPH-4) — the viewer
+            // recomputes no bucket.
+            @if matches!(pairing.bucket, scoring::WeightBucket::Sparse) {
+                p { (SCORE_SPARSE_HONESTY_NOTICE) }
+            }
+            (render_score_breakdown(pairing))
+        }
+    }
+}
+
+/// Render the per-claim breakdown TABLE for a pairing (the `--explain`
+/// decomposition made VISIBLE, I-CS-2 / I-CS-10). One row per
+/// [`scoring::Contribution`]: the contribution's author DID (non-`Option`
+/// attribution, never merged away), the claim CID, the VERBATIM base confidence
+/// (via [`render_confidence`] — `0.86`, never `0.9`/`86%`; I-CS-6), the
+/// author-distinct + cross-project-triangulation bonuses, and the subtotal. The
+/// subtotals sum to the pairing's headline weight (Gate 2) because both are
+/// projected from the SAME `WeightedPairing`.
+fn render_score_breakdown(pairing: &scoring::WeightedPairing) -> Markup {
+    html! {
+        table {
+            thead {
+                tr {
+                    th { "Author" }
+                    th { "CID" }
+                    th { "Confidence" }
+                    th { "Author bonus" }
+                    th { "Triangulation bonus" }
+                    th { "Subtotal" }
+                }
+            }
+            tbody {
+                @for contribution in pairing.contributions() {
+                    tr {
+                        td { (contribution.author_did().0) }
+                        td { (contribution.cid.0) }
+                        td { (render_confidence(contribution.base)) }
+                        td { (render_weight(contribution.author_distinct_bonus)) }
+                        td { (render_weight(contribution.cross_project_triangulation_bonus)) }
+                        td { (render_weight(contribution.subtotal)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Format a derived weight / bonus / subtotal `f64` VERBATIM for display: two
+/// decimal places (`0.55`), mirroring [`render_confidence`]'s verbatim contract so
+/// the displayed numbers are byte-stable and the operator can reproduce the running
+/// sum by hand (KPI-GRAPH-3). Held separately from `render_confidence` because a
+/// weight is NOT a `[0.0, 1.0]` confidence (it can exceed 1.0), but the two-decimal
+/// rendering is identical, so the reproduce-by-hand arithmetic lines up.
+fn render_weight(value: f64) -> String {
+    format!("{value:.2}")
+}
+
+/// Render the display-only [`scoring::WeightBucket`] label PROJECTED from the pure
+/// core (WD-CS-6 — the viewer recomputes no bucket). `Sparse` renders the
+/// load-bearing `[SPARSE]` marker the honesty scenarios assert on (I-CS-3); the
+/// breadth guard, not the weight magnitude, decided it in the pure core. PURE total
+/// match over the ADT.
+fn render_weight_bucket(bucket: scoring::WeightBucket) -> &'static str {
+    match bucket {
+        scoring::WeightBucket::Strong => "Strong",
+        scoring::WeightBucket::Moderate => "Moderate",
+        scoring::WeightBucket::Sparse => "[SPARSE]",
     }
 }
 
@@ -3699,6 +3960,220 @@ mod tests {
             !html.contains("countered by"),
             "an UNCOUNTERED row (counter_annotation == None) must render NO \
              'countered by' annotation; got:\n{html}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Contributor-Score view (slice-09; ADR-039/040/041) —
+    // `render_score_results_fragment` projection. The render core REUSES
+    // `scoring::score` to obtain a REAL `WeightedView` (never a hand-rolled
+    // pairing), so these tests pin the PROJECTION (per-pairing breakdown rows,
+    // verbatim confidence, headline weight, and that the rendered subtotals sum to
+    // the rendered weight) WITHOUT reimplementing the scoring math.
+    // -------------------------------------------------------------------------
+
+    use chrono::{TimeZone, Utc};
+    use claim_domain::{Cid, Did};
+    use scoring::{score, AttributedClaim, ScoringConfig};
+
+    /// Build one `AttributedClaim` for the score-render fixtures. The author DID +
+    /// cid are rendered verbatim in the breakdown; the confidence is the scored
+    /// base value (Gate 6).
+    fn attributed(author: &str, cid: &str, subject: &str, object: &str, confidence: f64) -> AttributedClaim {
+        AttributedClaim {
+            author_did: Did(author.to_string()),
+            cid: Cid(cid.to_string()),
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+            confidence,
+            composed_at: Utc.with_ymd_and_hms(2026, 5, 30, 12, 0, 0).unwrap(),
+            relationship: AuthorRelationship::SubscribedPeer,
+        }
+    }
+
+    /// A RICH feed: one contributor asserting the SAME object across THREE distinct
+    /// subjects (cross-project span ≥ 2 → NOT sparse) at varied confidences, so the
+    /// pure scorer yields a real weight + a multi-row breakdown that decomposes.
+    fn rich_scored_state() -> ScoreState {
+        let repro = "org.openlore.philosophy.reproducible-builds";
+        let feed = vec![
+            attributed("did:plc:priya-test", "bafyone", "github:bazelbuild/bazel", repro, 0.86),
+            attributed("did:plc:priya-test", "bafytwo", "github:NixOS/nixpkgs", repro, 0.90),
+            attributed("did:plc:priya-test", "bafythree", "github:GNOME/meson", repro, 0.74),
+        ];
+        let view = score(&feed, &ScoringConfig::DEFAULT);
+        ScoreState::Scored { view }
+    }
+
+    /// Behavior (C-1/C-4; I-CS-2/I-CS-10): the score fragment renders, for the
+    /// contributor's scored feed, EVERY contribution's author DID + cid + the
+    /// VERBATIM base confidence (`0.86`, never `0.9`/`86%`) inside a per-claim
+    /// breakdown — never an opaque number. Pins the per-row attribution + verbatim
+    /// projection at the unit level (the cardinal anti-opaque-number contract).
+    #[test]
+    fn score_fragment_renders_per_claim_breakdown_attributed_and_verbatim() {
+        let html = render_score_results_fragment(&rich_scored_state()).into_string();
+
+        assert!(
+            html.contains(SCORE_RESULTS_ID),
+            "the score fragment must carry the `#score-results` swap-target id; got:\n{html}"
+        );
+        // Per-row attribution: the contributor's author DID appears (every
+        // Contribution carries its non-Option author_did, I-CS-10).
+        assert!(
+            html.contains("did:plc:priya-test"),
+            "the breakdown must attribute rows to the author DID; got:\n{html}"
+        );
+        // Every claim's cid is rendered (Gate 5 analog).
+        for cid in ["bafyone", "bafytwo", "bafythree"] {
+            assert!(html.contains(cid), "the breakdown must name the claim cid {cid:?}; got:\n{html}");
+        }
+        // Each base confidence is rendered VERBATIM (two decimals — I-CS-6).
+        for conf in ["0.86", "0.90", "0.74"] {
+            assert!(
+                html.contains(conf),
+                "the breakdown must render the confidence {conf:?} verbatim (never 0.9/86%); got:\n{html}"
+            );
+        }
+        // The score is never a faceless merged consensus number (anti-merging, I-CS-2).
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["authors agree", "community consensus", "consensus score"] {
+            assert!(
+                !lowered.contains(banned),
+                "the breakdown must show NO merged consensus row; found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior / CARDINAL (C-5; KPI-GRAPH-3 reproduce-by-hand): the per-claim
+    /// subtotals the fragment renders for a pairing SUM to the headline weight it
+    /// renders for that SAME pairing — because both are projected from the SAME
+    /// `WeightedPairing`. This pins the transparency-by-construction contract at the
+    /// unit level: the operator can reproduce the number from what she SEES.
+    #[test]
+    fn score_fragment_rendered_subtotals_sum_to_the_displayed_weight() {
+        // A single-pairing feed (TWO distinct authors on the SAME subject+object) so
+        // the rendered weight + subtotals are unambiguous and the pairing decomposes
+        // into two attributed rows (anti-merging).
+        let repro = "org.openlore.philosophy.reproducible-builds";
+        let feed = vec![
+            attributed("did:plc:priya-test", "bafyone", "github:bazelbuild/bazel", repro, 0.86),
+            attributed("did:plc:rachel-test", "bafytwo", "github:bazelbuild/bazel", repro, 0.90),
+        ];
+        let view = score(&feed, &ScoringConfig::DEFAULT);
+        assert_eq!(view.ranked.len(), 1, "fixture must produce exactly one pairing");
+        let pairing = &view.ranked[0];
+
+        let html = render_score_results_fragment(&ScoreState::Scored { view: view.clone() }).into_string();
+
+        // The headline weight renders VERBATIM (two decimals).
+        let weight_str = format!("{:.2}", pairing.weight);
+        assert!(
+            html.contains(&format!("Weight: {weight_str}")),
+            "the pairing's headline weight {weight_str:?} must render; got:\n{html}"
+        );
+        // Each contribution's subtotal renders VERBATIM, and their running sum
+        // equals the displayed weight (reproduce-by-hand; the subtotals + the
+        // weight are projected from the SAME pairing, so they agree by construction).
+        let mut running = 0.0_f64;
+        for c in pairing.contributions() {
+            let subtotal_str = format!("{:.2}", c.subtotal);
+            assert!(
+                html.contains(&subtotal_str),
+                "the breakdown must render the subtotal {subtotal_str:?}; got:\n{html}"
+            );
+            running += c.subtotal;
+        }
+        assert!(
+            (running - pairing.weight).abs() < 1e-9,
+            "Σ subtotal ({running}) must equal the displayed weight ({}) — \
+             reproduce-by-hand (KPI-GRAPH-3)",
+            pairing.weight
+        );
+    }
+
+    /// Behavior (C-7/C-10; I-CS-3): a thin single-claim/single-author/single-subject
+    /// feed renders `[SPARSE]` + the "treat as a lead" honesty line REGARDLESS of how
+    /// HIGH the confidence is — the breadth guard (inherited from the pure core),
+    /// not the magnitude, decides the bucket. The viewer PROJECTS the pure core's
+    /// `WeightBucket::Sparse`; it recomputes no bucket (WD-CS-6).
+    #[test]
+    fn score_fragment_projects_sparse_bucket_and_honesty_line_at_any_confidence() {
+        let repro = "org.openlore.philosophy.reproducible-builds";
+        // One claim, one author, one subject, HIGH confidence.
+        let feed = vec![attributed("did:plc:bjorn-test", "bafysparse", "github:torvalds/linux", repro, 0.95)];
+        let view = score(&feed, &ScoringConfig::DEFAULT);
+        let html = render_score_results_fragment(&ScoreState::Scored { view }).into_string();
+
+        assert!(
+            html.contains("[SPARSE]"),
+            "a thin pairing must render the `[SPARSE]` marker; got:\n{html}"
+        );
+        assert!(
+            html.to_ascii_lowercase().contains("treat as a lead"),
+            "a `[SPARSE]` pairing must carry the 'treat as a lead' honesty line; got:\n{html}"
+        );
+        assert!(
+            !html.contains("Strong"),
+            "a thin pairing must NOT be labelled Strong regardless of confidence; got:\n{html}"
+        );
+    }
+
+    /// Behavior (C-9; OD-CS-6 / I-CS-5): the `NoClaims` state renders the guided
+    /// "No local claims for that contributor." notice NAMING the queried DID — never
+    /// a fabricated zero score, never a `[SPARSE]`/weight leak.
+    #[test]
+    fn score_fragment_renders_guided_no_claims_state_naming_the_did() {
+        let html = render_score_results_fragment(&ScoreState::NoClaims {
+            contributor: "did:plc:nobody-local".to_string(),
+        })
+        .into_string();
+
+        assert!(
+            html.to_ascii_lowercase().contains("no local claims"),
+            "the NoClaims state must render the guided notice; got:\n{html}"
+        );
+        assert!(
+            html.contains("did:plc:nobody-local"),
+            "the NoClaims state must name the queried DID; got:\n{html}"
+        );
+        for banned in ["[SPARSE]", "Weight:"] {
+            assert!(
+                !html.contains(banned),
+                "the empty state must show NO fabricated score; found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior (C-2/C-3; I-CS-7 parity): the full `/score` page EMBEDS the EXACT
+    /// `render_score_results_fragment` output — the page's score region is the
+    /// fragment string verbatim — so fragment/full-page parity is structural, and
+    /// the full page additionally carries chrome (`<!DOCTYPE>`) + the contributor
+    /// form.
+    #[test]
+    fn score_page_embeds_the_fragment_and_adds_chrome_and_form() {
+        let state = rich_scored_state();
+        let fragment = render_score_results_fragment(&state).into_string();
+        let page = render_score_page(&state);
+
+        assert!(
+            page.contains(&fragment),
+            "the full page must EMBED the exact score-results fragment (parity by \
+             construction, I-CS-7); page:\n{page}"
+        );
+        assert!(
+            page.to_lowercase().contains("<!doctype html>"),
+            "the full page must carry full-page chrome; page:\n{page}"
+        );
+        assert!(
+            page.contains("name=\"contributor\""),
+            "the full page must carry the contributor form; page:\n{page}"
+        );
+        // The fragment alone carries NO full-page chrome (I-CS-7 / I-HX-1).
+        assert!(
+            !fragment.contains("<!DOCTYPE") && !fragment.contains("<html"),
+            "the fragment must carry NO full-page chrome; fragment:\n{fragment}"
         );
     }
 }

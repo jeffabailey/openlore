@@ -22,6 +22,9 @@
 //!   the viewer (NFR-VIEW-6), never a raw stack trace.
 
 use chrono::{DateTime, Utc};
+use claim_domain::Did;
+
+use crate::AttributedClaim;
 
 /// One own-claim row from the `claims` table, projected for the read-only
 /// viewer. A FLAT DTO (not the rich `claim_domain::SignedClaim`): the viewer
@@ -187,4 +190,24 @@ pub trait StoreReadPort: Send + Sync {
     /// position indicator + empty-state decision (US-VIEW-003) read this
     /// `COUNT(*)` over `peer_claims`.
     fn count_peer_claims(&self) -> Result<usize, StoreReadError>;
+
+    /// Read the LOCAL attributed-claim feed for ONE contributor (`/score`,
+    /// slice-09 / ADR-039/040/041 / I-CS-5): every claim authored by `contributor`
+    /// across all subjects, from the operator's OWN `claims` table UNION ALL the
+    /// LOCAL `peer_claims` table — NO network. The pure `scoring::score` core
+    /// aggregates this `Vec<AttributedClaim>` into the ranked `WeightedView`; the
+    /// weight is NEVER computed in SQL, so the per-claim rows always exist as the
+    /// aggregate's decomposition (I-GRAPH-2 / WD-73).
+    ///
+    /// READ-ONLY by construction: this is a SELECT over the SAME shared connection
+    /// the CLI writes through (BR-VIEW-4) — there is NO mutation method on this
+    /// trait, so a `Box<dyn StoreReadPort>` cannot change the store (I-VIEW-1). The
+    /// `UNION ALL` projects `author_did` EXPLICITLY (NEVER a merging `JOIN`/`GROUP
+    /// BY`), so two same-content claims by different authors stay TWO attributed
+    /// rows (anti-merging). Returns an EMPTY vec for a contributor with no local
+    /// rows (the viewer renders the guided `NoClaims` state — never an error).
+    fn query_contributor_scoring_feed(
+        &self,
+        contributor: &Did,
+    ) -> Result<Vec<AttributedClaim>, StoreReadError>;
 }
