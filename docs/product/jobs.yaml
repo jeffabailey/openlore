@@ -669,3 +669,33 @@ changelog:
       public-data framing (KPI-AV-5), progressive enhancement + offline chrome
       (KPI-HX-G1/G2), graceful degradation (KPI-5). No new KPI IDs minted — slice-08
       realizes the inherited KPI-AV-* / KPI-VIEW-* / KPI-HX-* on a new surface.
+  - date: "2026-06-05"
+    feature: viewer-contributor-scoring
+    change: >
+      slice-09 (viewer-contributor-scoring) DISCUSS traces to J-002 (no new job),
+      focused on sub-job J-002c (transparent, auditable, reproduce-by-hand adherence
+      weighting). It is the BROWSER UI for `graph query --contributor <did> --weighted
+      --explain`: a read-only `GET /score?contributor=<did>` view on the `openlore ui`
+      viewer (slices 06/07/08) that reads the LOCAL claim graph for a contributor, runs
+      the slice-04 PURE `scoring` scorer (REUSED verbatim — `score`/`WeightedView`/
+      `Contribution`/`WeightBucket`; no reimplemented formula), and renders the
+      contributor's transparent adherence score WITH its per-claim component breakdown
+      as HTML (htmx fragment swap). Persona is P-001 (the viewer operator, "Maria")
+      wearing the graph-explorer hat; slice-04 framed P-002 primary for the CLI
+      surface, but the browser viewer is P-001's surface. Stories US-CS-002/003 realize
+      J-002c on the browser: US-CS-002 renders the weight + the reproduce-by-hand
+      breakdown (each Contribution under its author DID + cid; running sum == displayed
+      weight; anti-merging visible); US-CS-003 renders [SPARSE] honesty for thin
+      evidence, verbatim confidence/weight, and the no-claims empty state. US-CS-002
+      also realizes the contributor dimension of J-002a in the browser. US-CS-001 is
+      @infrastructure (the new LOCAL contributor-scoring read capability in the viewer
+      process). Cardinal invariants carried in unchanged: transparency / reproduce-by-
+      hand (KPI-GRAPH-3), anti-merging in aggregates (KPI-GRAPH-2 — a score is an
+      AGGREGATE VIEW that never loses per-author attribution), sparse renders sparse
+      (KPI-GRAPH-4 — the load-bearing breadth guard, inherited from the pure core),
+      read-only / no signing key (KPI-VIEW-2), display-only / never-persisted weight
+      (WD-72), local-first / offline (KPI-5 / KPI-GRAPH-6 — the score read is LOCAL,
+      distinct from the network /search and GitHub /scrape routes), verbatim confidence/
+      weight (KPI-4 / FR-VIEW-8), progressive enhancement + offline chrome
+      (KPI-HX-G1/G2/G3). No new KPI IDs minted — slice-09 realizes the inherited
+      KPI-GRAPH-* / KPI-VIEW-* / KPI-HX-* / KPI-4 / KPI-5 on a new surface.
