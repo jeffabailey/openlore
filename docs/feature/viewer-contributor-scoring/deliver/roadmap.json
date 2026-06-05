@@ -1,0 +1,564 @@
+{
+  "roadmap": {
+    "project_id": "viewer-contributor-scoring",
+    "created_at": "2026-06-05T13:33:13Z",
+    "total_steps": 13
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Foundation + score-by-contributor (walking skeleton)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only local contributor-scoring feed read + pure scorer into the viewer and render the breakdown fragment",
+          "description": "The thick foundational walking-skeleton step (US-CS-001 capability + US-CS-002 render, C-1). Add the read-only `query_contributor_scoring_feed(&Did) -> Result<Vec<AttributedClaim>, StoreReadError>` method to StoreReadPort in crates/ports (NO mutation method added to the port; AttributedClaim already lives in ports from slice-04). Impl it on DuckDbStoreReadAdapter in crates/adapter-duckdb as read-only SQL over the SAME shared connection — the slice-04 query_by_contributor UNION-ALL pattern (claims UNION ALL local peer_claims, explicit author_did projection, NEVER a merging JOIN); LOCAL only, no network. Add GET /score?contributor=<did> to the adapter-http-viewer route table with the Shape::from_request fork (read once). Add the score_page handler: parse_contributor, read the local feed via StoreReadPort, run the REUSED pure scoring::score(&feed, &ScoringConfig::DEFAULT), map the outcome to ScoreState, fork by Shape at the render call — reading the store the ViewerServer ALREADY holds (NO new Option<Shared*> field). Add the pure ScoreState ADT (Form | Scored{contributor, view} | NoClaims{contributor}) to viewer-domain plus render_score_results_fragment (the #score-results region, projecting WeightedView per pairing: subject -> verbatim weight + WeightBucket label + a per-claim breakdown table, one row per Contribution with author_did + cid + verbatim base confidence + bonuses + subtotal, running sum == the displayed weight) and render_score_page (chrome + GET contributor form + the SAME fragment fn + nav link). Add scoring as a pure dependency of viewer-domain (Cargo.toml). Add the xtask check-arch delta: viewer-domain -> scoring on the pure-core dependency allowlist (pure->pure edge, the SAME shape as slice-08's viewer-domain -> appview-domain); NO capability-rule change (the read is read-only; scoring is pure, not a forbidden surface). Materialize the seed_contributor_rich_trail(env, CONTRIBUTOR_RICH_DID) harness helper via the existing seed_peer_authored_graph seam. Outcome: a rich contributor + HX-Request -> ONLY the #score-results breakdown fragment. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run must cargo build the bin before executing these ATs. NO second binary (the score is a LOCAL read, unlike slice-08's openlore-indexer).",
+          "criteria": [
+            "GET /score?contributor=<CONTRIBUTOR_RICH_DID> with HX-Request over a seeded rich local store returns 200 text/html containing ONLY the #score-results region fragment (no page chrome, no <head>).",
+            "The fragment renders each subject pairing with its verbatim displayed weight + WeightBucket label AND a per-claim breakdown table; each row names the Contribution's author_did + cid, the verbatim base confidence (e.g. 0.86, never 0.9 or 86%), the applied bonuses, and a subtotal — projected from the slice-04 WeightedView via the REUSED scoring::score (no viewer-side scoring math).",
+            "StoreReadPort gains a single read-only method query_contributor_scoring_feed(&Did) -> Result<Vec<AttributedClaim>, StoreReadError> (NO mutation method added to the port); DuckDbStoreReadAdapter impls it as read-only SQL over the shared connection (claims UNION ALL local peer_claims, explicit author_did, no merging JOIN), LOCAL only with no network call.",
+            "The score_page handler reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), runs PURE scoring::score(&feed, &ScoringConfig::DEFAULT) in the effect shell, and holds NO signing key (no signing/identity/PDS surface enters the viewer process; no write/sign route added).",
+            "xtask check-arch passes with the delta: viewer-domain -> scoring is allowlisted as a pure->pure edge; the pure-core no-I/O arm still passes for viewer-domain (no duckdb/tokio/reqwest/std::fs/std::net/SystemTime enters it); no viewer capability rule changes (the read is read-only, scoring is pure).",
+            "The seed_contributor_rich_trail seam seeds a contributor across DISTINCT subjects (cross_project_span >= 2) via the production peer pull path; the openlore bin is built before the AT runs."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<CONTRIBUTOR_RICH_DID> with HX-Request over a seeded rich local store returns 200 text/html containing ONLY the #score-results region fragment (no page chrome, no <head>).",
+            "The fragment renders each subject pairing with its verbatim displayed weight + WeightBucket label AND a per-claim breakdown table; each row names the Contribution's author_did + cid, the verbatim base confidence (e.g. 0.86, never 0.9 or 86%), the applied bonuses, and a subtotal — projected from the slice-04 WeightedView via the REUSED scoring::score (no viewer-side scoring math).",
+            "StoreReadPort gains a single read-only method query_contributor_scoring_feed(&Did) -> Result<Vec<AttributedClaim>, StoreReadError> (NO mutation method added to the port); DuckDbStoreReadAdapter impls it as read-only SQL over the shared connection (claims UNION ALL local peer_claims, explicit author_did, no merging JOIN), LOCAL only with no network call.",
+            "The score_page handler reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), runs PURE scoring::score(&feed, &ScoringConfig::DEFAULT) in the effect shell, and holds NO signing key (no signing/identity/PDS surface enters the viewer process; no write/sign route added).",
+            "xtask check-arch passes with the delta: viewer-domain -> scoring is allowlisted as a pure->pure edge; the pure-core no-I/O arm still passes for viewer-domain (no duckdb/tokio/reqwest/std::fs/std::net/SystemTime enters it); no viewer capability rule changes (the read is read-only, scoring is pure).",
+            "The seed_contributor_rich_trail seam seeds a contributor across DISTINCT subjects (cross_project_span >= 2) via the production peer pull path; the openlore bin is built before the AT runs."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "score_by_contributor_with_htmx_returns_only_the_breakdown_fragment",
+          "n_scenarios": [
+            "C-1"
+          ],
+          "us_trace": [
+            "US-CS-001",
+            "US-CS-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "crates/xtask/src/check_arch.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "crates/xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (ScoreState ADT + render_score_results_fragment / render_score_page projecting the slice-04 WeightedView per pairing). Extend nightly mutation testing to this projection (verbatim weight + confidence, per-claim author_did + cid attribution, running-sum == displayed weight, no-merge rows) toward the Phase-5 >=80% gate. The xtask viewer-domain -> scoring allowlist delta lands here."
+        },
+        {
+          "id": "01-02",
+          "name": "No-write/sign surface, no-JS full page, and fragment/full-page parity",
+          "description": "Complete the walking-skeleton render contract (C-1b / C-2 / C-3). (C-1b) Assert the score capability exposes no write/sign/follow surface on a Scored response — no new write/sign/subscribe/follow route, no executable control, no signing key in the process (I-CS-1). (C-2) GET /score?contributor=<did> WITHOUT HX-Request serves a complete full page (chrome + GET contributor form + the embedded #score-results region) for the no-JS no-regression path (I-CS-7). (C-3) The #score-results fragment is structurally identical to the same region inside the full page (parity by construction — render_score_page EMBEDS render_score_results_fragment). This collapses the htmx + no-JS + parity trio of US-CS-001/002 into one TDD move.",
+          "criteria": [
+            "A rich-contributor score with no HX-Request returns a complete full HTML page: <head>, page chrome, the GET contributor form, and the embedded #score-results region.",
+            "The capability/response exposes NO write/sign surface: no new write/sign/subscribe/follow route in the route inventory, no executable control, no signing key read in the viewer process (I-CS-1).",
+            "The #score-results fragment returned under HX-Request is structurally identical to the score region embedded in the full page for the same contributor (parity by construction, I-CS-7).",
+            "The full-page response renders pairings with the same weight + bucket + per-claim breakdown rows (author_did + cid + verbatim confidence + subtotal) as the fragment — no divergence between shapes."
+          ],
+          "acceptance_criteria": [
+            "A rich-contributor score with no HX-Request returns a complete full HTML page: <head>, page chrome, the GET contributor form, and the embedded #score-results region.",
+            "The capability/response exposes NO write/sign surface: no new write/sign/subscribe/follow route in the route inventory, no executable control, no signing key read in the viewer process (I-CS-1).",
+            "The #score-results fragment returned under HX-Request is structurally identical to the score region embedded in the full page for the same contributor (parity by construction, I-CS-7).",
+            "The full-page response renders pairings with the same weight + bucket + per-claim breakdown rows (author_did + cid + verbatim confidence + subtotal) as the fragment — no divergence between shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "score_by_contributor_without_htmx_returns_the_full_page_with_form_and_breakdown",
+          "n_scenarios": [
+            "C-1b",
+            "C-2",
+            "C-3"
+          ],
+          "us_trace": [
+            "US-CS-001",
+            "US-CS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "A no-claims contributor renders the guided NoClaims state, never a crash",
+          "description": "Close out Phase 01 with the reliability edge of US-CS-001 (C-1c). A contributor with zero local claims yields an empty feed read; the handler maps an empty (or Err) feed to ScoreState::NoClaims{contributor} and the render shows a guided 'No local claims for that contributor.' message that names the DID — never a crash, hang, blank region, stack trace, or network call. The breadth guard is never invoked on an empty feed (no manufactured score). This proves the read+compute path degrades to the guided state by construction.",
+          "criteria": [
+            "GET /score for a contributor with no local claims (CONTRIBUTOR_EMPTY_DID) returns 200 and renders the guided ScoreState::NoClaims state naming the queried DID, not a blank region.",
+            "No crash, hang, panic, or stack trace occurs in the viewer process; the breadth guard / scoring::score is never asked to bucket an empty feed.",
+            "No network call occurs in the /score path for the empty case (LOCAL read only, I-CS-5).",
+            "A read error (Err) from query_contributor_scoring_feed maps to the SAME guided NoClaims state, never a 5xx or a leaked error string."
+          ],
+          "acceptance_criteria": [
+            "GET /score for a contributor with no local claims (CONTRIBUTOR_EMPTY_DID) returns 200 and renders the guided ScoreState::NoClaims state naming the queried DID, not a blank region.",
+            "No crash, hang, panic, or stack trace occurs in the viewer process; the breadth guard / scoring::score is never asked to bucket an empty feed.",
+            "No network call occurs in the /score path for the empty case (LOCAL read only, I-CS-5).",
+            "A read error (Err) from query_contributor_scoring_feed maps to the SAME guided NoClaims state, never a 5xx or a leaked error string."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "scoring_a_no_claims_contributor_never_crashes_the_viewer",
+          "n_scenarios": [
+            "C-1c"
+          ],
+          "us_trace": [
+            "US-CS-001"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The NoClaims arm (empty-feed AND Err-degrade branches) is load-bearing pure/shell logic; cover with mutation testing (the empty-feed -> NoClaims branch, the Err -> NoClaims degrade branch, and the DID-naming of the guided message)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Transparency — breakdown, reproduce-by-hand, anti-merging (load-bearing)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "The weight renders WITH a per-claim breakdown, never an opaque number",
+          "description": "US-CS-002 transparency thesis (C-4). Assert that every displayed weight carries its component breakdown: for each pairing the headline weight + WeightBucket label, and beneath it a per-claim table where every row names the Contribution's author_did + cid, the verbatim base confidence, the author-distinct bonus, the cross-project triangulation bonus, and a subtotal. No score is rendered without its breakdown (an opaque number is structurally impossible because the projection fn takes a &WeightedPairing and renders both the weight and its contributions() from it). This is the load-bearing J-002c anti-opaque guarantee (I-CS-2 / I-CS-10 / KPI-GRAPH-2).",
+          "criteria": [
+            "Each rendered pairing shows its headline weight + WeightBucket label AND a per-claim breakdown table directly beneath it (no opaque number-only render).",
+            "Every breakdown row names the contributing claim's author_did + cid (I-CS-10), the verbatim base confidence, the applied bonuses, and a subtotal.",
+            "No pairing renders a weight without its component breakdown — the weight and the breakdown are projected from the SAME WeightedPairing (I-CS-2).",
+            "The breakdown content is projected from the slice-04 Contribution list (no viewer-side recomputation of confidence, bonuses, or subtotals)."
+          ],
+          "acceptance_criteria": [
+            "Each rendered pairing shows its headline weight + WeightBucket label AND a per-claim breakdown table directly beneath it (no opaque number-only render).",
+            "Every breakdown row names the contributing claim's author_did + cid (I-CS-10), the verbatim base confidence, the applied bonuses, and a subtotal.",
+            "No pairing renders a weight without its component breakdown — the weight and the breakdown are projected from the SAME WeightedPairing (I-CS-2).",
+            "The breakdown content is projected from the slice-04 Contribution list (no viewer-side recomputation of confidence, bonuses, or subtotals)."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "weight_renders_with_per_claim_breakdown_never_an_opaque_number",
+          "n_scenarios": [
+            "C-4"
+          ],
+          "us_trace": [
+            "US-CS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Materialize assert_score_html_breakdown_attributed_and_verbatim (author_did + cid + verbatim confidence per row, no merged-consensus row). The weight-always-with-breakdown projection is load-bearing; mutation-test the no-opaque-number and per-row-attribution branches."
+        },
+        {
+          "id": "02-02",
+          "name": "Rendered breakdown subtotals sum to the displayed weight (reproduce-by-hand)",
+          "description": "US-CS-002 reproduce-by-hand invariant (C-5, the KPI-GRAPH-3 north star on the browser surface). The per-claim subtotals shown in a pairing's breakdown MUST sum to the headline weight shown for that pairing. This holds structurally because the headline weight and the breakdown are rendered from the SAME WeightedPairing (weight + contributions(), Gate 2 in the pure core: weight == sum subtotal). Materialize the CARDINAL assert_score_html_breakdown_sums_to_displayed_weight parse helper (DELIVER parses the rendered weight + the rendered row subtotals out of the HTML and asserts equality).",
+          "criteria": [
+            "For each rendered pairing, the sum of the per-claim row subtotals parsed from the breakdown table equals the headline weight parsed from the same pairing (reproduce-by-hand, KPI-GRAPH-3).",
+            "The headline weight and the breakdown rows are rendered from the SAME WeightedPairing (Gate 2: weight == sum of subtotals carried from the pure core).",
+            "The assert_score_html_breakdown_sums_to_displayed_weight helper parses the OBSERVABLE rendered HTML (the displayed weight + the row subtotals), not internal scoring structs.",
+            "The equality holds for a multi-row rich pairing (the sum is over >1 contribution, not a trivial single row)."
+          ],
+          "acceptance_criteria": [
+            "For each rendered pairing, the sum of the per-claim row subtotals parsed from the breakdown table equals the headline weight parsed from the same pairing (reproduce-by-hand, KPI-GRAPH-3).",
+            "The headline weight and the breakdown rows are rendered from the SAME WeightedPairing (Gate 2: weight == sum of subtotals carried from the pure core).",
+            "The assert_score_html_breakdown_sums_to_displayed_weight helper parses the OBSERVABLE rendered HTML (the displayed weight + the row subtotals), not internal scoring structs.",
+            "The equality holds for a multi-row rich pairing (the sum is over >1 contribution, not a trivial single row)."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "rendered_breakdown_subtotals_sum_to_the_displayed_weight",
+          "n_scenarios": [
+            "C-5"
+          ],
+          "us_trace": [
+            "US-CS-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Materialize the CARDINAL assert_score_html_breakdown_sums_to_displayed_weight HTML parse. The render-headline-and-breakdown-from-one-WeightedPairing logic is load-bearing; mutation-test the running-sum projection (a mutant that renders a different weight than the rows sum to must be killed)."
+        },
+        {
+          "id": "02-03",
+          "name": "Conflicting claims by different authors render as two attributed rows (anti-merging)",
+          "description": "US-CS-002 anti-merging guarantee (C-6). When two different authors assert the same (subject, object) at different confidences, BOTH contributions appear as separate rows in the breakdown — each under its own author_did + cid + verbatim confidence — never averaged or merged into one faceless consensus row. Guaranteed structurally because aggregation happens in PURE scoring::score (Rust, per-claim Contributions) and never in SQL, and Contribution.author_did is non-Option. Materialize seed_contributor_conflicting_authors(env) via the seed_own_plus_peer_graph identical-content two-author seam.",
+          "criteria": [
+            "A score where two distinct authors assert the same (subject, object) at different confidences renders TWO separate breakdown rows under their own author_dids; NO merged or averaged consensus row appears (anti-merging, I-CS-2).",
+            "Each of the two rows carries its own author_did + cid + verbatim base confidence (I-CS-10); neither confidence is averaged or collapsed.",
+            "The two contributions appear within the SAME subject pairing (one pairing, two attributed rows), reflecting the per-claim Contribution list from the pure scorer.",
+            "The seed_contributor_conflicting_authors seam seeds the identical-content two-author shape via the production peer path (seed_own_plus_peer_graph), no hand-inserted rows."
+          ],
+          "acceptance_criteria": [
+            "A score where two distinct authors assert the same (subject, object) at different confidences renders TWO separate breakdown rows under their own author_dids; NO merged or averaged consensus row appears (anti-merging, I-CS-2).",
+            "Each of the two rows carries its own author_did + cid + verbatim base confidence (I-CS-10); neither confidence is averaged or collapsed.",
+            "The two contributions appear within the SAME subject pairing (one pairing, two attributed rows), reflecting the per-claim Contribution list from the pure scorer.",
+            "The seed_contributor_conflicting_authors seam seeds the identical-content two-author shape via the production peer path (seed_own_plus_peer_graph), no hand-inserted rows."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "conflicting_authors_render_two_attributed_rows_never_a_merged_row",
+          "n_scenarios": [
+            "C-6"
+          ],
+          "us_trace": [
+            "US-CS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The per-author no-merge projection (one row per Contribution, grouped/keyed by author_did) is load-bearing anti-merging logic; mutation-test the two-rows-never-one-row branch and the per-row author_did/cid rendering."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Epistemic honesty — sparse, verbatim, empty",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Thin evidence renders [SPARSE] + honesty line at any confidence (breadth, not magnitude)",
+          "description": "US-CS-003 sparse honesty (C-7 + C-10, KPI-GRAPH-4). A single-claim / single-author / no-cross-project-span pairing renders the [SPARSE] marker + the 'based on N claim(s) by M author(s) — treat as a lead, not a conclusion' honesty line, regardless of weight/confidence magnitude (even at 0.95). The [SPARSE] bucket + the honesty counts are PROJECTED from the pure core's WeightBucket::Sparse + the pairing's claim_count / distinct_author_count — the viewer recomputes NO bucket. C-10 folds in the breadth-vs-magnitude boundary: two pairings at the same raw weight, one with cross-project span (Strong) and one without (Sparse) — breadth, not magnitude, decides the bucket. Materialize seed_contributor_sparse_trail(env, CONTRIBUTOR_SPARSE_DID) (one claim / one author / one subject @ 0.95).",
+          "criteria": [
+            "A single-claim / single-author / no-cross-project-span pairing renders [SPARSE] + the 'based on N claim(s) by M author(s) — treat as a lead, not a conclusion' honesty line, regardless of confidence magnitude (e.g. still [SPARSE] at 0.95, never Strong) (I-CS-3 / KPI-GRAPH-4).",
+            "The [SPARSE] marker + the honesty counts (N claims, M authors) are projected from the pure core's WeightBucket::Sparse + claim_count / distinct_author_count — the viewer recomputes NO bucket (WD-CS-6).",
+            "Given two pairings at the same raw weight where one spans >=2 projects and one does not, the spanning pairing renders its non-Sparse bucket and the non-spanning pairing renders [SPARSE] — breadth (not magnitude) decides the bucket (C-10 boundary).",
+            "Materialize assert_score_html_renders_sparse_honesty ([SPARSE] + the lead-not-conclusion line present + the pairing never labelled Strong); seed_contributor_sparse_trail seeds one claim / one author / one subject via the production seam."
+          ],
+          "acceptance_criteria": [
+            "A single-claim / single-author / no-cross-project-span pairing renders [SPARSE] + the 'based on N claim(s) by M author(s) — treat as a lead, not a conclusion' honesty line, regardless of confidence magnitude (e.g. still [SPARSE] at 0.95, never Strong) (I-CS-3 / KPI-GRAPH-4).",
+            "The [SPARSE] marker + the honesty counts (N claims, M authors) are projected from the pure core's WeightBucket::Sparse + claim_count / distinct_author_count — the viewer recomputes NO bucket (WD-CS-6).",
+            "Given two pairings at the same raw weight where one spans >=2 projects and one does not, the spanning pairing renders its non-Sparse bucket and the non-spanning pairing renders [SPARSE] — breadth (not magnitude) decides the bucket (C-10 boundary).",
+            "Materialize assert_score_html_renders_sparse_honesty ([SPARSE] + the lead-not-conclusion line present + the pairing never labelled Strong); seed_contributor_sparse_trail seeds one claim / one author / one subject via the production seam."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "thin_evidence_renders_sparse_and_honesty_line_at_any_confidence",
+          "n_scenarios": [
+            "C-7",
+            "C-10"
+          ],
+          "us_trace": [
+            "US-CS-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The [SPARSE] + honesty-counts projection (mapping WeightBucket::Sparse -> the marker + line, and claim_count/distinct_author_count -> the counts) is load-bearing; mutation-test the bucket-label branch (Sparse vs not) and the honesty-line presence so a mutant dressing a thin pairing as Strong is killed."
+        },
+        {
+          "id": "03-02",
+          "name": "Confidence and weight render verbatim (0.90, never 0.9 or 90%)",
+          "description": "US-CS-003 verbatim numbers (C-8, I-CS-6 / KPI-4). Every confidence renders through the EXISTING render_confidence contract verbatim ({:.2}) — 0.90, never 0.9 or 90% — and the displayed pairing weight is the exact consumed WeightedPairing.weight (no bucket-midpoint rounding) via a sibling weight formatter rendered at one site. Reuses render_confidence; adds the verbatim weight formatter (the OD/DELIVER-open precision is fixed here against the I-CS-6 scenarios).",
+          "criteria": [
+            "A contributing claim whose stored confidence is 0.90 renders as '0.90' in the breakdown, never '0.9' or '90%' (reuses the shared render_confidence verbatim contract, I-CS-6).",
+            "The displayed pairing weight is the exact consumed WeightedPairing.weight with no bucket-midpoint rounding (the verbatim weight formatter renders the consumed value).",
+            "Confidence is rendered at one site (render_confidence) and the weight at one site (the sibling weight formatter) — no second formatting path in viewer-domain.",
+            "The verbatim guarantee holds in BOTH the fragment and the full-page render (no divergence)."
+          ],
+          "acceptance_criteria": [
+            "A contributing claim whose stored confidence is 0.90 renders as '0.90' in the breakdown, never '0.9' or '90%' (reuses the shared render_confidence verbatim contract, I-CS-6).",
+            "The displayed pairing weight is the exact consumed WeightedPairing.weight with no bucket-midpoint rounding (the verbatim weight formatter renders the consumed value).",
+            "Confidence is rendered at one site (render_confidence) and the weight at one site (the sibling weight formatter) — no second formatting path in viewer-domain.",
+            "The verbatim guarantee holds in BOTH the fragment and the full-page render (no divergence)."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "confidence_and_weight_render_verbatim",
+          "n_scenarios": [
+            "C-8"
+          ],
+          "us_trace": [
+            "US-CS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The verbatim weight formatter (no rounding) is load-bearing alongside the reused render_confidence; mutation-test the formatting branch so a mutant that rounds the weight or renders 0.9/90% is killed."
+        },
+        {
+          "id": "03-03",
+          "name": "An unknown/empty contributor shows the guided NoClaims state in both shapes",
+          "description": "US-CS-003 empty/unknown state (C-9, OD-CS-6 / I-CS-5). A contributor with no local claims renders the guided 'No local claims for that contributor.' message naming the queried DID, with no fake/zero score, in BOTH the fragment (HX-Request) and full-page shapes — never a blank region, crash, or stack trace, and never a network call. This generalizes the 01-03 NoClaims arm to both shapes and pins the DID-naming + no-fake-score content via assert_score_html_renders_no_claims.",
+          "criteria": [
+            "GET /score for an unknown contributor (CONTRIBUTOR_EMPTY_DID) renders the guided 'No local claims for that contributor.' message naming the queried DID, with no fake or zero score (OD-CS-6).",
+            "The guided NoClaims state renders in BOTH the HX-Request fragment and the no-HX-Request full page (both shapes), with no blank region, crash, or stack trace.",
+            "No network call occurs in the /score path for the unknown contributor (LOCAL read only, I-CS-5).",
+            "Materialize assert_score_html_renders_no_claims (the guided message names the DID, no fake score / stack trace appears)."
+          ],
+          "acceptance_criteria": [
+            "GET /score for an unknown contributor (CONTRIBUTOR_EMPTY_DID) renders the guided 'No local claims for that contributor.' message naming the queried DID, with no fake or zero score (OD-CS-6).",
+            "The guided NoClaims state renders in BOTH the HX-Request fragment and the no-HX-Request full page (both shapes), with no blank region, crash, or stack trace.",
+            "No network call occurs in the /score path for the unknown contributor (LOCAL read only, I-CS-5).",
+            "Materialize assert_score_html_renders_no_claims (the guided message names the DID, no fake score / stack trace appears)."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring.rs",
+          "scenario_name": "unknown_contributor_renders_guided_no_claims_in_both_shapes",
+          "n_scenarios": [
+            "C-9"
+          ],
+          "us_trace": [
+            "US-CS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The NoClaims render in both shapes (DID-naming, no-fake-score) is load-bearing pure logic; mutation-test the both-shapes-render-the-guided-message branch and the DID-naming so a mutant that emits a blank region or a fake zero score is killed."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Gold guardrails — read-only, no-write, offline, transparency",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Every /score route leaves the store row counts unchanged (read-only gold)",
+          "description": "Gold guardrail C-INV-ReadOnly (I-CS-4 / WD-CS-3 / KPI-VIEW-2). Across every /score route variant (rich / sparse / empty x full-page / fragment), the claims + peer_claims row counts are UNCHANGED — the score is a READ + pure compute that persists nothing. Reuses the inherited assert_store_read_only over capture_store_row_count_universe (Mandate-8 universe = the two port-exposed row counts). Lands in viewer_contributor_scoring_invariants.rs.",
+          "criteria": [
+            "For every /score route variant (rich/sparse/empty x full-page/fragment), the claims and peer_claims row counts captured before and after are identical (assert_store_read_only over the two port-exposed counts).",
+            "No derived score, weight, or bucket is written to any store/table/file by the /score path (zero new persisted types, I-CS-4 / WD-72).",
+            "The read-only universe is the inherited capture_store_row_count_universe (the two port-exposed counts), not internal struct fields (Mandate 8).",
+            "The guardrail holds across all three seeded postures (rich, sparse, empty) in both shapes."
+          ],
+          "acceptance_criteria": [
+            "For every /score route variant (rich/sparse/empty x full-page/fragment), the claims and peer_claims row counts captured before and after are identical (assert_store_read_only over the two port-exposed counts).",
+            "No derived score, weight, or bucket is written to any store/table/file by the /score path (zero new persisted types, I-CS-4 / WD-72).",
+            "The read-only universe is the inherited capture_store_row_count_universe (the two port-exposed counts), not internal struct fields (Mandate 8).",
+            "The guardrail holds across all three seeded postures (rich, sparse, empty) in both shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+          "scenario_name": "every_score_route_leaves_store_row_counts_unchanged",
+          "n_scenarios": [
+            "C-INV-ReadOnly"
+          ],
+          "us_trace": [
+            "US-CS-001",
+            "US-CS-002",
+            "US-CS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-02",
+          "name": "No /score response renders a write/sign/follow control (no-write gold)",
+          "description": "Gold guardrail C-INV-NoWrite (I-CS-1 / WD-CS-3). No /score response shape (rich/sparse/empty x full-page/fragment) renders a sign/publish/subscribe/follow control or any executable write affordance — the optional author-row 'score' link + nav link are render-only navigation TEXT, never controls. Reuses assert_score_html_has_no_write_or_sign_control. Confirms the viewer holds no signing/identity/PDS surface on the /score path.",
+          "criteria": [
+            "No /score response shape renders a sign, publish, subscribe, or follow control, or any executable write affordance (assert_score_html_has_no_write_or_sign_control).",
+            "Any author-row 'score' link or nav link present is render-only navigation TEXT (an <a href>), never an executable write/sign control (I-CS-1).",
+            "The route inventory shows no new write/sign/subscribe route introduced by /score; no signing key is read in the viewer process.",
+            "The guardrail holds across all response shapes (full-page and fragment) and seeded postures."
+          ],
+          "acceptance_criteria": [
+            "No /score response shape renders a sign, publish, subscribe, or follow control, or any executable write affordance (assert_score_html_has_no_write_or_sign_control).",
+            "Any author-row 'score' link or nav link present is render-only navigation TEXT (an <a href>), never an executable write/sign control (I-CS-1).",
+            "The route inventory shows no new write/sign/subscribe route introduced by /score; no signing key is read in the viewer process.",
+            "The guardrail holds across all response shapes (full-page and fragment) and seeded postures."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+          "scenario_name": "no_score_response_renders_a_write_or_sign_control",
+          "n_scenarios": [
+            "C-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-CS-001"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-03",
+          "name": "Offline chrome + offline data — only local htmx, /score works network-down",
+          "description": "Gold guardrails C-INV-OfflineChrome + C-INV-Offline (I-CS-8 / KPI-HX-G2 and I-CS-5 / KPI-5). (OfflineChrome) The /score page's only script src is the local /static/htmx.min.js — zero off-host / CDN references (references_external_cdn is false). (Offline) /score renders fully with NO network seam wired — the score is a LOCAL DuckDB read + pure compute, distinct from /search (indexer) and /scrape (GitHub); the network being down never degrades /score. Reuses the slice-06 references_external_cdn + a network-disabled viewer posture.",
+          "criteria": [
+            "The /score page's only <script src> is the local /static/htmx.min.js; references_external_cdn returns false (no CDN / off-host reference, I-CS-8 / KPI-HX-G2).",
+            "/score renders a full rich-contributor score (weight + breakdown) with NO network seam wired and/or the network disabled — distinct from /search and /scrape (I-CS-5 / KPI-5).",
+            "No outbound network call occurs anywhere in the /score path (chrome AND data are local).",
+            "The offline guarantee holds for both the full-page and fragment shapes."
+          ],
+          "acceptance_criteria": [
+            "The /score page's only <script src> is the local /static/htmx.min.js; references_external_cdn returns false (no CDN / off-host reference, I-CS-8 / KPI-HX-G2).",
+            "/score renders a full rich-contributor score (weight + breakdown) with NO network seam wired and/or the network disabled — distinct from /search and /scrape (I-CS-5 / KPI-5).",
+            "No outbound network call occurs anywhere in the /score path (chrome AND data are local).",
+            "The offline guarantee holds for both the full-page and fragment shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+          "scenario_name": "score_page_uses_only_local_htmx_and_renders_fully_offline",
+          "n_scenarios": [
+            "C-INV-OfflineChrome",
+            "C-INV-Offline"
+          ],
+          "us_trace": [
+            "US-CS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-04",
+          "name": "CARDINAL transparency gold — subtotals sum to weight and no score without breakdown",
+          "description": "The CARDINAL gold guardrail C-INV-Transparency (I-CS-2 / KPI-GRAPH-3 / J-002c — the J-002c release gate). For every rendered pairing across the seeded postures, the breakdown subtotals sum to the displayed weight (reproduce-by-hand) AND a score is NEVER shown without its breakdown (no opaque number anywhere on the /score surface). This is the slice's release-blocking transparency gate; reuses assert_score_html_breakdown_sums_to_displayed_weight + the no-opaque-number assertion over every pairing. LAST roadmap step.",
+          "criteria": [
+            "For every rendered pairing across rich/sparse/conflicting postures, the parsed breakdown subtotals sum to the parsed displayed weight (reproduce-by-hand; the CARDINAL J-002c gate, I-CS-2 / KPI-GRAPH-3).",
+            "No score / weight is rendered anywhere on the /score surface without its accompanying per-claim breakdown (no opaque number, anti-opaque).",
+            "The guardrail reuses assert_score_html_breakdown_sums_to_displayed_weight over the rendered HTML and asserts breakdown presence on every weight (release-blocking).",
+            "The gate holds in both the fragment and full-page shapes."
+          ],
+          "acceptance_criteria": [
+            "For every rendered pairing across rich/sparse/conflicting postures, the parsed breakdown subtotals sum to the parsed displayed weight (reproduce-by-hand; the CARDINAL J-002c gate, I-CS-2 / KPI-GRAPH-3).",
+            "No score / weight is rendered anywhere on the /score surface without its accompanying per-claim breakdown (no opaque number, anti-opaque).",
+            "The guardrail reuses assert_score_html_breakdown_sums_to_displayed_weight over the rendered HTML and asserts breakdown presence on every weight (release-blocking).",
+            "The gate holds in both the fragment and full-page shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+          "scenario_name": "rendered_subtotals_sum_to_weight_and_no_score_without_breakdown",
+          "n_scenarios": [
+            "C-INV-Transparency"
+          ],
+          "us_trace": [
+            "US-CS-002",
+            "US-CS-003"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "04-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_contributor_scoring_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release gate. Mutation-test the running-sum projection and the no-opaque-number guarantee (every weight carries its breakdown) — a mutant that renders a weight whose rows do not sum to it, or a weight with no breakdown, must be killed (the J-002c gate toward the Phase-5 >=80% threshold)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "crates/xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-06-05T13:39:51Z"
+  }
+}
