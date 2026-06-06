@@ -30,6 +30,26 @@ use crate::bare_did;
 /// Read-only view over the SAME shared DuckDB connection the CLI writes through.
 /// Constructed via [`crate::DuckDbStorageAdapter::read_adapter`] so no second
 /// handle to the DB file is ever opened (BR-VIEW-4).
+///
+/// ## Read-only enforcement boundary (I-VIEW-1 / I-CS-4)
+///
+/// This struct holds an `Arc<Mutex<Connection>>` — a connection that is, at the
+/// type level, fully capable of writing. The read-only guarantee (I-VIEW-1 /
+/// I-CS-4: the viewer NEVER mutates the store) is NOT enforced by this type; it is
+/// enforced at the [`StoreReadPort`] TRAIT boundary, which exposes NO mutation
+/// method (only `list_*` / `count_*` / `get_claim` / `query_contributor_scoring_feed`
+/// — all read-only SELECTs). The impl must therefore only ever be reached THROUGH
+/// the trait: callers depend on `&dyn StoreReadPort`, never on this concrete type,
+/// so the absence of a write method is the contract.
+///
+/// That trait-level guarantee is backed by two further layers (three-layer
+/// enforcement): the `xtask check-arch` capability rule (which audits that the
+/// viewer holds no write/sign capability), and the behavioral gold tests
+/// (`every_score_route_leaves_the_store_read_only` / the slice-06 `viewer_is_read_only`
+/// twins) that exercise every route and assert the persisted row counts are
+/// UNCHANGED. A `ReadOnlyConnection` newtype wrapping the handle was CONSIDERED and
+/// REJECTED as over-engineering: the impl is unreachable except through the
+/// no-mutation trait, so the threat it would guard against is not reachable.
 pub struct DuckDbStoreReadAdapter {
     conn: Arc<Mutex<Connection>>,
 }

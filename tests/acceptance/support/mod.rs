@@ -8081,6 +8081,17 @@ pub fn seed_contributor_sparse_trail(env: &TestEnv, contributor_did: &str) {
     seed_peer_authored_graph(env, &[sparse_trail_seed_peer(contributor_did)]);
 }
 
+/// The VERBATIM rendered headline weight of the SPARSE trail's single pairing
+/// (`0.95`). One claim, one author (rank 1 → multiplier share `1.0`), no
+/// cross-project triangulation (`+0.0`), so `subtotal = 0.95 * 1.0 + 0.0 = 0.95`
+/// and the pairing weight IS that lone subtotal (Gate 2: weight == Σ subtotal). Held
+/// here next to `sparse_trail_seed_peer` (the `0.95` confidence source of truth) so
+/// the CARDINAL gold's sparse single-row reproduce-by-hand check
+/// ([`assert_score_html_single_row_subtotal_equals_weight`]) can pin the rendered
+/// weight against the KNOWN seeded value — catching a `render_weight` `{:.2}` →
+/// `{:.1}` format mutation on the sparse surface.
+pub const CONTRIBUTOR_SPARSE_RENDERED_WEIGHT: f64 = 0.95;
+
 /// The SPARSE-trail [`SeedPeer`] definition (ONE subject on the shared object at a
 /// HIGH 0.95 confidence → claim_count=1, distinct_author_count=1,
 /// cross_project_span=1 → `[SPARSE]` at any magnitude). Held in ONE place so the
@@ -8451,6 +8462,76 @@ pub fn assert_score_html_breakdown_sums_to_displayed_weight(body: &str) {
             pairing.subtotals,
         );
     }
+}
+
+/// Assert the SPARSE single-row reproduce-by-hand case on a rendered `/score` body:
+/// the displayed pairing weight EQUALS its single breakdown-row subtotal, BOTH read
+/// from the rendered HTML, AND that displayed weight matches `expected_weight`
+/// verbatim (the known seeded value). This is the trivial-but-real Σ(one row) ==
+/// weight case the multi-row [`assert_score_html_breakdown_sums_to_displayed_weight`]
+/// guard deliberately skips (it requires >1 row), so the sparse surface's render
+/// path is left otherwise un-pinned. Closing that gap: it parses the OBSERVABLE
+/// rendered surface (Mandate 8 universe = port-exposed HTML, never the in-process
+/// `WeightedPairing`), reusing the SAME `parse_score_pairings` logic as the multi-row
+/// helper, so the sparse `render_weight` (`{:.2}`) formatter is exercised here too.
+///
+/// Catches a `render_weight` format mutation: `{:.2}` → `{:.1}` renders the headline
+/// weight as `1.0` instead of `0.95`, so the parsed weight no longer equals the
+/// `expected_weight` literal (the equality-vs-subtotal half stays true under that
+/// mutation because BOTH cells share `render_weight`, but the verbatim literal half
+/// fails). Asserts exactly ONE pairing with exactly ONE subtotal row (the sparse
+/// shape by construction); a multi-row body here would mean the wrong posture.
+pub fn assert_score_html_single_row_subtotal_equals_weight(body: &str, expected_weight: f64) {
+    // Reuse the SAME observable-HTML parse the multi-row reproduce-by-hand gate uses
+    // (a `<section>` per pairing → headline `Weight:` + the breakdown table's last-
+    // `<td>` subtotals), so the sparse surface is held to the identical render
+    // contract — never an internal struct.
+    let pairings = parse_score_pairings(body);
+    assert_eq!(
+        pairings.len(),
+        1,
+        "sparse reproduce-by-hand: the SPARSE `/score` body must render EXACTLY one \
+         pairing <section> (single subject/object); parsed {} pairing(s) from body:\n{body}",
+        pairings.len()
+    );
+    let pairing = &pairings[0];
+    assert_eq!(
+        pairing.subtotals.len(),
+        1,
+        "sparse reproduce-by-hand: the SPARSE pairing must render EXACTLY one \
+         breakdown subtotal row (single claim, single author); parsed {} subtotal \
+         row(s): {:?}; body was:\n{body}",
+        pairing.subtotals.len(),
+        pairing.subtotals
+    );
+    let subtotal = pairing.subtotals[0];
+
+    // (a) The trivial-but-real Σ(one row) == weight case, on the OBSERVABLE surface:
+    // the lone parsed subtotal equals the parsed displayed weight (both two-decimal
+    // renders, so |diff| < 0.005 covers the per-cell rounding; a re-render is byte-
+    // identical so this never flakes). This pins the single-row arithmetic the multi-
+    // row helper skips.
+    assert!(
+        (subtotal - pairing.weight).abs() < 0.005,
+        "sparse reproduce-by-hand: the SPARSE pairing's lone rendered subtotal \
+         ({subtotal:.2}) must equal its displayed weight ({:.2}) — the trivial \
+         Σ(one row) == weight case; body was:\n{body}",
+        pairing.weight
+    );
+
+    // (b) The displayed weight matches the KNOWN seeded value VERBATIM. This is the
+    // load-bearing half that catches a `render_weight` `{:.2}` → `{:.1}` mutation:
+    // the equality-vs-subtotal half above survives such a mutation (both cells share
+    // `render_weight`, so both shift together), but the rendered weight would read
+    // `1.0` instead of `0.95`, so the parsed value no longer equals `expected_weight`.
+    assert!(
+        (pairing.weight - expected_weight).abs() < 0.005,
+        "sparse reproduce-by-hand: the SPARSE pairing's displayed weight \
+         ({:.2}) must equal the known seeded value ({expected_weight:.2}) verbatim — \
+         a `render_weight` format mutation (e.g. `{{:.2}}` → `{{:.1}}`) would render \
+         the wrong value here; body was:\n{body}",
+        pairing.weight
+    );
 }
 
 /// Assert the ANTI-OPAQUE structural invariant on a rendered `/score` body: NO

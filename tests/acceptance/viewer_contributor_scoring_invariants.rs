@@ -575,11 +575,24 @@ fn a_rendered_score_is_never_shown_without_its_breakdown_summing_to_the_weight()
         // (b) SUM-TO-WEIGHT reproduce-by-hand (the multi-row postures): for every
         // rendered pairing the parsed breakdown subtotals sum to the parsed displayed
         // weight (Σ subtotal == weight). The shared helper enforces a NON-trivial
-        // (>1-row) decomposition, so it runs over the rich + conflicting surfaces
-        // (the sparse single-row surface is covered by the anti-opaque guard above —
-        // its lone subtotal IS the displayed weight by construction).
+        // (>1-row) decomposition, so it runs over the rich + conflicting surfaces.
         if *is_multi_row {
             assert_score_html_breakdown_sums_to_displayed_weight(body);
+        } else {
+            // (b') SPARSE single-row reproduce-by-hand (closes the multi-row helper's
+            // coverage gap, review D1): the sparse posture is ONE claim → ONE pairing
+            // → ONE breakdown row, so the >1-row helper above skips it. Here the lone
+            // rendered subtotal must EQUAL the displayed weight (the trivial-but-real
+            // Σ(one row) == weight case) AND that displayed weight must match the
+            // KNOWN seeded value `CONTRIBUTOR_SPARSE_RENDERED_WEIGHT` VERBATIM — so the
+            // `render_weight` `{:.2}` formatter is pinned on the sparse surface too (a
+            // `{:.2}` → `{:.1}` mutation would render `1.0` instead of `0.95` and fail
+            // the verbatim check). Asserted on the OBSERVABLE rendered HTML, both
+            // shapes (the sparse arm runs once per shape).
+            assert_score_html_single_row_subtotal_equals_weight(
+                body,
+                CONTRIBUTOR_SPARSE_RENDERED_WEIGHT,
+            );
         }
 
         // (c) NEVER an opaque number: the weight is shown WITH a per-claim breakdown
