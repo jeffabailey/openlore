@@ -8889,12 +8889,24 @@ pub fn seed_two_author_same_edge(
     // pure `group_*` projection decomposes the ONE group into TWO attributed
     // `EdgeRow`s under their own author_dids — never averaged/merged (anti-merging;
     // I-GT-3). NO hand-inserted store rows. Returns the two distinct author DIDs in
-    // seeded order (own, peer).
-    let _ = (subject, object);
-    todo!(
-        "slice-10 DELIVER: seed two authors on ONE (subject, object) via \
-         seed_own_plus_peer_graph — own claim (0.92) + Tobias peer claim (0.70) on \
-         the SAME (subject, object); return (local_did, tobias_did). RED scaffold."
+    // seeded order (own, peer). Mirrors slice-09's `seed_contributor_conflicting_
+    // authors` shape exactly, swapping the survey key to the passed (subject, object).
+    seed_own_plus_peer_graph(
+        env,
+        &[OwnClaim {
+            subject,
+            object,
+            confidence: 0.92,
+        }],
+        &[SeedPeer {
+            peer_did: TRAVERSAL_AUTHOR_TOBIAS,
+            seed: [43u8; 32],
+            triples: &[(subject, object, 0.70)],
+        }],
+    );
+    (
+        env.identity.author_did().to_string(),
+        TRAVERSAL_AUTHOR_TOBIAS.to_string(),
     )
 }
 
@@ -9008,11 +9020,19 @@ pub fn assert_traversal_html_groups_attributed_and_verbatim(
 ///
 /// SCAFFOLD: true (slice-10).
 pub fn assert_traversal_html_names_cids(body: &str, expected_cids: &[String]) {
-    let _ = (body, expected_cids);
-    todo!(
-        "slice-10 DELIVER: assert every expected cid appears on its edge row (each \
-         edge = exactly one signed claim; no invented edges, I-GT-4). RED scaffold."
-    )
+    assert!(
+        !expected_cids.is_empty(),
+        "I-GT-4: the cid-naming assertion needs ≥1 expected cid (the seeded survey \
+         trail produced none); body was:\n{body}"
+    );
+    for cid in expected_cids {
+        assert!(
+            body.contains(cid.as_str()),
+            "I-GT-4: the traversal survey must NAME the contributing claim cid {cid:?} \
+             on its edge row (every edge maps to exactly one signed claim — no invented \
+             edges); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a rendered traversal survey body lists each expected contributor DID as a
