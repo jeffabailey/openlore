@@ -1,0 +1,460 @@
+{
+  "roadmap": {
+    "project_id": "viewer-counter-claim-threads",
+    "created_at": "2026-06-06T00:00:00Z",
+    "total_steps": 11
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton \u2014 the counter-thread on GET /claims/{cid}",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only query_counter_claims read + pure CounterThread ADT + thread render into GET /claims/{cid} and return the htmx detail fragment with the thread (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-CT-001 capability + US-CT-002 render, CT-1). It forces the WHOLE counter-thread thread into existence end-to-end. (ports) Add `query_counter_claims(&self, target_cid: &str) -> Result<Vec<CounterClaimRow>, StoreReadError>` to the read-only StoreReadPort trait + the flat `CounterClaimRow` boundary DTO (non-Option author_did + cid, Option<String> reason, f64 confidence, DateTime<Utc> composed_at, PeerOrigin origin) \u2014 NO mutation method added to the port (I-CT-1). (adapter-duckdb) Impl it on DuckDbStoreReadAdapter (src/store_read.rs) as the ADR-046 2-step read: Step A = the indexed UNION ALL ref lookup over the SAME shared connection (claims JOIN claim_references + peer_claims JOIN peer_claim_references, WHERE referenced_cid = ? AND ref_type = 'counters', explicit author_did + cid + source_table discriminant, ORDER BY composed_at, source_table, cid \u2014 intra-store JOINs only, no cross-store merge/AVG/GROUP-BY); Step B = a per-row read_artifact_at(artifact_path) to decode each counter's unsigned.reason (Option<String>) \u2014 LOCAL only, no network; returns Ok(vec![]) for an un-countered target. (viewer-domain) Add the PURE CounterThread ADT (None | Countered { counters: Vec<CounterEntry> }) + the CounterEntry view-model + the total projection Vec<CounterClaimRow> -> CounterThread (empty -> None; non-empty -> Countered, one entry per row, order preserved, is_own derived from PeerOrigin), and EXTEND render_claim_detail_fragment to render the counter-thread BENEATH the existing render_claim_fields + render_evidence_section (naming each counter's author_did + its CID + verbatim reason, reusing render_confidence single-site + the (you) annotation + the /claims/{counter_cid} link). (adapter-http-viewer) In claim_detail_page (src/lib.rs), on the Ok(Some(detail)) arm, also call store.query_counter_claims(cid), project to CounterThread, and pass it to the extended render \u2014 reading the store the ViewerServer ALREADY holds (no new field), Shape fork reused UNCHANGED, no new route, no network. Materialize the seed_claim_with_counter support seam (via seed_peer_authored_graph for Rachel's 0.91 target + the production `claim counter --reason` verb for Maria's OWN counter) and the assert_counter_thread_renders_attributed_verbatim helper body in support/mod.rs. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the 2-step read is a LOCAL read).",
+          "criteria": [
+            "GET /claims/{cid} with the HX-Request header, over a seeded local store where Rachel's claim (confidence 0.91) is countered by Maria's own counter (seed_claim_with_counter), returns 200 text/html containing ONLY the #claim-detail fragment (no page chrome, no <head>): the claim renders verbatim (confidence 0.91) and, beneath it, a counter-thread section names the counter's author DID, its own CID, and its verbatim reason.",
+            "StoreReadPort gains a single read-only method query_counter_claims(&str) -> Result<Vec<CounterClaimRow>, StoreReadError> + the CounterClaimRow DTO (non-Option author_did + cid, Option reason); NO mutation method is added to the port; the DuckDbStoreReadAdapter implements it as the ADR-046 2-step read (indexed UNION ALL ref lookup over the shared connection filtered to ref_type='counters' with explicit author_did + cid + no cross-store merge JOIN, then a per-row artifact read for the reason), LOCAL only with no network call, returning an empty vec for an un-countered CID.",
+            "The detail route reads the store the ViewerServer ALREADY holds (no new field), holds NO signing key, and adds no write/sign/counter route; the counter's CID renders only as render-only navigation TEXT toward /claims/{counter_cid}.",
+            "The original claim's confidence renders through the single render_confidence site (0.91 verbatim, never 0.9 or 91%), unchanged by the presence of the counter."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} with the HX-Request header, over a seeded local store where Rachel's claim (confidence 0.91) is countered by Maria's own counter (seed_claim_with_counter), returns 200 text/html containing ONLY the #claim-detail fragment (no page chrome, no <head>): the claim renders verbatim (confidence 0.91) and, beneath it, a counter-thread section names the counter's author DID, its own CID, and its verbatim reason.",
+            "StoreReadPort gains a single read-only method query_counter_claims(&str) -> Result<Vec<CounterClaimRow>, StoreReadError> + the CounterClaimRow DTO (non-Option author_did + cid, Option reason); NO mutation method is added to the port; the DuckDbStoreReadAdapter implements it as the ADR-046 2-step read (indexed UNION ALL ref lookup over the shared connection filtered to ref_type='counters' with explicit author_did + cid + no cross-store merge JOIN, then a per-row artifact read for the reason), LOCAL only with no network call, returning an empty vec for an un-countered CID.",
+            "The detail route reads the store the ViewerServer ALREADY holds (no new field), holds NO signing key, and adds no write/sign/counter route; the counter's CID renders only as render-only navigation TEXT toward /claims/{counter_cid}.",
+            "The original claim's confidence renders through the single render_confidence site (0.91 verbatim, never 0.9 or 91%), unchanged by the presence of the counter."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "open_a_countered_claim_with_htmx_returns_only_the_detail_fragment_with_the_thread",
+          "n_scenarios": [
+            "CT-1"
+          ],
+          "us_trace": [
+            "US-CT-001",
+            "US-CT-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (CounterThread ADT + the Vec<CounterClaimRow> -> CounterThread projection + the thread render beneath the claim) AND the ADR-046 2-step adapter read. Extend nightly mutation testing to this projection/read (empty -> None vs non-empty -> Countered branch, per-counter author_did + cid + verbatim reason attribution, ref_type='counters' filter, the no-cross-store-merge UNION ALL, and the per-row artifact reason decode)."
+        },
+        {
+          "id": "01-02",
+          "name": "GET /claims/{cid} no-JS full page + fragment parity (page embeds the same detail fragment fn, thread included)",
+          "description": "Complete the detail render contract for the counter-thread (CT-2; I-CT-6). GET /claims/{cid} WITHOUT HX-Request serves a COMPLETE full page (chrome + the SAME #claim-detail region with the claim + counter-thread) for the no-JS no-regression path; the #claim-detail region inside the full page is structurally IDENTICAL to the htmx fragment \u2014 parity by construction because the full-page render EMBEDS render_claim_detail_fragment (the thread is rendered INSIDE the fragment fn the page embeds). Confirmatory once 01-01 exists (no new read; the thread already renders inside the fragment fn \u2014 this pins that the full page embeds it). The full page is the contract; the htmx swap is a nicety.",
+          "criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter) WITHOUT HX-Request returns a complete full HTML page (is_full_page(): <head>, page chrome, and the embedded #claim-detail region); WITH HX-Request returns the bare #claim-detail fragment (is_fragment(), no chrome).",
+            "The counter's author DID, its CID, and its verbatim reason appear in BOTH the full-page body and the htmx-fragment body \u2014 the full page embeds the same detail fragment fn (parity by construction, I-CT-6).",
+            "No divergence between the two shapes: the same claim (confidence 0.91 verbatim) and the same counter-thread render in both."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter) WITHOUT HX-Request returns a complete full HTML page (is_full_page(): <head>, page chrome, and the embedded #claim-detail region); WITH HX-Request returns the bare #claim-detail fragment (is_fragment(), no chrome).",
+            "The counter's author DID, its CID, and its verbatim reason appear in BOTH the full-page body and the htmx-fragment body \u2014 the full page embeds the same detail fragment fn (parity by construction, I-CT-6).",
+            "No divergence between the two shapes: the same claim (confidence 0.91 verbatim) and the same counter-thread render in both."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "a_countered_claim_renders_identically_under_htmx_and_no_js",
+          "n_scenarios": [
+            "CT-2"
+          ],
+          "us_trace": [
+            "US-CT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Attribution + verbatim reason + the empty-reason edge (REAL work)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "The counter reason renders verbatim and its CID is a one-hop drill-link (depth-1, no recursion)",
+          "description": "The verbatim-reason + drill-link scenario for US-CT-002 (CT-5; I-CT-3 / I-CT-4 / ADR-047). The counter's free-text --reason renders EXACTLY as authored (including punctuation), the original claim's confidence renders verbatim (0.91, never 0.9/91%), and the counter's CID is a render-only <a href> to /claims/{counter_cid} \u2014 a ONE-HOP drill into the counter's own detail, with NO nested/recursive counter render (depth-1, ADR-047). Reuses seed_claim_with_counter + assert_counter_thread_renders_attributed_verbatim from 01-01; pins the verbatim reason byte-fidelity and the depth-1 drill-link href on the observable surface.",
+          "criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter capturing the verbatim reason + the counter CID) renders the counter's reason text byte-for-byte (including its punctuation), the original claim's confidence as 0.91 verbatim (never 0.9 or 91%), and the counter's CID as an <a href=\"/claims/{counter_cid}\"> render-only one-hop drill-link.",
+            "The drill-link is depth-1: the counter's own counters are NOT rendered inline (no nested/recursive thread); drilling renders the counter's detail via the same /claims/{cid} route.",
+            "Each counter CID is render-only navigation TEXT (an <a href> anchor), never an executable control."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter capturing the verbatim reason + the counter CID) renders the counter's reason text byte-for-byte (including its punctuation), the original claim's confidence as 0.91 verbatim (never 0.9 or 91%), and the counter's CID as an <a href=\"/claims/{counter_cid}\"> render-only one-hop drill-link.",
+            "The drill-link is depth-1: the counter's own counters are NOT rendered inline (no nested/recursive thread); drilling renders the counter's detail via the same /claims/{cid} route.",
+            "Each counter CID is render-only navigation TEXT (an <a href> anchor), never an executable control."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "the_counter_reason_renders_verbatim_and_its_cid_is_a_one_hop_drill_link",
+          "n_scenarios": [
+            "CT-5"
+          ],
+          "us_trace": [
+            "US-CT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The verbatim-reason render + the depth-1 /claims/{counter_cid} href (the no-nested-render boundary) are load-bearing; mutation-test the verbatim reason rendering and the drill-link href construction so a mutant that truncates/escapes the reason or that recurses into nested counters is killed."
+        },
+        {
+          "id": "02-02",
+          "name": "Two counters by distinct authors render as two attributed items, never merged (anti-merging \u2014 needs the new peer-counter seed builder, REAL work)",
+          "description": "The CARDINAL anti-merging GOLD scenario for the counter-thread (CT-4; I-CT-3 / KPI-AV-2 / KPI-GRAPH-2 / KPI-FED-1). A claim countered by TWO DISTINCT authors \u2014 Maria's OWN counter via `claim counter` (-> claims) AND peer Tobias's counter via `peer add` + `peer pull` (-> peer_claims) \u2014 renders TWO attributed counter entries under their OWN author DIDs + CIDs + verbatim reasons, and NEVER a merged 'disputed by 2' / consensus aggregate row. REAL work: the existing build_verifiable_peer_records_for_triples hardcodes references: Vec::new(), so this step MUST add a new peer-counter seed builder (e.g. build_verifiable_peer_counter_record(tobias_did, seed, target_cid, reason)) that emits a verifiable peer signed record carrying references:[{type:counters, cid:target_cid}] + a reason, so the peer counter is produced (and CID-recomputed + verified) by the production pull pipeline \u2014 NOT hand-inserted. Materialize seed_claim_two_counters_distinct_authors + the assert_counter_thread_two_attributed_no_merge helper body in support/mod.rs. The CounterThread ADT has NO aggregate variant by construction (ADR-047), and the adapter UNION ALL projects author_did + cid explicitly with no cross-store merge JOIN (ADR-046).",
+          "criteria": [
+            "GET /claims/{cid} over a claim countered by two distinct authors (seed_claim_two_counters_distinct_authors: Maria's own counter + peer Tobias's counter) renders EXACTLY two attributed counter entries \u2014 one naming Maria's DID + her CID, one naming Tobias's DID + his CID \u2014 each with its own verbatim reason.",
+            "No single row aggregates the two counters into a 'disputed by 2' / consensus / net-verdict row on the rendered surface (anti-merging; the entries are never collapsed across authors).",
+            "The peer counter is produced by the production federation pull path from a verifiable peer record carrying references:[{type:counters, cid:target_cid}] (the new peer-counter seed builder), not a hand-inserted store row; the read returns it via the indexed UNION ALL over claims and peer_claims with explicit per-author attribution."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over a claim countered by two distinct authors (seed_claim_two_counters_distinct_authors: Maria's own counter + peer Tobias's counter) renders EXACTLY two attributed counter entries \u2014 one naming Maria's DID + her CID, one naming Tobias's DID + his CID \u2014 each with its own verbatim reason.",
+            "No single row aggregates the two counters into a 'disputed by 2' / consensus / net-verdict row on the rendered surface (anti-merging; the entries are never collapsed across authors).",
+            "The peer counter is produced by the production federation pull path from a verifiable peer record carrying references:[{type:counters, cid:target_cid}] (the new peer-counter seed builder), not a hand-inserted store row; the read returns it via the indexed UNION ALL over claims and peer_claims with explicit per-author attribution."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "two_counters_by_distinct_authors_render_as_two_attributed_items_never_merged",
+          "n_scenarios": [
+            "CT-4"
+          ],
+          "us_trace": [
+            "US-CT-002"
+          ],
+          "estimate_hours": 8,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The per-counter no-merge projection (one CounterEntry per (author, cid), NO aggregate variant in the ADT) plus the new peer-counter seed builder are load-bearing anti-merging logic; mutation-test the two-entries-never-one-entry branch and the per-entry author_did + cid rendering so a mutant that merges or elides an author is killed."
+        },
+        {
+          "id": "02-03",
+          "name": "A counter with no reason renders an explicit 'no reason provided' state (empty-reason edge, REAL work)",
+          "description": "The empty-reason edge for US-CT-002 (CT-6; ADR-047 / ADR-015 wire-optional). A counter whose reason is absent (a peer record authored by a non-OpenLore client, unsigned.reason == None) renders an explicit 'no reason provided' state \u2014 the counter's author DID + its CID are STILL shown \u2014 never a blank line, never a crash. The empty-reason edge is total at the type level (reason: Option<String> in CounterClaimRow/CounterEntry). REAL work: requires the new peer-counter seed builder (from 02-02) in its reason-OMITTED form to land a verifiable peer counter with no reason via `peer add` + `peer pull`, plus the render arm that maps None/empty-after-trim -> 'no reason provided'. Materialize seed_counter_empty_reason + the assert_counter_thread_empty_reason_state helper body in support/mod.rs.",
+          "criteria": [
+            "GET /claims/{cid} over a claim countered by a peer record whose reason is absent (seed_counter_empty_reason) renders the counter entry with its author DID + its CID STILL shown, AND an explicit 'no reason provided' state in place of the reason text.",
+            "The empty-reason counter never renders a blank line and never causes a 5xx / panic (the edge is total via reason: Option<String>; ADR-047).",
+            "The peer counter with no reason is produced by the production federation pull path from a verifiable peer record (the reason-OMITTED form of the peer-counter seed builder), not a hand-inserted store row."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over a claim countered by a peer record whose reason is absent (seed_counter_empty_reason) renders the counter entry with its author DID + its CID STILL shown, AND an explicit 'no reason provided' state in place of the reason text.",
+            "The empty-reason counter never renders a blank line and never causes a 5xx / panic (the edge is total via reason: Option<String>; ADR-047).",
+            "The peer counter with no reason is produced by the production federation pull path from a verifiable peer record (the reason-OMITTED form of the peer-counter seed builder), not a hand-inserted store row."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "a_counter_with_no_reason_renders_an_explicit_no_reason_provided_state",
+          "n_scenarios": [
+            "CT-6"
+          ],
+          "us_trace": [
+            "US-CT-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The empty-reason render arm (None/empty-after-trim -> 'no reason provided', author DID + CID still shown) is load-bearing reliability logic; mutation-test the Some(reason) vs None branch so a mutant that renders a blank line or drops the attribution is killed."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "No-noise discipline + neutral presence flag + 404 no-regression",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "An un-countered claim shows no counter section and no empty noise; the countered claim is shown verbatim never re-weighted (no-noise + shown-never-applied)",
+          "description": "Two story-local scenarios that ride the same no-noise / shown-never-applied discipline (CT-7 no-noise + CT-3 shown-never-applied; US-CT-003 / US-CT-002, I-CT-2). (CT-7) An un-countered claim (seed_uncountered_claim) yields an empty query_counter_claims result -> CounterThread::None -> the detail renders the claim ALONE: NO 'Counter-claims' section, NO 'Countered' flag, NO '0 counters' / 'no disagreement' empty-state noise (byte-unaffected common case). (CT-3) The SAME claim (confidence 0.91) rendered un-countered (seed_uncountered_claim) and countered (seed_claim_with_counter) shows the claim's confidence + fields byte-identical in both \u2014 the counter is additive context BELOW, never a re-weight ABOVE. Materialize seed_uncountered_claim + the assert_no_counter_thread_noise + assert_counter_claim_verbatim_unchanged helper bodies in support/mod.rs. Confirmatory once 01-01 exists (the None arm + verbatim render already present); pins the no-noise + shown-never-applied properties on the observable surface.",
+          "criteria": [
+            "GET /claims/{cid} over an un-countered claim (seed_uncountered_claim) renders the claim + evidence as in slice-06 (status 200) with NO 'Counter-claims' section, NO 'Countered' presence flag, and NO '0 counters' / 'no disagreement' empty-state text.",
+            "The SAME claim rendered un-countered and countered shows its confidence (0.91 verbatim) and its claim-region fields byte-identical in both renders \u2014 the counter never re-weights, filters, merges, or re-ranks the claim (shown-never-applied, I-CT-2 / I-CT-4).",
+            "assert_no_counter_thread_noise and assert_counter_claim_verbatim_unchanged are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over an un-countered claim (seed_uncountered_claim) renders the claim + evidence as in slice-06 (status 200) with NO 'Counter-claims' section, NO 'Countered' presence flag, and NO '0 counters' / 'no disagreement' empty-state text.",
+            "The SAME claim rendered un-countered and countered shows its confidence (0.91 verbatim) and its claim-region fields byte-identical in both renders \u2014 the counter never re-weights, filters, merges, or re-ranks the claim (shown-never-applied, I-CT-2 / I-CT-4).",
+            "assert_no_counter_thread_noise and assert_counter_claim_verbatim_unchanged are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "an_un_countered_claim_shows_no_counter_section_and_no_empty_noise",
+          "n_scenarios": [
+            "CT-7",
+            "CT-3"
+          ],
+          "us_trace": [
+            "US-CT-002",
+            "US-CT-003"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The None arm (no section, no flag, no empty-state noise) and the shown-never-applied verbatim render are load-bearing; mutation-test the empty -> None no-noise branch and the confidence/fields-unchanged property so a mutant that emits '0 counters' noise or re-weights the claim is killed."
+        },
+        {
+          "id": "03-02",
+          "name": "A countered claim shows a neutral 'Countered' presence flag, not a verdict",
+          "description": "The neutral presence-flag scenario for US-CT-003 (CT-8; I-CT-3). A countered claim (seed_claim_with_counter) shows a neutral 'Countered' presence indicator near the claim \u2014 a PRESENCE marker only, NEVER a verdict, a score, a count ('disputed by N'), or a count-based re-rank. The flag makes disagreement legible without picking a winner. Reuses seed_claim_with_counter; adds the neutral presence-flag render on the Countered arm + materializes the assert_counter_thread_presence_flag_is_neutral helper body in support/mod.rs. Largely confirmatory once 01-01's Countered arm exists; pins the neutral (non-verdict, non-count) phrasing of the flag.",
+          "criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter) marks the claim with a neutral 'Countered' presence flag (presence only).",
+            "No verdict / score / 'disputed by N' count-based phrasing appears anywhere on the rendered surface \u2014 the flag is a marker, never a weight, count, or re-rank (I-CT-3).",
+            "assert_counter_thread_presence_flag_is_neutral is materialized in support/mod.rs and asserts the neutral presence flag is present AND no count/verdict phrasing is present."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} over a countered claim (seed_claim_with_counter) marks the claim with a neutral 'Countered' presence flag (presence only).",
+            "No verdict / score / 'disputed by N' count-based phrasing appears anywhere on the rendered surface \u2014 the flag is a marker, never a weight, count, or re-rank (I-CT-3).",
+            "assert_counter_thread_presence_flag_is_neutral is materialized in support/mod.rs and asserts the neutral presence flag is present AND no count/verdict phrasing is present."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "a_countered_claim_shows_a_neutral_countered_presence_flag_not_a_verdict",
+          "n_scenarios": [
+            "CT-8"
+          ],
+          "us_trace": [
+            "US-CT-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The neutral presence-flag render (presence-only, no count/verdict phrasing) is load-bearing; mutation-test the flag-present branch and the no-count phrasing so a mutant that emits a 'disputed by N' count or a verdict is killed."
+        },
+        {
+          "id": "03-03",
+          "name": "An unknown CID keeps the existing guided not-found with no thread added (no slice-06 regression)",
+          "description": "The 404 boundary for US-CT-003 (CT-9; slice-06 V-7 no-regression). A CID not in the store STILL shows the EXISTING slice-06 guided not-found page ('No claim with that identifier in your store' + a back link to /claims) \u2014 UNCHANGED by slice-11. The 404 path gains NO counter thread / flag (the thread is built ONLY on the Ok(Some(detail)) arm, never the not-found arm). Confirmatory once 01-01 exists (the thread is wired into the found arm only); pins that slice-11 does not regress slice-06 V-7. Reuses seed_claim_with_counter (so the store is non-empty) + the existing not-found assertions.",
+          "criteria": [
+            "GET /claims/{cid} for a CID that is NOT in the store (with the store non-empty via seed_claim_with_counter) renders the EXISTING slice-06 guided not-found message 'No claim with that identifier in your store' + a '/claims' back link, UNCHANGED.",
+            "The 404 body carries NO 'Counter-claims' section and NO 'Countered' presence flag \u2014 the thread is built only on the claim-found arm (no slice-06 V-7 regression).",
+            "The not-found path is read-only and adds no write/sign/counter control."
+          ],
+          "acceptance_criteria": [
+            "GET /claims/{cid} for a CID that is NOT in the store (with the store non-empty via seed_claim_with_counter) renders the EXISTING slice-06 guided not-found message 'No claim with that identifier in your store' + a '/claims' back link, UNCHANGED.",
+            "The 404 body carries NO 'Counter-claims' section and NO 'Countered' presence flag \u2014 the thread is built only on the claim-found arm (no slice-06 V-7 regression).",
+            "The not-found path is read-only and adds no write/sign/counter control."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads.rs",
+          "scenario_name": "an_unknown_cid_keeps_the_existing_guided_not_found_with_no_thread_added",
+          "n_scenarios": [
+            "CT-9"
+          ],
+          "us_trace": [
+            "US-CT-003"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Gold guardrails \u2014 read-only, no-write, offline, shown-never-applied (cross-cutting, LAST)",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Every detail route with counters leaves the store read-only + no detail response adds a write/sign control (gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-03 are done (CT-INV-ReadOnly + CT-INV-NoWrite; I-CT-1 / KPI-VIEW-2). (ReadOnly) Exercising the detail route across postures (countered + un-countered) AND both shapes (full page + htmx fragment), plus a non-existent CID, leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts) \u2014 over a NON-TRIVIAL store (own + peer counter via seed_claim_two_counters_distinct_authors so the read-only delta is over a populated store). The thread is computed per query and persists nothing. (NoWrite) No detail response shape (full page or fragment, countered or not) renders a sign/publish/counter/subscribe control; any /claims/{cid} drill-link present is render-only <a href> navigation TEXT. Both reuse the inherited harnesses (assert_store_read_only, capture_store_row_count_universe) + assert_detail_html_has_no_write_or_sign_control (materialize its body in support/mod.rs). Lands in viewer_counter_claim_threads_invariants.rs.",
+          "criteria": [
+            "Exercising the detail route (countered + un-countered CID + a non-existent CID, full page + htmx fragment) over a non-trivial store leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CT-1).",
+            "The counter-thread is recomputed per query and never persisted (zero new persisted rows; the read-only universe is the inherited port-exposed counts, Mandate 8).",
+            "No detail response shape (full page or fragment, countered or un-countered) renders a sign/publish/counter/subscribe control (assert_detail_html_has_no_write_or_sign_control over EVERY shape x posture).",
+            "Any /claims/{cid} drill-link present is render-only navigation TEXT (an <a href> anchor), never an executable control; assert_detail_html_has_no_write_or_sign_control is materialized in support/mod.rs."
+          ],
+          "acceptance_criteria": [
+            "Exercising the detail route (countered + un-countered CID + a non-existent CID, full page + htmx fragment) over a non-trivial store leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CT-1).",
+            "The counter-thread is recomputed per query and never persisted (zero new persisted rows; the read-only universe is the inherited port-exposed counts, Mandate 8).",
+            "No detail response shape (full page or fragment, countered or un-countered) renders a sign/publish/counter/subscribe control (assert_detail_html_has_no_write_or_sign_control over EVERY shape x posture).",
+            "Any /claims/{cid} drill-link present is render-only navigation TEXT (an <a href> anchor), never an executable control; assert_detail_html_has_no_write_or_sign_control is materialized in support/mod.rs."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+          "scenario_name": "every_detail_route_with_counters_leaves_the_store_read_only",
+          "n_scenarios": [
+            "CT-INV-ReadOnly",
+            "CT-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-CT-002",
+            "US-CT-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-02",
+          "name": "The counter-thread chrome stays offline (no CDN) and the whole thread renders fully offline (gold)",
+          "description": "Two offline gold guardrails (CT-INV-OfflineChrome + CT-INV-Offline; I-CT-5 / KPI-HX-G2 and I-CT-5 / KPI-5). (OfflineChrome) The countered-claim detail full page references ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false in both shapes). (Offline) The counter-thread renders fully with NO network seam wired (plain ViewerServer::start) over a store seeded with a PULLED PEER counter (verified at pull time) \u2014 the 2-step read (indexed DB ref lookup + local artifact fs::read for the reason) is LOCAL with NO outbound edge to take down, so the peer counter's author DID + CID + verbatim reason render with no Unavailable/degraded notice in both shapes (offline-STRONGER than /search; the viewer re-verifies nothing). Reuses seed_claim_with_counter (peer-counter posture) + the slice-06 references_external_cdn + the network-disabled viewer posture. Lands in viewer_counter_claim_threads_invariants.rs; flips green for free once 01-01 + the chrome exist.",
+          "criteria": [
+            "The countered-claim detail full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both the full-page and htmx-fragment shapes (no CDN / off-host reference, I-CT-5 / KPI-HX-G2).",
+            "GET /claims/{cid} over a claim with a pulled PEER counter, with NO network seam wired (plain ViewerServer::start), renders the full counter-thread (the peer counter's author DID + CID + verbatim reason) in BOTH shapes from the LOCAL store with no network call \u2014 the 2-step read is LOCAL.",
+            "Neither shape renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the counter-thread route has no outbound edge (I-CT-5 / KPI-5)."
+          ],
+          "acceptance_criteria": [
+            "The countered-claim detail full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both the full-page and htmx-fragment shapes (no CDN / off-host reference, I-CT-5 / KPI-HX-G2).",
+            "GET /claims/{cid} over a claim with a pulled PEER counter, with NO network seam wired (plain ViewerServer::start), renders the full counter-thread (the peer counter's author DID + CID + verbatim reason) in BOTH shapes from the LOCAL store with no network call \u2014 the 2-step read is LOCAL.",
+            "Neither shape renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the counter-thread route has no outbound edge (I-CT-5 / KPI-5)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+          "scenario_name": "the_counter_thread_page_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "CT-INV-OfflineChrome",
+            "CT-INV-Offline"
+          ],
+          "us_trace": [
+            "US-CT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-03",
+          "name": "SHOWN-NEVER-APPLIED GOLD \u2014 the countered claim confidence is byte-identical with and without counters, in both shapes (LAST)",
+          "description": "The CARDINAL shown-never-applied gold guardrail (CT-INV-ShownNeverApplied; I-CT-2 / OD-AV-7 / ADR-015 \u2014 the load-bearing slice-11 invariant; release-blocking). The SAME claim (confidence 0.91) rendered un-countered (seed_uncountered_claim) and countered (seed_claim_with_counter, own + peer counters) shows its rendered confidence AND its claim-region fields byte-IDENTICAL whether or not it is countered \u2014 the counter never filters, merges, down-weights, or re-ranks the claim. Disagreement is additive context BELOW the claim and changes NOTHING above. A shown-never-applied regression silently lets a counter mutate the claim being read; this gold makes it unshippable. Generalizes the 03-01 story-local shown-never-applied check to the cross-cutting release gate. Reuses assert_counter_claim_verbatim_unchanged (materialized in 03-01) over both the un-countered and countered renders. LAST roadmap step (it tends to flip green for free once 01-01 + 03-01 hold, because the claim is built from get_claim UNCHANGED and the thread is a separate ADT rendered below).",
+          "criteria": [
+            "The SAME claim (confidence 0.91) rendered un-countered (seed_uncountered_claim) and countered (seed_claim_with_counter) shows its confidence as 0.91 verbatim AND its claim-region fields byte-identical across both renders \u2014 the counter never re-weights, filters, merges, or re-ranks the claim (shown-never-applied, I-CT-2 / OD-AV-7 / ADR-015).",
+            "The byte-identity holds because the countered claim is built from get_claim UNCHANGED and the counter-thread is a separate ADT rendered BELOW \u2014 no code path feeds a counter back into the claim's confidence/fields.",
+            "Any divergence in the claim region between the un-countered and countered renders is an UNSHIPPABLE shown-never-applied breach (release-blocking); assert_counter_claim_verbatim_unchanged is asserted over both renders."
+          ],
+          "acceptance_criteria": [
+            "The SAME claim (confidence 0.91) rendered un-countered (seed_uncountered_claim) and countered (seed_claim_with_counter) shows its confidence as 0.91 verbatim AND its claim-region fields byte-identical across both renders \u2014 the counter never re-weights, filters, merges, or re-ranks the claim (shown-never-applied, I-CT-2 / OD-AV-7 / ADR-015).",
+            "The byte-identity holds because the countered claim is built from get_claim UNCHANGED and the counter-thread is a separate ADT rendered BELOW \u2014 no code path feeds a counter back into the claim's confidence/fields.",
+            "Any divergence in the claim region between the un-countered and countered renders is an UNSHIPPABLE shown-never-applied breach (release-blocking); assert_counter_claim_verbatim_unchanged is asserted over both renders."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+          "scenario_name": "the_countered_claim_confidence_is_byte_identical_with_and_without_counters",
+          "n_scenarios": [
+            "CT-INV-ShownNeverApplied"
+          ],
+          "us_trace": [
+            "US-CT-002",
+            "US-CT-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_threads_invariants.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release-blocking shown-never-applied gate. Mutation-test the claim-region byte-identity across countered/un-countered \u2014 a mutant that feeds a counter back into the claim's confidence/fields (a re-weight, filter, or re-rank) must be killed (the I-CT-2 gate toward the Phase-5 mutation threshold)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-solution-architect-reviewer",
+    "note": "APPROVED 0 blockers; 14/14 scenarios covered; real-work isolated"
+  },
+  "total_steps": 11
+}
