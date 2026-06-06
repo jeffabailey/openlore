@@ -4108,6 +4108,87 @@ mod tests {
         );
     }
 
+    /// Behavior / CARDINAL anti-opaque (C-5/C-4; I-CS-2 / J-002c): the renderer
+    /// NEVER projects a `Weight:` headline without an accompanying per-claim
+    /// breakdown `<table>` — across the RICH (multi-pairing/multi-row), SPARSE
+    /// (single-row), and CONFLICTING-authors (one pairing, two rows) feeds, in BOTH
+    /// the fragment AND the full page. This pins the STRUCTURAL half of the cardinal
+    /// transparency gate at the unit level: an opaque-number regression (emitting a
+    /// weight while dropping the breakdown table) silently re-creates the J-002
+    /// aggregator failure. The arithmetic sibling
+    /// (`score_fragment_rendered_subtotals_sum_to_the_displayed_weight`) pins
+    /// Σ-subtotal == weight; THIS test pins that the weight and its table are
+    /// STRUCTURALLY inseparable — every rendered weight carries a table.
+    #[test]
+    fn score_render_never_shows_a_weight_without_a_breakdown_table() {
+        // Build the three CARDINAL postures as REAL scored views (never hand-rolled
+        // pairings — the render core reuses `scoring::score`).
+        let repro = "org.openlore.philosophy.reproducible-builds";
+        // RICH: one contributor across distinct subjects → multi-row, NOT sparse.
+        let rich = rich_scored_state();
+        // SPARSE: one claim/one author/one subject → `[SPARSE]`, single-row.
+        let sparse = ScoreState::Scored {
+            view: score(
+                &[attributed("did:plc:bjorn-test", "bafysparse", "github:torvalds/linux", repro, 0.95)],
+                &ScoringConfig::DEFAULT,
+            ),
+        };
+        // CONFLICTING: two distinct authors on the SAME (subject, object) → ONE
+        // pairing, TWO attributed rows.
+        let conflicting = ScoreState::Scored {
+            view: score(
+                &[
+                    attributed("did:plc:test-jeff", "bafyown", "github:denoland/deno", repro, 0.40),
+                    attributed("did:plc:test-jeff-collaborator", "bafypeer", "github:denoland/deno", repro, 0.55),
+                ],
+                &ScoringConfig::DEFAULT,
+            ),
+        };
+
+        for (posture, state) in [("rich", &rich), ("sparse", &sparse), ("conflicting", &conflicting)] {
+            let fragment = render_score_results_fragment(state).into_string();
+            let page = render_score_page(state);
+            for (shape, html) in [("fragment", &fragment), ("page", &page)] {
+                // The surface must actually show a weight (else the structural guard
+                // would pass vacuously).
+                assert!(
+                    html.contains("Weight:"),
+                    "anti-opaque ({posture}/{shape}): a Scored render must show a \
+                     `Weight:` headline; got:\n{html}"
+                );
+                // EVERY pairing <section> that shows a weight MUST carry a breakdown
+                // <table> — no weight is ever an opaque number detached from its
+                // per-claim decomposition (I-CS-2 / J-002c).
+                for section in html.split("<section").skip(1) {
+                    if section.contains("Weight:") {
+                        assert!(
+                            section.contains("<table"),
+                            "anti-opaque ({posture}/{shape}): a pairing section \
+                             renders a `Weight:` headline with NO breakdown `<table>` \
+                             — a weight must never be shown without its per-claim \
+                             breakdown; offending section:\n<section{section}"
+                        );
+                    }
+                }
+                // No weight may render OUTSIDE a pairing section (in the chrome): every
+                // `Weight:` occurrence must fall inside a breakdown-bearing section, so
+                // the in-section count equals the total count.
+                let total = html.matches("Weight:").count();
+                let in_sections: usize = html
+                    .split("<section")
+                    .skip(1)
+                    .map(|s| s.matches("Weight:").count())
+                    .sum();
+                assert_eq!(
+                    in_sections, total,
+                    "anti-opaque ({posture}/{shape}): every displayed weight must fall \
+                     inside a breakdown-bearing pairing <section>; {total} weight(s) \
+                     total but {in_sections} inside sections; got:\n{html}"
+                );
+            }
+        }
+    }
+
     /// Behavior (C-8; AC-003.2 / I-CS-6 / KPI-4 verbatim): a contributing claim
     /// stored at 0.90 renders byte-for-byte "0.90" (never "0.9", never "90%"), the
     /// displayed pairing weight is the EXACT consumed `WeightedPairing.weight`

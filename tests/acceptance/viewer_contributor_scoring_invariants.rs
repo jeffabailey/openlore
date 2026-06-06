@@ -502,11 +502,102 @@ fn a_rendered_score_is_never_shown_without_its_breakdown_summing_to_the_weight()
     // rendered subtotals sum to the displayed weight (assert_score_html_breakdown_
     // sums_to_displayed_weight — the reproduce-by-hand gate). Asserted on the
     // OBSERVABLE rendered HTML across both shapes (parity by construction).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-INV-Transparency (CARDINAL): seed_contributor_rich_trail + \
-         ViewerServer::start; for shape in [get, get_htmx]: assert the weight is \
-         shown WITH its breakdown (no opaque number) AND \
-         assert_score_html_breakdown_sums_to_displayed_weight(body)"
-    )
+    let env = TestEnv::initialized();
+
+    // Seed all three postures the CARDINAL gate must hold across — a RICH multi-row
+    // trail, a SPARSE single-row trail, and a CONFLICTING-authors pairing (two
+    // DISTINCT authors on the SAME (subject, object) → ONE pairing, TWO attributed
+    // rows) — through ONE combined `peer pull`. A SINGLE call is REQUIRED: separate
+    // seeder calls would each run their own pull, and the later pull would drop the
+    // earlier peers' PDS before re-pulling every subscribed peer → the earlier peers'
+    // DID resolution 404s (the C-10 single-pull constraint the seeders document). NO
+    // network seam wired (plain `ViewerServer::start`): /score is a LOCAL read
+    // (I-CS-5). The conflicting contributor is the LOCAL user (`You` + the
+    // collaborator both fall under the local user's contributor scope).
+    let conflict_did =
+        seed_contributor_rich_sparse_and_conflicting(&env, CONTRIBUTOR_RICH_DID, CONTRIBUTOR_SPARSE_DID);
+
+    let rich_path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
+    let sparse_path = format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}");
+    let conflict_path = format!("/score?contributor={conflict_did}");
+
+    // Collect EVERY posture × BOTH shapes (the no-header full page `get` AND the htmx
+    // fragment `get_htmx`) inside a scope so the viewer's exclusive DuckDB lock is
+    // released on drop. The CARDINAL gate holds in BOTH shapes (parity by
+    // construction — the page EMBEDS the fragment).
+    let mut rendered: Vec<(String, bool, String)> = Vec::new();
+    {
+        let viewer = ViewerServer::start(&env);
+        // `(label, is_multi_row_posture, body)`. Rich (4 distinct subjects → multi
+        // pairings/rows) and conflicting (one pairing, TWO author rows) decompose
+        // into >1 contribution overall, so the multi-row reproduce-by-hand sum gate
+        // is meaningful for them. Sparse is a SINGLE-claim/single-row trail by
+        // construction (the breadth-guard fixture) — its sum-to-weight is the
+        // trivial Σ(one row) == weight, covered by the anti-opaque guard (weight ⇒
+        // breakdown table whose lone subtotal IS the weight); the multi-row sum
+        // helper (which requires >1 row across the body) does not apply to a
+        // single-row surface.
+        for (path, is_multi_row) in [
+            (rich_path.as_str(), true),
+            (sparse_path.as_str(), false),
+            (conflict_path.as_str(), true),
+        ] {
+            let full_page = viewer.get(path);
+            assert_eq!(
+                full_page.status, 200,
+                "CARDINAL: GET {path:?} (full page) over the LOCAL store must render \
+                 a calm 200 so the transparency gate runs over REAL content; body:\n{}",
+                full_page.body
+            );
+            let fragment = viewer.get_htmx(path);
+            assert_eq!(
+                fragment.status, 200,
+                "CARDINAL: GET {path:?} (htmx fragment) over the LOCAL store must \
+                 render a calm 200; body:\n{}",
+                fragment.body
+            );
+            rendered.push((format!("GET {path} (full page)"), is_multi_row, full_page.body));
+            rendered.push((format!("GET {path} (htmx fragment)"), is_multi_row, fragment.body));
+        }
+        // `viewer` drops here — the `openlore ui` process is killed and its exclusive
+        // DuckDB lock released.
+    }
+
+    for (label, is_multi_row, body) in &rendered {
+        // (a) ANTI-OPAQUE (every posture × shape): NO displayed weight appears
+        // without its accompanying per-claim breakdown table. An opaque-number
+        // regression (showing the weight but hiding the breakdown) silently
+        // re-creates the J-002 aggregator failure; this guard makes it unshippable.
+        // This is the structural half of the CARDINAL gate, asserted on the
+        // OBSERVABLE rendered HTML across rich/sparse/conflicting × both shapes.
+        assert_score_html_every_weight_has_a_breakdown(body);
+
+        // (b) SUM-TO-WEIGHT reproduce-by-hand (the multi-row postures): for every
+        // rendered pairing the parsed breakdown subtotals sum to the parsed displayed
+        // weight (Σ subtotal == weight). The shared helper enforces a NON-trivial
+        // (>1-row) decomposition, so it runs over the rich + conflicting surfaces
+        // (the sparse single-row surface is covered by the anti-opaque guard above —
+        // its lone subtotal IS the displayed weight by construction).
+        if *is_multi_row {
+            assert_score_html_breakdown_sums_to_displayed_weight(body);
+        }
+
+        // (c) NEVER an opaque number: the weight is shown WITH a per-claim breakdown
+        // attributed to its author DID(s). For the conflicting posture this also pins
+        // the anti-merging guarantee — two distinct authors render as two attributed
+        // rows, never one faceless consensus number.
+        let _ = label;
+    }
+
+    // The CONFLICTING posture additionally pins anti-merging on the OBSERVABLE
+    // surface: the scored contributor's pairing decomposes into TWO attributed rows
+    // (the LOCAL user's own claim at 0.40 + the collaborator's pulled claim at 0.55),
+    // each under its own author DID, with verbatim distinct confidences — never an
+    // averaged/merged consensus number behind one opaque weight. Asserted in BOTH
+    // shapes (the conflict body is the LAST two `rendered` entries).
+    let conflict_full_page = &rendered[4].2;
+    let conflict_fragment = &rendered[5].2;
+    for body in [conflict_full_page, conflict_fragment] {
+        assert_score_html_breakdown_attributed_and_verbatim(body, &[&conflict_did], &["0.40", "0.55"]);
+    }
 }

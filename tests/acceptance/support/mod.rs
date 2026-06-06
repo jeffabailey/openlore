@@ -8165,6 +8165,57 @@ pub fn seed_contributor_conflicting_authors(env: &TestEnv) -> (String, String) {
     (env.identity.author_did().to_string(), peer_did.to_string())
 }
 
+/// Seed ALL THREE contributor-score postures — RICH (`rich_did`), SPARSE
+/// (`sparse_did`), and CONFLICTING-authors (the LOCAL user `You`) — in ONE
+/// `peer pull` so the CARDINAL transparency gate can exercise every posture over
+/// ONE viewer/store. A SINGLE combined call is REQUIRED for the SAME reason
+/// [`seed_contributor_rich_and_sparse_trails`] documents: `seed_own_plus_peer_graph`
+/// keeps every peer's PDS alive only for the duration of the ONE call AND wires the
+/// resolver/pubkey seams for ALL peers into the ONE pull. Seeding the postures
+/// through SEPARATE seeder calls would drop the earlier peers' PDS before a later
+/// call's pull re-pulls every subscribed peer → the earlier peers' DID resolution
+/// 404s (the failure mode the per-seeder docs warn about).
+///
+/// The conflicting posture is the GQE-2 identical-content shape: the LOCAL user's
+/// OWN claim (deno @ 0.40, via the real `claim add` verb → `You`) plus a SECOND,
+/// DISTINCT collaborator peer (deno @ 0.55) both assert the SAME (subject,
+/// reproducible-builds) pairing, so the local user's contributor feed decomposes
+/// that ONE pairing into TWO attributed rows — never merged. The rich + sparse peers
+/// ride the SAME single pull. PRODUCTION federation write path; LOCAL only at score
+/// time. Returns the conflicting contributor's DID (the LOCAL user).
+pub fn seed_contributor_rich_sparse_and_conflicting(
+    env: &TestEnv,
+    rich_did: &str,
+    sparse_did: &str,
+) -> String {
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let conflict_subject = "github:denoland/deno";
+    let collaborator_did = "did:plc:test-jeff-collaborator";
+    seed_own_plus_peer_graph(
+        env,
+        // The LOCAL user's own claim on the conflicting pairing (deno @ 0.40 → `You`).
+        &[OwnClaim {
+            subject: conflict_subject,
+            object: repro,
+            confidence: 0.40,
+        }],
+        // ALL peers pulled in ONE invocation: the collaborator (deno @ 0.55, the
+        // SECOND author on the conflicting pairing) + the rich trail + the sparse
+        // trail. The rich/sparse SeedPeer shapes are the SAME single-source-of-truth
+        // builders the standalone seeders use, so the postures never drift.
+        &[
+            SeedPeer {
+                peer_did: collaborator_did,
+                seed: [37u8; 32],
+                triples: &[(conflict_subject, repro, 0.55)],
+            },
+            rich_trail_seed_peer(rich_did),
+            sparse_trail_seed_peer(sparse_did),
+        ],
+    );
+    env.identity.author_did().to_string()
+}
+
 /// The `#score-results` swap-target id the `/score` fragment renders under (the
 /// sibling of slice-08's `#search-results`). Asserting it appears in BOTH the
 /// fragment and the full-page score region proves the parity-by-construction
@@ -8400,6 +8451,66 @@ pub fn assert_score_html_breakdown_sums_to_displayed_weight(body: &str) {
             pairing.subtotals,
         );
     }
+}
+
+/// Assert the ANTI-OPAQUE structural invariant on a rendered `/score` body: NO
+/// displayed weight EVER appears without its accompanying per-claim breakdown table
+/// (I-CS-2 / J-002c, the anti-opaque half of the CARDINAL gate). An opaque-number
+/// regression — rendering a `Weight:` headline while hiding the per-claim breakdown
+/// — silently re-creates the aggregator failure J-002 exists to avoid; this guard
+/// makes it unshippable. Distinct from
+/// [`assert_score_html_breakdown_sums_to_displayed_weight`] (which checks the
+/// ARITHMETIC Σ-subtotal == weight): THIS guard checks the STRUCTURE — every weight
+/// is STRUCTURALLY paired with a breakdown `<table>`, scanning the OBSERVABLE
+/// rendered HTML only (Mandate 8 universe = port-exposed rendered surface).
+///
+/// Scans EVERY pairing `<section>` (the unit a weight renders under): a section that
+/// shows a `Weight:` headline MUST also carry a breakdown `<table>`. Also asserts at
+/// least one weight is present (a vacuous pass over a body with no weight would prove
+/// nothing on a Scored surface).
+pub fn assert_score_html_every_weight_has_a_breakdown(body: &str) {
+    // Split on the per-pairing `<section>` boundary (the SAME boundary
+    // `parse_score_pairings` uses). Text before the first `<section>` is chrome.
+    let sections: Vec<&str> = body.split("<section").skip(1).collect();
+
+    // The whole rendered surface must show ≥1 weight — a guard that passes vacuously
+    // over a body with NO `Weight:` proves nothing on a Scored surface.
+    let total_weights = body.matches("Weight:").count();
+    assert!(
+        total_weights >= 1,
+        "anti-opaque (I-CS-2 / J-002c): the rendered `/score` body must show ≥1 \
+         `Weight:` headline for the breakdown-presence guard to be meaningful; body \
+         was:\n{body}"
+    );
+
+    // EVERY section that shows a weight MUST carry a breakdown `<table>` — no weight
+    // is ever an opaque number detached from its per-claim decomposition. A weight
+    // rendered OUTSIDE any `<section>` (i.e. in the chrome, before the first section)
+    // would also be a breach: every `Weight:` occurrence must fall inside a section
+    // that carries a table, so the in-section count must equal the total count.
+    let mut weights_in_sections = 0usize;
+    for section in &sections {
+        let section_weights = section.matches("Weight:").count();
+        if section_weights == 0 {
+            continue;
+        }
+        weights_in_sections += section_weights;
+        assert!(
+            section.contains("<table"),
+            "anti-opaque (I-CS-2 / J-002c): a `/score` pairing section renders a \
+             `Weight:` headline with NO accompanying breakdown `<table>` — a weight \
+             must NEVER be shown without its per-claim breakdown (opaque-number \
+             regression); offending section:\n<section{section}"
+        );
+    }
+    assert_eq!(
+        weights_in_sections, total_weights,
+        "anti-opaque (I-CS-2 / J-002c): every displayed `Weight:` must fall inside a \
+         pairing <section> that carries a breakdown table; found {total_weights} \
+         weight(s) total but only {weights_in_sections} inside breakdown-bearing \
+         sections (a weight rendered outside any breakdown section is an opaque \
+         number); body was:\n{body}"
+    );
 }
 
 /// One parsed `/score` pairing: its displayed headline weight + the per-claim
