@@ -9043,12 +9043,71 @@ pub fn assert_traversal_html_names_cids(body: &str, expected_cids: &[String]) {
 ///
 /// SCAFFOLD: true (slice-10).
 pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_dids: &[&str]) {
-    let _ = (body, expected_dids);
-    todo!(
-        "slice-10 DELIVER: assert each contributor DID renders as an `<a href>` link \
-         to `/score?contributor=<bare-did>` (spanning contributor appears once; \
-         render-only navigation TEXT, not a control). RED scaffold."
-    )
+    assert!(
+        !expected_dids.is_empty(),
+        "GT-4: the contributors-link assertion needs ≥1 expected contributor DID (the \
+         seeded two-author survey produced none); body was:\n{body}"
+    );
+    // The labeled distinct-contributors section MUST be present (the survey lists the
+    // contributors-who-claimed, never a blank region).
+    assert!(
+        body.contains("Contributors who claimed"),
+        "GT-4: the survey must render the labeled \"Contributors who claimed\" section; \
+         body was:\n{body}"
+    );
+    for did in expected_dids {
+        // Each contributor links to the slice-09 `/score` terminus in BARE-DID form
+        // (ADR-044 Q1): the signing `#fragment` locator is dropped, then the bare DID is
+        // percent-encoded into the query component (ADR-044 §security). The expected
+        // href mirrors the production `encode_query_component` exactly.
+        let bare = did.split('#').next().unwrap_or(did);
+        let expected_href = format!("/score?contributor={}", encode_query_component_for_test(bare));
+        // Render-only navigation TEXT: a plain `<a href=…>` anchor, never a button/form
+        // control. The exact `<a href="<expected>">` opening tag MUST appear (so a no-JS
+        // click is a full navigation that LANDS on the contributor's /score).
+        let expected_anchor = format!("<a href=\"{expected_href}\">");
+        assert!(
+            body.contains(&expected_anchor),
+            "GT-4: contributor {did:?} must render as a render-only `<a href>` traversal \
+             link to its bare-DID /score terminus ({expected_anchor:?}); body was:\n{body}"
+        );
+    }
+    // Anti-merging: the two distinct authors are NEVER folded into one aggregate
+    // contributor link — each expected DID resolves to a DISTINCT bare /score href.
+    let distinct_hrefs: std::collections::BTreeSet<String> = expected_dids
+        .iter()
+        .map(|did| {
+            let bare = did.split('#').next().unwrap_or(did);
+            format!("/score?contributor={}", encode_query_component_for_test(bare))
+        })
+        .collect();
+    assert_eq!(
+        distinct_hrefs.len(),
+        expected_dids.len(),
+        "GT-4: each contributor must resolve to a DISTINCT /score link — the survey must \
+         NOT merge the authors into a single aggregate contributor; body was:\n{body}"
+    );
+}
+
+/// Percent-encode a value into an href QUERY COMPONENT the SAME way the production
+/// `viewer_domain::encode_query_component` does (ADR-044 §security): every byte
+/// OUTSIDE the unreserved set (`A-Z a-z 0-9 - _ . ~`) becomes `%XX` (uppercase hex).
+/// Lives in the test harness (NOT a viewer-domain import) so the assertion scans the
+/// OBSERVABLE rendered surface against an INDEPENDENT oracle of the expected href —
+/// Mandate 8 (the rendered byte sequence, not a re-call of the production fn).
+fn encode_query_component_for_test(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        let unreserved =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
+        if unreserved {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// Assert a rendered traversal survey body renders each survey cross-link as a plain

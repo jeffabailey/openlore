@@ -4980,4 +4980,75 @@ mod tests {
         let href = href_score("did:plc:rachel-test#org.openlore.application");
         assert_eq!(href, "/score?contributor=did%3Aplc%3Arachel-test");
     }
+
+    /// Behavior (US-GT-002 Example 1 / AC-002.3 — GT-4 oracle): the "Contributors who
+    /// claimed" section renders EACH distinct contributor DID as a render-only `<a href>`
+    /// link to `/score?contributor=<bare-did>` (the slice-09 terminus REUSED; bare-DID
+    /// form, ADR-044 Q1), in first-seen ORDER, with a spanning contributor appearing
+    /// ONCE (deduped). Two distinct authors are NEVER merged into one aggregate link.
+    #[test]
+    fn render_project_fragment_lists_contributors_as_deduped_ordered_score_links() {
+        // Two distinct authors on the SAME edge — both must appear as their OWN /score
+        // link (no merge); the first author's fragmented signing DID reduces to bare.
+        let rows = [
+            survey_row(
+                "did:plc:maria#org.openlore.application",
+                "bafy1",
+                "github:rust-lang/cargo",
+                "phil-a",
+                0.92,
+            ),
+            survey_row(
+                "did:plc:tobias-test",
+                "bafy2",
+                "github:rust-lang/cargo",
+                "phil-a",
+                0.70,
+            ),
+        ];
+        let view = group_project("github:rust-lang/cargo", &rows);
+        let html = render_project_fragment(&view).into_string();
+        // The labeled section is present.
+        assert!(
+            html.contains("Contributors who claimed"),
+            "the contributors section must be labeled; {html}"
+        );
+        // BOTH distinct contributors render as their OWN bare-DID /score anchor — never
+        // merged into one aggregate, the signing #fragment dropped (bare-DID form).
+        assert!(
+            html.contains(r#"<a href="/score?contributor=did%3Aplc%3Amaria">"#),
+            "Maria must render as a bare-DID /score link; {html}"
+        );
+        assert!(
+            html.contains(r#"<a href="/score?contributor=did%3Aplc%3Atobias-test">"#),
+            "Tobias must render as a bare-DID /score link; {html}"
+        );
+        // Scope the dedup/order assertions to the "Contributors who claimed" LIST
+        // section (the edge-row author links reuse the SAME href, so the whole-document
+        // count would double — the contract is on the distinct contributor LIST).
+        let list = html
+            .split_once("Contributors who claimed")
+            .expect("contributors section present")
+            .1;
+        // Deduped + order-preserved within the list: Maria (first-seen) precedes Tobias.
+        let maria_at = list
+            .find("contributor=did%3Aplc%3Amaria")
+            .expect("Maria link present in list");
+        let tobias_at = list
+            .find("contributor=did%3Aplc%3Atobias-test")
+            .expect("Tobias link present in list");
+        assert!(maria_at < tobias_at, "first-seen order preserved; {html}");
+        // Each distinct contributor appears EXACTLY ONCE in the list (deduped — never
+        // merged, never duplicated).
+        assert_eq!(
+            list.matches("contributor=did%3Aplc%3Amaria").count(),
+            1,
+            "Maria appears once in the contributors list (deduped); {html}"
+        );
+        assert_eq!(
+            list.matches("contributor=did%3Aplc%3Atobias-test").count(),
+            1,
+            "Tobias appears once in the contributors list (deduped); {html}"
+        );
+    }
 }
