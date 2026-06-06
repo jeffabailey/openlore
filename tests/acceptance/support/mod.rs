@@ -9161,12 +9161,45 @@ pub fn assert_traversal_href_percent_encoded(body: &str) {
 ///
 /// SCAFFOLD: true (slice-10).
 pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str) {
-    let _ = (body, queried_entity);
-    todo!(
-        "slice-10 DELIVER: assert the guided NoClaims state names the queried entity, \
-         hints a CLI next step, fabricates NO edge (no `<a href=\"/project` / \
-         `/philosophy` edge row, no cid), and leaks no stack trace. RED scaffold."
-    )
+    let lowered = body.to_ascii_lowercase();
+    // The guided plain-language notice: emptiness is recognized as emptiness, naming
+    // that there are no claims in the LOCAL graph (US-GT-002/003 Example 3 / I-GT-4).
+    assert!(
+        lowered.contains("no claims") && lowered.contains("local graph"),
+        "I-GT-4: a claim-less entity must render the guided \"No claims … in your \
+         local graph\" notice; body was:\n{body}"
+    );
+    // The notice NAMES the queried subject so the operator knows WHAT was looked up.
+    assert!(
+        body.contains(queried_entity),
+        "I-GT-4: the guided NoClaims state must name the queried entity \
+         {queried_entity:?} so the operator knows what was looked up; body was:\n{body}"
+    );
+    // The CLI next-step hint points the operator at the CLI (`graph query` / `scrape`)
+    // rather than a dead end (NFR-VIEW-6 / I-GT-4).
+    assert!(
+        lowered.contains("graph query") || lowered.contains("scrape"),
+        "I-GT-4: the guided NoClaims state must hint a CLI next step (graph query / \
+         scrape) so emptiness points somewhere actionable; body was:\n{body}"
+    );
+    // No FABRICATED traversal edge: emptiness invents no edge row — no traversal
+    // `<a href>` to the OTHER dimension and no cid surfaces (I-GT-4).
+    for banned in ["href=\"/project", "href=\"/philosophy", "href=\"/score", "cid"] {
+        assert!(
+            !lowered.contains(banned),
+            "I-GT-4: the guided NoClaims state must fabricate NO traversal edge \
+             (found {banned:?}); body was:\n{body}"
+        );
+    }
+    // No leaked stack trace / raw error internals — a calm guided state, never a panic
+    // surface (I-GT-4 / NFR-VIEW-6).
+    for banned in ["panicked", "RUST_BACKTRACE", "thread 'main'", "stack backtrace"] {
+        assert!(
+            !body.contains(banned),
+            "I-GT-4: the guided NoClaims state must leak NO stack trace / error \
+             internal (found {banned:?}); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a rendered traversal survey body carries NO sign / publish / follow /
