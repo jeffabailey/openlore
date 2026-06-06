@@ -9140,13 +9140,40 @@ pub fn assert_traversal_html_crosslink_is_plain_anchor(
     body: &str,
     expected_hrefs: &[&str],
 ) {
-    let _ = (body, expected_hrefs);
-    todo!(
-        "slice-10 DELIVER: assert each expected href is rendered as a plain `<a href= \
-         …>` anchor (no `hx-` requirement; a no-JS click is a full navigation), with \
-         the claim-controlled value PERCENT-ENCODED in the query component (ADR-044). \
-         RED scaffold."
-    )
+    assert!(
+        !expected_hrefs.is_empty(),
+        "GT-9/GT-12/GT-14: the crosslink-anchor assertion needs ≥1 expected href (the \
+         seeded survey rendered no traversal cross-link); body was:\n{body}"
+    );
+    for href in expected_hrefs {
+        // The cross-link is a render-only `<a href="…">` opening tag — a plain anchor,
+        // so a no-JS click is a FULL navigation that lands on the OTHER-dimension survey
+        // (progressive enhancement; WD-GT-3). The exact opening tag (with the
+        // percent-encoded value already baked into the expected href, ADR-044) MUST
+        // appear verbatim so the navigation target is the inert, injection-safe route.
+        let expected_anchor = format!("<a href=\"{href}\">");
+        assert!(
+            body.contains(&expected_anchor),
+            "GT-9/GT-12/GT-14: the traversal cross-link must render as a plain `<a href>` \
+             anchor to {href:?} ({expected_anchor:?}) — a no-JS click is a full \
+             navigation; body was:\n{body}"
+        );
+        // The href value MUST NOT be smuggled into an executable control: it appears in
+        // an `<a href>`, never as a `<button>`'s/`<form>`'s `formaction`/`action`
+        // attribute. A render-only navigation edge carries NO write/submit control
+        // (I-GT-1 / WD-GT-8).
+        for control_attr in [
+            format!("action=\"{href}\""),
+            format!("formaction=\"{href}\""),
+        ] {
+            assert!(
+                !body.contains(&control_attr),
+                "GT-9/GT-12/GT-14: the traversal cross-link to {href:?} must be a plain \
+                 `<a href>`, never a button/form executable control (found \
+                 {control_attr:?}); body was:\n{body}"
+            );
+        }
+    }
 }
 
 /// Assert a rendered traversal survey body carries the hostile claim-controlled
