@@ -381,14 +381,47 @@ fn a_rich_contributor_score_renders_its_weight_with_a_per_claim_breakdown() {
     // GIVEN a rich-trail store. WHEN `get` for the contributor. THEN the body shows
     // the weight + bucket AND a per-claim breakdown attributing every contribution
     // to its author DID + cid, with verbatim confidence — never an opaque number
-    // (assert_score_html_breakdown_attributed_and_verbatim).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-4 anti-opaque-number: seed_contributor_rich_trail + start; \
-         get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); assert the weight \
-         renders WITH a per-claim breakdown naming author DID + cid + verbatim \
-         confidence (no opaque number; I-CS-2)"
-    )
+    // (assert_score_html_breakdown_attributed_and_verbatim + _names_cids).
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    // Read the production-recomputed claim cids from the store BEFORE the viewer
+    // opens it (the running server holds the DuckDB lock); the rendered breakdown
+    // must NAME these exact cids (I-CS-10).
+    let seeded_cids = read_peer_claim_cids_for(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-4: GET /score for a rich contributor must return 200; body was:\n{}",
+        response.body
+    );
+    // The score region is present AND carries the headline weight (never a region
+    // that omits the number it is decomposing).
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-4: the response must carry the `#score-results` region; body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains("Weight:"),
+        "C-4: every rendered pairing must show its headline weight; body was:\n{}",
+        response.body
+    );
+    // The breakdown attributes every contribution to its author DID AND renders the
+    // VERBATIM base confidence of each seeded claim (`0.86`, never `0.9`/`86%`;
+    // I-CS-6 / I-CS-10) — no opaque, faceless consensus number (I-CS-2).
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &response.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    // AND every breakdown row NAMES the contributing claim's cid (I-CS-10): the
+    // weight + breakdown are projected from the SAME WeightedPairing, so the cids
+    // the renderer emits are exactly the seeded peer_claims rows the local feed read
+    // returned (read above, before the viewer locked the store).
+    assert_score_html_breakdown_names_cids(&response.body, &seeded_cids);
 }
 
 /// C-5 / CARDINAL (US-CS-002 / AC-002.3 — reproduce-by-hand): the running sum of a

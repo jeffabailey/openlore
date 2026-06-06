@@ -8150,6 +8150,53 @@ pub fn assert_score_html_breakdown_attributed_and_verbatim(
     }
 }
 
+/// Read the canonical CIDs of every `peer_claims` row attributed to `peer_did`
+/// (the rows `peer pull` recomputed + stored), so a `/score` scenario can assert
+/// the rendered breakdown NAMES each contributing claim's cid (I-CS-10). Read
+/// from the SAME store the viewer's local feed read returns; the CIDs are the
+/// production-recomputed values, never hand-stamped fixtures. Held here so the
+/// cid-naming assertion never drifts from the seeded rows.
+pub fn read_peer_claim_cids_for(env: &TestEnv, peer_did: &str) -> Vec<String> {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for peer_claims cid read: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare("SELECT cid FROM peer_claims WHERE author_did = ?")
+        .unwrap_or_else(|err| panic!("prepare peer_claims cid read: {err}"));
+    let rows = stmt
+        .query_map(duckdb::params![peer_did], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|err| panic!("query peer_claims cids for {peer_did}: {err}"));
+    rows.map(|r| r.expect("decode peer_claims cid")).collect()
+}
+
+/// Assert a rendered `/score` body NAMES every expected claim cid in its per-claim
+/// breakdown (I-CS-10): every breakdown row identifies the contributing claim by
+/// its cid, so the weight is never an opaque number detached from the claims that
+/// produced it. The OBSERVABLE counterpart of the slice-04 `--explain` cid column;
+/// scans the rendered HTML only (Mandate 8 universe = port-exposed rendered
+/// surface). Used ALONGSIDE [`assert_score_html_breakdown_attributed_and_verbatim`]
+/// (author DID + verbatim confidence) to pin the FULL per-row identity
+/// (author_did + cid) the C-4 anti-opaque-number criterion requires.
+pub fn assert_score_html_breakdown_names_cids(body: &str, expected_cids: &[String]) {
+    assert!(
+        !expected_cids.is_empty(),
+        "I-CS-10: the cid-naming assertion needs ≥1 expected cid (the seeded rich \
+         trail produced none); body was:\n{body}"
+    );
+    for cid in expected_cids {
+        assert!(
+            body.contains(cid.as_str()),
+            "I-CS-10: the `/score` breakdown must name the contributing claim cid \
+             {cid:?} (every row identifies its claim — the weight is never an opaque \
+             number); body was:\n{body}"
+        );
+    }
+}
+
 /// Assert the rendered `/score` body marks a pairing `[SPARSE]` and carries the
 /// "treat as a lead, not a conclusion" honesty line — the projected breadth-guard
 /// state for thin evidence (I-CS-3 / KPI-GRAPH-4). Scans the OBSERVABLE rendered
