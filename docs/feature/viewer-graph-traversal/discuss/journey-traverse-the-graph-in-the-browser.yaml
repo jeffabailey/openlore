@@ -1,0 +1,286 @@
+schema_version: 1
+
+# Structured journey schema for viewer-graph-traversal (slice-10).
+# Companion to journey-traverse-the-graph-in-the-browser-visual.md
+# Gherkin is embedded per step (no standalone .feature file per the DISCUSS convention).
+# Brownfield DELTA on slices 04 (traversal contract) / 06 / 07 / 08 / 09.
+
+journey:
+  name: "Traverse the philosophy graph in the browser"
+  goal: >
+    From any claim/project/philosophy/contributor on the read-only `openlore ui`
+    viewer, follow an edge (one signed claim) to the next related entity — to
+    surface the non-obvious connection (a contributor who spans the projects I am
+    evaluating) and ground a tech/community decision in attributed, citable claims.
+  persona: "P-001 Maria (node operator), slice-04 graph-explorer hat. P-002 wears the same hat on the CLI."
+  job_id: J-002b
+
+  scope_notes: >
+    READ/VIEW ONLY. This journey creates, signs, follows, and publishes NOTHING.
+    It reads the LOCAL DuckDB store (claims ∪ peer_claims, never merged) over the
+    read-only StoreReadPort. NO network seam on these routes (distinct from /search
+    → indexer and /scrape → GitHub). Each edge maps to exactly one signed claim
+    (its cid); traversal invents no edges. Confidence is verbatim + display-only
+    bucket; the viewer recomputes no weight (J-002c stays at /score, slice-09).
+
+  emotional_arc:
+    start: "Flat-list-curiosity (has claims as flat lists; cannot SEE the connections; anxious the local graph is too sparse)"
+    middle: "Orienting (a survey page shows who claims what about an entity) -> Connecting (click an edge -> the non-obvious span appears, the aha)"
+    end: "Defensibly-connected (can cite the exact attributed signed claims, each with verbatim confidence)"
+
+steps:
+  - id: 1
+    name: "Land on an entity (cross-links make rows clickable)"
+    command: "GET /claims | /peer-claims | /score | /search — every subject/object/contributor cell is a link"
+    story_ref: US-GT-004
+
+    tui_mockup: |
+      +-- GET /claims (rows clickable) -----------------------------------+
+      | [${subject}]→/project  embodiesPhilosophy  [${object}]→/philosophy |
+      |   ${author_did}→/score   ${confidence}                            |
+      | Every subject/object/contributor cell is a traversal edge (link). |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "subject"
+        source: "claims.subject / peer_claims.subject (slice-01/03 DuckDB)"
+        displayed_as: "${subject}"
+        consumers: ["/claims row link", "/project query arg", "/philosophy project row"]
+      - name: "object"
+        source: "claims.object / peer_claims.object (philosophy URI)"
+        displayed_as: "${object}"
+        consumers: ["/claims row link", "/philosophy query arg", "/project philosophy row"]
+      - name: "author_did"
+        source: "claims.author_did / peer_claims.author_did (derived from signed payload `author`)"
+        displayed_as: "${author_did}"
+        consumers: ["every row header", "/score query arg", "survey attribution"]
+
+    emotional_state:
+      entry: "Flat-list-curiosity"
+      exit: "Orienting (a click away)"
+
+    integration_checkpoint: |
+      Render-only wiring in pure viewer-domain. No new route, no new read, no
+      write surface. The slice-06 three-layer read-only gold tests stay green.
+
+    failure_modes:
+      - "A row with a subject/object that has no other claims still links; the target page renders the single-claim survey (never a dead link to nothing — it renders the entity it knows)."
+
+    gherkin: |
+      Scenario: A subject cell on /claims is a link to the project page
+        Given a claim row on /claims has subject github:rust-lang/cargo
+        When Maria views `GET /claims` on her openlore ui viewer
+        Then the subject cell renders as a link to `/project?subject=github:rust-lang/cargo`
+        And a no-JS click navigates to the full project page
+
+      Scenario: Cross-links add no write surface and stay read-only
+        Given the cross-links are wired on every list surface
+        When the route inventory and key-access audit run against the real openlore ui
+        Then no new write/sign/follow route exists
+        And no signing key is read in the viewer process
+        And the bind stays loopback-only
+
+  - id: 2
+    name: "Survey a project (the subject entry node)"
+    command: "GET /project?subject=github:rust-lang/cargo"
+    story_ref: US-GT-002
+
+    tui_mockup: |
+      +-- GET /project?subject=${subject} --------------------------------+
+      | Philosophies embodied (LOCAL; own ∪ peer; no merge):              |
+      |   ${object}                                                       |
+      |     ${author_did} (you)  ${confidence} [${bucket}] cid ${claim_cid}|
+      |     ${author_did} (peer) ${confidence} [${bucket}] cid ${claim_cid}|
+      | Contributors who claimed: ${author_did}→/score  ${author_did}→/score|
+      | Each edge is one signed claim. No invented edges. LOCAL · offline.|
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "confidence"
+        source: "claims.confidence / peer_claims.confidence (numeric DOUBLE, WD-10)"
+        displayed_as: "${confidence} (display-only bucket)"
+        consumers: ["/project row", "/philosophy row", "/score input (slice-09)"]
+      - name: "claim_cid"
+        source: "claims.cid / peer_claims.cid (each edge = exactly one signed claim)"
+        displayed_as: "${claim_cid}"
+        consumers: ["/project edge identity", "/philosophy edge identity"]
+
+    emotional_state:
+      entry: "Orienting"
+      exit: "Orienting (deeper) → Connecting on the next click"
+
+    integration_checkpoint: |
+      Reads the LOCAL survey via the new US-GT-001 read method (UNION ALL claims ∪
+      peer_claims, no merge JOIN). Grouping into philosophies + contributors happens
+      in the PURE viewer-domain core (Rust), never SQL. Every survey row carries a
+      non-Option author_did + cid. Contributor edges link to the slice-09 /score.
+
+    failure_modes:
+      - "Subject has zero claims -> guided 'no claims about this project' state naming the subject; 200; no fabricated edge"
+      - "Single sparse claim -> render the one edge verbatim; never manufacture confidence or a second edge"
+      - "Store read failure -> degrade to the SAME guided empty state (NFR-VIEW-6); never a stack trace"
+
+    gherkin: |
+      Scenario: A project page surveys every philosophy it embodies, attributed, no merge
+        Given Maria's local store has her own claim (conf 0.90) and Rachel's pulled peer
+          claim (conf 0.88) that github:rust-lang/cargo embodies org.openlore.philosophy.dependency-pinning
+        When Maria requests `GET /project?subject=github:rust-lang/cargo`
+        Then the response groups claims under "Philosophies embodied"
+        And dependency-pinning shows TWO attributed rows, one per author DID, never averaged
+        And each row shows its numeric confidence verbatim (0.90, 0.88) with the display-only bucket
+        And each row names its claim cid
+
+      Scenario: A project page lists contributors as traversal links to their score
+        Given github:rust-lang/cargo has claims by did:plc:maria-test and did:plc:rachel-test
+        When Maria requests `GET /project?subject=github:rust-lang/cargo`
+        Then both DIDs appear under "Contributors who claimed"
+        And each contributor is a link to `/score?contributor=<did>`
+        And no contributor row merges the two authors into a single aggregate
+
+      Scenario: A claim-less project renders the guided no-claims state, not a crash
+        Given there are zero claims about github:nonexistent/repo in the local store
+        When Maria requests `GET /project?subject=github:nonexistent/repo`
+        Then the response is 200 and names the queried subject
+        And it states there are no claims about this project in the local graph
+        And it fabricates no edge
+
+      Scenario: The project page renders fully with the network disabled
+        Given the network is disabled and github:rust-lang/cargo has claims in the local store
+        When Maria requests `GET /project?subject=github:rust-lang/cargo`
+        Then the response renders the full survey from the local store
+        And no network call is made
+
+  - id: 3
+    name: "Survey a philosophy (the object entry node) — the aha"
+    command: "GET /philosophy?object=org.openlore.philosophy.reproducible-builds"
+    story_ref: US-GT-003
+
+    tui_mockup: |
+      +-- GET /philosophy?object=${object} -------------------------------+
+      | Projects that embody this (LOCAL; own ∪ peer; no merge):          |
+      |   ${subject}→/project  ${author_did} ${confidence} [${bucket}] cid…|
+      |   ${subject_2}→/project ${author_did} ${confidence} [${bucket}] cid…|
+      | Contributors: ${author_did}→/score ◄ spans BOTH projects (the aha)|
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "object"
+        source: "claims.object / peer_claims.object (philosophy URI)"
+        displayed_as: "${object}"
+        consumers: ["/philosophy query arg", "/project philosophy row", "/claims object link"]
+
+    emotional_state:
+      entry: "Orienting"
+      exit: "Connecting (the aha — a contributor spans two projects)"
+
+    integration_checkpoint: |
+      Symmetric to step 2 (same LOCAL survey read pattern, mirrored key, same pure
+      grouping + render). Project rows link to /project; contributor rows to /score.
+      A contributor spanning multiple projects appears ONCE under contributors.
+
+    failure_modes:
+      - "Object has zero claims -> guided 'no claims for this philosophy' state naming the object; 200; no fabricated edge"
+      - "Same project claimed by two authors -> two attributed rows; never averaged into one project entry"
+
+    gherkin: |
+      Scenario: A philosophy page surveys every project that embodies it, attributed, no merge
+        Given Rachel's pulled peer claims assert github:NixOS/nixpkgs (conf 0.92) and
+          github:bazelbuild/bazel (conf 0.85) embody org.openlore.philosophy.reproducible-builds
+        When Maria requests `GET /philosophy?object=org.openlore.philosophy.reproducible-builds`
+        Then the response lists both projects under "Projects that embody this"
+        And each project shows its attributed author DID, verbatim confidence, bucket, and cid
+        And each project is a link to `/project?subject=<uri>`
+
+      Scenario: Two authors claiming one project for a philosophy render as two rows
+        Given github:NixOS/nixpkgs is claimed for reproducible-builds by did:plc:maria-test (0.92)
+          and did:plc:tobias-test (0.70) in the local store
+        When Maria requests `GET /philosophy?object=org.openlore.philosophy.reproducible-builds`
+        Then nixpkgs shows two attributed rows, one per author DID
+        And no row averages the two confidences into a single nixpkgs entry
+
+      Scenario: A shared contributor across projects is a single traversal link
+        Given did:plc:rachel-test claims both nixpkgs and bazel for reproducible-builds
+        When Maria requests `GET /philosophy?object=org.openlore.philosophy.reproducible-builds`
+        Then did:plc:rachel-test appears once under "Contributors who claimed it"
+        And it is a link to `/score?contributor=did:plc:rachel-test`
+
+      Scenario: A network /search row cross-links into local traversal without a network call
+        Given a /search network result shows object org.openlore.philosophy.dependency-pinning
+        When Maria clicks that object link
+        Then she lands on `/philosophy?object=org.openlore.philosophy.dependency-pinning`
+        And that page reads the LOCAL store only, with no network call
+
+  - id: 4
+    name: "Ground the finding (traverse to the contributor score — reuses slice-09)"
+    command: "GET /score?contributor=did:plc:rachel-test  (slice-09 — REUSED, not rebuilt)"
+    story_ref: US-GT-004
+
+    tui_mockup: |
+      +-- GET /score?contributor=${author_did}  (slice-09 — REUSED) ------+
+      | Transparent weighted adherence breakdown (J-002c — shipped).      |
+      | This slice adds the LINK to here, not the page.                   |
+      | Maria can now cite: ${author_did} spans ${subject} + ${subject_2},|
+      | each edge a signed claim (cid), verbatim confidence — defensible. |
+      +-------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "author_did"
+        source: "claims.author_did / peer_claims.author_did"
+        displayed_as: "${author_did}"
+        consumers: ["/score query arg (slice-09)", "survey contributor rows"]
+
+    emotional_state:
+      entry: "Connecting"
+      exit: "Defensibly-connected"
+
+    integration_checkpoint: |
+      The contributor traversal target is the slice-09 /score route — REUSED, not
+      rebuilt. This slice's only addition is the LINK (US-GT-004). DESIGN owns
+      whether the link carries the bare vs app-identity DID (mirror the slice-08
+      /search resolver).
+
+    failure_modes:
+      - "Contributor link carries a DID with no score rows -> slice-09 /score already renders its guided NoClaims state (no new handling needed)"
+
+    gherkin: |
+      Scenario: A contributor cell links to that contributor's score (reusing slice-09)
+        Given a claim row shows author did:plc:rachel-test
+        When Maria views the row on /claims or /peer-claims or a survey page
+        Then the contributor cell renders as a link to `/score?contributor=did:plc:rachel-test`
+
+      Scenario: htmx request returns the survey results fragment; no-JS returns the full page
+        Given github:rust-lang/cargo has claims in the local store
+        When Maria requests `GET /project?subject=github:rust-lang/cargo` WITH an HX-Request header
+        Then the response is the project-survey results fragment only (no chrome)
+        When Maria requests the same route WITHOUT an HX-Request header
+        Then the response is the complete full page embedding that same fragment
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "author_did"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "Attribution loss in a survey/traversal output is a fatal anti-merging failure (extends KPI-GRAPH-2 / KPI-FED-1 / I-FED-1)."
+    - artifact: "confidence"
+      must_match_across: [2, 3]
+      failure_message: "The numeric confidence shown on a survey edge MUST be the verbatim claim value (0.90, never 0.9/90%); no silent rounding, no recompute (KPI-4 / FR-VIEW-8 / WD-10)."
+    - artifact: "claim_cid"
+      must_match_across: [2, 3]
+      failure_message: "Every displayed edge MUST map to exactly one signed claim's cid; a survey row without a cid is a fabricated edge (I-GT-4 / slice-04 traversal contract)."
+    - artifact: "subject"
+      must_match_across: [1, 2, 3]
+      failure_message: "A subject linked from /claims or /philosophy MUST resolve to the same /project survey key; a mismatch breaks traversal continuity."
+    - artifact: "object"
+      must_match_across: [1, 2, 3]
+      failure_message: "An object linked from /claims or /project MUST resolve to the same /philosophy survey key; a mismatch breaks traversal continuity."
+
+changelog:
+  - date: "2026-06-06"
+    feature: "viewer-graph-traversal"
+    change: >
+      Initial journey for slice-10 traverse-the-graph-in-the-browser: the BROWSER
+      realization of J-002b (traverse contributor<->project<->philosophy edges).
+      Two LOCAL read-only routes (/project, /philosophy) + cross-link wiring that
+      makes every existing list row a traversal edge. Anti-merging surveys,
+      no-invented-edges, verbatim confidence, LOCAL/offline, read-only. Reuses the
+      slice-09 /score as the contributor traversal target. No new weighting surface
+      (J-002c link-out only).
