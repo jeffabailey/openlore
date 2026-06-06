@@ -547,12 +547,29 @@ fn a_thin_single_claim_contributor_renders_sparse_at_any_confidence() {
     // contributor. THEN the pairing renders `[SPARSE]` + the honesty line and NOT
     // Strong, regardless of the high confidence (assert_score_html_renders_sparse_
     // honesty) — the breadth guard, not the magnitude, decides the bucket.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-7 sparse honesty: seed_contributor_sparse_trail(&env, \
-         CONTRIBUTOR_SPARSE_DID); ViewerServer::start; get(\"/score?contributor=\
-         {CONTRIBUTOR_SPARSE_DID}\"); assert_score_html_renders_sparse_honesty(body)"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_sparse_trail(&env, CONTRIBUTOR_SPARSE_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-7: GET /score for a thin (single-claim) contributor must return 200; \
+         body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-7: the response must carry the `#score-results` region; body was:\n{}",
+        response.body
+    );
+    // The thin pairing renders `[SPARSE]` + the "based on N claim(s) by M author(s)
+    // — treat as a lead, not a conclusion" honesty line (projected from the pure
+    // core's WeightBucket::Sparse + claim_count/distinct_author_count) and is NEVER
+    // labelled Strong, regardless of the HIGH (0.95) confidence — the breadth guard,
+    // not the magnitude, decides the bucket (I-CS-3 / KPI-GRAPH-4 / WD-CS-6).
+    assert_score_html_renders_sparse_honesty(&response.body);
 }
 
 /// C-8 (US-CS-003 Example 2 / AC-003.2 — confidence + weight shown verbatim): a
@@ -632,10 +649,47 @@ fn breadth_not_magnitude_decides_sparse_versus_strong_on_the_browser_surface() {
     // SPARSE_DID) contributor seeded. WHEN each is scored over the same viewer.
     // THEN the rich contributor's pairing is NOT `[SPARSE]` (a real bucket) while the
     // sparse contributor's pairing IS `[SPARSE]` — decided by breadth, not magnitude.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-10 breadth-guard: seed both rich + sparse trails; \
-         ViewerServer::start; score each; assert the rich pairing is non-sparse and \
-         the sparse pairing renders [SPARSE] (breadth decides, not magnitude)"
-    )
+    let env = TestEnv::initialized();
+    // The RICH trail spans ≥2 projects on the shared object (cross_project_span ≥ 2);
+    // the SPARSE trail is one claim/one author/one subject. BOTH on the SAME object,
+    // so it is BREADTH (span), not weight magnitude, that separates the buckets. Both
+    // are seeded in ONE federation pull (a single seed call keeps both peers' PDS
+    // servers alive + wires both resolver seams for the one `peer pull`).
+    seed_contributor_rich_and_sparse_trails(&env, CONTRIBUTOR_RICH_DID, CONTRIBUTOR_SPARSE_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let rich = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+    let sparse = viewer.get(&format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}"));
+
+    assert_eq!(
+        rich.status, 200,
+        "C-10: GET /score for the rich (spanning) contributor must return 200; \
+         body was:\n{}",
+        rich.body
+    );
+    assert_eq!(
+        sparse.status, 200,
+        "C-10: GET /score for the sparse (single-claim) contributor must return 200; \
+         body was:\n{}",
+        sparse.body
+    );
+    // The SPANNING contributor (cross_project_span ≥ 2) renders its NON-Sparse bucket
+    // — its pairing carries NO `[SPARSE]` marker (a real weight + multi-row
+    // breakdown). Breadth lifted it out of Sparse.
+    assert!(
+        !rich.body.contains("[SPARSE]"),
+        "C-10: a contributor spanning ≥2 projects must render a NON-Sparse bucket \
+         (no `[SPARSE]` marker) — breadth lifts it out of Sparse; body was:\n{}",
+        rich.body
+    );
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &rich.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    // The NON-spanning contributor (single claim, no span) renders `[SPARSE]` + the
+    // honesty line, regardless of its confidence magnitude — breadth (not magnitude)
+    // decided the bucket in the pure core; the browser surface preserves it
+    // (I-CS-3 / WD-CS-5 / KPI-GRAPH-4).
+    assert_score_html_renders_sparse_honesty(&sparse.body);
 }

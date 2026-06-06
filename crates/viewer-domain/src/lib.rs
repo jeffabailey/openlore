@@ -1518,13 +1518,27 @@ pub const SCORE_RESULTS_ID: &str = "score-results";
 /// never drift apart.
 pub const SCORE_URL: &str = "/score";
 
-/// The honesty line a `[SPARSE]` pairing carries beneath its bucket label (I-CS-3
-/// / KPI-GRAPH-4): thin evidence is a LEAD, not a conclusion. PROJECTED from the
-/// pure core's [`scoring::WeightBucket::Sparse`] — the viewer recomputes NO bucket
-/// (WD-CS-6). Held in ONE place so the honesty promise is a single source of truth
-/// + a single mutation site.
-pub const SCORE_SPARSE_HONESTY_NOTICE: &str =
-    "Sparse evidence — treat as a lead, not a conclusion.";
+/// The honesty-line SUFFIX a `[SPARSE]` pairing carries beneath its bucket label
+/// (I-CS-3 / KPI-GRAPH-4): thin evidence is a LEAD, not a conclusion. The full line
+/// is "based on N claim(s) by M author(s) — treat as a lead, not a conclusion",
+/// where N / M are PROJECTED from the pure core's `claim_count` /
+/// `distinct_author_count` (WD-CS-6 — the viewer recomputes NO bucket and NO
+/// counts). Held in ONE place so the honesty promise is a single source of truth +
+/// a single mutation site; [`render_sparse_honesty_line`] interpolates the counts.
+pub const SCORE_SPARSE_HONESTY_NOTICE: &str = "treat as a lead, not a conclusion.";
+
+/// Build the `[SPARSE]` honesty line from the pairing's PROJECTED counts (WD-CS-6 —
+/// the viewer recomputes NEITHER the bucket NOR the counts; it reads `claim_count`
+/// and `distinct_author_count` off the pure-core `WeightedPairing` and projects
+/// them): "based on N claim(s) by M author(s) — treat as a lead, not a conclusion."
+/// PURE total function over the two counts. Held in ONE place so the honesty phrasing
+/// (the counts + the lead-not-conclusion clause) is a single source of truth.
+fn render_sparse_honesty_line(claim_count: u32, distinct_author_count: u32) -> String {
+    format!(
+        "based on {claim_count} claim(s) by {distinct_author_count} author(s) — \
+         {SCORE_SPARSE_HONESTY_NOTICE}"
+    )
+}
 
 /// The fixed plain-language notice the [`ScoreState::NoClaims`] arm renders when a
 /// contributor has NO claims in the local store (OD-CS-6 / I-CS-5). Held in ONE
@@ -1675,10 +1689,11 @@ fn render_score_pairing(pairing: &scoring::WeightedPairing) -> Markup {
                 " " (render_weight_bucket(pairing.bucket))
             }
             // A `[SPARSE]` pairing carries the honesty line PROJECTED from the pure
-            // core's `WeightBucket::Sparse` (I-CS-3 / KPI-GRAPH-4) — the viewer
-            // recomputes no bucket.
+            // core's `WeightBucket::Sparse` + the `claim_count` / `distinct_author_
+            // count` counts (I-CS-3 / KPI-GRAPH-4) — the viewer recomputes NEITHER
+            // the bucket NOR the counts (WD-CS-6).
             @if matches!(pairing.bucket, scoring::WeightBucket::Sparse) {
-                p { (SCORE_SPARSE_HONESTY_NOTICE) }
+                p { (render_sparse_honesty_line(pairing.claim_count, pairing.distinct_author_count)) }
             }
             (render_score_breakdown(pairing))
         }
@@ -4169,9 +4184,18 @@ mod tests {
             html.contains("[SPARSE]"),
             "a thin pairing must render the `[SPARSE]` marker; got:\n{html}"
         );
+        let lowered = html.to_ascii_lowercase();
         assert!(
-            html.to_ascii_lowercase().contains("treat as a lead"),
+            lowered.contains("treat as a lead"),
             "a `[SPARSE]` pairing must carry the 'treat as a lead' honesty line; got:\n{html}"
+        );
+        // The honesty line names the PROJECTED counts (claim_count=1,
+        // distinct_author_count=1) — "based on 1 claim(s) by 1 author(s)" — read off
+        // the pure-core pairing, NOT recomputed by the viewer (WD-CS-6).
+        assert!(
+            lowered.contains("based on 1 claim") && lowered.contains("by 1 author"),
+            "a `[SPARSE]` pairing's honesty line must project the counts (based on 1 \
+             claim(s) by 1 author(s)); got:\n{html}"
         );
         assert!(
             !html.contains("Strong"),

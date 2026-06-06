@@ -8027,20 +8027,34 @@ pub fn seed_contributor_rich_trail(env: &TestEnv, contributor_did: &str) {
     // through the PRODUCTION federation write path (`peer add` + `peer pull`) so the
     // rows land in the REAL `peer_claims` table the viewer's LOCAL feed read returns
     // — no network at score time (Pillar 3 / BR-VIEW-4 / I-CS-5).
-    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
-    seed_peer_authored_graph(
-        env,
-        &[SeedPeer {
-            peer_did: contributor_did,
-            seed: [23u8; 32],
-            triples: &[
-                ("github:bazelbuild/bazel", repro, 0.86),
-                ("github:NixOS/nixpkgs", repro, 0.90),
-                ("github:reproducible-builds/diffoscope", repro, 0.74),
-                ("github:GNOME/meson", repro, 0.62),
-            ],
-        }],
-    );
+    seed_peer_authored_graph(env, &[rich_trail_seed_peer(contributor_did)]);
+}
+
+/// The RICH-trail [`SeedPeer`] definition (FOUR distinct subjects on the shared
+/// reproducible-builds object at varied confidences → `cross_project_span >= 2`,
+/// NOT sparse). Held in ONE place so the standalone [`seed_contributor_rich_trail`]
+/// and the combined [`seed_contributor_rich_and_sparse_trails`] (C-10) seed the
+/// IDENTICAL trail through ONE `seed_peer_authored_graph` call — no drift on the
+/// subjects / confidences / seed.
+fn rich_trail_seed_peer(contributor_did: &str) -> SeedPeer<'_> {
+    // The triple list is inlined with the `&'static str` object const so the array
+    // literal is fully constant → promoted to `'static` (the `SeedPeer<'a>` triples
+    // borrow). Binding the object to a `let` first would make the array a temporary
+    // owned by this fn (E0515 on return).
+    SeedPeer {
+        peer_did: contributor_did,
+        seed: [23u8; 32],
+        triples: &[
+            ("github:bazelbuild/bazel", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.86),
+            ("github:NixOS/nixpkgs", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.90),
+            (
+                "github:reproducible-builds/diffoscope",
+                SCORE_OBJECT_REPRODUCIBLE_BUILDS,
+                0.74,
+            ),
+            ("github:GNOME/meson", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.62),
+        ],
+    }
 }
 
 /// Seed a SPARSE local trail for `contributor_did`: EXACTLY ONE claim, by that one
@@ -8055,17 +8069,52 @@ pub fn seed_contributor_rich_trail(env: &TestEnv, contributor_did: &str) {
 /// graph` with ONE `SeedPeer` carrying a SINGLE triple (one subject, the shared
 /// object, confidence 0.95).
 pub fn seed_contributor_sparse_trail(env: &TestEnv, contributor_did: &str) {
-    // DELIVER: one `SeedPeer{ peer_did: contributor_did, seed, triples: &[(one
-    // subject, reproducible-builds, 0.95)] }` via `seed_peer_authored_graph` so
-    // exactly ONE `peer_claims` row lands — a single-claim/single-author/no-span
-    // feed the pure core buckets `[SPARSE]` at any confidence. LOCAL only.
-    let _ = (env, contributor_did, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
-    todo!(
-        "slice-09 DELIVER: seed a SPARSE local trail for {contributor_did} (exactly \
-         one claim, one author, one subject, confidence 0.95) via the production \
-         `peer add` + `peer pull` path so the pure core buckets it [SPARSE] \
-         regardless of the high confidence"
-    )
+    // ONE `SeedPeer{ peer_did: contributor_did, seed, triples: &[(one subject,
+    // reproducible-builds, 0.95)] }` via `seed_peer_authored_graph` so exactly ONE
+    // `peer_claims` row lands — a single-claim / single-author / no-span feed
+    // (claim_count=1, distinct_author_count=1, cross_project_span=1) the pure core
+    // buckets `[SPARSE]` at ANY confidence. The confidence is intentionally HIGH
+    // (0.95) so the scenario proves magnitude does not dress a thin opinion up as
+    // Strong. Materialized through the PRODUCTION federation write path (`peer add`
+    // + `peer pull`) so the row lands in the REAL `peer_claims` table the viewer's
+    // LOCAL feed read returns — no network at score time (Pillar 3 / I-CS-5).
+    seed_peer_authored_graph(env, &[sparse_trail_seed_peer(contributor_did)]);
+}
+
+/// The SPARSE-trail [`SeedPeer`] definition (ONE subject on the shared object at a
+/// HIGH 0.95 confidence → claim_count=1, distinct_author_count=1,
+/// cross_project_span=1 → `[SPARSE]` at any magnitude). Held in ONE place so the
+/// standalone [`seed_contributor_sparse_trail`] and the combined
+/// [`seed_contributor_rich_and_sparse_trails`] (C-10) seed the IDENTICAL trail.
+fn sparse_trail_seed_peer(contributor_did: &str) -> SeedPeer<'_> {
+    // Inlined object const (constant array → `'static` promotion; see
+    // [`rich_trail_seed_peer`]).
+    SeedPeer {
+        peer_did: contributor_did,
+        seed: [29u8; 32],
+        triples: &[("github:torvalds/linux", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.95)],
+    }
+}
+
+/// Seed BOTH a RICH trail (for `rich_did`) and a SPARSE trail (for `sparse_did`) in
+/// ONE `seed_peer_authored_graph` invocation (C-10 breadth-vs-magnitude). A SINGLE
+/// call is REQUIRED: `seed_peer_authored_graph` keeps every peer's PDS server alive
+/// only for the duration of the call AND wires the resolver/pubkey seams for ALL
+/// peers into the ONE `peer pull`. Seeding the two trails through two SEPARATE calls
+/// would drop the first peer's PDS before the second call's pull re-pulls every
+/// subscribed peer → the first peer's DID resolution 404s. Both contributors assert
+/// the SAME reproducible-builds object, so it is BREADTH (cross-project span), not
+/// weight magnitude, that separates the buckets (the rich one spans ≥2 projects →
+/// non-Sparse; the sparse one is a single claim → `[SPARSE]`). PRODUCTION federation
+/// write path (`peer add` + `peer pull`); LOCAL only at score time.
+pub fn seed_contributor_rich_and_sparse_trails(env: &TestEnv, rich_did: &str, sparse_did: &str) {
+    seed_peer_authored_graph(
+        env,
+        &[
+            rich_trail_seed_peer(rich_did),
+            sparse_trail_seed_peer(sparse_did),
+        ],
+    );
 }
 
 /// Seed a trail where TWO DISTINCT authors assert the SAME (subject, object) at
@@ -8240,6 +8289,16 @@ pub fn assert_score_html_renders_sparse_honesty(body: &str) {
         lowered.contains("treat as a lead"),
         "I-CS-3: a `[SPARSE]` pairing must carry the \"treat as a lead, not a \
          conclusion\" honesty line; body was:\n{body}"
+    );
+    // The honesty line carries the COUNTS (N claims, M authors) PROJECTED from the
+    // pure core's `claim_count` / `distinct_author_count` (WD-CS-6 — the viewer
+    // recomputes NO bucket and NO counts): "based on 1 claim(s) by 1 author(s)".
+    // A single-claim / single-author sparse trail is N=1, M=1.
+    assert!(
+        lowered.contains("based on 1 claim") && lowered.contains("by 1 author"),
+        "I-CS-3 / KPI-GRAPH-4: a `[SPARSE]` pairing's honesty line must name the \
+         projected counts (based on N claim(s) by M author(s)) — here N=1, M=1; \
+         body was:\n{body}"
     );
     // The thin pairing is NEVER labelled Strong, regardless of confidence magnitude
     // (the breadth guard, not the weight, decides the bucket).
