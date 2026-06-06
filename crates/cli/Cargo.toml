@@ -432,3 +432,53 @@ harness = true
 name = "viewer_contributor_scoring_invariants"
 path = "../../tests/acceptance/viewer_contributor_scoring_invariants.rs"
 harness = true
+
+# Slice-10 (viewer-graph-traversal; DISTILL): the `openlore ui` GRAPH-TRAVERSAL views
+# (US-GT-002/003/004; ADR-042/043/044/045). Two NEW LOCAL read-only routes —
+# `GET /project?subject=<uri>` (project survey) and `GET /philosophy?object=<uri>`
+# (philosophy survey) — read the entity's LOCAL attributed survey over the read-only
+# DuckDB store (`StoreReadPort::query_project_survey` / `query_philosophy_survey` —
+# claims ∪ local peer_claims, UNION ALL, NO merge, NO network), group the attributed
+# claims in the PURE `viewer-domain` core into a `TraversalView` ADT (grouping in
+# Rust, never SQL — anti-merging, I-GT-3), and render: per group a traversal `<a href>`
+# to the OTHER dimension, per edge the attributed author_did + verbatim confidence +
+# the REUSED claim-domain display-only bucket + cid (every edge = one signed claim,
+# I-GT-4). Distinct contributors link to `/score?contributor=<bare-did>` (slice-09
+# terminus REUSED; ADR-044 Q1). Empty/unknown entity → guided `NoClaims` (200, no
+# fabricated edge). Forks by `Shape` (slice-07 HX-Request): full page WITHOUT
+# `HX-Request`, the `#traversal-results` fragment WITH it (parity by construction,
+# I-GT-6). US-GT-004 wires every survey cell as an `<a href>` traversal edge; claim-
+# controlled subject/object URIs are PERCENT-ENCODED into the href (the ADR-044
+# §security injection boundary — a hostile peer URI cannot break out of the attribute).
+# Drives the REAL `openlore ui` verb via `ViewerServer` + in-test HTTP (get/get_htmx)
+# over a REAL seeded local store — traversal is LOCAL + OFFLINE (no indexer, no GitHub;
+# offline-STRONGER than /search). Seeding postures (production peer path): PROJECT
+# trail, PHILOSOPHY trail (spanning contributor), TWO-AUTHORS-one-edge (anti-merging),
+# EMPTY (NoClaims), INJECTION-URI (the §security fixture). Per Mandate 9/11 the sad
+# paths (no-claims, injection URI) are example-based, never PBT-generated at this
+# layer. Build-before-run: `cargo build` the `openlore` bin (the viewer) before
+# running. DISTILL registers + materializes the harness so the GT-* scenarios classify
+# RED (panic at `todo!()`); GT-* stay RED until DELIVER's per-scenario phases.
+[[test]]
+name = "viewer_graph_traversal"
+path = "../../tests/acceptance/viewer_graph_traversal.rs"
+harness = true
+
+# Slice-10 (viewer-graph-traversal; DISTILL) GOLD / guardrail invariants over the
+# whole `/project` + `/philosophy` surface (cross-cutting I-GT-1/2/3/4/7):
+# every_traversal_route_leaves_the_store_read_only (read-only state-delta, Mandate 8 —
+# surveys computed per query, nothing persisted), no_traversal_response_adds_a_write_
+# or_sign_control (no sign/publish/follow control on any shape — cross-links are
+# render-only `<a href>` TEXT), the_traversal_page_chrome_stays_offline_no_cdn (local
+# /static/htmx.min.js, no CDN), the_traversal_surface_works_fully_offline (LOCAL read,
+# no outbound edge — offline-STRONGER than /search), and the SECURITY gold
+# no_traversal_href_lets_a_claim_controlled_uri_inject (ADR-044 §security — a hostile
+# claim-controlled URI is percent-encoded into the href and can never inject/break).
+# Drives the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO
+# mocked boundary (both routes are a LOCAL read + PURE group/render). Per Mandate 9/11
+# example-based, never PBT-generated at this layer. DISTILL registers + RED gate;
+# GT-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_graph_traversal_invariants"
+path = "../../tests/acceptance/viewer_graph_traversal_invariants.rs"
+harness = true

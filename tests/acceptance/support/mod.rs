@@ -8690,3 +8690,375 @@ pub fn assert_score_html_has_no_write_or_sign_control(body: &str) {
         );
     }
 }
+
+// =============================================================================
+// slice-10 (viewer-graph-traversal) `/project` + `/philosophy` traversal harness
+// (US-GT-002/003/004; ADR-042/043/044/045). The two new LOCAL read-only routes —
+// `GET /project?subject=<uri>` (project survey) and `GET /philosophy?object=<uri>`
+// (philosophy survey) — plus the cross-link wiring that turns every survey row
+// into a clickable traversal edge.
+//
+// Driving discipline (Mandate 1): scenarios enter through the REAL `openlore ui`
+// subprocess (`ViewerServer`) + in-test HTTP GET (with/without `HX-Request` — the
+// slice-07 `get`/`get_htmx` pair). The LOCAL DuckDB store is REAL, seeded through
+// the PRODUCTION federation write path (`seed_own_plus_peer_graph` /
+// `seed_peer_authored_graph` — the SAME `peer add` + `peer pull` seam slice-09
+// uses), so the rows the survey reads are produced by production code, not
+// hand-inserted (Pillar 3 / BR-VIEW-4). NO external/network boundary exists —
+// `/project` + `/philosophy` are LOCAL + OFFLINE (distinct from `/scrape`'s GitHub
+// edge and `/search`'s indexer edge; offline-STRONGER than `/search` — I-GT-2 /
+// I-GT-7). NO scenario calls the `viewer-domain` `render_project_*` /
+// `render_philosophy_*` fns OR the `group_*` projections directly (those are
+// unit/property-level, exercised in DELIVER) — every assertion is on the rendered
+// HTML the operator's browser shows (Mandate 8 universe = port-exposed rendered
+// surface, never an internal struct field).
+//
+// Layer placement (nw-tdd-methodology Layered Test Discipline matrix): every
+// traversal scenario is a layer-3/layer-5 subprocess + real-I/O test — EXAMPLE-only
+// (Mandate 9/11). The sad paths (no-claims, the injection URI) are enumerated
+// explicitly, never PBT-generated at this layer (the generative exploration of the
+// pure group/render core + the `encode_query_component` round-trip PROPERTY are a
+// layer-1/2 DELIVER concern).
+//
+// Anti-merging seeding postures (the key harness pieces):
+//   - PROJECT trail → `seed_project_survey_trail`: ONE subject (a project) with
+//                     several attributed claims on DISTINCT objects (philosophies)
+//                     so the project survey groups multiple philosophies embodied,
+//                     each an attributed edge.
+//   - PHILOSOPHY    → `seed_philosophy_survey_trail`: ONE object (a philosophy)
+//                     embodied by several DISTINCT subjects (projects), each an
+//                     attributed edge — with a SHARED contributor spanning ≥2
+//                     projects (the canonical "aha").
+//   - TWO AUTHORS   → `seed_two_author_same_edge`: two DISTINCT authors claim the
+//                     SAME (subject, object) → two attributed rows under their own
+//                     author_dids, never merged/averaged (WD-GT-5 / I-GT-3).
+//   - EMPTY         → no seeding for an unknown entity → guided `NoClaims`.
+//   - INJECTION URI → `seed_injection_uri_subject`: a claim-controlled subject
+//                     carrying HTML/quote/`&`/space characters → the survey row's
+//                     href must percent-ENCODE it (the ADR-044 §security boundary).
+// =============================================================================
+
+/// The canonical slice-10 traversal entities — one source of truth so the seed
+/// call + the rendered-edge assertions never drift on the URI strings. Mirrors the
+/// journey's real data (cargo / nixpkgs / bazel / dependency-pinning /
+/// reproducible-builds; did:plc:maria-test / rachel-test / tobias-test).
+pub const TRAVERSAL_PROJECT_CARGO: &str = "github:rust-lang/cargo";
+pub const TRAVERSAL_PROJECT_NIXPKGS: &str = "github:NixOS/nixpkgs";
+pub const TRAVERSAL_PROJECT_BAZEL: &str = "github:bazelbuild/bazel";
+pub const TRAVERSAL_PROJECT_UNKNOWN: &str = "github:nonexistent/repo";
+
+/// The percent-encoded forms of the well-known project subjects as they MUST appear
+/// in a traversal href's `?subject=` query component (the `:` and `/` of a
+/// `github:owner/repo` URI → `%3A` / `%2F`; ADR-044 `encode_query_component`). One
+/// source of truth so the cross-link assertions pin the EXACT encoded value the
+/// production helper must emit. `github:NixOS/nixpkgs` → `github%3ANixOS%2Fnixpkgs`;
+/// `github:bazelbuild/bazel` → `github%3Abazelbuild%2Fbazel`.
+pub const TRAVERSAL_PROJECT_NIXPKGS_ENCODED: &str = "github%3ANixOS%2Fnixpkgs";
+pub const TRAVERSAL_PROJECT_BAZEL_ENCODED: &str = "github%3Abazelbuild%2Fbazel";
+pub const TRAVERSAL_PHILOSOPHY_DEP_PINNING: &str = "org.openlore.philosophy.dependency-pinning";
+pub const TRAVERSAL_PHILOSOPHY_REPRO_BUILDS: &str = "org.openlore.philosophy.reproducible-builds";
+pub const TRAVERSAL_PHILOSOPHY_UNKNOWN: &str = "org.openlore.philosophy.actor-model";
+
+/// The two SECOND-author DIDs the anti-merging surveys attribute their peer rows
+/// to (the LOCAL user is the OWN author). Rachel is the canonical spanning
+/// contributor (claims across ≥2 projects); Tobias is the second author on a
+/// shared project (the two-authors-one-project no-merge fixture).
+pub const TRAVERSAL_AUTHOR_RACHEL: &str = "did:plc:rachel-test";
+pub const TRAVERSAL_AUTHOR_TOBIAS: &str = "did:plc:tobias-test";
+
+/// The `#traversal-results` swap-target id the `/project` + `/philosophy` fragment
+/// renders under (the sibling of slice-09's `#score-results` + slice-08's
+/// `#search-results`). Asserting it appears in BOTH the fragment and the full-page
+/// results region proves the parity-by-construction embedding (I-GT-6). One source
+/// of truth so the scenarios never drift.
+pub const TRAVERSAL_RESULTS_ID: &str = "traversal-results";
+
+/// A claim-controlled subject URI carrying HOSTILE characters — an HTML/attribute
+/// breakout attempt a PEER could author into a signed claim (`"`, `<`, `>`, `&`,
+/// and a space). It is the ADR-044 §security fixture: when this subject renders as
+/// a `/philosophy` survey row (or any cross-link), its href MUST percent-ENCODE
+/// every reserved/unsafe byte so the value cannot break out of the `href` attribute
+/// or smuggle a second query param. The raw value also round-trips back to the
+/// stored subject verbatim (the linked key resolves to the SAME survey).
+pub const TRAVERSAL_INJECTION_SUBJECT: &str = "github:evil/x\"><script>&q= space";
+
+/// The percent-encoded form of [`TRAVERSAL_INJECTION_SUBJECT`] as it MUST appear in
+/// a traversal href's `?subject=` query component (every byte outside the
+/// unreserved set `A-Z a-z 0-9 - _ . ~` → `%XX`). One source of truth so the
+/// injection-boundary assertion pins the EXACT encoded value the production
+/// `encode_query_component` (ADR-044) must emit. `"` → `%22`, `<` → `%3C`, `>` →
+/// `%3E`, `&` → `%26`, `=` → `%3D`, space → `%20`, `:` → `%3A`, `/` → `%2F`.
+pub const TRAVERSAL_INJECTION_SUBJECT_ENCODED: &str =
+    "github%3Aevil%2Fx%22%3E%3Cscript%3E%26q%3D%20space";
+
+/// Seed a PROJECT-survey trail through the PRODUCTION federation write path
+/// (`peer add` + `peer pull` against a `PeerPds` double — the SAME store `openlore
+/// ui` opens, Pillar 3 / BR-VIEW-4): ONE subject (`project`) carrying several
+/// attributed claims on DISTINCT objects (philosophies) at varied confidences, so
+/// the project survey groups MULTIPLE philosophies-embodied edges (US-GT-002). The
+/// claims are authored by the spanning contributor (`author_did`) so the survey's
+/// "Contributors who claimed" list names that DID (a link to `/score`). DISTINCT
+/// objects keep the canonical CIDs distinct (the store keys on cid). Confidences
+/// vary so the verbatim-render + bucket scenarios have distinct numbers to assert
+/// (`0.90` triangulated, `0.74` well-evidenced, `0.25` speculative).
+///
+/// SCAFFOLD: true (slice-10) — DELIVER materializes it via the EXISTING
+/// `seed_peer_authored_graph` (`peer add` + `peer pull`), one `SeedPeer` for
+/// `author_did` whose `triples` are several DISTINCT objects on the shared
+/// `project` subject. No new mechanism — the rows land in the REAL `peer_claims`
+/// table the viewer's LOCAL project-survey read returns.
+pub fn seed_project_survey_trail(env: &TestEnv, project: &str, author_did: &str) {
+    // The contributor asserts the SHARED `project` subject across THREE DISTINCT
+    // objects (philosophies) at varied confidences, so the project survey groups
+    // three philosophies-embodied edges, each attributed to `author_did`. DISTINCT
+    // objects keep the canonical CIDs distinct (identical triples would collide
+    // into one row). Materialized through the PRODUCTION federation write path so
+    // the rows land in the REAL `peer_claims` table the viewer's LOCAL survey read
+    // returns — no network at survey time (Pillar 3 / I-GT-2).
+    let _ = (project, author_did);
+    todo!(
+        "slice-10 DELIVER: seed a project-survey trail via seed_peer_authored_graph \
+         — one SeedPeer for `author_did` whose triples are THREE distinct \
+         philosophies (dependency-pinning 0.90, reproducible-builds 0.74, \
+         memory-safety 0.25) on the shared `project` subject. RED scaffold."
+    )
+}
+
+/// Seed a PHILOSOPHY-survey trail through the PRODUCTION federation write path: ONE
+/// object (`philosophy`) embodied by several DISTINCT subjects (projects), each an
+/// attributed claim by the SHARED contributor (`spanning_author_did`) — so the
+/// philosophy survey lists multiple projects-that-embody edges AND the spanning
+/// contributor appears ONCE under "Contributors who claimed" (the canonical
+/// cross-project "aha", US-GT-003). DISTINCT subjects keep the CIDs distinct.
+///
+/// SCAFFOLD: true (slice-10) — DELIVER materializes it via `seed_peer_authored_
+/// graph` with one `SeedPeer` for `spanning_author_did` whose triples are several
+/// DISTINCT subjects on the shared `philosophy` object.
+pub fn seed_philosophy_survey_trail(env: &TestEnv, philosophy: &str, spanning_author_did: &str) {
+    // The spanning contributor embodies the SHARED `philosophy` object across TWO
+    // DISTINCT subjects (nixpkgs 0.92, bazel 0.85), so the philosophy survey lists
+    // two projects-that-embody edges AND names the ONE spanning contributor under
+    // "Contributors who claimed" (deduped — appears once; the non-obvious span).
+    // PRODUCTION federation write path; LOCAL only at survey time (I-GT-2).
+    let _ = (philosophy, spanning_author_did);
+    todo!(
+        "slice-10 DELIVER: seed a philosophy-survey trail via seed_peer_authored_\
+         graph — one SeedPeer for `spanning_author_did` whose triples are TWO \
+         distinct subjects (nixpkgs 0.92, bazel 0.85) on the shared `philosophy` \
+         object. RED scaffold."
+    )
+}
+
+/// Seed a trail where TWO DISTINCT authors claim the SAME (subject, object) at
+/// DIFFERENT confidences, so the survey for that entity decomposes into TWO
+/// separate attributed rows under their OWN author_dids — never averaged/merged
+/// into one faceless consensus row (the cardinal anti-merging guarantee, WD-GT-5 /
+/// I-GT-3). Returns the two author DIDs (in seeded order: own, peer) so the
+/// scenario can assert both rows are present + attributed. Mirrors the slice-09
+/// `seed_contributor_conflicting_authors` shape exactly, swapping the survey key.
+///
+/// SCAFFOLD: true (slice-10) — DELIVER materializes it via `seed_own_plus_peer_
+/// graph` (the GQE-2 identical-content-two-authors fixture shape): the LOCAL user
+/// (`You`) + a pulled peer both assert the same (subject, object) at different
+/// confidences, landing two attributed rows on one survey group.
+pub fn seed_two_author_same_edge(
+    env: &TestEnv,
+    subject: &str,
+    object: &str,
+) -> (String, String) {
+    // The LOCAL user's OWN claim (via the real `claim add` verb → the local DID) AND
+    // a pulled PEER claim (via the real `peer add` + `peer pull` verbs → Tobias) by
+    // a SECOND, DISTINCT author both assert the SAME (subject, object) at DISTINCT
+    // confidences (0.92 own + 0.70 peer). The own row lands in `claims`, the peer row
+    // in `peer_claims`; the survey read returns BOTH (UNION ALL, no merge) and the
+    // pure `group_*` projection decomposes the ONE group into TWO attributed
+    // `EdgeRow`s under their own author_dids — never averaged/merged (anti-merging;
+    // I-GT-3). NO hand-inserted store rows. Returns the two distinct author DIDs in
+    // seeded order (own, peer).
+    let _ = (subject, object);
+    todo!(
+        "slice-10 DELIVER: seed two authors on ONE (subject, object) via \
+         seed_own_plus_peer_graph — own claim (0.92) + Tobias peer claim (0.70) on \
+         the SAME (subject, object); return (local_did, tobias_did). RED scaffold."
+    )
+}
+
+/// Seed ONE attributed claim whose SUBJECT is the HOSTILE claim-controlled URI
+/// [`TRAVERSAL_INJECTION_SUBJECT`] (carrying `"`, `<`, `>`, `&`, space) on a known
+/// philosophy object — so a `/philosophy` survey row (and any cross-link) must
+/// render that subject's `/project` href with the value PERCENT-ENCODED (the
+/// ADR-044 §security injection boundary). The claim is authored by a peer (the
+/// hostile-input source is a PEER's signed claim, the attacker-influenced surface).
+/// Returns the philosophy object the injection subject embodies (so the scenario
+/// can query `/philosophy?object=<that>` and find the hostile subject as a row).
+///
+/// SCAFFOLD: true (slice-10) — DELIVER materializes it via `seed_peer_authored_
+/// graph` with one `SeedPeer` whose single triple is `(INJECTION_SUBJECT,
+/// dependency-pinning, 0.50)`. The subject is a valid stored string; the SECURITY
+/// contract is purely on the OUTBOUND href encoding, not on rejecting the claim.
+pub fn seed_injection_uri_subject(env: &TestEnv) -> String {
+    // One peer claim whose SUBJECT is the hostile URI on the dependency-pinning
+    // object, via the PRODUCTION federation write path. The hostile value is stored
+    // verbatim (claims are not rejected for their subject text — anti-merging /
+    // no-invented-edge are the only survey contracts); the SECURITY boundary is that
+    // when the `/philosophy` survey for dependency-pinning renders this subject as a
+    // `/project` cross-link, the href percent-ENCODES it (ADR-044). Returns the
+    // object so the scenario queries `/philosophy?object=<dependency-pinning>`.
+    todo!(
+        "slice-10 DELIVER: seed ONE peer claim whose subject is \
+         TRAVERSAL_INJECTION_SUBJECT on the dependency-pinning object via \
+         seed_peer_authored_graph; return TRAVERSAL_PHILOSOPHY_DEP_PINNING. RED \
+         scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body (fragment OR full page) groups its
+/// attributed edges correctly: every expected group `key` (a philosophy on
+/// `/project`, a project on `/philosophy`) is rendered, each expected `author_did`
+/// is attributed on an edge row, each `expected_confidence_verbatim` string is
+/// present byte-for-byte (`0.90`, never `0.9`/`90%`; I-GT-5), each expected
+/// `bucket_label` (the REUSED claim-domain display-only bucket) is shown, and NO
+/// merged/averaged consensus row appears (anti-merging; I-GT-3). The OBSERVABLE
+/// counterpart of the slice-09 `assert_score_html_breakdown_attributed_and_verbatim`
+/// — scans the rendered HTML only (Mandate 8 universe = port-exposed rendered
+/// surface, never an internal struct field).
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_groups_attributed_and_verbatim(
+    body: &str,
+    expected_group_keys: &[&str],
+    expected_authors: &[&str],
+    expected_confidences_verbatim: &[&str],
+    expected_bucket_labels: &[&str],
+) {
+    let _ = (
+        body,
+        expected_group_keys,
+        expected_authors,
+        expected_confidences_verbatim,
+        expected_bucket_labels,
+    );
+    todo!(
+        "slice-10 DELIVER: assert every group key + author_did + verbatim confidence \
+         + display-only bucket label is rendered, each edge names its cid, and NO \
+         merged/averaged consensus row appears (anti-merging; I-GT-3 / I-GT-5). RED \
+         scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body names every `cid` it is built from — each
+/// displayed edge maps to exactly ONE signed claim (no invented edges; I-GT-4). The
+/// sibling of slice-09's `assert_score_html_breakdown_names_cids`. The CIDs are read
+/// from the SAME store the viewer's survey read returns (production-recomputed, never
+/// hand-stamped).
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_names_cids(body: &str, expected_cids: &[String]) {
+    let _ = (body, expected_cids);
+    todo!(
+        "slice-10 DELIVER: assert every expected cid appears on its edge row (each \
+         edge = exactly one signed claim; no invented edges, I-GT-4). RED scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body lists each expected contributor DID as a
+/// traversal LINK to `/score?contributor=<bare-did>` (the slice-09 terminus reused;
+/// the bare-DID form, ADR-044 Q1). A spanning contributor appears ONCE (deduped).
+/// The link is a render-only `<a href>` (no executable control). Scans the
+/// OBSERVABLE rendered surface only.
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_dids: &[&str]) {
+    let _ = (body, expected_dids);
+    todo!(
+        "slice-10 DELIVER: assert each contributor DID renders as an `<a href>` link \
+         to `/score?contributor=<bare-did>` (spanning contributor appears once; \
+         render-only navigation TEXT, not a control). RED scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body renders each survey cross-link as a plain
+/// `<a href>` to the correct route — subject → `/project?subject=`, object →
+/// `/philosophy?object=` — so a no-JS click is a FULL navigation (progressive
+/// enhancement; the href value MUST be present so the navigation lands). For each
+/// `(raw_value, expected_route_prefix)` the rendered href is
+/// `<route_prefix>?<key>=<encoded(raw_value)>` (the percent-encoded value, ADR-044).
+/// The render-only `<a href>` carries no executable control.
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_crosslink_is_plain_anchor(
+    body: &str,
+    expected_hrefs: &[&str],
+) {
+    let _ = (body, expected_hrefs);
+    todo!(
+        "slice-10 DELIVER: assert each expected href is rendered as a plain `<a href= \
+         …>` anchor (no `hx-` requirement; a no-JS click is a full navigation), with \
+         the claim-controlled value PERCENT-ENCODED in the query component (ADR-044). \
+         RED scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body carries the hostile claim-controlled
+/// subject's `/project` cross-link with the value PERCENT-ENCODED — the ADR-044
+/// §security injection boundary. The rendered href MUST contain the EXACT encoded
+/// form ([`TRAVERSAL_INJECTION_SUBJECT_ENCODED`]) and MUST NOT contain the raw
+/// hostile characters (`"><script>`, the un-encoded `&`/space) INSIDE the href
+/// attribute — so a peer's hostile subject cannot break out of the attribute or
+/// smuggle a second query param. The raw subject MAY still appear as escaped TEXT in
+/// the row's visible label (maud auto-escapes text); the assertion is specifically
+/// about the HREF being inert.
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_href_percent_encoded(body: &str) {
+    let _ = body;
+    todo!(
+        "slice-10 DELIVER: assert the hostile subject's /project href contains \
+         TRAVERSAL_INJECTION_SUBJECT_ENCODED and does NOT break out of the href \
+         attribute (no `\"><script>` / un-encoded `&`/space inside the href) — the \
+         ADR-044 §security injection boundary. RED scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body shows the guided `NoClaims` state for an
+/// entity with no local claims (US-GT-002/003 Example 3 / I-GT-4): the guided "no
+/// claims … in your local graph" notice naming the queried entity, a CLI next-step
+/// hint (`graph query` / `scrape`), NO fabricated edge, and NO leaked stack trace.
+/// The sibling of slice-09's `assert_score_html_renders_no_claims`.
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str) {
+    let _ = (body, queried_entity);
+    todo!(
+        "slice-10 DELIVER: assert the guided NoClaims state names the queried entity, \
+         hints a CLI next step, fabricates NO edge (no `<a href=\"/project` / \
+         `/philosophy` edge row, no cid), and leaks no stack trace. RED scaffold."
+    )
+}
+
+/// Assert a rendered traversal survey body carries NO sign / publish / follow /
+/// subscribe control on any shape — the read-only-surface guarantee on the
+/// traversal routes (I-GT-1 / WD-GT-3). The sibling of slice-09's
+/// `assert_score_html_has_no_write_or_sign_control`. Cross-links ARE present and
+/// are render-only `<a href>` navigation TEXT, never executable controls.
+///
+/// SCAFFOLD: true (slice-10).
+pub fn assert_traversal_html_has_no_write_or_sign_control(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "name=\"sign\"",
+        "sign claim",
+        "sign & publish",
+        "sign &amp; publish",
+        "subscribe",
+        ">follow<",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-GT-1 / WD-GT-3: the traversal surface (`/project` + `/philosophy`) \
+             must render NO sign / publish / follow / subscribe control (traversal is \
+             a read; cross-links are render-only `<a href>` navigation TEXT; \
+             signing/following stays in the CLI); found {banned:?} in body:\n{body}"
+        );
+    }
+}

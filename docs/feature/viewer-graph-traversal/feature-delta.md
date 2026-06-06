@@ -850,8 +850,200 @@ the cross-link affordance discoverability before any deeper traversal investment
 
 ---
 
+## Wave: DISTILL
+
+> Wave: **DISTILL** (lean mode) · Owner: Quinn (nw-acceptance-designer) · Date: 2026-06-06
+> Per ADR-025 DISTILL is the CANONICAL author of ALL acceptance tests, scaffolded
+> RED (each body `todo!(...)` → panics → classifies RED / MISSING_FUNCTIONALITY).
+> DELIVER unskips them (it does not re-author ATs in RED). Brownfield DELTA: mirrors
+> the slice-06/07/08/09 viewer acceptance corpus EXACTLY (same `ViewerServer`
+> subprocess harness, `Shape` discriminators, production peer seeding path,
+> `capture_store_row_count_universe` / `assert_store_read_only` gold). No new test
+> framework.
+
+### [REF] Reconciliation result
+
+**Reconciliation passed — 0 contradictions.** Read DISCUSS `discuss/wave-decisions.md`
+(WD-GT-1..10) against the DESIGN artifacts (`architecture-design.md` §7 resolved
+questions + `component-boundaries.md` + `data-models.md` + ADR-042/043/044/045).
+Every DISCUSS lock is carried verbatim by DESIGN: two routes + contributor→/score
+(WD-GT-1 ↔ ADR-044), read-only 3-layer (WD-GT-3 ↔ I-GT-1), local-only/offline
+(WD-GT-4 ↔ I-GT-2), anti-merging (WD-GT-5 ↔ I-GT-3 + SurveyRow non-Option
+author_did), no-invented-edges (WD-GT-6 ↔ I-GT-4 + non-Option cid), verbatim+bucket
+no-recompute (WD-GT-7 ↔ I-GT-5 + claim_domain::confidence_bucket reuse), Shape parity
+(WD-GT-8 ↔ I-GT-6), depth-1 (WD-GT-10 ↔ ADR-043). The three DISCUSS open questions
+(Q1 bare-DID, Q2 percent-encode, Q3 two methods) are RESOLVED by DESIGN §7 — these
+are resolutions, not contradictions. No DEVOPS dir for this slice (graceful
+degradation: WARN; the `openlore ui` driving port is already in the project
+Infrastructure Policy, so no env-matrix gap). No DESIGN `wave-decisions.md` file
+(decisions live in the four ADRs, all read).
+
+### [REF] Lang + Infrastructure Policy + Port bootstrap
+
+- `[lang-mode] rust` (workspace `Cargo.toml`).
+- `[policy-mode] inherit` — `docs/architecture/atdd-infrastructure-policy.md` PRESENT;
+  the `openlore` CLI `ui` verb driving port (`GET /` `/claims` `/peer-claims`
+  `/scrape` `/search` `/score` `/static/htmx.min.js`) is already recorded. slice-10
+  adds `/project` + `/philosophy` to that SAME long-running-subprocess driving port —
+  no new port class, no new mechanism, no policy row appended (the StoreReadPort
+  driven-internal real-DuckDB mechanism is unchanged; the two new survey reads are
+  methods on the already-recorded read-only port).
+- `[port-mode] inherit` — state-delta port present at `tests/common/state_delta.rs`
+  (re-exported as `support::state_delta`; reused by the read-only gold).
+
+### [REF] Scenario list with tags
+
+Naming `GT-N` (mirrors slice-09 `C-N`). Driving port (port-to-port): the two HTTP
+routes `GET /project?subject=<uri>` + `GET /philosophy?object=<uri>` over the REAL
+`openlore ui` subprocess. Layer-3/5 subprocess + real-I/O, EXAMPLE-only (Mandate
+9/11 — sad paths enumerated, never PBT-generated at this layer).
+
+**`tests/acceptance/viewer_graph_traversal.rs`** (Tier A story scenarios — 14):
+
+| Scenario | US | Invariant(s) | Tags |
+|---|---|---|---|
+| `open_a_project_survey_with_htmx_returns_only_the_traversal_fragment` **(WS)** | US-GT-002 | I-GT-3/5/6 | `@walking_skeleton @driving_port @real-io @htmx-fragment @happy` |
+| `the_project_survey_full_page_and_fragment_render_the_same_region` | US-GT-002 | I-GT-6 | `@no-js @full-page @parity @happy` |
+| `a_project_survey_renders_two_authors_on_one_philosophy_as_two_rows` | US-GT-002 | I-GT-3/4/5 | `@anti-merging @kpi-graph-2 @boundary` |
+| `a_project_survey_lists_contributors_as_links_to_their_score` | US-GT-002 | I-GT-3 | `@crosslink @kpi-graph-1 @happy` |
+| `a_claim_less_project_renders_the_guided_no_claims_state_not_a_crash` | US-GT-002 | I-GT-4 | `@no-claims @empty-state @error` |
+| `the_project_survey_renders_fully_with_the_network_disabled` | US-GT-002 | I-GT-2 | `@offline @local-first @kpi-5 @happy` |
+| `open_a_philosophy_survey_with_htmx_returns_only_the_traversal_fragment` **(WS)** | US-GT-003 | I-GT-3/5/6 | `@walking_skeleton @driving_port @real-io @htmx-fragment @happy` |
+| `the_philosophy_survey_full_page_and_fragment_render_the_same_region` | US-GT-003 | I-GT-6 | `@no-js @full-page @parity @happy` |
+| `a_philosophy_survey_renders_two_authors_on_one_project_as_two_rows` | US-GT-003 | I-GT-3/4 | `@anti-merging @crosslink @kpi-graph-2 @boundary` |
+| `a_shared_contributor_across_projects_is_a_single_traversal_link` | US-GT-003 | I-GT-3 | `@crosslink @kpi-graph-1 @happy` |
+| `a_claim_less_philosophy_renders_the_guided_no_claims_state` | US-GT-003 | I-GT-4 | `@no-claims @empty-state @error` |
+| `survey_cells_render_as_traversal_links_to_the_next_entity` | US-GT-004 | I-GT-6 | `@crosslink @kpi-graph-1 @kpi-graph-5 @happy` |
+| `traversal_cross_links_are_plain_anchors_navigable_without_js` | US-GT-004 | I-GT-6 | `@crosslink @no-js @happy` |
+| `a_claim_controlled_uri_is_percent_encoded_and_cannot_inject_the_href` | US-GT-004 | ADR-044 §security | `@security @injection-boundary @adr-044 @error` |
+
+**`tests/acceptance/viewer_graph_traversal_invariants.rs`** (GOLD guardrails — 5):
+
+| Scenario | Invariant | Tags |
+|---|---|---|
+| `every_traversal_route_leaves_the_store_read_only` | I-GT-1 / WD-GT-3 (read-only, Mandate 8 state-delta) | `@property @read-only @i-gt-1 @gold` |
+| `no_traversal_response_adds_a_write_or_sign_control` | I-GT-1 / WD-GT-3 (no write/sign; cross-links render-only) | `@property @read-only @i-gt-1 @gold` |
+| `the_traversal_page_chrome_stays_offline_no_cdn` | I-GT-7 / KPI-HX-G2 (only local htmx asset) | `@property @offline @no-cdn @i-gt-7 @gold` |
+| `the_traversal_surface_works_fully_offline` | I-GT-2 / KPI-5 (LOCAL read, no outbound edge) | `@property @offline @local-first @i-gt-2 @gold` |
+| `no_traversal_href_lets_a_claim_controlled_uri_inject` | ADR-044 §security (injection boundary, both shapes) | `@property @security @injection-boundary @i-gt-3 @i-gt-4 @gold` |
+
+**Error/edge ratio**: 8 of 19 scenarios are error/edge/security/offline boundary
+(GT-5, GT-11 no-claims; GT-3, GT-9 anti-merging boundary; GT-14 + GT-INV-Security
+injection; GT-6 + GT-INV-Offline offline) = **42%** (≥ 40% target met). Two walking
+skeletons (one per new route — the symmetric project + philosophy threads).
+
+### [REF] WS strategy
+
+Per the Architecture of Reference (driving = real adapter) + the project
+Infrastructure Policy: the walking skeletons drive the REAL `openlore ui` subprocess
+(`ViewerServer::start`) over a REAL DuckDB store seeded through the PRODUCTION peer
+path (`seed_*_survey_trail` → `peer add` + `peer pull`), asserting on rendered HTML
+(Pillar 3). Two WS — `open_a_project_survey_with_htmx_returns_only_the_traversal_fragment`
+(US-GT-002) and `open_a_philosophy_survey_with_htmx_returns_only_the_traversal_fragment`
+(US-GT-003) — each the thinnest end-to-end thread for its route (viewer → LOCAL
+survey read → pure group → HTML fragment). Tagged `@walking_skeleton @driving_port
+@real-io`. No Tier B state-machine PBT: the journey is depth-1 (each edge is a
+discrete LINK click = a fresh GET, NOT a chained in-process state machine — browser
+back/forward IS the traversal stack, WD-GT-10), so the Mandate-10 "≥3 chained
+scenarios + domain-rich input" trigger does not fire; Tier A example coverage
+suffices.
+
+### [REF] Adapter / driving-port coverage
+
+| Driving port (route) | Scenario(s) | Real-I/O |
+|---|---|---|
+| `GET /project?subject=<uri>` | GT-1..6, GT-12, GT-INV-* | YES — REAL `openlore ui` subprocess + HTTP |
+| `GET /philosophy?object=<uri>` | GT-7..11, GT-13/14, GT-INV-* | YES — REAL `openlore ui` subprocess + HTTP |
+
+Driven port: `StoreReadPort` (read-only) — its two new survey reads
+(`query_project_survey` / `query_philosophy_survey`) are exercised through the REAL
+DuckDB via the driving routes (real-I/O; the store is seeded by the production
+`claim add` / `peer add` / `peer pull` verbs, never hand-inserted). NO new driven
+adapter, NO new external integration → NO contract-test annotation required (the
+offline-STRONGER property: both routes have no outbound edge — I-GT-2 / I-GT-7).
+
+### [REF] Scaffold file list (Mandate 7 — `// SCAFFOLD: true`)
+
+- `tests/acceptance/viewer_graph_traversal.rs` — 14 story scenarios (`todo!()` bodies).
+- `tests/acceptance/viewer_graph_traversal_invariants.rs` — 5 GOLD guardrails
+  (`todo!()` bodies; the read-only gold reuses the inherited universe-bound
+  `assert_store_read_only`).
+- `tests/acceptance/support/mod.rs` — NEW slice-10 seams (compile; stubbed `todo!()`
+  where they need DELIVER render/seed knowledge): consts
+  `TRAVERSAL_PROJECT_*` / `TRAVERSAL_PHILOSOPHY_*` / `TRAVERSAL_AUTHOR_*` /
+  `TRAVERSAL_RESULTS_ID` / `TRAVERSAL_INJECTION_SUBJECT(_ENCODED)` /
+  `TRAVERSAL_PROJECT_{NIXPKGS,BAZEL}_ENCODED`; seeders `seed_project_survey_trail`,
+  `seed_philosophy_survey_trail`, `seed_two_author_same_edge`,
+  `seed_injection_uri_subject` (all drive the EXISTING production
+  `seed_peer_authored_graph` / `seed_own_plus_peer_graph` peer path); asserts
+  `assert_traversal_html_groups_attributed_and_verbatim`,
+  `assert_traversal_html_names_cids`,
+  `assert_traversal_html_contributors_link_to_score`,
+  `assert_traversal_html_crosslink_is_plain_anchor`,
+  `assert_traversal_href_percent_encoded`,
+  `assert_traversal_html_renders_no_claims`,
+  `assert_traversal_html_has_no_write_or_sign_control` (this last fully materialized,
+  mirrors the slice-09 no-write scan).
+- `crates/cli/Cargo.toml` — two new `[[test]]` targets registered so `cargo build -p
+  cli --tests` compiles them.
+
+**Build/RED confirmation**: `cargo build -p cli --tests` COMPILES both new binaries
+(only pre-existing shared unused-import warnings). Spot-run confirms RED: each GT-*
+scenario panics at a `todo!(...)` (MISSING_FUNCTIONALITY), never an ImportError /
+collection error / BROKEN. The 19 slice-10 scenarios stay RED until DELIVER's
+per-scenario RED→GREEN→COMMIT cycles.
+
+### [REF] Test placement
+
+`tests/acceptance/viewer_graph_traversal{,_invariants}.rs` — the EXACT directory +
+`{feature}` + `{feature}_invariants` split the slice-06/07/08/09 viewer acceptance
+files use (precedent: `viewer_contributor_scoring.rs` +
+`viewer_contributor_scoring_invariants.rs`). Shared harness in
+`tests/acceptance/support/mod.rs` (one harness for the whole acceptance corpus, the
+established brownfield convention).
+
+### [REF] Pre-requisites (DESIGN driving ports + DEVOPS env the scenarios depend on)
+
+- DESIGN driving ports: `GET /project?subject` + `GET /philosophy?object` (ADR-044),
+  forking by `Shape` after the synchronous store-read match (component-boundaries.md
+  §adapter-http-viewer). The pure `TraversalView` group + render + `href_*` helpers
+  (ADR-043 + data-models.md §2) are the DELIVER GREEN target.
+- DEVOPS: none new — the `openlore ui` subprocess driving port + REAL DuckDB store
+  are the inherited slice-06..09 environment (Infrastructure Policy `## Driving` +
+  `## Driven internal (real)`). Build-before-run: `cargo build` the `openlore` bin.
+
+### CM-A/B/C mandate-compliance evidence
+
+- **CM-A (hexagonal boundary)**: every scenario enters through the REAL `openlore ui`
+  HTTP routes (driving ports) via `ViewerServer::get`/`get_htmx`; ZERO scenario calls
+  `viewer-domain` `render_*`/`group_*` or `StoreReadPort` impls directly. The only
+  `use` is `support::*` (the subprocess harness).
+- **CM-B (business language)**: scenario names + Gherkin doc-comments speak the domain
+  (project / philosophy / contributor / claim / embodies / traverse / survey),
+  never HTTP/SQL/DuckDB/maud. Technical detail lives inside the step bodies + support
+  helpers only.
+- **CM-C (complete user journeys)**: each scenario is a full traverse-one-hop journey
+  with observable value (land on an entity → see its attributed edges → follow a
+  cross-link), asserted on rendered HTML the operator's browser shows — not isolated
+  technical operations.
+
+---
+
 ## Changelog
 
+- 2026-06-06 — Quinn — DISTILL wave for `viewer-graph-traversal` (slice-10):
+  reconciliation PASSED (0 contradictions). Authored 19 RED acceptance scaffolds (14
+  Tier-A story + 5 GOLD invariants) for the two new driving ports
+  (`GET /project?subject`, `GET /philosophy?object`) mirroring the slice-09 viewer
+  corpus: two walking skeletons (project + philosophy fragment threads), anti-merging
+  two-authors-two-rows, verbatim confidence + display-only bucket + cid, contributor
+  →/score (bare DID) + subject→/project + object→/philosophy cross-links, guided
+  NoClaims, network-disabled render, and the ADR-044 §security injection boundary (a
+  claim-controlled URI percent-encoded into the href). New support seams stubbed
+  (`seed_*_survey_trail` / `seed_two_author_same_edge` / `seed_injection_uri_subject`
+  + `assert_traversal_*`). `cargo build -p cli --tests` compiles; all 19 classify RED
+  (`todo!()` panic). `[lang-mode] rust` / `[policy-mode] inherit` / `[port-mode]
+  inherit`.
 - 2026-06-06 — Luna — Initial DISCUSS delta for `viewer-graph-traversal` (slice-10):
   browser traversal for J-002b. Two LOCAL read-only routes (`/project`,
   `/philosophy`) + cross-link wiring on existing surfaces. No new job, no new
