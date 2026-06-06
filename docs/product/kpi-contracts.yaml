@@ -501,6 +501,43 @@ kpis:
   # the browser surface. The slice-08 invariants I-NS-1..9 carry the AV-* + I-VIEW-* +
   # I-HX-* contracts forward (see the slice-08 evolution archive).
 
+  # --- slice-11 (viewer-counter-claim-threads), recorded at DISCUSS 2026-06-06 ---
+  # The counter-claim THREAD on the read-only GET /claims/{cid} viewer view (J-003b
+  # VIEW half, DELTA on slices 03/06/07). Persona is P-001 (the node operator, "Maria",
+  # new counter-claim-reader hat). slice-11 mints NO new KPI ID — it is the LEGIBILITY
+  # surface for the existing J-003b job and REALIZES inherited KPIs while strengthening
+  # the READ side of the KPI-FED-3 loop (per the slice-11 DISCUSS Outcome-KPIs decision
+  # in docs/feature/viewer-counter-claim-threads/discuss/feature-delta.md, which
+  # intentionally did NOT duplicate a per-feature outcome-kpis.md — lean):
+  #   - KPI-FED-3 (counter-claim publication rate, north star): STRENGTHENED on the READ
+  #     side — making a counter LEGIBLE on the local viewer closes the disagreement
+  #     feedback loop (author a counter -> see it land in the thread). Per-feature GREEN
+  #     (the thread renders own + peer counters); cohort YELLOW pending the inherited
+  #     opt-in telemetry endpoint (ADR-010).
+  #   - KPI-VIEW-1 (time-to-see-store-contents, legibility north star): EXTENDED into
+  #     the disagreement dimension (the operator SEES disagreement around a claim in the
+  #     browser, zero SQL).
+  #   - KPI-VIEW-2 (read-only, guardrail): MET — the counter-thread route adds no
+  #     write/sign/counter route; zero key reads; query_counter_claims is read-only on a
+  #     no-mutation trait. Carried verbatim across the new render. Release-blocking.
+  #   - KPI-AV-2 / KPI-GRAPH-2 / KPI-FED-1/2 (anti-merging, guardrails): MET — every
+  #     counter attributed to its own author_did + cid; no merged "disputed by N"/
+  #     consensus row; query_counter_claims UNION-ALL projects author_did + cid
+  #     explicitly (no merging JOIN). Release-blocking.
+  #   - KPI-4 (verbatim confidence, guardrail): MET — the original claim's confidence
+  #     renders verbatim AND unchanged by the existence of counters (shown-never-applied,
+  #     ADR-015 / OD-AV-7). Release-blocking.
+  #   - KPI-5 / KPI-VIEW-5 / KPI-HX-G1/G2/G3 (local-first / offline / no-CDN / no-JS
+  #     no-regression / read-only, guardrails): MET — the thread reads the LOCAL store
+  #     only (claims ∪ peer_claims, no network on this route), renders offline,
+  #     references only the vendored local htmx asset, serves a full page without
+  #     HX-Request (page = chrome + the same fragment), adds no write surface, loopback
+  #     bind. Release-blocking.
+  # No KPI entry is added or modified above; this block records the realization on the
+  # browser surface + the KPI-FED-3 read-side strengthening. The slice-11 invariants
+  # I-CT-1..7 carry the I-VIEW-* / I-HX-* / AV-* / FED-* / ADR-015 shown-never-applied
+  # contracts forward (see docs/feature/viewer-counter-claim-threads/discuss/feature-delta.md).
+
 # Guardrail policy:
 #   KPI-4 and KPI-5 are guardrails. A release that lowers either is blocked,
 #   regardless of how well KPI-1/2/3/6 are moving. See ADR-011 for the release

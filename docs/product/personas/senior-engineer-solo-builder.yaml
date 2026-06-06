@@ -54,3 +54,43 @@ persona:
     - Output must be greppable text by default; `--json` opt-in.
     - Never silently mutate; surface every write with a checksum/CID.
     - Confidence display must NEVER read as "the system thinks this is true."
+
+  # -------------------------------------------------------------------------
+  # Counter-claim-reader hat (slice-11 / viewer-counter-claim-threads)
+  # Added 2026-06-06 by Luna during DISCUSS for viewer-counter-claim-threads.
+  # -------------------------------------------------------------------------
+  hats:
+    - id: counter-claim-reader
+      activated_in_slice: slice-11 / viewer-counter-claim-threads
+      one_liner: >
+        P-001 wearing the counter-claim-reader hat is reading a claim in the
+        read-only `openlore ui` browser viewer and wants to instantly see whether
+        anyone has disagreed with it — and if so, who, with what CID, and exactly
+        why (the verbatim reason) — WITHOUT the disagreement ever silently changing
+        the claim she is reading. The VIEW half of J-003b; authoring stays the CLI.
+
+      typical_session:
+        - "Evaluating Rachel's claim that cargo embodies dependency-pinning (confidence 0.91)"
+        - "Open http://127.0.0.1:<port>/claims/bafy...n4ka in the viewer"
+        - "See a 'Countered' flag near the claim; beneath it a Counter-claims thread"
+        - "Read Maria's own counter (bafy...new) and peer Tobias's counter (bafy...t0bi), each with its DID, CID, and verbatim reason"
+        - "Note the claim's confidence is still 0.91 — the counters did not re-weight it"
+        - "Click a counter's CID to drill into /claims/bafy...new (the counter's own detail)"
+        - "Decide whether to trust, cite, or counter the claim herself — via the CLI `claim counter`"
+
+      load_bearing_anxieties:
+        - "Am I reading a claim someone has already refuted, and the viewer is hiding it from me?"
+        - "Will the counter overwrite or re-weight the original, picking a winner for me?"
+        - "Can I tell whose counter this is and read their actual reasoning, or just a faceless 'disputed' badge?"
+
+      load_bearing_signals_of_success:
+        - "The countered claim is clearly FLAGGED as disputed, AND its original confidence/text is untouched."
+        - "Each counter shows its author DID, its own CID, and the full verbatim reason."
+        - "An un-countered claim looks exactly like it does today — no empty 'no disagreement' noise."
+
+      ux_guardrails_specific_to_counter_threads:
+        - The viewer NEVER offers a counter/reply/dispute control; authoring stays EXCLUSIVELY in the CLI (read-only, I-VIEW-3).
+        - The countered claim renders VERBATIM with its ORIGINAL confidence; counters never filter, merge, re-weight, or re-rank it (shown, never applied).
+        - Every counter is attributed to its own author DID + CID with its verbatim reason; never a merged "disputed by N" or "consensus" aggregate.
+        - The 'Countered' flag is a NEUTRAL presence marker, never a score, weight, count-verdict, or judgement.
+        - The thread reads the LOCAL store only (own + pulled-peer counters); no network on this route; renders offline.

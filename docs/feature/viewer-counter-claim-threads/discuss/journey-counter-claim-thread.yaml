@@ -1,0 +1,289 @@
+schema_version: 1
+
+journey:
+  name: read-counter-claim-thread
+  goal: >
+    Drill into a claim on the local `openlore ui` viewer and SEE the disagreement
+    around it — every counter attributed to its own author DID + CID with its
+    verbatim free-text reason, rendered as a thread beneath the claim — without the
+    disagreement ever overwriting, filtering, merging, or re-weighting the original
+    claim. The VIEW half of J-003b (authoring stays the slice-03 CLI).
+  persona: P-001                    # senior-engineer-solo-builder, counter-claim-reader hat
+  secondary_persona: P-002          # researcher-tech-lead also reads disagreement
+  job_id: J-003b
+  related_jobs: [J-003, J-003a]     # reinforces J-003a anti-merging; J-003c untouched
+  feature_id: viewer-counter-claim-threads
+  slice_id: slice-11
+  brownfield_delta_on: [htmx-scraper-viewer, viewer-htmx-swaps, openlore-federated-read]
+
+  emotional_arc:
+    start: Uncertain — "I'm reading this claim but I can't tell if anyone has disputed it."
+    middle: Informed — "Maria and Tobias countered it; here is exactly why, in their words."
+    end: Sovereign-confident — "I can read both sides; the system didn't pick a winner. My call."
+    arc_pattern: uncertainty-to-informed-to-sovereign-confident
+
+  preconditions:
+    - The operator runs `openlore ui` (slices 06/07 viewer present).
+    - The local store contains a claim and, for the countered path, ≥1 signed claim
+      (own or pulled peer) that counters it via a references[] entry of type
+      `counters` (slice-03 / ADR-015).
+
+  steps:
+
+    - id: 1
+      name: Open an un-countered claim
+      command: GET /claims/bafy...solo
+
+      tui_mockup: |
+        OpenLore — Claim Detail
+        Read-only viewer. Authoring happens in the CLI.
+
+          Subject     github:openlore/openlore
+          Predicate   embodiesPhilosophy
+          Object      org.openlore.philosophy.memory-safety
+          Confidence  0.75
+          Author      did:plc:maria-test
+          Composed at 2026-05-26T12:00:00Z
+          CID         bafy...solo
+
+          Evidence
+           - https://example.org/evidence/1
+
+          Back to My Claims
+        # NO Counter-claims section. NO empty noise.
+
+      shared_artifacts:
+        - name: cid
+          source: GET /claims/{cid} path param → StoreReadPort.get_claim + query_counter_claims
+          displayed_as: bafy...solo
+          consumers: ["claim detail render", "query_counter_claims target", "counter CID links"]
+
+      emotional_state:
+        entry: Uncertain
+        exit: Reassured — "Clean render; nothing dramatic; this one is uncontested."
+
+      integration_checkpoint: |
+        query_counter_claims(cid) returns an EMPTY vec → the CounterThread::None arm
+        renders NOTHING extra. No "Counter-claims" section, no "0 counters" line, no
+        empty-state noise. The claim render is byte-identical to slice-06/07.
+
+      failure_modes:
+        - Unknown CID → existing guided 404 (slice-07) unchanged; no thread/flag added.
+        - Store unreadable → existing guided error (NFR-VIEW-6); no raw stack trace.
+
+      gherkin: |
+        Scenario: An un-countered claim shows no counter section and no empty noise
+          Given Maria's store contains her claim bafy...solo and nothing counters it
+          When Maria requests GET /claims/bafy...solo from the openlore ui viewer
+          Then the response renders the claim fields and evidence as in slice-06/07
+          And the response contains no "Counter-claims" section
+          And the response contains no "0 counters" or "no disagreement" empty-state text
+
+    - id: 2
+      name: Open a countered claim — see the flag + the thread
+      command: GET /claims/bafy...n4ka
+
+      tui_mockup: |
+        OpenLore — Claim Detail
+        Read-only viewer. Authoring happens in the CLI.
+
+          [ Countered ]   <- neutral presence flag; not a score/verdict
+
+          Subject     github:rust-lang/cargo
+          Predicate   embodiesPhilosophy
+          Object      org.openlore.philosophy.dependency-pinning
+          Confidence  0.91            <- VERBATIM, UNCHANGED by the counters
+          Author      did:plc:rachel-test
+          Composed at 2026-05-22T09:18:44Z
+          CID         bafy...n4ka
+
+          Evidence
+           - https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html
+
+          Counter-claims
+           - Author  did:plc:maria-test (you)
+             CID     bafy...new      (links to /claims/bafy...new)
+             Reason  Cargo's dependency pinning is opt-in, not philosophical;
+                     pinning is a tool, not a value.
+           - Author  did:plc:tobias-test
+             CID     bafy...t0bi     (links to /claims/bafy...t0bi)
+             Reason  Pinning here is CI policy, not a stated value of the project.
+
+          Back to My Claims
+
+      shared_artifacts:
+        - name: target_cid
+          source: GET /claims/{cid} path param
+          displayed_as: bafy...n4ka
+          consumers: ["the countered claim render", "query_counter_claims(target_cid) arg"]
+        - name: counter_author_did
+          source: peer_claims OR claims author_did (anti-merging, non-Option, verbatim)
+          displayed_as: did:plc:maria-test / did:plc:tobias-test
+          consumers: ["each counter thread item attribution"]
+        - name: counter_cid
+          source: the counter's own content-addressed CID (claims ∪ peer_claims)
+          displayed_as: bafy...new / bafy...t0bi
+          consumers: ["counter thread item", "link to /claims/{counter_cid}"]
+        - name: counter_reason
+          source: the signed claim's verbatim `reason` field (ADR-015, NFC-normalized at author time)
+          displayed_as: the reason text, verbatim
+          consumers: ["counter thread item reason line"]
+        - name: original_confidence
+          source: the countered claim's stored confidence DOUBLE
+          displayed_as: 0.91 (verbatim, render_confidence)
+          consumers: ["the countered claim's Confidence field — UNCHANGED by counters"]
+
+      emotional_state:
+        entry: Uncertain
+        exit: Informed → Sovereign-confident
+
+      integration_checkpoint: |
+        query_counter_claims(target_cid) returns every counter (own + peer) from
+        claims ∪ peer_claims via UNION ALL with explicit author_did + cid (no merging
+        JOIN/GROUP BY/AVG). Each counter renders as ONE thread item under its OWN
+        author DID + CID + verbatim reason. The original claim renders VERBATIM with
+        its ORIGINAL confidence (0.91) — counters change nothing above the thread.
+        A "Countered" neutral flag marks the claim (presence only, never a verdict).
+        Each counter CID links to /claims/{counter_cid} (existing route reuse).
+
+      failure_modes:
+        - A counter with empty reason (non-OpenLore client; ADR-015 wire-optional) →
+          explicit "no reason provided" item state, never a blank line or crash.
+        - A counter from a purged peer → simply absent (lived in peer_claims); no ghost.
+
+      gherkin: |
+        Scenario: A countered claim shows the counter thread beneath it
+          Given Maria's store contains Rachel's claim bafy...n4ka (confidence 0.91)
+          And it is countered by Maria's own bafy...new with reason "Cargo's dependency pinning is opt-in, not philosophical; pinning is a tool, not a value."
+          When Maria requests GET /claims/bafy...n4ka from the openlore ui viewer
+          Then the response renders Rachel's claim with confidence "0.91"
+          And beneath the claim a "Counter-claims" section renders one item showing author "did:plc:maria-test", CID "bafy...new", and the verbatim reason text
+          And the original claim's confidence is still "0.91" (unchanged by the counter)
+          And a neutral "Countered" flag marks the claim with no score or verdict
+
+        Scenario: Two counters render as two attributed thread items, never merged
+          Given Rachel's claim bafy...n4ka is countered by Maria's bafy...new and peer Tobias's bafy...t0bi (author "did:plc:tobias-test")
+          When Maria requests GET /claims/bafy...n4ka from the viewer
+          Then the "Counter-claims" section renders exactly two items
+          And one item shows author "did:plc:maria-test" with CID "bafy...new"
+          And the other shows author "did:plc:tobias-test" with CID "bafy...t0bi"
+          And no single row aggregates the two counters into a "disputed by 2" or consensus row
+
+        Scenario: Each counter's CID links to that counter's own detail
+          Given Rachel's claim bafy...n4ka is countered by Maria's bafy...new
+          When Maria requests GET /claims/bafy...n4ka from the viewer
+          Then the counter thread item for "bafy...new" includes a link to /claims/bafy...new
+
+        Scenario: A counter with no reason renders an explicit empty-reason state
+          Given Rachel's claim bafy...x7ts is countered by a peer record whose reason is empty
+          When Maria requests GET /claims/bafy...x7ts from the viewer
+          Then the counter thread item shows the author DID and CID
+          And it shows an explicit "no reason provided" state rather than a blank line or a crash
+
+    - id: 3
+      name: Verify parity + offline (progressive enhancement, local-first)
+      command: GET /claims/bafy...n4ka  (with and without HX-Request, network down)
+
+      tui_mockup: |
+        # htmx (HX-Request: true): returns ONLY the #claim-detail fragment
+        #   = the claim + the counter thread (no chrome)
+        # no-JS (no HX-Request): returns the full page whose #claim-detail region
+        #   embeds the SAME fragment (structural parity)
+        # network disabled: both render fully; only /static/htmx.min.js referenced
+
+      shared_artifacts:
+        - name: claim_detail_fragment
+          source: viewer-domain render_claim_detail_fragment (extended with the thread)
+          displayed_as: the #claim-detail region (claim + counter thread)
+          consumers: ["htmx swap response", "full-page #claim-detail region (embedded)"]
+
+      emotional_state:
+        entry: Sovereign-confident
+        exit: Sovereign-confident — "Works without reloads AND with the network off; my surface is mine."
+
+      integration_checkpoint: |
+        The counter thread is rendered by the SAME fragment fn in both shapes; the
+        full page embeds the fragment (page = chrome + fragment, structural parity,
+        I-HX-5). The thread renders with the network disabled (local read). The page
+        references only the vendored local /static/htmx.min.js (no CDN).
+
+      failure_modes:
+        - A CDN htmx reference would break offline → forbidden (references_external_cdn scan).
+        - A fragment/full-page divergence would break parity → forbidden (parity gold).
+
+      gherkin: |
+        Scenario: The counter thread renders identically under htmx and no-JS
+          Given Rachel's claim bafy...n4ka is countered by Maria's bafy...new
+          When Maria requests GET /claims/bafy...n4ka WITH HX-Request: true
+          And Maria requests GET /claims/bafy...n4ka WITHOUT HX-Request
+          Then the htmx response returns the #claim-detail fragment containing the claim + the counter thread
+          And the no-JS response returns the full page whose #claim-detail region embeds the SAME fragment
+
+        Scenario: The counter thread renders with the network disabled
+          Given Rachel's claim bafy...n4ka is countered by peer Tobias's bafy...t0bi (already pulled)
+          And the network is disabled
+          When Maria requests GET /claims/bafy...n4ka from the viewer
+          Then the counter thread renders Tobias's counter fully (author DID + CID + reason)
+          And the page references only the local /static/htmx.min.js (no CDN, no network call)
+
+  integration_validation:
+    shared_artifact_consistency:
+      - artifact: target_cid
+        must_match_across: [2]
+        failure_message: >
+          The CID in the GET /claims/{cid} path must equal the target_cid passed to
+          query_counter_claims; a mismatch would show the wrong claim's counters.
+      - artifact: counter_cid
+        must_match_across: [2]
+        failure_message: >
+          Each counter's displayed CID must equal the href target /claims/{counter_cid};
+          drift would break the drill-into-counter navigation.
+      - artifact: original_confidence
+        must_match_across: [2]
+        failure_message: >
+          The countered claim's confidence must render verbatim and UNCHANGED whether
+          or not counters exist; any change is a shown-never-applied violation (I-CT-2).
+
+  anti_merging_guarantee:
+    description: >
+      Every counter in a thread is attributed to its own author DID + its own CID with
+      its verbatim reason. Two counters render as two items; NO surface renders a
+      merged "disputed by N", "net confidence", or "consensus" row. query_counter_claims
+      reads claims ∪ peer_claims via UNION ALL with explicit author_did + cid (no
+      merging JOIN/GROUP BY/AVG) — anti-merging by construction (I-CT-3 / KPI-AV-2 /
+      KPI-GRAPH-2 / KPI-FED-1).
+    enforced_at:
+      - step 2 (the counter thread): per-author, per-cid items, no aggregate row
+      - ports/adapter-duckdb: UNION ALL explicit author_did + cid, no merging JOIN
+      - acceptance suite: an anti-merging gold over GET /claims/{cid} asserting two
+        counters render as two attributed items with no consensus row
+
+  shown_never_applied_guarantee:
+    description: >
+      The countered claim is rendered VERBATIM with its ORIGINAL confidence; the
+      counters and the "Countered" flag are additive context BELOW/BESIDE the claim
+      and never overwrite, filter out, merge, down-weight, or re-rank it (I-CT-2 /
+      OD-AV-7 / ADR-015).
+    enforced_at:
+      - step 2: confidence renders 0.91 unchanged with or without counters
+      - acceptance suite: a shown-never-applied gold asserting the claim's rendered
+        confidence/fields are identical with and without counters present
+
+  cross_journey_consistency:
+    - The counter model (a signed claim with references[].type == counters + a
+      mandatory verbatim reason) is the SAME slice-03 model authored by the CLI
+      `claim counter` verb (author-counter-claim.yaml); slice-11 only READS it.
+    - The "countered by" one-line annotation precedent is the slice-08
+      SEARCH_COUNTERED_BY_PREFIX on the /search view; slice-11 deepens this into a
+      full thread on the LOCAL /claims/{cid} detail (a different route, a fuller render).
+    - page = chrome + fragment (Shape::from_request) is the slice-07 contract reused
+      verbatim; render_confidence (verbatim) is the slice-06 single site reused.
+
+changelog:
+  - date: "2026-06-06"
+    feature: viewer-counter-claim-threads
+    change: >
+      Initial journey for slice-11 — the VIEW half of J-003b (reading the counter-claim
+      thread on the local GET /claims/{cid} viewer). Authoring stays the slice-03 CLI.
+      New read-only StoreReadPort::query_counter_claims. No new route, no network on
+      this route, no new crates, no new KPI ID.

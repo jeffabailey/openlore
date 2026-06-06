@@ -699,3 +699,34 @@ changelog:
       weight (KPI-4 / FR-VIEW-8), progressive enhancement + offline chrome
       (KPI-HX-G1/G2/G3). No new KPI IDs minted — slice-09 realizes the inherited
       KPI-GRAPH-* / KPI-VIEW-* / KPI-HX-* / KPI-4 / KPI-5 on a new surface.
+  - date: "2026-06-06"
+    feature: viewer-counter-claim-threads
+    change: >
+      slice-11 (viewer-counter-claim-threads) DISCUSS traces to J-003b (no new job,
+      no new sub-job), realizing the VIEWING / LEGIBILITY half of J-003b
+      ("counter-claim authoring as first-class disagreement"). Authoring already ships
+      EXCLUSIVELY via the slice-03 CLI `claim counter --reason <REASON> <CID>`; this
+      slice makes the disagreement fully legible on the LOCAL browser viewer. It
+      EXTENDS the existing read-only GET /claims/{cid} route (slices 06/07) to render,
+      beneath the claim, ALL counter-claims targeting that CID — each with its own
+      author_did, its own cid, and its verbatim free-text reason (ADR-015) — as a
+      thread; the original claim is rendered VERBATIM with its original confidence,
+      counters SHOWN never applied (inherits OD-AV-7 / I-NS-3 from slice-08). A
+      countered claim is flagged (neutral presence marker); an un-countered claim
+      renders as today (no empty-thread noise). Persona is P-001 (the viewer operator,
+      "Maria", new counter-claim-reader hat). Stories US-CT-002/003 realize J-003b on
+      the browser (US-CT-002 also REINFORCES J-003a: each counter attributed to its own
+      DID + cid, never merged); US-CT-001 is @infrastructure (the new read-only
+      StoreReadPort::query_counter_claims(target_cid) over LOCAL claims ∪ peer_claims).
+      Cardinal invariants carried in unchanged: read-only / no signing key
+      (KPI-VIEW-2), shown-never-applied (ADR-015 / OD-AV-7), anti-merging
+      (KPI-AV-2 / KPI-GRAPH-2 / KPI-FED-1 — every counter attributed, no consensus
+      row), verbatim confidence (KPI-4), local-first / offline (KPI-5 / KPI-VIEW-5 —
+      no network on this route), progressive enhancement + offline chrome
+      (KPI-HX-G1/G2/G3). NO new crates (extend viewer-domain + adapter-http-viewer +
+      adapter-duckdb read impl + ports + cli + xtask; workspace stays 21), NO new
+      route (extends GET /claims/{cid}), NO new KPI ID (slice-11 realizes inherited
+      KPIs on a new surface + strengthens the READ side of the KPI-FED-3 loop). The
+      /claims LIST-row "countered by" annotation is DEFERRED to a recommended slice-12.
+      J-003b boundary: J-003a (anti-merging) reinforced; J-003c (revocable subscription)
+      untouched; the AUTHORING half of J-003b stays the slice-03 CLI.
