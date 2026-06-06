@@ -39,14 +39,15 @@ use ports::{
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    group_project, render_claim_detail, render_claim_detail_fragment,
+    group_philosophy, group_project, render_claim_detail, render_claim_detail_fragment,
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
-    render_project_fragment, render_project_page, render_score_page, render_score_results_fragment,
-    render_scrape_page, render_scrape_results_fragment, render_search_page,
-    render_search_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
-    PeerClaimRowView, ScoreState, ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL,
-    PROJECT_URL, SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
+    render_philosophy_fragment, render_philosophy_page, render_project_fragment, render_project_page,
+    render_score_page, render_score_results_fragment, render_scrape_page,
+    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
+    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScoreState,
+    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PHILOSOPHY_URL, PROJECT_URL,
+    SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -363,6 +364,15 @@ async fn route(
         // renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds
         // NO signing key (a read + pure compute); renders NO write/sign/follow control.
         PROJECT_URL => Ok(project_page(store.as_ref(), query.as_deref(), shape)),
+        // `GET /philosophy?object=<uri>` — the SYMMETRIC philosophy graph-traversal survey
+        // (slice-10; ADR-042/043/044/045 / US-GT-003). Mirrors the `/project` route, swapping
+        // subject↔object: reads the philosophy's LOCAL attributed survey over the read-only
+        // store the viewer ALREADY holds (`query_philosophy_survey` — claims ∪ local
+        // peer_claims, NO network — I-GT-2), groups the rows in the PURE
+        // `viewer-domain::group_philosophy` core BY subject (anti-merging, never SQL — I-GT-3),
+        // and renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds NO
+        // signing key (a read + pure compute); renders NO write/sign/follow control.
+        PHILOSOPHY_URL => Ok(philosophy_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
@@ -544,6 +554,56 @@ fn resolve_project_view(store: &dyn StoreReadPort, query: Option<&str>) -> Trave
         // A read failure degrades to the SAME guided NoClaims state naming the queried
         // subject — never a blank region, never a leaked stack trace (I-GT-4).
         Err(_) => TraversalView::NoClaims { entity: subject },
+    }
+}
+
+/// Render the philosophy graph-traversal survey page (`GET /philosophy?object=<uri>`,
+/// US-GT-003; slice-10 / ADR-042/043/044/045) — the SYMMETRIC mirror of [`project_page`],
+/// swapping subject↔object. Parses `?object=` from the query, reads that philosophy's
+/// LOCAL attributed survey over the read-only store the viewer ALREADY holds
+/// (`query_philosophy_survey` — claims ∪ local peer_claims, NO network / I-GT-2), groups
+/// the rows in the PURE `viewer-domain::group_philosophy` core BY subject (the projects
+/// that embody it; anti-merging, never SQL / I-GT-3), maps the outcome to a
+/// [`TraversalView`], and renders — forking by [`Shape`] (ADR-033): the htmx swap returns
+/// ONLY the `#traversal-results` fragment; the no-JS / bookmark / direct-URL request
+/// returns the complete `/philosophy` full page. Both project the SAME view — the full
+/// page EMBEDS the fragment fn (I-GT-6 parity by construction).
+///
+/// SANDWICH (ADR-007): read (impure store call) → decide (PURE `group_philosophy`) →
+/// render (pure). The handler holds NO signing key — the survey is a read + pure compute
+/// (I-GT-1); it renders NO write/sign/follow control. A bare `GET /philosophy` with no
+/// `?object` OR an object with no local rows OR a store read failure all degrade to the
+/// guided [`TraversalView::NoClaims`] state (naming the queried entity; I-GT-4) rather
+/// than a crash (NFR-VIEW-6 — never a raw stack trace).
+fn philosophy_page(
+    store: &dyn StoreReadPort,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
+    let view = resolve_philosophy_view(store, query);
+    match shape {
+        Shape::Fragment => html_ok(render_philosophy_fragment(&view).into_string()),
+        Shape::FullPage => html_ok(render_philosophy_page(&view)),
+    }
+}
+
+/// Resolve the [`TraversalView`] for a `/philosophy` request (the read + pure-group
+/// decision over the parsed `?object=`) — the SYMMETRIC mirror of [`resolve_project_view`].
+/// No object value → a `NoClaims` naming the empty entity (a bare `GET /philosophy`). An
+/// object with ≥1 local claim → the PURE `group_philosophy` output (`Found`). An object
+/// with zero local rows OR a store read failure → `NoClaims` naming the queried object
+/// (graceful degradation; emptiness is never a fabricated edge, and a read error never
+/// leaks — I-GT-4 / NFR-VIEW-6).
+fn resolve_philosophy_view(store: &dyn StoreReadPort, query: Option<&str>) -> TraversalView {
+    let object = query_param(query, "object").unwrap_or_default();
+    match store.query_philosophy_survey(&object) {
+        // group_philosophy over the LOCAL survey rows: an empty Vec yields NoClaims, a
+        // non-empty one the grouped Found view — grouping is in Rust (the pure core),
+        // NEVER SQL, so two same-content claims by different authors stay two rows.
+        Ok(rows) => group_philosophy(&object, &rows),
+        // A read failure degrades to the SAME guided NoClaims state naming the queried
+        // object — never a blank region, never a leaked stack trace (I-GT-4).
+        Err(_) => TraversalView::NoClaims { entity: object },
     }
 }
 

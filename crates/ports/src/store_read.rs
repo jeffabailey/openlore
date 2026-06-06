@@ -264,4 +264,22 @@ pub trait StoreReadPort: Send + Sync {
     /// returns an EMPTY vec for a subject with no local rows (the viewer renders the
     /// guided `NoClaims` state — never an error, I-GT-4).
     fn query_project_survey(&self, subject: &str) -> Result<Vec<SurveyRow>, StoreReadError>;
+
+    /// Read the LOCAL attributed SURVEY for ONE philosophy object (`/philosophy`,
+    /// slice-10 / ADR-042/043/044/045 / I-GT-2) — the SYMMETRIC mirror of
+    /// [`StoreReadPort::query_project_survey`], swapping subject↔object: every signed
+    /// claim whose `object` is the queried philosophy, from the operator's OWN `claims`
+    /// table UNION ALL the LOCAL `peer_claims` table — NO network. The pure
+    /// `viewer-domain::group_philosophy` core groups this `Vec<SurveyRow>` by `subject`
+    /// (the project that embodies the philosophy) into the `TraversalView`; the grouping
+    /// is NEVER done in SQL (I-GT-3).
+    ///
+    /// READ-ONLY by construction: a SELECT over the SAME shared connection the CLI writes
+    /// through (BR-VIEW-4) — there is NO mutation method on this trait (I-VIEW-1). The
+    /// `UNION ALL` projects `author_did` + `cid` EXPLICITLY (NEVER a merging `JOIN`/`GROUP
+    /// BY`/`AVG`), so two same-content claims by different authors stay TWO attributed
+    /// rows (anti-merging, I-GT-3 / I-GT-4). LOCAL only; returns an EMPTY vec for a
+    /// philosophy with no local rows (the viewer renders the guided `NoClaims` state —
+    /// never an error, I-GT-4).
+    fn query_philosophy_survey(&self, object: &str) -> Result<Vec<SurveyRow>, StoreReadError>;
 }

@@ -8855,13 +8855,30 @@ pub fn seed_philosophy_survey_trail(env: &TestEnv, philosophy: &str, spanning_au
     // two projects-that-embody edges AND names the ONE spanning contributor under
     // "Contributors who claimed" (deduped — appears once; the non-obvious span).
     // PRODUCTION federation write path; LOCAL only at survey time (I-GT-2).
-    let _ = (philosophy, spanning_author_did);
-    todo!(
-        "slice-10 DELIVER: seed a philosophy-survey trail via seed_peer_authored_\
-         graph — one SeedPeer for `spanning_author_did` whose triples are TWO \
-         distinct subjects (nixpkgs 0.92, bazel 0.85) on the shared `philosophy` \
-         object. RED scaffold."
-    )
+    //
+    // ONE `SeedPeer{ peer_did: spanning_author_did, triples: &[(subject_i, philosophy,
+    // conf_i)] }` via `seed_peer_authored_graph` so TWO `peer_claims` rows land on the
+    // SHARED `philosophy` object across DISTINCT subjects (projects) at varied
+    // confidences (nixpkgs 0.92 → triangulated, bazel 0.85 → well-evidenced). DISTINCT
+    // subjects keep the canonical CIDs distinct (identical triples collide into one
+    // row). The single spanning contributor (`spanning_author_did`) is named ONCE under
+    // "Contributors who claimed" (a `/score` link). The SYMMETRIC mirror of
+    // `seed_project_survey_trail`, swapping subject↔object: one shared object embodied
+    // by several distinct subjects (vs one shared subject embodying several objects).
+    // Materialized through the PRODUCTION federation write path (`peer add` + `peer
+    // pull`) so the rows land in the REAL `peer_claims` table the viewer's LOCAL
+    // philosophy-survey read returns — no network at survey time (Pillar 3 / I-GT-2).
+    seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: spanning_author_did,
+            seed: [42u8; 32],
+            triples: &[
+                (TRAVERSAL_PROJECT_NIXPKGS, philosophy, 0.92),
+                (TRAVERSAL_PROJECT_BAZEL, philosophy, 0.85),
+            ],
+        }],
+    );
 }
 
 /// Seed a trail where TWO DISTINCT authors claim the SAME (subject, object) at

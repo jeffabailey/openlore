@@ -1882,6 +1882,22 @@ pub fn group_project(entity: &str, rows: &[SurveyRow]) -> TraversalView {
     group_by(entity, rows, |row| row.object.clone())
 }
 
+/// Group a philosophy survey's flat [`SurveyRow`]s into a [`TraversalView`] (PURE,
+/// anti-merging — data-models.md §2). The SYMMETRIC mirror of [`group_project`],
+/// swapping subject↔object: groups the `rows` by `subject` (the project that EMBODIES
+/// the philosophy), so the `/philosophy` survey lists projects-that-embody edges (vs
+/// `/project`'s philosophies-embodied edges). Within a group, ONE [`EdgeRow`] per row
+/// (one signed claim), so two authors on the same subject yield TWO rows — NEVER
+/// averaged (I-GT-3). `contributors` is the distinct `author_did` across all rows,
+/// ORDER-PRESERVED and DEDUPED (a spanning contributor appears ONCE — the canonical
+/// cross-project "aha", US-GT-003). Group + edge order follow the `rows` order (the
+/// adapter ordered by `subject, source_table, cid` — deterministic). An EMPTY `rows`
+/// slice → [`TraversalView::NoClaims`] (never a fabricated edge, I-GT-4). PURE total
+/// function — no I/O. REUSES the identical [`group_by`] anti-merging engine.
+pub fn group_philosophy(entity: &str, rows: &[SurveyRow]) -> TraversalView {
+    group_by(entity, rows, |row| row.subject.clone())
+}
+
 /// Shared grouping engine for the two surveys (PURE, anti-merging). `key_of` selects
 /// the OTHER-dimension key per row (`object` for `/project`, `subject` for
 /// `/philosophy`). Order-preserving: groups appear in first-seen key order; edges
@@ -1984,6 +2000,54 @@ pub fn render_project_page(view: &TraversalView) -> String {
     markup.into_string()
 }
 
+/// Render the philosophy-survey swap-target FRAGMENT (slice-10; ADR-043) — the
+/// SYMMETRIC mirror of [`render_project_fragment`], swapping subject↔object: the
+/// `<div id="traversal-results">` wrapping the grouped attributed PROJECT edges (the
+/// projects that EMBODY the philosophy) for the given [`TraversalView`]. The group key
+/// (a project) is a traversal `<a href>` to `/project?subject=<encoded>`; each edge row
+/// names its author DID (a link to `/score?contributor=<bare-did>`), the VERBATIM
+/// confidence + the REUSED display-only bucket, and the `cid`. PURE: a total function —
+/// NO full-page chrome and NO form, so an `HX-Request` response carries ONLY this region
+/// (I-GT-6). Renders NO sign/publish/follow control (I-GT-1). [`render_philosophy_page`]
+/// EMBEDS this SAME fn, so the fragment and the full page's results region are
+/// byte-identical by construction (I-GT-6 parity). REUSES the SAME `#traversal-results`
+/// region renderer, forked only on the group-key dimension (project, not philosophy).
+pub fn render_philosophy_fragment(view: &TraversalView) -> Markup {
+    html! {
+        div id=(TRAVERSAL_RESULTS_ID) {
+            (render_traversal_result(view, GroupDimension::Project))
+        }
+    }
+}
+
+/// Render the philosophy-survey page (`GET /philosophy?object=<uri>`, US-GT-003) as a
+/// complete HTML document (maud) — the SYMMETRIC mirror of [`render_project_page`]. PURE:
+/// a total function from the [`TraversalView`] to an HTML string — no I/O, no network.
+/// Renders the page chrome (incl. the local offline-first htmx `<script src>` + a nav
+/// link back to the other views) THEN the traversal results region.
+///
+/// COMPOSITION (slice-10; ADR-043): the results region is chrome + nav wrapped AROUND
+/// [`render_philosophy_fragment`] — the EXACT same fragment fn the htmx shape returns
+/// alone. Because the results region is the SAME fn in both shapes, fragment/full-page
+/// parity is structural, not asserted by duplicating render logic (I-GT-6). The `<head>`
+/// emits exactly ONE local `<script src="/static/htmx.min.js">` (offline-first).
+pub fn render_philosophy_page(view: &TraversalView) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            (page_head("OpenLore — Philosophy Survey"))
+            body {
+                h1 { "Philosophy Survey" }
+                nav {
+                    a href=(MY_CLAIMS_URL) { "My Claims" }
+                }
+                (render_philosophy_fragment(view))
+            }
+        }
+    };
+    markup.into_string()
+}
+
 /// Which dimension a survey's GROUP KEY belongs to — drives the per-group traversal
 /// `<a href>` route (`/project` groups BY philosophy → the key links to
 /// `/philosophy`; `/philosophy` groups BY project → the key links to `/project`).
@@ -1992,6 +2056,8 @@ pub fn render_project_page(view: &TraversalView) -> String {
 enum GroupDimension {
     /// The group key is a philosophy (the `/project` survey) → link to `/philosophy`.
     Philosophy,
+    /// The group key is a project (the `/philosophy` survey) → link to `/project`.
+    Project,
 }
 
 /// Render the traversal results region for the given [`TraversalView`]. PURE total
@@ -2031,6 +2097,7 @@ fn render_traversal_result(view: &TraversalView, dimension: GroupDimension) -> M
 fn render_edge_group(group: &EdgeGroup, dimension: GroupDimension) -> Markup {
     let href = match dimension {
         GroupDimension::Philosophy => href_philosophy(&group.key),
+        GroupDimension::Project => href_project(&group.key),
     };
     html! {
         section {
@@ -2119,9 +2186,8 @@ fn href_philosophy(object: &str) -> String {
 /// Build the `/project?subject=<encoded>` traversal href for a subject key (the
 /// subject→project edge; ADR-044). The claim-controlled `subject` is percent-encoded
 /// into the query component. PURE total function. (Used by the `/philosophy` survey's
-/// project group keys — slice-10 later; exposed-by-construction symmetry with
+/// project group keys — the subject→project traversal edge; symmetric with
 /// [`href_philosophy`].)
-#[allow(dead_code)]
 fn href_project(subject: &str) -> String {
     format!("{PROJECT_URL}?subject={}", encode_query_component(subject))
 }
@@ -5049,6 +5115,130 @@ mod tests {
             list.matches("contributor=did%3Aplc%3Atobias-test").count(),
             1,
             "Tobias appears once in the contributors list (deduped); {html}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Graph-Traversal view — the SYMMETRIC philosophy survey (slice-10 / step
+    // 02-01): group_philosophy + render_philosophy_fragment / render_philosophy_page.
+    // The object→philosophy mirror of the project oracles, swapping subject↔object:
+    // `group_philosophy` groups BY subject (the project that embodies the philosophy),
+    // and the group key links to `/project?subject=` (vs `/philosophy?object=`).
+    // -------------------------------------------------------------------------
+
+    /// Behavior (data-models.md §2 / I-GT-3, symmetric to the project oracle):
+    /// `group_philosophy` groups a philosophy's survey rows by `subject` (the project
+    /// that embodies it), one group per distinct subject, contributors deduped +
+    /// order-preserved.
+    #[test]
+    fn group_philosophy_groups_by_subject_with_deduped_contributors() {
+        let rows = [
+            survey_row("did:plc:rachel-test", "bafy1", "github:NixOS/nixpkgs", "phil-x", 0.92),
+            survey_row("did:plc:rachel-test", "bafy2", "github:bazelbuild/bazel", "phil-x", 0.85),
+        ];
+        let view = group_philosophy("phil-x", &rows);
+        let TraversalView::Found { entity, groups, contributors } = view else {
+            panic!("a non-empty survey must group to Found; got {view:?}");
+        };
+        assert_eq!(entity, "phil-x");
+        assert_eq!(groups.len(), 2, "two distinct subjects → two groups");
+        assert_eq!(groups[0].key, "github:NixOS/nixpkgs");
+        assert_eq!(groups[1].key, "github:bazelbuild/bazel");
+        // The spanning contributor appears ONCE in the contributor list (deduped).
+        assert_eq!(contributors, vec!["did:plc:rachel-test".to_string()]);
+    }
+
+    /// Behavior (I-GT-3 anti-merging, symmetric): two DISTINCT authors on the SAME
+    /// subject (project) render as TWO `EdgeRow`s under ONE group key — never averaged.
+    #[test]
+    fn group_philosophy_keeps_two_authors_on_one_subject_as_two_rows() {
+        let rows = [
+            survey_row("did:plc:maria", "bafy1", "github:NixOS/nixpkgs", "phil-x", 0.92),
+            survey_row("did:plc:tobias-test", "bafy2", "github:NixOS/nixpkgs", "phil-x", 0.70),
+        ];
+        let view = group_philosophy("phil-x", &rows);
+        let TraversalView::Found { groups, contributors, .. } = view else {
+            panic!("expected Found");
+        };
+        assert_eq!(groups.len(), 1, "one shared subject → one group");
+        assert_eq!(groups[0].edges.len(), 2, "two authors → two edges (no merge)");
+        assert_eq!(contributors.len(), 2, "two distinct contributors");
+    }
+
+    /// Behavior (I-GT-3 / I-GT-5, symmetric): `render_philosophy_fragment` carries the
+    /// `#traversal-results` id, the group key (a project) as a `/project?subject=`
+    /// traversal href, each edge's author DID (a `/score?contributor=` link), the
+    /// VERBATIM confidence (`0.92`) + the REUSED display-only bucket + the cid.
+    #[test]
+    fn render_philosophy_fragment_attributes_each_edge_verbatim_with_bucket_and_cid() {
+        let rows = [survey_row(
+            "did:plc:rachel-test",
+            "bafyedge1",
+            "github:NixOS/nixpkgs",
+            "org.openlore.philosophy.reproducible-builds",
+            0.92,
+        )];
+        let view = group_philosophy("org.openlore.philosophy.reproducible-builds", &rows);
+        let html = render_philosophy_fragment(&view).into_string();
+        assert!(html.contains(TRAVERSAL_RESULTS_ID), "fragment must carry the region id; {html}");
+        assert!(
+            html.contains("/project?subject="),
+            "the group key (a project) must be a /project traversal href; {html}"
+        );
+        assert!(
+            html.contains("/score?contributor="),
+            "the author must be a /score traversal link; {html}"
+        );
+        assert!(html.contains("did:plc:rachel-test"), "edge must attribute its author; {html}");
+        assert!(html.contains("0.92"), "confidence must render VERBATIM (0.92, not 0.9); {html}");
+        assert!(html.contains("triangulated"), "the REUSED display-only bucket must show; {html}");
+        assert!(html.contains("bafyedge1"), "the edge must name its cid; {html}");
+        // NO full-page chrome (I-GT-6 / I-HX-1).
+        assert!(!html.contains("<!DOCTYPE") && !html.contains("<html"), "fragment has no chrome; {html}");
+        // The philosophy fragment groups BY subject → it must NOT link to /philosophy.
+        assert!(!html.contains("/philosophy?object="), "philosophy survey keys link to /project, not /philosophy; {html}");
+    }
+
+    /// Behavior (I-GT-4, symmetric): `render_philosophy_fragment` for a `NoClaims` view
+    /// names the queried entity + the guided notice, and fabricates NO edge.
+    #[test]
+    fn render_philosophy_fragment_no_claims_names_entity_and_fabricates_no_edge() {
+        let view = TraversalView::NoClaims {
+            entity: "org.openlore.philosophy.actor-model".to_string(),
+        };
+        let html = render_philosophy_fragment(&view).into_string();
+        assert!(html.contains(TRAVERSAL_RESULTS_ID));
+        assert!(html.contains("org.openlore.philosophy.actor-model"), "must name the queried entity; {html}");
+        assert!(html.contains(TRAVERSAL_NO_CLAIMS_NOTICE), "must show the guided notice; {html}");
+        assert!(
+            !html.contains("/project?subject=") && !html.contains("/score?contributor="),
+            "a NoClaims render must fabricate NO traversal edge; {html}"
+        );
+    }
+
+    /// Behavior (I-GT-6 parity by construction, symmetric): `render_philosophy_page`
+    /// EMBEDS the EXACT `render_philosophy_fragment` region verbatim, plus full-page
+    /// chrome.
+    #[test]
+    fn render_philosophy_page_embeds_the_fragment_region_with_chrome() {
+        let rows = [survey_row(
+            "did:plc:rachel-test",
+            "bafyedge1",
+            "github:NixOS/nixpkgs",
+            "phil-x",
+            0.92,
+        )];
+        let view = group_philosophy("phil-x", &rows);
+        let fragment = render_philosophy_fragment(&view).into_string();
+        let page = render_philosophy_page(&view);
+        assert!(
+            page.contains(&fragment),
+            "the full page must EMBED the exact traversal-results fragment (parity by \
+             construction, I-GT-6); page:\n{page}"
+        );
+        assert!(
+            page.to_lowercase().contains("<!doctype html>"),
+            "the full page must carry full-page chrome; page:\n{page}"
         );
     }
 }
