@@ -487,12 +487,37 @@ fn conflicting_claims_by_different_authors_render_as_two_attributed_rows() {
     // for that contributor. THEN BOTH authors' contributions render as SEPARATE rows
     // under their own DIDs (assert_score_html_breakdown_attributed_and_verbatim with
     // both DIDs + both verbatim confidences) and NO merged/averaged consensus row.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-6 anti-merging: let (a, b) = seed_contributor_conflicting_\
-         authors(&env); ViewerServer::start; get the contributor's /score; assert \
-         both author DIDs render as separate attributed rows + no merged consensus row"
-    )
+    let env = TestEnv::initialized();
+    let (own_did, peer_did) = seed_contributor_conflicting_authors(&env);
+    let viewer = ViewerServer::start(&env);
+
+    // Score the contributor whose feed holds BOTH the own claim AND the pulled peer
+    // claim on the SAME (subject, reproducible-builds) — the contributor-scope feed
+    // read returns both, and the pure scorer decomposes the one pairing into TWO
+    // attributed rows.
+    let response = viewer.get(&format!("/score?contributor={own_did}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-6: GET /score for the conflicting-authors contributor must return 200; \
+         body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-6: the response must carry the `#score-results` region; body was:\n{}",
+        response.body
+    );
+    // BOTH authors' contributions render as SEPARATE rows under their OWN author DIDs,
+    // each carrying its verbatim base confidence (0.40 own + 0.55 peer) — neither
+    // averaged nor merged into one faceless consensus row (anti-merging; the helper
+    // also bans the merged-consensus phrasings). The two rows sit within the SAME
+    // subject pairing (I-CS-2 / I-CS-10).
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &response.body,
+        &[&own_did, &peer_did],
+        &["0.40", "0.55"],
+    );
 }
 
 // =============================================================================

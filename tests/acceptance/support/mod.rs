@@ -8080,16 +8080,40 @@ pub fn seed_contributor_sparse_trail(env: &TestEnv, contributor_did: &str) {
 /// (`You`) + a pulled peer both assert the same (subject, reproducible-builds) at
 /// different confidences, landing two attributed rows on one pairing.
 pub fn seed_contributor_conflicting_authors(env: &TestEnv) -> (String, String) {
-    // DELIVER: reuse the `seed_own_plus_peer_graph` identical-content shape — own
-    // claim (You) + one pulled peer on the SAME (subject, reproducible-builds) at
-    // distinct confidences (e.g. 0.40 own + 0.55 peer) so the contributor-scope
-    // feed yields one pairing decomposing into TWO attributed Contribution rows.
-    let _ = (env, SCORE_OBJECT_REPRODUCIBLE_BUILDS);
-    todo!(
-        "slice-09 DELIVER: seed two distinct authors asserting the same \
-         (subject, reproducible-builds) at different confidences so the pairing \
-         decomposes into two attributed rows (anti-merging; I-CS-2/I-CS-10)"
-    )
+    // Mirror the GQE-2 `DenoIdenticalContentTwoAuthors` identical-content shape via
+    // the PRODUCTION federation write path: the LOCAL user's OWN claim (via the real
+    // `claim add` verb → `You`, author `did:plc:test-jeff`) AND a pulled PEER claim
+    // (via the real `peer add` + `peer pull` verbs → `SubscribedPeer`) by a SECOND,
+    // DISTINCT author both assert the SAME (subject, reproducible-builds) at DISTINCT
+    // confidences (0.40 own + 0.55 peer). The own row lands in `claims`, the peer row
+    // in `peer_claims`; BOTH fall under the scored contributor's author scope, so the
+    // production `query_contributor_scoring_feed` read returns both and the pure
+    // scorer decomposes the ONE pairing into TWO attributed `Contribution` rows under
+    // their own author DIDs — never averaged/merged (anti-merging; I-CS-2 / I-CS-10).
+    // NO hand-inserted store rows. Returns the two distinct author DIDs in seeded
+    // order (own, peer) so the scenario can assert both rows are present + attributed.
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let subject = "github:denoland/deno";
+    // A second, distinct PLC identity. It shares the local user's contributor scope
+    // (so the contributor-feed read returns BOTH authors' claims on the shared
+    // pairing) yet is a SEPARATE author DID — the row renders under its own DID, so
+    // the anti-merging guarantee (two distinct authors → two rows, no average) is
+    // genuinely exercised through the production peer path.
+    let peer_did = "did:plc:test-jeff-collaborator";
+    seed_own_plus_peer_graph(
+        env,
+        &[OwnClaim {
+            subject,
+            object: repro,
+            confidence: 0.40,
+        }],
+        &[SeedPeer {
+            peer_did,
+            seed: [37u8; 32],
+            triples: &[(subject, repro, 0.55)],
+        }],
+    );
+    (env.identity.author_did().to_string(), peer_did.to_string())
 }
 
 /// The `#score-results` swap-target id the `/score` fragment renders under (the

@@ -4093,6 +4093,65 @@ mod tests {
         );
     }
 
+    /// Behavior / CARDINAL (C-6; I-CS-2 / I-CS-10 anti-merging): TWO DISTINCT authors
+    /// asserting the SAME (subject, object) at DIFFERENT confidences render as TWO
+    /// SEPARATE breakdown rows under their OWN author DIDs — within ONE pairing —
+    /// never averaged or collapsed into a single faceless consensus row. Pins the
+    /// per-author-row decomposition at the unit level: the pure scorer groups by
+    /// (subject, object) and the renderer emits one row per `Contribution`, so a
+    /// merge/de-dup of same-pairing different-author claims is structurally
+    /// impossible. The sum-to-weight sibling pins the arithmetic; THIS test pins the
+    /// row CARDINALITY + per-row attribution + verbatim distinct confidences.
+    #[test]
+    fn score_fragment_renders_two_distinct_authors_on_one_pairing_as_two_rows_no_merge() {
+        let repro = "org.openlore.philosophy.reproducible-builds";
+        let subject = "github:denoland/deno";
+        // Two DISTINCT authors, SAME (subject, object), DIFFERENT confidences.
+        let feed = vec![
+            attributed("did:plc:test-jeff", "bafyown", subject, repro, 0.40),
+            attributed("did:plc:test-jeff-collaborator", "bafypeer", subject, repro, 0.55),
+        ];
+        let view = score(&feed, &ScoringConfig::DEFAULT);
+        // ONE pairing (same subject+object) decomposing into TWO contributions.
+        assert_eq!(view.ranked.len(), 1, "two same-(subject,object) claims must form ONE pairing");
+        assert_eq!(
+            view.ranked[0].contributions().len(),
+            2,
+            "the one pairing must decompose into TWO contributions (one per author), never merged"
+        );
+
+        let html = render_score_results_fragment(&ScoreState::Scored { view }).into_string();
+
+        // BOTH distinct author DIDs render (per-row attribution; non-Option author_did).
+        for did in ["did:plc:test-jeff", "did:plc:test-jeff-collaborator"] {
+            assert!(
+                html.contains(did),
+                "the breakdown must attribute a SEPARATE row to {did:?}; got:\n{html}"
+            );
+        }
+        // Each author's distinct base confidence renders VERBATIM — neither averaged
+        // nor collapsed (an averaged 0.475 would surface NEITHER 0.40 NOR 0.55).
+        for conf in ["0.40", "0.55"] {
+            assert!(
+                html.contains(conf),
+                "the breakdown must render the verbatim confidence {conf:?} (never averaged); got:\n{html}"
+            );
+        }
+        // No averaged/merged consensus midpoint leaks.
+        assert!(
+            !html.contains("0.48") && !html.contains("0.47"),
+            "the breakdown must NOT render an averaged consensus confidence (anti-merging); got:\n{html}"
+        );
+        // No faceless merged-consensus phrasing.
+        let lowered = html.to_ascii_lowercase();
+        for banned in ["authors agree", "community consensus", "consensus score", "the network says"] {
+            assert!(
+                !lowered.contains(banned),
+                "the breakdown must show NO merged consensus row; found {banned:?} in:\n{html}"
+            );
+        }
+    }
+
     /// Behavior (C-7/C-10; I-CS-3): a thin single-claim/single-author/single-subject
     /// feed renders `[SPARSE]` + the "treat as a lead" honesty line REGARDLESS of how
     /// HIGH the confidence is — the breadth guard (inherited from the pure core),
