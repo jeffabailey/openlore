@@ -587,16 +587,93 @@ fn a_thin_single_claim_contributor_renders_sparse_at_any_confidence() {
 /// @edge
 #[test]
 fn the_score_breakdown_renders_confidence_and_weight_verbatim() {
-    // GIVEN a rich-trail store whose seeded confidences include 0.90. WHEN `get`
-    // for the contributor. THEN the body contains "0.90" verbatim and NOT a
-    // truncated "0.9" boundary nor a "%"-formatted value (assert via the verbatim
-    // confidence list + a scan that no `90%` / lone-`0.9` rounding appears).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-8 verbatim: seed_contributor_rich_trail (with a 0.90 claim) + \
-         start; get the contributor's /score; assert the body renders \"0.90\" \
-         verbatim (never \"0.9\"/\"90%\") + the weight is the exact consumed value"
-    )
+    // GIVEN a rich-trail store whose seeded confidences include 0.90 (the
+    // `github:NixOS/nixpkgs` claim). WHEN `get` (no-JS full page) AND `get_htmx`
+    // (fragment) for the contributor. THEN BOTH shapes render "0.90" verbatim and
+    // NOT a "%"-formatted value, AND the displayed weight is the exact consumed
+    // value (reproduce-by-hand: Σ subtotal == weight, with no bucket-midpoint
+    // rounding). The verbatim guarantee must hold in BOTH the fragment and the
+    // full page (no divergence — single-site formatting: render_confidence + the
+    // sibling render_weight).
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let full = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+    let fragment = viewer.get_htmx(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        full.status, 200,
+        "C-8: GET /score (no HX-Request) for a rich contributor must return 200; \
+         body was:\n{}",
+        full.body
+    );
+    assert_eq!(
+        fragment.status, 200,
+        "C-8: GET /score (HX-Request) for a rich contributor must return 200; body \
+         was:\n{}",
+        fragment.body
+    );
+    // The two shapes differ ONLY in chrome (the full page embeds the fragment) —
+    // so the verbatim guarantee asserted below must hold in BOTH.
+    assert!(
+        full.is_full_page(),
+        "C-8: the no-JS response must be a full page; body was:\n{}",
+        full.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "C-8: the HX-Request response must be a bare fragment; body was:\n{}",
+        fragment.body
+    );
+
+    // The verbatim contract holds in BOTH shapes: the breakdown renders the seeded
+    // confidence "0.90" byte-for-byte (via the shared render_confidence, I-CS-6),
+    // never a "90%"-formatted value. Asserted over the full page AND the fragment
+    // so a second formatting path (which could diverge between shapes) is excluded.
+    for (shape, body) in [("full page", &full.body), ("fragment", &fragment.body)] {
+        // The contributing claim seeded at 0.90 renders "0.90" verbatim (never
+        // truncated, never percentized). The full verbatim confidence list is
+        // pinned by C-1/C-4; here C-8 nails the 0.90 boundary specifically.
+        assert!(
+            body.contains("0.90"),
+            "C-8 ({shape}): a claim stored at 0.90 must render \"0.90\" verbatim \
+             (I-CS-6); body was:\n{body}"
+        );
+        // NEVER a "%"-formatted confidence/weight: no "90%" (and no "%" sign at all
+        // in the score surface) — confidence + weight are decimals, not percents.
+        assert!(
+            !body.contains("90%"),
+            "C-8 ({shape}): confidence/weight must NOT render as a percent (found \
+             \"90%\"); body was:\n{body}"
+        );
+        assert!(
+            !body.contains('%'),
+            "C-8 ({shape}): the score surface must render NO \"%\" formatting — \
+             confidence + weight are verbatim decimals (single-site render_confidence \
+             / render_weight, no second percent path); body was:\n{body}"
+        );
+    }
+
+    // The displayed pairing weight is the EXACT consumed WeightedPairing.weight with
+    // NO bucket-midpoint rounding — pinned observably as reproduce-by-hand: the
+    // running sum of the rendered per-claim subtotals EQUALS the rendered weight (the
+    // weight is the verbatim consumed value, not a re-derived bucket midpoint). Holds
+    // in BOTH the full page AND the fragment (no divergence — one weight formatter).
+    assert_score_html_breakdown_sums_to_displayed_weight(&full.body);
+    assert_score_html_breakdown_sums_to_displayed_weight(&fragment.body);
+    // AND the full per-row identity (verbatim confidences + author attribution) holds
+    // in both shapes — the SAME single-site verbatim render the breakdown uses.
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &full.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &fragment.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
 }
 
 /// C-9 (US-CS-003 Example 3 / AC-003.3 — an unknown contributor shows a guided

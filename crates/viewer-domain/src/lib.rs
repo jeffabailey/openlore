@@ -4108,6 +4108,58 @@ mod tests {
         );
     }
 
+    /// Behavior (C-8; AC-003.2 / I-CS-6 / KPI-4 verbatim): a contributing claim
+    /// stored at 0.90 renders byte-for-byte "0.90" (never "0.9", never "90%"), the
+    /// displayed pairing weight is the EXACT consumed `WeightedPairing.weight`
+    /// (`{:.2}` of the value — no bucket-midpoint rounding), and BOTH guarantees
+    /// hold identically in the fragment AND the full page (no divergence — the page
+    /// EMBEDS the fragment fn, so there is exactly ONE confidence formatter
+    /// (`render_confidence`) and ONE weight formatter (`render_weight`)). This pins
+    /// the single-site verbatim contract at the unit level: a stray `{:.1}` / `%`
+    /// path on either shape would fail here.
+    #[test]
+    fn score_render_keeps_confidence_and_weight_verbatim_in_fragment_and_page() {
+        let state = rich_scored_state();
+        let ScoreState::Scored { view } = &state else {
+            panic!("rich_scored_state must be a Scored view");
+        };
+        // The consumed weight rendered EXACTLY as `render_weight` would (two
+        // decimals of the consumed value — no midpoint rounding).
+        let pairing = &view.ranked[0];
+        let weight_verbatim = format!("Weight: {}", render_weight(pairing.weight));
+
+        let fragment = render_score_results_fragment(&state).into_string();
+        let page = render_score_page(&state);
+
+        for (shape, html) in [("fragment", &fragment), ("page", &page)] {
+            // The 0.90 claim renders "0.90" verbatim — never truncated, never a percent.
+            assert!(
+                html.contains("0.90"),
+                "C-8 ({shape}): a claim at 0.90 must render \"0.90\" verbatim (I-CS-6); got:\n{html}"
+            );
+            assert!(
+                !html.contains("90%") && !html.contains('%'),
+                "C-8 ({shape}): confidence/weight must render as verbatim decimals, \
+                 never a percent (no \"90%\"/\"%\" — single-site render_confidence / \
+                 render_weight, no second percent path); got:\n{html}"
+            );
+            // The displayed weight is the EXACT consumed value (no bucket-midpoint
+            // rounding) — the verbatim `Weight: <{:.2} of the consumed weight>`.
+            assert!(
+                html.contains(&weight_verbatim),
+                "C-8 ({shape}): the displayed weight must be the exact consumed \
+                 WeightedPairing.weight ({weight_verbatim:?}), with no bucket-midpoint \
+                 rounding; got:\n{html}"
+            );
+        }
+        // No divergence: the verbatim region the page shows is the EXACT fragment.
+        assert!(
+            page.contains(&fragment),
+            "C-8: the full page must embed the EXACT fragment, so the verbatim \
+             confidence/weight cannot diverge between shapes; page:\n{page}"
+        );
+    }
+
     /// Behavior / CARDINAL (C-6; I-CS-2 / I-CS-10 anti-merging): TWO DISTINCT authors
     /// asserting the SAME (subject, object) at DIFFERENT confidences render as TWO
     /// SEPARATE breakdown rows under their OWN author DIDs — within ONE pairing —
