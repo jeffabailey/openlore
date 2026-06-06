@@ -443,12 +443,27 @@ fn the_rendered_breakdown_subtotals_sum_to_the_displayed_weight() {
     // rendered weight + the per-row subtotals out of the breakdown table and assert
     // Σ subtotal == the displayed weight (assert_score_html_breakdown_sums_to_
     // displayed_weight) — the cardinal reproduce-by-hand gate, asserted on the HTML.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-5 reproduce-by-hand: seed_contributor_rich_trail + start; \
-         get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); \
-         assert_score_html_breakdown_sums_to_displayed_weight(body)"
-    )
+    let env = TestEnv::initialized();
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
+
+    assert_eq!(
+        response.status, 200,
+        "C-5: GET /score for a rich contributor must return 200; body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains(SCORE_RESULTS_ID),
+        "C-5: the response must carry the `#score-results` region; body was:\n{}",
+        response.body
+    );
+    // CARDINAL reproduce-by-hand (KPI-GRAPH-3): parse the displayed weight + the
+    // per-row subtotals out of the rendered breakdown table and assert, for each
+    // rendered pairing, that Σ subtotal == the displayed weight — over a non-trivial
+    // multi-row rich trail (>1 contribution), read from the OBSERVABLE HTML only.
+    assert_score_html_breakdown_sums_to_displayed_weight(&response.body);
 }
 
 /// C-6 (US-CS-002 Example 4 / AC-002.5 — conflicting claims both contribute,

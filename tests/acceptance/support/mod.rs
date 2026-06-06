@@ -8270,18 +8270,125 @@ pub fn assert_score_html_renders_no_claims(body: &str, queried_did: &str) {
 /// 1e-9). The PARSE shape is DELIVER's against the render tests; the CONTRACT
 /// (rendered subtotals sum to the rendered weight) is fixed here.
 pub fn assert_score_html_breakdown_sums_to_displayed_weight(body: &str) {
-    // DELIVER: extract the displayed pairing weight + each rendered Contribution
-    // subtotal from the breakdown table markup, then assert their running sum
-    // equals the displayed weight (reproduce-by-hand). The assertion reads ONLY the
-    // rendered surface (Mandate 8 universe = port-exposed rendered HTML), never the
-    // in-process `WeightedPairing` — the whole point is that the HTML itself is
-    // self-consistent.
-    let _ = body;
-    todo!(
-        "slice-09 DELIVER: parse the rendered weight + the per-row subtotals out of \
-         the breakdown table and assert Σ subtotal == displayed weight (the J-002c \
-         reproduce-by-hand gate; KPI-GRAPH-3)"
-    )
+    // Parse the OBSERVABLE rendered surface (Mandate 8 universe = port-exposed
+    // rendered HTML), never the in-process `WeightedPairing` — the whole point is
+    // that the HTML itself is self-consistent. Each pairing renders as one
+    // `<section>` carrying its headline `Weight: <2dp>` (a `<p>`) and a breakdown
+    // `<table>` whose `<tbody>` rows end in the per-claim `Subtotal` `<td>` (the
+    // last cell). For EACH pairing the running sum of the row subtotals must equal
+    // that pairing's displayed weight (reproduce-by-hand; KPI-GRAPH-3).
+    let pairings = parse_score_pairings(body);
+    assert!(
+        !pairings.is_empty(),
+        "C-5 reproduce-by-hand: the rendered `/score` body must carry ≥1 pairing \
+         <section> with a Weight + breakdown table to reproduce by hand; body \
+         was:\n{body}"
+    );
+    // The whole rendered surface must decompose >1 contribution overall — a
+    // reproduce-by-hand gate over a TRIVIAL single row proves nothing (the brief's
+    // multi-row requirement). The rich trail seeds a multi-pairing/multi-row feed.
+    let total_rows: usize = pairings.iter().map(|p| p.subtotals.len()).sum();
+    assert!(
+        total_rows > 1,
+        "C-5 reproduce-by-hand must hold over a NON-trivial breakdown (>1 \
+         contribution rendered across the pairings, not a single row); parsed \
+         {total_rows} subtotal row(s) from body:\n{body}"
+    );
+    for pairing in &pairings {
+        assert!(
+            !pairing.subtotals.is_empty(),
+            "C-5: a rendered pairing (weight {}) carried a breakdown table with NO \
+             subtotal rows — a weight must never appear without its decomposition; \
+             body was:\n{body}",
+            pairing.weight
+        );
+        let running: f64 = pairing.subtotals.iter().sum();
+        // Both the weight and each subtotal are rendered to two decimals, so a row's
+        // displayed value carries up to 0.005 of rounding error; the sum of `n`
+        // rows is within `0.005 * n` of the displayed weight (plus the weight's own
+        // ≤0.005). A re-render is byte-identical, so this tolerance never flakes.
+        let epsilon = 0.005 * (pairing.subtotals.len() as f64 + 1.0);
+        assert!(
+            (running - pairing.weight).abs() <= epsilon,
+            "C-5 reproduce-by-hand (KPI-GRAPH-3): the running sum of the rendered \
+             per-claim subtotals ({running:.2}) must equal the displayed pairing \
+             weight ({:.2}); subtotals parsed = {:?}; body was:\n{body}",
+            pairing.weight,
+            pairing.subtotals,
+        );
+    }
+}
+
+/// One parsed `/score` pairing: its displayed headline weight + the per-claim
+/// subtotals read out of the breakdown table — both extracted from the OBSERVABLE
+/// rendered HTML (never an internal struct). Used by
+/// [`assert_score_html_breakdown_sums_to_displayed_weight`].
+struct ParsedScorePairing {
+    weight: f64,
+    subtotals: Vec<f64>,
+}
+
+/// Parse every rendered pairing out of a `/score` body: split on the per-pairing
+/// `<section>` boundary, then for each section extract the headline `Weight:`
+/// value and the breakdown table's per-row subtotals (the LAST `<td>` of each
+/// `<tbody>` row — the `Subtotal` column the renderer emits last). Plain string
+/// scanning over the maud-emitted (compact) markup; no HTML/regex dependency so
+/// the helper stays self-contained in the support module.
+fn parse_score_pairings(body: &str) -> Vec<ParsedScorePairing> {
+    body.split("<section")
+        .skip(1) // text before the first <section> is chrome, never a pairing
+        .filter_map(|section| {
+            let weight = parse_weight(section)?;
+            let subtotals = parse_row_subtotals(section);
+            Some(ParsedScorePairing { weight, subtotals })
+        })
+        .collect()
+}
+
+/// Extract the headline weight from one pairing section: the number following the
+/// rendered `Weight: ` text node (e.g. `Weight: 1.36 Strong`).
+fn parse_weight(section: &str) -> Option<f64> {
+    let after = section.split("Weight: ").nth(1)?;
+    parse_leading_f64(after)
+}
+
+/// Extract each breakdown row's subtotal (the LAST `<td>` of every `<tbody>`
+/// row). Scopes to the `<tbody>` so the `<thead>` header cells are never parsed
+/// as numbers; the subtotal is the last `<td>` because the renderer emits it last
+/// (Author, CID, Confidence, Author bonus, Triangulation bonus, Subtotal).
+fn parse_row_subtotals(section: &str) -> Vec<f64> {
+    let tbody = match section.split_once("<tbody>") {
+        Some((_, rest)) => rest.split("</tbody>").next().unwrap_or(rest),
+        None => return Vec::new(),
+    };
+    tbody
+        .split("<tr>")
+        .skip(1)
+        .filter_map(|row| {
+            // The subtotal is the LAST cell: take the text of the final `<td>`.
+            let last_cell = row.rsplit("<td>").next()?;
+            let value = last_cell.split("</td>").next()?;
+            value.trim().parse::<f64>().ok()
+        })
+        .collect()
+}
+
+/// Parse the leading floating-point number out of a string slice (digits, an
+/// optional leading sign, and a single decimal point), ignoring any trailing
+/// markup/text. Returns `None` when no number leads the slice.
+fn parse_leading_f64(s: &str) -> Option<f64> {
+    let trimmed = s.trim_start();
+    let mut seen_dot = false;
+    let end = trimmed
+        .char_indices()
+        .take_while(|(i, c)| {
+            c.is_ascii_digit()
+                || (*c == '-' && *i == 0)
+                || (*c == '.' && !std::mem::replace(&mut seen_dot, true))
+        })
+        .last()
+        .map(|(i, c)| i + c.len_utf8())?;
+    trimmed[..end].parse::<f64>().ok()
 }
 
 /// Assert a rendered `/score` body carries NO sign / publish / follow / subscribe
