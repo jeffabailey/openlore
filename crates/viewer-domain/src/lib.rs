@@ -5039,6 +5039,124 @@ mod tests {
         assert_eq!(encode_query_component("aZ0-_.~"), "aZ0-_.~");
     }
 
+    /// The inbound decoder's behavior, mirrored as a TEST ORACLE so the round-trip
+    /// property can prove `encode_query_component` is its exact inverse WITHOUT a
+    /// cross-crate dependency on the adapter (`adapter-http-viewer::percent_decode_
+    /// form`). Decodes a `%XX` triplet back to its byte and passes unreserved bytes
+    /// through verbatim — the same total decode the inbound `query_param` applies to
+    /// a followed traversal link (ADR-044 §security round-trip). NOTE: unlike a raw
+    /// HTML-form decoder it does NOT treat `+` as space, because the ENCODER never
+    /// emits a bare `+` (space → `%20`), so over the encoder's output the two agree.
+    #[cfg(test)]
+    fn percent_decode_query_component(value: &str) -> String {
+        let bytes = value.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi * 16 + lo) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Property (ADR-044 §security — the injection-boundary INVARIANT): for ANY
+    /// claim-controlled string, `encode_query_component` emits ONLY bytes that are
+    /// safe inside an `href` query component — every byte is either RFC3986
+    /// unreserved (`A-Z a-z 0-9 - _ . ~`) or part of a `%XX` uppercase-hex triplet.
+    /// So NONE of `"`, `<`, `>`, `&`, `=`, space, `?`, `#`, `%` (the attribute /
+    /// markup / param-smuggling breakout bytes) can ever leak unencoded — the
+    /// generalization of the hostile EXAMPLE over arbitrary attacker input.
+    fn assert_only_unreserved_or_percent_triplets(encoded: &str) -> Result<(), TestCaseError> {
+        let bytes = encoded.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'%' {
+                prop_assert!(
+                    i + 2 < bytes.len(),
+                    "encoded output {encoded:?} has a truncated percent-triplet at {i}"
+                );
+                for j in [i + 1, i + 2] {
+                    prop_assert!(
+                        bytes[j].is_ascii_digit()
+                            || (b'A'..=b'F').contains(&bytes[j]),
+                        "encoded output {encoded:?} must use UPPERCASE hex digits; \
+                         byte {:?} at {j} is not 0-9/A-F",
+                        bytes[j] as char
+                    );
+                }
+                i += 3;
+            } else {
+                prop_assert!(
+                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'),
+                    "encoded output {encoded:?} leaked a non-unreserved byte {:?} at \
+                     {i} OUTSIDE a percent-triplet — it could break out of the href \
+                     attribute or smuggle a query param (ADR-044 §security)",
+                    b as char
+                );
+                i += 1;
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        /// Property (ADR-044 §security — round-trip exactness + injection boundary):
+        /// for ANY string (including the hostile `"<>&%?=# ` bytes), the encoder
+        /// (1) emits ONLY unreserved bytes or `%XX` triplets (nothing can break out
+        /// of the `href`), AND (2) is the EXACT inverse of the inbound decode — a
+        /// followed traversal link decodes back to the byte-for-byte original subject,
+        /// so the linked key resolves to the SAME survey. Generalizes the hostile
+        /// EXAMPLE oracle over arbitrary attacker-controlled input.
+        #[test]
+        fn encode_query_component_is_injection_safe_and_round_trips(value in ".*") {
+            let encoded = encode_query_component(&value);
+            assert_only_unreserved_or_percent_triplets(&encoded)?;
+            prop_assert_eq!(
+                percent_decode_query_component(&encoded),
+                value.clone(),
+                "decode(encode(s)) must equal s exactly (round-trip) for {:?}",
+                value
+            );
+        }
+
+        /// Property: the hostile breakout bytes are ALWAYS encoded — for any string,
+        /// none of `"`, `<`, `>`, `&`, space, `?`, `#`, `%`, `=` survives unencoded
+        /// in the output (each becomes its `%XX` form), so no second attribute, no
+        /// `<script>`, and no smuggled `&param=`/`#fragment` can appear in the href.
+        #[test]
+        fn encode_query_component_never_leaks_a_hostile_byte(value in ".*") {
+            let encoded = encode_query_component(&value);
+            for hostile in ['"', '<', '>', '&', ' ', '?', '#', '%', '='] {
+                // The only `%` in the output begins a triplet; a hostile char that was
+                // present in the input must have been replaced by `%XX`, so it cannot
+                // appear as a RAW char. (`%` itself encodes to `%25`, so a raw `%` only
+                // ever heads a valid triplet — checked by the round-trip property.)
+                if hostile != '%' {
+                    prop_assert!(
+                        !encoded.contains(hostile),
+                        "hostile byte {hostile:?} leaked unencoded into {encoded:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Behavior (ADR-044 Q1 bare-DID): the `/score` cross-link reduces a fragmented
     /// signing DID to its BARE form before encoding (matches the slice-09 convention).
     #[test]

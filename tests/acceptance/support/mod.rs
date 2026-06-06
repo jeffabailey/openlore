@@ -8948,12 +8948,19 @@ pub fn seed_injection_uri_subject(env: &TestEnv) -> String {
     // when the `/philosophy` survey for dependency-pinning renders this subject as a
     // `/project` cross-link, the href percent-ENCODES it (ADR-044). Returns the
     // object so the scenario queries `/philosophy?object=<dependency-pinning>`.
-    todo!(
-        "slice-10 DELIVER: seed ONE peer claim whose subject is \
-         TRAVERSAL_INJECTION_SUBJECT on the dependency-pinning object via \
-         seed_peer_authored_graph; return TRAVERSAL_PHILOSOPHY_DEP_PINNING. RED \
-         scaffold."
-    )
+    seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: TRAVERSAL_AUTHOR_RACHEL,
+            seed: [7u8; 32],
+            triples: &[(
+                TRAVERSAL_INJECTION_SUBJECT,
+                TRAVERSAL_PHILOSOPHY_DEP_PINNING,
+                0.50,
+            )],
+        }],
+    );
+    TRAVERSAL_PHILOSOPHY_DEP_PINNING.to_string()
 }
 
 /// Assert a rendered traversal survey body (fragment OR full page) groups its
@@ -9188,13 +9195,72 @@ pub fn assert_traversal_html_crosslink_is_plain_anchor(
 ///
 /// SCAFFOLD: true (slice-10).
 pub fn assert_traversal_href_percent_encoded(body: &str) {
-    let _ = body;
-    todo!(
-        "slice-10 DELIVER: assert the hostile subject's /project href contains \
-         TRAVERSAL_INJECTION_SUBJECT_ENCODED and does NOT break out of the href \
-         attribute (no `\"><script>` / un-encoded `&`/space inside the href) — the \
-         ADR-044 §security injection boundary. RED scaffold."
-    )
+    // The hostile subject renders as a `/project` cross-link. The expected, inert
+    // anchor carries the EXACT percent-encoded form (one source of truth: the
+    // production `encode_query_component` must emit precisely this). Independently
+    // re-derive it from the raw subject so the oracle is not a copy of the constant.
+    let expected_value = encode_query_component_for_test(TRAVERSAL_INJECTION_SUBJECT);
+    assert_eq!(
+        expected_value, TRAVERSAL_INJECTION_SUBJECT_ENCODED,
+        "test oracle drift: encode_query_component_for_test must agree with \
+         TRAVERSAL_INJECTION_SUBJECT_ENCODED"
+    );
+    let expected_href = format!("/project?subject={expected_value}");
+    let expected_anchor = format!("<a href=\"{expected_href}\">");
+    assert!(
+        body.contains(&expected_anchor),
+        "GT-14 (ADR-044 §security): the hostile subject's `/project` cross-link must \
+         render with the value PERCENT-ENCODED ({expected_anchor:?}) so every \
+         reserved/unsafe byte is %XX; body was:\n{body}"
+    );
+
+    // Parse EVERY `/project?subject=` href value from the rendered HTML and assert no
+    // raw reserved/unsafe byte survives inside it — the href cannot break out of the
+    // attribute or smuggle a second query param. We scan the OBSERVABLE bytes between
+    // `href="` and the closing `"`, not an internal struct field (Mandate 8).
+    let needle = "href=\"/project?subject=";
+    let mut found_href = false;
+    let mut rest = body;
+    while let Some(pos) = rest.find(needle) {
+        found_href = true;
+        let after = &rest[pos + needle.len()..];
+        let end = after
+            .find('"')
+            .expect("a rendered href attribute must be closed by a quote");
+        let href_value = &after[..end];
+        // Every reserved/unsafe byte MUST be percent-encoded — none may appear raw
+        // inside the href value. A raw `"` is impossible (it would have closed the
+        // attribute early), a raw `<`/`>` could inject markup, a raw `&` could smuggle
+        // a second query param, and a raw space/`?`/`#` could break the URL.
+        for unsafe_char in ['"', '<', '>', '&', ' ', '?', '#'] {
+            assert!(
+                !href_value.contains(unsafe_char),
+                "GT-14 (ADR-044 §security): the `/project` href value {href_value:?} \
+                 leaked a RAW unsafe byte {unsafe_char:?} — it must be %XX-encoded so \
+                 it cannot break out of the attribute or smuggle a query param; \
+                 body was:\n{body}"
+            );
+        }
+        rest = &after[end..];
+    }
+    assert!(
+        found_href,
+        "GT-14: the injection survey must render the hostile subject as a `/project` \
+         cross-link href (none found); body was:\n{body}"
+    );
+
+    // Defense-in-depth: the hostile subject's markup payload must NEVER appear as an
+    // EXECUTABLE breakout anywhere in the response — no injected `<script>` tag and no
+    // attribute-closing `\"><script` sequence (the classic href breakout). The raw
+    // subject MAY appear as auto-escaped visible TEXT (maud escapes `<`→`&lt;`), but
+    // never as live markup.
+    for breakout in ["<script>", "\"><script", "\"></a><script"] {
+        assert!(
+            !body.contains(breakout),
+            "GT-14 (ADR-044 §security): the hostile subject must NOT inject markup — \
+             found {breakout:?} in the rendered body:\n{body}"
+        );
+    }
 }
 
 /// Assert a rendered traversal survey body shows the guided `NoClaims` state for an
