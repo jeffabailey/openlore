@@ -309,13 +309,63 @@ fn the_counter_reason_renders_verbatim_and_its_cid_is_a_one_hop_drill_link() {
     // counter's CID renders as an `<a href="/claims/{counter_cid}">` render-only
     // drill-link (one hop; NO nested counter render — depth-1, ADR-047). Asserted on
     // the OBSERVABLE rendered HTML.
-    todo!(
-        "DELIVER (CT-5 verbatim + drill-link): seed_claim_with_counter (capturing the \
-         verbatim reason + the counter_cid); start ViewerServer, GET \
-         /claims/{{target_cid}}; assert the reason renders byte-for-byte + the original \
-         confidence renders \"0.91\" verbatim (I-CT-4) + the body carries \
-         `<a href=\"/claims/{{counter_cid}}\"` (a render-only one-hop drill-link; \
-         depth-1, no nested render — ADR-047)"
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+    let counter = seeded
+        .counters
+        .first()
+        .expect("CT-5: seed_claim_with_counter must seed exactly one counter");
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    assert_eq!(
+        response.status, 200,
+        "CT-5: GET /claims/{{cid}} over a countered claim must return 200;\n\
+         --- body ---\n{}",
+        response.body
+    );
+
+    // (a) the counter's verbatim free-text reason renders byte-for-byte AND
+    // (b) the original claim's confidence renders `0.91` verbatim (the
+    // shown-never-applied / verbatim-confidence contract; I-CT-2 / I-CT-4).
+    assert_counter_thread_renders_attributed_verbatim(&response.body, &seeded.counters, "0.91");
+
+    // (a, sharpened) the punctuated reason is present byte-for-byte — the `;` and
+    // `,` are load-bearing (NFC-normalized at author time; ADR-015 / WD-35).
+    let reason = counter
+        .reason
+        .as_deref()
+        .expect("CT-5: the seeded own counter carries a verbatim reason");
+    assert!(
+        response.body.contains(reason),
+        "CT-5: the counter's free-text reason must render EXACTLY as authored \
+         (verbatim, including punctuation) {reason:?};\n--- body ---\n{}",
+        response.body
+    );
+
+    // (c) the counter's CID is a render-only ONE-HOP drill-link — an
+    // `<a href="/claims/{counter_cid}">` anchor (navigation TEXT, never an
+    // executable control; ADR-047 / I-CT-1).
+    let drill_link = format!("<a href=\"/claims/{}\">", counter.cid);
+    assert!(
+        response.body.contains(&drill_link),
+        "CT-5: the counter's CID must render as a render-only one-hop drill-link \
+         {drill_link:?};\n--- body ---\n{}",
+        response.body
+    );
+
+    // (c, depth-1) the thread does NOT recurse into the counter's own counters:
+    // the rendered counter-thread section heading appears EXACTLY once (the target
+    // claim's thread only — no nested/recursive counter render; ADR-047).
+    let thread_heading = "<h2>Counter-claims</h2>";
+    assert_eq!(
+        response.body.matches(thread_heading).count(),
+        1,
+        "CT-5: the thread must be DEPTH-1 — the counter-thread heading {thread_heading:?} \
+         must appear EXACTLY once (no nested/recursive counter render; ADR-047);\n\
+         --- body ---\n{}",
+        response.body
     );
 }
 
