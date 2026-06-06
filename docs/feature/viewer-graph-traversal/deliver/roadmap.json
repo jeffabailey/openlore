@@ -1,0 +1,681 @@
+{
+  "roadmap": {
+    "project_id": "viewer-graph-traversal",
+    "created_at": "2026-06-06T00:00:00Z",
+    "total_steps": 16
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Project survey (walking skeleton) \u2014 GET /project",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only project-survey read + pure TraversalView grouping into the viewer and render the /project fragment (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-GT-001 capability + US-GT-002 render, GT-1). It forces the WHOLE traversal thread into existence end-to-end. (ports) Add `query_project_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError>` to StoreReadPort and the flat `SurveyRow` DTO (non-Option author_did + cid, subject/predicate/object, f64 confidence, PeerOrigin origin, composed_at) \u2014 NO mutation method added to the port (ADR-042). (adapter-duckdb) Impl it on DuckDbStoreReadAdapter as read-only SQL over the SAME shared connection \u2014 claims UNION ALL peer_claims filtered WHERE subject = ?, explicit author_did projection, source_table discriminant, NO merge/AVG/GROUP-BY JOIN (anti-merging in Rust, not SQL); LOCAL only, no network. (adapter-http-viewer) Add GET /project?subject=<uri> to the route table as a SYNCHRONOUS arm (after the async /search fork) with the slice-07 Shape fork; add the project_page handler: query_param(\"subject\") -> read the local survey via StoreReadPort -> TraversalView::group_project(subject, rows) (PURE) -> fork by Shape at the render call \u2014 reading the store the ViewerServer ALREADY holds (NO new Option<Shared*> field, mirrors /score not /search). (viewer-domain) Add the pure TraversalView ADT (Found { entity, groups: Vec<EdgeGroup>, contributors } | NoClaims { entity }) + EdgeGroup { key, edges } + EdgeRow { author_did, confidence, cid }, the PURE group_project total fn (group by object, one EdgeRow per (author,cid), distinct deduped contributors, NO average), render_project_fragment (the #traversal-results region: per group the attributed edges, each naming author_did + verbatim render_confidence + the REUSED claim_domain::confidence_bucket label + cid), and add claim-domain as a [dependencies] edge of viewer-domain (Cargo.toml). (xtask) Add the check-arch delta: viewer-domain -> claim-domain on the pure-core dependency allowlist (pure->pure edge, SAME shape as slice-08 viewer-domain->appview-domain / slice-09 viewer-domain->scoring); NO capability-rule change (the read is read-only; claim-domain is a pure core, not a forbidden surface); CONFIRM the anti-merging no_cross_table_join_elides_author SQL rule stays green over the new survey SELECT. Outcome: a seeded project + HX-Request -> ONLY the #traversal-results fragment, grouped + attributed + verbatim. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the survey is a LOCAL read, unlike slice-08's indexer). Materialize the assert_traversal_html_groups_attributed_and_verbatim helper body in support/mod.rs.",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> with HX-Request over a seeded local store (seed_project_survey_trail) returns 200 text/html containing ONLY the #traversal-results region fragment (no page chrome, no <head>).",
+            "The fragment groups the philosophies the project embodies; each edge names its author_did, the verbatim confidence (e.g. 0.90, never 0.9 or 90%), and the REUSED claim_domain::confidence_bucket label (triangulated/well-evidenced/speculative) \u2014 each distinct (author, cid) appears as its own attributed edge, never averaged.",
+            "StoreReadPort gains a single read-only method query_project_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError> + the SurveyRow DTO (non-Option author_did + cid); NO mutation method added to the port; DuckDbStoreReadAdapter impls it as read-only SQL over the shared connection (claims UNION ALL peer_claims WHERE subject = ?, explicit author_did, no merge JOIN), LOCAL only with no network call.",
+            "The /project route reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), holds NO signing key, and adds no write/sign/follow route.",
+            "xtask check-arch passes with the delta: viewer-domain -> claim-domain is allowlisted as a pure->pure edge; the pure-core no-I/O arm still passes for viewer-domain (no duckdb/tokio/reqwest/std::fs/std::net/SystemTime enters it); the anti-merging no_cross_table_join_elides_author SQL rule stays green over the new survey SELECT; no viewer capability rule changes."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> with HX-Request over a seeded local store (seed_project_survey_trail) returns 200 text/html containing ONLY the #traversal-results region fragment (no page chrome, no <head>).",
+            "The fragment groups the philosophies the project embodies; each edge names its author_did, the verbatim confidence (e.g. 0.90, never 0.9 or 90%), and the REUSED claim_domain::confidence_bucket label (triangulated/well-evidenced/speculative) \u2014 each distinct (author, cid) appears as its own attributed edge, never averaged.",
+            "StoreReadPort gains a single read-only method query_project_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError> + the SurveyRow DTO (non-Option author_did + cid); NO mutation method added to the port; DuckDbStoreReadAdapter impls it as read-only SQL over the shared connection (claims UNION ALL peer_claims WHERE subject = ?, explicit author_did, no merge JOIN), LOCAL only with no network call.",
+            "The /project route reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), holds NO signing key, and adds no write/sign/follow route.",
+            "xtask check-arch passes with the delta: viewer-domain -> claim-domain is allowlisted as a pure->pure edge; the pure-core no-I/O arm still passes for viewer-domain (no duckdb/tokio/reqwest/std::fs/std::net/SystemTime enters it); the anti-merging no_cross_table_join_elides_author SQL rule stays green over the new survey SELECT; no viewer capability rule changes."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "open_a_project_survey_with_htmx_returns_only_the_traversal_fragment",
+          "n_scenarios": [
+            "GT-1"
+          ],
+          "us_trace": [
+            "US-GT-001",
+            "US-GT-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (TraversalView ADT + group_project + render_project_fragment projecting attributed edges). Extend nightly mutation testing to this projection (verbatim confidence, REUSED bucket label, per-edge author_did + cid attribution, no-merge rows). The xtask viewer-domain -> claim-domain allowlist delta lands here."
+        },
+        {
+          "id": "01-02",
+          "name": "GET /project no-JS full page + fragment parity (page embeds the same fragment fn)",
+          "description": "Complete the project-survey render contract (GT-2; I-GT-6). GET /project?subject=<uri> WITHOUT HX-Request serves a COMPLETE full page (chrome + the GET subject form + the SAME #traversal-results region) for the no-JS no-regression path; the #traversal-results region inside the full page is structurally IDENTICAL to the htmx fragment \u2014 parity by construction because render_project_page EMBEDS render_project_fragment. Add render_project_page to viewer-domain (chrome + embedded fragment fn) and the no-header full-page arm in project_page. The full page is the contract; the htmx swap is a nicety (KPI-HX-G1).",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> with NO HX-Request returns a complete full HTML page: <head>, page chrome, and the embedded #traversal-results region (is_full_page()).",
+            "GET /project?subject=<...> WITH HX-Request returns the bare #traversal-results fragment (is_fragment(), no chrome).",
+            "The full page's #traversal-results region is byte-identical to the htmx fragment body (the full page contains the fragment verbatim) \u2014 parity by construction (I-GT-6).",
+            "No divergence between the two shapes: the same grouped attributed edges render in both."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> with NO HX-Request returns a complete full HTML page: <head>, page chrome, and the embedded #traversal-results region (is_full_page()).",
+            "GET /project?subject=<...> WITH HX-Request returns the bare #traversal-results fragment (is_fragment(), no chrome).",
+            "The full page's #traversal-results region is byte-identical to the htmx fragment body (the full page contains the fragment verbatim) \u2014 parity by construction (I-GT-6).",
+            "No divergence between the two shapes: the same grouped attributed edges render in both."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "the_project_survey_full_page_and_fragment_render_the_same_region",
+          "n_scenarios": [
+            "GT-2"
+          ],
+          "us_trace": [
+            "US-GT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "Two authors on one philosophy render as two attributed rows naming their cids (anti-merging, REAL work)",
+          "description": "The CARDINAL anti-merging scenario for the project surface (GT-3; WD-GT-5 / I-GT-3 / I-GT-4 / I-GT-5). A philosophy claimed by TWO DISTINCT authors (own 0.92 + peer 0.70 via seed_two_author_same_edge) renders as TWO attributed EdgeRows under their OWN author DIDs \u2014 never averaged into one consensus row \u2014 each row carrying its verbatim confidence + display-only bucket + its cid (the production-recomputed cids read via read_peer_claim_cids_for). This is REAL work: it pins the group_project per-(author,cid) decomposition and the no-invented-edge cid rendering. Materialize the assert_traversal_html_names_cids helper body in support/mod.rs.",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a two-author store (seed_two_author_same_edge) renders dependency-pinning with TWO attributed rows, one per author DID (0.92 own + 0.70 peer), each with its verbatim confidence + display-only bucket \u2014 NEVER averaged into one 0.81/consensus row (anti-merging; I-GT-3).",
+            "Every rendered edge NAMES its contributing claim's cid (no invented edges; I-GT-4) \u2014 the cids are exactly the seeded rows the survey read returned (read via read_peer_claim_cids_for, production-recomputed, never hand-stamped).",
+            "The two rows appear within the SAME philosophy group (one group key, two attributed rows), one per distinct (author, cid).",
+            "The anti-merging holds on the rendered surface: the two distinct authors never collapse into one consensus row and no SQL GROUP BY/AVG appears in the survey read; assert_traversal_html_names_cids is materialized in support/mod.rs."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a two-author store (seed_two_author_same_edge) renders dependency-pinning with TWO attributed rows, one per author DID (0.92 own + 0.70 peer), each with its verbatim confidence + display-only bucket \u2014 NEVER averaged into one 0.81/consensus row (anti-merging; I-GT-3).",
+            "Every rendered edge NAMES its contributing claim's cid (no invented edges; I-GT-4) \u2014 the cids are exactly the seeded rows the survey read returned (read via read_peer_claim_cids_for, production-recomputed, never hand-stamped).",
+            "The two rows appear within the SAME philosophy group (one group key, two attributed rows), one per distinct (author, cid).",
+            "The anti-merging holds on the rendered surface: the two distinct authors never collapse into one consensus row and no SQL GROUP BY/AVG appears in the survey read; assert_traversal_html_names_cids is materialized in support/mod.rs."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_project_survey_renders_two_authors_on_one_philosophy_as_two_rows",
+          "n_scenarios": [
+            "GT-3"
+          ],
+          "us_trace": [
+            "US-GT-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The per-author no-merge projection (one EdgeRow per (author,cid), grouped by the other dimension) is load-bearing anti-merging logic; mutation-test the two-rows-never-one-row branch and the per-row author_did/cid rendering so a mutant that averages or elides an author is killed."
+        },
+        {
+          "id": "01-04",
+          "name": "A project survey lists each distinct contributor as a traversal link to /score (bare DID)",
+          "description": "The contributor traversal edge on the project surface (GT-4; US-GT-002 AC-002.3 / I-GT-3). A project survey lists each distinct contributor who claimed anything about the project as a link to /score?contributor=<bare-did> (the slice-09 terminus REUSED; bare-DID form per ADR-044 Q1) \u2014 never merging the authors into a single aggregate. Add the contributors list render to render_project_fragment using the href_score helper (bare DID via encode_query_component). Materialize the assert_traversal_html_contributors_link_to_score helper body in support/mod.rs.",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a two-author store lists BOTH distinct contributor DIDs under \"Contributors who claimed\", each rendered as an <a href> link targeting /score?contributor=<bare-did> directly.",
+            "The contributor links use the bare-DID form (ADR-044 Q1; the slice-09 /score terminus reused \u2014 built, not rebuilt).",
+            "No contributor row merges the two authors into a single aggregate (distinct, order-preserved, deduped contributors).",
+            "Each contributor link is render-only navigation TEXT (an <a href>), never an executable control."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a two-author store lists BOTH distinct contributor DIDs under \"Contributors who claimed\", each rendered as an <a href> link targeting /score?contributor=<bare-did> directly.",
+            "The contributor links use the bare-DID form (ADR-044 Q1; the slice-09 /score terminus reused \u2014 built, not rebuilt).",
+            "No contributor row merges the two authors into a single aggregate (distinct, order-preserved, deduped contributors).",
+            "Each contributor link is render-only navigation TEXT (an <a href>), never an executable control."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_project_survey_lists_contributors_as_links_to_their_score",
+          "n_scenarios": [
+            "GT-4"
+          ],
+          "us_trace": [
+            "US-GT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The contributor-dedup + href_score (bare-DID) projection is load-bearing; mutation-test the distinct-deduped-contributors branch and the bare-DID href construction."
+        },
+        {
+          "id": "01-05",
+          "name": "A claim-less project renders the guided NoClaims state in both shapes, never a crash",
+          "description": "The reliability edge of US-GT-002 (GT-5; I-GT-4 / NFR-VIEW-6). A subject with zero local claims yields an empty survey read; project_page maps an empty (or Err) Vec to TraversalView::NoClaims { entity } and the render shows a guided \"No claims about this project in your local graph\" notice that NAMES the queried subject, hints a CLI next step (graph query / scrape), fabricates NO edge, and leaks NO stack trace \u2014 a calm 200 in BOTH the full-page and htmx-fragment shapes. Materialize the assert_traversal_html_renders_no_claims helper body in support/mod.rs.",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_UNKNOWN> (claim-less) returns a calm 200 guided NoClaims state in BOTH shapes (no-JS full page is_full_page() and HX-Request fragment is_fragment()), never a 5xx/hang/panic.",
+            "The guided notice NAMES the queried subject, states there are no claims in the local graph, and hints a CLI next step (graph query / scrape).",
+            "No fabricated edge appears (no /project or /philosophy edge row, no cid) and no stack trace is leaked (I-GT-4); a read Err maps to the SAME guided NoClaims state.",
+            "No network call occurs in the /project path for the empty case (LOCAL read only); assert_traversal_html_renders_no_claims is materialized in support/mod.rs."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_UNKNOWN> (claim-less) returns a calm 200 guided NoClaims state in BOTH shapes (no-JS full page is_full_page() and HX-Request fragment is_fragment()), never a 5xx/hang/panic.",
+            "The guided notice NAMES the queried subject, states there are no claims in the local graph, and hints a CLI next step (graph query / scrape).",
+            "No fabricated edge appears (no /project or /philosophy edge row, no cid) and no stack trace is leaked (I-GT-4); a read Err maps to the SAME guided NoClaims state.",
+            "No network call occurs in the /project path for the empty case (LOCAL read only); assert_traversal_html_renders_no_claims is materialized in support/mod.rs."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_claim_less_project_renders_the_guided_no_claims_state_not_a_crash",
+          "n_scenarios": [
+            "GT-5"
+          ],
+          "us_trace": [
+            "US-GT-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The NoClaims arm (empty-feed AND Err-degrade branches, both shapes, entity-naming, no fabricated edge) is load-bearing; mutation-test the empty -> NoClaims branch, the Err -> NoClaims degrade branch, and the entity-naming of the guided message."
+        },
+        {
+          "id": "01-06",
+          "name": "The project survey renders fully with the network disabled (offline-stronger)",
+          "description": "US-GT-002 offline edge (GT-6; I-GT-2 / KPI-5). The /project survey renders the FULL attributed survey (the survey DATA, not just the chrome) over the LOCAL DuckDB store with NO network seam wired \u2014 the plain ViewerServer::start posture (no indexer URL, no GitHub base). The network being down NEVER degrades it; it NEVER renders the slice-08 /search Unavailable arm (no \"unavailable\"/\"network error\"/\"could not reach\"/\"try again\"). /project has no outbound edge to take down \u2014 offline-STRONGER than /search. Confirmatory once 01-01 exists (no new render path; pins the no-degraded-notice property over the existing LOCAL read).",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a seeded store with NO network seam wired (plain ViewerServer::start) renders a calm 200 carrying the #traversal-results region (a REAL Found render, not a blank/error page).",
+            "The full attributed survey renders (grouped, attributed, verbatim) from the LOCAL store with no network call \u2014 the LOCAL read is self-sufficient.",
+            "NO Unavailable/degraded notice appears (the response contains none of \"unavailable\", \"network error\", \"could not reach\", \"try again\") \u2014 /project has no outbound edge (I-GT-2), distinct from the slice-08 /search Unavailable arm.",
+            "The route is synchronous (no .await) and holds only StoreReadPort \u2014 no indexer/GitHub handle enters the project_page path."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> over a seeded store with NO network seam wired (plain ViewerServer::start) renders a calm 200 carrying the #traversal-results region (a REAL Found render, not a blank/error page).",
+            "The full attributed survey renders (grouped, attributed, verbatim) from the LOCAL store with no network call \u2014 the LOCAL read is self-sufficient.",
+            "NO Unavailable/degraded notice appears (the response contains none of \"unavailable\", \"network error\", \"could not reach\", \"try again\") \u2014 /project has no outbound edge (I-GT-2), distinct from the slice-08 /search Unavailable arm.",
+            "The route is synchronous (no .await) and holds only StoreReadPort \u2014 no indexer/GitHub handle enters the project_page path."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "the_project_survey_renders_fully_with_the_network_disabled",
+          "n_scenarios": [
+            "GT-6"
+          ],
+          "us_trace": [
+            "US-GT-002"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Philosophy survey (symmetric) \u2014 GET /philosophy",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Wire the philosophy-survey read + group_philosophy and render the /philosophy fragment + full-page parity (symmetric, mostly reuse)",
+          "description": "The symmetric philosophy walking skeleton (GT-7 + GT-8; US-GT-001 capability + US-GT-003 render + parity). (ports) Add query_philosophy_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError> to StoreReadPort (read-only, no mutation; ADR-042). (adapter-duckdb) Impl it as the read-only sibling of query_project_survey with WHERE object = ? and ORDER BY subject, source_table, cid \u2014 claims UNION ALL peer_claims, explicit author_did, no merge JOIN, LOCAL only. (adapter-http-viewer) Add GET /philosophy?object=<uri> as a synchronous route arm + the philosophy_page handler mirroring project_page (?object + query_philosophy_survey + group_philosophy). (viewer-domain) Add the PURE group_philosophy total fn (group by subject \u2014 projects that embody \u2014 same per-(author,cid) rule, distinct deduped contributors) + render_philosophy_fragment + render_philosophy_page (page EMBEDS the fragment fn \u2014 parity by construction). Reuses the TraversalView ADT, EdgeGroup/EdgeRow, render_confidence, claim_domain::confidence_bucket, and the Shape fork built in Phase 01 \u2014 the read seam + group + render mirror their project siblings, so this is mostly reuse. Two scenarios (GT-7 fragment + GT-8 parity) land together since the page-embeds-fragment parity is one structural move.",
+          "criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> with HX-Request over a seeded store (seed_philosophy_survey_trail) returns 200 text/html containing ONLY the #traversal-results fragment (no chrome), grouping the projects that embody the philosophy (nixpkgs 0.92, bazel 0.85), each edge attributed to its author DID with verbatim confidence + bucket.",
+            "GET /philosophy?object=<...> with NO HX-Request returns a complete full page (is_full_page()) whose #traversal-results region is byte-identical to the htmx fragment \u2014 parity by construction (I-GT-6).",
+            "StoreReadPort gains query_philosophy_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError> (read-only, NO mutation method); DuckDbStoreReadAdapter impls it as claims UNION ALL peer_claims WHERE object = ?, explicit author_did, no merge JOIN, LOCAL only.",
+            "The /philosophy route reads the store the ViewerServer ALREADY holds (no new field), groups the projects that embody the philosophy by subject, and adds no write/sign route; xtask check-arch (incl. the anti-merging SQL rule over the new SELECT) stays green."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> with HX-Request over a seeded store (seed_philosophy_survey_trail) returns 200 text/html containing ONLY the #traversal-results fragment (no chrome), grouping the projects that embody the philosophy (nixpkgs 0.92, bazel 0.85), each edge attributed to its author DID with verbatim confidence + bucket.",
+            "GET /philosophy?object=<...> with NO HX-Request returns a complete full page (is_full_page()) whose #traversal-results region is byte-identical to the htmx fragment \u2014 parity by construction (I-GT-6).",
+            "StoreReadPort gains query_philosophy_survey(&str) -> Result<Vec<SurveyRow>, StoreReadError> (read-only, NO mutation method); DuckDbStoreReadAdapter impls it as claims UNION ALL peer_claims WHERE object = ?, explicit author_did, no merge JOIN, LOCAL only.",
+            "The /philosophy route reads the store the ViewerServer ALREADY holds (no new field), groups the projects that embody the philosophy by subject, and adds no write/sign route; xtask check-arch (incl. the anti-merging SQL rule over the new SELECT) stays green."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "open_a_philosophy_survey_with_htmx_returns_only_the_traversal_fragment",
+          "n_scenarios": [
+            "GT-7",
+            "GT-8"
+          ],
+          "us_trace": [
+            "US-GT-001",
+            "US-GT-003"
+          ],
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-06"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "group_philosophy (group by subject) + render_philosophy_fragment mirror the project siblings; extend mutation testing to the philosophy projection (verbatim confidence, bucket, per-edge author_did + cid, page-embeds-fragment parity)."
+        },
+        {
+          "id": "02-02",
+          "name": "Two authors on one project render as two rows, and the project group key is a /project link (anti-merging + cross-link, REAL work)",
+          "description": "The anti-merging + traversal-edge scenario for the philosophy surface (GT-9; WD-GT-5 / I-GT-3 / I-GT-4). A project claimed for the philosophy by TWO DISTINCT authors (own 0.92 + peer 0.70 via seed_two_author_same_edge) renders as TWO attributed rows under their OWN author DIDs \u2014 never averaged into one nixpkgs: 0.81 row \u2014 AND the project group key is a traversal link to /project?subject=<uri> (the object->project edge, value percent-encoded per ADR-044). REAL work: it pins group_philosophy's per-(author,cid) decomposition AND introduces the EdgeGroup-key-as-/project-cross-link render via href_project. Materialize/extend assert_traversal_html_crosslink_is_plain_anchor (and the percent-encoded href value) in support/mod.rs.",
+          "criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> over a two-author store (seed_two_author_same_edge on nixpkgs) renders nixpkgs with TWO attributed rows, one per author DID (0.92 own + 0.70 peer), each with its verbatim confidence + bucket \u2014 NEVER averaged into one consensus row (anti-merging; I-GT-3).",
+            "The nixpkgs project group key renders as a plain <a href> traversal link to /project?subject=<percent-encoded uri> (TRAVERSAL_PROJECT_NIXPKGS_ENCODED \u2014 the object->project edge, value percent-encoded per ADR-044), navigable without JS.",
+            "The two attributed rows appear within the SAME project group (one group key, two attributed rows), the per-author decomposition reflected on the rendered surface.",
+            "assert_traversal_html_crosslink_is_plain_anchor is materialized in support/mod.rs and asserts the rendered href is /project?subject=<percent-encoded(nixpkgs)> as a plain anchor (no hx- requirement)."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> over a two-author store (seed_two_author_same_edge on nixpkgs) renders nixpkgs with TWO attributed rows, one per author DID (0.92 own + 0.70 peer), each with its verbatim confidence + bucket \u2014 NEVER averaged into one consensus row (anti-merging; I-GT-3).",
+            "The nixpkgs project group key renders as a plain <a href> traversal link to /project?subject=<percent-encoded uri> (TRAVERSAL_PROJECT_NIXPKGS_ENCODED \u2014 the object->project edge, value percent-encoded per ADR-044), navigable without JS.",
+            "The two attributed rows appear within the SAME project group (one group key, two attributed rows), the per-author decomposition reflected on the rendered surface.",
+            "assert_traversal_html_crosslink_is_plain_anchor is materialized in support/mod.rs and asserts the rendered href is /project?subject=<percent-encoded(nixpkgs)> as a plain anchor (no hx- requirement)."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_philosophy_survey_renders_two_authors_on_one_project_as_two_rows",
+          "n_scenarios": [
+            "GT-9"
+          ],
+          "us_trace": [
+            "US-GT-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The group_philosophy two-rows-never-one projection AND the EdgeGroup-key-as-/project-href (via href_project + encode_query_component) are load-bearing; mutation-test the no-merge branch and the percent-encoded href construction."
+        },
+        {
+          "id": "02-03",
+          "name": "A shared contributor across projects is a single deduped /score link",
+          "description": "US-GT-003 shared-contributor dedup (GT-10; I-GT-3 / KPI-GRAPH-1 \u2014 the canonical cross-project span aha). A contributor who claims MULTIPLE projects for the philosophy (Rachel across nixpkgs + bazel via seed_philosophy_survey_trail) appears ONCE under \"Contributors who claimed it\" (deduped) as a single link to /score?contributor=<bare-did>. Reuses the contributors-list render + href_score from Phase 01; this pins the spanning-author-appears-once dedup on the philosophy surface. Reuses assert_traversal_html_contributors_link_to_score.",
+          "criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> over a philosophy trail where Rachel embodies it across nixpkgs + bazel lists Rachel ONCE under \"Contributors who claimed it\" (deduped \u2014 the spanning contributor appears a single time).",
+            "Rachel's single entry is a render-only <a href> link to /score?contributor=<bare-did> (TRAVERSAL_AUTHOR_RACHEL).",
+            "The dedup applies ONLY to the contributors list (a spanning author appears once there); the per-group edges are never collapsed across authors.",
+            "assert_traversal_html_contributors_link_to_score confirms the single deduped /score link."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> over a philosophy trail where Rachel embodies it across nixpkgs + bazel lists Rachel ONCE under \"Contributors who claimed it\" (deduped \u2014 the spanning contributor appears a single time).",
+            "Rachel's single entry is a render-only <a href> link to /score?contributor=<bare-did> (TRAVERSAL_AUTHOR_RACHEL).",
+            "The dedup applies ONLY to the contributors list (a spanning author appears once there); the per-group edges are never collapsed across authors.",
+            "assert_traversal_html_contributors_link_to_score confirms the single deduped /score link."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_shared_contributor_across_projects_is_a_single_traversal_link",
+          "n_scenarios": [
+            "GT-10"
+          ],
+          "us_trace": [
+            "US-GT-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The spanning-contributor-appears-once dedup is load-bearing; mutation-test the contributors dedup branch so a mutant that lists a spanning author twice (or collapses per-group edges) is killed."
+        },
+        {
+          "id": "02-04",
+          "name": "A claim-less philosophy renders the guided NoClaims state in both shapes",
+          "description": "The philosophy mirror of GT-5 (GT-11; I-GT-4). An object with zero local claims yields an empty survey read; philosophy_page maps it to TraversalView::NoClaims { entity } and renders the guided \"No claims for this philosophy in your local graph\" notice that NAMES the queried object, hints a CLI next step, fabricates NO edge, and leaks no stack trace \u2014 a calm 200 in BOTH shapes. Confirmatory once 01-05 + 02-01 exist (the NoClaims arm + philosophy renderers already present); pins the object-naming guided state. Reuses assert_traversal_html_renders_no_claims.",
+          "criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_UNKNOWN> (claim-less) returns a calm 200 guided NoClaims state in BOTH shapes (no-JS full page is_full_page() and HX-Request fragment is_fragment()), never a 5xx/hang/panic.",
+            "The guided notice NAMES the queried object, states there are no claims for this philosophy in the local graph, and hints a CLI next step.",
+            "No fabricated edge appears (no edge row, no cid) and no stack trace is leaked (I-GT-4); a read Err maps to the SAME guided NoClaims state.",
+            "assert_traversal_html_renders_no_claims confirms the object-naming guided state in both shapes."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_UNKNOWN> (claim-less) returns a calm 200 guided NoClaims state in BOTH shapes (no-JS full page is_full_page() and HX-Request fragment is_fragment()), never a 5xx/hang/panic.",
+            "The guided notice NAMES the queried object, states there are no claims for this philosophy in the local graph, and hints a CLI next step.",
+            "No fabricated edge appears (no edge row, no cid) and no stack trace is leaked (I-GT-4); a read Err maps to the SAME guided NoClaims state.",
+            "assert_traversal_html_renders_no_claims confirms the object-naming guided state in both shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_claim_less_philosophy_renders_the_guided_no_claims_state",
+          "n_scenarios": [
+            "GT-11"
+          ],
+          "us_trace": [
+            "US-GT-003"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Cross-links journey + the injection security boundary \u2014 US-GT-004",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Survey cells render as traversal links to the next entity (object->/philosophy, contributor->/score)",
+          "description": "The canonical multi-edge cross-link scenario (GT-12; US-GT-004 AC-004.1/2/3). On a project survey, the philosophy group key renders as a link to /philosophy?object=<uri> (the object->philosophy edge) and the contributor cell as a link to /score?contributor=<bare-did> (the contributor->score edge) \u2014 so the operator traverses claim -> project -> philosophy -> contributor by clicking (the J-002b follow-the-edge). This adds the philosophy-group-key-as-/philosophy-cross-link render (the project surface's EdgeGroup key, via href_philosophy). Reuses href_score (01-04) and assert_traversal_html_crosslink_is_plain_anchor / assert_traversal_html_contributors_link_to_score.",
+          "criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> renders the philosophy group key as a plain <a href> traversal link to /philosophy?object=<percent-encoded uri> (TRAVERSAL_PHILOSOPHY_DEP_PINNING, value percent-encoded per ADR-044).",
+            "The contributor cell renders as a plain <a href> traversal link to /score?contributor=<bare-did> (TRAVERSAL_AUTHOR_RACHEL \u2014 the slice-09 terminus reused).",
+            "Both cross-links are render-only navigation TEXT (<a href>), enabling claim -> project -> philosophy -> contributor traversal by clicking.",
+            "assert_traversal_html_crosslink_is_plain_anchor + assert_traversal_html_contributors_link_to_score confirm both edges on the project surface."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<TRAVERSAL_PROJECT_CARGO> renders the philosophy group key as a plain <a href> traversal link to /philosophy?object=<percent-encoded uri> (TRAVERSAL_PHILOSOPHY_DEP_PINNING, value percent-encoded per ADR-044).",
+            "The contributor cell renders as a plain <a href> traversal link to /score?contributor=<bare-did> (TRAVERSAL_AUTHOR_RACHEL \u2014 the slice-09 terminus reused).",
+            "Both cross-links are render-only navigation TEXT (<a href>), enabling claim -> project -> philosophy -> contributor traversal by clicking.",
+            "assert_traversal_html_crosslink_is_plain_anchor + assert_traversal_html_contributors_link_to_score confirm both edges on the project surface."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "survey_cells_render_as_traversal_links_to_the_next_entity",
+          "n_scenarios": [
+            "GT-12"
+          ],
+          "us_trace": [
+            "US-GT-004"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The EdgeGroup-key-as-/philosophy-href (href_philosophy) on the project surface is load-bearing; mutation-test the object->/philosophy href construction and its percent-encoding."
+        },
+        {
+          "id": "03-02",
+          "name": "Traversal cross-links are plain anchors navigable without JS, with no write/sign control",
+          "description": "The no-JS-traversability scenario (GT-13; US-GT-004 AC-004.5 / WD-GT-8 / I-GT-6). Every traversal cross-link on a survey is a plain <a href> anchor \u2014 a no-JS click is a FULL navigation to the target page (progressive enhancement; an htmx swap is OPTIONAL, never required), carrying NO executable control. On a philosophy survey both project group keys (nixpkgs + bazel) are plain /project anchors, and the surface carries no write/sign/follow control. Materialize the assert_traversal_html_has_no_write_or_sign_control helper body in support/mod.rs (reused by the Phase 04 gold).",
+          "criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> (no JS) returns a complete full page (is_full_page()) where each project group key (nixpkgs + bazel) is a plain <a href> to /project?subject=<encoded(uri)> \u2014 a no-JS click is a full navigation, with no hx- requirement and no executable control wrapping the link.",
+            "The traversal surface carries NO executable write/sign/follow control (assert_traversal_html_has_no_write_or_sign_control) \u2014 the cross-links are render-only navigation TEXT.",
+            "Both project cross-links use the percent-encoded form (TRAVERSAL_PROJECT_NIXPKGS_ENCODED + TRAVERSAL_PROJECT_BAZEL_ENCODED) per ADR-044.",
+            "assert_traversal_html_has_no_write_or_sign_control is materialized in support/mod.rs (scanning the observable rendered surface for sign/publish/subscribe/follow controls)."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<TRAVERSAL_PHILOSOPHY_REPRO_BUILDS> (no JS) returns a complete full page (is_full_page()) where each project group key (nixpkgs + bazel) is a plain <a href> to /project?subject=<encoded(uri)> \u2014 a no-JS click is a full navigation, with no hx- requirement and no executable control wrapping the link.",
+            "The traversal surface carries NO executable write/sign/follow control (assert_traversal_html_has_no_write_or_sign_control) \u2014 the cross-links are render-only navigation TEXT.",
+            "Both project cross-links use the percent-encoded form (TRAVERSAL_PROJECT_NIXPKGS_ENCODED + TRAVERSAL_PROJECT_BAZEL_ENCODED) per ADR-044.",
+            "assert_traversal_html_has_no_write_or_sign_control is materialized in support/mod.rs (scanning the observable rendered surface for sign/publish/subscribe/follow controls)."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "traversal_cross_links_are_plain_anchors_navigable_without_js",
+          "n_scenarios": [
+            "GT-13"
+          ],
+          "us_trace": [
+            "US-GT-004"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The plain-anchor (no executable control) render is load-bearing for the read-only guarantee; mutation-test the no-write/sign-control assertion path so a mutant that wraps a cross-link in a <button>/<form> is killed."
+        },
+        {
+          "id": "03-03",
+          "name": "A claim-controlled URI is percent-encoded and cannot inject the href (SECURITY, REAL work)",
+          "description": "The load-bearing security scenario (GT-14; US-GT-004 / ADR-044 \u00a7security). A hostile subject a PEER authored into a signed claim \u2014 carrying \", <, >, &, and a space (TRAVERSAL_INJECTION_SUBJECT) \u2014 renders its /project cross-link with EVERY reserved/unsafe byte PERCENT-ENCODED (TRAVERSAL_INJECTION_SUBJECT_ENCODED), so it cannot break out of the href attribute or smuggle a second query param. REAL work: it forces the pure encode_query_component helper (percent-encode everything outside the unreserved set A-Za-z0-9-_.~) to be correct against a hostile input, and pins the injection boundary on the OBSERVABLE rendered href. Materialize the assert_traversal_href_percent_encoded helper body in support/mod.rs.",
+          "criteria": [
+            "GET /philosophy?object=<dependency-pinning> over a store seeded with a PEER claim whose subject is the hostile TRAVERSAL_INJECTION_SUBJECT (seed_injection_uri_subject) renders that subject's /project cross-link href with the EXACT percent-encoded form TRAVERSAL_INJECTION_SUBJECT_ENCODED.",
+            "The raw hostile characters (\"><script>, the un-encoded & / space) NEVER appear UNESCAPED inside the href attribute \u2014 the URI cannot break out of the attribute or smuggle a second query param (ADR-044 \u00a7security).",
+            "Every byte outside the unreserved set (A-Za-z0-9-_.~) is percent-encoded so /, :, #, &, <, >, \", space all appear as %XX in the rendered href; the resulting /project?subject=<encoded> link, when followed, decodes back to the exact original subject (round-trip exact).",
+            "assert_traversal_href_percent_encoded is materialized in support/mod.rs and asserts the encoded form is present AND the raw hostile bytes are absent inside the href."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<dependency-pinning> over a store seeded with a PEER claim whose subject is the hostile TRAVERSAL_INJECTION_SUBJECT (seed_injection_uri_subject) renders that subject's /project cross-link href with the EXACT percent-encoded form TRAVERSAL_INJECTION_SUBJECT_ENCODED.",
+            "The raw hostile characters (\"><script>, the un-encoded & / space) NEVER appear UNESCAPED inside the href attribute \u2014 the URI cannot break out of the attribute or smuggle a second query param (ADR-044 \u00a7security).",
+            "Every byte outside the unreserved set (A-Za-z0-9-_.~) is percent-encoded so /, :, #, &, <, >, \", space all appear as %XX in the rendered href; the resulting /project?subject=<encoded> link, when followed, decodes back to the exact original subject (round-trip exact).",
+            "assert_traversal_href_percent_encoded is materialized in support/mod.rs and asserts the encoded form is present AND the raw hostile bytes are absent inside the href."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal.rs",
+          "scenario_name": "a_claim_controlled_uri_is_percent_encoded_and_cannot_inject_the_href",
+          "n_scenarios": [
+            "GT-14"
+          ],
+          "us_trace": [
+            "US-GT-004"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "encode_query_component is the SECURITY boundary; mutation-test it heavily (a mutant that leaves any of \", <, >, &, space un-encoded, or that encodes an unreserved byte breaking the round-trip, must be killed). This is the load-bearing slice-10 injection-boundary gate."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Gold guardrails \u2014 read-only, no-write, offline, injection (cross-cutting, LAST)",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "Every traversal route leaves the store read-only + no traversal response adds a write/sign control (gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-03 are done (GT-INV-ReadOnly + GT-INV-NoWrite; I-GT-1 / WD-GT-3 / KPI-VIEW-2). (ReadOnly) Exercising EVERY traversal route \u2014 /project + /philosophy, populated AND claim-less, in BOTH shapes \u2014 leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts). Surveys persist nothing (I-GT-8). (NoWrite) No traversal response shape renders a sign/publish/subscribe/executable-follow control, and any /score|/project|/philosophy cross-link present is render-only <a href> navigation TEXT. Both reuse the inherited harnesses (assert_store_read_only, capture_store_row_count_universe, assert_traversal_html_has_no_write_or_sign_control materialized in 03-02). Lands in viewer_graph_traversal_invariants.rs.",
+          "criteria": [
+            "Exercising every traversal route (/project + /philosophy, populated + claim-less, full page + htmx fragment) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-GT-1 / WD-GT-3).",
+            "No survey/group/edge is written to any store/table/file by any traversal route (zero new persisted types, I-GT-8); the read-only universe is the inherited port-exposed counts, not internal struct fields (Mandate 8).",
+            "No traversal response shape (full page or fragment, either route) renders a sign/publish/subscribe/executable-follow control (assert_traversal_html_has_no_write_or_sign_control over EVERY shape x route).",
+            "Any /score?contributor= / /project?subject= / /philosophy?object= cross-link present is render-only navigation TEXT (an <a href> anchor), never an executable control."
+          ],
+          "acceptance_criteria": [
+            "Exercising every traversal route (/project + /philosophy, populated + claim-less, full page + htmx fragment) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-GT-1 / WD-GT-3).",
+            "No survey/group/edge is written to any store/table/file by any traversal route (zero new persisted types, I-GT-8); the read-only universe is the inherited port-exposed counts, not internal struct fields (Mandate 8).",
+            "No traversal response shape (full page or fragment, either route) renders a sign/publish/subscribe/executable-follow control (assert_traversal_html_has_no_write_or_sign_control over EVERY shape x route).",
+            "Any /score?contributor= / /project?subject= / /philosophy?object= cross-link present is render-only navigation TEXT (an <a href> anchor), never an executable control."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal_invariants.rs",
+          "scenario_name": "every_traversal_route_leaves_the_store_read_only",
+          "n_scenarios": [
+            "GT-INV-ReadOnly",
+            "GT-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-GT-002",
+            "US-GT-003",
+            "US-GT-004"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-02",
+          "name": "The traversal chrome stays offline (no CDN) and the whole surface works fully offline (gold)",
+          "description": "Two offline gold guardrails (GT-INV-OfflineChrome + GT-INV-Offline; I-GT-7 / KPI-HX-G2 and I-GT-2 / KPI-5). (OfflineChrome) The /project + /philosophy full pages reference ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false in both shapes). (Offline) Both traversal views render fully with NO network seam wired (plain ViewerServer::start) \u2014 the survey DATA (not just the chrome) is a LOCAL read with NO outbound edge to take down, so the #traversal-results region renders with no Unavailable/degraded notice in both shapes (offline-STRONGER than /search). Reuses the slice-06 references_external_cdn + the network-disabled viewer posture. Lands in viewer_graph_traversal_invariants.rs; flips green for free once 01-06 + the chrome exist.",
+          "criteria": [
+            "The /project + /philosophy full pages' only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both shapes (no CDN / off-host reference, I-GT-7 / KPI-HX-G2).",
+            "Both traversal views render the full attributed survey (the #traversal-results region) with NO network seam wired (plain ViewerServer::start) in BOTH shapes \u2014 distinct from /search and /scrape (I-GT-2 / KPI-5).",
+            "Neither shape renders a network-degraded notice (none of \"unavailable\", \"network error\", \"could not reach\", \"try again\") \u2014 traversal has no outbound edge.",
+            "No outbound network call occurs anywhere in either traversal path (chrome AND data are local)."
+          ],
+          "acceptance_criteria": [
+            "The /project + /philosophy full pages' only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both shapes (no CDN / off-host reference, I-GT-7 / KPI-HX-G2).",
+            "Both traversal views render the full attributed survey (the #traversal-results region) with NO network seam wired (plain ViewerServer::start) in BOTH shapes \u2014 distinct from /search and /scrape (I-GT-2 / KPI-5).",
+            "Neither shape renders a network-degraded notice (none of \"unavailable\", \"network error\", \"could not reach\", \"try again\") \u2014 traversal has no outbound edge.",
+            "No outbound network call occurs anywhere in either traversal path (chrome AND data are local)."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal_invariants.rs",
+          "scenario_name": "the_traversal_page_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "GT-INV-OfflineChrome",
+            "GT-INV-Offline"
+          ],
+          "us_trace": [
+            "US-GT-002",
+            "US-GT-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "04-03",
+          "name": "SECURITY GOLD \u2014 no traversal href lets a claim-controlled URI inject, in both shapes (LAST)",
+          "description": "The CARDINAL security gold guardrail (GT-INV-Security; ADR-044 \u00a7security \u2014 the I-GT-3/4 hostile-input boundary; the slice's release-blocking injection gate). A hostile peer-authored subject (carrying \"/</&/space) renders its /project cross-link href PERCENT-ENCODED across BOTH shapes (full page + fragment) \u2014 it can NEVER break out of the href attribute or smuggle a second query param. This generalizes the 03-03 story scenario to BOTH shapes and makes an injection regression unshippable. Reuses assert_traversal_href_percent_encoded (materialized in 03-03) + seed_injection_uri_subject over both get and get_htmx. LAST roadmap step (it tends to flip green for free once 03-03's encode_query_component is correct, because the page embeds the fragment).",
+          "criteria": [
+            "GET /philosophy?object=<dependency-pinning> over the injection-subject store (seed_injection_uri_subject) renders the hostile subject's /project cross-link href percent-encoded (TRAVERSAL_INJECTION_SUBJECT_ENCODED) in BOTH the full-page AND htmx-fragment shapes.",
+            "In EACH shape the raw hostile characters (\"><script>, un-encoded & / space) never appear inside the href attribute \u2014 the URI cannot break out or smuggle a second query param (ADR-044 \u00a7security).",
+            "The injection boundary holds in both shapes by construction (the page EMBEDS the fragment); an injection regression in EITHER shape is an UNSHIPPABLE security breach on an attacker-influenced surface (release-blocking).",
+            "assert_traversal_href_percent_encoded is asserted over both full_page.body and fragment.body."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<dependency-pinning> over the injection-subject store (seed_injection_uri_subject) renders the hostile subject's /project cross-link href percent-encoded (TRAVERSAL_INJECTION_SUBJECT_ENCODED) in BOTH the full-page AND htmx-fragment shapes.",
+            "In EACH shape the raw hostile characters (\"><script>, un-encoded & / space) never appear inside the href attribute \u2014 the URI cannot break out or smuggle a second query param (ADR-044 \u00a7security).",
+            "The injection boundary holds in both shapes by construction (the page EMBEDS the fragment); an injection regression in EITHER shape is an UNSHIPPABLE security breach on an attacker-influenced surface (release-blocking).",
+            "assert_traversal_href_percent_encoded is asserted over both full_page.body and fragment.body."
+          ],
+          "test_file": "tests/acceptance/viewer_graph_traversal_invariants.rs",
+          "scenario_name": "no_traversal_href_lets_a_claim_controlled_uri_inject",
+          "n_scenarios": [
+            "GT-INV-Security"
+          ],
+          "us_trace": [
+            "US-GT-004"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_graph_traversal_invariants.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release-blocking injection gate. Mutation-test the percent-encoded href across both shapes \u2014 a mutant that leaves any hostile byte un-encoded in either shape, or that diverges the fragment from the page, must be killed (the ADR-044 \u00a7security gate toward the Phase-5 mutation threshold)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-solution-architect-reviewer",
+    "note": "APPROVED after 1 revision (AC decoupled from impl names); 19/19 scenarios covered"
+  },
+  "total_steps": 16
+}
