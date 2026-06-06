@@ -186,18 +186,80 @@ fn every_score_route_leaves_the_store_read_only() {
 /// @us-cs-001 @us-cs-002 @property @driving_port @real-io @read-only @i-cs-1 @gold
 #[test]
 fn no_score_response_adds_a_write_or_sign_control() {
-    // GIVEN a rich-trail store + the viewer rendering the score in BOTH shapes.
-    // WHEN each shape (get full page + get_htmx fragment) is inspected.
+    // GIVEN a store seeded with a RICH and a SPARSE contributor trail (one
+    // `seed_contributor_rich_and_sparse_trails` call — see the C-INV-ReadOnly note
+    // on why a single call is REQUIRED) + the viewer rendering the score in BOTH
+    // shapes across EVERY posture (rich / sparse / empty).
+    // WHEN each shape (get full page + get_htmx fragment) of each posture is
+    // inspected.
     // THEN none carries a sign/publish/subscribe/follow affordance
-    // (assert_score_html_has_no_write_or_sign_control over both shapes; I-CS-1 /
-    // WD-CS-3). The viewer holds no key (the no-key audit is structural — xtask
-    // check-arch).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-INV-NoWrite: seed_contributor_rich_trail + ViewerServer::start; \
-         for shape in [get, get_htmx] of /score?contributor={CONTRIBUTOR_RICH_DID}: \
-         assert_score_html_has_no_write_or_sign_control(body)"
-    )
+    // (assert_score_html_has_no_write_or_sign_control over EVERY shape × posture;
+    // I-CS-1 / WD-CS-3), AND any author-row / nav "score" link present is render-only
+    // navigation TEXT — an `<a href>` anchor, never an executable write/sign control.
+    // The viewer holds no key (the no-key audit is structural — xtask check-arch).
+    let env = TestEnv::initialized();
+
+    // Seed BOTH a RICH and a SPARSE contributor trail through the PRODUCTION
+    // federation write path so the no-control scan runs over POPULATED score views
+    // (rich → multi-row breakdown; sparse → `[SPARSE]`), not just the empty arm. A
+    // SINGLE call is REQUIRED (two separate `peer pull`s would drop the first peer's
+    // PDS — see the helper doc + the C-INV-ReadOnly twin).
+    seed_contributor_rich_and_sparse_trails(&env, CONTRIBUTOR_RICH_DID, CONTRIBUTOR_SPARSE_DID);
+
+    // Every /score posture — a rich trail (multi-row breakdown), a sparse trail
+    // (`[SPARSE]` honesty), and an empty contributor (never seeded → guided
+    // `NoClaims`). All three are LOCAL reads + pure compute; none may render a sign /
+    // publish / subscribe / follow control on ANY response shape.
+    let rich_path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
+    let sparse_path = format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}");
+    let empty_path = format!("/score?contributor={CONTRIBUTOR_EMPTY_DID}");
+
+    // Collect EVERY /score response shape — each posture in BOTH shapes (the no-header
+    // full page `get` AND the htmx fragment `get_htmx`) — inside a scope so the
+    // viewer's exclusive DuckDB lock is released on drop (mirrors the slice-08
+    // N-INV-NoWrite collection discipline).
+    let mut responses = Vec::new();
+    {
+        let viewer = ViewerServer::start(&env);
+        for path in [rich_path.as_str(), sparse_path.as_str(), empty_path.as_str()] {
+            responses.push((format!("GET {path} (full page)"), viewer.get(path)));
+            responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(path)));
+        }
+        // `viewer` drops here — the `openlore ui` process is killed.
+    }
+
+    for (label, r) in &responses {
+        // Each /score route renders successfully (200) so the no-control assertion is
+        // over REAL rendered content, not an error page.
+        assert_eq!(
+            r.status, 200,
+            "/score route {label:?} over the LOCAL store must render successfully \
+             (200) so the no-control scan is over REAL content; got {} body:\n{}",
+            r.status, r.body
+        );
+
+        // (a) NO sign / publish / subscribe / executable-follow control on ANY shape
+        // or posture (the inherited no-write harness; I-CS-1 / WD-CS-3). Any hit is an
+        // UNSHIPPABLE write/sign-surface breach.
+        assert_score_html_has_no_write_or_sign_control(&r.body);
+
+        // (b) Any author-row / nav "score" link present (OD-CS-4) is render-only
+        // navigation TEXT — an `<a href>` anchor — never an executable write/sign
+        // control (no `<button>`/`<form>` wrapping the score link; I-CS-1). Vacuously
+        // true when this posture/shape renders no score link (the OD-CS-4 author-row
+        // link is OPTIONAL); load-bearing when one IS present.
+        let lower = r.body.to_lowercase();
+        if lower.contains("/score?contributor=") {
+            assert!(
+                lower.contains("<a href"),
+                "I-CS-1: any author-row / nav 'score' link must be render-only \
+                 navigation TEXT (an `<a href>` anchor), not an executable control; \
+                 {label:?} references `/score?contributor=` with no `<a href` anchor:\
+                 \n{}",
+                r.body
+            );
+        }
+    }
 }
 
 // =============================================================================
