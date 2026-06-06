@@ -70,6 +70,121 @@ impl DuckDbStoreReadAdapter {
             detail: "connection mutex poisoned".to_string(),
         })
     }
+
+    /// Shared engine for the two LOCAL attributed survey reads (`/project` +
+    /// `/philosophy`; slice-10 / ADR-042). INTERNAL impl-sharing only — the
+    /// [`StoreReadPort`] trait deliberately keeps TWO public methods (ADR-042 chose
+    /// two reads over a dimension-enum at the port boundary); this helper is private
+    /// to the adapter and exists so the byte-identical cross-store SELECT + row-decode
+    /// machinery lives in ONE place. The two callers differ ONLY in the GROUPED
+    /// dimension: `filter_col` is the column the `?` value matches (`subject` for the
+    /// project survey, `object` for the philosophy survey) and `order_col` is the
+    /// GROUPED dimension placed first in `ORDER BY` (so the pure grouper's first-seen
+    /// group order is deterministic) — the mirror of `filter_col`. Both are
+    /// hard-coded `&'static str` column names (NEVER user input), so the formatted SQL
+    /// carries no injection surface; the matched VALUE is always a bound `?` param.
+    /// `label` names the calling method in error details.
+    ///
+    /// READ-ONLY: own `claims` UNION ALL local `peer_claims`, EXPLICIT `author_did` +
+    /// `cid` projection (NEVER a merging JOIN/GROUP BY/AVG — `xtask check-arch::
+    /// no_cross_table_join_elides_author` enforces it), LOCAL only (no network).
+    /// Grouping into edges is the PURE `viewer-domain` core's job in Rust — this query
+    /// returns one row per signed claim (each survey edge maps to exactly one claim,
+    /// I-GT-4). The own arm carries an empty `fetched_from_pds` + `'Own'` discriminant;
+    /// the peer arm carries its PDS endpoint + `'Peer'` (data-models.md §4).
+    fn query_survey(
+        &self,
+        value: &str,
+        filter_col: &'static str,
+        order_col: &'static str,
+        label: &str,
+    ) -> Result<Vec<SurveyRow>, StoreReadError> {
+        let conn = self.lock_conn()?;
+
+        let sql = format!(
+            "SELECT author_did, cid, subject, predicate, object, confidence, \
+             composed_at, fetched_from_pds, source_table \
+             FROM ( \
+               SELECT c.author_did AS author_did, c.cid AS cid, c.subject AS subject, \
+                      c.predicate AS predicate, c.object AS object, \
+                      c.confidence AS confidence, c.composed_at AS composed_at, \
+                      '' AS fetched_from_pds, 'Own' AS source_table \
+               FROM claims c \
+               WHERE c.{filter_col} = ? \
+               UNION ALL \
+               SELECT pc.author_did AS author_did, pc.cid AS cid, pc.subject AS subject, \
+                      pc.predicate AS predicate, pc.object AS object, \
+                      pc.confidence AS confidence, pc.composed_at AS composed_at, \
+                      pc.fetched_from_pds AS fetched_from_pds, 'Peer' AS source_table \
+               FROM peer_claims pc \
+               WHERE pc.{filter_col} = ? \
+             ) ORDER BY {order_col}, source_table, cid"
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare {label}: {err}"),
+            })?;
+        let row_iter = stmt
+            .query_map(duckdb::params![value, value], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, DateTime<Utc>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map {label}: {err}"),
+            })?;
+
+        let mut survey = Vec::new();
+        for row in row_iter {
+            let (
+                author_did,
+                cid,
+                subject,
+                predicate,
+                object,
+                confidence,
+                composed_at,
+                fetched_from_pds,
+                source_table,
+            ) = row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode {label}: {err}"),
+            })?;
+            // The origin IS the (source_table, author_did, fetched_from_pds) triple:
+            // an own row carries an empty PDS; a peer row carries the PDS it was
+            // fetched from. A blank author_did (defensive, bypassing the slice-03
+            // CHECK) projects to `Unknown` so the viewer labels rather than drops it.
+            let origin = if author_did.is_empty() {
+                PeerOrigin::Unknown
+            } else {
+                PeerOrigin::Known {
+                    author_did: author_did.clone(),
+                    fetched_from_pds,
+                }
+            };
+            let _ = source_table;
+            survey.push(SurveyRow {
+                author_did,
+                cid,
+                subject,
+                predicate,
+                object,
+                confidence,
+                origin,
+                composed_at,
+            });
+        }
+        Ok(survey)
+    }
 }
 
 impl StoreReadPort for DuckDbStoreReadAdapter {
@@ -380,191 +495,18 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
     }
 
     fn query_project_survey(&self, subject: &str) -> Result<Vec<SurveyRow>, StoreReadError> {
-        let conn = self.lock_conn()?;
-
-        // READ-ONLY cross-store SELECT for the project's LOCAL attributed survey:
-        // own `claims` UNION ALL local `peer_claims` matching the subject VERBATIM,
-        // EXPLICIT `author_did` + `cid` projection (NEVER a merging JOIN/GROUP BY/AVG
-        // — `xtask check-arch::no_cross_table_join_elides_author` enforces it), LOCAL
-        // only (no network). Grouping into philosophies-embodied edges is the PURE
-        // `viewer-domain::group_project` core's job in Rust — this query returns one
-        // row per signed claim (each survey edge maps to exactly one claim, I-GT-4).
-        // The own arm carries an empty `fetched_from_pds` + `'Own'` discriminant; the
-        // peer arm carries its PDS endpoint + `'Peer'` (data-models.md §4).
-        let sql = "SELECT author_did, cid, subject, predicate, object, confidence, \
-                   composed_at, fetched_from_pds, source_table \
-                   FROM ( \
-                     SELECT c.author_did AS author_did, c.cid AS cid, c.subject AS subject, \
-                            c.predicate AS predicate, c.object AS object, \
-                            c.confidence AS confidence, c.composed_at AS composed_at, \
-                            '' AS fetched_from_pds, 'Own' AS source_table \
-                     FROM claims c \
-                     WHERE c.subject = ? \
-                     UNION ALL \
-                     SELECT pc.author_did AS author_did, pc.cid AS cid, pc.subject AS subject, \
-                            pc.predicate AS predicate, pc.object AS object, \
-                            pc.confidence AS confidence, pc.composed_at AS composed_at, \
-                            pc.fetched_from_pds AS fetched_from_pds, 'Peer' AS source_table \
-                     FROM peer_claims pc \
-                     WHERE pc.subject = ? \
-                   ) ORDER BY object, source_table, cid";
-
-        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare query_project_survey: {err}"),
-        })?;
-        let row_iter = stmt
-            .query_map(duckdb::params![subject, subject], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, f64>(5)?,
-                    row.get::<_, DateTime<Utc>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                ))
-            })
-            .map_err(|err| StoreReadError::QueryFailed {
-                detail: format!("query_map query_project_survey: {err}"),
-            })?;
-
-        let mut survey = Vec::new();
-        for row in row_iter {
-            let (
-                author_did,
-                cid,
-                subject,
-                predicate,
-                object,
-                confidence,
-                composed_at,
-                fetched_from_pds,
-                source_table,
-            ) = row.map_err(|err| StoreReadError::QueryFailed {
-                detail: format!("row decode query_project_survey: {err}"),
-            })?;
-            // The origin IS the (source_table, author_did, fetched_from_pds) triple:
-            // an own row carries an empty PDS; a peer row carries the PDS it was
-            // fetched from. A blank author_did (defensive, bypassing the slice-03
-            // CHECK) projects to `Unknown` so the viewer labels rather than drops it.
-            let origin = if author_did.is_empty() {
-                PeerOrigin::Unknown
-            } else {
-                PeerOrigin::Known {
-                    author_did: author_did.clone(),
-                    fetched_from_pds,
-                }
-            };
-            let _ = source_table;
-            survey.push(SurveyRow {
-                author_did,
-                cid,
-                subject,
-                predicate,
-                object,
-                confidence,
-                origin,
-                composed_at,
-            });
-        }
-        Ok(survey)
+        // The project survey filters on `subject` and GROUPS by `object` (the
+        // philosophy embodied) — so `object` leads the ORDER BY for a deterministic
+        // first-seen group order. Delegates to the shared `query_survey` engine
+        // (INTERNAL impl-sharing; the trait keeps two methods per ADR-042).
+        self.query_survey(subject, "subject", "object", "query_project_survey")
     }
 
     fn query_philosophy_survey(&self, object: &str) -> Result<Vec<SurveyRow>, StoreReadError> {
-        let conn = self.lock_conn()?;
-
-        // READ-ONLY cross-store SELECT for the philosophy's LOCAL attributed survey — the
-        // SYMMETRIC mirror of `query_project_survey`, swapping the filter to the `object`
-        // (philosophy) dimension: own `claims` UNION ALL local `peer_claims` matching the
-        // object VERBATIM, EXPLICIT `author_did` + `cid` projection (NEVER a merging JOIN/
-        // GROUP BY/AVG — `xtask check-arch::no_cross_table_join_elides_author` enforces it),
-        // LOCAL only (no network). Grouping into projects-that-embody edges is the PURE
-        // `viewer-domain::group_philosophy` core's job in Rust — this query returns one row
-        // per signed claim (each survey edge maps to exactly one claim, I-GT-4). The own arm
-        // carries an empty `fetched_from_pds` + `'Own'` discriminant; the peer arm carries
-        // its PDS endpoint + `'Peer'`. Ordered by `subject, source_table, cid` (the GROUPED
-        // dimension first) so the pure grouper's first-seen group order is deterministic.
-        let sql = "SELECT author_did, cid, subject, predicate, object, confidence, \
-                   composed_at, fetched_from_pds, source_table \
-                   FROM ( \
-                     SELECT c.author_did AS author_did, c.cid AS cid, c.subject AS subject, \
-                            c.predicate AS predicate, c.object AS object, \
-                            c.confidence AS confidence, c.composed_at AS composed_at, \
-                            '' AS fetched_from_pds, 'Own' AS source_table \
-                     FROM claims c \
-                     WHERE c.object = ? \
-                     UNION ALL \
-                     SELECT pc.author_did AS author_did, pc.cid AS cid, pc.subject AS subject, \
-                            pc.predicate AS predicate, pc.object AS object, \
-                            pc.confidence AS confidence, pc.composed_at AS composed_at, \
-                            pc.fetched_from_pds AS fetched_from_pds, 'Peer' AS source_table \
-                     FROM peer_claims pc \
-                     WHERE pc.object = ? \
-                   ) ORDER BY subject, source_table, cid";
-
-        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare query_philosophy_survey: {err}"),
-        })?;
-        let row_iter = stmt
-            .query_map(duckdb::params![object, object], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, f64>(5)?,
-                    row.get::<_, DateTime<Utc>>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                ))
-            })
-            .map_err(|err| StoreReadError::QueryFailed {
-                detail: format!("query_map query_philosophy_survey: {err}"),
-            })?;
-
-        let mut survey = Vec::new();
-        for row in row_iter {
-            let (
-                author_did,
-                cid,
-                subject,
-                predicate,
-                object,
-                confidence,
-                composed_at,
-                fetched_from_pds,
-                source_table,
-            ) = row.map_err(|err| StoreReadError::QueryFailed {
-                detail: format!("row decode query_philosophy_survey: {err}"),
-            })?;
-            // The origin IS the (source_table, author_did, fetched_from_pds) triple:
-            // an own row carries an empty PDS; a peer row carries the PDS it was
-            // fetched from. A blank author_did (defensive, bypassing the slice-03
-            // CHECK) projects to `Unknown` so the viewer labels rather than drops it.
-            let origin = if author_did.is_empty() {
-                PeerOrigin::Unknown
-            } else {
-                PeerOrigin::Known {
-                    author_did: author_did.clone(),
-                    fetched_from_pds,
-                }
-            };
-            let _ = source_table;
-            survey.push(SurveyRow {
-                author_did,
-                cid,
-                subject,
-                predicate,
-                object,
-                confidence,
-                origin,
-                composed_at,
-            });
-        }
-        Ok(survey)
+        // The SYMMETRIC mirror, swapping subject↔object: filters on `object` and
+        // GROUPS by `subject` (the project that embodies the philosophy) — so
+        // `subject` leads the ORDER BY. Delegates to the SAME shared engine.
+        self.query_survey(object, "object", "subject", "query_philosophy_survey")
     }
 }
 
