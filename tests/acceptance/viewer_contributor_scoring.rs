@@ -223,12 +223,24 @@ fn scoring_a_contributor_with_no_local_claims_never_crashes_the_viewer() {
     // GIVEN an initialized store with NO rows for CONTRIBUTOR_EMPTY_DID.
     // WHEN she scores that contributor.
     // THEN the response is a calm 200 guided state — no 5xx, no hang, no stack trace.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-1c: ViewerServer::start over an empty store; \
-         get(\"/score?contributor={CONTRIBUTOR_EMPTY_DID}\"); assert status 200 + \
-         the response is the guided NoClaims state (no crash/hang/stack trace)"
-    )
+    let env = TestEnv::initialized();
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(&format!("/score?contributor={CONTRIBUTOR_EMPTY_DID}"));
+
+    // A calm 200 — emptiness (and even a read error) degrades to the guided state,
+    // never a 5xx / hang / panic (I-CS-5). A 5xx here would mean the breadth guard /
+    // `scoring::score` was asked to bucket an empty feed.
+    assert_eq!(
+        response.status, 200,
+        "C-5: GET /score for a contributor with no local claims must return a calm \
+         200 guided state, never a 5xx; body was:\n{}",
+        response.body
+    );
+    // The guided NoClaims state names the queried DID — never a blank region — and
+    // leaks NO fabricated score and NO raw error/stack trace (the helper bans
+    // \"panicked\" / \"RUST_BACKTRACE\" / \"thread 'main'\").
+    assert_score_html_renders_no_claims(&response.body, CONTRIBUTOR_EMPTY_DID);
 }
 
 // =============================================================================
