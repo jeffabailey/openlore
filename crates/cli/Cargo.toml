@@ -482,3 +482,49 @@ harness = true
 name = "viewer_graph_traversal_invariants"
 path = "../../tests/acceptance/viewer_graph_traversal_invariants.rs"
 harness = true
+
+# Slice-11 (viewer-counter-claim-threads; DISTILL) — the counter-claim THREAD on the
+# EXISTING read-only `GET /claims/{cid}` detail route (US-CT-002/003; ADR-046/047).
+# BENEATH the claim + evidence, ALL counters targeting that CID render as a thread —
+# each with its OWN author DID, its OWN CID (an `<a href>` drill-link to
+# /claims/{counter_cid}), and its verbatim free-text `--reason`. The original claim is
+# rendered VERBATIM with its ORIGINAL confidence (shown-never-applied, I-CT-2); counters
+# are SHOWN, never applied. The read is the 2-step ADR-046 decode-and-filter: the INDEXED
+# `claim_references`/`peer_claim_references` lookup by referenced_cid (UNION ALL,
+# attributed, no-merge) + a per-row `read_artifact_at` for each counter's reason (the
+# reason is NOT a DB column — it lives in the on-disk SignedClaim artifact, ADR-015). The
+# thread is DEPTH-1 (ADR-047 — no nested/recursive counter render). An un-countered claim
+# renders exactly as slice-06 (no empty-thread noise). Drives the REAL `openlore ui` verb
+# via `ViewerServer` + in-test HTTP (get/get_htmx) over a REAL seeded local store —
+# seeded through the PRODUCTION CLI counter path (own counter via `claim counter`; peer
+# counter via `peer add`+`peer pull`). The 2-step read is LOCAL (DB index + local artifact
+# fs read), no network on this route. Per Mandate 9/11 the sad paths (empty-reason
+# counter, unknown CID) are example-based, never PBT-generated at this layer. Build-before-
+# run: `cargo build` the `openlore` bin (the viewer) before running. DISTILL registers +
+# materializes the harness so the CT-* scenarios classify RED (panic at `todo!()`); CT-*
+# stay RED until DELIVER's per-scenario phases.
+[[test]]
+name = "viewer_counter_claim_threads"
+path = "../../tests/acceptance/viewer_counter_claim_threads.rs"
+harness = true
+
+# Slice-11 (viewer-counter-claim-threads; DISTILL) GOLD / guardrail invariants over the
+# whole countered-detail surface (cross-cutting I-CT-1/2/3/5/6):
+# every_detail_route_with_counters_leaves_the_store_read_only (read-only state-delta,
+# Mandate 8 — the thread is computed per query, nothing persisted),
+# no_detail_response_with_counters_adds_a_write_or_sign_control (no sign/publish/counter
+# control on any shape — counter CID drill-links are render-only `<a href>` TEXT;
+# authoring stays the slice-03 CLI), the_counter_thread_page_chrome_stays_offline_no_cdn
+# (local /static/htmx.min.js, no CDN), the_counter_thread_renders_fully_offline (the
+# 2-step read is LOCAL — DB + local artifact fs read; renders network-down; the viewer
+# re-verifies nothing), and the SHOWN-NEVER-APPLIED gold
+# the_countered_claim_confidence_is_byte_identical_with_and_without_counters (I-CT-2 /
+# OD-AV-7 / ADR-015 — the counter never filters/merges/re-weights/re-ranks the claim).
+# Drives the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO
+# mocked boundary (the route is a LOCAL 2-step read + PURE projection/render). Per Mandate
+# 9/11 example-based, never PBT-generated at this layer. DISTILL registers + RED gate;
+# CT-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_claim_threads_invariants"
+path = "../../tests/acceptance/viewer_counter_claim_threads_invariants.rs"
+harness = true

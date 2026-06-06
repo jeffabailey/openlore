@@ -9338,3 +9338,337 @@ pub fn assert_traversal_html_has_no_write_or_sign_control(body: &str) {
         );
     }
 }
+
+// =============================================================================
+// slice-11 (viewer-counter-claim-threads) — counter-thread on `GET /claims/{cid}`
+// (US-CT-002/003; ADR-046/047). The thread reuses the slice-03 counter-claim model
+// (a counter is an ordinary signed claim carrying a `references[].type == counters`
+// entry + a mandatory verbatim `reason`, ADR-015) — slice-11 only READS it via the
+// new read-only `StoreReadPort::query_counter_claims(target_cid)` (the 2-step ADR-046
+// read: indexed `claim_references`/`peer_claim_references` lookup by `referenced_cid`,
+// UNION ALL attributed no-merge, + a per-row `read_artifact_at` for each counter's
+// reason). Seeding drives the PRODUCTION CLI counter path: an OWN counter via
+// `claim counter --reason <R> <CID>` (lands in `claims`); a PEER counter via the
+// `peer add` + `peer pull` federation path (a peer who authored a `counters`-
+// referencing signed claim; lands in `peer_claims`). The assert helpers scan the
+// OBSERVABLE rendered HTML only (Mandate 8 universe = port-exposed rendered surface,
+// never an internal struct field).
+// =============================================================================
+
+/// The well-known counter-thread author DIDs (reuse the slice-10 spanning-author DIDs
+/// so the corpus never mints throwaway identities): Maria authors the operator's OWN
+/// counter; Tobias is the second, DISTINCT peer author for the anti-merging fixture.
+/// The countered claim is authored by Rachel (a pulled peer).
+pub const COUNTER_TARGET_AUTHOR_RACHEL: &str = "did:plc:rachel-test";
+pub const COUNTER_AUTHOR_TOBIAS: &str = "did:plc:tobias-test";
+
+/// The verbatim free-text reason the OWN counter is authored with (the verbatim-render
+/// contract, CT-5): one source of truth so the seed + the assertion never drift. The
+/// punctuation (`;` and `,`) is load-bearing — it must render byte-for-byte (NFC-
+/// normalized at author time by the slice-03 `claim counter` verb, ADR-015 / WD-35).
+pub const COUNTER_REASON_VERBATIM: &str =
+    "Cargo's dependency pinning is opt-in, not philosophical; pinning is a tool, not a value.";
+
+/// The `#claim-detail` swap-target id the `/claims/{cid}` detail fragment renders under
+/// (the slice-06/07 detail region the slice-11 counter-thread is rendered INSIDE — the
+/// page EMBEDS this fragment, so the htmx fragment and the no-JS full page are
+/// byte-identical in the swap region, I-CT-6). Asserting it appears in BOTH the fragment
+/// and the full-page detail region proves the parity-by-construction embedding. One
+/// source of truth so the scenarios never drift.
+pub const CLAIM_DETAIL_REGION_ID: &str = "claim-detail";
+
+/// The handle a counter-thread seed returns: the target claim's CID (the
+/// `GET /claims/{target_cid}` path + the `query_counter_claims(target_cid)` arg) and
+/// each seeded counter's OWN CID (the `<a href="/claims/{counter_cid}">` drill-link
+/// target + the per-item attribution). Captured so the scenario addresses the exact
+/// records without hard-coding a CID (mirrors `seed_own_claim_with_evidence`'s returned
+/// CID + the slice-09 `read_peer_claim_cids_for` shape).
+#[derive(Debug, Clone)]
+pub struct SeededCounterThread {
+    /// The countered claim's CID — the `/claims/{cid}` path + `query_counter_claims`
+    /// target.
+    pub target_cid: String,
+    /// The countered claim's stored confidence, rendered VERBATIM + UNCHANGED by the
+    /// counter (the shown-never-applied contract; e.g. `0.91`).
+    pub target_confidence: f64,
+    /// One row per seeded counter: `(author_did, counter_cid, reason)`. `reason` is
+    /// `None` for the empty-reason edge (CT-6). Preserves seeded order (the adapter's
+    /// deterministic `composed_at, source_table, cid` order).
+    pub counters: Vec<SeededCounter>,
+}
+
+/// One seeded counter targeting the thread's claim (own or peer).
+#[derive(Debug, Clone)]
+pub struct SeededCounter {
+    /// The counter author's DID (Maria for own; a peer DID for peer counters).
+    pub author_did: String,
+    /// The counter's OWN content-addressed CID — the `/claims/{cid}` drill-link target.
+    pub cid: String,
+    /// The verbatim reason; `None`/empty for the ADR-015 wire-optional empty-reason edge
+    /// → rendered as "no reason provided".
+    pub reason: Option<String>,
+}
+
+/// Seed a countered claim through the PRODUCTION write paths: Rachel's claim (a pulled
+/// peer claim at confidence 0.91) countered by the operator's OWN counter authored via
+/// the slice-03 `claim counter --reason <COUNTER_REASON_VERBATIM> <target_cid>` verb
+/// (Pillar 3 / BR-VIEW-4 — the SAME store `openlore ui` reads). The own counter lands
+/// in `claims` carrying a `references[].type == counters` entry whose `cid == target`
+/// (ADR-015) + the verbatim reason in its on-disk artifact. Returns the
+/// [`SeededCounterThread`] so the scenario addresses the exact records (the
+/// `/claims/{target_cid}` path + the counter's `/claims/{counter_cid}` drill-link).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER materializes it via the EXISTING federation +
+/// counter seams: `seed_peer_authored_graph` (one `SeedPeer` for Rachel, ONE triple at
+/// 0.91 → the target lands in `peer_claims`), recover the target CID (the production-
+/// recomputed peer-claim CID, e.g. via `read_peer_claim_cids_for(env, RACHEL)`), then
+/// drive `run_openlore_with_peer_resolver_stdin(env, ["claim","counter",&target_cid,
+/// "--reason",COUNTER_REASON_VERBATIM], …, "\nN\n")` so the OWN counter is signed +
+/// persisted locally (decline publish — the read path needs only the local row).
+/// Recover the counter CID from stdout (`signed_cid_from_stdout` / the slice-03
+/// `parse_counter_claim_cid`). NO hand-inserted store rows.
+pub fn seed_claim_with_counter(env: &TestEnv) -> SeededCounterThread {
+    let _ = env;
+    todo!(
+        "DELIVER (seed_claim_with_counter): seed Rachel's claim at 0.91 via \
+         seed_peer_authored_graph (one triple), recover its production-recomputed \
+         target_cid, then author the operator's OWN counter via the slice-03 \
+         `claim counter --reason COUNTER_REASON_VERBATIM <target_cid>` verb (sign, \
+         decline publish), recover the counter_cid from stdout, and return a \
+         SeededCounterThread {{ target_cid, target_confidence: 0.91, counters: [Maria's \
+         own counter (Some(COUNTER_REASON_VERBATIM))] }}"
+    )
+}
+
+/// Seed a claim countered by TWO DISTINCT authors through the PRODUCTION CLI counter
+/// path — the anti-merging fixture (CT-4 / I-CT-3): Rachel's claim (0.91) countered by
+/// (a) the operator's OWN counter via `claim counter` (→ `claims`) AND (b) peer Tobias's
+/// counter via the `peer add` + `peer pull` federation path (Tobias authored a signed
+/// claim carrying `references[].type == counters` whose `cid == target` + his own
+/// reason → `peer_claims`). The two counters MUST render as two attributed items under
+/// their own author DIDs + CIDs — never a merged "disputed by 2" aggregate. Returns the
+/// [`SeededCounterThread`] with BOTH counters in deterministic order.
+///
+/// SCAFFOLD: true (slice-11) — DELIVER materializes it by (1) seeding Rachel's target
+/// claim + recovering its CID (as `seed_claim_with_counter`); (2) authoring Maria's OWN
+/// counter via `claim counter`; (3) building a verifiable PEER record for Tobias that
+/// carries a `references: [{ type: "counters", cid: target_cid }]` entry + a reason
+/// (extend `build_verifiable_peer_records_for_triples` with a references+reason variant,
+/// e.g. `build_verifiable_peer_counter_record(tobias_did, seed, target_cid, reason)`),
+/// `peer add` + `peer pull` it so the peer counter lands in `peer_claims`; (4) recover
+/// both counter CIDs. NO hand-inserted store rows; the peer-counter shape is verified +
+/// CID-recomputed by the production pull pipeline.
+pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterThread {
+    let _ = env;
+    todo!(
+        "DELIVER (seed_claim_two_counters_distinct_authors): seed Rachel's target claim \
+         (0.91); author Maria's OWN counter via `claim counter` (→ claims); build a \
+         verifiable PEER counter record for COUNTER_AUTHOR_TOBIAS carrying \
+         references:[{{type:counters, cid:target_cid}}] + a reason, then `peer add` + \
+         `peer pull` it (→ peer_claims); recover both counter CIDs; return a \
+         SeededCounterThread with BOTH counters (Maria own + Tobias peer) in \
+         deterministic order"
+    )
+}
+
+/// Seed a claim countered by a PEER record whose `reason` is ABSENT/empty — the ADR-015
+/// wire-optional asymmetry edge (CT-6 / ADR-047): a non-OpenLore client may author a
+/// counter with no reason. The viewer must render the counter's author DID + CID with
+/// an explicit "no reason provided" state — never a blank line, never a crash. Returns
+/// the [`SeededCounterThread`] whose single counter has `reason == None`.
+///
+/// SCAFFOLD: true (slice-11) — DELIVER materializes it by seeding Rachel's target claim
+/// + a verifiable PEER counter record (via the references+reason builder) whose
+/// `unsigned.reason` is OMITTED (`None`), `peer add` + `peer pull`ed so it lands in
+/// `peer_claims`. NO hand-inserted store rows.
+pub fn seed_counter_empty_reason(env: &TestEnv) -> SeededCounterThread {
+    let _ = env;
+    todo!(
+        "DELIVER (seed_counter_empty_reason): seed Rachel's target claim (0.91); build a \
+         verifiable PEER counter record (references:[{{type:counters, cid:target_cid}}]) \
+         whose reason is OMITTED (None) for COUNTER_AUTHOR_TOBIAS; `peer add` + \
+         `peer pull` it; return a SeededCounterThread whose single counter has \
+         reason == None (the empty-reason edge — ADR-047)"
+    )
+}
+
+/// Seed an UN-countered claim (CT-7 no-noise; CT-3 / CT-INV-ShownNeverApplied baseline):
+/// the SAME claim shape `seed_claim_with_counter` targets (Rachel's claim at confidence
+/// 0.91) but with NOTHING countering it, so `query_counter_claims` returns an empty vec
+/// → `CounterThread::None` → the detail renders the claim ALONE (no section, no flag, no
+/// "0 counters" noise). Returns the target CID so the scenario opens `/claims/{cid}`.
+/// Used as the byte-identical baseline the shown-never-applied gold diffs against.
+///
+/// SCAFFOLD: true (slice-11) — DELIVER materializes it via `seed_peer_authored_graph`
+/// (one `SeedPeer` for Rachel, ONE triple at 0.91 — the SAME target shape as
+/// `seed_claim_with_counter`, minus any counter) and returns the recovered target CID.
+/// The IDENTICAL claim shape is what makes the shown-never-applied byte-diff meaningful.
+pub fn seed_uncountered_claim(env: &TestEnv) -> String {
+    let _ = env;
+    todo!(
+        "DELIVER (seed_uncountered_claim): seed Rachel's claim at 0.91 via \
+         seed_peer_authored_graph (the SAME target shape as seed_claim_with_counter, \
+         with NOTHING countering it); return the recovered target CID so the scenario \
+         opens /claims/{{cid}} (CounterThread::None — renders the claim alone)"
+    )
+}
+
+/// Assert a rendered claim-detail body (fragment OR full page) renders the
+/// counter-thread correctly: every expected counter's `author_did` is attributed, its
+/// OWN `cid` is shown, and its verbatim `reason` text appears byte-for-byte — and the
+/// original claim's `expected_confidence_verbatim` renders unchanged (`0.91`, never
+/// `0.9`/`91%`; I-CT-4). The OBSERVABLE counterpart of the slice-08
+/// `assert_search_html_counter_shown_not_applied` + the slice-10 traversal asserts;
+/// scans the rendered HTML only (Mandate 8 universe = port-exposed rendered surface).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts: each expected (author_did, cid, reason)
+/// triple is present in the body (per-counter attribution + drill-target + verbatim
+/// reason, I-CT-3); the `expected_confidence_verbatim` string is present byte-for-byte
+/// (the countered claim's confidence, UNCHANGED — I-CT-2/I-CT-4); the body carries the
+/// `#claim-detail` region id (I-CT-6).
+pub fn assert_counter_thread_renders_attributed_verbatim(
+    body: &str,
+    expected_counters: &[SeededCounter],
+    expected_confidence_verbatim: &str,
+) {
+    let _ = (body, expected_counters, expected_confidence_verbatim);
+    todo!(
+        "DELIVER (assert_counter_thread_renders_attributed_verbatim): for each expected \
+         counter assert body.contains(author_did) + body.contains(cid) + (when \
+         reason.is_some()) body.contains(reason) byte-for-byte; assert \
+         body.contains(expected_confidence_verbatim) (the claim's confidence verbatim + \
+         unchanged — I-CT-2/I-CT-4) + body.contains(CLAIM_DETAIL_REGION_ID) (I-CT-6)"
+    )
+}
+
+/// Assert a rendered claim-detail body renders EXACTLY two attributed counter entries
+/// (one per distinct author + cid, each with its verbatim reason) and NO merged
+/// "disputed by N" / consensus aggregate row — the anti-merging gold (CT-4 / I-CT-3 /
+/// KPI-AV-2). The OBSERVABLE counterpart of the slice-08
+/// `assert_search_html_has_no_merged_consensus_row` + the slice-09/10 anti-merging
+/// asserts; scans the rendered HTML only (Mandate 8 universe = port-exposed rendered
+/// surface).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts: BOTH expected (author_did, cid) pairs
+/// are present (two attributed items, each with its verbatim reason); NO merged /
+/// faceless consensus phrasing appears ("disputed by", "disputed by 2", "consensus",
+/// "net verdict", "N people disagree", "X people disagree") — the thread is per-counter,
+/// never an aggregate (I-CT-3).
+pub fn assert_counter_thread_two_attributed_no_merge(
+    body: &str,
+    expected_counters: &[SeededCounter],
+) {
+    let _ = (body, expected_counters);
+    todo!(
+        "DELIVER (assert_counter_thread_two_attributed_no_merge): assert BOTH expected \
+         (author_did, cid) pairs render as two attributed items (each with its verbatim \
+         reason); assert NO merged aggregate phrasing ('disputed by', 'disputed by 2', \
+         'consensus', 'net verdict', 'people disagree') appears — the thread is \
+         per-counter, never a 'disputed by N' aggregate (I-CT-3 / KPI-AV-2)"
+    )
+}
+
+/// Assert a rendered claim-detail body shows the empty-reason counter state correctly
+/// (CT-6 / ADR-047): the counter entry STILL shows its author DID + its CID, AND shows
+/// an explicit "no reason provided" state — never a blank line, never a crash. Scans the
+/// rendered HTML only (Mandate 8 universe = port-exposed rendered surface).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts: the empty-reason counter's `author_did`
+/// + `cid` are present (attribution never elided), AND the body carries the explicit
+/// "no reason provided" state for that entry (ADR-047 — total at the type level via
+/// `reason: Option<String>`).
+pub fn assert_counter_thread_empty_reason_state(body: &str, expected_counter: &SeededCounter) {
+    let _ = (body, expected_counter);
+    todo!(
+        "DELIVER (assert_counter_thread_empty_reason_state): assert \
+         body.contains(expected_counter.author_did) + body.contains(expected_counter.cid) \
+         (attribution still shown) + body.contains('no reason provided') (the explicit \
+         empty-reason state — never a blank line / crash; ADR-047)"
+    )
+}
+
+/// Assert a rendered claim-detail body shows a NEUTRAL "Countered" presence flag (CT-8 /
+/// I-CT-3): a presence marker only — never a verdict, a score, or a count-based re-rank
+/// ("disputed by N"). Scans the rendered HTML only (Mandate 8 universe = port-exposed
+/// rendered surface).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts: the body carries the neutral "Countered"
+/// presence flag, AND NO verdict / score / count-based phrasing ("disputed by N",
+/// "consensus", "net verdict", "X people disagree") appears alongside it (the flag is a
+/// presence marker, never a weight/verdict — I-CT-3).
+pub fn assert_counter_thread_presence_flag_is_neutral(body: &str) {
+    let _ = body;
+    todo!(
+        "DELIVER (assert_counter_thread_presence_flag_is_neutral): assert \
+         body.contains('Countered') (a neutral presence flag) AND NO verdict/score/ \
+         count-based phrasing ('disputed by', 'consensus', 'net verdict', 'people \
+         disagree') appears — the flag is a presence marker, never a weight or re-rank \
+         (I-CT-3)"
+    )
+}
+
+/// Assert the no-noise discipline (CT-7 / I-CT-2): an UN-countered claim's detail body
+/// carries NO "Counter-claims" section, NO "Countered" presence flag, and NO "0
+/// counters" / "no disagreement" empty-state noise — `CounterThread::None` renders
+/// nothing extra. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts the body contains NONE of: "Counter-
+/// claims", "Countered", "0 counters", "no disagreement", "no counter" — the
+/// un-countered claim renders exactly as slice-06 (byte-unaffected for the common case).
+pub fn assert_no_counter_thread_noise(body: &str) {
+    let _ = body;
+    todo!(
+        "DELIVER (assert_no_counter_thread_noise): assert the body contains NONE of \
+         'Counter-claims', 'Countered', '0 counters', 'no disagreement' — an \
+         un-countered claim (CounterThread::None) renders nothing extra (slice-06 \
+         parity; I-CT-2)"
+    )
+}
+
+/// Assert NO detail response shape renders a write / sign / counter / publish control
+/// (CT-INV-NoWrite / I-CT-1): authoring stays the slice-03 CLI; the counter CID
+/// drill-links are render-only `<a href>` navigation TEXT. The slice-11 sibling of
+/// `assert_traversal_html_has_no_write_or_sign_control`. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts the body carries NONE of the write/sign/
+/// counter affordances (`name="sign"`, "sign claim", "sign & publish", "subscribe",
+/// ">follow<", "counter this", "add counter", a `<form`/`<button` wrapping a write
+/// action) — the viewer renders counters, never offers to author one.
+pub fn assert_detail_html_has_no_write_or_sign_control(body: &str) {
+    let _ = body;
+    todo!(
+        "DELIVER (assert_detail_html_has_no_write_or_sign_control): assert the body \
+         renders NO write/sign/counter/publish control ('name=\"sign\"', 'sign claim', \
+         'sign & publish', 'subscribe', '>follow<', 'counter this', 'add counter') — \
+         authoring stays the slice-03 CLI; counter CID links are render-only `<a href>` \
+         navigation TEXT (I-CT-1)"
+    )
+}
+
+/// Assert the shown-never-applied invariant (CT-3 / CT-INV-ShownNeverApplied / I-CT-2 /
+/// OD-AV-7 / ADR-015): the SAME claim's rendered confidence + fields are byte-IDENTICAL
+/// whether or not it is countered — the counter never filters/merges/re-weights/re-ranks
+/// the claim. Diffs the claim region of the countered render against the un-countered
+/// render (and pins the verbatim confidence). Scans the rendered HTML only (Mandate 8
+/// universe = port-exposed rendered surface).
+///
+/// SCAFFOLD: true (slice-11) — DELIVER asserts: the countered body contains the
+/// `expected_confidence_verbatim` string byte-for-byte (`0.91`, never `0.9`/`91%`); AND
+/// the claim region (subject/predicate/object/confidence/author/cid) of the countered
+/// render is byte-identical to the un-countered render — the counter changed nothing
+/// above the thread (I-CT-2 / I-CT-4). Any divergence in the claim region is an
+/// UNSHIPPABLE shown-never-applied breach.
+pub fn assert_counter_claim_verbatim_unchanged(
+    uncountered_body: &str,
+    countered_body: &str,
+    expected_confidence_verbatim: &str,
+) {
+    let _ = (uncountered_body, countered_body, expected_confidence_verbatim);
+    todo!(
+        "DELIVER (assert_counter_claim_verbatim_unchanged): assert \
+         countered_body.contains(expected_confidence_verbatim) byte-for-byte; AND assert \
+         the claim region (subject/predicate/object/confidence/author/cid) of the \
+         countered render is byte-identical to the un-countered render — the counter \
+         never re-weights/filters/merges/re-ranks the claim (I-CT-2 / OD-AV-7 / ADR-015)"
+    )
+}

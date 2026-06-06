@@ -325,6 +325,145 @@ See `definition-of-ready.md`. Verdict: **PASS (9/9)**.
 
 ---
 
+## Wave: DISTILL / [REF] Reconciliation result
+
+**Reconciliation passed — 0 contradictions.** Checked DISCUSS (this feature-delta +
+`journey-counter-claim-thread.yaml`) against DESIGN (`architecture-design.md`,
+`component-boundaries.md`, `data-models.md`, `technology-stack.md`) + ADR-046/047. No
+standalone `wave-decisions.md` files exist for this feature (lean model — decisions are
+inlined). DESIGN realizes the DISCUSS contract verbatim: extend `GET /claims/{cid}`,
+read-only, anti-merging (UNION-ALL explicit author_did + cid, no merge), shown-never-
+applied (claim verbatim/unchanged), depth-1 no-recursion, empty-reason → "no reason
+provided", LOCAL/offline 2-step read (indexed ref lookup + `read_artifact_at`), no new
+crate/route/network/KPI. The list-row annotation is consistently OUT of scope (deferred
+to slice-12) in both waves.
+
+## Wave: DISTILL / [REF] Scenario list with tags
+
+Tier A (Gojko-style, production composition root, example-only — Mandate 10). NO Tier B:
+the journey is a single detail-route render (not a ≥3-chained-scenario state machine);
+generative exploration of the pure projection/render belongs to layer-1/2 `viewer-domain`
+units in DELIVER (Mandate 9). Layer 3/5 subprocess + real-I/O; sad paths example-based
+(Mandate 11).
+
+`tests/acceptance/viewer_counter_claim_threads.rs` (US-CT-002/003 story scenarios):
+
+| ID | Scenario | US | Invariant | Tags |
+|---|---|---|---|---|
+| CT-1 | `open_a_countered_claim_with_htmx_returns_only_the_detail_fragment_with_the_thread` | US-CT-002 | I-CT-2/3/6 | `@walking_skeleton @driving_port @driving_adapter @real-io @htmx-fragment @happy` |
+| CT-2 | `a_countered_claim_renders_identically_under_htmx_and_no_js` | US-CT-002 | I-CT-6 | `@driving_port @real-io @no-js @full-page @parity @happy` |
+| CT-3 | `the_countered_claim_is_shown_verbatim_never_re_weighted_by_its_counter` | US-CT-002 | I-CT-2/4 | `@driving_port @real-io @shown-never-applied @gold` |
+| CT-4 | `two_counters_by_distinct_authors_render_as_two_attributed_items_never_merged` | US-CT-002 | I-CT-3 | `@driving_port @real-io @anti-merging @kpi-av-2 @gold` |
+| CT-5 | `the_counter_reason_renders_verbatim_and_its_cid_is_a_one_hop_drill_link` | US-CT-002 | I-CT-3/4 | `@driving_port @real-io @verbatim @drill-link @happy` |
+| CT-6 | `a_counter_with_no_reason_renders_an_explicit_no_reason_provided_state` | US-CT-002 | ADR-047 | `@driving_port @real-io @empty-reason @edge` |
+| CT-7 | `an_un_countered_claim_shows_no_counter_section_and_no_empty_noise` | US-CT-003 | I-CT-2 | `@driving_port @real-io @no-noise @happy` |
+| CT-8 | `a_countered_claim_shows_a_neutral_countered_presence_flag_not_a_verdict` | US-CT-003 | I-CT-3 | `@driving_port @real-io @presence-flag @happy` |
+| CT-9 | `an_unknown_cid_keeps_the_existing_guided_not_found_with_no_thread_added` | US-CT-003 | (slice-06 V-7 no-regression) | `@driving_port @real-io @not-found @boundary @no-regression @error` |
+
+`tests/acceptance/viewer_counter_claim_threads_invariants.rs` (GOLD / guardrails):
+
+| ID | Scenario | US | Invariant | Tags |
+|---|---|---|---|---|
+| CT-INV-ReadOnly | `every_detail_route_with_counters_leaves_the_store_read_only` | US-CT-002/003 | I-CT-1 | `@property @driving_port @real-io @read-only @gold` |
+| CT-INV-NoWrite | `no_detail_response_with_counters_adds_a_write_or_sign_control` | US-CT-002/003 | I-CT-1 | `@property @driving_port @real-io @read-only @gold` |
+| CT-INV-OfflineChrome | `the_counter_thread_page_chrome_stays_offline_no_cdn` | US-CT-002 | I-CT-5 | `@property @driving_port @real-io @offline @no-cdn @gold` |
+| CT-INV-Offline | `the_counter_thread_renders_fully_offline` | US-CT-002 | I-CT-5 | `@property @driving_port @real-io @offline @local-first @kpi-5 @gold` |
+| CT-INV-ShownNeverApplied | `the_countered_claim_confidence_is_byte_identical_with_and_without_counters` | US-CT-002/003 | I-CT-2 | `@property @driving_port @real-io @shown-never-applied @gold` |
+
+US coverage: US-CT-002 → CT-1..6 + all 5 gold; US-CT-003 → CT-7/8/9 + read-only/no-write/
+shown-never-applied gold; US-CT-001 (infra `query_counter_claims`) → exercised THROUGH the
+route by every scenario (its observable contract — attributed/empty/no-merge/local — is
+asserted on the rendered surface, port-to-port; no direct-call test, per Mandate 1).
+
+Error/edge ratio: 14 total; CT-3/4/6/9 + all 5 gold are error/edge/guardrail = 9/14 ≈ 64%
+(≥ 40% target met — the slice is invariant-heavy by nature: shown-never-applied,
+anti-merging, read-only, offline are all failure-mode guards).
+
+## Wave: DISTILL / [REF] WS strategy
+
+Per the Architecture of Reference (port-class → treatment, project-level): driving port
+`GET /claims/{cid}` = REAL adapter (the `openlore ui` subprocess via `ViewerServer`);
+driven-internal `StoreReadPort` (DuckDB + artifacts) = REAL via the project Infrastructure
+Policy (the operator's REAL DuckDB, seeded through production write paths); no
+driven-external/non-deterministic port on this route (LOCAL read, no network/clock/LLM —
+nothing faked). CT-1 is the `@walking_skeleton @driving_port` scenario: the thinnest
+end-to-end thread (viewer → LOCAL 2-step read → pure projection → HTML fragment) that a
+stakeholder confirms "yes — I can read the disagreement around a claim." Brownfield DELTA:
+no Feature-0 skeleton (the viewer, route, store port, page=chrome+fragment, and counter
+model all pre-exist — slices 03/06/07).
+
+## Wave: DISTILL / [REF] Adapter coverage table
+
+| Driven adapter | Real-I/O scenario | Covered by |
+|---|---|---|
+| `DuckDbStoreReadAdapter::query_counter_claims` (indexed ref lookup, Step A) | YES | every CT-* + every gold (REAL DuckDB seeded via production `claim counter` / `peer pull`) |
+| `read_artifact_at` (on-disk SignedClaim `reason` decode, Step B) | YES | CT-1/3/4/5 (verbatim reason rendered) + CT-6 (empty-reason `None` decode) + CT-INV-Offline (LOCAL artifact fs read, network-down) |
+
+No NEW external boundary in this slice (DESIGN §5 — no network/PDS/indexer seam on this
+route), so no `@requires_external` contract-smoke is needed. Both driven reads are LOCAL
+and exercised with REAL I/O by the scenarios above.
+
+## Wave: DISTILL / [REF] Driving-adapter coverage
+
+`GET /claims/{cid}` (the ONLY driving port in DESIGN §7) is exercised via its real
+protocol — the `openlore ui` subprocess + in-test HTTP — in BOTH shapes (no-header full
+page via `get`, `HX-Request` fragment via `get_htmx`) across countered/un-countered/404
+postures. Verified per scenario: HTTP status (200 / existing 404), output format
+(text/html; fragment-vs-full-page shape via `is_fragment()`/`is_full_page()`), and the
+rendered counter-thread surface. No new route added (the route is extended, ADR-046).
+
+## Wave: DISTILL / [REF] Scaffolds (RED-ready, `todo!()` per ADR-025)
+
+- `tests/acceptance/viewer_counter_claim_threads.rs` — 9 CT-* scenarios, all `todo!()`.
+- `tests/acceptance/viewer_counter_claim_threads_invariants.rs` — 5 CT-INV-* gold, all
+  `todo!()`.
+- `tests/acceptance/support/mod.rs` — NEW seams (all `todo!()` / SCAFFOLD: true):
+  - seeds: `seed_claim_with_counter`, `seed_claim_two_counters_distinct_authors`,
+    `seed_counter_empty_reason`, `seed_uncountered_claim` (drive the production CLI
+    counter path: own counter via `claim counter`; peer counter via `peer add`+`peer
+    pull`).
+  - asserts: `assert_counter_thread_renders_attributed_verbatim`,
+    `assert_counter_thread_two_attributed_no_merge`,
+    `assert_counter_thread_empty_reason_state`,
+    `assert_counter_thread_presence_flag_is_neutral`, `assert_no_counter_thread_noise`,
+    `assert_detail_html_has_no_write_or_sign_control`,
+    `assert_counter_claim_verbatim_unchanged`.
+  - types/consts: `SeededCounterThread`, `SeededCounter`, `COUNTER_TARGET_AUTHOR_RACHEL`,
+    `COUNTER_AUTHOR_TOBIAS`, `COUNTER_REASON_VERBATIM`, `CLAIM_DETAIL_REGION_ID`.
+- `crates/cli/Cargo.toml` — two new `[[test]]` targets registered (`viewer_counter_
+  claim_threads`, `viewer_counter_claim_threads_invariants`).
+
+RED gate verified: `cargo build -p cli --tests` compiles (no errors; pre-existing
+unused-import warnings only); each scenario body panics at `todo!()` →
+MISSING_FUNCTIONALITY (correct RED), never ImportError/collection error (BROKEN). DELIVER
+unskips them one at a time and replaces the `todo!()` seam bodies with production-path
+implementations.
+
+## Wave: DISTILL / [REF] Test placement
+
+`tests/acceptance/` (workspace-level integration tests compiled by `crates/cli` via
+explicit `[[test]]` targets) — the EXACT placement + harness of the slice-06..10 viewer
+corpus (`viewer_store.rs`, `viewer_graph_traversal{,_invariants}.rs`). Story scenarios +
+GOLD invariants split into a `_invariants.rs` sibling, mirroring slice-10. Reuses the
+shared `support/mod.rs` harness (`ViewerServer`, `get`/`get_htmx`, `is_fragment`/
+`is_full_page`/`references_external_cdn`, `capture_store_row_count_universe`/
+`assert_store_read_only`, the production seeding seams) — NO new test framework.
+
+## Wave: DISTILL / [REF] Mandate compliance evidence
+
+- CM-A (hexagonal): every scenario enters through `GET /claims/{cid}` (the `openlore ui`
+  driving port via `ViewerServer`); zero direct calls to `viewer-domain` render fns.
+- CM-B (business language): scenario names + tags use domain terms (counter, thread,
+  reason, countered, attributed); technical detail lives in step/assert bodies only.
+- CM-C (journey completeness): CT-1 walking skeleton = the demo-able user goal (read the
+  disagreement around a claim); 8 focused + 5 gold cover the boundaries/guardrails.
+- CM-E/F (Mandate 8/9): read-only gold uses `assert_store_read_only` (universe = the two
+  port-exposed row counts, all `unchanged`); all layer-3+ scenarios are example-only — no
+  PBT machinery imported (the `@property` tag marks universal invariants for the reader +
+  DELIVER, not Hypothesis at this layer, Mandate 11).
+- CM-G (Mandate 10): Tier B intentionally absent (single detail-route render, not a rich
+  ≥3-chained-scenario state machine — documented above).
+
 ## Changelog
 
 - 2026-06-06 — slice-11 (`viewer-counter-claim-threads`) DISCUSS. Traces to J-003b
@@ -332,3 +471,10 @@ See `definition-of-ready.md`. Verdict: **PASS (9/9)**.
   New read-only `StoreReadPort::query_counter_claims`. No new crates, no new KPI ID,
   no new route (extends `GET /claims/{cid}`). List-row annotation DEFERRED to a
   recommended slice-12. Scope PASS (~1 day). DoR PASS (9/9).
+- 2026-06-06 — slice-11 DISTILL (Quinn, nw-acceptance-designer). Reconciliation passed
+  (0 contradictions). 14 RED Tier-A acceptance scaffolds authored (9 CT-* story + 5
+  CT-INV-* gold), all `todo!()` per ADR-025; error/edge ratio 64%. New `tests/acceptance/
+  viewer_counter_claim_threads{,_invariants}.rs` + 7 stubbed support seams (4 seed via the
+  production CLI counter path, 7 assert) + 2 `[[test]]` targets. `cargo build -p cli
+  --tests` compiles; scenarios classify RED (panic at `todo!()`). Tier B intentionally
+  absent (single detail-route render). NOT proceeding to DELIVER.
