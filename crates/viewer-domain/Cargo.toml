@@ -42,14 +42,20 @@ appview-domain = { path = "../appview-domain" }
 # `viewer-domain → appview-domain` edge), so this keeps `viewer-domain` pure: the
 # scoring math is REUSED, never reimplemented here.
 scoring = { path = "../scoring" }
+# PURE → PURE (slice-10; ADR-042/043/044/045): the graph-traversal view-model
+# REUSES `claim-domain`'s display-only `confidence_bucket` (WD-10 thresholds, the
+# ONE source of truth for the per-claim confidence bucket label rendered on every
+# traversal edge — the viewer recomputes NO bucket/threshold). `claim-domain` is
+# the pure claim core (no I/O, the root of the pure-core allowlist), so this keeps
+# `viewer-domain` pure: the bucketing is REUSED, never reimplemented here. Promoted
+# from a dev-dependency (was `/score` test-only) to a regular dep for production use.
+claim-domain = { path = "../claim-domain" }
 
 [dev-dependencies]
 proptest = { workspace = true }
-# TEST-ONLY: the `/score` render unit/property tests build an `AttributedClaim`
-# feed and run the REUSED pure `scoring::score` to obtain a real `WeightedView`
-# (not a hand-rolled one) before rendering it — so they need the `Cid`/`Did` value
-# types + `chrono` for the claim `composed_at`. Dev-dependencies only; the
-# production viewer-domain capability surface is unchanged (xtask check-arch
-# untouched — these are not in `[dependencies]`).
-claim-domain = { path = "../claim-domain" }
+# TEST-ONLY: the `/score` + `/project` render unit/property tests build an
+# `AttributedClaim` / `SurveyRow` feed and run the REUSED pure cores to obtain real
+# view-models (not hand-rolled ones) before rendering them — so they need `chrono`
+# for the claim `composed_at`. (`claim-domain`'s `Cid`/`Did` value types are now a
+# regular dep above.) Dev-dependency only.
 chrono = { workspace = true }

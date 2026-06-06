@@ -1380,6 +1380,32 @@ mod tests {
     }
 
     #[test]
+    fn viewer_domain_depending_on_claim_domain_is_an_allowed_pure_to_pure_edge() {
+        // slice-10 delta / ADR-042/043/044/045: `viewer-domain` REUSES `claim-domain`'s
+        // display-only `confidence_bucket` (the WD-10 thresholds, one SSOT) to render
+        // the per-claim confidence bucket on every graph-traversal edge. `claim-domain`
+        // is the pure claim core (serde + the audited pure-core allowlist — no banned
+        // I/O), so the edge introduces NO I/O — the pure-core arm must still pass for
+        // `viewer-domain`. Mirrors the `viewer-domain → appview-domain` / `→ scoring`
+        // pure→pure edges above.
+        let w = ws(&[
+            (
+                "viewer-domain",
+                &["maud", "ports", "appview-domain", "scoring", "claim-domain"],
+            ),
+            ("scoring", &["ports", "claim-domain", "serde", "chrono"]),
+            ("appview-domain", &["claim-domain", "serde", "chrono"]),
+            ("ports", &["async-trait", "claim-domain"]),
+            ("claim-domain", &["serde"]),
+        ]);
+        assert!(
+            check_workspace(&w).is_empty(),
+            "viewer-domain → claim-domain must be an allowed pure→pure edge (ADR-045), got: {:?}",
+            check_workspace(&w)
+        );
+    }
+
+    #[test]
     fn viewer_adapter_may_hold_the_read_only_index_query_client() {
         // slice-08 delta (b) / I-NS-1: the viewer adapter MAY reach the read-only
         // index-query CLIENT (`adapter-index-query`) — it holds the read-only

@@ -25,7 +25,9 @@
 #![forbid(unsafe_code)]
 
 use maud::{html, Markup, DOCTYPE};
-use ports::{AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin};
+use ports::{
+    AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin, SurveyRow,
+};
 // The PURE slice-04 `scoring` core is REUSED for the `/score` view-model
 // projection (ADR-039): the renderer projects the `WeightedView` (ranked
 // `WeightedPairing`s + their per-claim `Contribution` decomposition) + the
@@ -1758,6 +1760,416 @@ fn render_weight_bucket(bucket: scoring::WeightBucket) -> &'static str {
         scoring::WeightBucket::Moderate => "Moderate",
         scoring::WeightBucket::Sparse => "[SPARSE]",
     }
+}
+
+// =============================================================================
+// Graph-Traversal view (slice-10; ADR-042/043/044/045) — `GET /project?subject=<uri>`
+// =============================================================================
+//
+// The `/project` route reads the project's LOCAL attributed survey over the
+// read-only `StoreReadPort::query_project_survey` (claims ∪ local peer_claims, NO
+// network — I-GT-2), groups the attributed rows in the PURE `viewer-domain` core
+// into a [`TraversalView`] (grouping in Rust, NEVER SQL — I-GT-3), and renders it
+// here. Each EDGE is one signed claim attributed to its author DID (non-`Option`,
+// never merged — I-GT-3/I-GT-4) carrying a VERBATIM confidence (`0.90`, I-GT-5) +
+// the REUSED claim-domain display-only confidence bucket. This crate holds NO
+// grouping/bucketing math beyond the projection — it REUSES
+// `claim_domain::confidence_bucket` (the WD-10 thresholds, one SSOT).
+
+/// The HTML `id` of the `/project` + `/philosophy` traversal results swap-target
+/// region (slice-10; the sibling of slice-09's [`SCORE_RESULTS_ID`] + slice-08's
+/// [`SEARCH_RESULTS_ID`]). htmx swaps the element whose id matches; the no-JS full
+/// page EMBEDS the SAME `<div id="traversal-results">` so the fragment and the
+/// full-page results region are structurally identical (I-GT-6 parity by
+/// construction). Held in ONE place so the fragment fn, the page slot, and any
+/// `hx-target` all reference the SAME id (one mutation site).
+pub const TRAVERSAL_RESULTS_ID: &str = "traversal-results";
+
+/// The real route the project survey is served at (`/project`) — the no-JS `href`,
+/// any htmx `hx-get`, AND the subject cross-link target all reference this one path
+/// (ADR-044: one source of truth for the project-survey route). Held in ONE place so
+/// the references can never drift apart.
+pub const PROJECT_URL: &str = "/project";
+
+/// The real route the philosophy survey is served at (`/philosophy`) — the object
+/// cross-link target (object → philosophy traversal edge; ADR-044). Held in ONE
+/// place so the cross-link href and the (slice-10) `/philosophy` route agree.
+pub const PHILOSOPHY_URL: &str = "/philosophy";
+
+/// The guided plain-language notice the [`TraversalView::NoClaims`] arm renders for
+/// an entity with NO claims in the local store (US-GT-002/003 Example 3 / I-GT-4).
+/// Held in ONE place AND emitted as a fixed constant so emptiness is recognized as
+/// emptiness — never a fabricated edge, never a leaked error internal. The queried
+/// entity is named alongside it, and a CLI next-step hint follows, so the operator
+/// knows WHAT was looked up and WHERE to go next.
+pub const TRAVERSAL_NO_CLAIMS_NOTICE: &str = "No claims about this in your local graph.";
+
+/// The CLI next-step hint appended to the guided [`TraversalView::NoClaims`] state —
+/// emptiness points the operator at the CLI (`graph query` / `scrape`) rather than a
+/// dead end (NFR-VIEW-6 / I-GT-4). Held in ONE place (one mutation site).
+pub const TRAVERSAL_NO_CLAIMS_HINT: &str =
+    "Use the openlore CLI (graph query / scrape) to add claims to your local graph.";
+
+/// The pure render input for a project (or, slice-10 later, philosophy) survey: the
+/// queried entity + its direct attributed edges, grouped by the OTHER dimension
+/// (data-models.md §2 / ADR-043). An ADT so the renderer matches TOTALLY
+/// (nw-fp-domain-modeling §1): a non-empty survey is `Found`; an empty one (or a
+/// read error) is the guided `NoClaims`. The effect shell builds this from the LOCAL
+/// survey read via the pure [`group_project`]; the renderer is a pure total function
+/// over it.
+///
+/// `PartialEq` (not `Eq`) because [`EdgeRow`] carries an `f64` confidence.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraversalView {
+    /// ≥1 claim about the entity: the grouped, attributed edges + the distinct
+    /// contributors. Grouping is in PURE Rust (anti-merging), NEVER SQL (I-GT-3).
+    Found {
+        /// The queried subject (project) or object (philosophy).
+        entity: String,
+        /// The edge groups keyed by the OTHER dimension (a philosophy on `/project`;
+        /// a project on `/philosophy`). Each group's key is a traversal target.
+        groups: Vec<EdgeGroup>,
+        /// The distinct contributor `author_did`s across all edges, order-preserved
+        /// and DEDUPED (a spanning author appears ONCE) — each a link to `/score`.
+        contributors: Vec<String>,
+    },
+    /// Zero claims (or bare route / read error): the guided "no claims" state naming
+    /// the entity — NEVER a fabricated edge (I-GT-4).
+    NoClaims {
+        /// The queried entity, named in the guided empty state.
+        entity: String,
+    },
+}
+
+/// One group of attributed traversal edges sharing the OTHER-dimension key
+/// (data-models.md §2). On `/project` the `key` is an `object` (a philosophy
+/// embodied); on `/philosophy` it is a `subject` (a project). The key is itself a
+/// traversal target rendered as an `<a href>` to the next survey.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeGroup {
+    /// The OTHER-dimension key (a philosophy on `/project`) — a traversal `<a href>`.
+    pub key: String,
+    /// One [`EdgeRow`] per `(author, cid)` — NEVER averaged into a consensus row.
+    pub edges: Vec<EdgeRow>,
+}
+
+/// One attributed traversal edge = one signed claim (data-models.md §2). Carries the
+/// non-`Option` `author_did` (attribution, never merged away — I-GT-3), the VERBATIM
+/// `confidence` (rendered via [`render_confidence`] + the REUSED display-only bucket
+/// — I-GT-5), and the non-`Option` `cid` (every edge maps to exactly one claim —
+/// I-GT-4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeRow {
+    /// The claim author DID — non-`Option` attribution; rendered + linked to `/score`.
+    pub author_did: String,
+    /// The stored confidence DOUBLE — rendered VERBATIM + as a display-only bucket.
+    pub confidence: f64,
+    /// The claim CID — non-`Option`; every edge maps to exactly one signed claim.
+    pub cid: String,
+}
+
+/// Group a project survey's flat [`SurveyRow`]s into a [`TraversalView`] (PURE,
+/// anti-merging — data-models.md §2 "Grouping rules"). Groups the `rows` by `object`
+/// (the philosophy embodied); within a group, ONE [`EdgeRow`] per row (one signed
+/// claim), so two authors on the same object yield TWO rows — NEVER averaged into a
+/// consensus row (I-GT-3). `contributors` is the distinct `author_did` across all
+/// rows, ORDER-PRESERVED and DEDUPED (a spanning author appears ONCE in the list,
+/// never deduped among the per-group edges). Group order + edge order follow the
+/// `rows` order (the adapter ordered by `object, source_table, cid` — deterministic).
+/// An EMPTY `rows` slice → [`TraversalView::NoClaims`] (never a fabricated edge,
+/// I-GT-4). PURE total function — no I/O.
+pub fn group_project(entity: &str, rows: &[SurveyRow]) -> TraversalView {
+    group_by(entity, rows, |row| row.object.clone())
+}
+
+/// Shared grouping engine for the two surveys (PURE, anti-merging). `key_of` selects
+/// the OTHER-dimension key per row (`object` for `/project`, `subject` for
+/// `/philosophy`). Order-preserving: groups appear in first-seen key order; edges
+/// appear in row order; `contributors` in first-seen author order (deduped). Empty
+/// `rows` → [`TraversalView::NoClaims`]. Held in ONE place so the project + (slice-10
+/// later) philosophy groupers share the identical anti-merging machinery.
+fn group_by(
+    entity: &str,
+    rows: &[SurveyRow],
+    key_of: impl Fn(&SurveyRow) -> String,
+) -> TraversalView {
+    if rows.is_empty() {
+        return TraversalView::NoClaims {
+            entity: entity.to_string(),
+        };
+    }
+    // Order-preserving group accumulation: a parallel key-order vec drives the output
+    // order while the map collects each key's edges (a BTreeMap would re-sort keys and
+    // break the deterministic adapter ordering the scenarios pin).
+    let mut key_order: Vec<String> = Vec::new();
+    let mut grouped: std::collections::HashMap<String, Vec<EdgeRow>> =
+        std::collections::HashMap::new();
+    let mut contributors: Vec<String> = Vec::new();
+
+    for row in rows {
+        let key = key_of(row);
+        if !grouped.contains_key(&key) {
+            key_order.push(key.clone());
+        }
+        grouped.entry(key).or_default().push(EdgeRow {
+            author_did: row.author_did.clone(),
+            confidence: row.confidence,
+            cid: row.cid.clone(),
+        });
+        if !contributors.contains(&row.author_did) {
+            contributors.push(row.author_did.clone());
+        }
+    }
+
+    let groups = key_order
+        .into_iter()
+        .map(|key| {
+            let edges = grouped.remove(&key).unwrap_or_default();
+            EdgeGroup { key, edges }
+        })
+        .collect();
+
+    TraversalView::Found {
+        entity: entity.to_string(),
+        groups,
+        contributors,
+    }
+}
+
+/// Render the project-survey swap-target FRAGMENT (slice-10; ADR-043): the
+/// `<div id="traversal-results">` wrapping the grouped attributed philosophy edges
+/// (or the guided no-claims notice) for the given [`TraversalView`]. The group key
+/// (a philosophy) is a traversal `<a href>` to `/philosophy?object=<encoded>`; each
+/// edge row names its author DID (a link to `/score?contributor=<bare-did>`), the
+/// VERBATIM confidence + the REUSED display-only bucket, and the `cid`. PURE: a total
+/// function — NO full-page chrome and NO form, so an `HX-Request` response carries
+/// ONLY this region (I-GT-6). Renders NO sign/publish/follow control (I-GT-1 —
+/// traversal is a READ; the cross-links are render-only navigation TEXT, WD-GT-3).
+/// [`render_project_page`] EMBEDS this SAME fn, so the fragment and the full page's
+/// results region are byte-identical by construction (I-GT-6 parity).
+pub fn render_project_fragment(view: &TraversalView) -> Markup {
+    html! {
+        div id=(TRAVERSAL_RESULTS_ID) {
+            (render_traversal_result(view, GroupDimension::Philosophy))
+        }
+    }
+}
+
+/// Render the project-survey page (`GET /project?subject=<uri>`, US-GT-002) as a
+/// complete HTML document (maud). PURE: a total function from the [`TraversalView`]
+/// to an HTML string — no I/O, no network. Renders the page chrome (incl. the local
+/// offline-first htmx `<script src>` + a nav link back to the other views) THEN the
+/// traversal results region.
+///
+/// COMPOSITION (slice-10; ADR-043): the results region is chrome + nav wrapped AROUND
+/// [`render_project_fragment`] — the EXACT same fragment fn the htmx shape returns
+/// alone. Because the results region is the SAME fn in both shapes, fragment/full-page
+/// parity is structural, not asserted by duplicating render logic (I-GT-6). The
+/// `<head>` emits exactly ONE local `<script src="/static/htmx.min.js">`
+/// (offline-first, never a CDN).
+pub fn render_project_page(view: &TraversalView) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            (page_head("OpenLore — Project Survey"))
+            body {
+                h1 { "Project Survey" }
+                nav {
+                    a href=(MY_CLAIMS_URL) { "My Claims" }
+                }
+                (render_project_fragment(view))
+            }
+        }
+    };
+    markup.into_string()
+}
+
+/// Which dimension a survey's GROUP KEY belongs to — drives the per-group traversal
+/// `<a href>` route (`/project` groups BY philosophy → the key links to
+/// `/philosophy`; `/philosophy` groups BY project → the key links to `/project`).
+/// PURE display selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupDimension {
+    /// The group key is a philosophy (the `/project` survey) → link to `/philosophy`.
+    Philosophy,
+}
+
+/// Render the traversal results region for the given [`TraversalView`]. PURE total
+/// match over the ADT: a `Found` survey renders each attributed edge group + the
+/// distinct contributors-who-claimed list; a `NoClaims` survey renders the guided
+/// empty state naming the queried entity + a CLI next-step hint (no fabricated edge,
+/// I-GT-4).
+fn render_traversal_result(view: &TraversalView, dimension: GroupDimension) -> Markup {
+    html! {
+        @match view {
+            TraversalView::Found {
+                entity,
+                groups,
+                contributors,
+            } => {
+                h2 { "Survey of " (entity) }
+                @for group in groups {
+                    (render_edge_group(group, dimension))
+                }
+                (render_contributors(contributors))
+            }
+            // No-claims (US-GT-002/003 Example 3 / I-GT-4): the guided plain-language
+            // empty state naming the queried entity + a CLI next-step hint — never a
+            // blank region, never a fabricated edge, never a crash.
+            TraversalView::NoClaims { entity } => {
+                p { (TRAVERSAL_NO_CLAIMS_NOTICE) " (" (entity) ")" }
+                p { (TRAVERSAL_NO_CLAIMS_HINT) }
+            }
+        }
+    }
+}
+
+/// Render ONE edge group: the group key as a traversal `<a href>` to the OTHER
+/// dimension's survey, then the per-edge attributed rows. The key href percent-encodes
+/// the claim-controlled key (ADR-044 §security). The rows are NEVER averaged — one row
+/// per signed claim, each under its own author DID (anti-merging, I-GT-3).
+fn render_edge_group(group: &EdgeGroup, dimension: GroupDimension) -> Markup {
+    let href = match dimension {
+        GroupDimension::Philosophy => href_philosophy(&group.key),
+    };
+    html! {
+        section {
+            h3 {
+                a href=(href) { (group.key) }
+            }
+            table {
+                thead {
+                    tr {
+                        th { "Contributor" }
+                        th { "Confidence" }
+                        th { "Bucket" }
+                        th { "CID" }
+                    }
+                }
+                tbody {
+                    @for edge in &group.edges {
+                        (render_edge_row(edge))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render ONE attributed traversal edge row: the author DID as an `<a href>` link to
+/// `/score?contributor=<bare-did>` (the slice-09 terminus REUSED; bare-DID form,
+/// ADR-044 Q1), the VERBATIM confidence (via [`render_confidence`] — `0.90`, never
+/// `0.9`/`90%`; I-GT-5), the REUSED display-only confidence bucket label, and the cid
+/// (every edge = one signed claim, I-GT-4). The bare DID is percent-encoded into the
+/// href (ADR-044). NO sign/follow control (I-GT-1 — the link is render-only TEXT).
+fn render_edge_row(edge: &EdgeRow) -> Markup {
+    html! {
+        tr {
+            td {
+                a href=(href_score(&edge.author_did)) { (edge.author_did) }
+            }
+            td { (render_confidence(edge.confidence)) }
+            td { (render_confidence_bucket(edge.confidence)) }
+            td { (edge.cid) }
+        }
+    }
+}
+
+/// Render the distinct "Contributors who claimed" list: each contributor DID as an
+/// `<a href>` link to `/score?contributor=<bare-did>` (the slice-09 terminus REUSED).
+/// A spanning contributor appears ONCE (the list is already deduped in
+/// [`group_by`]). Render-only navigation TEXT — no executable control (I-GT-1).
+fn render_contributors(contributors: &[String]) -> Markup {
+    html! {
+        h3 { "Contributors who claimed" }
+        ul {
+            @for did in contributors {
+                li {
+                    a href=(href_score(did)) { (did) }
+                }
+            }
+        }
+    }
+}
+
+/// The display-only confidence-bucket LABEL for an edge's confidence — the REUSED
+/// `claim_domain::confidence_bucket` (WD-10 thresholds, the ONE SSOT) PROJECTED to a
+/// human label (data-models.md §3). The viewer recomputes NO bucket and NO threshold.
+/// `0.90 → triangulated`, `0.74 → well-evidenced`, `0.25 → speculative`, `0.50 →
+/// weighted`. DISTINCT from the slice-04 scoring `WeightBucket` (Strong/Moderate/
+/// Sparse) — the traversal edge shows the per-claim CONFIDENCE bucket, never a weight
+/// bucket (J-002c boundary). PURE total match over the ADT.
+pub fn render_confidence_bucket(confidence: f64) -> &'static str {
+    match claim_domain::confidence_bucket(confidence) {
+        claim_domain::ConfidenceBucket::Speculative => "speculative",
+        claim_domain::ConfidenceBucket::Weighted => "weighted",
+        claim_domain::ConfidenceBucket::WellEvidenced => "well-evidenced",
+        claim_domain::ConfidenceBucket::Triangulated => "triangulated",
+    }
+}
+
+/// Build the `/philosophy?object=<encoded>` traversal href for an object key (the
+/// object→philosophy edge; ADR-044). The claim-controlled `object` is percent-encoded
+/// into the query component so a hostile URI cannot break out of the `href` attribute
+/// or smuggle a second query param. PURE total function.
+fn href_philosophy(object: &str) -> String {
+    format!("{PHILOSOPHY_URL}?object={}", encode_query_component(object))
+}
+
+/// Build the `/project?subject=<encoded>` traversal href for a subject key (the
+/// subject→project edge; ADR-044). The claim-controlled `subject` is percent-encoded
+/// into the query component. PURE total function. (Used by the `/philosophy` survey's
+/// project group keys — slice-10 later; exposed-by-construction symmetry with
+/// [`href_philosophy`].)
+#[allow(dead_code)]
+fn href_project(subject: &str) -> String {
+    format!("{PROJECT_URL}?subject={}", encode_query_component(subject))
+}
+
+/// Build the `/score?contributor=<bare-did-encoded>` traversal href for an author DID
+/// (the contributor→score edge; the slice-09 terminus REUSED, ADR-044 Q1 bare-DID
+/// form). The DID is reduced to its BARE form ([`bare_did`]) — the signing `#fragment`
+/// locator is dropped so the link matches the slice-09 `/score?contributor=` convention
+/// — then percent-encoded. PURE total function.
+fn href_score(author_did: &str) -> String {
+    format!(
+        "{SCORE_URL}?contributor={}",
+        encode_query_component(bare_did(author_did))
+    )
+}
+
+/// Reduce a DID to its BARE form — everything before a `#fragment` signing locator
+/// (`did:plc:x#org.openlore.application` → `did:plc:x`). PURE total function; a DID
+/// without a fragment passes through unchanged. Mirrors the adapter's `bare_did` so the
+/// `/score` cross-link matches the slice-09 contributor convention (one bare-DID SSOT).
+fn bare_did(did: &str) -> &str {
+    match did.split_once('#') {
+        Some((bare, _)) => bare,
+        None => did,
+    }
+}
+
+/// Percent-encode a claim-controlled value into an `href` QUERY COMPONENT (ADR-044
+/// §security — data-models.md §5): every byte OUTSIDE the unreserved set
+/// (`A-Z a-z 0-9 - _ . ~`) becomes `%XX` (uppercase hex). So `/`, `:`, `#`, `&`, `<`,
+/// `>`, `"`, `=`, and space all encode — a hostile subject/object cannot break out of
+/// the attribute or smuggle a second query param, AND a `github:owner/repo` URI is
+/// carried as a SINGLE query value (so the linked key resolves to the SAME survey on
+/// the inbound `query_param` → `percent_decode_form` decode — an exact round-trip).
+/// PURE total function — defense-in-depth OVER maud's attribute auto-escape.
+pub fn encode_query_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        let unreserved = byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~');
+        if unreserved {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -4391,5 +4803,181 @@ mod tests {
             !fragment.contains("<!DOCTYPE") && !fragment.contains("<html"),
             "the fragment must carry NO full-page chrome; fragment:\n{fragment}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Graph-Traversal view (slice-10; ADR-042/043/044/045) — group_project +
+    // render_project_fragment / render_project_page. The pure group + render core
+    // (port-to-port at domain scope: the pure fn IS the driving port).
+    // -------------------------------------------------------------------------
+
+    /// Build one [`SurveyRow`] for the traversal fixtures (a peer-origin edge).
+    fn survey_row(author: &str, cid: &str, subject: &str, object: &str, confidence: f64) -> SurveyRow {
+        SurveyRow {
+            author_did: author.to_string(),
+            cid: cid.to_string(),
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+            confidence,
+            origin: PeerOrigin::Known {
+                author_did: author.to_string(),
+                fetched_from_pds: "https://pds.example".to_string(),
+            },
+            composed_at: chrono::DateTime::parse_from_rfc3339("2026-05-30T12:00:00+00:00")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }
+    }
+
+    /// Behavior (data-models.md §2 / I-GT-3): `group_project` groups a project's
+    /// survey rows by `object` (the philosophy embodied), one group per distinct
+    /// object, with the distinct contributors deduped + order-preserved.
+    #[test]
+    fn group_project_groups_by_object_with_deduped_contributors() {
+        let rows = [
+            survey_row("did:plc:rachel-test", "bafy1", "github:rust-lang/cargo", "phil-a", 0.90),
+            survey_row("did:plc:rachel-test", "bafy2", "github:rust-lang/cargo", "phil-b", 0.74),
+        ];
+        let view = group_project("github:rust-lang/cargo", &rows);
+        let TraversalView::Found { entity, groups, contributors } = view else {
+            panic!("a non-empty survey must group to Found; got {view:?}");
+        };
+        assert_eq!(entity, "github:rust-lang/cargo");
+        assert_eq!(groups.len(), 2, "two distinct objects → two groups");
+        assert_eq!(groups[0].key, "phil-a");
+        assert_eq!(groups[1].key, "phil-b");
+        // The spanning contributor appears ONCE in the contributor list (deduped).
+        assert_eq!(contributors, vec!["did:plc:rachel-test".to_string()]);
+    }
+
+    /// Behavior (I-GT-3 anti-merging): two DISTINCT authors on the SAME object render
+    /// as TWO `EdgeRow`s under ONE group key — never averaged into a consensus row.
+    #[test]
+    fn group_project_keeps_two_authors_on_one_object_as_two_rows() {
+        let rows = [
+            survey_row("did:plc:maria", "bafy1", "github:rust-lang/cargo", "phil-a", 0.92),
+            survey_row("did:plc:tobias-test", "bafy2", "github:rust-lang/cargo", "phil-a", 0.70),
+        ];
+        let view = group_project("github:rust-lang/cargo", &rows);
+        let TraversalView::Found { groups, contributors, .. } = view else {
+            panic!("expected Found");
+        };
+        assert_eq!(groups.len(), 1, "one shared object → one group");
+        assert_eq!(groups[0].edges.len(), 2, "two authors → two edges (no merge)");
+        assert_eq!(contributors.len(), 2, "two distinct contributors");
+    }
+
+    /// Behavior (I-GT-4): an EMPTY survey yields `NoClaims` naming the entity — never
+    /// a fabricated edge.
+    #[test]
+    fn group_project_empty_rows_yields_no_claims_naming_the_entity() {
+        let view = group_project("github:nonexistent/repo", &[]);
+        assert_eq!(
+            view,
+            TraversalView::NoClaims {
+                entity: "github:nonexistent/repo".to_string()
+            }
+        );
+    }
+
+    /// Behavior (I-GT-3 / I-GT-5): `render_project_fragment` carries the
+    /// `#traversal-results` id, the group key as a `/philosophy?object=` traversal
+    /// href, each edge's author DID (a `/score?contributor=` link), the VERBATIM
+    /// confidence (`0.90`) + the REUSED display-only bucket (`triangulated`) + the cid.
+    #[test]
+    fn render_project_fragment_attributes_each_edge_verbatim_with_bucket_and_cid() {
+        let rows = [survey_row(
+            "did:plc:rachel-test",
+            "bafyedge1",
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.90,
+        )];
+        let view = group_project("github:rust-lang/cargo", &rows);
+        let html = render_project_fragment(&view).into_string();
+        assert!(html.contains(TRAVERSAL_RESULTS_ID), "fragment must carry the region id; {html}");
+        assert!(
+            html.contains("/philosophy?object="),
+            "the group key must be a /philosophy traversal href; {html}"
+        );
+        assert!(
+            html.contains("/score?contributor="),
+            "the author must be a /score traversal link; {html}"
+        );
+        assert!(html.contains("did:plc:rachel-test"), "edge must attribute its author; {html}");
+        assert!(html.contains("0.90"), "confidence must render VERBATIM (0.90, not 0.9); {html}");
+        assert!(html.contains("triangulated"), "the REUSED display-only bucket must show; {html}");
+        assert!(html.contains("bafyedge1"), "the edge must name its cid; {html}");
+        // NO full-page chrome (I-GT-6 / I-HX-1).
+        assert!(!html.contains("<!DOCTYPE") && !html.contains("<html"), "fragment has no chrome; {html}");
+    }
+
+    /// Behavior (I-GT-4): `render_project_fragment` for a `NoClaims` view names the
+    /// queried entity + the guided notice, and fabricates NO edge (no `/philosophy`
+    /// href, no `/score` link).
+    #[test]
+    fn render_project_fragment_no_claims_names_entity_and_fabricates_no_edge() {
+        let view = TraversalView::NoClaims {
+            entity: "github:nonexistent/repo".to_string(),
+        };
+        let html = render_project_fragment(&view).into_string();
+        assert!(html.contains(TRAVERSAL_RESULTS_ID));
+        assert!(html.contains("github:nonexistent/repo"), "must name the queried entity; {html}");
+        assert!(html.contains(TRAVERSAL_NO_CLAIMS_NOTICE), "must show the guided notice; {html}");
+        assert!(
+            !html.contains("/philosophy?object=") && !html.contains("/score?contributor="),
+            "a NoClaims render must fabricate NO traversal edge; {html}"
+        );
+    }
+
+    /// Behavior (I-GT-6 parity by construction): `render_project_page` EMBEDS the
+    /// EXACT `render_project_fragment` region verbatim, plus full-page chrome.
+    #[test]
+    fn render_project_page_embeds_the_fragment_region_with_chrome() {
+        let rows = [survey_row(
+            "did:plc:rachel-test",
+            "bafyedge1",
+            "github:rust-lang/cargo",
+            "phil-a",
+            0.90,
+        )];
+        let view = group_project("github:rust-lang/cargo", &rows);
+        let fragment = render_project_fragment(&view).into_string();
+        let page = render_project_page(&view);
+        assert!(
+            page.contains(&fragment),
+            "the full page must EMBED the exact traversal-results fragment (parity by \
+             construction, I-GT-6); page:\n{page}"
+        );
+        assert!(
+            page.to_lowercase().contains("<!doctype html>"),
+            "the full page must carry full-page chrome; page:\n{page}"
+        );
+    }
+
+    /// Behavior (ADR-044 §security): `encode_query_component` percent-encodes every
+    /// byte outside the unreserved set, so a hostile claim-controlled URI cannot break
+    /// out of the href attribute. Pins the canonical encoded forms.
+    #[test]
+    fn encode_query_component_percent_encodes_reserved_and_hostile_bytes() {
+        assert_eq!(
+            encode_query_component("github:rust-lang/cargo"),
+            "github%3Arust-lang%2Fcargo"
+        );
+        assert_eq!(
+            encode_query_component("github:evil/x\"><script>&q= space"),
+            "github%3Aevil%2Fx%22%3E%3Cscript%3E%26q%3D%20space"
+        );
+        // Unreserved bytes pass through unchanged.
+        assert_eq!(encode_query_component("aZ0-_.~"), "aZ0-_.~");
+    }
+
+    /// Behavior (ADR-044 Q1 bare-DID): the `/score` cross-link reduces a fragmented
+    /// signing DID to its BARE form before encoding (matches the slice-09 convention).
+    #[test]
+    fn href_score_uses_the_bare_did_without_the_signing_fragment() {
+        let href = href_score("did:plc:rachel-test#org.openlore.application");
+        assert_eq!(href, "/score?contributor=did%3Aplc%3Arachel-test");
     }
 }

@@ -39,13 +39,14 @@ use ports::{
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    render_claim_detail, render_claim_detail_fragment, render_claim_not_found_fragment,
-    render_claims_page, render_claims_view_panel_fragment, render_error, render_landing,
-    render_peer_claims_page, render_peer_claims_view_panel_fragment, render_score_page,
-    render_score_results_fragment, render_scrape_page, render_scrape_results_fragment,
-    render_search_page, render_search_results_fragment, CandidateRowView, ClaimDetailView,
-    ClaimRowView, PageView, PeerClaimRowView, ScoreState, ScrapeState, SearchState, HTMX_ASSET_URL,
-    SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
+    group_project, render_claim_detail, render_claim_detail_fragment,
+    render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
+    render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
+    render_project_fragment, render_project_page, render_score_page, render_score_results_fragment,
+    render_scrape_page, render_scrape_results_fragment, render_search_page,
+    render_search_results_fragment, CandidateRowView, ClaimDetailView, ClaimRowView, PageView,
+    PeerClaimRowView, ScoreState, ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL,
+    PROJECT_URL, SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -354,6 +355,14 @@ async fn route(
         // pure `scoring::score` in the shell, and renders the ranked `WeightedView`.
         // Forks by `Shape` (ADR-033). Holds NO signing key (a read + pure compute).
         SCORE_URL => Ok(score_page(store.as_ref(), query.as_deref(), shape)),
+        // `GET /project?subject=<uri>` — the project graph-traversal survey (slice-10;
+        // ADR-042/043/044/045). Reads the project's LOCAL attributed survey over the
+        // read-only store the viewer ALREADY holds (`query_project_survey` — claims ∪
+        // local peer_claims, NO network — I-GT-2), groups the rows in the PURE
+        // `viewer-domain::group_project` core (anti-merging, never SQL — I-GT-3), and
+        // renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds
+        // NO signing key (a read + pure compute); renders NO write/sign/follow control.
+        PROJECT_URL => Ok(project_page(store.as_ref(), query.as_deref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
@@ -487,6 +496,54 @@ fn resolve_score_state(store: &dyn StoreReadPort, query: Option<&str>) -> ScoreS
         // Zero local rows OR a read failure: the guided NoClaims state naming the
         // queried DID (OD-CS-6 / I-CS-5) — never a blank region, never a stack trace.
         Ok(_) | Err(_) => ScoreState::NoClaims { contributor },
+    }
+}
+
+/// Render the project graph-traversal survey page (`GET /project?subject=<uri>`,
+/// US-GT-002; slice-10 / ADR-042/043/044/045). Parses `?subject=` from the query,
+/// reads that subject's LOCAL attributed survey over the read-only store the viewer
+/// ALREADY holds (`query_project_survey` — claims ∪ local peer_claims, NO network /
+/// I-GT-2), groups the rows in the PURE `viewer-domain::group_project` core
+/// (anti-merging, never SQL / I-GT-3), maps the outcome to a [`TraversalView`], and
+/// renders — forking by [`Shape`] (ADR-033): the htmx swap returns ONLY the
+/// `#traversal-results` fragment; the no-JS / bookmark / direct-URL request returns
+/// the complete `/project` full page. Both project the SAME view — the full page
+/// EMBEDS the fragment fn (I-GT-6 parity by construction).
+///
+/// SANDWICH (ADR-007): read (impure store call) → decide (PURE `group_project`) →
+/// render (pure). The handler holds NO signing key — the survey is a read + pure
+/// compute (I-GT-1); it renders NO write/sign/follow control. A bare `GET /project`
+/// with no `?subject` OR a subject with no local rows OR a store read failure all
+/// degrade to the guided [`TraversalView::NoClaims`] state (naming the queried entity;
+/// I-GT-4) rather than a crash (NFR-VIEW-6 — never a raw stack trace).
+fn project_page(
+    store: &dyn StoreReadPort,
+    query: Option<&str>,
+    shape: Shape,
+) -> Response<Full<Bytes>> {
+    let view = resolve_project_view(store, query);
+    match shape {
+        Shape::Fragment => html_ok(render_project_fragment(&view).into_string()),
+        Shape::FullPage => html_ok(render_project_page(&view)),
+    }
+}
+
+/// Resolve the [`TraversalView`] for a `/project` request (the read + pure-group
+/// decision over the parsed `?subject=`). No subject value → a `NoClaims` naming the
+/// empty entity (a bare `GET /project`). A subject with ≥1 local claim → the PURE
+/// `group_project` output (`Found`). A subject with zero local rows OR a store read
+/// failure → `NoClaims` naming the queried subject (graceful degradation; emptiness is
+/// never a fabricated edge, and a read error never leaks — I-GT-4 / NFR-VIEW-6).
+fn resolve_project_view(store: &dyn StoreReadPort, query: Option<&str>) -> TraversalView {
+    let subject = query_param(query, "subject").unwrap_or_default();
+    match store.query_project_survey(&subject) {
+        // group_project over the LOCAL survey rows: an empty Vec yields NoClaims, a
+        // non-empty one the grouped Found view — grouping is in Rust (the pure core),
+        // NEVER SQL, so two same-content claims by different authors stay two rows.
+        Ok(rows) => group_project(&subject, &rows),
+        // A read failure degrades to the SAME guided NoClaims state naming the queried
+        // subject — never a blank region, never a leaked stack trace (I-GT-4).
+        Err(_) => TraversalView::NoClaims { entity: subject },
     }
 }
 

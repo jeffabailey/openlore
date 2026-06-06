@@ -8815,13 +8815,28 @@ pub fn seed_project_survey_trail(env: &TestEnv, project: &str, author_did: &str)
     // into one row). Materialized through the PRODUCTION federation write path so
     // the rows land in the REAL `peer_claims` table the viewer's LOCAL survey read
     // returns — no network at survey time (Pillar 3 / I-GT-2).
-    let _ = (project, author_did);
-    todo!(
-        "slice-10 DELIVER: seed a project-survey trail via seed_peer_authored_graph \
-         — one SeedPeer for `author_did` whose triples are THREE distinct \
-         philosophies (dependency-pinning 0.90, reproducible-builds 0.74, \
-         memory-safety 0.25) on the shared `project` subject. RED scaffold."
-    )
+    // ONE `SeedPeer{ peer_did: author_did, triples: &[(project, philosophy_i, conf_i)] }`
+    // via `seed_peer_authored_graph` so THREE `peer_claims` rows land on the SHARED
+    // `project` subject across DISTINCT objects (philosophies) at varied confidences
+    // (dependency-pinning 0.90 → triangulated, a second philosophy 0.74 →
+    // well-evidenced, a third 0.25 → speculative). DISTINCT objects keep the canonical
+    // CIDs distinct (identical triples collide into one row). The single contributor
+    // (`author_did`) is named under "Contributors who claimed" (a `/score` link).
+    // Materialized through the PRODUCTION federation write path (`peer add` +
+    // `peer pull`) so the rows land in the REAL `peer_claims` table the viewer's LOCAL
+    // project-survey read returns — no network at survey time (Pillar 3 / I-GT-2).
+    seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: author_did,
+            seed: [41u8; 32],
+            triples: &[
+                (project, TRAVERSAL_PHILOSOPHY_DEP_PINNING, 0.90),
+                (project, "org.openlore.philosophy.reproducible-builds", 0.74),
+                (project, "org.openlore.philosophy.memory-safety", 0.25),
+            ],
+        }],
+    );
 }
 
 /// Seed a PHILOSOPHY-survey trail through the PRODUCTION federation write path: ONE
@@ -8931,19 +8946,58 @@ pub fn assert_traversal_html_groups_attributed_and_verbatim(
     expected_confidences_verbatim: &[&str],
     expected_bucket_labels: &[&str],
 ) {
-    let _ = (
-        body,
-        expected_group_keys,
-        expected_authors,
-        expected_confidences_verbatim,
-        expected_bucket_labels,
-    );
-    todo!(
-        "slice-10 DELIVER: assert every group key + author_did + verbatim confidence \
-         + display-only bucket label is rendered, each edge names its cid, and NO \
-         merged/averaged consensus row appears (anti-merging; I-GT-3 / I-GT-5). RED \
-         scaffold."
-    )
+    // Every expected group key (a philosophy on `/project`, a project on
+    // `/philosophy`) is rendered — the survey groups by the OTHER dimension.
+    for key in expected_group_keys {
+        assert!(
+            body.contains(key),
+            "I-GT-3: the traversal survey must render the group key {key:?} (the \
+             OTHER-dimension traversal target); body was:\n{body}"
+        );
+    }
+    // Every expected author DID is attributed on an edge row (per-row, non-Option
+    // attribution — two authors → two rows, never merged away; I-GT-3).
+    for did in expected_authors {
+        assert!(
+            body.contains(did),
+            "I-GT-3: the traversal survey must attribute an edge to {did:?} (every \
+             edge carries its author DID; anti-merging); body was:\n{body}"
+        );
+    }
+    // Each confidence is rendered VERBATIM — the exact stored `f64` string, never a
+    // truncated `0.9` or a `%`-formatted value (I-GT-5).
+    for conf in expected_confidences_verbatim {
+        assert!(
+            body.contains(conf),
+            "I-GT-5: the traversal survey must render the confidence {conf:?} verbatim \
+             (never 0.9 / 90%); body was:\n{body}"
+        );
+    }
+    // Each expected display-only bucket label (the REUSED claim-domain confidence
+    // bucket) is shown on its edge — the viewer recomputes NO bucket.
+    for bucket in expected_bucket_labels {
+        assert!(
+            body.contains(bucket),
+            "I-GT-5: the traversal survey must render the display-only confidence \
+             bucket {bucket:?} (REUSED claim-domain bucket); body was:\n{body}"
+        );
+    }
+    // The survey is NEVER a faceless merged consensus — each edge is per-claim
+    // (anti-merging; I-GT-3). No averaged-consensus phrasing appears.
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "authors agree",
+        "the network says",
+        "consensus score",
+        "community consensus",
+        "averaged",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-GT-3 (anti-merging): the traversal survey must show NO merged / \
+             averaged consensus row; found {banned:?} in body:\n{body}"
+        );
+    }
 }
 
 /// Assert a rendered traversal survey body names every `cid` it is built from — each
