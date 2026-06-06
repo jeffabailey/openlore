@@ -103,13 +103,68 @@ fn every_score_route_leaves_the_store_read_only() {
     // viewer LEFT BEHIND, mirroring V-INV-1 / N-INV-ReadOnly).
     // THEN the persisted-store row counts are UNCHANGED (assert_store_read_only; any
     // change is an UNSHIPPABLE write-surface breach — I-CS-4 / WD-CS-3).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-INV-ReadOnly: seed rich + sparse trails; capture_store_row_count_\
-         universe(before); {{ ViewerServer::start; get + get_htmx for rich/sparse/\
-         empty /score routes }}; capture(after); assert_store_read_only(&before, \
-         &after)"
-    )
+    let env = TestEnv::initialized();
+
+    // Seed BOTH a RICH and a SPARSE contributor trail through the PRODUCTION
+    // federation write path (`peer add` + `peer pull`) so the read-only universe is
+    // NON-TRIVIAL (a `0 == 0` delta would not prove the viewer leaves a POPULATED
+    // store untouched). A SINGLE `seed_contributor_rich_and_sparse_trails` call is
+    // REQUIRED — seeding the two trails through two separate `peer pull`s would drop
+    // the first peer's PDS before the second pull re-pulls it (the helper documents
+    // this). The rows land in the REAL `peer_claims` table the viewer's LOCAL feed
+    // read returns.
+    seed_contributor_rich_and_sparse_trails(&env, CONTRIBUTOR_RICH_DID, CONTRIBUTOR_SPARSE_DID);
+
+    // Capture the read-only universe (the two port-exposed counts:
+    // `claims.row_count` + `peer_claims.row_count`) BEFORE any /score route runs
+    // (Mandate 8: the universe is the inherited capture, NOT internal struct fields).
+    let before = capture_store_row_count_universe(&env);
+
+    // Every /score posture: a rich trail (multi-row breakdown), a sparse trail
+    // (`[SPARSE]`), and an empty contributor (never seeded → guided `NoClaims`). All
+    // three are LOCAL reads + pure compute — none may persist a derived score /
+    // weight / bucket (I-CS-4 / WD-72 — zero new persisted types).
+    let rich_path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
+    let sparse_path = format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}");
+    let empty_path = format!("/score?contributor={CONTRIBUTOR_EMPTY_DID}");
+
+    // Exercise EVERY /score route inside a scope so the viewer's exclusive DuckDB
+    // lock is RELEASED (on drop) BEFORE the `after` snapshot re-opens the store — the
+    // read-only proof is about what the viewer LEFT BEHIND (mirrors the slice-06
+    // V-INV-1 / slice-07 H-INV-ReadOnly / slice-08 N-INV-ReadOnly gold tests).
+    {
+        let viewer = ViewerServer::start(&env);
+
+        // Every posture (rich / sparse / empty) in BOTH shapes — the no-header full
+        // page (`get`) AND the htmx fragment (`get_htmx`). Each is a LOCAL read +
+        // pure compute that must persist NOTHING.
+        for path in [rich_path.as_str(), sparse_path.as_str(), empty_path.as_str()] {
+            let full_page = viewer.get(path);
+            assert_eq!(
+                full_page.status, 200,
+                "GET {path:?} (full page) over the LOCAL store must be 200; body:\n{}",
+                full_page.body
+            );
+            let fragment = viewer.get_htmx(path);
+            assert_eq!(
+                fragment.status, 200,
+                "GET {path:?} (htmx fragment) over the LOCAL store must be 200; \
+                 body:\n{}",
+                fragment.body
+            );
+        }
+        // `viewer` drops here — the `openlore ui` process is killed and its exclusive
+        // DuckDB lock released before the `after` snapshot.
+    }
+
+    // Capture the read-only universe AFTER every route ran.
+    let after = capture_store_row_count_universe(&env);
+
+    // The persisted-store row counts are UNCHANGED — every universe slot `unchanged`
+    // (any change is an UNSHIPPABLE write-surface breach; I-CS-4 / WD-CS-3). The
+    // score was recomputed per query and persisted nothing (no derived score /
+    // weight / bucket written to any store/table/file by the /score path).
+    assert_store_read_only(&before, &after);
 }
 
 // =============================================================================
