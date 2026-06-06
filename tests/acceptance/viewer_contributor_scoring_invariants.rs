@@ -283,12 +283,71 @@ fn the_score_page_chrome_stays_offline_no_cdn() {
     // WHEN the page's script references are inspected.
     // THEN `references_external_cdn()` is FALSE (the only htmx asset is the local
     // /static/htmx.min.js; I-CS-8 / KPI-HX-G2).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-INV-OfflineChrome: seed_contributor_rich_trail + start; \
-         get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); assert is_full_page() + \
-         !response.references_external_cdn()"
-    )
+    let env = TestEnv::initialized();
+
+    // Seed a RICH contributor trail so the /score page renders a REAL score surface
+    // (weight + multi-row breakdown), not an empty page — the no-CDN scan must run
+    // over POPULATED chrome. NO network seam is wired (plain `ViewerServer::start`):
+    // /score is a LOCAL read, so the page CHROME and the SCORE itself are both
+    // offline-capable.
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+    let viewer = ViewerServer::start(&env);
+
+    let path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
+
+    // The no-header full page carries the chrome (the htmx `<script src>`). The
+    // HX-Request fragment is the bare `#score-results` region — neither shape may
+    // reference an off-host CDN (the only htmx asset is the LOCAL /static/htmx.min.js;
+    // I-CS-8 / KPI-HX-G2). Asserted over BOTH shapes so the offline guarantee holds
+    // for the full-page AND fragment surfaces.
+    let full_page = viewer.get(&path);
+    let fragment = viewer.get_htmx(&path);
+
+    assert_eq!(
+        full_page.status, 200,
+        "C-INV-OfflineChrome: GET {path:?} (full page) must render successfully (200) \
+         so the no-CDN scan is over REAL chrome; body was:\n{}",
+        full_page.body
+    );
+    assert_eq!(
+        fragment.status, 200,
+        "C-INV-OfflineChrome: GET {path:?} (htmx fragment) must render successfully \
+         (200); body was:\n{}",
+        fragment.body
+    );
+
+    // The no-header response IS the full page (chrome present) — the surface that
+    // carries the htmx `<script src>`; the HX-Request response is the bare fragment
+    // (no chrome). The no-CDN guarantee is asserted on both.
+    assert!(
+        full_page.is_full_page(),
+        "C-INV-OfflineChrome: the no-JS `/score` response must be a complete full page \
+         (chrome present — it is the surface that loads the htmx asset); body was:\n{}",
+        full_page.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "C-INV-OfflineChrome: the HX-Request `/score` response must be a bare fragment \
+         (no chrome); body was:\n{}",
+        fragment.body
+    );
+
+    // The hard invariant (I-CS-8 / KPI-HX-G2): NO `/score` shape references an
+    // off-host CDN for the htmx library — the only htmx asset is the LOCAL
+    // /static/htmx.min.js the viewer serves itself. Any CDN host hit is an
+    // UNSHIPPABLE offline-guarantee breach.
+    assert!(
+        !full_page.references_external_cdn(),
+        "I-CS-8: the `/score` full page must reference ONLY the local \
+         /static/htmx.min.js — no off-host CDN; body was:\n{}",
+        full_page.body
+    );
+    assert!(
+        !fragment.references_external_cdn(),
+        "I-CS-8: the `/score` htmx fragment must reference ONLY the local \
+         /static/htmx.min.js — no off-host CDN; body was:\n{}",
+        fragment.body
+    );
 }
 
 // =============================================================================
@@ -321,13 +380,93 @@ fn the_score_surface_works_fully_offline() {
     // THEN the full weight + breakdown renders (a real Scored state) with NO
     // Unavailable/degraded notice and NO network call — proving `/score` is LOCAL +
     // offline by construction (I-CS-5; distinct from the slice-08 Unavailable arm).
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-INV-Offline: seed_contributor_rich_trail + ViewerServer::start \
-         (no network seam wired); get(\"/score?contributor={CONTRIBUTOR_RICH_DID}\"); \
-         assert a full Scored render (weight + breakdown) with NO Unavailable/\
-         degraded state — the score is a LOCAL read, no network needed"
-    )
+    let env = TestEnv::initialized();
+
+    // Seed the RICH contributor trail into the LOCAL store (production `peer add` +
+    // `peer pull` path). The score DATA — not just the chrome — is computed over this
+    // LOCAL DuckDB feed + the PURE slice-04 scorer.
+    seed_contributor_rich_trail(&env, CONTRIBUTOR_RICH_DID);
+
+    // The plain `ViewerServer::start` is THE proof of "no network seam wired": it
+    // calls `start_inner(env, None, None, None)` — NO `_github` (/scrape) AND NO
+    // `_indexer` (/search) handle is held, and NEITHER `OPENLORE_GITHUB_API_BASE`
+    // NOR `OPENLORE_INDEXER_URL` is exported to the viewer process. Compare
+    // `start_with_indexer`, which the slice-08 Unavailable/degraded arm uses to wire
+    // a network edge. With no outbound edge to take down, a full Scored render here
+    // proves `/score` is LOCAL + offline by construction (I-CS-5 / KPI-5).
+    let viewer = ViewerServer::start(&env);
+
+    let path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
+
+    // Both shapes — the no-header full page (`get`) AND the htmx fragment
+    // (`get_htmx`) — render the score over the LOCAL store with no network. The
+    // offline guarantee holds for the full-page AND fragment surfaces.
+    let full_page = viewer.get(&path);
+    let fragment = viewer.get_htmx(&path);
+
+    assert_eq!(
+        full_page.status, 200,
+        "C-INV-Offline: GET {path:?} (full page) must render a calm 200 over the LOCAL \
+         store with no network wired; body was:\n{}",
+        full_page.body
+    );
+    assert_eq!(
+        fragment.status, 200,
+        "C-INV-Offline: GET {path:?} (htmx fragment) must render a calm 200 over the \
+         LOCAL store with no network wired; body was:\n{}",
+        fragment.body
+    );
+
+    for (shape, body) in [("full page", &full_page.body), ("fragment", &fragment.body)] {
+        // The `#score-results` region rendered (a REAL Scored state), not a blank /
+        // error surface — the score is a LOCAL read, self-sufficient with no network.
+        assert!(
+            body.contains(SCORE_RESULTS_ID),
+            "C-INV-Offline ({shape}): the offline `/score` response must carry the \
+             `#score-results` region (a REAL Scored render, not a blank/error page); \
+             body was:\n{body}"
+        );
+        // The headline WEIGHT is shown — the score DATA (not just the chrome) computed
+        // over the LOCAL feed. No network was needed to produce it.
+        assert!(
+            body.contains("Weight:"),
+            "C-INV-Offline ({shape}): the offline `/score` render must show the \
+             headline weight (the score DATA is a LOCAL read, not network-gated); \
+             body was:\n{body}"
+        );
+        // NO Unavailable / degraded notice — `/score` has no outbound edge to fail,
+        // so it NEVER renders the slice-08 `/search` Unavailable arm. The honesty/
+        // sparse "treat as a lead" line is a DISTINCT, legitimate render and is NOT
+        // banned here (the rich trail is non-sparse, so it does not appear anyway).
+        let lowered = body.to_ascii_lowercase();
+        for banned in ["unavailable", "network error", "could not reach", "try again"] {
+            assert!(
+                !lowered.contains(banned),
+                "C-INV-Offline ({shape}): the offline `/score` render must NOT show a \
+                 network-degraded notice ({banned:?}) — /score has no outbound edge \
+                 (I-CS-5); body was:\n{body}"
+            );
+        }
+    }
+
+    // The FULL rich score renders (weight + breakdown): every contribution attributed
+    // to its author DID with verbatim confidence, in BOTH shapes — the LOCAL read +
+    // pure compute is self-sufficient with no network present.
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &full_page.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    assert_score_html_breakdown_attributed_and_verbatim(
+        &fragment.body,
+        &[CONTRIBUTOR_RICH_DID],
+        &["0.86", "0.90", "0.74", "0.62"],
+    );
+    // AND the breakdown is a FULL one — its rendered subtotals sum to the displayed
+    // weight (reproduce-by-hand), proving the score DATA rendered completely offline,
+    // not a partial/degraded shape. Holds in both shapes.
+    assert_score_html_breakdown_sums_to_displayed_weight(&full_page.body);
+    assert_score_html_breakdown_sums_to_displayed_weight(&fragment.body);
 }
 
 // =============================================================================
