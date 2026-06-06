@@ -9762,14 +9762,114 @@ pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterT
 /// `unsigned.reason` is OMITTED (`None`), `peer add` + `peer pull`ed so it lands in
 /// `peer_claims`. NO hand-inserted store rows.
 pub fn seed_counter_empty_reason(env: &TestEnv) -> SeededCounterThread {
-    let _ = env;
-    todo!(
-        "DELIVER (seed_counter_empty_reason): seed Rachel's target claim (0.91); build a \
-         verifiable PEER counter record (references:[{{type:counters, cid:target_cid}}]) \
-         whose reason is OMITTED (None) for COUNTER_AUTHOR_TOBIAS; `peer add` + \
-         `peer pull` it; return a SeededCounterThread whose single counter has \
-         reason == None (the empty-reason edge — ADR-047)"
-    )
+    // STEP 1 — build BOTH peers' verifiable wire records UP FRONT, holding each
+    // `PeerPds` ALIVE for the whole function so a SINGLE `peer pull` over BOTH peers
+    // succeeds. Rachel hosts the TARGET claim (0.91); Tobias hosts a COUNTER
+    // referencing the target whose `reason` is OMITTED (`None`) — the ADR-015
+    // wire-optional empty-reason edge. Rachel's target CID is DETERMINISTIC (the pull
+    // pipeline recomputes the SAME CID the builder computes), so Tobias's counter can
+    // reference it before either is pulled. Mirrors
+    // `seed_claim_two_counters_distinct_authors`, minus the operator's OWN counter and
+    // with `reason: None`.
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &[(
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.91,
+        )],
+    );
+    let target_cid = rachel_records
+        .first()
+        .expect("Rachel's target record")
+        .rkey
+        .clone();
+
+    // The empty-reason counter: `build_verifiable_peer_counter_record` with `reason:
+    // None` OMITS the wire `reason` field entirely (the production reason-absent form).
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) =
+        build_verifiable_peer_counter_record(COUNTER_AUTHOR_TOBIAS, tobias_seed, &target_cid, None);
+
+    let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 2 — subscribe to BOTH peers via the real `peer add` verb, then `peer pull`
+    // BOTH in ONE invocation while both PDS are alive. The production pull pipeline
+    // verifies each record + recomputes its CID + writes peer_claims (+
+    // peer_claim_references for Tobias's `counters` reference).
+    for (did, pds) in [
+        (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        assert_eq!(
+            added.status, 0,
+            "seed_counter_empty_reason: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_counter_empty_reason: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Confirm the pull recomputed Rachel's target CID to the SAME value the builder
+    // computed.
+    let target_cids = read_peer_claim_cids_for(env, COUNTER_TARGET_AUTHOR_RACHEL);
+    assert_eq!(
+        target_cids,
+        vec![target_cid.clone()],
+        "seed_counter_empty_reason: the pulled Rachel target CID must match the \
+         deterministically computed one; got {target_cids:?}"
+    );
+
+    // Recover Tobias's production-recomputed empty-reason counter CID from `peer_claims`
+    // (verified + content-addressed by the pull pipeline — no hand-inserted row).
+    let tobias_cids = read_peer_claim_cids_for(env, COUNTER_AUTHOR_TOBIAS);
+    assert_eq!(
+        tobias_cids.len(),
+        1,
+        "seed_counter_empty_reason: expected exactly ONE pulled Tobias counter; \
+         got {tobias_cids:?}"
+    );
+    let peer_counter_cid = tobias_cids
+        .into_iter()
+        .next()
+        .expect("one Tobias counter CID");
+
+    // The single counter carries `reason == None` — the empty-reason edge (ADR-047).
+    SeededCounterThread {
+        target_cid,
+        target_confidence: 0.91,
+        counters: vec![SeededCounter {
+            author_did: COUNTER_AUTHOR_TOBIAS.to_string(),
+            cid: peer_counter_cid,
+            reason: None,
+        }],
+    }
 }
 
 /// Seed an UN-countered claim (CT-7 no-noise; CT-3 / CT-INV-ShownNeverApplied baseline):
@@ -9944,13 +10044,28 @@ pub fn assert_counter_thread_two_attributed_no_merge(
 /// "no reason provided" state for that entry (ADR-047 — total at the type level via
 /// `reason: Option<String>`).
 pub fn assert_counter_thread_empty_reason_state(body: &str, expected_counter: &SeededCounter) {
-    let _ = (body, expected_counter);
-    todo!(
-        "DELIVER (assert_counter_thread_empty_reason_state): assert \
-         body.contains(expected_counter.author_did) + body.contains(expected_counter.cid) \
-         (attribution still shown) + body.contains('no reason provided') (the explicit \
-         empty-reason state — never a blank line / crash; ADR-047)"
-    )
+    // Attribution is NEVER elided by an absent reason: the author DID + the counter's
+    // own CID are STILL shown (anti-merging; I-CT-3).
+    assert!(
+        body.contains(&expected_counter.author_did),
+        "CT-6: the empty-reason counter's author DID {:?} must still be shown;\n\
+         --- body ---\n{body}",
+        expected_counter.author_did
+    );
+    assert!(
+        body.contains(&expected_counter.cid),
+        "CT-6: the empty-reason counter's CID {:?} must still be shown;\n\
+         --- body ---\n{body}",
+        expected_counter.cid
+    );
+
+    // The absent reason renders the EXPLICIT "no reason provided" state — never a blank
+    // line, never a crash (ADR-047; total at the type level via reason: Option<String>).
+    assert!(
+        body.contains("no reason provided"),
+        "CT-6: a counter with no reason must render the explicit 'no reason provided' \
+         state (never a blank line);\n--- body ---\n{body}"
+    );
 }
 
 /// Assert a rendered claim-detail body shows a NEUTRAL "Countered" presence flag (CT-8 /

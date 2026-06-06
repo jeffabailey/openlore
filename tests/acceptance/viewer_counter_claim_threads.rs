@@ -403,13 +403,32 @@ fn a_counter_with_no_reason_renders_an_explicit_no_reason_provided_state() {
     // THEN the counter entry STILL shows the author DID + its CID, and shows the
     // explicit "no reason provided" state — never a blank line, never a crash
     // (assert_counter_thread_empty_reason_state; ADR-047).
-    todo!(
-        "DELIVER (CT-6 empty-reason edge): seed_counter_empty_reason (peer counter with \
-         no reason); start ViewerServer, GET /claims/{{target_cid}}; assert via \
-         assert_counter_thread_empty_reason_state that the counter entry shows the \
-         author DID + CID AND an explicit 'no reason provided' state — not a blank \
-         line, not a crash (ADR-047)"
+    let env = TestEnv::initialized();
+    let seeded = seed_counter_empty_reason(&env);
+    let counter = seeded
+        .counters
+        .first()
+        .expect("CT-6: seed_counter_empty_reason must seed exactly one counter");
+    assert!(
+        counter.reason.is_none(),
+        "CT-6: the seeded empty-reason counter must carry reason == None (the \
+         wire-optional edge)"
     );
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    // THEN: 200 (never a 5xx/panic on the empty-reason edge).
+    assert_eq!(
+        response.status, 200,
+        "CT-6: GET /claims/{{cid}} over a claim countered by an empty-reason peer record \
+         must return 200 (never a 5xx/panic);\n--- body ---\n{}",
+        response.body
+    );
+
+    // THEN: the counter entry STILL shows its author DID + its CID AND an explicit
+    // "no reason provided" state — never a blank line (ADR-047).
+    assert_counter_thread_empty_reason_state(&response.body, counter);
 }
 
 // =============================================================================
