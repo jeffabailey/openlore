@@ -697,12 +697,50 @@ fn an_unknown_contributor_shows_a_guided_no_claims_state_not_a_crash() {
     // NoClaims notice naming the queried DID, with no fabricated score and no leaked
     // error internals (assert_score_html_renders_no_claims) — the empty state in
     // both shapes.
-    let _env = TestEnv::initialized();
-    todo!(
-        "slice-09 C-9 empty state: ViewerServer::start over an empty store; get + \
-         get_htmx for /score?contributor={CONTRIBUTOR_EMPTY_DID}; \
-         assert_score_html_renders_no_claims(body, CONTRIBUTOR_EMPTY_DID) for BOTH"
-    )
+    let env = TestEnv::initialized();
+    let viewer = ViewerServer::start(&env);
+
+    // The no-JS full page AND the HX-Request fragment for the SAME unknown
+    // contributor — no seeding, so the LOCAL feed read returns zero rows and
+    // `resolve_score_state` degrades to the guided `NoClaims` state in BOTH shapes
+    // (no network call on the /score path — I-CS-5).
+    let full = viewer.get(&format!("/score?contributor={CONTRIBUTOR_EMPTY_DID}"));
+    let fragment = viewer.get_htmx(&format!("/score?contributor={CONTRIBUTOR_EMPTY_DID}"));
+
+    // Both shapes are a calm 200 guided state — never a 5xx / hang / panic (I-CS-5).
+    assert_eq!(
+        full.status, 200,
+        "C-9: GET /score (no HX-Request) for an unknown contributor must return a \
+         calm 200 guided state, never a 5xx; body was:\n{}",
+        full.body
+    );
+    assert_eq!(
+        fragment.status, 200,
+        "C-9: GET /score (HX-Request) for an unknown contributor must return a calm \
+         200 guided state, never a 5xx; body was:\n{}",
+        fragment.body
+    );
+    // The shapes differ only in chrome: the no-JS request is a full page, the
+    // HX-Request response is the bare `#score-results` fragment (no chrome) — the
+    // guided NoClaims state renders in BOTH (I-CS-7).
+    assert!(
+        full.is_full_page(),
+        "C-9: the no-JS NoClaims response must be a complete full page (chrome \
+         present); body was:\n{}",
+        full.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "C-9: the HX-Request NoClaims response must be a bare fragment (no chrome); \
+         body was:\n{}",
+        fragment.body
+    );
+    // BOTH shapes render the guided "No local claims for that contributor." notice
+    // naming the queried DID, with no blank region, no fabricated/zero score, and no
+    // leaked stack trace (OD-CS-6 / I-CS-5). Emptiness is recognized as emptiness,
+    // never mistaken for a zero score.
+    assert_score_html_renders_no_claims(&full.body, CONTRIBUTOR_EMPTY_DID);
+    assert_score_html_renders_no_claims(&fragment.body, CONTRIBUTOR_EMPTY_DID);
 }
 
 /// C-10 (US-CS-003 Example 4 / AC-003.1 — sparse vs Strong decided by BREADTH, not
