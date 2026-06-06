@@ -15,14 +15,16 @@
 //! `viewer-domain` core renders — no `SignedClaim`/artifact read needed for the
 //! list view.
 
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did};
+use claim_domain::{Cid, Did, SignedClaim};
 use duckdb::Connection;
 use ports::{
-    AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, Page, PageRequest, PeerClaimRow,
-    PeerOrigin, StoreReadError, StoreReadPort, SurveyRow,
+    AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest,
+    PeerClaimRow, PeerOrigin, StoreReadError, StoreReadPort, SurveyRow,
 };
 
 use crate::bare_did;
@@ -52,13 +54,47 @@ use crate::bare_did;
 /// no-mutation trait, so the threat it would guard against is not reachable.
 pub struct DuckDbStoreReadAdapter {
     conn: Arc<Mutex<Connection>>,
+    /// The storage root's `peer_claims` directory — used to resolve a peer
+    /// counter's RELATIVE `signed_record_path` (`peer_claims/<encoded_did>/<cid>.json`)
+    /// when reading its artifact for the free-text `reason` (the ADR-046 step-B read).
+    /// Mirrors `DuckDbStorageAdapter::read_artifact_at`'s resolution so own-claim
+    /// (absolute) and peer-claim (relative) artifact paths both resolve correctly.
+    peer_claims_root: PathBuf,
 }
 
 impl DuckDbStoreReadAdapter {
-    /// Construct from a shared connection handle (cloned `Arc`). Private to the
-    /// crate — only [`crate::DuckDbStorageAdapter::read_adapter`] builds it.
-    pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    /// Construct from a shared connection handle (cloned `Arc`) + the storage
+    /// root's `peer_claims` directory (for resolving peer artifact paths in the
+    /// counter-thread step-B read). Private to the crate — only
+    /// [`crate::DuckDbStorageAdapter::read_adapter`] builds it.
+    pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>, peer_claims_root: PathBuf) -> Self {
+        Self {
+            conn,
+            peer_claims_root,
+        }
+    }
+
+    /// Read one counter's free-text `reason` from its on-disk `SignedClaim`
+    /// artifact — the ADR-046 step-B read (the reason is NOT a DB column; it lives
+    /// in the artifact, ADR-015). Own-counter rows store an ABSOLUTE path under
+    /// `claims/`; peer-counter rows store a path RELATIVE to the storage root
+    /// (`peer_claims/<encoded_did>/<cid>.json`) resolved under `peer_claims_root`
+    /// — mirroring `DuckDbStorageAdapter::read_artifact_at`. READ-ONLY: a plain
+    /// `fs::read`, LOCAL only, no network. A missing/undeserializable artifact
+    /// surfaces as [`StoreReadError::QueryFailed`] (never a panic).
+    fn read_reason_at(&self, artifact_path: &str) -> Result<Option<String>, StoreReadError> {
+        let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
+            Some(relative) => self.peer_claims_root.join(relative),
+            None => PathBuf::from(artifact_path),
+        };
+        let bytes = fs::read(&resolved).map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("read counter artifact {}: {err}", resolved.display()),
+        })?;
+        let signed: SignedClaim =
+            serde_json::from_slice(&bytes).map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("deserialize counter artifact {}: {err}", resolved.display()),
+            })?;
+        Ok(signed.unsigned.reason)
     }
 
     /// Lock the shared connection, mapping a poisoned mutex to a plain-language
@@ -280,28 +316,86 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("query_map get_claim: {err}"),
             })?;
-        let claim = match claim_iter.next() {
-            None => {
-                drop(claim_iter);
-                drop(stmt);
-                return Ok(None);
-            }
-            Some(row) => row.map_err(|err| StoreReadError::QueryFailed {
+        let own_claim = match claim_iter.next() {
+            None => None,
+            Some(row) => Some(row.map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("row decode get_claim: {err}"),
-            })?,
+            })?),
         };
         drop(claim_iter);
         drop(stmt);
 
+        // slice-11: a counter-thread's target may be a PULLED PEER claim (Maria
+        // counters Rachel's peer claim — the self-counter rule forbids countering
+        // one's OWN claim, ADR-015 / WD-34). So when the CID is not an OWN claim,
+        // FALL BACK to the LOCAL `peer_claims` table (the SAME shared connection,
+        // read-only). This keeps the detail route able to render the countered claim
+        // verbatim (built from `get_claim` UNCHANGED — I-CT-2) regardless of which
+        // local store holds it. A CID in NEITHER store still yields `Ok(None)` (the
+        // guided not-found — slice-06 V-7 unchanged). The own table is checked FIRST
+        // so an own claim's detail is byte-identical to slice-06.
+        let claim = match own_claim {
+            Some(row) => row,
+            None => {
+                let mut peer_stmt = conn
+                    .prepare(
+                        "SELECT cid, subject, predicate, object, confidence, author_did, \
+                         composed_at FROM peer_claims WHERE cid = ?",
+                    )
+                    .map_err(|err| StoreReadError::QueryFailed {
+                        detail: format!("prepare get_claim peer fallback: {err}"),
+                    })?;
+                let mut peer_iter = peer_stmt
+                    .query_map(duckdb::params![cid], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, f64>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, DateTime<Utc>>(6)?,
+                        ))
+                    })
+                    .map_err(|err| StoreReadError::QueryFailed {
+                        detail: format!("query_map get_claim peer fallback: {err}"),
+                    })?;
+                match peer_iter.next() {
+                    None => {
+                        drop(peer_iter);
+                        drop(peer_stmt);
+                        return Ok(None);
+                    }
+                    Some(row) => {
+                        let decoded = row.map_err(|err| StoreReadError::QueryFailed {
+                            detail: format!("row decode get_claim peer fallback: {err}"),
+                        })?;
+                        drop(peer_iter);
+                        drop(peer_stmt);
+                        decoded
+                    }
+                }
+            }
+        };
+
         // Read the evidence URLs ordered by ordinal ascending (the order they
-        // were attached, FR-VIEW-3).
+        // were attached, FR-VIEW-3). The CID is unique to ONE store, so UNION the
+        // own `claim_evidence` with the peer `peer_claim_evidence` (slice-11 peer
+        // fallback) — only the table holding the claim contributes rows; the other
+        // is empty. ORDER BY ordinal preserves attachment order in both cases.
         let mut ev_stmt = conn
-            .prepare("SELECT evidence FROM claim_evidence WHERE cid = ? ORDER BY ordinal ASC")
+            .prepare(
+                "SELECT evidence, ordinal FROM ( \
+                   SELECT evidence, ordinal FROM claim_evidence WHERE cid = ? \
+                   UNION ALL \
+                   SELECT evidence, ordinal FROM peer_claim_evidence WHERE cid = ? \
+                 ) ORDER BY ordinal ASC",
+            )
             .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("prepare get_claim evidence: {err}"),
             })?;
         let ev_iter = ev_stmt
-            .query_map(duckdb::params![cid], |row| row.get::<_, String>(0))
+            .query_map(duckdb::params![cid, cid], |row| row.get::<_, String>(0))
             .map_err(|err| StoreReadError::QueryFailed {
                 detail: format!("query_map get_claim evidence: {err}"),
             })?;
@@ -507,6 +601,114 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // GROUPS by `subject` (the project that embodies the philosophy) — so
         // `subject` leads the ORDER BY. Delegates to the SAME shared engine.
         self.query_survey(object, "object", "subject", "query_philosophy_survey")
+    }
+
+    fn query_counter_claims(
+        &self,
+        target_cid: &str,
+    ) -> Result<Vec<CounterClaimRow>, StoreReadError> {
+        let conn = self.lock_conn()?;
+
+        // ADR-046 STEP A: the INDEXED UNION-ALL ref lookup for every counter of
+        // `target_cid`. Own counters live in `claims` JOIN `claim_references`; peer
+        // counters in `peer_claims` JOIN `peer_claim_references` — both filtered by
+        // the indexed `referenced_cid = ? AND ref_type = 'counters'`. The JOIN is
+        // INTRA-store only (ref table → its own claims table) to recover the
+        // counter's `author_did` + `cid` + `confidence` + `composed_at` + its
+        // artifact path; the cross-store combination is a UNION ALL (NEVER a merging
+        // JOIN/GROUP BY/AVG), projecting `author_did` + `cid` EXPLICITLY so two
+        // counters by different authors stay TWO rows (anti-merging, I-CT-3 —
+        // `xtask check-arch::no_cross_table_join_elides_author` enforces it). The own
+        // arm carries an empty `fetched_from_pds` + `'Own'` discriminant; the peer
+        // arm carries its PDS endpoint + `'Peer'`. ORDER BY (composed_at,
+        // source_table, cid) is deterministic — composed_at is for ORDERING only,
+        // never a re-weight of the countered claim (shown-never-applied, I-CT-2).
+        let sql = "SELECT author_did, cid, confidence, composed_at, fetched_from_pds, \
+                   artifact_path, source_table \
+                   FROM ( \
+                     SELECT c.author_did AS author_did, c.cid AS cid, \
+                            c.confidence AS confidence, c.composed_at AS composed_at, \
+                            '' AS fetched_from_pds, c.artifact_path AS artifact_path, \
+                            'Own' AS source_table \
+                     FROM claims c \
+                     JOIN claim_references cr ON cr.referencing_cid = c.cid \
+                     WHERE cr.referenced_cid = ? AND cr.ref_type = 'counters' \
+                     UNION ALL \
+                     SELECT pc.author_did AS author_did, pc.cid AS cid, \
+                            pc.confidence AS confidence, pc.composed_at AS composed_at, \
+                            pc.fetched_from_pds AS fetched_from_pds, \
+                            pc.signed_record_path AS artifact_path, 'Peer' AS source_table \
+                     FROM peer_claims pc \
+                     JOIN peer_claim_references pcr ON pcr.referencing_cid = pc.cid \
+                     WHERE pcr.referenced_cid = ? AND pcr.ref_type = 'counters' \
+                   ) ORDER BY composed_at, source_table, cid";
+
+        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("prepare query_counter_claims: {err}"),
+        })?;
+        let row_iter = stmt
+            .query_map(duckdb::params![target_cid, target_cid], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, DateTime<Utc>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map query_counter_claims: {err}"),
+            })?;
+
+        // Decode step A into intermediate tuples FIRST (releasing the statement
+        // borrow) so step B's per-row artifact reads do not hold the prepared
+        // statement open across the filesystem reads.
+        let mut staged: Vec<(String, String, f64, DateTime<Utc>, String, String)> = Vec::new();
+        for row in row_iter {
+            let (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path, source_table) =
+                row.map_err(|err| StoreReadError::QueryFailed {
+                    detail: format!("row decode query_counter_claims: {err}"),
+                })?;
+            let _ = source_table;
+            staged.push((
+                author_did,
+                cid,
+                confidence,
+                composed_at,
+                fetched_from_pds,
+                artifact_path,
+            ));
+        }
+        drop(stmt);
+        drop(conn);
+
+        // ADR-046 STEP B: per-row artifact read for the free-text `reason` (NOT a DB
+        // column — ADR-015). LOCAL `fs::read`, no network. A blank `author_did`
+        // (defensive, bypassing the slice-03 CHECK) projects to `Unknown` so the
+        // viewer labels rather than drops it.
+        let mut counters = Vec::with_capacity(staged.len());
+        for (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path) in staged {
+            let reason = self.read_reason_at(&artifact_path)?;
+            let origin = if author_did.is_empty() {
+                PeerOrigin::Unknown
+            } else {
+                PeerOrigin::Known {
+                    author_did: author_did.clone(),
+                    fetched_from_pds,
+                }
+            };
+            counters.push(CounterClaimRow {
+                author_did,
+                cid,
+                reason,
+                confidence,
+                composed_at,
+                origin,
+            });
+        }
+        Ok(counters)
     }
 }
 

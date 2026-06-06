@@ -26,7 +26,8 @@
 
 use maud::{html, Markup, DOCTYPE};
 use ports::{
-    AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, PeerClaimRow, PeerOrigin, SurveyRow,
+    AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, CounterClaimRow, PeerClaimRow,
+    PeerOrigin, SurveyRow,
 };
 // The PURE slice-04 `scoring` core is REUSED for the `/score` view-model
 // projection (ADR-039): the renderer projects the `WeightedView` (ranked
@@ -621,6 +622,104 @@ impl ClaimDetailView {
 /// parity by construction).
 pub const CLAIM_DETAIL_ID: &str = "claim-detail";
 
+/// The exact "no reason provided" state text rendered for a counter whose
+/// free-text `reason` is absent (the ADR-015 wire-optional empty-reason edge,
+/// CT-6 / ADR-047). Held in ONE place so the empty-reason phrasing is a single
+/// source of truth and a string mutation has exactly one site to attack.
+pub const COUNTER_NO_REASON_NOTICE: &str = "no reason provided";
+
+/// The neutral "Countered" PRESENCE flag rendered near a claim that has ≥1
+/// counter (CT-8 / I-CT-3): a presence marker ONLY — never a verdict, a score, a
+/// count ("disputed by N"), or a count-based re-rank. Held in ONE place so the
+/// flag text is a single source of truth.
+pub const COUNTERED_PRESENCE_FLAG: &str = "Countered";
+
+/// The counter-thread section heading rendered above the attributed counter
+/// entries (slice-11 / US-CT-002). Held in ONE place; absent entirely when a
+/// claim is un-countered ([`CounterThread::None`] renders nothing, I-CT-2).
+pub const COUNTER_THREAD_HEADING: &str = "Counter-claims";
+
+/// One attributed counter in a [`CounterThread`] — the VIEW-model for a single
+/// counter rendered BENEATH the verbatim claim (slice-11 / US-CT-002 / ADR-047).
+/// Names the counter's author DID + its own CID (a render-only one-hop drill-link
+/// toward `/claims/{cid}`, depth-1) + its verbatim free-text `reason` (`None` →
+/// the explicit "no reason provided" state). `is_own` distinguishes the
+/// operator's own counter from a peer's (display-only; never a re-weight).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CounterEntry {
+    /// The counter author's DID — rendered VERBATIM as attribution (anti-merging,
+    /// I-CT-3): never elided, never merged into a faceless aggregate.
+    pub author_did: String,
+    /// The counter's own content-addressed CID — the render-only
+    /// `<a href="/claims/{cid}">` one-hop drill-link target (depth-1, ADR-047).
+    pub cid: String,
+    /// The counter's verbatim free-text reason; `None` → the explicit
+    /// [`COUNTER_NO_REASON_NOTICE`] state (the ADR-015 wire-optional edge).
+    pub reason: Option<String>,
+    /// Whether this counter is the operator's OWN (display-only). Derived from the
+    /// peer ORIGIN (an own counter carries an empty `fetched_from_pds`).
+    pub is_own: bool,
+}
+
+/// The counter-claim thread for one claim (slice-11 / US-CT-002 / ADR-047): the
+/// PURE ADT the detail render threads BENEATH the verbatim claim. Total at the
+/// type level so the "no-noise for an un-countered claim" contract (I-CT-2) is
+/// structural — an un-countered claim is `None` and renders NOTHING extra (no
+/// section, no flag, no "0 counters" empty-state). A countered claim is
+/// `Countered { counters }` with ≥1 attributed [`CounterEntry`]; the counters are
+/// SHOWN, never APPLIED — they never re-weight/filter/merge the claim above them
+/// (shown-never-applied, I-CT-2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CounterThread {
+    /// The claim is UN-countered — `query_counter_claims` returned an empty vec.
+    /// Renders NOTHING extra (no section, no flag, no empty-state noise; I-CT-2).
+    None,
+    /// The claim has ≥1 counter. Each is an attributed [`CounterEntry`] rendered
+    /// beneath the verbatim claim; the count is the length of `counters` (the
+    /// thread is per-counter, NEVER a merged "disputed by N" aggregate, I-CT-3).
+    Countered { counters: Vec<CounterEntry> },
+}
+
+impl CounterThread {
+    /// Project the boundary [`ports::CounterClaimRow`]s (the ADR-046 2-step read
+    /// output) into the pure [`CounterThread`] ADT — a TOTAL conversion, always
+    /// succeeds. An EMPTY slice yields [`CounterThread::None`] (the un-countered
+    /// no-noise case, I-CT-2); a non-empty slice yields [`CounterThread::Countered`]
+    /// preserving the adapter's deterministic order. `is_own` is derived from the
+    /// counter's ORIGIN: an own counter carries `PeerOrigin::Known { fetched_from_pds:
+    /// "" }` (empty PDS); a pulled peer counter carries its PDS endpoint. The
+    /// grouping/attribution is NEVER recomputed here — each row maps to exactly one
+    /// entry (anti-merging by construction, I-CT-3).
+    pub fn from_rows(rows: &[CounterClaimRow]) -> Self {
+        if rows.is_empty() {
+            return CounterThread::None;
+        }
+        let counters = rows
+            .iter()
+            .map(|row| CounterEntry {
+                author_did: row.author_did.clone(),
+                cid: row.cid.clone(),
+                reason: row.reason.clone(),
+                is_own: counter_is_own(&row.origin),
+            })
+            .collect();
+        CounterThread::Countered { counters }
+    }
+}
+
+/// True when a counter's ORIGIN marks it as the operator's OWN (display-only):
+/// an own counter is a `PeerOrigin::Known` with an EMPTY `fetched_from_pds` (the
+/// adapter's own arm sets `'' AS fetched_from_pds`); a pulled peer counter carries
+/// a non-empty PDS endpoint, and an `Unknown` origin is never "own".
+fn counter_is_own(origin: &PeerOrigin) -> bool {
+    matches!(
+        origin,
+        PeerOrigin::Known {
+            fetched_from_pds, ..
+        } if fetched_from_pds.is_empty()
+    )
+}
+
 /// Render the claim-detail swap-target FRAGMENT (slice-07 H-4a; ADR-032/033): the
 /// `<div id="claim-detail">` wrapping EVERY claim field (subject, predicate,
 /// object, the VERBATIM confidence, author_did, composed_at, CID) PLUS the
@@ -634,11 +733,77 @@ pub const CLAIM_DETAIL_ID: &str = "claim-detail";
 /// construction (I-HX-5 parity — the field/evidence-rendering logic is NOT
 /// duplicated). This is the load-bearing slice-07 structural contract: page =
 /// chrome + fragment.
-pub fn render_claim_detail_fragment(claim: &ClaimDetailView) -> Markup {
+pub fn render_claim_detail_fragment(claim: &ClaimDetailView, thread: &CounterThread) -> Markup {
     html! {
         div id=(CLAIM_DETAIL_ID) {
+            (render_presence_flag(thread))
             (render_claim_fields(claim))
             (render_evidence_section(&claim.evidence))
+            (render_counter_thread(thread))
+        }
+    }
+}
+
+/// Render the neutral "Countered" PRESENCE flag for a claim that has ≥1 counter
+/// (CT-8 / I-CT-3): a presence marker ONLY — never a verdict, score, or count.
+/// An UN-countered claim ([`CounterThread::None`]) renders NOTHING (no flag, no
+/// noise; I-CT-2). PURE total function over the thread ADT.
+fn render_presence_flag(thread: &CounterThread) -> Markup {
+    html! {
+        @if let CounterThread::Countered { .. } = thread {
+            p { (COUNTERED_PRESENCE_FLAG) }
+        }
+    }
+}
+
+/// Render the counter-claim thread BENEATH the verbatim claim (slice-11 /
+/// US-CT-002 / ADR-047): one attributed entry per counter — its author DID, its
+/// own CID as a render-only `<a href="/claims/{cid}">` one-hop drill-link
+/// (depth-1, NO nested/recursive counter render), and its verbatim free-text
+/// reason (or the explicit "no reason provided" state for the empty-reason edge).
+/// The entries are SHOWN, never APPLIED — they never re-weight/filter/merge the
+/// claim above (shown-never-applied, I-CT-2), and never collapse into a merged
+/// "disputed by N" aggregate (anti-merging, I-CT-3). An UN-countered claim
+/// ([`CounterThread::None`]) renders NOTHING — no section, no empty-state noise.
+/// PURE total function over the thread ADT.
+fn render_counter_thread(thread: &CounterThread) -> Markup {
+    html! {
+        @if let CounterThread::Countered { counters } = thread {
+            section {
+                h2 { (COUNTER_THREAD_HEADING) }
+                ul {
+                    @for entry in counters {
+                        li {
+                            (render_counter_entry(entry))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render one counter entry: its author DID (verbatim attribution), its own CID
+/// as a render-only one-hop drill-link toward `/claims/{cid}` (depth-1, ADR-047),
+/// and its verbatim reason (or [`COUNTER_NO_REASON_NOTICE`] when absent). The
+/// drill-link is navigation TEXT only — the viewer offers NO write/sign/counter
+/// control (I-CT-1). PURE total function over the entry.
+fn render_counter_entry(entry: &CounterEntry) -> Markup {
+    let drill_href = format!("/claims/{}", entry.cid);
+    html! {
+        dl {
+            dt { "Counter author" } dd { (entry.author_did) }
+            dt { "Counter CID" }
+            dd {
+                a href=(drill_href) { (entry.cid) }
+            }
+            dt { "Reason" }
+            dd {
+                @match &entry.reason {
+                    Some(reason) => (reason),
+                    None => (COUNTER_NO_REASON_NOTICE),
+                }
+            }
         }
     }
 }
@@ -657,7 +822,7 @@ pub fn render_claim_detail_fragment(claim: &ClaimDetailView) -> Markup {
 /// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2).
 /// Because the detail region is the SAME fn in both shapes, fragment/full-page
 /// parity is structural, not asserted by duplicating render logic (I-HX-5).
-pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
+pub fn render_claim_detail(claim: &ClaimDetailView, thread: &CounterThread) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
@@ -665,7 +830,7 @@ pub fn render_claim_detail(claim: &ClaimDetailView) -> String {
             body {
                 h1 { "Claim Detail" }
                 p { (READ_ONLY_NOTICE) }
-                (render_claim_detail_fragment(claim))
+                (render_claim_detail_fragment(claim, thread))
                 p {
                     a href="/claims" { "Back to My Claims" }
                 }
@@ -2287,7 +2452,7 @@ mod tests {
             "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE",
             "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml",
         ]);
-        let html = render_claim_detail(&view);
+        let html = render_claim_detail(&view, &CounterThread::None);
         for needle in [
             "tokio-rs/tokio",
             "has-license",
@@ -2311,11 +2476,162 @@ mod tests {
     /// Guards the empty/non-empty fork of the evidence section.
     #[test]
     fn render_claim_detail_with_no_evidence_shows_explicit_empty_state() {
-        let html = render_claim_detail(&detail(&[]));
+        let html = render_claim_detail(&detail(&[]), &CounterThread::None);
         assert!(
             html.contains("no evidence attached"),
             "a claim with empty evidence must show \"no evidence attached\"; got:\n{html}"
         );
+    }
+
+    /// A `CounterClaimRow` builder for the projection unit tests. `pds` empty →
+    /// an OWN counter (`is_own == true`); non-empty → a peer counter.
+    fn counter_row(author_did: &str, cid: &str, reason: Option<&str>, pds: &str) -> CounterClaimRow {
+        use chrono::TimeZone;
+        CounterClaimRow {
+            author_did: author_did.to_string(),
+            cid: cid.to_string(),
+            reason: reason.map(|r| r.to_string()),
+            confidence: 0.40,
+            composed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 30, 12, 0, 0).unwrap(),
+            origin: PeerOrigin::Known {
+                author_did: author_did.to_string(),
+                fetched_from_pds: pds.to_string(),
+            },
+        }
+    }
+
+    /// Behavior (slice-11 / I-CT-2): an EMPTY `query_counter_claims` result projects
+    /// to `CounterThread::None` — the un-countered no-noise case. The detail render
+    /// then shows the claim ALONE: NO "Counter-claims" section, NO "Countered" flag,
+    /// NO "0 counters" empty-state noise.
+    #[test]
+    fn empty_counter_rows_project_to_none_and_render_no_noise() {
+        let thread = CounterThread::from_rows(&[]);
+        assert_eq!(thread, CounterThread::None);
+
+        let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread)
+            .into_string();
+        for noise in [
+            COUNTER_THREAD_HEADING,
+            COUNTERED_PRESENCE_FLAG,
+            "0 counters",
+            "no disagreement",
+        ] {
+            assert!(
+                !frag.contains(noise),
+                "an un-countered claim (CounterThread::None) must render no {noise:?} \
+                 noise; got:\n{frag}"
+            );
+        }
+    }
+
+    /// Behavior (slice-11 / I-CT-3): a non-empty result projects to
+    /// `CounterThread::Countered` with ONE `CounterEntry` per row, preserving order +
+    /// attribution + reason; `is_own` is derived from the ORIGIN (empty PDS → own).
+    /// Two rows by distinct authors stay TWO entries (never merged).
+    #[test]
+    fn counter_rows_project_to_attributed_entries_preserving_order_and_is_own() {
+        let rows = vec![
+            counter_row("did:plc:maria", "bafy-own", Some("I disagree."), ""),
+            counter_row(
+                "did:plc:tobias-test",
+                "bafy-peer",
+                Some("Different lens."),
+                "https://pds.example.com",
+            ),
+        ];
+        let thread = CounterThread::from_rows(&rows);
+        match thread {
+            CounterThread::Countered { counters } => {
+                assert_eq!(counters.len(), 2, "two rows → two attributed entries");
+                assert_eq!(counters[0].author_did, "did:plc:maria");
+                assert_eq!(counters[0].cid, "bafy-own");
+                assert_eq!(counters[0].reason.as_deref(), Some("I disagree."));
+                assert!(counters[0].is_own, "empty PDS → own counter");
+                assert_eq!(counters[1].author_did, "did:plc:tobias-test");
+                assert_eq!(counters[1].cid, "bafy-peer");
+                assert!(!counters[1].is_own, "non-empty PDS → peer counter");
+            }
+            CounterThread::None => panic!("non-empty rows must project to Countered"),
+        }
+    }
+
+    /// Behavior (slice-11 / I-CT-3 / ADR-047): the rendered thread names each
+    /// counter's author DID, shows its own CID as a render-only
+    /// `<a href="/claims/{cid}">` one-hop drill-link, renders the verbatim reason,
+    /// carries the neutral "Countered" presence flag, and never emits a merged
+    /// "disputed by N" aggregate. The countered claim's confidence renders VERBATIM
+    /// + UNCHANGED (shown-never-applied, I-CT-2).
+    #[test]
+    fn render_thread_attributes_each_counter_with_drill_link_and_verbatim_reason() {
+        let reason = "Cargo's dependency pinning is opt-in, not philosophical.";
+        let rows = vec![counter_row("did:plc:maria", "bafycounter", Some(reason), "")];
+        let thread = CounterThread::from_rows(&rows);
+        let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread)
+            .into_string();
+
+        assert!(frag.contains(COUNTER_THREAD_HEADING), "thread heading; got:\n{frag}");
+        assert!(frag.contains(COUNTERED_PRESENCE_FLAG), "presence flag; got:\n{frag}");
+        assert!(frag.contains("did:plc:maria"), "counter author DID; got:\n{frag}");
+        assert!(
+            frag.contains("href=\"/claims/bafycounter\""),
+            "counter CID render-only drill-link toward /claims/{{cid}}; got:\n{frag}"
+        );
+        assert!(frag.contains(reason), "verbatim reason byte-for-byte; got:\n{frag}");
+        // The claim's own confidence (0.95) renders VERBATIM + unchanged by the counter.
+        assert!(frag.contains("0.95"), "claim confidence verbatim + unchanged; got:\n{frag}");
+        for merged in ["disputed by", "consensus", "net verdict"] {
+            assert!(
+                !frag.contains(merged),
+                "the thread must never emit a merged {merged:?} aggregate; got:\n{frag}"
+            );
+        }
+    }
+
+    /// Behavior (slice-11 / CT-6 / ADR-047): a counter whose `reason` is `None`
+    /// (the ADR-015 wire-optional empty-reason edge) STILL renders its author DID +
+    /// its CID AND the explicit "no reason provided" state — never a blank line,
+    /// never a crash (total at the type level via `reason: Option<String>`).
+    #[test]
+    fn render_thread_empty_reason_shows_explicit_no_reason_state() {
+        let rows = vec![counter_row("did:plc:tobias-test", "bafynoreason", None, "https://pds.x")];
+        let thread = CounterThread::from_rows(&rows);
+        let frag = render_claim_detail_fragment(&detail(&[]), &thread).into_string();
+
+        assert!(frag.contains("did:plc:tobias-test"), "author still shown; got:\n{frag}");
+        assert!(frag.contains("bafynoreason"), "cid still shown; got:\n{frag}");
+        assert!(
+            frag.contains(COUNTER_NO_REASON_NOTICE),
+            "an absent reason must render the explicit {COUNTER_NO_REASON_NOTICE:?} \
+             state; got:\n{frag}"
+        );
+    }
+
+    /// Behavior (slice-11 / I-CT-2 shown-never-applied): the SAME claim's confidence
+    /// + fields render BYTE-IDENTICALLY whether or not a counter is present — the
+    /// counter is additive context BELOW, never a re-weight ABOVE. Pins the
+    /// load-bearing gold at the unit level (the claim region must not drift).
+    #[test]
+    fn counter_presence_never_changes_the_claim_region_above_the_thread() {
+        let view = detail(&["https://e.test/0"]);
+        let uncountered = render_claim_detail_fragment(&view, &CounterThread::None).into_string();
+        let rows = vec![counter_row("did:plc:maria", "bafyc", Some("nope"), "")];
+        let countered =
+            render_claim_detail_fragment(&view, &CounterThread::from_rows(&rows)).into_string();
+
+        // The countered render is a PREFIX-superset: the claim fields + evidence the
+        // un-countered render shows all appear UNCHANGED in the countered render.
+        for needle in ["tokio-rs/tokio", "has-license", "MIT", "0.95", "bafytokio"] {
+            assert!(
+                uncountered.contains(needle) && countered.contains(needle),
+                "the claim field {needle:?} must render identically with/without a \
+                 counter (shown-never-applied); uncountered:\n{uncountered}\n\
+                 countered:\n{countered}"
+            );
+        }
+        // The un-countered render carries NONE of the thread chrome.
+        assert!(!uncountered.contains(COUNTER_THREAD_HEADING));
+        assert!(!uncountered.contains(COUNTERED_PRESENCE_FLAG));
     }
 
     /// Behavior (slice-07 H-4a; ADR-032/033): the claim-detail swap-target FRAGMENT
@@ -2329,7 +2645,7 @@ mod tests {
         let ev0 = "https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE";
         let ev1 = "https://github.com/tokio-rs/tokio/blob/HEAD/Cargo.toml";
         let view = detail(&[ev0, ev1]);
-        let frag = render_claim_detail_fragment(&view).into_string();
+        let frag = render_claim_detail_fragment(&view, &CounterThread::None).into_string();
 
         // Wrapped in the swap-target id, the single source of truth (CLAIM_DETAIL_ID).
         assert!(
@@ -2381,7 +2697,7 @@ mod tests {
                 .map(|i| format!("https://example.test/evidence-{i}"))
                 .collect();
             let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-            let html = render_claim_detail(&detail(&url_refs));
+            let html = render_claim_detail(&detail(&url_refs), &CounterThread::None);
 
             let mut last_pos: Option<usize> = None;
             for url in &urls {
@@ -2410,7 +2726,7 @@ mod tests {
         fn render_claim_detail_renders_confidence_verbatim(confidence in 0.0f64..=1.0f64) {
             let mut view = detail(&["https://example.test/e0"]);
             view.confidence = confidence;
-            let html = render_claim_detail(&view);
+            let html = render_claim_detail(&view, &CounterThread::None);
             prop_assert!(
                 html.contains(&render_confidence(confidence)),
                 "detail must embed the verbatim confidence {:?}",

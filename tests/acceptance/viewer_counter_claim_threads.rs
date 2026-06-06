@@ -110,14 +110,34 @@ fn open_a_countered_claim_with_htmx_returns_only_the_detail_fragment_with_the_th
     // THEN the response is ONLY the `#claim-detail` fragment (`is_fragment()`, NOT a
     // full page): the claim is rendered VERBATIM (confidence 0.91), and BENEATH it the
     // counter-thread names the counter's author DID + its CID + its verbatim reason.
-    todo!(
-        "DELIVER (CT-1 walking skeleton): seed a countered claim \
-         (seed_claim_with_counter), start ViewerServer, GET /claims/{{target_cid}} with \
-         the HX-Request header (get_htmx), assert status==200 + content-type text/html \
-         + is_fragment() + carries the #claim-detail id + the claim renders verbatim \
-         (0.91) + assert_counter_thread_renders_attributed_verbatim names the counter's \
-         author DID + CID + verbatim reason"
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get_htmx(&format!("/claims/{}", seeded.target_cid));
+
+    // THEN: 200 text/html, ONLY the #claim-detail fragment (no chrome).
+    assert_eq!(
+        response.status, 200,
+        "CT-1: GET /claims/{{cid}} with HX-Request over a countered claim must return \
+         200;\n--- body ---\n{}",
+        response.body
     );
+    assert!(
+        response.content_type.contains("text/html"),
+        "CT-1: the detail fragment must be served as text/html; content_type was {:?}",
+        response.content_type
+    );
+    assert!(
+        response.is_fragment(),
+        "CT-1: the HX-Request response must be ONLY the #claim-detail fragment (no \
+         full-page chrome);\n--- body ---\n{}",
+        response.body
+    );
+
+    // THEN: the claim renders VERBATIM (0.91) and, beneath it, the counter-thread names
+    // the counter's author DID + its CID + its verbatim reason.
+    assert_counter_thread_renders_attributed_verbatim(&response.body, &seeded.counters, "0.91");
 }
 
 /// CT-2 (US-CT-002 — no-JS full page + parity, I-CT-6): `GET /claims/{cid}` WITHOUT

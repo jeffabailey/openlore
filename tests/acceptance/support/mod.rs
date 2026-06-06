@@ -9428,16 +9428,74 @@ pub struct SeededCounter {
 /// Recover the counter CID from stdout (`signed_cid_from_stdout` / the slice-03
 /// `parse_counter_claim_cid`). NO hand-inserted store rows.
 pub fn seed_claim_with_counter(env: &TestEnv) -> SeededCounterThread {
-    let _ = env;
-    todo!(
-        "DELIVER (seed_claim_with_counter): seed Rachel's claim at 0.91 via \
-         seed_peer_authored_graph (one triple), recover its production-recomputed \
-         target_cid, then author the operator's OWN counter via the slice-03 \
-         `claim counter --reason COUNTER_REASON_VERBATIM <target_cid>` verb (sign, \
-         decline publish), recover the counter_cid from stdout, and return a \
-         SeededCounterThread {{ target_cid, target_confidence: 0.91, counters: [Maria's \
-         own counter (Some(COUNTER_REASON_VERBATIM))] }}"
-    )
+    // STEP 1 — seed Rachel's claim (confidence 0.91) as a PULLED PEER claim via the
+    // production `peer add` + `peer pull` federation path (it lands in `peer_claims`).
+    // ONE triple at 0.91 so the target shape matches `seed_uncountered_claim` (the
+    // shown-never-applied byte-diff baseline). Rachel's seed `[7u8; 32]` mirrors the
+    // slice-03 counter_claim.rs convention.
+    let rachel_seed = [7u8; 32];
+    let _graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+            seed: rachel_seed,
+            triples: &[(
+                "github:rust-lang/cargo",
+                "org.openlore.philosophy.dependency-pinning",
+                0.91,
+            )],
+        }],
+    );
+
+    // Recover the production-recomputed target CID from the real `peer_claims` table
+    // (the pull pipeline verified + content-addressed it — no hand-inserted row).
+    let target_cids = read_peer_claim_cids_for(env, COUNTER_TARGET_AUTHOR_RACHEL);
+    assert_eq!(
+        target_cids.len(),
+        1,
+        "seed_claim_with_counter: expected exactly ONE pulled Rachel claim to counter; \
+         got {target_cids:?}"
+    );
+    let target_cid = target_cids.into_iter().next().expect("one target CID");
+
+    // STEP 2 — author the operator's OWN counter against the target via the slice-03
+    // `claim counter --reason <R> <CID>` verb (it lands in the user's OWN `claims`
+    // table carrying references[].type == counters + the verbatim reason in its
+    // on-disk artifact). The verb resolves the target from the LOCAL stores (own
+    // `claims` then the peer cache) — NO network resolver needed. Confirm the sign
+    // prompt, DECLINE publish ("\nN\n") — the read path needs only the LOCAL row.
+    let outcome = run_openlore_with_stdin(
+        env,
+        &[
+            "claim",
+            "counter",
+            &target_cid,
+            "--reason",
+            COUNTER_REASON_VERBATIM,
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        outcome.status, 0,
+        "seed_claim_with_counter: `claim counter` must exit 0;\n--- stdout ---\n{}\n\
+         --- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Recover the OWN counter's content-addressed CID from the verb's
+    // `Computing claim CID <cid>` line (the same marker `claim add` prints; the CID is
+    // recoverable even when publish is declined).
+    let counter_cid = signed_cid_from_stdout(&outcome.stdout);
+
+    SeededCounterThread {
+        target_cid,
+        target_confidence: 0.91,
+        counters: vec![SeededCounter {
+            author_did: env.identity.author_did().to_string(),
+            cid: counter_cid,
+            reason: Some(COUNTER_REASON_VERBATIM.to_string()),
+        }],
+    }
 }
 
 /// Seed a claim countered by TWO DISTINCT authors through the PRODUCTION CLI counter
@@ -9531,14 +9589,47 @@ pub fn assert_counter_thread_renders_attributed_verbatim(
     expected_counters: &[SeededCounter],
     expected_confidence_verbatim: &str,
 ) {
-    let _ = (body, expected_counters, expected_confidence_verbatim);
-    todo!(
-        "DELIVER (assert_counter_thread_renders_attributed_verbatim): for each expected \
-         counter assert body.contains(author_did) + body.contains(cid) + (when \
-         reason.is_some()) body.contains(reason) byte-for-byte; assert \
-         body.contains(expected_confidence_verbatim) (the claim's confidence verbatim + \
-         unchanged — I-CT-2/I-CT-4) + body.contains(CLAIM_DETAIL_REGION_ID) (I-CT-6)"
-    )
+    assert!(
+        !expected_counters.is_empty(),
+        "I-CT-3: the attributed-thread assertion needs ≥1 expected counter; body was:\n{body}"
+    );
+    // The body carries the `#claim-detail` swap-target region (I-CT-6 — the page
+    // EMBEDS the same fragment fn, so this id appears in BOTH shapes).
+    assert!(
+        body.contains(CLAIM_DETAIL_REGION_ID),
+        "I-CT-6: the detail body must carry the #{CLAIM_DETAIL_REGION_ID} region id; \
+         body was:\n{body}"
+    );
+    // The original claim's confidence renders VERBATIM + UNCHANGED by the counter
+    // (shown-never-applied; never `0.9`/`91%`; I-CT-2 / I-CT-4).
+    assert!(
+        body.contains(expected_confidence_verbatim),
+        "I-CT-2/I-CT-4: the countered claim's confidence must render verbatim + \
+         unchanged ({expected_confidence_verbatim:?}); body was:\n{body}"
+    );
+    // Per-counter attribution: every expected counter's author DID + its own CID
+    // (the drill-link target) + its verbatim reason render byte-for-byte (I-CT-3).
+    for counter in expected_counters {
+        assert!(
+            body.contains(&counter.author_did),
+            "I-CT-3: the counter-thread must name the counter author DID \
+             {:?}; body was:\n{body}",
+            counter.author_did
+        );
+        assert!(
+            body.contains(&counter.cid),
+            "I-CT-3: the counter-thread must show the counter's own CID {:?} (the \
+             drill-link target); body was:\n{body}",
+            counter.cid
+        );
+        if let Some(reason) = &counter.reason {
+            assert!(
+                body.contains(reason.as_str()),
+                "I-CT-3: the counter-thread must render the verbatim reason {reason:?} \
+                 byte-for-byte; body was:\n{body}"
+            );
+        }
+    }
 }
 
 /// Assert a rendered claim-detail body renders EXACTLY two attributed counter entries

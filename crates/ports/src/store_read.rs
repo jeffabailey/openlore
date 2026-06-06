@@ -159,6 +159,54 @@ pub struct SurveyRow {
     pub composed_at: DateTime<Utc>,
 }
 
+/// One COUNTER targeting a given claim, projected for the read-only
+/// counter-claim thread on the detail view (`/claims/{cid}`, slice-11 /
+/// US-CT-002 / ADR-046/047). A FLAT DTO (not the rich `SignedClaim`): the pure
+/// `viewer-domain` projection reads these fields verbatim into a `CounterThread`.
+///
+/// A counter is an ordinary signed claim carrying a `references[].type ==
+/// counters` entry whose `cid` is the countered target (ADR-015). The thread is
+/// the ADR-046 2-step read: step A is the INDEXED `claim_references` /
+/// `peer_claim_references` lookup by `referenced_cid` (UNION ALL, attributed) for
+/// the counter's `author_did` + `cid` + `source_table`; step B reads each
+/// counter's on-disk `SignedClaim` artifact for its free-text `reason` (the
+/// reason is NOT a DB column — it lives in the artifact, ADR-015).
+///
+/// Both `author_did` and `cid` are NON-`Option` (the anti-merging + attribution
+/// contract, I-CT-3): every counter maps to exactly ONE signed claim and is
+/// ALWAYS attributed to its author — two counters by different authors stay TWO
+/// `CounterClaimRow`s (never merged into a "disputed by N" aggregate). `reason`
+/// is `Option<String>` (ADR-015 wire-optional): `None` for a counter authored by
+/// a non-OpenLore client that omitted the reason (the viewer then renders an
+/// explicit "no reason provided" state — never a blank line). `confidence` is the
+/// stored DOUBLE; `composed_at` is used ONLY for deterministic ordering;
+/// `origin` carries the peer ORIGIN ([`PeerOrigin`]: an own counter projects to
+/// `Known { author_did, fetched_from_pds: "" }`; a pulled peer counter carries
+/// its PDS) so the viewer can distinguish "mine vs peer".
+#[derive(Debug, Clone, PartialEq)]
+pub struct CounterClaimRow {
+    /// The counter's author DID — NON-`Option`, NEVER elided (anti-merging,
+    /// I-CT-3). Rendered VERBATIM as the counter's attribution.
+    pub author_did: String,
+    /// The counter's own content-addressed CID — NON-`Option`; the render-only
+    /// `<a href="/claims/{cid}">` one-hop drill-link target (depth-1, ADR-047).
+    pub cid: String,
+    /// The counter's free-text `--reason`, read from its on-disk `SignedClaim`
+    /// artifact (`unsigned.reason`). `None` for the ADR-015 wire-optional
+    /// empty-reason edge → the viewer renders "no reason provided".
+    pub reason: Option<String>,
+    /// The counter's stored confidence DOUBLE — carried for completeness;
+    /// rendered VERBATIM if shown (never rounded).
+    pub confidence: f64,
+    /// The counter `composed_at` — used ONLY for deterministic ordering, never a
+    /// re-weight of the countered claim (shown-never-applied, I-CT-2).
+    pub composed_at: DateTime<Utc>,
+    /// The counter's peer ORIGIN: an own counter projects to `Known {
+    /// author_did, fetched_from_pds: "" }`; a pulled peer counter carries its PDS
+    /// endpoint. Lets the viewer distinguish "mine vs peer".
+    pub origin: PeerOrigin,
+}
+
 /// An offset/limit pagination request over the own-claim store. The viewer
 /// translates a `?page=N` query (page size 50, ADR-030) into one of these: the
 /// offset/limit selects one page, the bounds + position indicator are projected
@@ -282,4 +330,30 @@ pub trait StoreReadPort: Send + Sync {
     /// philosophy with no local rows (the viewer renders the guided `NoClaims` state —
     /// never an error, I-GT-4).
     fn query_philosophy_survey(&self, object: &str) -> Result<Vec<SurveyRow>, StoreReadError>;
+
+    /// Read the LOCAL counter-claim thread for ONE claim CID (`/claims/{cid}`,
+    /// slice-11 / US-CT-002 / ADR-046/047): every signed claim that COUNTERS
+    /// `target_cid` (carries a `references[].type == counters` entry referencing
+    /// it), from the operator's OWN `claims` table UNION ALL the LOCAL
+    /// `peer_claims` table — NO network. The pure `viewer-domain` projection turns
+    /// this `Vec<CounterClaimRow>` into a `CounterThread` rendered BENEATH the
+    /// verbatim claim; the original claim is NEVER re-weighted/filtered/merged by a
+    /// counter (shown-never-applied, I-CT-2).
+    ///
+    /// READ-ONLY by construction: the ADR-046 2-step read over the SAME shared
+    /// connection the CLI writes through (BR-VIEW-4) — there is NO mutation method
+    /// on this trait (I-VIEW-1). Step A is the INDEXED UNION-ALL ref lookup
+    /// (`claims` JOIN `claim_references` ∪ `peer_claims` JOIN `peer_claim_references`,
+    /// `WHERE referenced_cid = ? AND ref_type = 'counters'`) projecting the
+    /// counter's `author_did` + `cid` + `source_table` EXPLICITLY (NEVER a merging
+    /// JOIN/GROUP BY/AVG — two counters by different authors stay TWO rows,
+    /// anti-merging I-CT-3). Step B reads each counter's on-disk `SignedClaim`
+    /// artifact for its free-text `reason` (the reason is NOT a DB column — ADR-015).
+    /// LOCAL only; returns an EMPTY vec for an UN-countered CID (the projection then
+    /// yields `CounterThread::None` — the detail renders the claim alone, no
+    /// empty-state noise, I-CT-2).
+    fn query_counter_claims(
+        &self,
+        target_cid: &str,
+    ) -> Result<Vec<CounterClaimRow>, StoreReadError>;
 }

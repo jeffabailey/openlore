@@ -158,7 +158,7 @@ impl DuckDbStorageAdapter {
     /// read-only `StoreReadPort` surface (no write/sign method), so the
     /// `openlore ui` viewer that holds it is structurally read-only (I-VIEW-1).
     pub fn read_adapter(&self) -> DuckDbStoreReadAdapter {
-        DuckDbStoreReadAdapter::from_shared(Arc::clone(&self.conn))
+        DuckDbStoreReadAdapter::from_shared(Arc::clone(&self.conn), self.peer_claims_root.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.

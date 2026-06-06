@@ -45,7 +45,8 @@ use viewer_domain::{
     render_philosophy_fragment, render_philosophy_page, render_project_fragment, render_project_page,
     render_score_page, render_score_results_fragment, render_scrape_page,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
-    CandidateRowView, ClaimDetailView, ClaimRowView, PageView, PeerClaimRowView, ScoreState,
+    CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
+    ScoreState,
     ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PHILOSOPHY_URL, PROJECT_URL,
     SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
@@ -680,9 +681,25 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Resp
     match store.get_claim(cid) {
         Ok(Some(detail)) => {
             let view = ClaimDetailView::from_detail(&detail);
+            // slice-11 (US-CT-002 / ADR-046/047): additionally read the LOCAL
+            // counter-claim thread over the SAME read-only store the viewer ALREADY
+            // holds (`query_counter_claims` — claims ∪ local peer_claims via the
+            // ADR-046 2-step read, NO network, NO new field, NO key), project the
+            // rows into the PURE `CounterThread` ADT (anti-merging — each row maps to
+            // one entry, never SQL-merged; I-CT-3), and thread it BENEATH the verbatim
+            // claim. A read failure degrades to `CounterThread::None` (the claim still
+            // renders verbatim — the counter read never crashes the detail, and a
+            // missing thread is never a stack trace; NFR-VIEW-6). The counter never
+            // re-weights the claim above it (shown-never-applied; I-CT-2).
+            let thread = match store.query_counter_claims(cid) {
+                Ok(rows) => CounterThread::from_rows(&rows),
+                Err(_) => CounterThread::None,
+            };
             match shape {
-                Shape::Fragment => html_ok(render_claim_detail_fragment(&view).into_string()),
-                Shape::FullPage => html_ok(render_claim_detail(&view)),
+                Shape::Fragment => {
+                    html_ok(render_claim_detail_fragment(&view, &thread).into_string())
+                }
+                Shape::FullPage => html_ok(render_claim_detail(&view, &thread)),
             }
         }
         // Unknown CID / read failure: the GUIDED 404 — message + back link, never a
