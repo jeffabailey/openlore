@@ -156,18 +156,62 @@ fn open_a_countered_claim_with_htmx_returns_only_the_detail_fragment_with_the_th
 #[test]
 fn a_countered_claim_renders_identically_under_htmx_and_no_js() {
     // GIVEN the same countered-claim store (Rachel's claim + Maria's own counter).
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+
+    let viewer = ViewerServer::start(&env);
+
     // WHEN Maria requests the detail WITHOUT the htmx header (full page) AND WITH it
     // (fragment).
-    // THEN the no-JS response is_full_page() (chrome present) and its `#claim-detail`
-    // region embeds the SAME claim + counter-thread the is_fragment() htmx response
-    // returns — structural parity by construction (I-CT-6).
-    todo!(
-        "DELIVER (CT-2 parity): seed_claim_with_counter, start ViewerServer, GET \
-         /claims/{{cid}} (get → full page) AND (get_htmx → fragment); assert \
-         full_page.is_full_page() + fragment.is_fragment() + both carry the \
-         #claim-detail id + the counter's author DID + CID + verbatim reason appear in \
-         BOTH bodies (the page embeds the same fragment fn — I-CT-6)"
+    let full_page = viewer.get(&format!("/claims/{}", seeded.target_cid));
+    let fragment = viewer.get_htmx(&format!("/claims/{}", seeded.target_cid));
+
+    // THEN both succeed as text/html.
+    assert_eq!(
+        full_page.status, 200,
+        "CT-2: GET /claims/{{cid}} WITHOUT HX-Request over a countered claim must \
+         return 200;\n--- body ---\n{}",
+        full_page.body
     );
+    assert_eq!(
+        fragment.status, 200,
+        "CT-2: GET /claims/{{cid}} WITH HX-Request over a countered claim must return \
+         200;\n--- body ---\n{}",
+        fragment.body
+    );
+    assert!(
+        full_page.content_type.contains("text/html"),
+        "CT-2: the full page must be served as text/html; content_type was {:?}",
+        full_page.content_type
+    );
+    assert!(
+        fragment.content_type.contains("text/html"),
+        "CT-2: the htmx fragment must be served as text/html; content_type was {:?}",
+        fragment.content_type
+    );
+
+    // THEN: the no-JS response is_full_page() (chrome present) while the htmx response
+    // is_fragment() (no chrome) — the two SHAPES differ (ADR-033) even though the
+    // detail REGION is identical.
+    assert!(
+        full_page.is_full_page(),
+        "CT-2: the no-JS response must be a COMPLETE full page (chrome present);\n\
+         --- body ---\n{}",
+        full_page.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "CT-2: the HX-Request response must be ONLY the #claim-detail fragment (no \
+         chrome);\n--- body ---\n{}",
+        fragment.body
+    );
+
+    // THEN: the full page EMBEDS the SAME fragment — its `#claim-detail` region carries
+    // the SAME claim (confidence 0.91 verbatim) AND the SAME counter-thread (the
+    // counter's author DID + its CID + its verbatim reason) the htmx fragment returns.
+    // No divergence: parity by construction (the page embeds the fragment fn — I-CT-6).
+    assert_counter_thread_renders_attributed_verbatim(&full_page.body, &seeded.counters, "0.91");
+    assert_counter_thread_renders_attributed_verbatim(&fragment.body, &seeded.counters, "0.91");
 }
 
 /// CT-3 / GOLD shown-never-applied (US-CT-002; I-CT-2 / OD-AV-7 / ADR-015): the
