@@ -2588,6 +2588,61 @@ mod tests {
         }
     }
 
+    /// Behavior (slice-11 / CT-4 anti-merging gold; I-CT-3 / KPI-AV-2): a claim
+    /// countered by TWO DISTINCT (author, cid) counters renders EXACTLY two attributed
+    /// `<li>` entries — each under its OWN author DID + its OWN CID drill-link + its
+    /// OWN verbatim reason — and NEVER a single merged "disputed by 2" / consensus /
+    /// net-verdict aggregate row. This is the RENDER-level anti-merging oracle (the
+    /// projection-level `from_rows` two-entries oracle is pinned separately above): two
+    /// rows → two `<li>` items, never one collapsed row.
+    #[test]
+    fn render_thread_two_distinct_authors_renders_two_items_never_a_merged_row() {
+        let own_reason = "Pinning is a tool, not a value.";
+        let peer_reason = "Reproducibility is a different axis.";
+        let rows = vec![
+            counter_row("did:plc:maria", "bafy-own", Some(own_reason), ""),
+            counter_row(
+                "did:plc:tobias-test",
+                "bafy-peer",
+                Some(peer_reason),
+                "https://pds.example.com",
+            ),
+        ];
+        let thread = CounterThread::from_rows(&rows);
+        let frag = render_claim_detail_fragment(&detail(&["https://e.test/0"]), &thread)
+            .into_string();
+
+        // EXACTLY two attributed counter entries — one per (author, cid), never
+        // collapsed. Counted by the per-entry "Counter author" label (the evidence
+        // section also uses `<li>`, so count the counter-specific marker instead).
+        assert_eq!(
+            frag.matches("Counter author").count(),
+            2,
+            "two distinct (author, cid) counters must render EXACTLY two attributed \
+             entries (never one merged row); got:\n{frag}"
+        );
+        // Each author DID + each CID drill-link + each verbatim reason renders.
+        for (did, cid, reason) in [
+            ("did:plc:maria", "bafy-own", own_reason),
+            ("did:plc:tobias-test", "bafy-peer", peer_reason),
+        ] {
+            assert!(frag.contains(did), "counter author DID {did:?}; got:\n{frag}");
+            assert!(
+                frag.contains(&format!("href=\"/claims/{cid}\"")),
+                "counter CID {cid:?} drill-link; got:\n{frag}"
+            );
+            assert!(frag.contains(reason), "verbatim reason {reason:?}; got:\n{frag}");
+        }
+        // NEVER a merged / faceless consensus aggregate row.
+        for merged in ["disputed by", "disputed by 2", "consensus", "net verdict"] {
+            assert!(
+                !frag.contains(merged),
+                "two distinct-author counters must NEVER collapse into a merged \
+                 {merged:?} aggregate; got:\n{frag}"
+            );
+        }
+    }
+
     /// Behavior (slice-11 / CT-6 / ADR-047): a counter whose `reason` is `None`
     /// (the ADR-015 wire-optional empty-reason edge) STILL renders its author DID +
     /// its CID AND the explicit "no reason provided" state — never a blank line,

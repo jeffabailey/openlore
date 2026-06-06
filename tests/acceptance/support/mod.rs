@@ -3538,6 +3538,91 @@ pub fn build_verifiable_peer_records_for_triples(
     (records, pubkey_hex)
 }
 
+/// Build ONE verifiable PEER COUNTER record: a signed claim authored by `peer_did`
+/// that carries `references: [{ type: "counters", cid: target_cid }]` (ADR-015) +
+/// an optional free-text `reason`, so that when it is `peer pull`ed through the
+/// PRODUCTION federation path it lands in `peer_claims` + `peer_claim_references`
+/// (referenced_cid == target_cid) and the ADR-046 2-step counter-thread read
+/// (`query_counter_claims`) finds it as an attributed peer counter. This is the
+/// sibling of [`build_verifiable_peer_records_for_triples`] (which hardcodes
+/// `references: Vec::new()` + `reason: None`) — the slice-11 anti-merging /
+/// empty-reason fixtures need a counter-shaped peer record, not a plain triple.
+///
+/// The `references` + `reason` are carried in BOTH the canonicalized
+/// [`UnsignedClaim`] (so `compute_cid` is over the true counter shape) AND the
+/// wire JSON body (so the pull pipeline's `parse_references` + `reason` decode
+/// reconstruct the SAME unsigned claim and the recomputed CID byte-matches the
+/// published rkey, WD-24). `reason == None` emits NO `reason` field (the ADR-015
+/// wire-optional empty-reason edge — the empty-reason fixture, CT-6).
+///
+/// Returns `(record, peer_pubkey_hex)` so the caller wires the verify seam.
+/// Test-support is the only place this construction is acceptable; the production
+/// populate path is `peer pull`.
+pub fn build_verifiable_peer_counter_record(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    target_cid: &str,
+    reason: Option<&str>,
+) -> (FakePeerRecord, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    // A counter is a claim whose `references[]` carries a `Counters` entry whose
+    // `cid` is the target. Subject/predicate/object identify the counter's own
+    // assertion; what makes it a COUNTER is the `counters` reference (ADR-015).
+    let confidence_wrapper: claim_domain::Confidence =
+        serde_json::from_value(serde_json::json!(0.40)).expect("confidence value is well-formed");
+    let unsigned = claim_domain::UnsignedClaim {
+        subject: "github:rust-lang/cargo".to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: "org.openlore.philosophy.dependency-pinning".to_string(),
+        evidence: vec!["https://example.test/counter".to_string()],
+        confidence: confidence_wrapper,
+        author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+        composed_at: "2026-05-22T09:18:44Z".to_string(),
+        references: vec![claim_domain::ClaimReference {
+            ref_type: claim_domain::ReferenceType::Counters,
+            cid: claim_domain::Cid(target_cid.to_string()),
+        }],
+        reason: reason.map(|r| r.to_string()),
+    };
+
+    let canonical = canonicalize(&unsigned).expect("canonicalize peer counter claim");
+    let cid = compute_cid(&canonical);
+    let signature = sign(&cid, &signing_key).expect("sign peer counter claim");
+    let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+    // The wire JSON body MUST mirror the unsigned claim so the pull pipeline's
+    // decode (`parse_references` + `reason`) reconstructs the SAME unsigned claim
+    // and the recomputed CID byte-matches the published rkey. `reason == None`
+    // omits the field entirely (the wire-optional empty-reason edge).
+    let mut body = serde_json::json!({
+        "subject": "github:rust-lang/cargo",
+        "predicate": "embodiesPhilosophy",
+        "object": "org.openlore.philosophy.dependency-pinning",
+        "evidence": ["https://example.test/counter"],
+        "confidence": 0.40,
+        "author": format!("{peer_did}#org.openlore.application"),
+        "composedAt": "2026-05-22T09:18:44Z",
+        "references": [{ "type": "counters", "cid": target_cid }],
+        "signature": {
+            "kid": format!("{peer_did}#org.openlore.application"),
+            "alg": "EdDSA",
+            "sig": sig_b64,
+        }
+    });
+    if let Some(reason) = reason {
+        body["reason"] = serde_json::json!(reason);
+    }
+
+    (FakePeerRecord::claim(cid.0, body), pubkey_hex)
+}
+
 /// Run `openlore <args>` with the network disabled (no PDS/peer endpoint
 /// reachable), so a read-only LOCAL explorer command must still succeed.
 /// Proves the local-first guardrail (I-GRAPH-7 / WD-79 / WD-92; extends
@@ -9369,6 +9454,14 @@ pub const COUNTER_AUTHOR_TOBIAS: &str = "did:plc:tobias-test";
 pub const COUNTER_REASON_VERBATIM: &str =
     "Cargo's dependency pinning is opt-in, not philosophical; pinning is a tool, not a value.";
 
+/// The verbatim free-text reason the PEER (Tobias) counter is authored with — DISTINCT
+/// from [`COUNTER_REASON_VERBATIM`] so the anti-merging fixture (CT-4) proves the two
+/// counters render as two attributed items with their OWN reasons, never collapsed into
+/// one merged "disputed by 2" row. One source of truth so the seed + assertion never
+/// drift; the punctuation is load-bearing (renders byte-for-byte, ADR-015 / WD-35).
+pub const COUNTER_PEER_REASON_VERBATIM: &str =
+    "Reproducibility is a different axis; pinning serves builds, not philosophy.";
+
 /// The `#claim-detail` swap-target id the `/claims/{cid}` detail fragment renders under
 /// (the slice-06/07 detail region the slice-11 counter-thread is rendered INSIDE — the
 /// page EMBEDS this fragment, so the htmx fragment and the no-JS full page are
@@ -9517,16 +9610,145 @@ pub fn seed_claim_with_counter(env: &TestEnv) -> SeededCounterThread {
 /// both counter CIDs. NO hand-inserted store rows; the peer-counter shape is verified +
 /// CID-recomputed by the production pull pipeline.
 pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterThread {
-    let _ = env;
-    todo!(
-        "DELIVER (seed_claim_two_counters_distinct_authors): seed Rachel's target claim \
-         (0.91); author Maria's OWN counter via `claim counter` (→ claims); build a \
-         verifiable PEER counter record for COUNTER_AUTHOR_TOBIAS carrying \
-         references:[{{type:counters, cid:target_cid}}] + a reason, then `peer add` + \
-         `peer pull` it (→ peer_claims); recover both counter CIDs; return a \
-         SeededCounterThread with BOTH counters (Maria own + Tobias peer) in \
-         deterministic order"
-    )
+    // STEP 1 — build BOTH peers' verifiable wire records UP FRONT, holding each
+    // `PeerPds` ALIVE for the whole function (so a SINGLE `peer pull` over BOTH peers
+    // succeeds — pulling one peer at a time would leave the other's now-dropped PDS
+    // unreachable and fail the pull). Rachel hosts the TARGET claim (0.91); Tobias
+    // hosts a COUNTER referencing the target. Rachel's target CID is DETERMINISTIC
+    // (the pull pipeline recomputes the SAME CID the builder computes), so Tobias's
+    // counter can reference it before either is pulled.
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &[(
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.91,
+        )],
+    );
+    let target_cid = rachel_records
+        .first()
+        .expect("Rachel's target record")
+        .rkey
+        .clone();
+
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 2 — subscribe to BOTH peers via the real `peer add` verb (resolver wired
+    // per peer), then `peer pull` BOTH in ONE invocation while both PDS are alive.
+    // The production pull pipeline verifies each record + recomputes its CID + writes
+    // peer_claims (+ peer_claim_references for Tobias's `counters` reference).
+    for (did, pds) in [
+        (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_claim_two_counters_distinct_authors: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_claim_two_counters_distinct_authors: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Confirm the pull recomputed Rachel's target CID to the SAME value the builder
+    // computed (so the local target_cid the own counter targets is the stored one).
+    let target_cids = read_peer_claim_cids_for(env, COUNTER_TARGET_AUTHOR_RACHEL);
+    assert_eq!(
+        target_cids, vec![target_cid.clone()],
+        "seed_claim_two_counters_distinct_authors: the pulled Rachel target CID must \
+         match the deterministically computed one; got {target_cids:?}"
+    );
+
+    // STEP 3 — author the operator's OWN counter against the target via the slice-03
+    // `claim counter --reason <R> <CID>` verb (→ the user's OWN `claims` table,
+    // carrying references[].type == counters + the verbatim reason). Confirm sign,
+    // DECLINE publish ("\nN\n") — the read path needs only the LOCAL row.
+    let own_outcome = run_openlore_with_stdin(
+        env,
+        &[
+            "claim",
+            "counter",
+            &target_cid,
+            "--reason",
+            COUNTER_REASON_VERBATIM,
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        own_outcome.status, 0,
+        "seed_claim_two_counters_distinct_authors: `claim counter` (own) must exit 0;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        own_outcome.stdout, own_outcome.stderr
+    );
+    let own_counter_cid = signed_cid_from_stdout(&own_outcome.stdout);
+
+    // STEP 4 — recover Tobias's production-recomputed counter CID from `peer_claims`
+    // (verified + content-addressed by the pull pipeline — no hand-inserted row).
+    let tobias_cids = read_peer_claim_cids_for(env, COUNTER_AUTHOR_TOBIAS);
+    assert_eq!(
+        tobias_cids.len(),
+        1,
+        "seed_claim_two_counters_distinct_authors: expected exactly ONE pulled Tobias \
+         counter; got {tobias_cids:?}"
+    );
+    let peer_counter_cid = tobias_cids.into_iter().next().expect("one Tobias counter CID");
+
+    // Return BOTH counters in deterministic order (own first, then peer) — each
+    // attributed to its OWN author DID + CID (anti-merging by construction).
+    SeededCounterThread {
+        target_cid,
+        target_confidence: 0.91,
+        counters: vec![
+            SeededCounter {
+                author_did: env.identity.author_did().to_string(),
+                cid: own_counter_cid,
+                reason: Some(COUNTER_REASON_VERBATIM.to_string()),
+            },
+            SeededCounter {
+                author_did: COUNTER_AUTHOR_TOBIAS.to_string(),
+                cid: peer_counter_cid,
+                reason: Some(COUNTER_PEER_REASON_VERBATIM.to_string()),
+            },
+        ],
+    }
 }
 
 /// Seed a claim countered by a PEER record whose `reason` is ABSENT/empty — the ADR-015
@@ -9649,14 +9871,67 @@ pub fn assert_counter_thread_two_attributed_no_merge(
     body: &str,
     expected_counters: &[SeededCounter],
 ) {
-    let _ = (body, expected_counters);
-    todo!(
-        "DELIVER (assert_counter_thread_two_attributed_no_merge): assert BOTH expected \
-         (author_did, cid) pairs render as two attributed items (each with its verbatim \
-         reason); assert NO merged aggregate phrasing ('disputed by', 'disputed by 2', \
-         'consensus', 'net verdict', 'people disagree') appears — the thread is \
-         per-counter, never a 'disputed by N' aggregate (I-CT-3 / KPI-AV-2)"
-    )
+    assert_eq!(
+        expected_counters.len(),
+        2,
+        "CT-4 anti-merging needs EXACTLY two distinct-author counters; got {} \
+         (body was:\n{body})",
+        expected_counters.len()
+    );
+
+    // Two DISTINCT authors and two DISTINCT CIDs — the precondition that makes the
+    // anti-merging assertion meaningful (each is its own (author, cid) identity).
+    assert_ne!(
+        expected_counters[0].author_did, expected_counters[1].author_did,
+        "CT-4: the two counters must be by DISTINCT authors; both were {:?}",
+        expected_counters[0].author_did
+    );
+    assert_ne!(
+        expected_counters[0].cid, expected_counters[1].cid,
+        "CT-4: the two counters must carry DISTINCT CIDs; both were {:?}",
+        expected_counters[0].cid
+    );
+
+    // BOTH expected (author_did, cid) pairs render as two attributed items, each with
+    // its OWN verbatim reason (per-counter attribution — anti-merging, I-CT-3).
+    for counter in expected_counters {
+        assert!(
+            body.contains(&counter.author_did),
+            "CT-4: each counter must render under its OWN author DID {:?}; body was:\n{body}",
+            counter.author_did
+        );
+        assert!(
+            body.contains(&counter.cid),
+            "CT-4: each counter must render its OWN CID {:?} (the drill-link target); \
+             body was:\n{body}",
+            counter.cid
+        );
+        if let Some(reason) = &counter.reason {
+            assert!(
+                body.contains(reason.as_str()),
+                "CT-4: each counter must render its OWN verbatim reason {reason:?} \
+                 byte-for-byte; body was:\n{body}"
+            );
+        }
+    }
+
+    // NO merged / faceless consensus aggregate row: the thread is per-counter, never a
+    // "disputed by N" / consensus / net-verdict collapse (anti-merging, I-CT-3 /
+    // KPI-AV-2). Case-insensitive so a capitalized variant can never sneak through.
+    let lowered = body.to_ascii_lowercase();
+    for merged in [
+        "disputed by",
+        "disputed by 2",
+        "consensus",
+        "net verdict",
+        "people disagree",
+    ] {
+        assert!(
+            !lowered.contains(merged),
+            "CT-4: the thread must NEVER emit a merged {merged:?} aggregate (two distinct \
+             (author, cid) → two items, never one); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a rendered claim-detail body shows the empty-reason counter state correctly

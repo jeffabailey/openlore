@@ -275,14 +275,27 @@ fn two_counters_by_distinct_authors_render_as_two_attributed_items_never_merged(
     // merged "disputed by N" / consensus aggregate row appears
     // (assert_counter_thread_two_attributed_no_merge; UNION ALL explicit author_did +
     // cid; I-CT-3).
-    todo!(
-        "DELIVER (CT-4 anti-merging gold): seed_claim_two_counters_distinct_authors \
-         (own counter via `claim counter`; peer counter via `peer add`+`peer pull`); \
-         start ViewerServer, GET /claims/{{target_cid}}; assert via \
-         assert_counter_thread_two_attributed_no_merge that EXACTLY two entries render \
-         (Maria's DID + CID, Tobias's DID + CID), each with its verbatim reason, and \
-         NO 'disputed by 2' / consensus aggregate row (I-CT-3 / KPI-AV-2)"
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_two_counters_distinct_authors(&env);
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    assert_eq!(
+        response.status, 200,
+        "CT-4: GET /claims/{{cid}} over a claim countered by two distinct authors must \
+         return 200;\n--- body ---\n{}",
+        response.body
     );
+
+    // THEN: both counters render as two attributed items (Maria own + Tobias peer),
+    // each with its OWN author DID + CID + verbatim reason, and the original claim's
+    // confidence renders verbatim + unchanged (shown-never-applied).
+    assert_counter_thread_renders_attributed_verbatim(&response.body, &seeded.counters, "0.91");
+
+    // AND: EXACTLY two attributed entries, NO merged "disputed by 2" / consensus /
+    // net-verdict aggregate row (the load-bearing anti-merging gold; I-CT-3 / KPI-AV-2).
+    assert_counter_thread_two_attributed_no_merge(&response.body, &seeded.counters);
 }
 
 /// CT-5 (US-CT-002 — verbatim reason + counter CID drill-link): the counter's
