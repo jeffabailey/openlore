@@ -468,12 +468,64 @@ fn the_countered_claim_confidence_is_byte_identical_with_and_without_counters() 
     // additive context BELOW, never a re-weight ABOVE
     // (assert_counter_claim_verbatim_unchanged over both renders; I-CT-2 / I-CT-4). Any
     // divergence in the claim region is an UNSHIPPABLE shown-never-applied breach.
-    todo!(
-        "DELIVER (CT-INV-ShownNeverApplied gold): render the SAME claim (confidence \
-         0.91) un-countered (seed_uncountered_claim) and countered \
-         (seed_claim_with_counter); assert via assert_counter_claim_verbatim_unchanged \
-         that the countered render shows '0.91' verbatim AND the claim region is \
-         byte-identical to the un-countered render — the counter never \
-         re-weights/filters/merges/re-ranks the claim (I-CT-2 / OD-AV-7 / ADR-015)"
+
+    // GIVEN two REAL stores seeding the SAME target claim shape (Rachel's pulled peer
+    // claim at confidence 0.91, ONE triple) — one UN-countered (`seed_uncountered_claim`)
+    // and one countered by the operator's OWN counter (`seed_claim_with_counter` — the
+    // EXACT same target seed plus a counter). The two seeds share step 1 byte-for-byte,
+    // so the claim region is comparable across the un-countered baseline and the countered
+    // render.
+    let uncountered_env = TestEnv::initialized();
+    let uncountered_cid = seed_uncountered_claim(&uncountered_env);
+
+    let countered_env = TestEnv::initialized();
+    let countered = seed_claim_with_counter(&countered_env);
+
+    // WHEN the SAME claim's detail renders in BOTH shapes (full page + htmx fragment) for
+    // each posture — collected in a scope so both viewers' exclusive DuckDB locks release
+    // on drop before any further work.
+    let (uncountered_full, uncountered_fragment, countered_full, countered_fragment) = {
+        let uncountered_viewer = ViewerServer::start(&uncountered_env);
+        let countered_viewer = ViewerServer::start(&countered_env);
+
+        let uncountered_path = format!("/claims/{uncountered_cid}");
+        let countered_path = format!("/claims/{}", countered.target_cid);
+
+        (
+            uncountered_viewer.get(&uncountered_path),
+            uncountered_viewer.get_htmx(&uncountered_path),
+            countered_viewer.get(&countered_path),
+            countered_viewer.get_htmx(&countered_path),
+        )
+    };
+
+    // Every shape must render 200 content before the byte-diff is meaningful.
+    for (label, response) in [
+        ("un-countered full page", &uncountered_full),
+        ("un-countered fragment", &uncountered_fragment),
+        ("countered full page", &countered_full),
+        ("countered fragment", &countered_fragment),
+    ] {
+        assert_eq!(
+            response.status, 200,
+            "CT-INV-ShownNeverApplied: the {label} detail must render 200 before the \
+             shown-never-applied byte-diff; body was:\n{}",
+            response.body
+        );
+    }
+
+    // THEN — in the FULL-PAGE shape — the countered render shows the claim's confidence
+    // VERBATIM (0.91) AND its claim region is byte-IDENTICAL to the un-countered render:
+    // the counter is additive context BELOW the claim (flag above + thread below), never
+    // a re-weight/filter/merge/re-rank ABOVE (I-CT-2 / OD-AV-7 / ADR-015).
+    assert_counter_claim_verbatim_unchanged(&uncountered_full.body, &countered_full.body, "0.91");
+
+    // THEN — in the htmx FRAGMENT shape — the SAME guarantee holds: the swap-target
+    // fragment's claim region is byte-identical countered vs un-countered, confidence
+    // 0.91 verbatim. The invariant is shape-independent (I-CT-2 / I-CT-6).
+    assert_counter_claim_verbatim_unchanged(
+        &uncountered_fragment.body,
+        &countered_fragment.body,
+        "0.91",
     );
 }
