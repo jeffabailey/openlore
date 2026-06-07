@@ -951,14 +951,39 @@ pub struct PeerClaimRowView {
     /// the renderer matches both arms totally (never drops a row). For `Known`,
     /// the peer's `author_did` is rendered VERBATIM (attribution discipline).
     pub origin: PeerOrigin,
+    /// Whether this peer claim has ≥1 counter (slice-13 / US-CF-002 / ADR-049): the
+    /// at-a-glance "Countered" PRESENCE flag, MIRRORING the slice-12 own-list flag on
+    /// the FEDERATED surface. A boolean per row (presence membership, NEVER a count) —
+    /// set in the EFFECT shell from the REUSED `counter_presence_for` set via
+    /// [`PeerClaimRowView::from_row_with_presence`], so the pure render stays a TOTAL
+    /// function of (page, presence). ADDITIVE: it NEVER changes row order/paging/count,
+    /// the peer ORIGIN, or the confidence cell (shown-never-applied, I-CF-2/I-CF-4).
+    pub is_countered: bool,
 }
 
 impl PeerClaimRowView {
     /// Project a boundary [`ports::PeerClaimRow`] into the view-model. Total —
     /// never fails. The peer ORIGIN ADT is carried through unchanged so the
     /// rendering rule (verbatim DID for `Known`, "unknown" label for `Unknown`)
-    /// lives in ONE place ([`render_peer_origin`]).
+    /// lives in ONE place ([`render_peer_origin`]). The row is UN-countered
+    /// (`is_countered = false`); the slice-13 flag is set via
+    /// [`Self::from_row_with_presence`] in the effect shell.
     pub fn from_row(row: &PeerClaimRow) -> Self {
+        Self::from_row_with_presence(row, &std::collections::HashSet::new())
+    }
+
+    /// Project a boundary [`ports::PeerClaimRow`] into the view-model, setting the
+    /// slice-13 "Countered" presence flag from `presence` (the REUSED slice-12
+    /// `counter_presence_for` SET): `is_countered` is true IFF this row's CID is a
+    /// member (US-CF-002 / ADR-049). A TOTAL conversion — always succeeds. The flag is
+    /// ADDITIVE: every display field (including the peer ORIGIN) is identical to
+    /// [`Self::from_row`]; only `is_countered` differs. The effect shell calls THIS per
+    /// row AFTER `list_peer_claims` pages them, so the presence read never re-orders /
+    /// re-pages / re-counts the federated list (I-CF-2).
+    pub fn from_row_with_presence(
+        row: &PeerClaimRow,
+        presence: &std::collections::HashSet<String>,
+    ) -> Self {
         Self {
             cid: row.cid.clone(),
             subject: row.subject.clone(),
@@ -966,6 +991,7 @@ impl PeerClaimRowView {
             object: row.object.clone(),
             confidence: row.confidence,
             origin: row.origin.clone(),
+            is_countered: presence.contains(&row.cid),
         }
     }
 }
@@ -1064,7 +1090,25 @@ fn render_peer_claim_row(row: &PeerClaimRowView) -> Markup {
             td { (row.object) }
             td { (render_confidence(row.confidence)) }
             td { (render_peer_origin(&row.origin)) }
-            td { (row.cid) }
+            td { (row.cid) (render_peer_list_presence_flag(row)) }
+        }
+    }
+}
+
+/// Render the at-a-glance "Countered" PRESENCE flag for one FEDERATED `/peer-claims`
+/// LIST row (slice-13 / US-CF-002 / ADR-049): a render-only
+/// `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11 counter
+/// thread — navigation TEXT, never an executable write/sign/counter control (I-CF-1). The
+/// FEDERATED-surface sibling of [`render_list_presence_flag`], emitting the SAME shared
+/// [`COUNTERED_PRESENCE_FLAG`] constant (one source of truth across surfaces). PRESENCE-only:
+/// a single neutral marker, NEVER a count or verdict. An UN-countered row
+/// (`is_countered == false`) renders NOTHING — no marker, no "0 counters" noise (no-noise
+/// discipline, I-CF-2). PURE total function over the row's `is_countered` flag, so the
+/// render is a total function of (page, presence).
+fn render_peer_list_presence_flag(row: &PeerClaimRowView) -> Markup {
+    html! {
+        @if row.is_countered {
+            a href=(format!("/claims/{}", row.cid)) { (COUNTERED_PRESENCE_FLAG) }
         }
     }
 }
@@ -3384,6 +3428,7 @@ mod tests {
             object: object.to_string(),
             confidence,
             origin,
+            is_countered: false,
         }
     }
 
@@ -5960,6 +6005,222 @@ mod tests {
                     html.contains(&anchor),
                     countered,
                     "row {} flag presence must equal is_countered={}",
+                    i,
+                    countered
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // slice-13 — the per-row "Countered" PRESENCE FLAG on the FEDERATED /peer-claims
+    // LIST (US-CF-002; ADR-049). MIRRORS the slice-12 ClaimRowView oracles EXACTLY on
+    // the PeerClaimRowView: flag set in the EFFECT shell via `from_row_with_presence`
+    // (the pure render stays a TOTAL function of (page, presence)), flag IFF the row's
+    // cid is in the presence set, un-countered → no marker, and the flag is ADDITIVE
+    // (it never changes the peer ORIGIN, confidence, row order, or count).
+    // =========================================================================
+
+    /// Build a boundary `ports::PeerClaimRow` (the shell's input to the federated
+    /// `from_row_with_presence`) at a fixed timestamp.
+    fn peer_claim_row(cid: &str, subject: &str, confidence: f64) -> PeerClaimRow {
+        PeerClaimRow {
+            cid: cid.to_string(),
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.x".to_string(),
+            confidence,
+            origin: PeerOrigin::Known {
+                author_did: "did:plc:peer-axum".to_string(),
+                fetched_from_pds: "https://pds.example.test".to_string(),
+            },
+            composed_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Oracle (US-CF-002): the FEDERATED `PeerClaimRowView::from_row_with_presence` sets
+    /// `is_countered = true` IFF the row's CID is a member of the presence set, and FALSE
+    /// otherwise (presence membership, the adapter's DISTINCT subset). A total projection.
+    #[test]
+    fn peer_from_row_with_presence_flags_iff_cid_in_presence_set() {
+        let countered = peer_claim_row("bafyPeerCountered", "github:peer/axum", 0.70);
+        let plain = peer_claim_row("bafyPeerPlain", "github:peer/tokio", 0.70);
+        let presence: std::collections::HashSet<String> =
+            ["bafyPeerCountered".to_string()].into_iter().collect();
+
+        let countered_view = PeerClaimRowView::from_row_with_presence(&countered, &presence);
+        let plain_view = PeerClaimRowView::from_row_with_presence(&plain, &presence);
+
+        assert!(
+            countered_view.is_countered,
+            "a peer row whose CID is in the presence set must be flagged countered"
+        );
+        assert!(
+            !plain_view.is_countered,
+            "a peer row whose CID is NOT in the presence set must NOT be flagged"
+        );
+    }
+
+    /// Oracle (US-CF-002 — additive only): the FEDERATED `from_row_with_presence` carries
+    /// every display field (including the peer ORIGIN) through UNCHANGED from `from_row` —
+    /// the flag is ADDITIVE only; an empty presence set flags NOTHING.
+    #[test]
+    fn peer_from_row_with_presence_preserves_every_display_field() {
+        let boundary = peer_claim_row("bafyPeerX", "github:peer/serde", 0.73);
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let plain = PeerClaimRowView::from_row(&boundary);
+        let with_presence = PeerClaimRowView::from_row_with_presence(&boundary, &empty);
+
+        assert_eq!(with_presence.cid, plain.cid);
+        assert_eq!(with_presence.subject, plain.subject);
+        assert_eq!(with_presence.predicate, plain.predicate);
+        assert_eq!(with_presence.object, plain.object);
+        assert_eq!(with_presence.confidence, plain.confidence);
+        assert_eq!(
+            with_presence.origin, plain.origin,
+            "the peer ORIGIN must carry through unchanged beside the flag (I-CF-4)"
+        );
+        assert!(
+            !with_presence.is_countered,
+            "an empty presence set flags NOTHING"
+        );
+    }
+
+    /// The exact render-only one-hop flag anchor for a countered peer row (the SAME
+    /// `<a href="/claims/{cid}">Countered</a>` the slice-12 own-list flag emits).
+    fn peer_flag_anchor(cid: &str) -> String {
+        format!("<a href=\"/claims/{cid}\">{COUNTERED_PRESENCE_FLAG}</a>")
+    }
+
+    /// Oracle (US-CF-002 / I-CF-6): a COUNTERED peer row renders the neutral "Countered"
+    /// marker as a render-only `<a href="/claims/{cid}">Countered</a>` one-hop link; an
+    /// UN-countered peer row renders NO such marker (no-noise, I-CF-2).
+    #[test]
+    fn countered_peer_row_renders_one_hop_link_uncountered_renders_none() {
+        let countered = PeerClaimRowView {
+            cid: "bafyPeerCountered".to_string(),
+            subject: "github:peer/axum".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.x".to_string(),
+            confidence: 0.70,
+            origin: PeerOrigin::Known {
+                author_did: "did:plc:peer-axum".to_string(),
+                fetched_from_pds: "https://pds.example.test".to_string(),
+            },
+            is_countered: true,
+        };
+        let plain = PeerClaimRowView {
+            is_countered: false,
+            cid: "bafyPeerPlain".to_string(),
+            ..countered.clone()
+        };
+        let page = PageView::new(vec![countered.clone(), plain.clone()]);
+        let html = render_peer_claims_table_fragment(&page).into_string();
+
+        assert!(
+            html.contains(&peer_flag_anchor("bafyPeerCountered")),
+            "the countered peer row must render the one-hop flag link; html:\n{html}"
+        );
+        assert!(
+            !html.contains(&peer_flag_anchor("bafyPeerPlain")),
+            "the un-countered peer row must render NO flag link; html:\n{html}"
+        );
+        // No-noise: no count / verdict text anywhere.
+        for noise in ["0 counters", "disputed by", "no disagreement"] {
+            assert!(!html.contains(noise), "no-noise: {noise:?} must be absent; {html}");
+        }
+    }
+
+    /// Oracle (I-CF-2 / I-CF-4 — additive only): the peer-claims presence flag NEVER
+    /// changes row ORDER, COUNT, the peer ORIGIN cell, or any row's verbatim CONFIDENCE.
+    /// Rendering the SAME page with and without flags differs ONLY by the additive marker.
+    #[test]
+    fn the_peer_flag_is_additive_order_count_origin_confidence_unchanged() {
+        let rows_flagged = vec![
+            PeerClaimRowView {
+                cid: "bafyPeerA".to_string(),
+                subject: "s-a".to_string(),
+                predicate: "p".to_string(),
+                object: "o".to_string(),
+                confidence: 0.91,
+                origin: PeerOrigin::Known {
+                    author_did: "did:plc:peer-a".to_string(),
+                    fetched_from_pds: "https://pds.a.test".to_string(),
+                },
+                is_countered: true,
+            },
+            PeerClaimRowView {
+                cid: "bafyPeerB".to_string(),
+                subject: "s-b".to_string(),
+                predicate: "p".to_string(),
+                object: "o".to_string(),
+                confidence: 0.42,
+                origin: PeerOrigin::Known {
+                    author_did: "did:plc:peer-b".to_string(),
+                    fetched_from_pds: "https://pds.b.test".to_string(),
+                },
+                is_countered: false,
+            },
+        ];
+        let rows_plain: Vec<PeerClaimRowView> = rows_flagged
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.is_countered = false;
+                r
+            })
+            .collect();
+
+        let flagged =
+            render_peer_claims_table_fragment(&PageView::new(rows_flagged)).into_string();
+        let plain = render_peer_claims_table_fragment(&PageView::new(rows_plain)).into_string();
+
+        // Eliding the additive marker from the flagged render yields the plain render
+        // BYTE-for-byte: order, count, origin, and confidence cells are unchanged.
+        let elided = flagged.replace(&peer_flag_anchor("bafyPeerA"), "");
+        assert_eq!(
+            elided, plain,
+            "the peer flag must be ADDITIVE only — eliding the marker must reproduce the \
+             un-flagged render byte-for-byte (order/count/origin/confidence unchanged)"
+        );
+        // The verbatim confidence cells + the peer-origin DIDs are present in BOTH renders.
+        assert!(plain.contains("0.91") && plain.contains("0.42"));
+        assert!(flagged.contains("0.91") && flagged.contains("0.42"));
+        assert!(plain.contains("did:plc:peer-a") && flagged.contains("did:plc:peer-a"));
+    }
+
+    proptest! {
+        /// Property: the peer-claims list render is a TOTAL function of (page, presence) —
+        /// for ANY vec of rows with ANY per-row `is_countered`, rendering never panics, and
+        /// a row carries the flag link IFF `is_countered` is true.
+        #[test]
+        fn peer_render_is_total_over_page_and_presence(
+            flags in proptest::collection::vec(any::<bool>(), 0..8usize)
+        ) {
+            let rows: Vec<PeerClaimRowView> = flags
+                .iter()
+                .enumerate()
+                .map(|(i, &countered)| PeerClaimRowView {
+                    cid: format!("bafyPeer{i:03}"),
+                    subject: format!("s-{i}"),
+                    predicate: "p".to_string(),
+                    object: "o".to_string(),
+                    confidence: 0.5,
+                    origin: PeerOrigin::Known {
+                        author_did: format!("did:plc:peer-{i}"),
+                        fetched_from_pds: "https://pds.example.test".to_string(),
+                    },
+                    is_countered: countered,
+                })
+                .collect();
+            let html = render_peer_claims_table_fragment(&PageView::new(rows)).into_string();
+            for (i, &countered) in flags.iter().enumerate() {
+                let anchor = peer_flag_anchor(&format!("bafyPeer{i:03}"));
+                prop_assert_eq!(
+                    html.contains(&anchor),
+                    countered,
+                    "peer row {} flag presence must equal is_countered={}",
                     i,
                     countered
                 );

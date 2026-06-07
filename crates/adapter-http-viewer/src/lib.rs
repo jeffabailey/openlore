@@ -647,10 +647,23 @@ fn peer_claims_page(
     };
     let page_view = match store.list_peer_claims(request) {
         Ok(read_page) => {
+            // slice-13 (US-CF-002 / ADR-049): read the per-CID counter PRESENCE for the
+            // WHOLE page in ONE aggregate lookup over the read-only store the viewer ALREADY
+            // holds (the REUSED slice-12 `counter_presence_for` — NO new method, NO new SQL,
+            // NO network, NO key, NO N+1). The `list_peer_claims` SQL + paging are UNCHANGED
+            // — the presence read is a SEPARATE set lookup mapped onto rows AFTER paging
+            // (additive only; I-CF-2). A presence-read FAILURE degrades to an EMPTY set
+            // (`unwrap_or_default`) → NO flags, never a 5xx (graceful degradation).
+            let cids = read_page
+                .rows
+                .iter()
+                .map(|row| row.cid.clone())
+                .collect::<Vec<_>>();
+            let presence = store.counter_presence_for(&cids).unwrap_or_default();
             let rows = read_page
                 .rows
                 .iter()
-                .map(PeerClaimRowView::from_row)
+                .map(|row| PeerClaimRowView::from_row_with_presence(row, &presence))
                 .collect::<Vec<_>>();
             PageView::paged(rows, page, DEFAULT_PAGE_SIZE, read_page.total)
         }

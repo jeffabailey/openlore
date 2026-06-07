@@ -11190,13 +11190,23 @@ pub struct SeededSurveyEdges {
 /// the FEDERATED surface.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn read_peer_claim_cids_in_list_order(_env: &TestEnv) -> Vec<String> {
-    todo!(
-        "slice-13 RED scaffold: read every peer_claims cid in the slice-06 \
-         /peer-claims list render order (the production list_peer_claims order), \
-         read-only over the env's REAL DuckDB; sibling of \
-         read_own_claim_cids_in_list_order for the FEDERATED surface"
-    )
+pub fn read_peer_claim_cids_in_list_order(env: &TestEnv) -> Vec<String> {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for peer_claims list-order cid read: {err}",
+            db_path.display()
+        )
+    });
+    // Mirror the production `DuckDbStoreReadAdapter::list_peer_claims` order
+    // (`composed_at DESC, cid`) so the returned CIDs match the rendered row order.
+    let mut stmt = conn
+        .prepare("SELECT cid FROM peer_claims ORDER BY composed_at DESC, cid")
+        .unwrap_or_else(|err| panic!("prepare peer_claims list-order cid read: {err}"));
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|err| panic!("query peer_claims cids in list order: {err}"));
+    rows.map(|r| r.expect("decode peer_claims cid")).collect()
 }
 
 /// Read every EDGE CID a traversal survey is built from, in the slice-10 grouped
@@ -11239,14 +11249,127 @@ pub fn read_survey_edge_cids_in_render_order(
 /// `peer pull`) so it lands in `peer_claim_references` with `referenced_cid ==
 /// target_cid`; (4) recovering every peer-claim CID in the slice-06 list order
 /// (`read_peer_claim_cids_in_list_order`) and splitting the ONE countered + the rest.
-pub fn seed_peer_claims_one_countered(_env: &TestEnv) -> SeededPeerClaimsList {
-    todo!(
-        "slice-13 RED scaffold: seed a /peer-claims page with EXACTLY ONE countered \
-         peer claim (countered by a DISTINCT peer via peer add + peer pull, landing in \
-         peer_claim_references) among several plain pulled peer claims, all via the \
-         PRODUCTION federation paths; return the SeededPeerClaimsList (ordered + \
-         countered + uncountered cids + the peer-origin DID)"
-    )
+pub fn seed_peer_claims_one_countered(env: &TestEnv) -> SeededPeerClaimsList {
+    // STEP 1 — build BOTH peers' verifiable wire records UP FRONT, holding each `PeerPds`
+    // ALIVE for the whole function so a SINGLE `peer pull` over BOTH peers succeeds (pulling
+    // one peer at a time would leave the other's now-dropped PDS unreachable and fail the
+    // pull). Rachel is the SURVEYED peer hosting several plain claims (the `/peer-claims`
+    // rows); Tobias is the DISTINCT peer hosting a COUNTER referencing ONE of Rachel's
+    // claims. Rachel's target CID is DETERMINISTIC (the pull pipeline recomputes the SAME
+    // CID the builder computes), so Tobias's counter can reference it before either is
+    // pulled.
+    let surveyed_peer = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_peer,
+        rachel_seed,
+        &[
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+        ],
+    );
+    // Counter Rachel's FIRST surveyed claim — its deterministic CID is the counter target.
+    let target_cid = rachel_records
+        .first()
+        .expect("seed_peer_claims_one_countered: Rachel's first surveyed record")
+        .rkey
+        .clone();
+
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_peer, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 2 — subscribe to BOTH peers via the real `peer add` verb (resolver wired per
+    // peer), then `peer pull` BOTH in ONE invocation while both PDS are alive. The
+    // production pull pipeline verifies each record, recomputes its CID, and writes
+    // `peer_claims` (+ `peer_claim_references` for Tobias's `counters` reference, landing
+    // with `referenced_cid == target_cid` — the peer arm of the UNION-ALL the presence
+    // read exercises).
+    for (did, pds) in [
+        (surveyed_peer, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_peer_claims_one_countered: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: surveyed_peer,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_peer_claims_one_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 3 — recover the SURVEYED peer's claim CIDs; split the ONE countered target +
+    // the rest un-countered. (The un-countered set is Rachel's OTHER claims — NOT Tobias's
+    // counter row, which is the disagreement itself, not one of the rows under scrutiny.)
+    let surveyed_cids = read_peer_claim_cids_for(env, surveyed_peer);
+    assert!(
+        surveyed_cids.contains(&target_cid),
+        "seed_peer_claims_one_countered: the countered target CID {target_cid:?} must be \
+         among the surveyed peer's claims; got {surveyed_cids:?}"
+    );
+    let uncountered_cids = surveyed_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // Every peer-claim CID in the slice-06 `/peer-claims` render order (for the
+    // no-regression gold). Includes Tobias's counter row + Rachel's rows.
+    let ordered_cids = read_peer_claim_cids_in_list_order(env);
+
+    SeededPeerClaimsList {
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+        peer_did: surveyed_peer.to_string(),
+    }
 }
 
 /// Seed a FEDERATED `/peer-claims` page where ONE peer claim is countered by TWO
@@ -11402,12 +11525,18 @@ pub fn seed_project_survey_many_groups_known_countered_subset(
 /// [`assert_list_row_flagged_countered`]. Scans the rendered HTML only.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claim_row_flagged_countered(_body: &str, _countered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the /peer-claims row for countered_cid carries \
-         the render-only one-hop 'Countered' anchor to the slice-11 thread (neutral \
-         presence flag; US-CF-002 / I-CF-6)"
-    )
+pub fn assert_peer_claim_row_flagged_countered(body: &str, countered_cid: &str) {
+    // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // (maud emits no whitespace inside the element). Scan the rendered HTML only.
+    let marker = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&marker),
+        "assert_peer_claim_row_flagged_countered: the countered /peer-claims row for \
+         {countered_cid:?} must carry the render-only marker {marker:?} (neutral presence \
+         flag + one-hop link; US-CF-002 / I-CF-6); body was:\n{body}"
+    );
 }
 
 /// Assert a rendered `/peer-claims` LIST body does NOT flag the given un-countered peer
@@ -11416,12 +11545,27 @@ pub fn assert_peer_claim_row_flagged_countered(_body: &str, _countered_cid: &str
 /// FEDERATED sibling of [`assert_list_row_not_flagged`]. Scans the rendered HTML only.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claim_row_not_flagged(_body: &str, _uncountered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the /peer-claims row for uncountered_cid carries \
-         NO 'Countered' marker and NO '0 counters' / empty-state noise (renders exactly \
-         as slice-06; US-CF-002 no-noise)"
-    )
+pub fn assert_peer_claim_row_not_flagged(body: &str, uncountered_cid: &str) {
+    // The un-countered row carries NO `<a href="/claims/{cid}">Countered</a>` flag
+    // anchor. (Its bare CID still appears in the row's CID cell — we assert the
+    // absence of the FLAG anchor specifically, not the CID text.)
+    let marker = format!(
+        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        !body.contains(&marker),
+        "assert_peer_claim_row_not_flagged: the un-countered /peer-claims row for \
+         {uncountered_cid:?} must carry NO 'Countered' flag marker {marker:?} (renders \
+         exactly as slice-06; US-CF-002 no-noise); body was:\n{body}"
+    );
+    // And NO "0 counters" / "no disagreement" empty-state noise anywhere on the page.
+    for noise in ["0 counters", "no disagreement", "no counters"] {
+        assert!(
+            !body.to_lowercase().contains(noise),
+            "assert_peer_claim_row_not_flagged: an un-countered /peer-claims list must carry \
+             no {noise:?} empty-state noise (no-noise discipline; US-CF-002); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the "Countered" marker on a countered `/peer-claims` row is a render-only
