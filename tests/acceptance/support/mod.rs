@@ -12031,13 +12031,102 @@ pub fn seed_project_survey_edge_two_counters_distinct_authors(
 /// so the one helper serves the no-noise scenario on BOTH routes.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn seed_survey_none_countered(_env: &TestEnv, _dimension: &str) -> SeededSurveyEdges {
-    todo!(
-        "slice-13 RED scaffold: seed a /project or /philosophy survey (per dimension) \
-         with several plain surveyed edges and NO counter authored against any \
-         (counter_presence_for returns the EMPTY set), via PRODUCTION paths; return the \
-         SeededSurveyEdges with an EMPTY countered_cids"
-    )
+pub fn seed_survey_none_countered(env: &TestEnv, dimension: &str) -> SeededSurveyEdges {
+    // The no-noise mirror of `seed_{project,philosophy}_survey_one_edge_countered`: seed
+    // ONLY Rachel's surveyed edges (three triples sharing the queried entity, so several
+    // edges across the survey's groups land in `peer_claims` via the PRODUCTION peer add +
+    // peer pull path, Pillar 3 / I-GT-2) — and author NO counter against ANY of them. With
+    // nothing in `peer_claim_references` referencing these edge CIDs, the flattened
+    // `counter_presence_for` over the survey's edges returns the EMPTY set, so no edge is
+    // flagged and the survey renders byte-identically to slice-10 (US-CF-003 / I-CF-2).
+    let surveyed_author = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [43u8; 32];
+    let (entity, triples): (&str, [(&str, &str, f64); 3]) = match dimension {
+        "project" => {
+            let surveyed_project = "github:peer/rachel-cargo";
+            (
+                surveyed_project,
+                [
+                    (surveyed_project, TRAVERSAL_PHILOSOPHY_DEP_PINNING, 0.90),
+                    (
+                        surveyed_project,
+                        "org.openlore.philosophy.reproducible-builds",
+                        0.74,
+                    ),
+                    (
+                        surveyed_project,
+                        "org.openlore.philosophy.memory-safety",
+                        0.25,
+                    ),
+                ],
+            )
+        }
+        "philosophy" => {
+            let surveyed_philosophy = TRAVERSAL_PHILOSOPHY_DEP_PINNING;
+            (
+                surveyed_philosophy,
+                [
+                    (TRAVERSAL_PROJECT_NIXPKGS, surveyed_philosophy, 0.92),
+                    (TRAVERSAL_PROJECT_BAZEL, surveyed_philosophy, 0.85),
+                    ("github:rust-lang/cargo", surveyed_philosophy, 0.74),
+                ],
+            )
+        }
+        other => panic!(
+            "seed_survey_none_countered: unknown dimension {other:?} (expected \
+             \"project\" or \"philosophy\")"
+        ),
+    };
+
+    let (rachel_records, rachel_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(surveyed_author, rachel_seed, &triples);
+    let rachel_pds = PeerPds::for_peer(surveyed_author, rachel_records);
+
+    // Subscribe to Rachel via the real `peer add` verb, then `peer pull` her surveyed
+    // edges. NO second peer + NO counter record is seeded — the no-noise condition.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", surveyed_author],
+        surveyed_author,
+        rachel_pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_survey_none_countered: peer add for {surveyed_author} must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[PeerSeam {
+            peer_did: surveyed_author,
+            peer_endpoint: rachel_pds.endpoint_url(),
+            peer_pubkey_hex: &rachel_pubkey_hex,
+        }],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_survey_none_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Recover the survey's edge CIDs in the slice-10 grouped render order. With NO counter
+    // authored against any of them, EVERY edge is un-countered (countered_cids EMPTY).
+    let ordered_cids = read_survey_edge_cids_in_render_order(env, dimension, entity);
+    assert!(
+        !ordered_cids.is_empty(),
+        "seed_survey_none_countered: the surveyed {dimension} must render >= 1 edge so the \
+         no-noise assertion is meaningful; got an empty survey for {entity:?}"
+    );
+
+    SeededSurveyEdges {
+        entity: entity.to_string(),
+        uncountered_cids: ordered_cids.clone(),
+        ordered_cids,
+        countered_cids: Vec::new(),
+    }
 }
 
 /// Seed a LARGE `/project?subject=<entity>` survey with MANY edges across MANY groups
