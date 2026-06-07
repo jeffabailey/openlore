@@ -1,0 +1,152 @@
+schema_version: 1
+
+journey:
+  name: "Spot countered claims on the federated + traversal surfaces"
+  goal: >
+    While scanning /peer-claims or traversing /project + /philosophy, instantly see
+    which claims/edges have drawn a counter — without the flag ever changing the
+    surface's order, grouping, paging, counts, weights, or the row/edge's data.
+  persona: "P-001 (Maria, counter-claim-scanner hat — federated + traversal surfaces)"
+  feature_id: viewer-counter-flags-graph-surfaces
+  slice: slice-13
+  job: J-003b
+  brownfield_delta_on: [slice-06, slice-07, slice-10, slice-11, slice-12]
+  reused_read: "StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> (slice-12 / ADR-048) — NO new read method"
+
+  emotional_arc:
+    start: "Curious + slightly wary — which of these did someone already push back on?"
+    middle: "Relief — I can SEE which are contested without opening each; nothing moved or re-grouped."
+    end: "Confident triage — I scan the same way I always did; contested ones are simply marked."
+
+steps:
+  - id: 1
+    name: "Flag countered rows on /peer-claims"
+    command: "GET /peer-claims"
+    story: US-CF-002
+
+    tui_mockup: |
+      +-- GET /peer-claims ------------------------------------------------------+
+      | Subject  Predicate  Object  Conf  Peer origin   CID                       |
+      | github:.../cargo ... dependency-pinning 0.88 did:plc:t0bi bafy...t0bi [Countered] -> /claims/bafy...t0bi
+      | github:.../tokio ... async-first        0.79 did:plc:rach bafy...rach           (no marker)
+      |  [Prev]  1–12 of 27  [Next]   <- order + paging UNCHANGED                  |
+      +--------------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "COUNTERED_PRESENCE_FLAG"
+        source: "crates/viewer-domain/src/lib.rs (slice-11/12 const)"
+        displayed_as: "Countered"
+        consumers: ["/claims list (slice-12)", "/claims/{cid} thread (slice-11)", "/peer-claims (slice-13)", "/project + /philosophy edges (slice-13)"]
+      - name: "counter_presence_for batch read"
+        source: "crates/ports/src/store_read.rs (slice-12 / ADR-048) — REUSED, no new method"
+        displayed_as: "presence set -> per-row is_countered bool"
+        consumers: ["/claims (slice-12)", "/peer-claims (slice-13)", "/project + /philosophy (slice-13)"]
+      - name: "claim thread link"
+        source: "GET /claims/{cid} (slice-11)"
+        displayed_as: "<a href=\"/claims/{cid}\">Countered</a>"
+        consumers: ["/claims list flag", "/peer-claims flag", "edge flag"]
+
+    emotional_state:
+      entry: "Wary — must I open every peer claim to find disagreement?"
+      exit: "Relief — the contested peer claims are marked in place; origin + confidence unchanged."
+
+    integration_checkpoint: |
+      The handler collects the page's peer-claim CIDs and calls counter_presence_for ONCE;
+      PeerClaimRowView.is_countered is set in the effect shell; render_peer_claim_row emits
+      the marker only when is_countered. Peer-origin column + confidence + order UNCHANGED.
+
+    failure_modes:
+      - "Per-row counter_presence_for call (N+1) instead of one batch call per page."
+      - "Flag re-orders or filters the peer list by counter presence (must not)."
+      - "A peer claim countered by N authors shows a count ('disputed by N') instead of ONE neutral marker."
+      - "The peer-origin column or confidence changes when the flag is present."
+
+    gherkin: |
+      Scenario: A countered peer-claim row shows the neutral marker linking to its thread
+        Given Maria pulled Tobias's peer claim "bafy...t0bi" (confidence 0.88) and it has >= 1 counter
+        When she opens GET /peer-claims in the viewer
+        Then Tobias's row shows the neutral "Countered" marker
+        And the marker is a render-only <a href="/claims/bafy...t0bi"> one-hop link to the slice-11 thread
+        And the row still shows Tobias's peer origin and the verbatim confidence 0.88
+        And a peer claim countered by two authors shows exactly ONE neutral marker
+
+  - id: 2
+    name: "Flag countered edges on /project + /philosophy"
+    command: "GET /project?subject=<uri> | GET /philosophy?object=<uri>"
+    story: US-CF-003
+
+    tui_mockup: |
+      +-- GET /project?subject=github:rust-lang/cargo --------------------------+
+      | Philosophy: dependency-pinning  (group key)                             |
+      |   did:plc:t0bi  0.88 [well-evidenced] bafy...t0bi [Countered] -> thread |
+      |   did:plc:maria 0.91 [triangulated]   bafy...mr1            (no marker)  |
+      | Contributors: did:plc:t0bi, did:plc:maria  (deduped — UNCHANGED)        |
+      +------------------------------------------------------------------------+
+      ^ grouping + group order + edge order + contributor list byte-identical to slice-10
+
+    shared_artifacts:
+      - name: "EdgeRow.cid"
+        source: "crates/viewer-domain/src/lib.rs (EdgeRow, slice-10)"
+        displayed_as: "the edge CID + the flag's /claims/{cid} link target"
+        consumers: ["/project edge render", "/philosophy edge render"]
+      - name: "shared EdgeRow render"
+        source: "render_project_fragment / render_philosophy_fragment (shared EdgeRow render)"
+        displayed_as: "one flag arm covering both routes"
+        consumers: ["/project", "/philosophy"]
+
+    emotional_state:
+      entry: "Wary — must I copy every edge CID and open each to find a contested edge?"
+      exit: "Confident — contested edges are marked in place; the survey grouping + order didn't move."
+
+    integration_checkpoint: |
+      The handler flattens ALL edge CIDs across every EdgeGroup into ONE counter_presence_for
+      call; EdgeRow.is_countered is set in the effect shell; the shared EdgeRow render emits the
+      marker only when is_countered. The flag NEVER changes group_by grouping, group/edge order,
+      the deduped contributor list, or any cross-link — byte-identical to slice-10 (markers elided).
+
+    failure_modes:
+      - "Per-group or per-edge counter_presence_for call (N+1) instead of one batch call per page."
+      - "The flag changes the group_by grouping, group order, or edge order within a group (must not)."
+      - "The flag changes the deduped contributor list or any cross-link (subject/object/contributor)."
+      - "A confidence or bucket changes when the flag is present (verbatim violated)."
+      - "An edge countered by N authors shows a count instead of ONE neutral marker."
+
+    gherkin: |
+      Scenario: A countered edge shows the marker and the survey never re-groups or re-orders
+        Given Maria's /project?subject=github:rust-lang/cargo has an edge for Tobias's claim "bafy...t0bi" (confidence 0.88) under the dependency-pinning group, and that claim has >= 1 counter
+        When she opens GET /project?subject=github:rust-lang/cargo
+        Then Tobias's edge shows the neutral "Countered" marker linking to /claims/bafy...t0bi
+        And the edge still shows Tobias's DID, the verbatim confidence 0.88, its bucket, and its CID
+        And the group_by grouping, the group order, the edge order within each group, and the deduped contributor list are byte-identical to slice-10
+        And the same flag arm serves both /project and /philosophy
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "COUNTERED_PRESENCE_FLAG"
+      must_match_across: [1, 2]
+      failure_message: "The marker string must be the SAME slice-11/12 constant on every surface (no new string)."
+    - artifact: "counter_presence_for batch read"
+      must_match_across: [1, 2]
+      failure_message: "Both surfaces must REUSE the slice-12 read (no new read method); ONE aggregate query per render (no N+1)."
+    - artifact: "claim thread link"
+      must_match_across: [1, 2]
+      failure_message: "Every flag must be a render-only <a href=\"/claims/{cid}\"> one-hop link to the slice-11 thread."
+
+cardinal_invariants:
+  - "Shown, never applied: the flag never re-orders/re-ranks/filters/re-weights/re-groups/re-paginates any surface (ADR-015 / I-CF-2 / I-CF-9)."
+  - "Presence-only: a row/edge countered by N authors shows ONE neutral marker, never a count or 'disputed by N' (I-CF-3)."
+  - "Read-only: StoreReadPort only; no key; no write/sign/counter control; authoring stays the CLI (I-CF-1)."
+  - "Batch, not N+1: one counter_presence_for call per render, REUSED from slice-12 (I-CF-8)."
+  - "LOCAL + offline: indexed ref-tables lookup, no network, no per-row artifact read, vendored htmx only (I-CF-5)."
+  - "Verbatim confidence/weight: every confidence/bucket renders exactly as today (I-CF-4)."
+
+out_of_scope:
+  - "/score (ScoreState::Scored{WeightedView} contribution rows) — deferred to slice-14 (weight-misread surface + sum-to-weight cardinal)."
+  - "/search — already has the slice-08 'countered by' annotation."
+  - "/claims — shipped in slice-12."
+  - "Authoring/composing a counter on the viewer; any count/verdict; any reason text on a flag; any network seam; any new read method."
+
+changelog:
+  - date: "2026-06-07"
+    feature: "viewer-counter-flags-graph-surfaces"
+    change: "Initial DISCUSS journey — slice-13. Extends the slice-12 'Countered' flag to /peer-claims + /project + /philosophy edges (REUSING counter_presence_for, no new read). /score deferred to slice-14."

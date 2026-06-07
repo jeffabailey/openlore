@@ -94,3 +94,51 @@ persona:
         - Every counter is attributed to its own author DID + CID with its verbatim reason; never a merged "disputed by N" or "consensus" aggregate.
         - The 'Countered' flag is a NEUTRAL presence marker, never a score, weight, count-verdict, or judgement.
         - The thread reads the LOCAL store only (own + pulled-peer counters); no network on this route; renders offline.
+
+    # -------------------------------------------------------------------------
+    # Counter-claim-scanner hat (slice-12 /claims list flag; EXTENDED in slice-13
+    # to /peer-claims + /project + /philosophy edges).
+    # Added 2026-06-07 by Luna during DISCUSS for viewer-counter-flags-graph-surfaces.
+    # -------------------------------------------------------------------------
+    - id: counter-claim-scanner
+      activated_in_slice: slice-12 / viewer-counter-claim-list-flags
+      extended_in_slice: slice-13 / viewer-counter-flags-graph-surfaces
+      one_liner: >
+        P-001 wearing the counter-claim-scanner hat is SCANNING a list-like viewer
+        surface (her own /claims list in slice-12; her federated /peer-claims list and
+        her /project + /philosophy traversal edges in slice-13) and wants to instantly
+        spot WHICH claims/edges have drawn disagreement — so she can triage where to
+        spend her attention — WITHOUT the flag ever changing the surface's order,
+        grouping, paging, counts, weights, or the flagged row/edge's data. The
+        at-a-glance facet of the VIEW half of J-003b; authoring stays the CLI.
+
+      surfaces:
+        - "/claims own-claims list (slice-12)"
+        - "/peer-claims federated list (slice-13)"
+        - "/project + /philosophy traversal edges (slice-13)"
+
+      typical_session:
+        - "Scanning /peer-claims to decide which peers' reasoning to engage with"
+        - "Spot a 'Countered' marker on Tobias's cargo/dependency-pinning row (bafy...t0bi, 0.88)"
+        - "Note the peer-origin column and the 0.88 confidence are unchanged — the flag moved nothing"
+        - "Switch to /project?subject=github:rust-lang/cargo and spot a contested edge in the dependency-pinning group"
+        - "Note the grouping, edge order, and contributor list are byte-identical to before the flag existed"
+        - "Click a flag to drill into /claims/{cid} (the slice-11 thread) and read the actual disagreement"
+        - "Decide whether to trust, cite, or counter the claim herself — via the CLI 'claim counter'"
+
+      load_bearing_anxieties:
+        - "Do I have to open every peer claim / every edge one-by-one to find which are countered?"
+        - "Will a 'Countered' tag silently re-sort, re-group, filter, or push contested rows/edges around — picking a triage order or a path for me?"
+        - "Is this flag a VERDICT ('disputed'/'refuted'/'false'), or just a neutral 'someone responded here' marker — and on a graph edge, does it change the edge's confidence or its place in the survey?"
+
+      load_bearing_signals_of_success:
+        - "I can see at a glance, on the peer list and on each traversal edge, which are countered — and the flag links me straight to that claim's thread."
+        - "A peer claim / edge with no counter looks EXACTLY like it does today — no badge, no noise."
+        - "The peer-list order, the traversal grouping + edge order, the contributor list, and every confidence/bucket are byte-identical to before the flag existed."
+
+      ux_guardrails_specific_to_scanner:
+        - The flag is the SAME neutral 'Countered' presence marker on every surface (the slice-11/12 COUNTERED_PRESENCE_FLAG); never a count, verdict, weight, or score.
+        - The flag NEVER re-orders/re-ranks/filters/re-weights/re-groups/re-paginates any surface; the flagged row/edge renders verbatim in its original position (shown, never applied).
+        - A row/edge countered by N authors shows ONE neutral marker (presence-only); the per-counter attribution lives in the slice-11 thread the flag links to.
+        - The presence read is the SAME slice-12 batch read (counter_presence_for) — ONE aggregate query per render (no N+1); LOCAL + offline; no per-row artifact read; no new read method.
+        - On /score the flag is DEFERRED (slice-14) precisely because a flag beside a weight risks a 'does being countered lower the weight?' misread; the scanner hat does NOT yet extend to /score.
