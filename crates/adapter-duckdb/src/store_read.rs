@@ -699,6 +699,64 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         }
         Ok(counters)
     }
+
+    fn counter_presence_for(
+        &self,
+        cids: &[String],
+    ) -> Result<std::collections::HashSet<String>, StoreReadError> {
+        // EMPTY input (an empty / all-un-countered page) → empty set, with NO query
+        // prepared: an empty `IN ()` is a SQL error (ADR-048). This guard is the
+        // no-noise common case (the list renders byte-identically to slice-06).
+        if cids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+
+        let conn = self.lock_conn()?;
+
+        // ADR-048: ONE aggregate `referenced_cid IN (...)` UNION-ALL DISTINCT read over
+        // the INDEXED `claim_references` ∪ `peer_claim_references` ref tables
+        // (`ref_type = 'counters'`). Ref-tables-only (NO JOIN to `claims`/`peer_claims`,
+        // NO per-row artifact read — the flag carries no reason text). Returns the
+        // SUBSET of input CIDs that are COUNTERED (a presence SET, never a count). The
+        // CID list is bound via `params_from_iter` (NEVER string-interpolated —
+        // injection-safe); the `(?, ?, …)` placeholder group is built from the input
+        // arity and bound TWICE (own arm + peer arm), mirroring slice-11's double-bind.
+        let placeholders = std::iter::repeat_n("?", cids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT DISTINCT referenced_cid FROM ( \
+               SELECT referenced_cid FROM claim_references \
+               WHERE referenced_cid IN ({placeholders}) AND ref_type = 'counters' \
+               UNION ALL \
+               SELECT referenced_cid FROM peer_claim_references \
+               WHERE referenced_cid IN ({placeholders}) AND ref_type = 'counters' \
+             )"
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("prepare counter_presence_for: {err}"),
+        })?;
+
+        // Bind the CID list TWICE (the own arm's IN then the peer arm's IN). The two
+        // `IN` lists share the SAME placeholder positions in order, so chaining the
+        // slice with itself yields the correct positional binds (slice-11 `[cid, cid]`
+        // double-bind, generalized to the whole list).
+        let params = duckdb::params_from_iter(cids.iter().chain(cids.iter()));
+        let row_iter = stmt
+            .query_map(params, |row| row.get::<_, String>(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map counter_presence_for: {err}"),
+            })?;
+
+        let mut presence = std::collections::HashSet::new();
+        for row in row_iter {
+            presence.insert(row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode counter_presence_for: {err}"),
+            })?);
+        }
+        Ok(presence)
+    }
 }
 
 /// Project a `(author_did, fetched_from_pds)` pair from a `peer_claims`-shaped row
@@ -746,4 +804,138 @@ fn active_subscription_dids(
         })?);
     }
     Ok(dids)
+}
+
+#[cfg(test)]
+mod counter_presence_tests {
+    //! slice-12 (US-LF-002/003; ADR-048) — `counter_presence_for` unit tests at the
+    //! adapter scope. Pins the ADR-048 single-aggregate `IN (...)` UNION-ALL DISTINCT
+    //! presence read: it returns the COUNTERED SUBSET of the input CIDs (a presence
+    //! SET, never a count), bound (never interpolated), and an EMPTY input slice →
+    //! `Ok(HashSet::new())` with NO query prepared (empty `IN ()` is a SQL error).
+
+    use std::collections::HashSet;
+
+    use claim_domain::{
+        Cid, ClaimReference, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
+    };
+    use ports::{StoragePort, StoreReadError, StoreReadPort};
+    use tempfile::TempDir;
+
+    use crate::DuckDbStorageAdapter;
+
+    fn confidence(value: f64) -> claim_domain::Confidence {
+        serde_json::from_value(serde_json::json!(value)).expect("confidence round-trips")
+    }
+
+    fn fresh_adapter() -> (DuckDbStorageAdapter, TempDir) {
+        let tmp = TempDir::new().expect("create tempdir");
+        let db_path = tmp.path().join("openlore.duckdb");
+        let adapter = DuckDbStorageAdapter::open(&db_path).expect("open adapter on tempdir");
+        (adapter, tmp)
+    }
+
+    fn claim(cid: &str, subject: &str, references: Vec<ClaimReference>) -> SignedClaim {
+        SignedClaim {
+            unsigned: UnsignedClaim {
+                subject: subject.to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: "org.openlore.philosophy.x".to_string(),
+                evidence: vec![],
+                confidence: confidence(0.90),
+                author_did: Did("did:plc:maria#org.openlore.application".to_string()),
+                composed_at: "2026-05-25T12:00:00Z".to_string(),
+                references,
+                reason: None,
+            },
+            signature: SignatureBlock {
+                signed_cid: Cid(cid.to_string()),
+                signature_bytes: vec![0xAA, 0xBB],
+                verification_method: "did:plc:maria#org.openlore.application".to_string(),
+            },
+        }
+    }
+
+    /// `counter_presence_for` returns the COUNTERED SUBSET of the input CIDs (presence
+    /// membership): a target referenced by a `counters` claim is in the set; an
+    /// un-countered target and an unknown CID are not. Targets referenced by a
+    /// NON-`counters` ref (e.g. `supersedes`) are NOT counted as countered.
+    #[test]
+    fn counter_presence_for_returns_the_countered_subset() {
+        let (adapter, _tmp) = fresh_adapter();
+
+        // Two own targets; only `bafyTarget` is countered. A third target is referenced
+        // by a `supersedes` (NOT a counter) — it must NOT appear in the presence set.
+        let target = claim("bafyTarget", "github:rust-lang/cargo", vec![]);
+        let plain = claim("bafyPlain", "github:rust-lang/rust", vec![]);
+        let superseded = claim("bafySuper", "github:denoland/deno", vec![]);
+        let counter = claim(
+            "bafyCounter",
+            "github:rust-lang/cargo",
+            vec![ClaimReference {
+                ref_type: ReferenceType::Counters,
+                cid: Cid("bafyTarget".to_string()),
+            }],
+        );
+        let superseder = claim(
+            "bafySuperseder",
+            "github:denoland/deno",
+            vec![ClaimReference {
+                ref_type: ReferenceType::Supersedes,
+                cid: Cid("bafySuper".to_string()),
+            }],
+        );
+        for c in [&target, &plain, &superseded, &counter, &superseder] {
+            adapter.write_signed_claim(c).expect("write claim");
+        }
+
+        let read = adapter.read_adapter();
+        let presence = read
+            .counter_presence_for(&[
+                "bafyTarget".to_string(),
+                "bafyPlain".to_string(),
+                "bafySuper".to_string(),
+                "bafyUnknown".to_string(),
+            ])
+            .expect("presence read succeeds");
+
+        let expected: HashSet<String> = ["bafyTarget".to_string()].into_iter().collect();
+        assert_eq!(
+            presence, expected,
+            "only the genuinely-countered target is in the presence set (a presence SET, \
+             never a count; supersedes is not a counter)"
+        );
+    }
+
+    /// An EMPTY input slice yields `Ok(HashSet::new())` WITHOUT preparing a query (an
+    /// empty `IN ()` is a SQL error) — the empty-page / all-un-countered guard.
+    #[test]
+    fn counter_presence_for_empty_input_is_empty_set_no_query() {
+        let (adapter, _tmp) = fresh_adapter();
+        let read = adapter.read_adapter();
+
+        let presence = read
+            .counter_presence_for(&[])
+            .expect("empty input must not error (no query prepared)");
+        assert!(
+            presence.is_empty(),
+            "empty input → empty presence set, no query prepared"
+        );
+    }
+
+    /// A page whose CIDs are all UN-countered yields the EMPTY set (no row flagged) —
+    /// the no-noise common case (the list renders byte-identically to slice-06).
+    #[test]
+    fn counter_presence_for_all_uncountered_is_empty_set() {
+        let (adapter, _tmp) = fresh_adapter();
+        let a = claim("bafyA", "s-a", vec![]);
+        let b = claim("bafyB", "s-b", vec![]);
+        adapter.write_signed_claim(&a).expect("write a");
+        adapter.write_signed_claim(&b).expect("write b");
+
+        let read = adapter.read_adapter();
+        let presence: Result<HashSet<String>, StoreReadError> =
+            read.counter_presence_for(&["bafyA".to_string(), "bafyB".to_string()]);
+        assert!(presence.expect("read succeeds").is_empty());
+    }
 }

@@ -121,15 +121,37 @@ fn open_the_claims_list_with_htmx_flags_only_the_countered_row() {
     // THEN the response is ONLY the list-panel fragment (`is_fragment()`, NOT a full
     // page): the countered row carries the neutral "Countered" marker linking to its
     // thread; every un-countered row carries NO marker.
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-1 (walking skeleton): seed_claims_list_one_countered(&env) → a multi-row own \
-         /claims store with exactly one peer-countered claim; ViewerServer::start; \
-         get_htmx(\"/claims\"); assert status 200 + text/html + is_fragment(); \
-         assert_list_row_flagged_countered(&body, &countered_cid) (neutral marker + \
-         <a href=\"/claims/{{cid}}\"> link); assert_list_row_not_flagged(&body, &cid) for \
-         each un-countered cid. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_one_countered(&env);
+    let server = ViewerServer::start(&env);
+
+    let response = server.get_htmx("/claims");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /claims (HX-Request) must be 200; body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        response.content_type
+    );
+    assert!(
+        response.is_fragment(),
+        "GET /claims WITH HX-Request must return ONLY the list-panel fragment (no chrome); \
+         body was:\n{}",
+        response.body
+    );
+
+    // The countered row carries the neutral "Countered" marker linking to its thread.
+    for countered in &seeded.countered_cids {
+        assert_list_row_flagged_countered(&response.body, countered);
+    }
+    // Every un-countered row carries NO marker (and no empty-state noise).
+    for uncountered in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&response.body, uncountered);
+    }
 }
 
 /// LF-2 (US-LF-002 — no-JS full page + parity, I-LF-6): `GET /claims` WITHOUT

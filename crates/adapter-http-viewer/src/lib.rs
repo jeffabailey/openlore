@@ -432,10 +432,23 @@ fn claims_page(
     };
     let page_view = match store.list_claims(request) {
         Ok(read_page) => {
+            // slice-12 (US-LF-002/003 / ADR-048): read the per-CID counter PRESENCE for
+            // the WHOLE page in ONE aggregate `IN (...)` UNION-ALL DISTINCT lookup over
+            // the read-only store the viewer ALREADY holds (NO new field, NO network,
+            // NO key, NO N+1). The list SQL + paging are UNCHANGED — the presence read
+            // is a SEPARATE set lookup mapped onto rows AFTER `list_claims` pages them
+            // (additive only; I-LF-2). A presence-read FAILURE degrades to an EMPTY set
+            // (`unwrap_or_default`) → NO flags, never a 5xx (graceful degradation).
+            let cids = read_page
+                .rows
+                .iter()
+                .map(|row| row.cid.clone())
+                .collect::<Vec<_>>();
+            let presence = store.counter_presence_for(&cids).unwrap_or_default();
             let rows = read_page
                 .rows
                 .iter()
-                .map(ClaimRowView::from_row)
+                .map(|row| ClaimRowView::from_row_with_presence(row, &presence))
                 .collect::<Vec<_>>();
             PageView::paged(rows, page, DEFAULT_PAGE_SIZE, read_page.total)
         }

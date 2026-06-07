@@ -356,4 +356,29 @@ pub trait StoreReadPort: Send + Sync {
         &self,
         target_cid: &str,
     ) -> Result<Vec<CounterClaimRow>, StoreReadError>;
+
+    /// READ-ONLY counter-PRESENCE lookup for a WHOLE `/claims` list page (`GET /claims`,
+    /// slice-12 / US-LF-002/003 / ADR-048): given the page's claim CIDs, return the
+    /// SUBSET that has ≥1 counter — a presence SET (`HashSet<String>`), NEVER a count.
+    /// The at-a-glance "Countered" list flag is set from membership in this set; the
+    /// pure `viewer-domain` render stays a total function of (page, presence).
+    ///
+    /// ONE aggregate query (NO N+1, I-LF-8): a single `referenced_cid IN (...)`
+    /// UNION-ALL DISTINCT read over the INDEXED `claim_references` ∪
+    /// `peer_claim_references` tables (`ref_type = 'counters'`), ref-tables-only (no
+    /// JOIN to `claims`/`peer_claims`, no per-row artifact read — the flag carries no
+    /// reason text). LOCAL only (renders offline, I-LF-5); the input CIDs are BOUND
+    /// placeholders, never string-interpolated (injection-safe). An EMPTY input slice
+    /// (an empty / all-un-countered page) returns `Ok(HashSet::new())` WITHOUT
+    /// preparing a query — an empty `IN ()` is a SQL error.
+    ///
+    /// READ-ONLY by construction: a SELECT over the SAME shared connection the CLI
+    /// writes through (BR-VIEW-4) — there is NO mutation method on this trait
+    /// (I-VIEW-1 / I-LF-1). The presence read NEVER re-orders / re-pages / re-counts /
+    /// re-weights the list — it is a SEPARATE set lookup the shell maps onto rows AFTER
+    /// `list_claims` pages them (shown-never-applied, additive only; I-LF-2 / I-LF-4).
+    fn counter_presence_for(
+        &self,
+        cids: &[String],
+    ) -> Result<std::collections::HashSet<String>, StoreReadError>;
 }

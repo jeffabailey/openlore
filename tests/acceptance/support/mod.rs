@@ -8393,6 +8393,29 @@ pub fn read_peer_claim_cids_for(env: &TestEnv, peer_did: &str) -> Vec<String> {
     rows.map(|r| r.expect("decode peer_claims cid")).collect()
 }
 
+/// Read every OWN-claim CID from the env's REAL `claims` table in the EXACT slice-06
+/// `/claims` list render order (`composed_at DESC, cid` — mirrors
+/// `DuckDbStoreReadAdapter::list_claims`). The slice-12 list-flag seeds return their
+/// CIDs in this order so a scenario can address rows by their rendered position +
+/// the no-regression gold can pin order byte-identity. Read-only; opens a SECOND
+/// short-lived connection (the env's `ui` viewer holds its own handle).
+pub fn read_own_claim_cids_in_list_order(env: &TestEnv) -> Vec<String> {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for claims cid read: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare("SELECT cid FROM claims ORDER BY composed_at DESC, cid")
+        .unwrap_or_else(|err| panic!("prepare own claims list-order cid read: {err}"));
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|err| panic!("query own claims cids in list order: {err}"));
+    rows.map(|r| r.expect("decode own claims cid")).collect()
+}
+
 /// Assert a rendered `/score` body NAMES every expected claim cid in its per-claim
 /// breakdown (I-CS-10): every breakdown row identifies the contributing claim by
 /// its cid, so the weight is never an opaque number detached from the claims that
@@ -10384,15 +10407,90 @@ pub struct SeededClaimsList {
 /// or by capturing each `claim add` CID + sorting per the list contract). NO hand-inserted
 /// store rows.
 pub fn seed_claims_list_one_countered(env: &TestEnv) -> SeededClaimsList {
-    let _ = env;
-    todo!(
-        "slice-12 seed_claims_list_one_countered: sign several plain own claims \
-         (seed_own_claim_with_evidence, distinct subjects) + one own claim countered by a \
-         PEER (build_verifiable_peer_counter_record(COUNTER_AUTHOR_TOBIAS, …, target_cid, \
-         Some(reason)) → peer add → peer pull, landing in peer_claim_references); recover \
-         all own-claim CIDs in composed_at DESC, cid order; return SeededClaimsList with \
-         countered_cids = [the one], uncountered_cids = the rest. RED until DELIVER."
-    )
+    // STEP 1 — sign several PLAIN own claims via the production `claim add` write path
+    // (distinct subjects → distinct CIDs). These are the un-countered rows; nothing
+    // references them.
+    for (subject, predicate, object) in [
+        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
+        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
+    ] {
+        seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
+    }
+
+    // STEP 2 — sign ONE more own claim that a PEER then counters. Recover its
+    // content-addressed CID (the counter's target).
+    let target_cid = seed_own_claim_with_evidence(
+        env,
+        "github:rust-lang/cargo",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.dependency-pinning",
+        0.90,
+        &[],
+    );
+
+    // STEP 3 — peer Tobias authors a verifiable COUNTER referencing the OWN target CID
+    // (a `references[].type == counters` entry whose `cid == target_cid`, ADR-015),
+    // delivered through the production `peer add` + `peer pull` federation path. The
+    // pull verifies + content-addresses it: the counter lands in `peer_claims` and its
+    // `counters` reference lands in `peer_claim_references` with `referenced_cid ==
+    // target_cid` (so the presence read exercises the peer arm of the UNION-ALL).
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", COUNTER_AUTHOR_TOBIAS],
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_claims_list_one_countered: peer add for {COUNTER_AUTHOR_TOBIAS} must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[PeerSeam {
+            peer_did: COUNTER_AUTHOR_TOBIAS,
+            peer_endpoint: tobias_pds.endpoint_url(),
+            peer_pubkey_hex: &tobias_pubkey_hex,
+        }],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_claims_list_one_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every own-claim CID in the slice-06 `composed_at DESC, cid`
+    // list order; split into the ONE countered + the rest un-countered.
+    let ordered_cids = read_own_claim_cids_in_list_order(env);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_claims_list_one_countered: the countered target CID {target_cid:?} must be \
+         among the own claims; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededClaimsList {
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed an own-claims `/claims` page with NO counters at all (the LF-5 / LF-INV-NoWrite
@@ -10455,13 +10553,17 @@ pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
 /// `<a href="/claims/{cid}">Countered</a>` (the one-hop drill-link, never an executable
 /// control — I-LF-1/I-LF-6).
 pub fn assert_list_row_flagged_countered(body: &str, countered_cid: &str) {
-    let _ = (body, countered_cid);
-    todo!(
-        "slice-12 assert_list_row_flagged_countered: assert the rendered list body carries \
-         the render-only marker `<a href=\"/claims/{{cid}}\">Countered</a>` for \
-         countered_cid (neutral presence flag + one-hop link; US-LF-002 / I-LF-6). \
-         RED until DELIVER."
-    )
+    // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // (maud emits no whitespace inside the element). Scan the rendered HTML only.
+    let marker = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&marker),
+        "assert_list_row_flagged_countered: the countered row for {countered_cid:?} must \
+         carry the render-only marker {marker:?} (neutral presence flag + one-hop link; \
+         US-LF-002 / I-LF-6); body was:\n{body}"
+    );
 }
 
 /// Assert a rendered `/claims` LIST body does NOT flag the given un-countered row: the row
@@ -10474,12 +10576,26 @@ pub fn assert_list_row_flagged_countered(body: &str, countered_cid: &str) {
 /// "no disagreement" empty-state text (the un-countered row is byte-unaffected by the
 /// flag — I-LF-2).
 pub fn assert_list_row_not_flagged(body: &str, uncountered_cid: &str) {
-    let _ = (body, uncountered_cid);
-    todo!(
-        "slice-12 assert_list_row_not_flagged: assert the un-countered row for \
-         uncountered_cid carries NO 'Countered' marker and no '0 counters' empty-state \
-         noise (renders exactly as slice-06; US-LF-003 / I-LF-2). RED until DELIVER."
-    )
+    // The un-countered row carries NO `<a href="/claims/{cid}">Countered</a>` flag
+    // anchor. (Its bare CID still appears in the row's CID cell — we assert the
+    // absence of the FLAG anchor specifically, not the CID text.)
+    let marker = format!(
+        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        !body.contains(&marker),
+        "assert_list_row_not_flagged: the un-countered row for {uncountered_cid:?} must \
+         carry NO 'Countered' flag marker {marker:?} (renders exactly as slice-06; \
+         US-LF-003 / I-LF-2); body was:\n{body}"
+    );
+    // And NO "0 counters" / "no disagreement" empty-state noise anywhere on the page.
+    for noise in ["0 counters", "no disagreement", "no counters"] {
+        assert!(
+            !body.to_lowercase().contains(noise),
+            "assert_list_row_not_flagged: an un-countered list must carry no {noise:?} \
+             empty-state noise (no-noise discipline; US-LF-003); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the "Countered" marker on a countered LIST row is a render-only

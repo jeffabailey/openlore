@@ -49,19 +49,43 @@ pub struct ClaimRowView {
     /// [`render_confidence`] (FR-VIEW-8) — held as the numeric, not a
     /// pre-formatted string, so the rendering rule lives in ONE place.
     pub confidence: f64,
+    /// Whether this claim has ≥1 counter (slice-12 / US-LF-002 / ADR-048): the
+    /// at-a-glance "Countered" PRESENCE flag. A boolean per row (presence membership,
+    /// NEVER a count) — set in the EFFECT shell from the `counter_presence_for` set via
+    /// [`ClaimRowView::from_row_with_presence`], so the pure render stays a TOTAL
+    /// function of (page, presence). ADDITIVE: it NEVER changes row order/paging/count
+    /// or the confidence cell (shown-never-applied, I-LF-2).
+    pub is_countered: bool,
 }
 
 impl ClaimRowView {
     /// Project a boundary [`ports::ClaimRow`] into the view-model. Total — never
     /// fails (the view-model is a strict subset of the DTO's display fields;
-    /// `author_did`/`composed_at` are not shown in the list view, FR-VIEW-1).
+    /// `author_did`/`composed_at` are not shown in the list view, FR-VIEW-1). The
+    /// row is UN-countered (`is_countered = false`); the slice-12 flag is set via
+    /// [`Self::from_row_with_presence`] in the effect shell.
     pub fn from_row(row: &ClaimRow) -> Self {
+        Self::from_row_with_presence(row, &std::collections::HashSet::new())
+    }
+
+    /// Project a boundary [`ports::ClaimRow`] into the view-model, setting the slice-12
+    /// "Countered" presence flag from `presence` (the `counter_presence_for` SET):
+    /// `is_countered` is true IFF this row's CID is a member (US-LF-002 / ADR-048). A
+    /// TOTAL conversion — always succeeds. The flag is ADDITIVE: every display field
+    /// is identical to [`Self::from_row`]; only `is_countered` differs. The effect
+    /// shell calls THIS per row AFTER `list_claims` pages them, so the presence read
+    /// never re-orders / re-pages / re-counts / re-weights the list (I-LF-2).
+    pub fn from_row_with_presence(
+        row: &ClaimRow,
+        presence: &std::collections::HashSet<String>,
+    ) -> Self {
         Self {
             cid: row.cid.clone(),
             subject: row.subject.clone(),
             predicate: row.predicate.clone(),
             object: row.object.clone(),
             confidence: row.confidence,
+            is_countered: presence.contains(&row.cid),
         }
     }
 }
@@ -427,7 +451,9 @@ fn render_claims_table(rows: &[ClaimRowView]) -> Markup {
 }
 
 /// Render one claim row. The confidence cell goes through [`render_confidence`]
-/// so the VERBATIM `0.90` rule lives in exactly one place (FR-VIEW-8).
+/// so the VERBATIM `0.90` rule lives in exactly one place (FR-VIEW-8). A countered
+/// row ALSO carries the neutral "Countered" presence flag (slice-12) — appended to
+/// the CID cell as a render-only one-hop link; see [`render_list_presence_flag`].
 fn render_claim_row(row: &ClaimRowView) -> Markup {
     html! {
         tr {
@@ -435,7 +461,25 @@ fn render_claim_row(row: &ClaimRowView) -> Markup {
             td { (row.predicate) }
             td { (row.object) }
             td { (render_confidence(row.confidence)) }
-            td { (row.cid) }
+            td { (row.cid) (render_list_presence_flag(row)) }
+        }
+    }
+}
+
+/// Render the at-a-glance "Countered" PRESENCE flag for one LIST row (slice-12 /
+/// US-LF-002 / ADR-048): a render-only `<a href="/claims/{cid}">Countered</a>`
+/// one-hop link to that claim's slice-11 counter thread — navigation TEXT, never an
+/// executable write/sign/counter control (I-LF-1). PRESENCE-only: a single neutral
+/// marker, NEVER a count ("disputed by N") or a verdict. An UN-countered row
+/// (`is_countered == false`) renders NOTHING — no marker, no "0 counters" noise
+/// (no-noise discipline, I-LF-2). PURE total function over the row's `is_countered`
+/// flag, so the render is a total function of (page, presence). The flag text is the
+/// shared [`COUNTERED_PRESENCE_FLAG`] constant (one source of truth with the detail
+/// view's presence flag).
+fn render_list_presence_flag(row: &ClaimRowView) -> Markup {
+    html! {
+        @if row.is_countered {
+            a href=(format!("/claims/{}", row.cid)) { (COUNTERED_PRESENCE_FLAG) }
         }
     }
 }
@@ -2426,6 +2470,7 @@ mod tests {
             predicate: predicate.to_string(),
             object: object.to_string(),
             confidence,
+            is_countered: false,
         }
     }
 
@@ -5729,5 +5774,196 @@ mod tests {
             page.to_lowercase().contains("<!doctype html>"),
             "the full page must carry full-page chrome; page:\n{page}"
         );
+    }
+
+    // =========================================================================
+    // slice-12 — the per-row "Countered" PRESENCE FLAG on the /claims LIST
+    // (US-LF-002/003; ADR-048). The flag is a render-only one-hop link, set in the
+    // EFFECT shell via `from_row_with_presence`, so the pure render stays a TOTAL
+    // function of (page, presence). These oracles pin: flag IFF in the presence set,
+    // un-countered → no marker, presence-only single neutral flag, and that the flag
+    // is ADDITIVE (it never changes row order / count / confidence).
+    // =========================================================================
+
+    /// Build a boundary `ports::ClaimRow` (the shell's input to
+    /// `from_row_with_presence`) at a fixed timestamp.
+    fn claim_row(cid: &str, subject: &str, confidence: f64) -> ClaimRow {
+        ClaimRow {
+            cid: cid.to_string(),
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.x".to_string(),
+            confidence,
+            author_did: "did:plc:maria#org.openlore.application".to_string(),
+            composed_at: chrono::Utc::now(),
+        }
+    }
+
+    /// The exact render-only one-hop flag anchor for a countered row.
+    fn flag_anchor(cid: &str) -> String {
+        format!("<a href=\"/claims/{cid}\">{COUNTERED_PRESENCE_FLAG}</a>")
+    }
+
+    /// Oracle: `from_row_with_presence` sets `is_countered = true` IFF the row's CID
+    /// is a member of the presence set, and FALSE otherwise (presence membership, the
+    /// adapter's DISTINCT subset). A total projection — never fails.
+    #[test]
+    fn from_row_with_presence_flags_iff_cid_in_presence_set() {
+        let countered = claim_row("bafyCountered", "github:rust-lang/cargo", 0.90);
+        let plain = claim_row("bafyPlain", "github:rust-lang/rust", 0.90);
+        let presence: std::collections::HashSet<String> =
+            ["bafyCountered".to_string()].into_iter().collect();
+
+        let countered_view = ClaimRowView::from_row_with_presence(&countered, &presence);
+        let plain_view = ClaimRowView::from_row_with_presence(&plain, &presence);
+
+        assert!(
+            countered_view.is_countered,
+            "a row whose CID is in the presence set must be flagged countered"
+        );
+        assert!(
+            !plain_view.is_countered,
+            "a row whose CID is NOT in the presence set must NOT be flagged"
+        );
+    }
+
+    /// Oracle: `from_row_with_presence` carries every display field through UNCHANGED
+    /// from `from_row` — the flag is ADDITIVE only (it adds `is_countered`, it does
+    /// not alter subject/predicate/object/confidence/cid).
+    #[test]
+    fn from_row_with_presence_preserves_every_display_field() {
+        let boundary = claim_row("bafyX", "github:rust-lang/cargo", 0.73);
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let plain = ClaimRowView::from_row(&boundary);
+        let with_presence = ClaimRowView::from_row_with_presence(&boundary, &empty);
+
+        assert_eq!(with_presence.cid, plain.cid);
+        assert_eq!(with_presence.subject, plain.subject);
+        assert_eq!(with_presence.predicate, plain.predicate);
+        assert_eq!(with_presence.object, plain.object);
+        assert_eq!(with_presence.confidence, plain.confidence);
+        assert!(
+            !with_presence.is_countered,
+            "an empty presence set flags NOTHING"
+        );
+    }
+
+    /// Oracle (US-LF-002 / I-LF-6): a COUNTERED row renders the neutral "Countered"
+    /// marker as a render-only `<a href="/claims/{cid}">Countered</a>` one-hop link;
+    /// an UN-countered row renders NO such marker (no-noise, I-LF-2).
+    #[test]
+    fn countered_row_renders_one_hop_link_uncountered_renders_none() {
+        let countered = ClaimRowView {
+            cid: "bafyCountered".to_string(),
+            subject: "github:rust-lang/cargo".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.x".to_string(),
+            confidence: 0.90,
+            is_countered: true,
+        };
+        let plain = ClaimRowView {
+            is_countered: false,
+            cid: "bafyPlain".to_string(),
+            ..countered.clone()
+        };
+        let page = PageView::new(vec![countered.clone(), plain.clone()]);
+        let html = render_claims_table_fragment(&page).into_string();
+
+        assert!(
+            html.contains(&flag_anchor("bafyCountered")),
+            "the countered row must render the one-hop flag link; html:\n{html}"
+        );
+        assert!(
+            !html.contains(&flag_anchor("bafyPlain")),
+            "the un-countered row must render NO flag link; html:\n{html}"
+        );
+        // No-noise: no "0 counters" / count / verdict text anywhere.
+        for noise in ["0 counters", "disputed by", "no disagreement"] {
+            assert!(!html.contains(noise), "no-noise: {noise:?} must be absent; {html}");
+        }
+    }
+
+    /// Oracle (I-LF-2 / I-LF-4 — additive only): the presence flag NEVER changes row
+    /// ORDER, COUNT, or any row's verbatim CONFIDENCE. Rendering the SAME page with
+    /// and without flags differs ONLY by the additive marker — the CID order, the row
+    /// count, and the confidence cells are byte-identical once the markers are elided.
+    #[test]
+    fn the_flag_is_additive_order_count_confidence_unchanged() {
+        let rows_flagged = vec![
+            ClaimRowView {
+                cid: "bafyA".to_string(),
+                subject: "s-a".to_string(),
+                predicate: "p".to_string(),
+                object: "o".to_string(),
+                confidence: 0.91,
+                is_countered: true,
+            },
+            ClaimRowView {
+                cid: "bafyB".to_string(),
+                subject: "s-b".to_string(),
+                predicate: "p".to_string(),
+                object: "o".to_string(),
+                confidence: 0.42,
+                is_countered: false,
+            },
+        ];
+        let rows_plain: Vec<ClaimRowView> = rows_flagged
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.is_countered = false;
+                r
+            })
+            .collect();
+
+        let flagged = render_claims_table_fragment(&PageView::new(rows_flagged)).into_string();
+        let plain = render_claims_table_fragment(&PageView::new(rows_plain)).into_string();
+
+        // Eliding the additive markers from the flagged render yields the plain render
+        // BYTE-for-byte: order, count, and confidence cells are unchanged.
+        let elided = flagged.replace(&flag_anchor("bafyA"), "");
+        assert_eq!(
+            elided, plain,
+            "the flag must be ADDITIVE only — eliding the marker must reproduce the \
+             un-flagged render byte-for-byte (order/count/confidence unchanged)"
+        );
+        // The verbatim confidence cells are present in BOTH renders.
+        assert!(plain.contains("0.91") && plain.contains("0.42"));
+        assert!(flagged.contains("0.91") && flagged.contains("0.42"));
+    }
+
+    proptest! {
+        /// Property: the list render is a TOTAL function of (page, presence) — for ANY
+        /// vec of rows with ANY per-row `is_countered`, rendering never panics, and a
+        /// row carries the flag link IFF `is_countered` is true.
+        #[test]
+        fn render_is_total_over_page_and_presence(
+            flags in proptest::collection::vec(any::<bool>(), 0..8usize)
+        ) {
+            let rows: Vec<ClaimRowView> = flags
+                .iter()
+                .enumerate()
+                .map(|(i, &countered)| ClaimRowView {
+                    cid: format!("bafy{i:03}"),
+                    subject: format!("s-{i}"),
+                    predicate: "p".to_string(),
+                    object: "o".to_string(),
+                    confidence: 0.5,
+                    is_countered: countered,
+                })
+                .collect();
+            let html = render_claims_table_fragment(&PageView::new(rows)).into_string();
+            for (i, &countered) in flags.iter().enumerate() {
+                let anchor = flag_anchor(&format!("bafy{i:03}"));
+                prop_assert_eq!(
+                    html.contains(&anchor),
+                    countered,
+                    "row {} flag presence must equal is_countered={}",
+                    i,
+                    countered
+                );
+            }
+        }
     }
 }
