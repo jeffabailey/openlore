@@ -275,12 +275,62 @@ fn the_counter_thread_page_chrome_stays_offline_no_cdn() {
     // local /static/htmx.min.js; I-CT-5 / KPI-HX-G2). NO network seam is wired (plain
     // `ViewerServer::start`): the 2-step read is LOCAL, so the page CHROME and the
     // THREAD itself are both offline-capable.
-    todo!(
-        "DELIVER (CT-INV-OfflineChrome): seed_claim_with_counter; start ViewerServer; \
-         GET /claims/{{target_cid}} via get (full page) + get_htmx (fragment); assert \
-         the full page is_full_page() + the fragment is_fragment() + both return 200 + \
-         !full_page.references_external_cdn() && !fragment.references_external_cdn() \
-         (only the local /static/htmx.min.js — I-CT-5 / KPI-HX-G2)"
+
+    // GIVEN a REAL store seeded with a countered claim (Rachel's 0.91 claim countered by
+    // the operator's OWN counter, via the production federation + `claim counter` paths).
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+
+    // WHEN the countered-claim detail is opened in BOTH shapes over the PLAIN viewer —
+    // `ViewerServer::start` wires NEITHER the /scrape GitHub seam NOR the /search indexer
+    // seam (the LOCAL-only viewer): the 2-step counter read has NO outbound edge.
+    let (full_page, fragment) = {
+        let viewer = ViewerServer::start(&env);
+        let path = format!("/claims/{}", seeded.target_cid);
+        (viewer.get(&path), viewer.get_htmx(&path))
+    };
+
+    // THEN both shapes render 200, the no-JS response is a COMPLETE full page (chrome
+    // present) while the htmx response is ONLY the swap-target fragment (no chrome).
+    assert_eq!(
+        full_page.status, 200,
+        "CT-INV-OfflineChrome: the countered detail full page must render 200; body \
+         was:\n{}",
+        full_page.body
+    );
+    assert_eq!(
+        fragment.status, 200,
+        "CT-INV-OfflineChrome: the countered detail fragment must render 200; body \
+         was:\n{}",
+        fragment.body
+    );
+    assert!(
+        full_page.is_full_page(),
+        "CT-INV-OfflineChrome: the no-JS response must be a COMPLETE full page (chrome \
+         present); body was:\n{}",
+        full_page.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "CT-INV-OfflineChrome: the HX-Request response must be ONLY the #claim-detail \
+         fragment (no chrome); body was:\n{}",
+        fragment.body
+    );
+
+    // THEN NEITHER shape references an off-host CDN — the ONLY htmx asset reference is
+    // the local /static/htmx.min.js the viewer serves itself (the page CHROME stays
+    // offline-capable; I-CT-5 / KPI-HX-G2).
+    assert!(
+        !full_page.references_external_cdn(),
+        "CT-INV-OfflineChrome: the full page must reference ONLY the local \
+         /static/htmx.min.js — NO off-host CDN (I-CT-5 / KPI-HX-G2); body was:\n{}",
+        full_page.body
+    );
+    assert!(
+        !fragment.references_external_cdn(),
+        "CT-INV-OfflineChrome: the fragment must reference ONLY the local \
+         /static/htmx.min.js — NO off-host CDN (I-CT-5 / KPI-HX-G2); body was:\n{}",
+        fragment.body
     );
 }
 
@@ -314,14 +364,75 @@ fn the_counter_thread_renders_fully_offline() {
     // counter-thread renders (the peer counter's author DID + CID + reason) with NO
     // Unavailable/degraded notice and NO network call — proving the 2-step read is
     // LOCAL + offline by construction (I-CT-5; the viewer re-verifies nothing).
-    todo!(
-        "DELIVER (CT-INV-Offline): seed_claim_with_counter so the counter is a PULLED \
-         PEER record (verified at pull time); start the plain ViewerServer (no /scrape, \
-         no /search seam); GET /claims/{{target_cid}} via get + get_htmx; assert both \
-         200 + the body carries the peer counter's author DID + CID + verbatim reason + \
-         NO 'unavailable'/'network error'/'could not reach'/'try again' degraded notice \
-         (the 2-step read is LOCAL — I-CT-5 / KPI-5)"
+
+    // GIVEN a REAL store seeded with a countered claim through the production write paths
+    // (Rachel's pulled peer claim at 0.91 + the operator's signed OWN counter carrying a
+    // verbatim reason). The counter's reason artifact is on local disk; the 2-step read
+    // (DB ref lookup + local artifact `fs::read`) has NO outbound edge.
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+    let counter = seeded
+        .counters
+        .first()
+        .expect("CT-INV-Offline: seed_claim_with_counter must seed exactly one counter");
+
+    // WHEN the countered-claim detail is opened in BOTH shapes over the PLAIN viewer —
+    // NEITHER the /scrape GitHub seam NOR the /search indexer seam is wired, so there is
+    // NO outbound edge for the network being down to take down (offline by construction).
+    let (full_page, fragment) = {
+        let viewer = ViewerServer::start(&env);
+        let path = format!("/claims/{}", seeded.target_cid);
+        (viewer.get(&path), viewer.get_htmx(&path))
+    };
+
+    // THEN both shapes render 200.
+    assert_eq!(
+        full_page.status, 200,
+        "CT-INV-Offline: the countered detail full page must render 200 fully offline; \
+         body was:\n{}",
+        full_page.body
     );
+    assert_eq!(
+        fragment.status, 200,
+        "CT-INV-Offline: the countered detail fragment must render 200 fully offline; \
+         body was:\n{}",
+        fragment.body
+    );
+
+    // THEN the FULL counter-thread renders in BOTH shapes — the counter's author DID +
+    // its own CID + its verbatim reason + the claim's verbatim confidence (0.91) — the
+    // LOCAL 2-step read serves the whole thread with NO network (I-CT-5 / KPI-5).
+    assert_counter_thread_renders_attributed_verbatim(&full_page.body, &seeded.counters, "0.91");
+    assert_counter_thread_renders_attributed_verbatim(&fragment.body, &seeded.counters, "0.91");
+
+    // THEN NO shape shows a degraded / network-failure notice — the route never reaches
+    // outward, so there is nothing to degrade (the viewer re-verifies nothing; I-CT-5).
+    let degraded_phrases = [
+        "unavailable",
+        "network error",
+        "could not reach",
+        "try again",
+    ];
+    for (label, body) in [("full page", &full_page.body), ("fragment", &fragment.body)] {
+        let lower = body.to_ascii_lowercase();
+        for phrase in degraded_phrases {
+            assert!(
+                !lower.contains(phrase),
+                "CT-INV-Offline: the {label} must render the full thread offline with NO \
+                 {phrase:?} degraded notice (the 2-step read is LOCAL — I-CT-5 / KPI-5); \
+                 body was:\n{body}"
+            );
+        }
+        // The verbatim reason is read from the LOCAL artifact — proving the second read
+        // step is local I/O, not a network fetch.
+        if let Some(reason) = &counter.reason {
+            assert!(
+                body.contains(reason.as_str()),
+                "CT-INV-Offline: the {label} must render the counter's verbatim reason \
+                 {reason:?} from the LOCAL artifact (no network); body was:\n{body}"
+            );
+        }
+    }
 }
 
 // =============================================================================
