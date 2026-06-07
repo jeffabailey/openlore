@@ -492,3 +492,109 @@ See `definition-of-ready.md`. Verdict: **PASS (9/9)**.
   route (extends `GET /claims`). Scope fork: `/claims`-only recommended (defer
   `/project`+`/philosophy`+`/score` to slice-13) — DECISION flagged for user. Scope
   PASS (~1 day). DoR PASS (9/9).
+- 2026-06-07 — slice-12 DISTILL (Quinn / nw-acceptance-designer). Reconciliation PASS
+  (0 contradictions across DISCUSS/DESIGN/ADR-048). 12 RED acceptance scaffolds authored
+  (`viewer_counter_claim_list_flags.rs` ×8 incl. WS LF-1 + `_invariants.rs` ×5 GOLD/wait
+  — 13 total counting the registered targets; see below), `todo!()`-bodied per ADR-025;
+  3 new support seeds + 5 assert seams stubbed in `support/mod.rs`; both targets
+  registered in `crates/cli/Cargo.toml`. `cargo build -p cli` compiles; tests RED.
+
+---
+
+## Wave: DISTILL
+
+### [REF] Inherited commitments
+
+| Origin | Commitment | DDD | Impact |
+|--------|------------|-----|--------|
+| DISCUSS#US-LF-002 | The `/claims` list flags each countered row with the neutral "Countered" marker linking to its slice-11 thread | n/a | LF-1 (WS) + LF-2/LF-4 acceptance scaffolds enter via `GET /claims` (real `openlore ui` subprocess), asserting the rendered marker + one-hop `<a href>` link |
+| DISCUSS#US-LF-003 | The flag is additive — order/paging/count/confidence byte-identical to slice-06; un-countered rows carry no noise | n/a | LF-5/LF-6/LF-7 + the LF-INV-ShownNeverApplied gold pin no-regression byte-identity on the rendered list HTML |
+| DESIGN#ADR-048 | Batch `counter_presence_for(&[cid])` is ONE aggregate `IN (...)` read (no N+1); presence-only HashSet; ref-tables-only; LOCAL | n/a | LF-8 N+1 behavioral proxy (subprocess layer) + LF-INV-Offline; the strict 1-query bound deferred to the DELIVER adapter-duckdb unit/property test |
+| DISCUSS#I-LF-3 | Presence-only boolean, never a count/verdict ("disputed by N") | n/a | LF-3 GOLD reuses the slice-11 neutral-flag verdict-word blocklist on the LIST surface |
+| DISCUSS#I-LF-1 | Read-only; authoring stays the CLI; no write/sign/counter control on any surface | n/a | LF-INV-ReadOnly (universe-bound state-delta, Mandate 8) + LF-INV-NoWrite over every shape × posture |
+
+### [REF] Scenario list with tags
+
+| ID | Scenario (test fn) | Story | Invariant | Tags |
+|---|---|---|---|---|
+| **LF-1** (**WS**) | `open_the_claims_list_with_htmx_flags_only_the_countered_row` | US-LF-002 | I-LF-3/6 | `@walking_skeleton @driving_port @driving_adapter @real-io @htmx-fragment @happy` |
+| LF-2 | `the_list_flags_render_identically_under_htmx_and_no_js` | US-LF-002 | I-LF-6 | `@driving_port @real-io @no-js @full-page @parity @happy` |
+| LF-3 | `a_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list` | US-LF-002 | I-LF-3 | `@driving_port @real-io @presence-only @anti-merging @gold` |
+| LF-4 | `the_countered_marker_is_a_render_only_one_hop_link_to_the_thread` | US-LF-002 | I-LF-6 | `@driving_port @real-io @drill-link @one-hop @happy` |
+| LF-5 | `a_store_with_no_counters_renders_the_list_exactly_as_slice_06` | US-LF-003 | I-LF-2 | `@driving_port @real-io @no-noise @empty-set @happy` |
+| LF-6 | `the_flag_never_reorders_repages_recounts_or_reweights_the_list` | US-LF-003 | I-LF-2/4 | `@driving_port @real-io @shown-never-applied @no-regression @gold` |
+| LF-7 | `a_mixed_page_flags_only_the_countered_rows_in_their_unchanged_positions` | US-LF-003 | I-LF-2/4 | `@driving_port @real-io @mixed-page @shown-never-applied @happy` |
+| LF-8 | `a_large_mixed_page_flags_every_countered_row_correctly_in_one_request` | US-LF-001/003 | I-LF-8 | `@driving_port @real-io @n-plus-1-guard @gold` |
+| LF-INV-ReadOnly | `every_claims_list_render_with_flags_leaves_the_store_read_only` | US-LF-002/003 | I-LF-1 | `@property @driving_port @real-io @read-only @gold` |
+| LF-INV-NoWrite | `no_claims_list_render_with_flags_adds_a_write_or_sign_control` | US-LF-002/003 | I-LF-1 | `@property @driving_port @real-io @read-only @gold` |
+| LF-INV-OfflineChrome | `the_flagged_claims_list_page_chrome_stays_offline_no_cdn` | US-LF-002 | I-LF-5 | `@property @driving_port @real-io @offline @no-cdn @gold` |
+| LF-INV-Offline | `the_flagged_claims_list_renders_fully_offline` | US-LF-002 | I-LF-5 | `@property @driving_port @real-io @offline @local-first @gold` |
+| LF-INV-ShownNeverApplied | `the_list_order_and_confidence_are_byte_identical_with_and_without_flags` | US-LF-003 | I-LF-2/4 | `@property @driving_port @real-io @shown-never-applied @no-regression @gold` |
+
+**13 scenarios total** (8 story + 5 invariant). Error/edge ratio: 7/13 ≈ 54% (no-noise,
+empty-set, multi-counter, mixed-page, offline, read-only, no-write/no-regression guards)
+— above the 40% mandate; for a read-only additive-flag DELTA the dominant risk surface is
+no-regression + presence-only discipline rather than input-validation sad paths (there is
+no user input on `GET /claims` beyond `?page`, inherited unchanged from slice-06).
+
+### [REF] WS strategy
+
+Brownfield DELTA — NO walking-skeleton Feature 0. The thinnest end-to-end thread IS
+**LF-1** (`@walking_skeleton`): `GET /claims` WITH `HX-Request` over a one-countered store
+→ ONLY the list fragment, the countered row flagged + linked, un-countered rows un-flagged.
+Per the Architecture of Reference, the driving port (`openlore ui` CLI subprocess) and the
+driven-internal store (DuckDB) are REAL (`@real-io`); the route has NO driven-external /
+non-deterministic port (no clock/email/network) — it is offline by construction.
+
+### [REF] Adapter coverage table
+
+| Driven adapter | `@real-io` scenario | Covered by |
+|---|---|---|
+| `adapter-duckdb` `StoreReadPort` (`list_claims` + NEW `counter_presence_for`) | YES | LF-1..LF-8 + all LF-INV-* (real seeded DuckDB; presence read over the indexed `claim_references ∪ peer_claim_references`) |
+| `adapter-http-viewer` (the `claims_page` SANDWICH route) | YES | every scenario (real `openlore ui` subprocess + in-test HTTP, both shapes) |
+| network / clock / external | n/a — NONE | route has no driven-external port (offline by construction, I-LF-5; LF-INV-Offline pins it) |
+
+No `NO — MISSING` rows. The new `counter_presence_for` read is exercised through the
+`GET /claims` driving port on a REAL store across every scenario; the strict single-query
+N+1 bound is asserted at the DELIVER layer-1/2 (`adapter-duckdb` unit/property), with the
+LF-8 subprocess-layer behavioral proxy here (Mandate 9/11 — layer 3+ is example-only).
+
+### [REF] Driving Adapter coverage
+
+`GET /claims` (the `openlore ui` CLI subprocess) is the single driving port for all 13
+scenarios (port-to-port — no scenario calls `counter_presence_for` or `viewer-domain`
+directly). LF-1 verifies the HX-Request fork (fragment), LF-2 the no-JS full-page fork
+(status + shape + content-type + rendered flag parity). No new route, no new entry point.
+
+### [REF] Scaffolds (RED-ready, Mandate 7 / ADR-025)
+
+- `tests/acceptance/viewer_counter_claim_list_flags.rs` — 8 story scaffolds (`// SCAFFOLD: true`); each body `todo!(…)` → panics → RED (MISSING_FUNCTIONALITY).
+- `tests/acceptance/viewer_counter_claim_list_flags_invariants.rs` — 5 GOLD/guardrail scaffolds (`// SCAFFOLD: true`); each body `todo!(…)` → RED.
+- `tests/acceptance/support/mod.rs` — 3 new seeds (`seed_claims_list_one_countered` / `seed_claims_list_none_countered` / `seed_claims_list_mixed_pages` → `SeededClaimsList`) + 5 assert seams (`assert_list_row_flagged_countered` / `assert_list_row_not_flagged` / `assert_list_flag_links_to_thread` / `assert_list_flag_is_single_neutral_presence` / `assert_list_order_and_confidence_byte_identical`) + `LIST_COUNTERED_FLAG_TEXT` const, all `todo!()`-stubbed (compile, panic at runtime).
+- `crates/cli/Cargo.toml` — both `[[test]]` targets registered so `cargo build -p cli` compiles them.
+
+The scaffolds REUSE the slice-11 seeds (`build_verifiable_peer_counter_record`,
+`seed_claim_two_counters_distinct_authors`), the slice-06 list harness (`ViewerServer`,
+`get`/`get_htmx`, `is_full_page`/`is_fragment`, `references_external_cdn`), the universe-
+bound read-only gold (`capture_store_row_count_universe` / `assert_store_read_only`,
+Mandate 8), and the slice-11 no-write assertion (`assert_detail_html_has_no_write_or_sign_control`).
+No production code is written — DELIVER fills the seed/assert `todo!()` bodies + the
+`counter_presence_for` read + the `ClaimRowView.is_countered` render one scenario at a time.
+
+### [REF] Test placement
+
+`tests/acceptance/` (workspace-root acceptance corpus; targets registered in
+`crates/cli/Cargo.toml` `[[test]]`) — mirrors `viewer_counter_claim_threads.rs` /
+`viewer_store.rs` precedent exactly (one story file + one `_invariants.rs` GOLD file per
+viewer slice).
+
+### [REF] Pre-requisites
+
+- DESIGN driving port: `GET /claims` (`adapter-http-viewer::claims_page`, the SANDWICH
+  read→presence→project→render) + the NEW read-only `StoreReadPort::counter_presence_for`
+  (`adapter-duckdb` impl, ADR-048). `viewer-domain::ClaimRowView.is_countered` +
+  `render_claim_row` flag branch.
+- DEVOPS environment matrix: **absent** (no `devops/` dir) — WARN, default matrix applied
+  (clean local store; subprocess + real DuckDB; offline). No infra constraint affects these
+  ATs (the route has no external seam). Mandate 4 environmental realism is satisfied by the
+  real-subprocess + real-DuckDB harness inherited from slice-06/11.

@@ -528,3 +528,46 @@ harness = true
 name = "viewer_counter_claim_threads_invariants"
 path = "../../tests/acceptance/viewer_counter_claim_threads_invariants.rs"
 harness = true
+
+# Slice-12 (viewer-counter-claim-list-flags; DISTILL) — the at-a-glance "Countered"
+# PRESENCE FLAG on the `GET /claims` LIST rows (US-LF-001/002/003; ADR-048). Extends the
+# slice-06 own-claims list so each row whose claim has ≥1 counter carries the neutral
+# slice-11 `COUNTERED_PRESENCE_FLAG` ("Countered") rendered as a render-only
+# `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11 thread;
+# un-countered rows carry nothing (no "0 counters" noise). Presence-only (a two-author
+# claim shows ONE neutral marker, never "disputed by N"); ADDITIVE (the flag never
+# re-orders/re-ranks/filters/re-weights the list — order/paging/count/confidence
+# byte-identical to slice-06). Backed by the read-only BATCH `counter_presence_for(&[cid])`
+# (ONE aggregate `referenced_cid IN (...)` UNION-ALL DISTINCT read over the indexed ref
+# tables — no N+1, I-LF-8). LF-1 walking skeleton (GET /claims HX-Request flags only the
+# countered row) + no-JS parity + presence-only single-marker + one-hop link + no-noise +
+# the shown-never-applied no-regression GOLD + the N+1 behavioral proxy. Drives the REAL
+# `openlore ui` via `ViewerServer` over a REAL seeded local store (slice-11 seeds reused);
+# NO mocked boundary (LOCAL read). Per Mandate 9/11 example-based, never PBT-generated at
+# this layer (the strict 1-query bound is a DELIVER adapter-duckdb unit/property test).
+# DISTILL registers + RED gate; LF-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_claim_list_flags"
+path = "../../tests/acceptance/viewer_counter_claim_list_flags.rs"
+harness = true
+
+# Slice-12 (viewer-counter-claim-list-flags; DISTILL) GOLD / guardrail invariants over the
+# whole flagged-list surface (cross-cutting I-LF-1/2/5/6/8):
+# every_claims_list_render_with_flags_leaves_the_store_read_only (read-only state-delta,
+# Mandate 8 — the presence read persists nothing),
+# no_claims_list_render_with_flags_adds_a_write_or_sign_control (no sign/publish/counter
+# control on any shape — the "Countered" markers are render-only `<a href>` TEXT; authoring
+# stays the slice-03 CLI), the_flagged_claims_list_page_chrome_stays_offline_no_cdn (local
+# /static/htmx.min.js, no CDN), the_flagged_claims_list_renders_fully_offline (the presence
+# read is LOCAL DB-index only; renders network-down; the viewer re-verifies nothing), and
+# the SHOWN-NEVER-APPLIED / no-regression gold
+# the_list_order_and_confidence_are_byte_identical_with_and_without_flags (I-LF-2 / OD-AV-7
+# / ADR-015 — the flag never re-orders/re-paginates/re-counts/re-weights the list). Drives
+# the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO mocked
+# boundary (the route is a LOCAL batch read + PURE projection/render). Per Mandate 9/11
+# example-based, never PBT-generated at this layer. DISTILL registers + RED gate; LF-INV-*
+# stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_claim_list_flags_invariants"
+path = "../../tests/acceptance/viewer_counter_claim_list_flags_invariants.rs"
+harness = true

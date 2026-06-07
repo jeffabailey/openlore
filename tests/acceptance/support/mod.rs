@@ -10321,3 +10321,224 @@ pub fn assert_counter_claim_verbatim_unchanged(
          {claim_region}\n--- countered ---\n{countered_body}"
     );
 }
+
+// =============================================================================
+// slice-12 (viewer-counter-claim-list-flags) — the `/claims` LIST counter-presence FLAG
+// seeds + assert helpers (US-LF-001/002/003; ADR-048). The flag is the slice-11
+// `COUNTERED_PRESENCE_FLAG = "Countered"` neutral marker (viewer-domain), rendered as a
+// render-only `<a href="/claims/{cid}">Countered</a>` one-hop link on each LIST row whose
+// claim has ≥1 counter. These seeds REUSE the slice-11 production write paths (own counter
+// via `claim counter`; peer counter via `peer add` + `peer pull`) widened to a MULTI-ROW
+// own-claims list; the asserts scan the rendered LIST HTML (Mandate 8 universe = the
+// port-exposed rendered surface, never an internal struct field).
+//
+// SCAFFOLD: true (slice-12) — every body is `todo!()` so the ATs COMPILE and panic at
+// runtime → classify RED (MISSING_FUNCTIONALITY), NOT BROKEN. DELIVER materializes them
+// (the DELIVER guidance is inlined in each doc comment).
+// =============================================================================
+
+/// The neutral list-row presence marker text — the slice-11 `COUNTERED_PRESENCE_FLAG`
+/// reused VERBATIM ("Countered"). One source of truth so the slice-12 seeds + asserts
+/// never drift from the viewer-domain constant. The marker is PRESENCE-ONLY: it is never a
+/// verdict ("disputed"/"refuted"/"false"), never a count ("disputed by N"), and never a
+/// sort/filter control (I-LF-3).
+pub const LIST_COUNTERED_FLAG_TEXT: &str = "Countered";
+
+/// The handle a `/claims`-list flag seed returns: the full set of own-claim CIDs on the
+/// page (in `composed_at DESC, cid` order, the slice-06 list order) split into the
+/// COUNTERED subset (rows that must carry the "Countered" marker) and the UN-COUNTERED
+/// subset (rows that must carry NO marker). The scenario addresses exact rows via these
+/// CIDs (the `assert_list_row_*` helpers + the `<a href="/claims/{cid}">` flag-link
+/// targets). `ordered_cids` is the EXACT rendered order so the no-regression gold can pin
+/// order byte-identity.
+#[derive(Debug, Clone)]
+pub struct SeededClaimsList {
+    /// Every own-claim CID on the page, in the slice-06 rendered order
+    /// (`composed_at DESC, cid`). The no-regression gold pins this order byte-identical
+    /// with and without the flag (I-LF-2).
+    pub ordered_cids: Vec<String>,
+    /// The subset of `ordered_cids` whose claim has ≥1 counter — each row MUST carry the
+    /// neutral "Countered" marker linking to `/claims/{cid}` (US-LF-002).
+    pub countered_cids: Vec<String>,
+    /// The subset of `ordered_cids` with NO counter — each row MUST carry NO marker and no
+    /// "0 counters" noise (US-LF-003 no-noise).
+    pub uncountered_cids: Vec<String>,
+}
+
+/// Seed an own-claims `/claims` page with EXACTLY ONE peer-countered claim among several
+/// plain own claims (the LF-1 walking-skeleton + LF-2/LF-4/LF-INV-* fixture). The
+/// countered claim is countered by a PEER (so the presence read exercises the
+/// `peer_claim_references` arm of the UNION-ALL), pulled via the production `peer add` +
+/// `peer pull` federation path; the rest are plain own claims signed via `claim add`. All
+/// rows land in the SAME local store `openlore ui` reads (Pillar 3 / BR-VIEW-4). Returns
+/// the [`SeededClaimsList`] so the scenario addresses the exact countered + un-countered
+/// rows.
+///
+/// SCAFFOLD: true (slice-12) — DELIVER materializes it by: (1) signing several plain own
+/// claims via `seed_own_claim_with_evidence` (distinct subjects so distinct CIDs);
+/// (2) seeding ONE more own claim that a PEER then counters — reuse the slice-11 pattern
+/// (`build_verifiable_peer_counter_record(COUNTER_AUTHOR_TOBIAS, seed, target_cid, reason)`
+/// + `peer add` + `peer pull`) so a `counters`-referencing peer record targeting that
+/// claim lands in `peer_claim_references`; (3) recover all own-claim CIDs in the slice-06
+/// `composed_at DESC, cid` list order (e.g. via `read_own_claim_cids_in_list_order(env)`
+/// or by capturing each `claim add` CID + sorting per the list contract). NO hand-inserted
+/// store rows.
+pub fn seed_claims_list_one_countered(env: &TestEnv) -> SeededClaimsList {
+    let _ = env;
+    todo!(
+        "slice-12 seed_claims_list_one_countered: sign several plain own claims \
+         (seed_own_claim_with_evidence, distinct subjects) + one own claim countered by a \
+         PEER (build_verifiable_peer_counter_record(COUNTER_AUTHOR_TOBIAS, …, target_cid, \
+         Some(reason)) → peer add → peer pull, landing in peer_claim_references); recover \
+         all own-claim CIDs in composed_at DESC, cid order; return SeededClaimsList with \
+         countered_cids = [the one], uncountered_cids = the rest. RED until DELIVER."
+    )
+}
+
+/// Seed an own-claims `/claims` page with NO counters at all (the LF-5 / LF-INV-NoWrite
+/// no-noise fixture): several plain own claims, NOTHING references any of them as a
+/// counter, so `counter_presence_for` returns the EMPTY set and the list renders
+/// byte-identically to slice-06. Returns the [`SeededClaimsList`] with an EMPTY
+/// `countered_cids` (every CID is in `uncountered_cids`).
+///
+/// SCAFFOLD: true (slice-12) — DELIVER materializes it by signing several plain own claims
+/// via `seed_own_claim_with_evidence` (distinct subjects → distinct CIDs), recovering them
+/// in the slice-06 `composed_at DESC, cid` list order, and returning them all as
+/// `uncountered_cids` with an empty `countered_cids`. NO counter is authored. NO
+/// hand-inserted store rows.
+pub fn seed_claims_list_none_countered(env: &TestEnv) -> SeededClaimsList {
+    let _ = env;
+    todo!(
+        "slice-12 seed_claims_list_none_countered: sign several plain own claims \
+         (seed_own_claim_with_evidence, distinct subjects); recover CIDs in composed_at \
+         DESC, cid order; return SeededClaimsList with countered_cids = [] and \
+         uncountered_cids = all. NO counter authored → empty presence set. RED until DELIVER."
+    )
+}
+
+/// Seed an own-claims `/claims` page MIXING countered + un-countered claims in a known
+/// `composed_at DESC, cid` order (the LF-6/LF-7/LF-8 + LF-INV-ShownNeverApplied fixture).
+/// The page is large enough that the LF-8 N+1-guard behavioral proxy is meaningful (many
+/// rows, a known countered subset), and the order is fixed so the no-regression gold can
+/// pin order/paging/count/confidence byte-identity with and without the flag. Counters are
+/// a mix of OWN (`claim counter` → `claim_references`) and PEER (`peer pull` →
+/// `peer_claim_references`) so BOTH UNION-ALL arms are exercised. Returns the
+/// [`SeededClaimsList`].
+///
+/// SCAFFOLD: true (slice-12) — DELIVER materializes it by signing N plain own claims, then
+/// countering a KNOWN subset (some via Maria's OWN `claim counter`, some via a PEER
+/// `build_verifiable_peer_counter_record` + `peer add` + `peer pull`), recovering every
+/// own-claim CID in the slice-06 `composed_at DESC, cid` order, and returning the ordered
+/// + countered + un-countered CID vecs. The COUNT, ORDER, and each row's confidence must
+/// match the slice-06 render of the SAME store (the no-regression baseline). NO
+/// hand-inserted store rows.
+pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
+    let _ = env;
+    todo!(
+        "slice-12 seed_claims_list_mixed_pages: sign N plain own claims; counter a KNOWN \
+         subset (mix of OWN `claim counter` → claim_references and PEER \
+         build_verifiable_peer_counter_record → peer pull → peer_claim_references); \
+         recover all own-claim CIDs in composed_at DESC, cid order; return SeededClaimsList \
+         (ordered_cids known + countered_cids subset + uncountered_cids rest), large enough \
+         for the LF-8 N+1 proxy. RED until DELIVER."
+    )
+}
+
+/// Assert a rendered `/claims` LIST body (fragment OR full page) FLAGS the given countered
+/// row: the row carries the neutral "Countered" marker ([`LIST_COUNTERED_FLAG_TEXT`])
+/// rendered as a render-only `<a href="/claims/{cid}">Countered</a>` one-hop link to that
+/// claim's slice-11 thread (US-LF-002 / I-LF-6). Scans the rendered HTML only (Mandate 8
+/// universe = the port-exposed rendered surface).
+///
+/// SCAFFOLD: true (slice-12) — DELIVER asserts: the body contains the marker text
+/// "Countered" associated with this row's CID, AND the marker is the render-only anchor
+/// `<a href="/claims/{cid}">Countered</a>` (the one-hop drill-link, never an executable
+/// control — I-LF-1/I-LF-6).
+pub fn assert_list_row_flagged_countered(body: &str, countered_cid: &str) {
+    let _ = (body, countered_cid);
+    todo!(
+        "slice-12 assert_list_row_flagged_countered: assert the rendered list body carries \
+         the render-only marker `<a href=\"/claims/{{cid}}\">Countered</a>` for \
+         countered_cid (neutral presence flag + one-hop link; US-LF-002 / I-LF-6). \
+         RED until DELIVER."
+    )
+}
+
+/// Assert a rendered `/claims` LIST body does NOT flag the given un-countered row: the row
+/// for `uncountered_cid` carries NO "Countered" marker and NO "0 counters" / empty-state
+/// noise — it renders exactly as slice-06 (US-LF-003 no-noise / I-LF-2). Scans the
+/// rendered HTML only.
+///
+/// SCAFFOLD: true (slice-12) — DELIVER asserts: the un-countered row's rendered region
+/// carries NO `<a href="/claims/{cid}">Countered</a>` marker and NO "0 counters" /
+/// "no disagreement" empty-state text (the un-countered row is byte-unaffected by the
+/// flag — I-LF-2).
+pub fn assert_list_row_not_flagged(body: &str, uncountered_cid: &str) {
+    let _ = (body, uncountered_cid);
+    todo!(
+        "slice-12 assert_list_row_not_flagged: assert the un-countered row for \
+         uncountered_cid carries NO 'Countered' marker and no '0 counters' empty-state \
+         noise (renders exactly as slice-06; US-LF-003 / I-LF-2). RED until DELIVER."
+    )
+}
+
+/// Assert the "Countered" marker on a countered LIST row is a render-only
+/// `<a href="/claims/{cid}">` ONE-HOP link to that claim's slice-11 thread — navigation
+/// TEXT, never an executable write/sign/counter control (US-LF-002 / I-LF-1 / I-LF-6).
+///
+/// SCAFFOLD: true (slice-12) — DELIVER asserts: the body contains the exact anchor
+/// `<a href="/claims/{cid}">` wrapping the "Countered" marker for this row, and the marker
+/// is render-only navigation TEXT (no form/button/onclick — the human gate stays the CLI).
+pub fn assert_list_flag_links_to_thread(body: &str, countered_cid: &str) {
+    let _ = (body, countered_cid);
+    todo!(
+        "slice-12 assert_list_flag_links_to_thread: assert the 'Countered' marker on the \
+         countered row is the render-only anchor `<a href=\"/claims/{{cid}}\">Countered</a>` \
+         (one-hop link to the slice-11 thread; never a control; I-LF-1/I-LF-6). \
+         RED until DELIVER."
+    )
+}
+
+/// Assert a claim countered by N (>1) authors shows EXACTLY ONE neutral "Countered" marker
+/// on its LIST row — presence-only, NEVER a count ("disputed by N"), a verdict
+/// ("disputed"/"refuted"/"false"), or a merged consensus row (US-LF-002 / I-LF-3 /
+/// KPI-AV-2). Reuses the slice-11 neutral-flag vocabulary (the `assert_counter_thread_
+/// presence_flag_is_neutral` verdict-word blocklist) on the LIST surface.
+///
+/// SCAFFOLD: true (slice-12) — DELIVER asserts: the row for `target_cid` carries EXACTLY
+/// one "Countered" marker (presence membership → one flag, DISTINCT referenced_cid), and
+/// the list body carries NONE of the count/verdict phrasings ("disputed by", "consensus",
+/// "net verdict", "disputed", "refuted", "is false", "is wrong").
+pub fn assert_list_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
+    let _ = (body, target_cid);
+    todo!(
+        "slice-12 assert_list_flag_is_single_neutral_presence: assert the row for \
+         target_cid carries EXACTLY one neutral 'Countered' marker (presence-only) AND the \
+         list body carries no count/verdict phrasing ('disputed by'/'consensus'/'net \
+         verdict'/'disputed'/'refuted'/'is false'/'is wrong'); I-LF-3 / KPI-AV-2. \
+         RED until DELIVER."
+    )
+}
+
+/// Assert the flagged `/claims` LIST render is byte-identical to the slice-06 reference
+/// render of the SAME store in every dimension EXCEPT the additive "Countered" markers:
+/// the row ORDER (`composed_at DESC, cid`), the PAGING / position indicator, the total
+/// COUNT, and EVERY row's CONFIDENCE are byte-IDENTICAL — the flag never re-orders,
+/// re-paginates, re-counts, or re-weights the list (US-LF-003 no-regression GOLD / I-LF-2
+/// / I-LF-4). `baseline` is the slice-06 reference render of the same store (the no-flag
+/// render path or the recorded slice-06 ordering); `flagged` is the slice-12 render.
+///
+/// SCAFFOLD: true (slice-12) — DELIVER asserts: with the additive "Countered" markers
+/// elided from `flagged`, the row order, the position indicator, the total count, and each
+/// row's confidence cell are byte-identical to `baseline`. Any divergence is an
+/// UNSHIPPABLE no-regression breach (the flag must be additive ONLY; I-LF-2).
+pub fn assert_list_order_and_confidence_byte_identical(flagged: &str, baseline: &str) {
+    let _ = (flagged, baseline);
+    todo!(
+        "slice-12 assert_list_order_and_confidence_byte_identical: with the additive \
+         'Countered' markers elided from `flagged`, assert row order (composed_at DESC, \
+         cid), position indicator, total count, and every row's confidence cell are \
+         byte-identical to the slice-06 `baseline` render of the SAME store (the flag is \
+         additive ONLY; US-LF-003 / I-LF-2 / I-LF-4). RED until DELIVER."
+    )
+}

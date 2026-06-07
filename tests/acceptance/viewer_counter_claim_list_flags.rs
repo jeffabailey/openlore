@@ -1,0 +1,377 @@
+//! Slice-12 acceptance — the `openlore ui` at-a-glance "Countered" PRESENCE FLAG on the
+//! `GET /claims` LIST rows (US-LF-001/002/003; ADR-048).
+//!
+//! The EXISTING read-only `GET /claims` own-claims LIST (slice-06 V-1/11/12/13) is
+//! EXTENDED so that each row whose claim has ≥1 counter carries a NEUTRAL "Countered"
+//! presence marker — a render-only `<a href="/claims/{cid}">Countered</a>` one-hop link
+//! to that claim's slice-11 thread. Un-countered rows carry NOTHING (no badge, no
+//! "0 counters" noise). The flag is PRESENCE-ONLY (a boolean per row): a claim countered
+//! by TWO distinct authors shows ONE neutral marker, never "disputed by 2", never a
+//! count, never a verdict. The flag is ADDITIVE: it NEVER re-orders, re-ranks, filters,
+//! re-weights, or re-paginates the list — row ORDER, PAGING, COUNT, and each row's
+//! verbatim CONFIDENCE are byte-identical to the slice-06 `/claims` render of the same
+//! store (shown-never-applied, I-LF-2).
+//!
+//! The AT-A-GLANCE / DISCOVERABILITY half of the VIEW side of J-003b (slice-11 shipped
+//! the DRILL-IN thread; slice-12 makes disagreement DISCOVERABLE while scanning).
+//! Authoring stays EXCLUSIVELY in the slice-03 CLI (`claim counter`); the viewer offers
+//! NO write/sign/counter control on any surface (I-LF-1). slice-12 only RENDERS the
+//! presence of counters that already exist; the marker LINKS to the slice-11 read-only
+//! thread, never to a compose form.
+//!
+//! The load-bearing technical commitment (ADR-048 / I-LF-8): the per-CID counter-presence
+//! lookup across the WHOLE list page is ONE aggregate `referenced_cid IN (...)` UNION-ALL
+//! DISTINCT read over the indexed `claim_references ∪ peer_claim_references` tables —
+//! NOT one query per row (no N+1). The presence read is read-only, LOCAL (renders
+//! offline), ref-tables-only (no JOIN to `claims`/`peer_claims`, no per-row artifact
+//! read — the flag carries no reason text), and returns the SET of countered CIDs for
+//! the page (`HashSet<String>`, presence membership, anti-merging by type). Empty input
+//! → empty set, zero queries.
+//!
+//! Driving discipline (Mandate 1): every scenario enters through the REAL `openlore ui`
+//! subprocess (`ViewerServer`) + in-test HTTP GET (with/without the `HX-Request` header —
+//! the slice-07 `get`/`get_htmx` pair) and asserts on the returned HTML. NO scenario
+//! calls the `viewer-domain` `render_*` fns or `counter_presence_for` directly (those are
+//! unit/property-level, exercised in DELIVER). The local DuckDB store is REAL, seeded
+//! through the PRODUCTION write paths — the operator's OWN counter via the `claim counter`
+//! verb and PEER counters via the `peer add` + `peer pull` federation path (Pillar 3 /
+//! BR-VIEW-4) — reusing the slice-11 seeds (`seed_claim_with_counter` /
+//! `seed_claim_two_counters_distinct_authors` / `seed_uncountered_claim`). The presence
+//! read is LOCAL (DB index only); NO network seam exists on this route (offline by
+//! construction, I-LF-5).
+//!
+//! Layer placement (nw-tdd-methodology Layered Test Discipline matrix + Mandate 9/11):
+//! every scenario here is a layer-3/layer-5 subprocess + real-I/O test — EXAMPLE-only.
+//! The sad/edge paths (none-countered, multi-counter, mixed page) are enumerated
+//! explicitly, never PBT-generated at this layer. The strict 1-query N+1 bound is a
+//! DELIVER unit/property assertion in `adapter-duckdb`; at this subprocess AT layer the
+//! N+1 guard is asserted via its behavioral proxy (a page of many countered + uncountered
+//! rows all flag correctly in ONE request, with no per-row degradation — LF-7).
+//!
+//! Build-before-run note (carry into the DELIVER roadmap, mirrors slice-06/07/11):
+//! `cargo test` does NOT rebuild a spawned binary automatically — the roadmap/run MUST
+//! `cargo build` the `openlore` (viewer) bin before running these ATs so
+//! `ViewerServer::start` spawns the CURRENT viewer, not a stale one. The flag needs NO
+//! second binary — the presence read is a LOCAL read.
+//!
+//! Mandate 7 RED scaffolds (ADR-025): the ATs spawn the bin + HTTP, so they COMPILE now
+//! with `todo!()` bodies + the new `seed_claims_list_one_countered` /
+//! `seed_claims_list_none_countered` / `seed_claims_list_mixed_pages` seeds +
+//! `assert_list_row_flagged_countered` / `assert_list_row_not_flagged` /
+//! `assert_list_order_and_confidence_byte_identical` / `assert_list_flag_links_to_thread`
+//! / `assert_list_flag_is_single_neutral_presence` assert helpers (all `todo!()`-stubbed
+//! in support/mod.rs — they compile, then panic). Each scenario body is `todo!()` →
+//! panics → classifies RED (MISSING_FUNCTIONALITY), NOT BROKEN. They stay RED until
+//! DELIVER's per-scenario RED→GREEN→COMMIT cycles.
+//!
+//! Covers:
+//! - US-LF-002 (the flag, LF-1..LF-5): LF-1 walking skeleton — GET /claims WITH
+//!   HX-Request over a store where one own claim is countered (a peer countered it) and
+//!   others are not → 200, ONLY the list fragment, the countered row carries the neutral
+//!   "Countered" marker linking to /claims/{cid}, the un-countered rows carry no marker +
+//!   no-JS full-page parity (LF-2) + presence-only single neutral flag for a two-author
+//!   claim (LF-4) + one-hop `<a href>` link to the slice-11 thread (LF-5).
+//! - US-LF-003 (no-noise + no-regression, LF-6..LF-9): an un-countered row renders
+//!   EXACTLY as slice-06 with no marker / no "0 counters" noise (LF-6); the
+//!   shown-never-applied / no-regression GOLD — order, paging, count, and each row's
+//!   confidence byte-identical to slice-06 (LF-7); a mixed page flags ONLY the countered
+//!   rows in their unchanged composed_at DESC positions (LF-8); the N+1-guard behavioral
+//!   proxy — a large mixed page flags every countered row correctly in ONE request (LF-9).
+//
+// SCAFFOLD: true
+
+mod support;
+
+#[allow(unused_imports)]
+use support::*;
+
+// =============================================================================
+// US-LF-002 — see the neutral "Countered" presence flag on the /claims list rows
+// (LF-1..LF-5). LF-1 is the thinnest end-to-end thread (the walking skeleton).
+// =============================================================================
+
+/// LF-1 / WALKING SKELETON (US-LF-002; the riskiest-assumption thread): from the LOCAL
+/// store, `GET /claims` WITH the `HX-Request` header over a store where ONE of Maria's
+/// own claims is countered (a peer authored a counter targeting it) and the others are
+/// NOT returns ONLY the list-panel fragment (no full-page chrome) in which the countered
+/// row carries the NEUTRAL "Countered" marker — a render-only `<a href="/claims/{cid}">`
+/// link to that claim's slice-11 thread — while the un-countered rows carry NO marker.
+/// This is the thinnest complete slice the feature can demo: viewer → LOCAL list read →
+/// LOCAL batch presence read → pure projection → HTML fragment, proving the read-only
+/// list can carry an at-a-glance disagreement flag while preserving the read-only /
+/// presence-only / local-first / progressive-enhancement invariants.
+///
+/// Given Maria's read-only viewer reads a LOCAL store holding several of her own claims,
+///   exactly one of which (`bafyMariaRust`) is countered by a peer;
+/// When she opens the My Claims list WITH the htmx header (`GET /claims`, HX-Request);
+/// Then she receives ONLY the list-panel fragment (no chrome) in which the
+///   `bafyMariaRust` row carries the neutral "Countered" marker linking to
+///   `/claims/bafyMariaRust`, and the un-countered rows carry no marker.
+///
+/// @us-lf-002 @walking_skeleton @driving_port @driving_adapter @real-io @htmx-fragment
+/// @i-lf-2 @i-lf-3 @i-lf-6 @kpi-fed-3 @happy
+#[test]
+fn open_the_claims_list_with_htmx_flags_only_the_countered_row() {
+    // GIVEN a REAL local store with several of Maria's own claims, exactly ONE of which
+    // is countered by a peer (seeded via the slice-11 federation + `claim counter` paths,
+    // widened to a multi-row list). The un-countered rows are plain own claims.
+    //
+    // WHEN Maria submits `GET /claims` WITH the HX-Request header (get_htmx).
+    //
+    // THEN the response is ONLY the list-panel fragment (`is_fragment()`, NOT a full
+    // page): the countered row carries the neutral "Countered" marker linking to its
+    // thread; every un-countered row carries NO marker.
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-1 (walking skeleton): seed_claims_list_one_countered(&env) → a multi-row own \
+         /claims store with exactly one peer-countered claim; ViewerServer::start; \
+         get_htmx(\"/claims\"); assert status 200 + text/html + is_fragment(); \
+         assert_list_row_flagged_countered(&body, &countered_cid) (neutral marker + \
+         <a href=\"/claims/{{cid}}\"> link); assert_list_row_not_flagged(&body, &cid) for \
+         each un-countered cid. RED until DELIVER."
+    )
+}
+
+/// LF-2 (US-LF-002 — no-JS full page + parity, I-LF-6): `GET /claims` WITHOUT
+/// `HX-Request` serves a COMPLETE full page (chrome + the SAME list region) whose list
+/// region renders the SAME flags as the htmx fragment — parity by construction (the page
+/// EMBEDS the same list-fragment fn; the flag is rendered INSIDE `render_claim_row`). The
+/// no-JS no-regression contract: the full page is the contract, the htmx swap is a nicety.
+///
+/// Given Maria's store holds a countered claim among her own claims;
+/// When the list renders as a full page (no JS) and as an htmx fragment;
+/// Then the countered row shows the SAME "Countered" marker in both shapes, and the
+///   un-countered rows carry no marker in either.
+///
+/// @us-lf-002 @driving_port @real-io @no-js @full-page @parity @i-lf-6 @happy
+#[test]
+fn the_list_flags_render_identically_under_htmx_and_no_js() {
+    // GIVEN the same one-countered list store (one peer-countered own claim among plain
+    // own claims).
+    // WHEN Maria requests the list WITHOUT the htmx header (full page) AND WITH it
+    // (fragment).
+    // THEN the no-JS response is_full_page() (chrome present) while the htmx response
+    // is_fragment() (no chrome); BOTH list regions carry the SAME flag on the countered
+    // row and NO flag on the un-countered rows (parity — the page embeds the fragment
+    // fn; I-LF-6).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-2 (parity): seed_claims_list_one_countered(&env); ViewerServer::start; \
+         full = get(\"/claims\"); fragment = get_htmx(\"/claims\"); assert both 200 + \
+         text/html; assert full.is_full_page() && fragment.is_fragment(); \
+         assert_list_row_flagged_countered on BOTH bodies for the countered cid; \
+         assert_list_row_not_flagged on BOTH for each un-countered cid. RED until DELIVER."
+    )
+}
+
+/// LF-3 / GOLD presence-only (US-LF-002; I-LF-3 / KPI-AV-2): a claim countered by TWO
+/// DISTINCT authors (Rachel + Tobias) shows EXACTLY ONE neutral "Countered" marker on its
+/// list row — a PRESENCE marker, NEVER "disputed by 2", never a count, never a merged
+/// verdict. The per-counter attribution (each author + CID + reason) lives in the
+/// slice-11 thread the marker LINKS to, not on the list. Reuses the slice-11
+/// `seed_claim_two_counters_distinct_authors` anti-merging fixture, observed on the LIST.
+///
+/// Given Maria's claim `bafyMariaTDD` is countered by both Rachel and Tobias;
+/// When Maria opens the My Claims list;
+/// Then the `bafyMariaTDD` row shows EXACTLY ONE neutral "Countered" marker, and the
+///   list shows no count, no "disputed by N", and no aggregate verdict.
+///
+/// @us-lf-002 @driving_port @real-io @presence-only @anti-merging @i-lf-3 @kpi-av-2 @gold
+#[test]
+fn a_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list() {
+    // GIVEN a claim countered by TWO DISTINCT authors (Maria's OWN counter via
+    // `claim counter` → `claims` + peer Tobias's counter via `peer pull` → `peer_claims`),
+    // among Maria's own claims on the list (slice-11 `seed_claim_two_counters_distinct_
+    // authors`, observed on the LIST surface).
+    // WHEN Maria opens the My Claims list.
+    // THEN the countered row shows EXACTLY ONE neutral "Countered" marker (presence-only —
+    // DISTINCT referenced_cid → one membership → one flag; I-LF-3), and the body carries
+    // NO count / "disputed by N" / consensus / net-verdict phrasing
+    // (assert_list_flag_is_single_neutral_presence).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-3 (presence-only gold): seed_claim_two_counters_distinct_authors(&env) \
+         (reused from slice-11) → the two-author-countered target lands among the own \
+         /claims rows; ViewerServer::start; get(\"/claims\"); assert 200; \
+         assert_list_flag_is_single_neutral_presence(&body, &target_cid) — EXACTLY one \
+         'Countered' marker on that row + NO count / 'disputed by N' / verdict phrasing. \
+         RED until DELIVER."
+    )
+}
+
+/// LF-4 (US-LF-002 — one-hop link to the slice-11 thread, I-LF-6): the "Countered" marker
+/// on a countered list row is a render-only `<a href="/claims/{cid}">` ONE-HOP link to
+/// that claim's slice-11 counter thread — navigable WITHOUT JS (a plain anchor, never an
+/// executable control). Following it lands on the slice-11 detail thread for that claim.
+///
+/// Given Maria's store holds her claim `bafyMariaRust` countered by Tobias;
+/// When Maria opens the My Claims list and follows the "Countered" marker;
+/// Then the marker is an `<a href="/claims/bafyMariaRust">` link, and following it shows
+///   the slice-11 counter thread for that claim.
+///
+/// @us-lf-002 @driving_port @real-io @drill-link @one-hop @i-lf-6 @happy
+#[test]
+fn the_countered_marker_is_a_render_only_one_hop_link_to_the_thread() {
+    // GIVEN a one-countered list store (the countered target has a known CID + a slice-11
+    // thread).
+    // WHEN Maria opens the My Claims list AND then follows the marker's href.
+    // THEN (a) the marker on the countered row is a render-only
+    // `<a href="/claims/{target_cid}">` anchor (navigation TEXT, never a control,
+    // I-LF-1/I-LF-6 — assert_list_flag_links_to_thread); and (b) GET-ing that href shows
+    // the slice-11 counter thread for the claim (the one-hop drill works without JS).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-4 (one-hop link): seed_claims_list_one_countered(&env) → countered_cid; \
+         ViewerServer::start; list = get(\"/claims\"); assert 200; \
+         assert_list_flag_links_to_thread(&list.body, &countered_cid) (render-only \
+         <a href=\"/claims/{{cid}}\"> anchor); then detail = get(&format!(\"/claims/{{}}\", \
+         countered_cid)); assert detail 200 + the slice-11 thread renders (reuse \
+         assert_counter_thread_renders_attributed_verbatim). RED until DELIVER."
+    )
+}
+
+// =============================================================================
+// US-LF-003 — no-noise discipline + shown-never-applied / no-regression on the list
+// (LF-5..LF-8). An un-countered row is byte-unaffected; the flag is purely additive.
+// =============================================================================
+
+/// LF-5 (US-LF-003 — no-noise discipline; I-LF-2): an UN-countered row renders EXACTLY as
+/// the slice-06 `/claims` row today — NO "Countered" marker, and NO "0 counters" /
+/// "no disagreement" empty-state noise. A store with NO counters renders the list
+/// byte-identically to slice-06. `counter_presence_for` returns the EMPTY set → no row
+/// is flagged → the list is unchanged. This is the byte-unaffected guarantee for the
+/// common case (the no-noise half of the trust contract).
+///
+/// Given Maria's store holds her claims and NOTHING counters any of them;
+/// When she opens the My Claims list;
+/// Then every row renders as in slice-06, with no "Countered" marker and no empty-state
+///   noise anywhere on the page.
+///
+/// @us-lf-002 @us-lf-003 @driving_port @real-io @no-noise @empty-set @i-lf-2 @happy
+#[test]
+fn a_store_with_no_counters_renders_the_list_exactly_as_slice_06() {
+    // GIVEN an all-un-countered list store (seed_claims_list_none_countered — several
+    // plain own claims, nothing references any of them as a counter →
+    // `counter_presence_for` returns the EMPTY set).
+    // WHEN Maria opens the My Claims list.
+    // THEN every row renders as in slice-06 (V-1), the body carries NO "Countered" marker
+    // and NO "0 counters" / "no disagreement" empty-state text
+    // (assert_list_row_not_flagged for each cid + a body-wide no-noise scan).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-5 (no-noise): seed_claims_list_none_countered(&env) → Vec<cid>; \
+         ViewerServer::start; page = get(\"/claims\"); assert 200 + text/html; for each \
+         cid assert_list_row_not_flagged(&page.body, &cid); assert the body contains \
+         NO 'Countered' marker and no '0 counters' empty-state noise. RED until DELIVER."
+    )
+}
+
+/// LF-6 / GOLD shown-never-applied + no-regression (US-LF-003; I-LF-2 / OD-AV-7 /
+/// ADR-015 / slice-11 I-CT-2): the flag NEVER re-orders, re-ranks, filters, or re-weights
+/// the list — row ORDER, PAGING, COUNT, and each row's verbatim CONFIDENCE are
+/// byte-identical to the slice-06 `/claims` render of the SAME store. The presence read
+/// is a SEPARATE set lookup mapped onto rows AFTER `list_claims` pages them; the list SQL
+/// (`ORDER BY composed_at DESC, cid LIMIT ? OFFSET ?` + its `COUNT(*)`) is UNTOUCHED. This
+/// is the load-bearing slice-12 gold: the flag is additive only. A regression silently
+/// lets the flag pick a triage order or re-score a claim; this gold makes it unshippable.
+///
+/// Given the SAME store is rendered once WITHOUT the flag feature (slice-06 baseline) and
+///   once WITH it;
+/// When both `/claims` lists render;
+/// Then the row order (`composed_at DESC, cid`), the page boundaries / position
+///   indicator, the total count, and EVERY row's confidence are byte-identical — the
+///   flag changed nothing but the additive marker.
+///
+/// @us-lf-003 @driving_port @real-io @shown-never-applied @no-regression @i-lf-2 @i-lf-4
+/// @gold
+#[test]
+fn the_flag_never_reorders_repages_recounts_or_reweights_the_list() {
+    // GIVEN a mixed store (some countered, some not) rendered as the slice-06 baseline
+    // list (no flag) AND as the slice-12 flagged list — the SAME store, so the ordering /
+    // paging / count / confidence are directly comparable.
+    // WHEN both `/claims` lists render.
+    // THEN the row ORDER (composed_at DESC, cid), the position indicator / page
+    // boundaries, the total COUNT, and EVERY row's verbatim confidence are
+    // byte-IDENTICAL between the flagged and the un-flagged render — the flag is additive
+    // only (assert_list_order_and_confidence_byte_identical; I-LF-2). Any divergence
+    // (re-order, re-page, re-count, re-weight) is an UNSHIPPABLE no-regression breach.
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-6 (shown-never-applied gold): seed_claims_list_mixed_pages(&env) → a store \
+         with a known order/count + a mix of countered + un-countered rows; \
+         ViewerServer::start; flagged = get(\"/claims\"); (baseline = the slice-06 \
+         reference render of the SAME store — DELIVER pins this via a no-flag render or \
+         the recorded slice-06 ordering); \
+         assert_list_order_and_confidence_byte_identical(&flagged.body, &baseline) — row \
+         order, position indicator, total count, and each row's confidence byte-identical; \
+         only the additive marker differs. RED until DELIVER."
+    )
+}
+
+/// LF-7 (US-LF-003 — mixed page, only countered rows flagged in unchanged order; I-LF-2):
+/// on a page mixing countered + un-countered rows, ONLY the genuinely-countered rows
+/// carry the "Countered" marker, and they appear in their ORIGINAL `composed_at DESC, cid`
+/// positions — the flag does NOT pull the countered rows together or to the top. A
+/// flagged claim's confidence renders verbatim (byte-identical to a no-flag render).
+///
+/// Given Maria's page is `bafyMariaSemver` (countered), `bafyMariaDoc` (un-countered),
+///   `bafyMariaRust` (countered) in `composed_at DESC` order;
+/// When Maria opens the My Claims list;
+/// Then `bafyMariaSemver` and `bafyMariaRust` carry the marker, `bafyMariaDoc` does not,
+///   the three appear in that SAME order, and each confidence renders verbatim.
+///
+/// @us-lf-003 @driving_port @real-io @mixed-page @shown-never-applied @i-lf-2 @i-lf-4
+/// @happy
+#[test]
+fn a_mixed_page_flags_only_the_countered_rows_in_their_unchanged_positions() {
+    // GIVEN a mixed page (countered, un-countered, countered in composed_at DESC order).
+    // WHEN Maria opens the My Claims list.
+    // THEN ONLY the countered rows carry the marker (assert_list_row_flagged_countered /
+    // assert_list_row_not_flagged per row), they appear in the SAME composed_at DESC
+    // order (NOT pulled together / to the top), and each row's confidence renders verbatim
+    // (the flag re-weights nothing; I-LF-2 / I-LF-4).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-7 (mixed page): seed_claims_list_mixed_pages(&env) → an ordered page with \
+         countered + un-countered rows; ViewerServer::start; page = get(\"/claims\"); \
+         assert 200; assert_list_row_flagged_countered for each countered cid + \
+         assert_list_row_not_flagged for each un-countered cid; assert the rendered row \
+         order is composed_at DESC, cid (countered rows NOT grouped/pulled up) and each \
+         confidence renders verbatim. RED until DELIVER."
+    )
+}
+
+/// LF-8 (US-LF-003 — N+1-guard behavioral proxy; I-LF-8 / ADR-048): a LARGE page mixing
+/// MANY countered + un-countered rows flags EVERY countered row correctly in ONE request,
+/// with no per-row degradation — the at-this-layer behavioral proxy for the single-query
+/// guarantee (the strict 1-query bound is a DELIVER unit/property assertion in
+/// `adapter-duckdb`; query count is not observable at the subprocess AT layer). If the
+/// presence read were N+1, a large page would either degrade or mis-flag under the
+/// per-row fan-out; this proxy pins that the whole page is flagged correctly in one shot.
+///
+/// Given Maria's page holds MANY claims, a known subset of which are countered;
+/// When she opens the My Claims list (ONE request);
+/// Then EVERY countered row carries the marker and EVERY un-countered row does not — the
+///   whole page is flagged correctly in a single request (no per-row degradation).
+///
+/// @us-lf-001 @us-lf-003 @driving_port @real-io @n-plus-1-guard @i-lf-8 @gold
+#[test]
+fn a_large_mixed_page_flags_every_countered_row_correctly_in_one_request() {
+    // GIVEN a LARGE mixed page (many own claims; a known subset peer-countered) — the
+    // N+1-guard behavioral proxy fixture.
+    // WHEN Maria opens the My Claims list (ONE GET request).
+    // THEN every countered cid in the subset carries the marker and every other row does
+    // NOT — the whole page is flagged correctly in a SINGLE request with no per-row
+    // degradation (the subprocess-layer proxy for the ADR-048 single-query bound; the
+    // strict 1-query assertion is a DELIVER adapter-duckdb unit/property test).
+    let _env = TestEnv::initialized();
+    todo!(
+        "LF-8 (N+1 behavioral proxy): seed_claims_list_mixed_pages(&env) seeding a LARGE \
+         page with a known countered subset (return countered + uncountered cid vecs); \
+         ViewerServer::start; page = get(\"/claims\"); assert 200; \
+         assert_list_row_flagged_countered for EVERY countered cid + \
+         assert_list_row_not_flagged for EVERY un-countered cid — all in the one response \
+         (no per-row degradation). NOTE: the strict single-query bound is a DELIVER \
+         adapter-duckdb unit/property assertion. RED until DELIVER."
+    )
+}
