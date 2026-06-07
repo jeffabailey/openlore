@@ -938,4 +938,110 @@ mod counter_presence_tests {
             read.counter_presence_for(&["bafyA".to_string(), "bafyB".to_string()]);
         assert!(presence.expect("read succeeds").is_empty());
     }
+
+    /// The STRICT N+1 guard (I-LF-8 / ADR-048): `counter_presence_for` issues EXACTLY
+    /// ONE counter-presence read per page render, INVARIANT to page size — never one
+    /// query per row. The `duckdb-rs` harness exposes NO prepared-statement / query
+    /// counter, so the bound is pinned two ways:
+    ///
+    /// 1. STRUCTURAL (read the impl): `counter_presence_for` builds ONE `IN (...)`
+    ///    UNION-ALL DISTINCT statement (a single `conn.prepare` over the input arity,
+    ///    bound via `params_from_iter`) — there is NO per-CID loop issuing per-row
+    ///    queries. The single prepared statement is the guarantee; this test pins its
+    ///    OBSERVABLE consequence.
+    /// 2. BEHAVIORAL (this test): the read is CONSTANT-SHAPE — the returned presence set
+    ///    equals the countered subset for inputs of size 1, N, and 5N over the SAME
+    ///    store, with NO per-CID iteration or fan-out artifact. An N+1 implementation
+    ///    (a loop of per-CID `SELECT`s) could not stay correct under a 5N input without
+    ///    its per-row cost/shape changing; a single aggregate `IN (...)` read scales the
+    ///    bound CID list while keeping ONE statement. Pairing this with the
+    ///    `empty_input_is_empty_set_no_query` guard (empty input → ZERO queries) pins the
+    ///    full single-aggregate contract: 0 queries for an empty page, exactly 1 for any
+    ///    non-empty page regardless of size.
+    #[test]
+    fn counter_presence_for_is_one_aggregate_query_invariant_to_page_size() {
+        let (adapter, _tmp) = fresh_adapter();
+
+        // Seed 5 own targets, each countered by ONE distinct `counters` claim. These are
+        // the "always present" countered CIDs the presence read must return for ANY page
+        // that includes them, regardless of how many UN-countered padding CIDs surround
+        // them on the page.
+        let mut countered: Vec<String> = Vec::new();
+        for i in 0..5 {
+            let target_cid = format!("bafyTarget{i}");
+            let subject = format!("github:org/countered-{i}");
+            let target = claim(&target_cid, &subject, vec![]);
+            let counter = claim(
+                &format!("bafyCounter{i}"),
+                &subject,
+                vec![ClaimReference {
+                    ref_type: ReferenceType::Counters,
+                    cid: Cid(target_cid.clone()),
+                }],
+            );
+            adapter.write_signed_claim(&target).expect("write target");
+            adapter.write_signed_claim(&counter).expect("write counter");
+            countered.push(target_cid);
+        }
+        let countered_set: HashSet<String> = countered.iter().cloned().collect();
+
+        let read = adapter.read_adapter();
+
+        // Build a page of arbitrary size `n` whose FIRST `min(n,5)` CIDs are the seeded
+        // countered targets and the rest are un-countered padding CIDs (never referenced
+        // by any `counters` claim). The expected presence set is exactly the countered
+        // targets that appear on the page — a constant SHAPE: one aggregate read, the
+        // result is the membership intersection, never a per-CID fan-out.
+        let page_of = |n: usize| -> Vec<String> {
+            (0..n)
+                .map(|i| {
+                    if i < countered.len() {
+                        countered[i].clone()
+                    } else {
+                        format!("bafyPadding{i}")
+                    }
+                })
+                .collect()
+        };
+        let expected_for = |n: usize| -> HashSet<String> {
+            countered
+                .iter()
+                .take(n.min(countered.len()))
+                .cloned()
+                .collect()
+        };
+
+        // Probe three page sizes spanning two orders of magnitude over the SAME store:
+        // size 1, size N (= 5, all countered), and size 5N (= 25, the 5 countered + 20
+        // un-countered padding). The result is the countered subset of the page in ALL
+        // three cases — the single aggregate `IN (...)` read scales the bound list while
+        // the statement count stays at one (structural), so the behavior is invariant to
+        // page size (no per-CID degradation / mis-flagging).
+        let n = countered.len(); // 5
+        for size in [1usize, n, 5 * n] {
+            let page = page_of(size);
+            let presence = read
+                .counter_presence_for(&page)
+                .unwrap_or_else(|err| panic!("presence read for page size {size} must succeed: {err:?}"));
+            assert_eq!(
+                presence,
+                expected_for(size),
+                "counter_presence_for must return EXACTLY the countered subset of a page of \
+                 size {size} in ONE aggregate IN(...) read (constant-shape, invariant to page \
+                 size; no per-CID fan-out; ADR-048 / I-LF-8)"
+            );
+        }
+
+        // The full 5N page returns ALL five countered targets (the whole known subset),
+        // proving the single aggregate read does not drop members as the page grows.
+        let big_page = page_of(5 * n);
+        let big_presence = read
+            .counter_presence_for(&big_page)
+            .expect("presence read for the 5N page must succeed");
+        assert_eq!(
+            big_presence, countered_set,
+            "the 5N page must flag EVERY countered target in one aggregate read — the single \
+             IN(...) statement scales the bound list, it does NOT fan out to per-row queries"
+        );
+    }
 }

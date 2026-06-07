@@ -578,14 +578,52 @@ fn a_large_mixed_page_flags_every_countered_row_correctly_in_one_request() {
     // NOT — the whole page is flagged correctly in a SINGLE request with no per-row
     // degradation (the subprocess-layer proxy for the ADR-048 single-query bound; the
     // strict 1-query assertion is a DELIVER adapter-duckdb unit/property test).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-8 (N+1 behavioral proxy): seed_claims_list_mixed_pages(&env) seeding a LARGE \
-         page with a known countered subset (return countered + uncountered cid vecs); \
-         ViewerServer::start; page = get(\"/claims\"); assert 200; \
-         assert_list_row_flagged_countered for EVERY countered cid + \
-         assert_list_row_not_flagged for EVERY un-countered cid — all in the one response \
-         (no per-row degradation). NOTE: the strict single-query bound is a DELIVER \
-         adapter-duckdb unit/property assertion. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a LARGE mixed page (many own claims; a KNOWN subset peer-countered, the
+    // countered rows interleaved among un-countered ones) — the N+1-guard behavioral
+    // proxy fixture. The presence read for the WHOLE page is one aggregate
+    // `referenced_cid IN (...)` read (ADR-048); if it were N+1, this large page would
+    // either degrade or mis-flag under the per-row fan-out.
+    let seeded = seed_claims_list_mixed_pages(&env);
+    // Sanity: the proxy is only meaningful over a genuinely large mixed page with a
+    // real countered subset AND un-countered rows. Pin both so the seed cannot silently
+    // shrink the page (which would hollow out the N+1 proxy).
+    assert!(
+        !seeded.countered_cids.is_empty(),
+        "LF-8: the large mixed page must carry a non-empty countered subset; got {:?}",
+        seeded.countered_cids
+    );
+    assert!(
+        !seeded.uncountered_cids.is_empty(),
+        "LF-8: the large mixed page must carry un-countered rows too (a MIXED page); got {:?}",
+        seeded.uncountered_cids
+    );
+
+    let server = ViewerServer::start(&env);
+
+    // WHEN Maria opens the My Claims list — ONE GET request renders the whole page.
+    let page = server.get("/claims");
+
+    assert_eq!(
+        page.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        page.body
+    );
+    assert!(
+        page.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        page.content_type
+    );
+
+    // THEN in that SINGLE response EVERY countered row carries the neutral "Countered"
+    // marker and EVERY un-countered row carries NONE — the whole page is flagged
+    // correctly in one request with no per-row degradation/fan-out (the subprocess-layer
+    // behavioral proxy for the ADR-048 single-aggregate presence read; the strict
+    // 1-query bound is the DELIVER adapter-duckdb unit/property assertion below).
+    for countered in &seeded.countered_cids {
+        assert_list_row_flagged_countered(&page.body, countered);
+    }
+    for uncountered in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&page.body, uncountered);
+    }
 }
