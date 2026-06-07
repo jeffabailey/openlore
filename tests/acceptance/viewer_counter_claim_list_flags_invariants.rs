@@ -242,14 +242,55 @@ fn the_flagged_claims_list_page_chrome_stays_offline_no_cdn() {
     // /static/htmx.min.js; I-LF-5 / KPI-HX-G2). NO network seam is wired (plain
     // `ViewerServer::start`): the presence read is LOCAL, so the page CHROME and the FLAG
     // are both offline-capable.
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-INV-OfflineChrome: seed_claims_list_one_countered(&env); {{ ViewerServer::start; \
-         full = get(\"/claims\"); fragment = get_htmx(\"/claims\") }}; assert both 200; \
-         assert full.is_full_page() && fragment.is_fragment(); \
-         assert !full.references_external_cdn() && !fragment.references_external_cdn(). \
-         RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a flagged list: one peer-countered own claim among several plain own claims,
+    // seeded via the production `claim add` / `peer add` + `peer pull` paths.
+    let _seeded = seed_claims_list_one_countered(&env);
+
+    // WHEN the flagged `/claims` list is rendered in BOTH shapes — under the plain,
+    // store-only `ViewerServer::start` (NO /scrape GitHub seam, NO /search indexer seam):
+    // the presence read is a LOCAL DB-index lookup, so there is no outbound edge to wire.
+    // The scope releases the viewer's exclusive DuckDB lock on drop.
+    let server = ViewerServer::start(&env);
+    let full = server.get("/claims");
+    let fragment = server.get_htmx("/claims");
+
+    for (label, response) in [("full page", &full), ("fragment", &fragment)] {
+        assert_eq!(
+            response.status, 200,
+            "LF-INV-OfflineChrome: GET /claims ({label}) must be 200; body was:\n{}",
+            response.body
+        );
+    }
+
+    // The full page carries chrome; the htmx fragment is the bare swap target.
+    assert!(
+        full.is_full_page(),
+        "LF-INV-OfflineChrome: the no-HX /claims response must be a full page; body was:\n{}",
+        full.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "LF-INV-OfflineChrome: the HX-Request /claims response must be a bare fragment; \
+         body was:\n{}",
+        fragment.body
+    );
+
+    // THEN neither shape references an off-host CDN — the only htmx asset is the LOCAL
+    // /static/htmx.min.js, so the page CHROME (and, since the flag read is LOCAL, the FLAG
+    // itself) stays offline-capable (I-LF-5 / KPI-HX-G2).
+    assert!(
+        !full.references_external_cdn(),
+        "LF-INV-OfflineChrome: the flagged /claims full page must reference NO off-host CDN \
+         (only the local /static/htmx.min.js); body was:\n{}",
+        full.body
+    );
+    assert!(
+        !fragment.references_external_cdn(),
+        "LF-INV-OfflineChrome: the flagged /claims fragment must reference NO off-host CDN \
+         (only the local /static/htmx.min.js); body was:\n{}",
+        fragment.body
+    );
 }
 
 // =============================================================================
@@ -280,14 +321,49 @@ fn the_flagged_claims_list_renders_fully_offline() {
     // countered row STILL carries the "Countered" marker with NO Unavailable/degraded
     // notice and NO network call — proving the presence read is LOCAL + offline by
     // construction (I-LF-5; the viewer re-verifies nothing).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-INV-Offline: seed_claims_list_one_countered(&env) (countered by a pulled \
-         peer); {{ ViewerServer::start; full = get(\"/claims\"); fragment = \
-         get_htmx(\"/claims\") }}; assert both 200; assert_list_row_flagged_countered on \
-         BOTH bodies for the countered cid; assert NEITHER body shows a degraded notice \
-         ('unavailable'/'network error'/'could not reach'/'try again'). RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a store seeded with a list whose countered row was countered by a PULLED PEER
+    // record (verified at `peer pull` time), via the production federation paths.
+    let seeded = seed_claims_list_one_countered(&env);
+    let countered_cid = seeded
+        .countered_cids
+        .first()
+        .expect("LF-INV-Offline: seed must produce exactly one countered row")
+        .clone();
+
+    // WHEN the `/claims` list is opened in BOTH shapes under the plain, store-only
+    // `ViewerServer::start` — NEITHER the /scrape GitHub seam NOR the /search indexer seam
+    // is wired, so the LOCAL-only viewer has NO outbound edge: the presence read is a LOCAL
+    // DB-index lookup, OFFLINE by construction. The scope releases the DuckDB lock on drop.
+    let (full_body, fragment_body) = {
+        let server = ViewerServer::start(&env);
+        let full = server.get("/claims");
+        let fragment = server.get_htmx("/claims");
+        for (label, response) in [("full page", &full), ("fragment", &fragment)] {
+            assert_eq!(
+                response.status, 200,
+                "LF-INV-Offline: GET /claims ({label}) must be 200; body was:\n{}",
+                response.body
+            );
+        }
+        (full.body, fragment.body)
+    };
+
+    // THEN the countered row STILL carries its render-only "Countered" marker in BOTH
+    // shapes — the peer counter was verified at pull time; the viewer re-verifies nothing,
+    // makes no network call, and never degrades (I-LF-5 / KPI-5).
+    for (label, body) in [("full page", &full_body), ("fragment", &fragment_body)] {
+        assert_list_row_flagged_countered(body, &countered_cid);
+        let lower = body.to_lowercase();
+        for notice in ["unavailable", "network error", "could not reach", "try again"] {
+            assert!(
+                !lower.contains(notice),
+                "LF-INV-Offline: the offline-rendered /claims list ({label}) must show NO \
+                 degraded notice ({notice:?}) — the presence read is LOCAL, no outbound \
+                 edge to take down; body was:\n{body}"
+            );
+        }
+    }
 }
 
 // =============================================================================
