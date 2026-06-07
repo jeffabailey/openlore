@@ -11095,3 +11095,471 @@ pub fn assert_list_order_and_confidence_byte_identical(flagged: &str, baseline: 
          dropped or duplicated (a re-count regression; US-LF-003 / I-LF-2); elided body was:\n{elided}"
     );
 }
+// =============================================================================
+// slice-13 (viewer-counter-flags-graph-surfaces; DISTILL) — the SAME neutral
+// "Countered" presence flag (slice-11/12 `COUNTERED_PRESENCE_FLAG`, REUSED
+// verbatim) extended to the OTHER two LOCAL surfaces the operator scans: the
+// FEDERATED `/peer-claims` list (US-CF-002) and the GRAPH-TRAVERSAL `/project` +
+// `/philosophy` EDGE surveys (US-CF-003). REUSES the slice-12
+// `StoreReadPort::counter_presence_for(&[cid]) -> HashSet<String>` batch read
+// (ADR-048 / ADR-049) — NO new read method. `/score` is OUT (deferred slice-14).
+//
+// The flag is render-only `<a href="/claims/{cid}">Countered</a>` navigation
+// TEXT (one-hop link to the slice-11 thread), PRESENCE-only (a row/edge countered
+// by N authors shows ONE neutral marker, never "disputed by N"), and ADDITIVE: it
+// NEVER re-orders the peer list / paging, and on the edge surfaces NEVER changes
+// the `group_by` grouping, group order, edge order, deduped contributor list, or
+// any cross-link (I-CF-2 / I-CF-9 shown-never-applied). An un-countered row/edge
+// renders byte-identically to slice-06 (`/peer-claims`) / slice-10 (traversal).
+//
+// Seeding drives the PRODUCTION paths (Pillar 3 / BR-VIEW-4): peer claims +
+// survey edges land via `peer add` + `peer pull` (REUSING `seed_peer_claims_via_
+// pull` / `seed_project_survey_trail` / `seed_philosophy_survey_trail`); the
+// COUNTER targeting a row/edge's CID lands via a DISTINCT peer's
+// `build_verifiable_peer_counter_record` + `peer add` + `peer pull` (so its
+// `counters` reference lands in `peer_claim_references` with
+// `referenced_cid == <target cid>`, the peer arm of the UNION-ALL). NO
+// hand-inserted store rows. The presence read is LOCAL (DB-index only); NO network
+// seam on any of these three routes (offline by construction, I-CF-5).
+//
+// Layer placement (Mandate 9/11): every slice-13 scenario is a layer-3/layer-5
+// subprocess + real-I/O test — EXAMPLE-only. The sad/edge paths (none-countered,
+// multi-counter, mixed survey) are enumerated explicitly, never PBT-generated at
+// this layer. The strict 1-query N+1 bound is a DELIVER `adapter-duckdb`
+// unit/property assertion (REUSED slice-12 read); at this subprocess AT layer the
+// N+1 guard is asserted via its behavioral proxy (a survey of MANY edges across
+// MANY groups flags the countered subset correctly in ONE request).
+//
+// Mandate 7 RED scaffolds (ADR-025): every seed + assert below is `todo!()` —
+// it COMPILES now (signatures resolve so the AT files build), then PANICS at
+// runtime → classifies RED (MISSING_FUNCTIONALITY), NOT BROKEN. They stay RED
+// until DELIVER's per-scenario RED→GREEN→COMMIT cycles.
+// =============================================================================
+
+/// The handle a `/peer-claims` flag seed returns: every peer-claim CID on the page
+/// (in the slice-06 `/peer-claims` rendered order), split into the COUNTERED subset
+/// (rows that MUST carry the "Countered" marker linking to `/claims/{cid}`) and the
+/// UN-COUNTERED subset (rows that MUST carry NO marker). Mirrors [`SeededClaimsList`]
+/// for the federated surface.
+#[derive(Debug, Clone)]
+pub struct SeededPeerClaimsList {
+    /// Every peer-claim CID on the page, in the slice-06 `/peer-claims` rendered
+    /// order. The no-regression gold pins this order byte-identical with the flag.
+    pub ordered_cids: Vec<String>,
+    /// The subset of `ordered_cids` whose claim has >= 1 counter — each row MUST carry
+    /// the neutral "Countered" marker linking to `/claims/{cid}` (US-CF-002).
+    pub countered_cids: Vec<String>,
+    /// The subset of `ordered_cids` with NO counter — each row MUST carry NO marker
+    /// and no "0 counters" noise (US-CF-002 no-noise).
+    pub uncountered_cids: Vec<String>,
+    /// The peer DID whose claims populate the list (the row-origin column must keep
+    /// showing this DID verbatim beside any flag — US-CF-002 origin-unchanged AC).
+    pub peer_did: String,
+}
+
+/// The handle a traversal-survey flag seed returns (`/project` or `/philosophy`):
+/// every EDGE CID across the WHOLE survey (the UNION of every `EdgeRow.cid` across
+/// every `EdgeGroup`, the flatten point of ADR-050), split into the COUNTERED subset
+/// (edges that MUST carry the marker in their UNCHANGED group + position) and the
+/// UN-COUNTERED subset (edges that MUST render exactly as slice-10). `entity` is the
+/// traversal target the scenario queries (`?subject=` for `/project`, `?object=` for
+/// `/philosophy`).
+#[derive(Debug, Clone)]
+pub struct SeededSurveyEdges {
+    /// The traversal target the scenario queries (`subject` for `/project`,
+    /// `object` for `/philosophy`).
+    pub entity: String,
+    /// Every edge CID across the whole survey, in the slice-10 rendered (grouped)
+    /// order. The no-regression gold pins grouping/edge-order byte-identical with the
+    /// flag (I-CF-9).
+    pub ordered_cids: Vec<String>,
+    /// The subset of `ordered_cids` whose claim has >= 1 counter — each edge MUST carry
+    /// the neutral "Countered" marker in its UNCHANGED group + position (US-CF-003).
+    pub countered_cids: Vec<String>,
+    /// The subset of `ordered_cids` with NO counter — each edge MUST render exactly as
+    /// slice-10 (no marker, no noise; US-CF-003).
+    pub uncountered_cids: Vec<String>,
+}
+
+/// Read every PEER-claim CID from the env's REAL `peer_claims` table in the EXACT
+/// slice-06 `/peer-claims` list render order (mirrors the production
+/// `list_peer_claims` ordering). The slice-13 `/peer-claims` flag seeds return their
+/// CIDs in this order so a scenario can address rows by their rendered position + the
+/// no-regression gold can pin order byte-identity. Read-only; opens a SECOND
+/// short-lived connection. The sibling of [`read_own_claim_cids_in_list_order`] for
+/// the FEDERATED surface.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn read_peer_claim_cids_in_list_order(_env: &TestEnv) -> Vec<String> {
+    todo!(
+        "slice-13 RED scaffold: read every peer_claims cid in the slice-06 \
+         /peer-claims list render order (the production list_peer_claims order), \
+         read-only over the env's REAL DuckDB; sibling of \
+         read_own_claim_cids_in_list_order for the FEDERATED surface"
+    )
+}
+
+/// Read every EDGE CID a traversal survey is built from, in the slice-10 grouped
+/// render order — the UNION of every edge's claim CID across every `EdgeGroup` (the
+/// `subject`-survey for `/project`, the `object`-survey for `/philosophy`). Reads the
+/// SAME `claims` U `peer_claims` rows the production `query_project_survey` /
+/// `query_philosophy_survey` return, in the SAME order, so the slice-13 traversal flag
+/// seeds can return the EXACT edge CID set + order (ADR-050: the survey rows ARE the
+/// flat union of every future-group edge). `dimension` selects the survey: `"project"`
+/// keys on `subject == entity`, `"philosophy"` keys on `object == entity`. Read-only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn read_survey_edge_cids_in_render_order(
+    _env: &TestEnv,
+    _dimension: &str,
+    _entity: &str,
+) -> Vec<String> {
+    todo!(
+        "slice-13 RED scaffold: read every edge CID a /project (subject=entity) or \
+         /philosophy (object=entity) survey is built from, in the slice-10 grouped \
+         render order — the flat union of every EdgeRow.cid across every EdgeGroup \
+         (ADR-050 flatten point), read-only over the env's REAL DuckDB"
+    )
+}
+
+/// Seed a FEDERATED `/peer-claims` page with EXACTLY ONE countered peer claim among
+/// several un-countered peer claims (the CF-1 walking-skeleton + CF-2/CF-4/CF-INV-*
+/// fixture). The countered peer claim is countered by a DISTINCT peer (Tobias) — so
+/// the presence read exercises the `peer_claim_references` arm of the UNION-ALL —
+/// pulled via the PRODUCTION `peer add` + `peer pull` federation path; the rest are
+/// plain pulled peer claims. ALL rows land in the SAME local store `openlore ui` reads
+/// (Pillar 3 / BR-VIEW-4). Returns the [`SeededPeerClaimsList`] so the scenario
+/// addresses the exact countered + un-countered rows + the peer-origin DID.
+///
+/// SCAFFOLD: true (slice-13) — DELIVER materializes it by: (1) pulling several plain
+/// peer claims from a surveyed peer (REUSE `seed_peer_claims_via_pull`) whose rows land
+/// in `peer_claims`; (2) recovering ONE of those peer-claim CIDs as the counter target;
+/// (3) a DISTINCT peer (Tobias) authoring a verifiable `counters`-referencing record
+/// targeting that CID (`build_verifiable_peer_counter_record` + `peer add` +
+/// `peer pull`) so it lands in `peer_claim_references` with `referenced_cid ==
+/// target_cid`; (4) recovering every peer-claim CID in the slice-06 list order
+/// (`read_peer_claim_cids_in_list_order`) and splitting the ONE countered + the rest.
+pub fn seed_peer_claims_one_countered(_env: &TestEnv) -> SeededPeerClaimsList {
+    todo!(
+        "slice-13 RED scaffold: seed a /peer-claims page with EXACTLY ONE countered \
+         peer claim (countered by a DISTINCT peer via peer add + peer pull, landing in \
+         peer_claim_references) among several plain pulled peer claims, all via the \
+         PRODUCTION federation paths; return the SeededPeerClaimsList (ordered + \
+         countered + uncountered cids + the peer-origin DID)"
+    )
+}
+
+/// Seed a FEDERATED `/peer-claims` page where ONE peer claim is countered by TWO
+/// DISTINCT authors (the CF presence-only GOLD fixture; I-CF-3 / KPI-AV-2). Two
+/// distinct peers each author a verifiable `counters`-referencing record targeting the
+/// SAME peer-claim CID, delivered through the PRODUCTION `peer add` + `peer pull`
+/// federation path, so BOTH land in `peer_claim_references` with the SAME
+/// `referenced_cid`. The `counter_presence_for` UNION-ALL DISTINCT collapses the two
+/// distinct-author counters of the SAME CID to ONE presence membership → the row
+/// carries EXACTLY ONE neutral "Countered" marker (never "disputed by 2"). Returns the
+/// [`SeededPeerClaimsList`] whose single `countered_cids` entry is the twice-countered
+/// peer row.
+///
+/// SCAFFOLD: true (slice-13) — adapts `seed_claims_list_target_two_counters_distinct_
+/// authors` to the FEDERATED surface (the target is a PEER claim on `/peer-claims`).
+pub fn seed_peer_claims_target_two_counters_distinct_authors(
+    _env: &TestEnv,
+) -> SeededPeerClaimsList {
+    todo!(
+        "slice-13 RED scaffold: seed a /peer-claims page where ONE peer claim is \
+         countered by TWO DISTINCT peer authors (both counters target the SAME peer cid \
+         via a single peer pull, landing in peer_claim_references with the SAME \
+         referenced_cid) so the DISTINCT read collapses them to ONE presence membership; \
+         return the SeededPeerClaimsList whose single countered entry is that peer row"
+    )
+}
+
+/// Seed a FEDERATED `/peer-claims` page with NO counters at all (the CF no-noise
+/// fixture): several plain pulled peer claims, NOTHING references any of them as a
+/// counter, so `counter_presence_for` returns the EMPTY set and the list renders
+/// byte-identically to slice-06. Returns the [`SeededPeerClaimsList`] with an EMPTY
+/// `countered_cids` (every CID is in `uncountered_cids`).
+///
+/// SCAFFOLD: true (slice-13).
+pub fn seed_peer_claims_none_countered(_env: &TestEnv) -> SeededPeerClaimsList {
+    todo!(
+        "slice-13 RED scaffold: seed a /peer-claims page with several plain pulled peer \
+         claims and NO counter authored against any of them (counter_presence_for \
+         returns the EMPTY set), via the PRODUCTION federation path; return the \
+         SeededPeerClaimsList with an EMPTY countered_cids"
+    )
+}
+
+/// Seed a `/project?subject=<entity>` survey with EXACTLY ONE countered edge among
+/// several un-countered edges spread across the survey's groups (the CF-3 walking
+/// fixture for the EDGE surface). The surveyed edges are authored by Rachel via
+/// `seed_project_survey_trail` (REUSED, landing in `peer_claims`); ONE edge's claim CID
+/// is then countered by a DISTINCT peer (Tobias) via `build_verifiable_peer_counter_
+/// record` + `peer add` + `peer pull` (landing in `peer_claim_references` with
+/// `referenced_cid == that edge's cid`). ALL rows land in the SAME local store
+/// `openlore ui` reads (Pillar 3 / I-GT-2). Returns the [`SeededSurveyEdges`] so the
+/// scenario addresses the exact flagged edge in its unchanged group/position.
+///
+/// SCAFFOLD: true (slice-13) — DELIVER materializes it by: (1) seeding the project
+/// survey (REUSE `seed_project_survey_trail` so >= 3 edges across groups land in
+/// `peer_claims`); (2) recovering the survey's edge CIDs in render order
+/// (`read_survey_edge_cids_in_render_order(env, "project", entity)`); (3) a DISTINCT
+/// peer countering ONE of those edge CIDs; (4) splitting the ONE countered + the rest.
+pub fn seed_project_survey_one_edge_countered(_env: &TestEnv) -> SeededSurveyEdges {
+    todo!(
+        "slice-13 RED scaffold: seed a /project survey (REUSE seed_project_survey_trail \
+         -> >= 3 edges across groups in peer_claims) and counter EXACTLY ONE edge's claim \
+         cid via a DISTINCT peer (peer add + peer pull -> peer_claim_references), all via \
+         PRODUCTION paths; return the SeededSurveyEdges (entity + ordered + countered + \
+         uncountered edge cids)"
+    )
+}
+
+/// Seed a `/philosophy?object=<entity>` survey with a KNOWN countered subset across
+/// several groups (the CF-3 SYMMETRIC fixture for the EDGE surface). The SYMMETRIC
+/// mirror of [`seed_project_survey_one_edge_countered`], swapping subject<->object: the
+/// surveyed edges are authored by Rachel via `seed_philosophy_survey_trail` (REUSED,
+/// landing in `peer_claims`); a KNOWN subset of edge claim CIDs is then countered by a
+/// DISTINCT peer (Tobias) via the federation path (landing in `peer_claim_references`).
+/// Returns the [`SeededSurveyEdges`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn seed_philosophy_survey_one_edge_countered(_env: &TestEnv) -> SeededSurveyEdges {
+    todo!(
+        "slice-13 RED scaffold: seed a /philosophy survey (REUSE \
+         seed_philosophy_survey_trail -> edges across groups in peer_claims) and counter \
+         a KNOWN subset of edge claim cids via a DISTINCT peer (peer add + peer pull -> \
+         peer_claim_references), all via PRODUCTION paths; return the SeededSurveyEdges \
+         (entity + ordered + countered + uncountered edge cids) — the SYMMETRIC mirror \
+         of seed_project_survey_one_edge_countered"
+    )
+}
+
+/// Seed a `/project?subject=<entity>` survey where ONE edge is countered by TWO
+/// DISTINCT authors (the EDGE presence-only GOLD fixture; I-CF-3 / KPI-GRAPH-2). Two
+/// distinct peers each author a verifiable `counters`-referencing record targeting the
+/// SAME edge claim CID via a single `peer pull`, so BOTH land in
+/// `peer_claim_references` with the SAME `referenced_cid` → the DISTINCT read collapses
+/// them to ONE presence membership → the edge carries EXACTLY ONE neutral marker in its
+/// unchanged group/position (never "disputed by 2"). Returns the [`SeededSurveyEdges`]
+/// whose single `countered_cids` entry is the twice-countered edge.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn seed_project_survey_edge_two_counters_distinct_authors(
+    _env: &TestEnv,
+) -> SeededSurveyEdges {
+    todo!(
+        "slice-13 RED scaffold: seed a /project survey where ONE edge's claim cid is \
+         countered by TWO DISTINCT peer authors (both target the SAME edge cid via one \
+         peer pull -> peer_claim_references with the SAME referenced_cid) so the DISTINCT \
+         read collapses them to ONE presence membership; return the SeededSurveyEdges \
+         whose single countered entry is that edge"
+    )
+}
+
+/// Seed a survey with NO counters at all (the EDGE no-noise fixture): several plain
+/// surveyed edges, NOTHING references any of them as a counter, so
+/// `counter_presence_for` returns the EMPTY set and the survey renders byte-identically
+/// to slice-10. Returns the [`SeededSurveyEdges`] with an EMPTY `countered_cids`.
+/// `dimension` selects `"project"` (subject survey) or `"philosophy"` (object survey)
+/// so the one helper serves the no-noise scenario on BOTH routes.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn seed_survey_none_countered(_env: &TestEnv, _dimension: &str) -> SeededSurveyEdges {
+    todo!(
+        "slice-13 RED scaffold: seed a /project or /philosophy survey (per dimension) \
+         with several plain surveyed edges and NO counter authored against any \
+         (counter_presence_for returns the EMPTY set), via PRODUCTION paths; return the \
+         SeededSurveyEdges with an EMPTY countered_cids"
+    )
+}
+
+/// Seed a LARGE `/project?subject=<entity>` survey with MANY edges across MANY groups
+/// and a KNOWN countered subset (the CF N+1-flatten behavioral-proxy fixture; I-CF-8 /
+/// ADR-050). The survey is large enough that a per-group or per-edge presence call
+/// would be observably wrong; the known countered subset is spread across DISTINCT
+/// groups so the single flattened call (ADR-050: collect every `EdgeRow.cid` across all
+/// groups from the FLAT survey rows BEFORE grouping) must flag every countered edge —
+/// and only those — in ONE request. Returns the [`SeededSurveyEdges`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn seed_project_survey_many_groups_known_countered_subset(
+    _env: &TestEnv,
+) -> SeededSurveyEdges {
+    todo!(
+        "slice-13 RED scaffold: seed a LARGE /project survey with MANY edges across MANY \
+         groups and a KNOWN countered subset spread across DISTINCT groups (so the \
+         ADR-050 single-flattened-call must flag every countered edge — and only those — \
+         in ONE request), all via PRODUCTION paths; return the SeededSurveyEdges"
+    )
+}
+
+/// Assert a rendered `/peer-claims` LIST body (fragment OR full page) FLAGS the given
+/// countered peer row: the row carries the neutral "Countered" marker
+/// ([`LIST_COUNTERED_FLAG_TEXT`]) rendered as a render-only
+/// `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11
+/// thread (US-CF-002 / I-CF-6). The FEDERATED-surface sibling of
+/// [`assert_list_row_flagged_countered`]. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claim_row_flagged_countered(_body: &str, _countered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the /peer-claims row for countered_cid carries \
+         the render-only one-hop 'Countered' anchor to the slice-11 thread (neutral \
+         presence flag; US-CF-002 / I-CF-6)"
+    )
+}
+
+/// Assert a rendered `/peer-claims` LIST body does NOT flag the given un-countered peer
+/// row: the row for `uncountered_cid` carries NO "Countered" marker and NO "0 counters"
+/// / empty-state noise — it renders exactly as slice-06 (US-CF-002 no-noise). The
+/// FEDERATED sibling of [`assert_list_row_not_flagged`]. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claim_row_not_flagged(_body: &str, _uncountered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the /peer-claims row for uncountered_cid carries \
+         NO 'Countered' marker and NO '0 counters' / empty-state noise (renders exactly \
+         as slice-06; US-CF-002 no-noise)"
+    )
+}
+
+/// Assert the "Countered" marker on a countered `/peer-claims` row is a render-only
+/// `<a href="/claims/{cid}">` ONE-HOP link to that claim's slice-11 thread — navigation
+/// TEXT, never an executable write/sign/counter control (US-CF-002 / I-CF-1 / I-CF-6).
+/// The FEDERATED sibling of [`assert_list_flag_links_to_thread`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claim_flag_links_to_thread(_body: &str, _countered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the 'Countered' marker on the /peer-claims row \
+         for countered_cid is the render-only one-hop link to its slice-11 thread \
+         (navigation TEXT, never a control; US-CF-002 / I-CF-1 / I-CF-6)"
+    )
+}
+
+/// Assert a `/peer-claims` row countered by N (>1) authors shows EXACTLY ONE neutral
+/// "Countered" marker — presence-only, NEVER a count ("disputed by N"), a verdict, or a
+/// merged consensus row (US-CF-002 / I-CF-3 / KPI-AV-2). The FEDERATED sibling of
+/// [`assert_list_flag_is_single_neutral_presence`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claim_flag_is_single_neutral_presence(_body: &str, _target_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the /peer-claims row for target_cid (countered by \
+         >= 2 distinct authors) carries EXACTLY ONE neutral 'Countered' marker (DISTINCT \
+         referenced_cid -> one presence membership -> one flag) and the body carries NO \
+         count/verdict/merged-judgement phrasing; I-CF-3 / KPI-AV-2"
+    )
+}
+
+/// Assert the `/peer-claims` row for the given peer still shows its peer ORIGIN (the
+/// peer's `author_did`) verbatim BESIDE any flag — the flag is ADDITIVE and changes
+/// nothing about the origin column (US-CF-002 origin-unchanged AC / I-CF-4). Scans the
+/// rendered HTML only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claim_row_origin_unchanged(_body: &str, _peer_did: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the flagged /peer-claims body still shows the peer \
+         origin (the peer's author_did) verbatim beside the flag — the flag is additive \
+         and changes nothing about the origin column (US-CF-002 / I-CF-4)"
+    )
+}
+
+/// Assert the flagged `/peer-claims` render is byte-identical to the slice-06 reference
+/// render of the SAME store in row ORDER and paging EXCEPT the additive "Countered"
+/// markers — the flag never re-orders or re-pages the federated list (US-CF-002
+/// no-regression / I-CF-2). Uses the slice-12 baseline+marker-elision tactic adapted to
+/// the `/peer-claims` order.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_peer_claims_order_byte_identical(_flagged: &str, _ordered_cids: &[String]) {
+    todo!(
+        "slice-13 RED scaffold: with the additive 'Countered' anchors elided, assert the \
+         flagged /peer-claims body honours the recorded slice-06 /peer-claims order \
+         (ordered_cids) byte-for-byte — the flag re-ordered / re-paged NOTHING \
+         (US-CF-002 / I-CF-2); marker-elision tactic from slice-12"
+    )
+}
+
+/// Assert a rendered traversal survey body (`/project` or `/philosophy`, fragment OR
+/// full page) FLAGS the given countered EDGE: the edge carries the neutral "Countered"
+/// marker rendered as a render-only `<a href="/claims/{cid}">Countered</a>` one-hop link
+/// to that claim's slice-11 thread (US-CF-003 / I-CF-6). The EDGE-surface sibling of
+/// [`assert_list_row_flagged_countered`]. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_edge_flagged_countered(_body: &str, _countered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the traversal edge for countered_cid carries the \
+         render-only one-hop 'Countered' anchor to the slice-11 thread (neutral presence \
+         flag; US-CF-003 / I-CF-6)"
+    )
+}
+
+/// Assert a rendered traversal survey body does NOT flag the given un-countered EDGE:
+/// the edge for `uncountered_cid` carries NO "Countered" marker and NO empty-state noise
+/// — it renders exactly as slice-10 (US-CF-003 no-noise). The EDGE sibling of
+/// [`assert_list_row_not_flagged`]. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_edge_not_flagged(_body: &str, _uncountered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the traversal edge for uncountered_cid carries NO \
+         'Countered' marker and NO empty-state noise (renders exactly as slice-10; \
+         US-CF-003 no-noise)"
+    )
+}
+
+/// Assert the "Countered" marker on a countered traversal EDGE is a render-only
+/// `<a href="/claims/{cid}">` ONE-HOP link to that claim's slice-11 thread — navigation
+/// TEXT, never an executable write/sign/counter control (US-CF-003 / I-CF-1 / I-CF-6).
+/// The EDGE sibling of [`assert_list_flag_links_to_thread`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_edge_flag_links_to_thread(_body: &str, _countered_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the 'Countered' marker on the traversal edge for \
+         countered_cid is the render-only one-hop link to its slice-11 thread \
+         (navigation TEXT, never a control; US-CF-003 / I-CF-1 / I-CF-6)"
+    )
+}
+
+/// Assert a traversal EDGE countered by N (>1) authors shows EXACTLY ONE neutral
+/// "Countered" marker in its unchanged group/position — presence-only, NEVER a count,
+/// a verdict, or a merged consensus row (US-CF-003 / I-CF-3 / KPI-GRAPH-2). The EDGE
+/// sibling of [`assert_list_flag_is_single_neutral_presence`].
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_edge_flag_is_single_neutral_presence(_body: &str, _target_cid: &str) {
+    todo!(
+        "slice-13 RED scaffold: assert the traversal edge for target_cid (countered by \
+         >= 2 distinct authors) carries EXACTLY ONE neutral 'Countered' marker (DISTINCT \
+         referenced_cid -> one presence membership -> one flag) and the body carries NO \
+         count/verdict/merged-judgement phrasing; I-CF-3 / KPI-GRAPH-2"
+    )
+}
+
+/// Assert the flagged traversal-survey render is byte-identical to the slice-10
+/// reference render of the SAME store in GROUPING, group order, edge order, and the
+/// deduped contributor list EXCEPT the additive "Countered" markers — the flag never
+/// re-groups, re-orders, or re-deduplicates the survey (US-CF-003 no-regression GOLD /
+/// I-CF-9). Uses the slice-12 baseline+marker-elision tactic adapted to the traversal
+/// survey: elide every additive "Countered" anchor and prove the remaining slice-10
+/// body honours the recorded grouping + edge order (`ordered_cids`, strictly increasing
+/// byte offsets) byte-for-byte. This is the CARDINAL no-regroup gold (I-CF-9).
+///
+/// SCAFFOLD: true (slice-13).
+pub fn assert_survey_grouping_and_order_byte_identical(
+    _flagged: &str,
+    _ordered_cids: &[String],
+) {
+    todo!(
+        "slice-13 RED scaffold: with the additive 'Countered' anchors elided, assert the \
+         flagged /project|/philosophy body honours the recorded slice-10 grouping + group \
+         order + edge order + deduped contributor list (ordered_cids, strictly increasing \
+         offsets) byte-for-byte — the flag re-grouped / re-ordered NOTHING (US-CF-003 \
+         CARDINAL no-regroup gold / I-CF-9); marker-elision tactic from slice-12"
+    )
+}

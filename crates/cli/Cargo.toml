@@ -571,3 +571,49 @@ harness = true
 name = "viewer_counter_claim_list_flags_invariants"
 path = "../../tests/acceptance/viewer_counter_claim_list_flags_invariants.rs"
 harness = true
+
+# Slice-13 (viewer-counter-flags-graph-surfaces; DISTILL) subprocess + real-I/O
+# acceptance: the SAME neutral "Countered" presence flag (slice-11/12
+# COUNTERED_PRESENCE_FLAG, REUSED verbatim) extended to the FEDERATED GET /peer-claims
+# list rows (US-CF-002) + the GRAPH-TRAVERSAL GET /project + GET /philosophy EDGE rows
+# (US-CF-003; ADR-049/050). REUSES the slice-12 counter_presence_for(&[cid]) batch read
+# VERBATIM (ADR-048) wired into three more handlers — NO new read method, NO new SQL.
+# The edge surfaces flatten every EdgeRow.cid across every EdgeGroup from the FLAT survey
+# rows BEFORE grouping and query ONCE (ADR-050) — one aggregate query per render,
+# invariant to edge/group count (I-CF-8). The flag is render-only
+# <a href="/claims/{cid}">Countered</a> navigation TEXT (one-hop link to the slice-11
+# thread), PRESENCE-only (N counters -> ONE neutral marker), and ADDITIVE (never
+# re-orders the peer list / re-groups the survey; I-CF-2 / I-CF-9). /score is OUT
+# (deferred slice-14); /search has its own slice-08 annotation; /claims shipped slice-12.
+# Drives the REAL `openlore ui` verb via `ViewerServer` + in-test HTTP (get/get_htmx)
+# over a REAL seeded LOCAL DuckDB; NO mocked boundary (LOCAL read). Per Mandate 9/11
+# example-based, never PBT-generated at this layer (the strict 1-query bound is a DELIVER
+# adapter-duckdb unit/property test). Build-before-run: `cargo build` the `openlore` bin.
+# DISTILL registers + RED gate; CF-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_flags_graph_surfaces"
+path = "../../tests/acceptance/viewer_counter_flags_graph_surfaces.rs"
+harness = true
+
+# Slice-13 (viewer-counter-flags-graph-surfaces; DISTILL) GOLD / guardrail invariants
+# over the whole flagged /peer-claims + /project + /philosophy surface (cross-cutting
+# I-CF-1/2/5/8/9): every_flagged_graph_surface_render_leaves_the_store_read_only
+# (read-only state-delta, Mandate 8 — the REUSED presence read persists nothing on any
+# surface), no_flagged_graph_surface_render_adds_a_write_or_sign_control (no
+# sign/publish/counter/subscribe control on any shape — markers are render-only
+# <a href> TEXT; authoring stays the slice-03 CLI),
+# the_flagged_graph_surface_chrome_stays_offline_no_cdn (local /static/htmx.min.js, no
+# CDN), the_flagged_graph_surfaces_render_fully_offline (the presence read is LOCAL
+# DB-index only; renders network-down; the viewer re-verifies nothing), the CARDINAL
+# shown-never-applied / no-regroup gold
+# the_traversal_grouping_and_order_are_byte_identical_with_and_without_flags (I-CF-9 /
+# ADR-015 / slice-10 I-GT-3/4 — the flag never re-groups/re-orders the survey on EITHER
+# traversal route, the SAME shared render arm), and the N+1-flatten behavioral proxy
+# a_large_multi_group_survey_resolves_presence_in_one_request (I-CF-8 / ADR-050). Drives
+# the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO mocked
+# boundary. Per Mandate 9/11 example-based, never PBT-generated at this layer. DISTILL
+# registers + RED gate; CF-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_flags_graph_surfaces_invariants"
+path = "../../tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs"
+harness = true
