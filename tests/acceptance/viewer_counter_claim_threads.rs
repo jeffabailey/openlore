@@ -543,18 +543,63 @@ fn an_un_countered_claim_shows_no_counter_section_and_no_empty_noise() {
 /// @us-ct-003 @driving_port @real-io @presence-flag @i-ct-3 @happy
 #[test]
 fn a_countered_claim_shows_a_neutral_countered_presence_flag_not_a_verdict() {
-    // GIVEN a countered claim (seed_claim_with_counter).
+    // GIVEN a countered claim (seed_claim_with_counter — Rachel's claim countered by
+    // Maria's OWN counter, via the production federation + `claim counter` paths).
     // WHEN Maria opens its detail page.
     // THEN a neutral "Countered" presence flag marks the claim (presence only), and NO
     // verdict / score / "disputed by N" count-based phrasing appears
     // (assert_counter_thread_presence_flag_is_neutral; I-CT-3 — the flag is a marker,
     // never a weight or re-rank).
-    todo!(
-        "DELIVER (CT-8 presence flag): seed_claim_with_counter; start ViewerServer, GET \
-         /claims/{{target_cid}}; assert via assert_counter_thread_presence_flag_is_neutral \
-         that a neutral 'Countered' presence flag marks the claim AND no verdict / score \
-         / 'disputed by N' count-based phrasing appears (I-CT-3)"
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    assert_eq!(
+        response.status, 200,
+        "CT-8: GET /claims/{{cid}} over a countered claim must return 200;\n\
+         --- body ---\n{}",
+        response.body
     );
+    assert!(
+        response.content_type.contains("text/html"),
+        "CT-8: the detail must be served as text/html; content_type was {:?}",
+        response.content_type
+    );
+
+    // THEN: the countered claim carries the neutral "Countered" presence flag — a marker
+    // that the claim HAS disagreement — and NO verdict ("disputed"/"refuted"/"false"/
+    // "wrong") and NO count-based re-rank / aggregate judgement appears. The flag is
+    // presence-only: it does NOT assert the counter is correct (I-CT-3).
+    assert_counter_thread_presence_flag_is_neutral(&response.body);
+
+    // AND: shown-never-applied — the original claim's confidence renders VERBATIM (0.91),
+    // UNCHANGED by the presence of the counter (the flag inserts no count-based re-rank /
+    // re-weight above the claim; I-CT-2).
+    assert!(
+        response.body.contains("0.91"),
+        "CT-8: the countered claim's confidence must render verbatim + unchanged (0.91) — \
+         the neutral flag never re-weights the claim (I-CT-2);\n--- body ---\n{}",
+        response.body
+    );
+
+    // AND: the no-flag-when-uncountered half of the contract (reuse the CT-7 no-noise
+    // discipline + seed_uncountered_claim): the SAME claim shape with NOTHING countering
+    // it carries NO "Countered" presence flag and no counter-thread noise.
+    let uncountered_env = TestEnv::initialized();
+    let uncountered_cid = seed_uncountered_claim(&uncountered_env);
+
+    let uncountered_viewer = ViewerServer::start(&uncountered_env);
+    let uncountered = uncountered_viewer.get(&format!("/claims/{uncountered_cid}"));
+
+    assert_eq!(
+        uncountered.status, 200,
+        "CT-8: GET /claims/{{cid}} over an un-countered claim must return 200;\n\
+         --- body ---\n{}",
+        uncountered.body
+    );
+    assert_no_counter_thread_noise(&uncountered.body);
 }
 
 /// CT-9 (US-CT-003 boundary — unknown CID, no slice-06 regression): a CID that is not

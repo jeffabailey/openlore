@@ -10102,14 +10102,40 @@ pub fn assert_counter_thread_empty_reason_state(body: &str, expected_counter: &S
 /// "consensus", "net verdict", "X people disagree") appears alongside it (the flag is a
 /// presence marker, never a weight/verdict — I-CT-3).
 pub fn assert_counter_thread_presence_flag_is_neutral(body: &str) {
-    let _ = body;
-    todo!(
-        "DELIVER (assert_counter_thread_presence_flag_is_neutral): assert \
-         body.contains('Countered') (a neutral presence flag) AND NO verdict/score/ \
-         count-based phrasing ('disputed by', 'consensus', 'net verdict', 'people \
-         disagree') appears — the flag is a presence marker, never a weight or re-rank \
-         (I-CT-3)"
-    )
+    // The countered claim carries the neutral "Countered" PRESENCE flag — disagreement
+    // is made legible WITHOUT picking a winner (CT-8 / I-CT-3).
+    assert!(
+        body.contains("Countered"),
+        "CT-8: a countered claim must carry the neutral 'Countered' presence flag;\n\
+         --- body ---\n{body}"
+    );
+
+    // The flag is PRESENCE-ONLY: it is NEVER a verdict, a score, or a count-based
+    // re-rank. NONE of these verdict / count-judgement phrasings may appear. Lowercased
+    // so a capitalized variant ("Disputed", "Refuted") can never sneak through. The
+    // verdict words ("disputed", "refuted", "false", "wrong") are checked as whole words
+    // to avoid false positives (e.g. "falsehood" is not "false" the verdict — but the
+    // neutral flag never emits any of these regardless).
+    let lowered = body.to_ascii_lowercase();
+    for verdict in [
+        // count-based / merged-judgement phrasing (never a count aggregated to a verdict)
+        "disputed by",
+        "consensus",
+        "net verdict",
+        "people disagree",
+        // verdict words — the flag asserts presence, never correctness of the counter
+        "disputed",
+        "refuted",
+        "is false",
+        "is wrong",
+    ] {
+        assert!(
+            !lowered.contains(verdict),
+            "CT-8: the 'Countered' flag is presence-only — it must NEVER emit a verdict / \
+             score / count-based phrasing ({verdict:?}); it asserts the claim HAS \
+             disagreement, never that the counter is correct (I-CT-3);\n--- body ---\n{body}"
+        );
+    }
 }
 
 /// Assert the no-noise discipline (CT-7 / I-CT-2): an UN-countered claim's detail body
