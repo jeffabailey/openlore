@@ -1,0 +1,457 @@
+{
+  "roadmap": {
+    "project_id": "viewer-counter-flags-graph-surfaces",
+    "created_at": "2026-06-07T00:00:00Z",
+    "total_steps": 10
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Foundation A \u2014 the at-a-glance Countered flag on the FEDERATED GET /peer-claims list rows (US-CF-002, THICK)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the REUSED counter_presence_for batch read + PeerClaimRowView.is_countered projection + the render-only Countered flag into GET /peer-claims and return the htmx list fragment flagging the countered row (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-CF-002, CF-1). It forces the WHOLE /peer-claims at-a-glance flag thread into existence end-to-end and REUSES the slice-12 read VERBATIM (ADR-049 \u2014 NO new port method, NO new SQL, NO adapter-duckdb edit). (viewer-domain) Add `pub is_countered: bool` to PeerClaimRowView (mirroring ClaimRowView) + the presence-aware projection `PeerClaimRowView::from_row_with_presence(row, &presence)` computing is_countered = presence.contains(&row.cid), retaining the existing from_row as from_row_with_presence(row, &HashSet::new()) so slice-06/07 call sites keep compiling (the slice-12 pattern). EXTEND render_peer_claim_row to emit, ONLY when is_countered, the REUSED slice-11/12 COUNTERED_PRESENCE_FLAG (LIST_COUNTERED_FLAG_TEXT = \"Countered\") as a render-only `<a href=\"/claims/{cid}\">Countered</a>` cell beside the existing subject/predicate/object/confidence/origin/cid cells \u2014 an un-countered row renders byte-identically to slice-06 (no marker). The flag NEVER re-orders/filters/re-pages (shown-never-applied; the renderer iterates the shell-supplied list order unchanged). (adapter-http-viewer) In peer_claims_page the SANDWICH gains ONE REUSED read between the existing read and render: read_page = store.list_peer_claims(request) UNCHANGED, collect the page CIDs, presence = store.counter_presence_for(&cids).unwrap_or_default() (degrade \u2192 empty set, no flags, never a 5xx), project each PeerClaimRow + presence \u2192 PeerClaimRowView::from_row_with_presence, then PageView::paged + the UNCHANGED Shape fork (render_peer_claims_view_panel_fragment vs render_peer_claims_page). NO new route, NO new crate (workspace stays 21), NO ports/adapter-duckdb/cli change (the existing DuckDbStoreReadAdapter already implements counter_presence_for; the existing startup store probe covers it \u2014 Earned-Trust: no new probe owed, component-boundaries.md \u00a77). Materialize the seed_peer_claims_one_countered support seam (several pulled peer claims via the production peer add + peer pull federation path + one countered by a DISTINCT peer's verifiable counter, landing in peer_claim_references; recover the list-order CIDs \u2192 SeededPeerClaimsList) + the assert_peer_claim_row_flagged_countered / assert_peer_claim_row_not_flagged helper bodies in support/mod.rs. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build -p cli --bin openlore before executing these ATs. NO second binary (the presence read is a LOCAL read). xtask delta: NONE (ADR-049 \u2014 no new dep edge, no new SQL; the REUSED ref-tables-only read does not trip no_cross_table_join_elides_author; the viewer capability boundary is unchanged).",
+          "criteria": [
+            "GET /peer-claims with the HX-Request header, over a seeded local store where exactly one pulled peer claim (the one countered by a DISTINCT peer from seed_peer_claims_one_countered) has a counter and the others do not, returns 200 text/html containing ONLY the list fragment (no page chrome, no <head>): the countered peer row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's slice-11 thread, and every un-countered row carries NO marker.",
+            "The /peer-claims route reuses the slice-12 StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> batch read VERBATIM (no new port method, no new SQL), reading the store the ViewerServer ALREADY holds (no new field), holding NO signing key, adding no write/sign/counter route, and degrading a presence-read failure to an empty presence set (no flags) rather than a 5xx.",
+            "The peer-origin column and each row's confidence render unchanged beside the additive flag, and the list order, paging, and total count are unchanged by the presence of the flag (the flag is an additive marker beside the row, never a sort/filter/group/page key)."
+          ],
+          "acceptance_criteria": [
+            "GET /peer-claims with the HX-Request header, over a seeded local store where exactly one pulled peer claim (the one countered by a DISTINCT peer from seed_peer_claims_one_countered) has a counter and the others do not, returns 200 text/html containing ONLY the list fragment (no page chrome, no <head>): the countered peer row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's slice-11 thread, and every un-countered row carries NO marker.",
+            "The /peer-claims route reuses the slice-12 StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> batch read VERBATIM (no new port method, no new SQL), reading the store the ViewerServer ALREADY holds (no new field), holding NO signing key, adding no write/sign/counter route, and degrading a presence-read failure to an empty presence set (no flags) rather than a 5xx.",
+            "The peer-origin column and each row's confidence render unchanged beside the additive flag, and the list order, paging, and total count are unchanged by the presence of the flag (the flag is an additive marker beside the row, never a sort/filter/group/page key)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "open_the_peer_claims_list_with_htmx_flags_only_the_countered_row",
+          "n_scenarios": [
+            "CF-1"
+          ],
+          "us_trace": [
+            "US-CF-001",
+            "US-CF-002"
+          ],
+          "estimate_hours": 10,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (PeerClaimRowView.is_countered + the presence.contains projection + the presence-gated render_peer_claim_row flag branch) over the REUSED slice-12 read. Extend nightly mutation testing to this projection/render (presence.contains true/false flag branch, the un-countered byte-identity arm, the single-flag-per-CID href construction).",
+          "scenario_fns": [
+            "open_the_peer_claims_list_with_htmx_flags_only_the_countered_row"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "GET /peer-claims no-JS full page + htmx fragment flag parity, and the no-counters store renders the list exactly as slice-06 (mostly confirmatory)",
+          "description": "Complete the /peer-claims render-shape contract (US-CF-002, CF-2 + CF-NoNoise). Confirmatory once 01-01 exists \u2014 no new read; the flag already renders inside render_peer_claim_row, the page EMBEDS the same fragment fn. (CF-2 parity, I-CF-4/I-CF-6) GET /peer-claims WITHOUT HX-Request serves a COMPLETE full page (chrome + the SAME list region) whose flags match the htmx fragment by construction; the peer-origin column + verbatim confidence render unchanged beside the flag. (CF-NoNoise, I-CF-2) an all-un-countered store renders the list byte-identically to slice-06 \u2014 NO marker anywhere, NO empty-state noise, recorded slice-06 order preserved (empty presence set \u2192 nothing flagged). Materializes seed_peer_claims_none_countered, assert_peer_claim_row_origin_unchanged, assert_peer_claims_order_byte_identical in support/mod.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /peer-claims over seed_peer_claims_one_countered WITHOUT HX-Request returns a complete full page (is_full_page()) and WITH HX-Request returns the bare list fragment (is_fragment()); the countered row carries the SAME 'Countered' marker in both shapes, every un-countered row none in either, and the peer-origin column + confidence render unchanged beside the flag (parity by construction, I-CF-4/I-CF-6).",
+            "GET /peer-claims over an all-un-countered store (seed_peer_claims_none_countered) renders every row as in slice-06 with NO 'Countered' marker anywhere and NO empty-state noise (empty presence set \u2192 nothing flagged, I-CF-2).",
+            "The all-un-countered list preserves the byte-identical recorded slice-06 row order (assert_peer_claims_order_byte_identical) \u2014 the flag re-ordered / re-paged nothing (shown-never-applied)."
+          ],
+          "acceptance_criteria": [
+            "GET /peer-claims over seed_peer_claims_one_countered WITHOUT HX-Request returns a complete full page (is_full_page()) and WITH HX-Request returns the bare list fragment (is_fragment()); the countered row carries the SAME 'Countered' marker in both shapes, every un-countered row none in either, and the peer-origin column + confidence render unchanged beside the flag (parity by construction, I-CF-4/I-CF-6).",
+            "GET /peer-claims over an all-un-countered store (seed_peer_claims_none_countered) renders every row as in slice-06 with NO 'Countered' marker anywhere and NO empty-state noise (empty presence set \u2192 nothing flagged, I-CF-2).",
+            "The all-un-countered list preserves the byte-identical recorded slice-06 row order (assert_peer_claims_order_byte_identical) \u2014 the flag re-ordered / re-paged nothing (shown-never-applied)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "the_peer_claims_flag_renders_identically_under_htmx_and_no_js",
+          "n_scenarios": [
+            "CF-2",
+            "CF-NoNoise"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The full-page-embeds-fragment parity and the empty-set \u2192 no-noise arm are load-bearing; mutation-test the empty-set no-marker path so a mutant emitting an empty-state noise string, a spurious un-countered marker, or a full-page/fragment flag divergence is killed.",
+          "scenario_fns": [
+            "the_peer_claims_flag_renders_identically_under_htmx_and_no_js",
+            "a_store_with_no_counters_renders_the_peer_claims_list_exactly_as_slice_06"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "A two-author-countered peer row shows exactly one neutral presence marker (anti-merging GOLD) and the marker is a render-only one-hop link to the thread (mostly confirmatory)",
+          "description": "The /peer-claims presence-only anti-merging GOLD + the one-hop drill-link (US-CF-002, CF-3 + CF-4; I-CF-3/KPI-AV-2/I-CF-6). Largely confirmatory once 01-01's flag render exists \u2014 the DISTINCT collapse and the <a href> link shape already hold; this pins the neutral single-marker phrasing and the one-hop drill on the observable surface. (CF-3 GOLD) a peer claim countered by TWO DISTINCT authors shows on its /peer-claims row EXACTLY ONE neutral 'Countered' marker (the DISTINCT referenced_cid collapses both to one membership \u2192 one flag), never 'disputed by 2', never a count/verdict \u2014 the per-counter attribution lives in the slice-11 thread the marker LINKS to. (CF-4) the marker on a countered row is a render-only <a href=\"/claims/{cid}\"> ONE-HOP link navigable without JS, and GET-ing that href lands on the slice-11 detail thread for that claim. Materializes seed_peer_claims_target_two_counters_distinct_authors, assert_peer_claim_flag_is_single_neutral_presence, assert_peer_claim_flag_links_to_thread in support/mod.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /peer-claims over a store where a peer claim is countered by two DISTINCT authors (seed_peer_claims_target_two_counters_distinct_authors) shows that row with EXACTLY ONE neutral 'Countered' marker, and the body carries NO count / 'disputed by N' / verdict phrasing anywhere (presence-only, anti-merging; assert_peer_claim_flag_is_single_neutral_presence, I-CF-3/KPI-AV-2).",
+            "The 'Countered' marker on a countered /peer-claims row (seed_peer_claims_one_countered) is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_peer_claim_flag_links_to_thread), and GET-ing that href returns 200 with the slice-11 counter thread for that claim (I-CF-6).",
+            "assert_peer_claim_flag_is_single_neutral_presence and assert_peer_claim_flag_links_to_thread are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /peer-claims over a store where a peer claim is countered by two DISTINCT authors (seed_peer_claims_target_two_counters_distinct_authors) shows that row with EXACTLY ONE neutral 'Countered' marker, and the body carries NO count / 'disputed by N' / verdict phrasing anywhere (presence-only, anti-merging; assert_peer_claim_flag_is_single_neutral_presence, I-CF-3/KPI-AV-2).",
+            "The 'Countered' marker on a countered /peer-claims row (seed_peer_claims_one_countered) is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_peer_claim_flag_links_to_thread), and GET-ing that href returns 200 with the slice-11 counter thread for that claim (I-CF-6).",
+            "assert_peer_claim_flag_is_single_neutral_presence and assert_peer_claim_flag_links_to_thread are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "a_peer_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list",
+          "n_scenarios": [
+            "CF-3",
+            "CF-4"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single-neutral-presence render (one marker per countered CID, no count/verdict phrasing) and the render-only <a href=\"/claims/{cid}\"> one-hop link href are load-bearing anti-merging + drill-link logic; mutation-test the one-flag-per-CID branch and the link href construction so a mutant emitting a 'disputed by N' count, a verdict, or a non-anchor control is killed.",
+          "scenario_fns": [
+            "a_peer_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list",
+            "the_peer_claims_countered_marker_is_a_render_only_one_hop_link_to_the_thread"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Foundation B \u2014 the Countered flag on the GRAPH-TRAVERSAL /project + /philosophy EDGE rows (US-CF-003) + peer-claims flag shape (mostly confirmatory)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Wire the ADR-050 edge-CID flatten-before-group_by + EdgeRow.is_countered into project_page/philosophy_page (ONE flattened presence call across all groups) and the shared render_edge_row flag arm; flag a countered /project edge in its unchanged group/position (edge FOUNDATION, REAL work)",
+          "description": "The SECOND foundation \u2014 the real edge-surface work (US-CF-003, CF-5; ADR-050). (viewer-domain) Add `pub is_countered: bool` to EdgeRow. Widen the grouper to thread a presence set through to where the EdgeRow is constructed: group_project(entity, rows, &presence) / group_philosophy(entity, rows, &presence) / group_by(entity, rows, key_of, &presence), and inside group_by build each EdgeRow with is_countered = presence.contains(&row.cid). The grouping algorithm \u2014 key_order, per-key edge accumulation, the contributors dedup \u2014 is UNCHANGED; the bool is an extra field orthogonal to all ordering (keeping it ON the edge makes the render a total function of the TraversalView \u2014 no second arg, no edge/flag misalignment, component-boundaries.md \u00a72). EXTEND the SHARED render_edge_row to emit, ONLY when edge.is_countered, the REUSED COUNTERED_PRESENCE_FLAG as a render-only <a href=\"/claims/{cid}\">Countered</a> cell beside the existing contributor/confidence/bucket/cid cells \u2014 ONE arm, since render_project_fragment and render_philosophy_fragment both funnel through render_edge_group \u2192 render_edge_row, so this covers BOTH routes. An un-countered edge renders byte-identically to slice-10. (adapter-http-viewer) In project_page inject the REUSED read in the resolve step, flattening ALL edge CIDs from the FLAT survey rows slice BEFORE grouping nests them (the natural one-call flatten, ADR-050): read rows = store.query_project_survey(&subject) UNCHANGED, cids = rows.iter().map(cid).collect() (ALL edge CIDs across all future groups), presence = store.counter_presence_for(&cids).unwrap_or_default() (ONE call, never per-group/per-edge; degrade \u2192 empty), then group_project(&subject, &rows, &presence). The shape fork (Fragment vs FullPage) is REUSED untouched. (NOTE) philosophy_page wiring lands in 02-02 with its symmetric AT; this step wires /project + the shared render arm both routes consume. NO ports/adapter-duckdb/cli change (REUSED read; Earned-Trust no new probe owed, \u00a77). Materialize seed_project_survey_one_edge_countered + read_survey_edge_cids_in_render_order + assert_edge_flagged_countered / assert_edge_not_flagged / assert_survey_grouping_and_order_byte_identical in support/mod.rs. Build-before-run as 01-01. xtask delta: NONE (no new dep edge, no new SQL; the REUSED ref-tables-only read does not trip no_cross_table_join_elides_author).",
+          "criteria": [
+            "GET /project?subject=<seeded> over a store where one of the project's edges is countered (seed_project_survey_one_edge_countered) returns 200 text/html in which that edge row carries the neutral 'Countered' <a href=\"/claims/{cid}\"> marker in its UNCHANGED group at its UNCHANGED position, every un-countered edge carries NO marker, and the survey grouping + group order + edge order + deduped contributor list are byte-identical to the slice-10 render with the additive markers elided (I-CF-6/I-CF-9).",
+            "The /project route reuses the slice-12 counter_presence_for VERBATIM as ONE call over the flattened union of EVERY edge CID across EVERY group, collected from the FLAT survey rows slice BEFORE grouping (ADR-050 \u2014 never per-group, never per-edge), and EdgeRow.is_countered is set inside the grouper so the render is a total function of the TraversalView; a presence-read failure degrades to an empty set (no flags) rather than a 5xx.",
+            "The one shared render_edge_row arm (consumed by both render_project_fragment and render_philosophy_fragment) emits the flag, and the grouper's key_order, per-key accumulation, and contributor dedup are unchanged \u2014 the flag is additive context beside each edge and changes nothing about which edges appear, in which group, in which order."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<seeded> over a store where one of the project's edges is countered (seed_project_survey_one_edge_countered) returns 200 text/html in which that edge row carries the neutral 'Countered' <a href=\"/claims/{cid}\"> marker in its UNCHANGED group at its UNCHANGED position, every un-countered edge carries NO marker, and the survey grouping + group order + edge order + deduped contributor list are byte-identical to the slice-10 render with the additive markers elided (I-CF-6/I-CF-9).",
+            "The /project route reuses the slice-12 counter_presence_for VERBATIM as ONE call over the flattened union of EVERY edge CID across EVERY group, collected from the FLAT survey rows slice BEFORE grouping (ADR-050 \u2014 never per-group, never per-edge), and EdgeRow.is_countered is set inside the grouper so the render is a total function of the TraversalView; a presence-read failure degrades to an empty set (no flags) rather than a 5xx.",
+            "The one shared render_edge_row arm (consumed by both render_project_fragment and render_philosophy_fragment) emits the flag, and the grouper's key_order, per-key accumulation, and contributor dedup are unchanged \u2014 the flag is additive context beside each edge and changes nothing about which edges appear, in which group, in which order."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "a_countered_edge_in_a_project_survey_is_flagged_in_its_unchanged_position",
+          "n_scenarios": [
+            "CF-5"
+          ],
+          "us_trace": [
+            "US-CF-001",
+            "US-CF-003"
+          ],
+          "estimate_hours": 10,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The ADR-050 flatten + the in-grouper EdgeRow.is_countered = presence.contains(&row.cid) projection + the shared render_edge_row flag branch are load-bearing. Mutation-test the edge-CID flatten (every group's CIDs included), the per-edge presence.contains true/false branch, the un-countered byte-identity arm, and that the bool never feeds back into key_order/accumulation/dedup.",
+          "scenario_fns": [
+            "a_countered_edge_in_a_project_survey_is_flagged_in_its_unchanged_position"
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "The symmetric /philosophy survey flags only countered edges through the SAME render arm, plus the edge presence-only single-neutral-marker + one-hop drill-link (mostly confirmatory; wires philosophy_page)",
+          "description": "Confirm the shared edge render arm on the second traversal route + the edge presence/link contract (US-CF-003, CF-6 + CF-8). (adapter-http-viewer) Wire philosophy_page identically to project_page from 02-01 \u2014 query_philosophy_survey + flatten ALL edge CIDs from the FLAT rows slice ONCE + REUSED counter_presence_for + group_philosophy(&object, &rows, &presence). The render arm is the SAME render_edge_row from 02-01 (no new render code). (CF-6, I-CF-6/I-CF-9) GET /philosophy?object=<seeded> flags exactly the countered edges across the survey's groups and none of the others, with grouping/group order/edge order/deduped contributor list byte-identical to slice-10 with markers elided \u2014 proving the ONE arm serves BOTH routes. (CF-8 GOLD, I-CF-3/I-CF-6/KPI-GRAPH-2) on /project an edge countered by TWO DISTINCT authors shows EXACTLY ONE neutral marker (DISTINCT referenced_cid collapse) in its unchanged group/position, the marker is a render-only <a href=\"/claims/{cid}\"> one-hop link, and GET-ing that href lands on the slice-11 thread. Materializes seed_philosophy_survey_one_edge_countered, seed_project_survey_edge_two_counters_distinct_authors, assert_edge_flag_is_single_neutral_presence, assert_edge_flag_links_to_thread in support/mod.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /philosophy?object=<seeded> over seed_philosophy_survey_one_edge_countered flags exactly the countered edges with the neutral 'Countered' <a href=\"/claims/{cid}\"> marker and none of the un-countered edges, through the SAME shared render_edge_row arm /project uses, with the grouping, group order, edge order, and deduped contributor list byte-identical to the slice-10 render with markers elided (I-CF-6/I-CF-9).",
+            "philosophy_page reuses counter_presence_for VERBATIM as ONE flattened call over EVERY edge CID across EVERY group (collected from the FLAT survey rows before grouping, ADR-050), degrading a presence-read failure to an empty set rather than a 5xx; no new render code is added (the 02-01 render_edge_row arm is reused unchanged).",
+            "GET /project over a store where an edge is countered by two DISTINCT authors shows that edge with EXACTLY ONE neutral 'Countered' marker (never 'disputed by 2') in its unchanged group/position, the marker is a render-only <a href=\"/claims/{cid}\"> one-hop anchor, and GET-ing that href returns 200 with the slice-11 counter thread for that edge's claim (I-CF-3/I-CF-6/KPI-GRAPH-2)."
+          ],
+          "acceptance_criteria": [
+            "GET /philosophy?object=<seeded> over seed_philosophy_survey_one_edge_countered flags exactly the countered edges with the neutral 'Countered' <a href=\"/claims/{cid}\"> marker and none of the un-countered edges, through the SAME shared render_edge_row arm /project uses, with the grouping, group order, edge order, and deduped contributor list byte-identical to the slice-10 render with markers elided (I-CF-6/I-CF-9).",
+            "philosophy_page reuses counter_presence_for VERBATIM as ONE flattened call over EVERY edge CID across EVERY group (collected from the FLAT survey rows before grouping, ADR-050), degrading a presence-read failure to an empty set rather than a 5xx; no new render code is added (the 02-01 render_edge_row arm is reused unchanged).",
+            "GET /project over a store where an edge is countered by two DISTINCT authors shows that edge with EXACTLY ONE neutral 'Countered' marker (never 'disputed by 2') in its unchanged group/position, the marker is a render-only <a href=\"/claims/{cid}\"> one-hop anchor, and GET-ing that href returns 200 with the slice-11 counter thread for that edge's claim (I-CF-3/I-CF-6/KPI-GRAPH-2)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "a_philosophy_survey_flags_only_countered_edges_and_never_regroups_or_reorders",
+          "n_scenarios": [
+            "CF-6",
+            "CF-8"
+          ],
+          "us_trace": [
+            "US-CF-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single-neutral-presence edge render (one marker per countered edge CID, no 'disputed by N') + the <a href=\"/claims/{cid}\"> one-hop link href + the philosophy_page flatten parity are load-bearing; mutation-test the one-flag-per-edge branch and the philosophy flatten so a mutant emitting a count/verdict, a non-anchor control, or a per-group philosophy fan-out is killed.",
+          "scenario_fns": [
+            "a_philosophy_survey_flags_only_countered_edges_and_never_regroups_or_reorders",
+            "a_twice_countered_edge_shows_one_neutral_marker_linking_to_its_thread"
+          ]
+        },
+        {
+          "id": "02-03",
+          "name": "A survey with no counters renders the /project (and symmetrically /philosophy) edges exactly as slice-10 (no-noise, empty presence set)",
+          "description": "The no-noise discipline on the edge surfaces (US-CF-003, CF-7; I-CF-2). An all-un-countered survey (seed_survey_none_countered(\"project\") \u2014 a survey whose edges nothing references as a counter) yields an EMPTY presence set from counter_presence_for \u2192 no edge is flagged \u2192 the survey renders byte-identically to slice-10: NO 'Countered' marker anywhere AND NO empty-state noise, with the slice-10 grouping + edge order preserved. This is the byte-unaffected guarantee for the common case (the no-noise half of the trust contract) on the edge surfaces. Reuses seed_survey_none_countered(dimension) + assert_edge_not_flagged + assert_survey_grouping_and_order_byte_identical; materializes the seed_survey_none_countered body in support/mod.rs. Confirmatory once 02-01 exists (the empty-set \u2192 no-flag branch already holds). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /project?subject=<seeded> over an all-un-countered survey (seed_survey_none_countered(\"project\")) returns 200 text/html in which EVERY edge renders as in slice-10 with NO 'Countered' marker (assert_edge_not_flagged for each edge cid) and the flag text appears NOWHERE in the body (empty presence set, I-CF-2).",
+            "The survey carries NO empty-state noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, I-CF-2).",
+            "The grouping + group order + edge order is byte-identical to the slice-10 render (assert_survey_grouping_and_order_byte_identical); seed_survey_none_countered is materialized in support/mod.rs by seeding the survey through the production paths (no hand-inserted rows), returning every edge CID as uncountered with an empty countered set."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<seeded> over an all-un-countered survey (seed_survey_none_countered(\"project\")) returns 200 text/html in which EVERY edge renders as in slice-10 with NO 'Countered' marker (assert_edge_not_flagged for each edge cid) and the flag text appears NOWHERE in the body (empty presence set, I-CF-2).",
+            "The survey carries NO empty-state noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, I-CF-2).",
+            "The grouping + group order + edge order is byte-identical to the slice-10 render (assert_survey_grouping_and_order_byte_identical); seed_survey_none_countered is materialized in support/mod.rs by seeding the survey through the production paths (no hand-inserted rows), returning every edge CID as uncountered with an empty countered set."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "a_survey_with_no_counters_renders_the_edges_exactly_as_slice_10",
+          "n_scenarios": [
+            "CF-7"
+          ],
+          "us_trace": [
+            "US-CF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The empty-presence-set \u2192 no-flag / no-noise edge branch is load-bearing; mutation-test the empty-set no-marker path so a mutant emitting an empty-state noise string or a spurious marker on an un-countered edge is killed.",
+          "scenario_fns": [
+            "a_survey_with_no_counters_renders_the_edges_exactly_as_slice_10"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "GOLD \u2014 N+1-flatten proxy + read-only / no-write / offline guardrails + the CARDINAL no-regroup byte-identity (REAL work + invariants LAST)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "A large multi-group /project survey flags every countered edge correctly in one request (N+1-flatten behavioral proxy, REAL work + adapter-duckdb single-query note)",
+          "description": "The N+1-flatten behavioral proxy on the edge surface (US-CF-001/003, CF-N1 + CF-INV-N1; I-CF-8 / ADR-050). A LARGE /project survey with MANY edges across MANY groups and a KNOWN countered subset flags EVERY countered edge correctly \u2014 and only those \u2014 in ONE request, with no per-group/per-edge degradation. This is the at-this-layer behavioral proxy for the single flattened presence call (the edge-CID flatten collects every EdgeRow.cid across every group from the FLAT survey rows BEFORE grouping and queries ONCE, ADR-050); if the presence read were per-group or per-edge, a large multi-group survey would degrade or mis-flag under the fan-out, so this proxy pins the whole survey is flagged correctly in one shot. REAL work: requires seed_project_survey_many_groups_known_countered_subset to seed a genuinely large multi-group survey with a real countered subset AND un-countered edges (a MIXED survey) so the proxy is meaningful. ADAPTER NOTE for DELIVER: the strict 1-query bound is NOT observable at the subprocess AT layer \u2014 confirm the REUSED slice-12 adapter-duckdb counter_presence_for single-aggregate IN(...) read already carries its N+1 unit/property assertion (inherited from slice-12 / ADR-048); only add a fresh adapter-duckdb assertion if the flattened multi-group edge-CID set exercises a path the slice-12 test does not already cover (query count invariant to edge/group count). Covers BOTH the story CF-N1 and the GOLD CF-INV-N1 (identical seed + behavioral proxy). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /project?subject=<seeded> over a LARGE multi-group survey (seed_project_survey_many_groups_known_countered_subset, a MIXED survey with a non-empty countered subset AND un-countered edges) flags EVERY countered edge (assert_edge_flagged_countered for every countered cid) and flags NO un-countered edge (assert_edge_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-group/per-edge degradation (I-CF-8).",
+            "The whole multi-group survey is flagged correctly from a single GET request, exercising the ADR-050 single flattened counter_presence_for call over the union of EVERY edge CID across EVERY group (the subprocess-layer behavioral proxy for the no-N+1 guarantee); the grouping/order stays byte-identical to slice-10 even at this size (I-CF-9).",
+            "DELIVER confirms the strict single-query bound is covered by the inherited slice-12 adapter-duckdb counter_presence_for unit/property assertion (query count invariant to input size, ADR-048), adding a fresh adapter-duckdb assertion ONLY if the flattened multi-group edge-CID set exercises an uncovered path; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<seeded> over a LARGE multi-group survey (seed_project_survey_many_groups_known_countered_subset, a MIXED survey with a non-empty countered subset AND un-countered edges) flags EVERY countered edge (assert_edge_flagged_countered for every countered cid) and flags NO un-countered edge (assert_edge_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-group/per-edge degradation (I-CF-8).",
+            "The whole multi-group survey is flagged correctly from a single GET request, exercising the ADR-050 single flattened counter_presence_for call over the union of EVERY edge CID across EVERY group (the subprocess-layer behavioral proxy for the no-N+1 guarantee); the grouping/order stays byte-identical to slice-10 even at this size (I-CF-9).",
+            "DELIVER confirms the strict single-query bound is covered by the inherited slice-12 adapter-duckdb counter_presence_for unit/property assertion (query count invariant to input size, ADR-048), adding a fresh adapter-duckdb assertion ONLY if the flattened multi-group edge-CID set exercises an uncovered path; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+          "scenario_name": "a_large_multi_group_survey_flags_every_countered_edge_correctly_in_one_request",
+          "n_scenarios": [
+            "CF-N1",
+            "CF-INV-N1"
+          ],
+          "us_trace": [
+            "US-CF-001",
+            "US-CF-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces.rs",
+            "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single flattened edge-CID counter_presence_for call across all groups (the no-N+1 guarantee) is the load-bearing performance contract; mutation-test the flatten (every group's edge CID included in the one bound set) + the inherited adapter-duckdb single-query bound so a mutant that fans the read out per group/per edge or drops a CID from the flattened set is killed.",
+          "scenario_fns": [
+            "a_large_multi_group_survey_flags_every_countered_edge_correctly_in_one_request",
+            "a_large_multi_group_survey_resolves_presence_in_one_request"
+          ]
+        },
+        {
+          "id": "03-02",
+          "name": "Every flagged surface render leaves the store read-only + no flagged surface adds a write/sign control (read-only / no-write gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-02 are done (US-CF-002/003, CF-INV-ReadOnly + CF-INV-NoWrite; I-CF-1). (ReadOnly) Exercising /peer-claims + /project across postures (countered + un-countered) AND both shapes (full page + htmx fragment) leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts) over a NON-TRIVIAL seeded store \u2014 the REUSED batch presence read is a read-only SELECT and persists nothing on ANY surface. (NoWrite) No response shape on ANY of the three flagged surfaces (full page or fragment, countered or not) renders a write / sign / counter / publish / subscribe control, and every '/claims/{cid}' reference is render-only <a href> navigation TEXT \u2014 authoring stays the slice-03 CLI; reuses the slice-10 traversal no-write blocklist + the per-reference anchor scan. Reuses the inherited harnesses (assert_store_read_only, capture_store_row_count_universe, assert_traversal_html_has_no_write_or_sign_control) + seed_peer_claims_one_countered + seed_project_survey_one_edge_countered. Lands in viewer_counter_flags_graph_surfaces_invariants.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "Exercising /peer-claims + /project (countered + un-countered postures, full page + htmx fragment) over a non-trivial seeded store leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CF-1); the REUSED batch presence read is a read-only SELECT and persists nothing on any surface.",
+            "No response shape on /peer-claims + /project + /philosophy (full page or fragment, countered or un-countered) renders a write / sign / counter / publish / subscribe control (assert_traversal_html_has_no_write_or_sign_control), and every '/claims/{cid}' reference is render-only navigation TEXT inside an <a href> anchor, never an executable control (I-CF-1).",
+            "Both guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML / the port-exposed row-count universe only."
+          ],
+          "acceptance_criteria": [
+            "Exercising /peer-claims + /project (countered + un-countered postures, full page + htmx fragment) over a non-trivial seeded store leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CF-1); the REUSED batch presence read is a read-only SELECT and persists nothing on any surface.",
+            "No response shape on /peer-claims + /project + /philosophy (full page or fragment, countered or un-countered) renders a write / sign / counter / publish / subscribe control (assert_traversal_html_has_no_write_or_sign_control), and every '/claims/{cid}' reference is render-only navigation TEXT inside an <a href> anchor, never an executable control (I-CF-1).",
+            "Both guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML / the port-exposed row-count universe only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+          "scenario_name": "every_flagged_graph_surface_render_leaves_the_store_read_only",
+          "n_scenarios": [
+            "CF-INV-ReadOnly",
+            "CF-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-CF-002",
+            "US-CF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "scenario_fns": [
+            "every_flagged_graph_surface_render_leaves_the_store_read_only",
+            "no_flagged_graph_surface_render_adds_a_write_or_sign_control"
+          ]
+        },
+        {
+          "id": "03-03",
+          "name": "The flagged surface chrome stays offline (no CDN) and the flagged surfaces render fully offline (offline gold)",
+          "description": "Two offline gold guardrails (US-CF-002/003, CF-INV-OfflineChrome + CF-INV-Offline; I-CF-5). (OfflineChrome) the flagged /peer-claims + /project full pages reference ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false), so the page CHROME \u2014 and, since the presence read is LOCAL, the FLAG itself \u2014 stays offline-capable. (Offline) the flagged /peer-claims + /project surfaces render fully with NO network seam wired (plain ViewerServer::start) over a store seeded with a row/edge countered by a PULLED PEER (verified at peer pull time) \u2014 the presence read is a LOCAL DB-index lookup with NO outbound edge, so the countered row/edge STILL carries its marker with NO degraded notice (the viewer re-verifies nothing). Reuses references_external_cdn + assert_peer_claim_row_flagged_countered + assert_edge_flagged_countered + seed_peer_claims_one_countered + seed_project_survey_one_edge_countered. Lands in viewer_counter_flags_graph_surfaces_invariants.rs; flips green for free once 01-01 + 02-01 + the chrome exist. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "The flagged /peer-claims + /project full pages reference NO off-host CDN (references_external_cdn() is false \u2014 only the local /static/htmx.min.js, I-CF-5/KPI-HX-G2).",
+            "GET /peer-claims + GET /project over a store with a row/edge countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), render the countered row/edge STILL carrying the 'Countered' marker from the LOCAL store with no network call (assert_peer_claim_row_flagged_countered / assert_edge_flagged_countered; the presence read is a LOCAL ref-tables-only lookup).",
+            "Neither surface renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged routes have no outbound edge (I-CF-5/KPI-5)."
+          ],
+          "acceptance_criteria": [
+            "The flagged /peer-claims + /project full pages reference NO off-host CDN (references_external_cdn() is false \u2014 only the local /static/htmx.min.js, I-CF-5/KPI-HX-G2).",
+            "GET /peer-claims + GET /project over a store with a row/edge countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), render the countered row/edge STILL carrying the 'Countered' marker from the LOCAL store with no network call (assert_peer_claim_row_flagged_countered / assert_edge_flagged_countered; the presence read is a LOCAL ref-tables-only lookup).",
+            "Neither surface renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged routes have no outbound edge (I-CF-5/KPI-5)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+          "scenario_name": "the_flagged_graph_surface_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "CF-INV-OfflineChrome",
+            "CF-INV-Offline"
+          ],
+          "us_trace": [
+            "US-CF-002",
+            "US-CF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "scenario_fns": [
+            "the_flagged_graph_surface_chrome_stays_offline_no_cdn",
+            "the_flagged_graph_surfaces_render_fully_offline"
+          ]
+        },
+        {
+          "id": "03-04",
+          "name": "CARDINAL no-regroup GOLD \u2014 the traversal grouping and order are byte-identical with and without flags on BOTH /project + /philosophy (baseline + marker-elision, LAST)",
+          "description": "The CARDINAL shown-never-applied / no-regroup gold guardrail (US-CF-003, CF-INV-ShownNeverApplied; I-CF-9 / ADR-015 / slice-10 I-GT-3/4 \u2014 the load-bearing slice-13 invariant on the edge surfaces; release-blocking). The SAME store's rendered survey GROUPING, group order, edge order, and deduped CONTRIBUTOR list are byte-IDENTICAL whether or not the flag is active, on BOTH traversal routes (/project + /philosophy, the SAME shared render_edge_row arm) \u2014 the flag never re-groups, re-orders, or re-deduplicates the survey. BASELINE TACTIC (adapted from slice-12, the precedent slice-12 03-02/03-06 recorded-ordering + marker-elision tactic): there is NO pre-flag binary and NO no-flag HTTP seam (the route ALWAYS reads counter_presence_for), so the slice-10 reference is the RECORDED edge order (the seed's ordered_cids), and the gold ELIDES the additive <a href=\"/claims/{cid}\">Countered</a> anchors from the rendered body and proves the remaining slice-10 body honours that recorded grouping/order byte-for-byte (assert_survey_grouping_and_order_byte_identical, materialized in 02-01). The SAME shared render arm is pinned on BOTH routes so they cannot drift. LAST roadmap step (tends to flip green for free once 02-01 + 02-02 hold, because the rows are built from the UNCHANGED grouper and the flag is a separate additive marker, but it is the release gate). A no-regroup breach silently lets the flag pick a traversal order or pull contested edges together; this gold makes it unshippable. Lands in viewer_counter_flags_graph_surfaces_invariants.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /project?subject=<seeded> AND GET /philosophy?object=<seeded> over surveys with a mix of countered + un-countered edges across groups render, with the additive 'Countered' markers elided, a grouping + group order + edge order + deduped contributor list byte-IDENTICAL to the recorded slice-10 baseline (the seed's ordered_cids) \u2014 the flag is additive ONLY (I-CF-9); any divergence is an UNSHIPPABLE release-blocking no-regroup breach.",
+            "The baseline is the RECORDED slice-10 edge order (ordered_cids) of the SAME store, since there is no pre-flag binary and no no-flag HTTP seam; the gold elides the <a href=\"/claims/{cid}\">Countered</a> anchors and proves the remaining body honours that recorded grouping/order byte-for-byte (assert_survey_grouping_and_order_byte_identical, the slice-12 baseline+marker-elision tactic adapted per surface).",
+            "Both traversal routes are pinned through the SAME shared render_edge_row arm so they cannot drift; the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /project?subject=<seeded> AND GET /philosophy?object=<seeded> over surveys with a mix of countered + un-countered edges across groups render, with the additive 'Countered' markers elided, a grouping + group order + edge order + deduped contributor list byte-IDENTICAL to the recorded slice-10 baseline (the seed's ordered_cids) \u2014 the flag is additive ONLY (I-CF-9); any divergence is an UNSHIPPABLE release-blocking no-regroup breach.",
+            "The baseline is the RECORDED slice-10 edge order (ordered_cids) of the SAME store, since there is no pre-flag binary and no no-flag HTTP seam; the gold elides the <a href=\"/claims/{cid}\">Countered</a> anchors and proves the remaining body honours that recorded grouping/order byte-for-byte (assert_survey_grouping_and_order_byte_identical, the slice-12 baseline+marker-elision tactic adapted per surface).",
+            "Both traversal routes are pinned through the SAME shared render_edge_row arm so they cannot drift; the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+          "scenario_name": "the_traversal_grouping_and_order_are_byte_identical_with_and_without_flags",
+          "n_scenarios": [
+            "CF-INV-ShownNeverApplied"
+          ],
+          "us_trace": [
+            "US-CF-003"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release-blocking no-regroup gate. Mutation-test the survey grouping/order/contributor byte-identity across flagged/baseline on BOTH routes \u2014 a mutant that lets the flag re-group, re-order, or re-deduplicate (feeding the presence bool back into key_order/accumulation/dedup; the I-CF-9 gate toward the Phase-5 mutation threshold) must be killed.",
+          "scenario_fns": [
+            "the_traversal_grouping_and_order_are_byte_identical_with_and_without_flags"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-solution-architect-reviewer",
+    "note": "APPROVED after 1 revision: all 16 scenario fns explicitly traced via scenario_fns; architecture+AC sound (reviewer); bundling matches slice-09..12 proven pattern"
+  },
+  "total_steps": 10
+}
