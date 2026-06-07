@@ -11220,16 +11220,50 @@ pub fn read_peer_claim_cids_in_list_order(env: &TestEnv) -> Vec<String> {
 ///
 /// SCAFFOLD: true (slice-13).
 pub fn read_survey_edge_cids_in_render_order(
-    _env: &TestEnv,
-    _dimension: &str,
-    _entity: &str,
+    env: &TestEnv,
+    dimension: &str,
+    entity: &str,
 ) -> Vec<String> {
-    todo!(
-        "slice-13 RED scaffold: read every edge CID a /project (subject=entity) or \
-         /philosophy (object=entity) survey is built from, in the slice-10 grouped \
-         render order — the flat union of every EdgeRow.cid across every EdgeGroup \
-         (ADR-050 flatten point), read-only over the env's REAL DuckDB"
-    )
+    // Mirror the production `query_survey` engine (adapter-duckdb): own `claims` UNION
+    // ALL local `peer_claims`, filtered by the survey dimension, ORDERED by the OTHER
+    // dimension then `source_table, cid` — the SAME flat union + order the viewer's
+    // `query_project_survey` / `query_philosophy_survey` return and `group_by` then
+    // groups in render order (ADR-050: the survey rows ARE the flat union of every
+    // future-group edge). `"project"` keys on `subject == entity` (groups by `object`);
+    // `"philosophy"` keys on `object == entity` (groups by `subject`).
+    let (filter_col, order_col) = match dimension {
+        "project" => ("subject", "object"),
+        "philosophy" => ("object", "subject"),
+        other => panic!(
+            "read_survey_edge_cids_in_render_order: dimension must be \"project\" or \
+             \"philosophy\", got {other:?}"
+        ),
+    };
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for survey edge-cid read: {err}",
+            db_path.display()
+        )
+    });
+    let sql = format!(
+        "SELECT cid FROM ( \
+           SELECT c.cid AS cid, c.{order_col} AS order_col, 'Own' AS source_table \
+           FROM claims c WHERE c.{filter_col} = ? \
+           UNION ALL \
+           SELECT pc.cid AS cid, pc.{order_col} AS order_col, 'Peer' AS source_table \
+           FROM peer_claims pc WHERE pc.{filter_col} = ? \
+         ) ORDER BY order_col, source_table, cid"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .unwrap_or_else(|err| panic!("prepare survey edge-cid read: {err}"));
+    let rows = stmt
+        .query_map(duckdb::params![entity, entity], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap_or_else(|err| panic!("query survey edge cids for {entity}: {err}"));
+    rows.map(|r| r.expect("decode survey edge cid")).collect()
 }
 
 /// Seed a FEDERATED `/peer-claims` page with EXACTLY ONE countered peer claim among
@@ -11624,14 +11658,123 @@ pub fn seed_peer_claims_none_countered(env: &TestEnv) -> SeededPeerClaimsList {
 /// `peer_claims`); (2) recovering the survey's edge CIDs in render order
 /// (`read_survey_edge_cids_in_render_order(env, "project", entity)`); (3) a DISTINCT
 /// peer countering ONE of those edge CIDs; (4) splitting the ONE countered + the rest.
-pub fn seed_project_survey_one_edge_countered(_env: &TestEnv) -> SeededSurveyEdges {
-    todo!(
-        "slice-13 RED scaffold: seed a /project survey (REUSE seed_project_survey_trail \
-         -> >= 3 edges across groups in peer_claims) and counter EXACTLY ONE edge's claim \
-         cid via a DISTINCT peer (peer add + peer pull -> peer_claim_references), all via \
-         PRODUCTION paths; return the SeededSurveyEdges (entity + ordered + countered + \
-         uncountered edge cids)"
-    )
+pub fn seed_project_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyEdges {
+    // STEP 1 — build BOTH peers' verifiable wire records UP FRONT, holding each `PeerPds`
+    // ALIVE for the whole function so a SINGLE `peer pull` over BOTH peers succeeds (a
+    // second pull after the first peer is already subscribed would re-resolve that peer
+    // with no resolver wired and fail). Rachel is the SURVEYED contributor asserting the
+    // SHARED project subject across THREE DISTINCT philosophies (so three
+    // philosophies-embodied edges across three groups land in `peer_claims` — the LOCAL
+    // `/project` survey rows, Pillar 3 / I-GT-2). Tobias is the DISTINCT peer hosting a
+    // COUNTER referencing ONE of Rachel's edge claims. Rachel's target CID is DETERMINISTIC
+    // (the pull pipeline recomputes the SAME CID the builder computes), so Tobias's counter
+    // references it before either is pulled.
+    let surveyed_project = "github:peer/rachel-cargo";
+    let surveyed_author = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [41u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_author,
+        rachel_seed,
+        &[
+            (surveyed_project, TRAVERSAL_PHILOSOPHY_DEP_PINNING, 0.90),
+            (
+                surveyed_project,
+                "org.openlore.philosophy.reproducible-builds",
+                0.74,
+            ),
+            (
+                surveyed_project,
+                "org.openlore.philosophy.memory-safety",
+                0.25,
+            ),
+        ],
+    );
+    // Counter Rachel's FIRST surveyed edge — its deterministic CID is the counter target.
+    let target_cid = rachel_records
+        .first()
+        .expect("seed_project_survey_one_edge_countered: Rachel's first surveyed record")
+        .rkey
+        .clone();
+
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_author, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 2 — subscribe to BOTH peers via the real `peer add` verb (resolver wired per
+    // peer), then `peer pull` BOTH in ONE invocation while both PDS are alive. The
+    // production pull pipeline verifies each record, recomputes its CID, and writes
+    // `peer_claims` (+ `peer_claim_references` for Tobias's `counters` reference, landing
+    // with `referenced_cid == target_cid` — the peer arm of the UNION-ALL the presence read
+    // exercises).
+    for (did, pds) in [
+        (surveyed_author, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_project_survey_one_edge_countered: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: surveyed_author,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_project_survey_one_edge_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 3 — recover the survey's edge CIDs in the slice-10 grouped render order (the
+    // flat union of every EdgeRow.cid across every EdgeGroup — ADR-050's flatten point),
+    // then split the ONE countered edge + the rest un-countered. (Tobias's counter row
+    // carries a DIFFERENT subject, so it never appears in THIS project's survey.)
+    let ordered_cids = read_survey_edge_cids_in_render_order(env, "project", surveyed_project);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_project_survey_one_edge_countered: the countered target CID {target_cid:?} \
+         must be among the surveyed project's edges; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededSurveyEdges {
+        entity: surveyed_project.to_string(),
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a `/philosophy?object=<entity>` survey with a KNOWN countered subset across
@@ -11927,12 +12070,18 @@ pub fn assert_peer_claims_order_byte_identical(flagged: &str, ordered_cids: &[St
 /// [`assert_list_row_flagged_countered`]. Scans the rendered HTML only.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_edge_flagged_countered(_body: &str, _countered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the traversal edge for countered_cid carries the \
-         render-only one-hop 'Countered' anchor to the slice-11 thread (neutral presence \
-         flag; US-CF-003 / I-CF-6)"
-    )
+pub fn assert_edge_flagged_countered(body: &str, countered_cid: &str) {
+    // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // (maud emits no whitespace inside the element). Scan the rendered HTML only.
+    let marker = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&marker),
+        "assert_edge_flagged_countered: the traversal edge for the countered CID \
+         {countered_cid:?} must carry the neutral render-only one-hop {marker:?} anchor to \
+         its slice-11 thread (US-CF-003 / I-CF-6); body was:\n{body}"
+    );
 }
 
 /// Assert a rendered traversal survey body does NOT flag the given un-countered EDGE:
@@ -11941,12 +12090,27 @@ pub fn assert_edge_flagged_countered(_body: &str, _countered_cid: &str) {
 /// [`assert_list_row_not_flagged`]. Scans the rendered HTML only.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_edge_not_flagged(_body: &str, _uncountered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the traversal edge for uncountered_cid carries NO \
-         'Countered' marker and NO empty-state noise (renders exactly as slice-10; \
-         US-CF-003 no-noise)"
-    )
+pub fn assert_edge_not_flagged(body: &str, uncountered_cid: &str) {
+    // The un-countered edge carries NO `<a href="/claims/{cid}">Countered</a>` flag anchor.
+    // (Its bare CID still appears in the edge's CID cell — we assert the absence of the
+    // FLAG anchor specifically, not the CID text.)
+    let marker = format!(
+        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        !body.contains(&marker),
+        "assert_edge_not_flagged: the un-countered traversal edge for {uncountered_cid:?} \
+         must carry NO 'Countered' flag marker {marker:?} (renders exactly as slice-10; \
+         US-CF-003 / I-CF-2); body was:\n{body}"
+    );
+    // And NO "0 counters" / "no disagreement" empty-state noise anywhere on the page.
+    for noise in ["0 counters", "no disagreement", "no counters"] {
+        assert!(
+            !body.to_lowercase().contains(noise),
+            "assert_edge_not_flagged: an un-countered survey must carry no {noise:?} \
+             empty-state noise (no-noise discipline; US-CF-003); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the "Countered" marker on a countered traversal EDGE is a render-only
@@ -11989,14 +12153,53 @@ pub fn assert_edge_flag_is_single_neutral_presence(_body: &str, _target_cid: &st
 ///
 /// SCAFFOLD: true (slice-13).
 pub fn assert_survey_grouping_and_order_byte_identical(
-    _flagged: &str,
-    _ordered_cids: &[String],
+    flagged: &str,
+    ordered_cids: &[String],
 ) {
-    todo!(
-        "slice-13 RED scaffold: with the additive 'Countered' anchors elided, assert the \
-         flagged /project|/philosophy body honours the recorded slice-10 grouping + group \
-         order + edge order + deduped contributor list (ordered_cids, strictly increasing \
-         offsets) byte-for-byte — the flag re-grouped / re-ordered NOTHING (US-CF-003 \
-         CARDINAL no-regroup gold / I-CF-9); marker-elision tactic from slice-12"
-    )
+    // ELIDE the additive markers: remove every `<a href="/claims/{cid}">Countered</a>`
+    // anchor (the ONLY thing slice-13 adds — appended INSIDE the CID `<td>`, see
+    // viewer-domain `render_edge_row`). What remains IS the slice-10 traversal byte-stream
+    // for this store. Eliding for EVERY recorded CID (countered edges carry one;
+    // un-countered edges carry none, so the replace is a no-op there) keeps the helper
+    // agnostic to WHICH edges were flagged.
+    let mut elided = flagged.to_string();
+    for cid in ordered_cids {
+        let anchor = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        elided = elided.replace(&anchor, "");
+    }
+    // No additive marker survives the elision — the remaining body is pure slice-10.
+    assert!(
+        !elided.contains(LIST_COUNTERED_FLAG_TEXT),
+        "assert_survey_grouping_and_order_byte_identical: every additive \
+         {LIST_COUNTERED_FLAG_TEXT:?} anchor must elide cleanly so the remaining body is the \
+         slice-10 traversal render; a residual marker means the flag is NOT purely the \
+         recorded `<a href>` anchor (US-CF-003 / I-CF-9); elided body was:\n{elided}"
+    );
+
+    // GROUPING + EDGE ORDER byte-identity: every recorded edge CID appears in the elided
+    // (no-flag) body, and their first-seen byte offsets are STRICTLY INCREASING in the
+    // recorded slice-10 grouped render order — the flag re-grouped / re-ordered NOTHING
+    // (US-CF-003 CARDINAL no-regroup gold / I-CF-9).
+    let mut prev_offset: Option<usize> = None;
+    for cid in ordered_cids {
+        let offset = elided.find(cid.as_str()).unwrap_or_else(|| {
+            panic!(
+                "assert_survey_grouping_and_order_byte_identical: the elided slice-10 \
+                 traversal body must contain every recorded edge CID; {cid:?} was missing — \
+                 the flag dropped/replaced an edge (a re-group/re-order regression); elided \
+                 body was:\n{elided}"
+            )
+        });
+        if let Some(prev) = prev_offset {
+            assert!(
+                offset > prev,
+                "assert_survey_grouping_and_order_byte_identical: the elided slice-10 \
+                 traversal edge order must follow the recorded grouped render order \
+                 {ordered_cids:?} VERBATIM — {cid:?} rendered out of position, so the flag \
+                 RE-GROUPED / RE-ORDERED the survey (US-CF-003 / I-CF-9); elided body \
+                 was:\n{elided}"
+            );
+        }
+        prev_offset = Some(offset);
+    }
 }

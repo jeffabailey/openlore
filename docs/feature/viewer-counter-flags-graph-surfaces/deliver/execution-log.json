@@ -64,6 +64,76 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-07T21:09:17Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:10:02Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:12:41Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:14:23Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: slice-13 oracles already cover one-marker-per-countered-row (peer_render_is_total_over_page_and_presence proptest) + /claims anchor (countered_peer_row_renders_one_hop_link); DISTINCT collapse is adapter-duckdb counter_presence_for",
+      "t": "2026-06-07T21:14:48Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:17:12Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:17:50Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:21:30Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:25:52Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:29:31Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T21:42:53Z"
     }
   ],
   "project_id": "viewer-counter-flags-graph-surfaces"

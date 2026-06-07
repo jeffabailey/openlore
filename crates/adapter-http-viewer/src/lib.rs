@@ -563,12 +563,35 @@ fn resolve_project_view(store: &dyn StoreReadPort, query: Option<&str>) -> Trave
     match store.query_project_survey(&subject) {
         // group_project over the LOCAL survey rows: an empty Vec yields NoClaims, a
         // non-empty one the grouped Found view — grouping is in Rust (the pure core),
-        // NEVER SQL, so two same-content claims by different authors stay two rows.
-        Ok(rows) => group_project(&subject, &rows),
+        // NEVER SQL, so two same-content claims by different authors stay two rows. The
+        // ONE flattened counter-presence read (ADR-050) is threaded into the grouper so
+        // EdgeRow.is_countered is set as each group is built (slice-13 / US-CF-003).
+        Ok(rows) => {
+            let presence = survey_counter_presence(store, &rows);
+            group_project(&subject, &rows, &presence)
+        }
         // A read failure degrades to the SAME guided NoClaims state naming the queried
         // subject — never a blank region, never a leaked stack trace (I-GT-4).
         Err(_) => TraversalView::NoClaims { entity: subject },
     }
+}
+
+/// Read the per-edge counter PRESENCE for a WHOLE traversal survey in ONE aggregate
+/// `counter_presence_for` lookup (slice-13 / US-CF-003 / ADR-050). Collects EVERY edge's
+/// CID from the FLAT survey rows BEFORE grouping — the flattened union across all future
+/// groups — and reads the presence set ONCE (never per-group, never per-edge / I-CF-8).
+/// REUSES the slice-12 `StoreReadPort::counter_presence_for` VERBATIM (NO new method, NO
+/// new SQL, NO network, NO key). The grouper then sets `EdgeRow.is_countered` from this
+/// set, so the render is a total function of the presence-projected `TraversalView`. A
+/// presence-read FAILURE degrades to an EMPTY set (`unwrap_or_default`) → NO flags, never
+/// a 5xx (graceful degradation). Shared by `/project` (and, 02-02, `/philosophy`) so the
+/// flatten-once wiring lives in ONE place.
+fn survey_counter_presence(
+    store: &dyn StoreReadPort,
+    rows: &[ports::SurveyRow],
+) -> std::collections::HashSet<String> {
+    let cids = rows.iter().map(|row| row.cid.clone()).collect::<Vec<_>>();
+    store.counter_presence_for(&cids).unwrap_or_default()
 }
 
 /// Render the philosophy graph-traversal survey page (`GET /philosophy?object=<uri>`,
@@ -613,8 +636,13 @@ fn resolve_philosophy_view(store: &dyn StoreReadPort, query: Option<&str>) -> Tr
     match store.query_philosophy_survey(&object) {
         // group_philosophy over the LOCAL survey rows: an empty Vec yields NoClaims, a
         // non-empty one the grouped Found view — grouping is in Rust (the pure core),
-        // NEVER SQL, so two same-content claims by different authors stay two rows.
-        Ok(rows) => group_philosophy(&object, &rows),
+        // NEVER SQL, so two same-content claims by different authors stay two rows. The
+        // SAME ONE flattened counter-presence read (ADR-050) is threaded into the grouper
+        // — the SYMMETRIC seam the slice-13 02-02 `/philosophy` edge flag closes.
+        Ok(rows) => {
+            let presence = survey_counter_presence(store, &rows);
+            group_philosophy(&object, &rows, &presence)
+        }
         // A read failure degrades to the SAME guided NoClaims state naming the queried
         // object — never a blank region, never a leaked stack trace (I-GT-4).
         Err(_) => TraversalView::NoClaims { entity: object },

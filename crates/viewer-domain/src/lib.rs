@@ -2119,6 +2119,15 @@ pub struct EdgeRow {
     pub confidence: f64,
     /// The claim CID — non-`Option`; every edge maps to exactly one signed claim.
     pub cid: String,
+    /// Whether this edge's claim has >= 1 counter (slice-13 / US-CF-003 / ADR-048): the
+    /// at-a-glance "Countered" PRESENCE flag. A boolean per edge (presence membership,
+    /// NEVER a count) — set inside [`group_by`] from the `counter_presence_for` set the
+    /// effect shell reads ONCE over the flattened union of every edge CID (ADR-050), so
+    /// the render stays a TOTAL function of the (presence-projected) [`TraversalView`].
+    /// ADDITIVE: it NEVER changes group key_order, per-key edge accumulation, edge order,
+    /// the deduped contributor list, or any confidence/bucket (shown-never-applied,
+    /// I-CF-2 / I-CF-9).
+    pub is_countered: bool,
 }
 
 /// Group a project survey's flat [`SurveyRow`]s into a [`TraversalView`] (PURE,
@@ -2131,8 +2140,12 @@ pub struct EdgeRow {
 /// `rows` order (the adapter ordered by `object, source_table, cid` — deterministic).
 /// An EMPTY `rows` slice → [`TraversalView::NoClaims`] (never a fabricated edge,
 /// I-GT-4). PURE total function — no I/O.
-pub fn group_project(entity: &str, rows: &[SurveyRow]) -> TraversalView {
-    group_by(entity, rows, |row| row.object.clone())
+pub fn group_project(
+    entity: &str,
+    rows: &[SurveyRow],
+    presence: &std::collections::HashSet<String>,
+) -> TraversalView {
+    group_by(entity, rows, presence, |row| row.object.clone())
 }
 
 /// Group a philosophy survey's flat [`SurveyRow`]s into a [`TraversalView`] (PURE,
@@ -2147,19 +2160,32 @@ pub fn group_project(entity: &str, rows: &[SurveyRow]) -> TraversalView {
 /// adapter ordered by `subject, source_table, cid` — deterministic). An EMPTY `rows`
 /// slice → [`TraversalView::NoClaims`] (never a fabricated edge, I-GT-4). PURE total
 /// function — no I/O. REUSES the identical [`group_by`] anti-merging engine.
-pub fn group_philosophy(entity: &str, rows: &[SurveyRow]) -> TraversalView {
-    group_by(entity, rows, |row| row.subject.clone())
+pub fn group_philosophy(
+    entity: &str,
+    rows: &[SurveyRow],
+    presence: &std::collections::HashSet<String>,
+) -> TraversalView {
+    group_by(entity, rows, presence, |row| row.subject.clone())
 }
 
 /// Shared grouping engine for the two surveys (PURE, anti-merging). `key_of` selects
 /// the OTHER-dimension key per row (`object` for `/project`, `subject` for
 /// `/philosophy`). Order-preserving: groups appear in first-seen key order; edges
 /// appear in row order; `contributors` in first-seen author order (deduped). Empty
-/// `rows` → [`TraversalView::NoClaims`]. Held in ONE place so the project + (slice-10
-/// later) philosophy groupers share the identical anti-merging machinery.
+/// `rows` → [`TraversalView::NoClaims`]. Held in ONE place so the project + philosophy
+/// groupers share the identical anti-merging machinery.
+///
+/// `presence` is the `counter_presence_for` SET the effect shell reads ONCE over the
+/// FLATTENED union of every edge CID across all groups (ADR-050 — collected from the
+/// FLAT survey rows BEFORE grouping, never per-group/per-edge): each built [`EdgeRow`]
+/// has `is_countered = presence.contains(&row.cid)`, so the slice-13 "Countered" flag is
+/// projected HERE and the render stays a TOTAL function of the resulting view. The flag
+/// is ADDITIVE — it touches NEITHER `key_order`, per-key edge accumulation, edge order,
+/// NOR the deduped `contributors` (I-CF-2 / I-CF-9).
 fn group_by(
     entity: &str,
     rows: &[SurveyRow],
+    presence: &std::collections::HashSet<String>,
     key_of: impl Fn(&SurveyRow) -> String,
 ) -> TraversalView {
     if rows.is_empty() {
@@ -2183,6 +2209,10 @@ fn group_by(
         grouped.entry(key).or_default().push(EdgeRow {
             author_did: row.author_did.clone(),
             confidence: row.confidence,
+            // The "Countered" presence flag (slice-13 / I-CF-9): membership in the
+            // ONE flattened `counter_presence_for` set — ADDITIVE, set as the edge is
+            // built so it never re-orders/re-groups (the key + push above are unchanged).
+            is_countered: presence.contains(&row.cid),
             cid: row.cid.clone(),
         });
         if !contributors.contains(&row.author_did) {
@@ -2382,6 +2412,15 @@ fn render_edge_group(group: &EdgeGroup, dimension: GroupDimension) -> Markup {
 /// `0.9`/`90%`; I-GT-5), the REUSED display-only confidence bucket label, and the cid
 /// (every edge = one signed claim, I-GT-4). The bare DID is percent-encoded into the
 /// href (ADR-044). NO sign/follow control (I-GT-1 — the link is render-only TEXT).
+///
+/// SHARED edge arm (slice-13 / US-CF-003): consumed by BOTH `render_project_fragment`
+/// and `render_philosophy_fragment` (via `render_edge_group`). It appends — ONLY when
+/// `is_countered` — a render-only `<a href="/claims/{cid}">Countered</a>` ONE-HOP link
+/// to that claim's slice-11 thread INSIDE the cid `<td>`, REUSING the shared
+/// [`COUNTERED_PRESENCE_FLAG`] (one SSOT with the list + detail surfaces). An UN-countered
+/// edge renders NOTHING extra — no marker, no "0 counters" noise (I-CF-2). The flag is
+/// ADDITIVE context beside the edge: it changes nothing about which edges appear, in
+/// which group, in which order (I-CF-9).
 fn render_edge_row(edge: &EdgeRow) -> Markup {
     html! {
         tr {
@@ -2390,7 +2429,26 @@ fn render_edge_row(edge: &EdgeRow) -> Markup {
             }
             td { (render_confidence(edge.confidence)) }
             td { (render_confidence_bucket(edge.confidence)) }
-            td { (edge.cid) }
+            td {
+                (edge.cid)
+                (render_edge_presence_flag(edge))
+            }
+        }
+    }
+}
+
+/// Render the slice-13 "Countered" PRESENCE flag for ONE traversal edge — appended
+/// inside the edge's cid `<td>` ONLY when the edge `is_countered`: a render-only
+/// `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11 counter
+/// thread (US-CF-003 / I-CF-6), navigation TEXT, never an executable write/sign/counter
+/// control (I-CF-1). PRESENCE-only: a single neutral marker, NEVER a count or a verdict.
+/// An UN-countered edge (`is_countered == false`) renders NOTHING — no marker, no noise
+/// (I-CF-2). PURE total function over the edge's flag. REUSES the shared
+/// [`COUNTERED_PRESENCE_FLAG`] (one SSOT with the list + detail + peer presence flags).
+fn render_edge_presence_flag(edge: &EdgeRow) -> Markup {
+    html! {
+        @if edge.is_countered {
+            a href=(format!("/claims/{}", edge.cid)) { (COUNTERED_PRESENCE_FLAG) }
         }
     }
 }
@@ -5366,7 +5424,7 @@ mod tests {
             survey_row("did:plc:rachel-test", "bafy1", "github:rust-lang/cargo", "phil-a", 0.90),
             survey_row("did:plc:rachel-test", "bafy2", "github:rust-lang/cargo", "phil-b", 0.74),
         ];
-        let view = group_project("github:rust-lang/cargo", &rows);
+        let view = group_project("github:rust-lang/cargo", &rows, &std::collections::HashSet::new());
         let TraversalView::Found { entity, groups, contributors } = view else {
             panic!("a non-empty survey must group to Found; got {view:?}");
         };
@@ -5386,7 +5444,7 @@ mod tests {
             survey_row("did:plc:maria", "bafy1", "github:rust-lang/cargo", "phil-a", 0.92),
             survey_row("did:plc:tobias-test", "bafy2", "github:rust-lang/cargo", "phil-a", 0.70),
         ];
-        let view = group_project("github:rust-lang/cargo", &rows);
+        let view = group_project("github:rust-lang/cargo", &rows, &std::collections::HashSet::new());
         let TraversalView::Found { groups, contributors, .. } = view else {
             panic!("expected Found");
         };
@@ -5399,7 +5457,7 @@ mod tests {
     /// a fabricated edge.
     #[test]
     fn group_project_empty_rows_yields_no_claims_naming_the_entity() {
-        let view = group_project("github:nonexistent/repo", &[]);
+        let view = group_project("github:nonexistent/repo", &[], &std::collections::HashSet::new());
         assert_eq!(
             view,
             TraversalView::NoClaims {
@@ -5421,7 +5479,7 @@ mod tests {
             "org.openlore.philosophy.dependency-pinning",
             0.90,
         )];
-        let view = group_project("github:rust-lang/cargo", &rows);
+        let view = group_project("github:rust-lang/cargo", &rows, &std::collections::HashSet::new());
         let html = render_project_fragment(&view).into_string();
         assert!(html.contains(TRAVERSAL_RESULTS_ID), "fragment must carry the region id; {html}");
         assert!(
@@ -5469,7 +5527,7 @@ mod tests {
             "phil-a",
             0.90,
         )];
-        let view = group_project("github:rust-lang/cargo", &rows);
+        let view = group_project("github:rust-lang/cargo", &rows, &std::collections::HashSet::new());
         let fragment = render_project_fragment(&view).into_string();
         let page = render_project_page(&view);
         assert!(
@@ -5651,7 +5709,7 @@ mod tests {
                 0.70,
             ),
         ];
-        let view = group_project("github:rust-lang/cargo", &rows);
+        let view = group_project("github:rust-lang/cargo", &rows, &std::collections::HashSet::new());
         let html = render_project_fragment(&view).into_string();
         // The labeled section is present.
         assert!(
@@ -5698,6 +5756,118 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Slice-13 (step 02-01 / US-CF-003) — the EDGE "Countered" presence flag: the
+    // grouper projects `EdgeRow.is_countered` from the ONE flattened
+    // `counter_presence_for` set, the SHARED `render_edge_row` arm emits the flag, and
+    // the flag is ADDITIVE (grouping/order/contributor dedup unchanged; I-CF-9).
+    // -------------------------------------------------------------------------
+
+    /// Behavior (US-CF-003 / I-CF-9): `group_by` (via `group_project`) sets
+    /// `EdgeRow.is_countered` to TRUE iff that edge's CID is a member of the presence
+    /// set, and FALSE otherwise — the flag is a TOTAL function of (rows, presence).
+    #[test]
+    fn group_project_sets_is_countered_iff_cid_in_presence_set() {
+        let rows = [
+            survey_row("did:plc:rachel-test", "bafy-countered", "github:rust-lang/cargo", "phil-a", 0.90),
+            survey_row("did:plc:rachel-test", "bafy-plain", "github:rust-lang/cargo", "phil-b", 0.74),
+        ];
+        let presence: std::collections::HashSet<String> =
+            std::iter::once("bafy-countered".to_string()).collect();
+        let view = group_project("github:rust-lang/cargo", &rows, &presence);
+        let TraversalView::Found { groups, .. } = view else {
+            panic!("expected Found");
+        };
+        let countered = &groups[0].edges[0];
+        let plain = &groups[1].edges[0];
+        assert_eq!(countered.cid, "bafy-countered");
+        assert!(countered.is_countered, "the edge whose cid is in presence must be flagged");
+        assert_eq!(plain.cid, "bafy-plain");
+        assert!(!plain.is_countered, "the edge whose cid is NOT in presence must NOT be flagged");
+    }
+
+    /// Behavior (US-CF-003 / I-CF-6 / I-CF-2): the SHARED `render_edge_row` arm emits the
+    /// render-only `<a href="/claims/{cid}">Countered</a>` one-hop marker ONLY for a
+    /// countered edge; an un-countered edge renders NO marker (no-noise).
+    #[test]
+    fn render_edge_row_emits_the_flag_iff_is_countered_with_claims_anchor() {
+        let rows = [
+            survey_row("did:plc:rachel-test", "bafy-countered", "github:rust-lang/cargo", "phil-a", 0.90),
+            survey_row("did:plc:rachel-test", "bafy-plain", "github:rust-lang/cargo", "phil-b", 0.74),
+        ];
+        let presence: std::collections::HashSet<String> =
+            std::iter::once("bafy-countered".to_string()).collect();
+        let view = group_project("github:rust-lang/cargo", &rows, &presence);
+        let html = render_project_fragment(&view).into_string();
+        assert!(
+            html.contains(r#"<a href="/claims/bafy-countered">Countered</a>"#),
+            "the countered edge must carry the render-only one-hop /claims marker; {html}"
+        );
+        assert!(
+            !html.contains(r#"<a href="/claims/bafy-plain">Countered</a>"#),
+            "the un-countered edge must carry NO marker; {html}"
+        );
+        // PRESENCE-only: exactly ONE flag text appears (the single countered edge).
+        assert_eq!(
+            html.matches(COUNTERED_PRESENCE_FLAG).count(),
+            1,
+            "exactly one neutral presence marker, never a count; {html}"
+        );
+    }
+
+    /// Behavior (US-CF-003 CARDINAL no-regroup / I-CF-9): the flag is ADDITIVE — with the
+    /// presence set EMPTY vs NON-EMPTY, the grouping (key_order), per-group edge order,
+    /// and the deduped contributor list are byte-identical once the additive `Countered`
+    /// anchors are elided. The flag re-grouped / re-ordered / re-deduped NOTHING.
+    #[test]
+    fn edge_flag_is_additive_grouping_order_and_contributors_byte_identical() {
+        let rows = [
+            survey_row("did:plc:maria", "bafy1", "github:rust-lang/cargo", "phil-a", 0.92),
+            survey_row("did:plc:tobias-test", "bafy2", "github:rust-lang/cargo", "phil-a", 0.70),
+            survey_row("did:plc:maria", "bafy3", "github:rust-lang/cargo", "phil-b", 0.74),
+        ];
+        let empty = std::collections::HashSet::new();
+        let baseline = render_project_fragment(&group_project("github:rust-lang/cargo", &rows, &empty))
+            .into_string();
+        let presence: std::collections::HashSet<String> =
+            ["bafy1".to_string(), "bafy3".to_string()].into_iter().collect();
+        let flagged = render_project_fragment(&group_project("github:rust-lang/cargo", &rows, &presence))
+            .into_string();
+        // Elide every additive anchor from the flagged render; what remains must equal the
+        // no-flag baseline byte-for-byte.
+        let mut elided = flagged.clone();
+        for cid in ["bafy1", "bafy2", "bafy3"] {
+            elided = elided.replace(&format!(r#"<a href="/claims/{cid}">Countered</a>"#), "");
+        }
+        assert_eq!(
+            elided, baseline,
+            "eliding the additive Countered anchors must recover the slice-10 byte-stream \
+             (grouping/order/contributor dedup unchanged); flagged:\n{flagged}"
+        );
+    }
+
+    /// Behavior (US-CF-003 — ONE shared arm serves BOTH routes): the SAME `render_edge_row`
+    /// arm emits the flag on the `/philosophy` survey too (consumed via
+    /// `render_philosophy_fragment`), proving the flag is not project-only.
+    #[test]
+    fn the_shared_edge_arm_flags_a_countered_edge_on_the_philosophy_survey_too() {
+        let rows = [survey_row(
+            "did:plc:rachel-test",
+            "bafy-phil-countered",
+            "github:rust-lang/cargo",
+            "org.openlore.philosophy.reproducible-builds",
+            0.90,
+        )];
+        let presence: std::collections::HashSet<String> =
+            std::iter::once("bafy-phil-countered".to_string()).collect();
+        let view = group_philosophy("org.openlore.philosophy.reproducible-builds", &rows, &presence);
+        let html = render_philosophy_fragment(&view).into_string();
+        assert!(
+            html.contains(r#"<a href="/claims/bafy-phil-countered">Countered</a>"#),
+            "the SHARED render_edge_row arm must flag the countered edge on /philosophy too; {html}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Graph-Traversal view — the SYMMETRIC philosophy survey (slice-10 / step
     // 02-01): group_philosophy + render_philosophy_fragment / render_philosophy_page.
     // The object→philosophy mirror of the project oracles, swapping subject↔object:
@@ -5715,7 +5885,7 @@ mod tests {
             survey_row("did:plc:rachel-test", "bafy1", "github:NixOS/nixpkgs", "phil-x", 0.92),
             survey_row("did:plc:rachel-test", "bafy2", "github:bazelbuild/bazel", "phil-x", 0.85),
         ];
-        let view = group_philosophy("phil-x", &rows);
+        let view = group_philosophy("phil-x", &rows, &std::collections::HashSet::new());
         let TraversalView::Found { entity, groups, contributors } = view else {
             panic!("a non-empty survey must group to Found; got {view:?}");
         };
@@ -5735,7 +5905,7 @@ mod tests {
             survey_row("did:plc:maria", "bafy1", "github:NixOS/nixpkgs", "phil-x", 0.92),
             survey_row("did:plc:tobias-test", "bafy2", "github:NixOS/nixpkgs", "phil-x", 0.70),
         ];
-        let view = group_philosophy("phil-x", &rows);
+        let view = group_philosophy("phil-x", &rows, &std::collections::HashSet::new());
         let TraversalView::Found { groups, contributors, .. } = view else {
             panic!("expected Found");
         };
@@ -5757,7 +5927,7 @@ mod tests {
             "org.openlore.philosophy.reproducible-builds",
             0.92,
         )];
-        let view = group_philosophy("org.openlore.philosophy.reproducible-builds", &rows);
+        let view = group_philosophy("org.openlore.philosophy.reproducible-builds", &rows, &std::collections::HashSet::new());
         let html = render_philosophy_fragment(&view).into_string();
         assert!(html.contains(TRAVERSAL_RESULTS_ID), "fragment must carry the region id; {html}");
         assert!(
@@ -5807,7 +5977,7 @@ mod tests {
             "phil-x",
             0.92,
         )];
-        let view = group_philosophy("phil-x", &rows);
+        let view = group_philosophy("phil-x", &rows, &std::collections::HashSet::new());
         let fragment = render_philosophy_fragment(&view).into_string();
         let page = render_philosophy_page(&view);
         assert!(
