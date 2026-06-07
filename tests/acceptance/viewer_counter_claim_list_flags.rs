@@ -243,24 +243,45 @@ fn the_list_flags_render_identically_under_htmx_and_no_js() {
 /// @us-lf-002 @driving_port @real-io @presence-only @anti-merging @i-lf-3 @kpi-av-2 @gold
 #[test]
 fn a_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list() {
-    // GIVEN a claim countered by TWO DISTINCT authors (Maria's OWN counter via
-    // `claim counter` → `claims` + peer Tobias's counter via `peer pull` → `peer_claims`),
-    // among Maria's own claims on the list (slice-11 `seed_claim_two_counters_distinct_
-    // authors`, observed on the LIST surface).
+    // GIVEN one of Maria's OWN claims countered by TWO DISTINCT authors (two distinct PEER
+    // authors each author a `counters`-referencing record targeting the SAME own CID via
+    // `peer pull` → `peer_claim_references`), among Maria's own claims on the list (the
+    // slice-11 anti-merging fixture adapted into the LIST surface so the target appears on
+    // /claims).
     // WHEN Maria opens the My Claims list.
     // THEN the countered row shows EXACTLY ONE neutral "Countered" marker (presence-only —
     // DISTINCT referenced_cid → one membership → one flag; I-LF-3), and the body carries
     // NO count / "disputed by N" / consensus / net-verdict phrasing
     // (assert_list_flag_is_single_neutral_presence).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-3 (presence-only gold): seed_claim_two_counters_distinct_authors(&env) \
-         (reused from slice-11) → the two-author-countered target lands among the own \
-         /claims rows; ViewerServer::start; get(\"/claims\"); assert 200; \
-         assert_list_flag_is_single_neutral_presence(&body, &target_cid) — EXACTLY one \
-         'Countered' marker on that row + NO count / 'disputed by N' / verdict phrasing. \
-         RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_target_two_counters_distinct_authors(&env);
+    let target_cid = seeded
+        .countered_cids
+        .first()
+        .expect("LF-3: the seed yields exactly one twice-countered own target");
+    let server = ViewerServer::start(&env);
+
+    let response = server.get("/claims");
+
+    assert_eq!(
+        response.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        response.body
+    );
+    assert!(
+        response.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        response.content_type
+    );
+
+    // The twice-countered row shows EXACTLY ONE neutral "Countered" marker (presence-only —
+    // DISTINCT referenced_cid collapses the two distinct-author counters to one membership),
+    // and the body carries NO count / "disputed by N" / verdict phrasing (I-LF-3 / KPI-AV-2).
+    assert_list_flag_is_single_neutral_presence(&response.body, target_cid);
+    // The un-countered rows carry NO marker (the flag is presence-only + additive).
+    for uncountered in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&response.body, uncountered);
+    }
 }
 
 /// LF-4 (US-LF-002 — one-hop link to the slice-11 thread, I-LF-6): the "Countered" marker
@@ -283,15 +304,45 @@ fn the_countered_marker_is_a_render_only_one_hop_link_to_the_thread() {
     // `<a href="/claims/{target_cid}">` anchor (navigation TEXT, never a control,
     // I-LF-1/I-LF-6 — assert_list_flag_links_to_thread); and (b) GET-ing that href shows
     // the slice-11 counter thread for the claim (the one-hop drill works without JS).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-4 (one-hop link): seed_claims_list_one_countered(&env) → countered_cid; \
-         ViewerServer::start; list = get(\"/claims\"); assert 200; \
-         assert_list_flag_links_to_thread(&list.body, &countered_cid) (render-only \
-         <a href=\"/claims/{{cid}}\"> anchor); then detail = get(&format!(\"/claims/{{}}\", \
-         countered_cid)); assert detail 200 + the slice-11 thread renders (reuse \
-         assert_counter_thread_renders_attributed_verbatim). RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_one_countered(&env);
+    let countered_cid = seeded
+        .countered_cids
+        .first()
+        .expect("LF-4: the seed yields exactly one countered own target");
+    let server = ViewerServer::start(&env);
+
+    let list = server.get("/claims");
+    assert_eq!(
+        list.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        list.body
+    );
+
+    // (a) The marker on the countered row is the render-only one-hop anchor
+    // `<a href="/claims/{cid}">Countered</a>` — navigation TEXT, never an executable
+    // control (I-LF-1 / I-LF-6).
+    assert_list_flag_links_to_thread(&list.body, countered_cid);
+
+    // (b) Following that href (the one-hop drill, no JS) lands on the slice-11 counter
+    // thread for the claim: a 200 detail page that IS the claim's thread (it carries the
+    // claim's CID + the neutral "Countered" presence flag the slice-11 thread renders).
+    let detail = server.get(&format!("/claims/{countered_cid}"));
+    assert_eq!(
+        detail.status, 200,
+        "GET /claims/{countered_cid} (the one-hop drill target) must be 200; body was:\n{}",
+        detail.body
+    );
+    assert!(
+        detail.body.contains(countered_cid),
+        "LF-4: the drilled-into detail page must be the thread for {countered_cid:?} (it \
+         names the claim's CID); body was:\n{}",
+        detail.body
+    );
+    // The detail page IS the slice-11 counter thread — it carries the neutral "Countered"
+    // presence flag (and never a count/verdict), confirming the one-hop link reached the
+    // thread, not a bare detail.
+    assert_counter_thread_presence_flag_is_neutral(&detail.body);
 }
 
 // =============================================================================

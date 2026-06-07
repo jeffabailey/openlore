@@ -10493,6 +10493,129 @@ pub fn seed_claims_list_one_countered(env: &TestEnv) -> SeededClaimsList {
     }
 }
 
+/// Seed an own-claims `/claims` page where ONE of Maria's OWN claims is countered by TWO
+/// DISTINCT authors (the LF-3 presence-only GOLD fixture; I-LF-3 / KPI-AV-2). Adapts the
+/// slice-11 `seed_claim_two_counters_distinct_authors` anti-merging fixture into the LIST
+/// context: the target is one of Maria's OWN claims (so it appears on `/claims`), countered
+/// by TWO distinct PEER authors (Rachel + Tobias) — each authors a verifiable `counters`-
+/// referencing record targeting the SAME own CID, delivered through the production
+/// `peer add` + `peer pull` federation path, so BOTH land in `peer_claim_references` with
+/// `referenced_cid == target_cid`. The `counter_presence_for` UNION-ALL DISTINCT collapses
+/// the two distinct-author counters of the SAME CID to ONE presence membership → the row
+/// carries EXACTLY ONE neutral "Countered" marker (never "disputed by 2"). All rows land in
+/// the SAME local store `openlore ui` reads (Pillar 3 / BR-VIEW-4). Returns the
+/// [`SeededClaimsList`] whose single `countered_cids` entry is the twice-countered own
+/// target.
+pub fn seed_claims_list_target_two_counters_distinct_authors(env: &TestEnv) -> SeededClaimsList {
+    // STEP 1 — sign several PLAIN own claims via the production `claim add` write path
+    // (distinct subjects → distinct CIDs). These are the un-countered rows.
+    for (subject, predicate, object) in [
+        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
+        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+    ] {
+        seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
+    }
+
+    // STEP 2 — sign ONE more own claim that TWO distinct peers then counter. Recover its
+    // content-addressed CID (both counters' shared target).
+    let target_cid = seed_own_claim_with_evidence(
+        env,
+        "github:rust-lang/cargo",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.dependency-pinning",
+        0.90,
+        &[],
+    );
+
+    // STEP 3 — TWO distinct peers (Rachel + Tobias) each author a verifiable COUNTER
+    // referencing the SAME OWN target CID (a `references[].type == counters` entry whose
+    // `cid == target_cid`, ADR-015), delivered through the production `peer add` +
+    // `peer pull` federation path. Build BOTH peers' records UP FRONT, holding each PDS
+    // ALIVE for the whole function so a SINGLE `peer pull` over BOTH peers succeeds. The
+    // pull verifies + content-addresses each: both counters land in `peer_claims` and
+    // their `counters` references land in `peer_claim_references` with the SAME
+    // `referenced_cid == target_cid` — two DISTINCT authors, one referenced CID.
+    let rachel_seed = [7u8; 32];
+    let (rachel_record, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &target_cid,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, vec![rachel_record]);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    for (did, pds) in [
+        (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_claims_list_target_two_counters_distinct_authors: peer add for {did} must \
+             succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_claims_list_target_two_counters_distinct_authors: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every own-claim CID in the slice-06 `composed_at DESC, cid` list
+    // order; split into the ONE twice-countered own target + the rest un-countered. (The
+    // peer counters live in `peer_claims`, NOT `claims`, so the own list is exactly the
+    // three `claim add` rows — the target plus the two plain rows.)
+    let ordered_cids = read_own_claim_cids_in_list_order(env);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_claims_list_target_two_counters_distinct_authors: the countered target CID \
+         {target_cid:?} must be among the own claims; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededClaimsList {
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
+}
+
 /// Seed an own-claims `/claims` page with NO counters at all (the LF-5 / LF-INV-NoWrite
 /// no-noise fixture): several plain own claims, NOTHING references any of them as a
 /// counter, so `counter_presence_for` returns the EMPTY set and the list renders
@@ -10606,13 +10729,30 @@ pub fn assert_list_row_not_flagged(body: &str, uncountered_cid: &str) {
 /// `<a href="/claims/{cid}">` wrapping the "Countered" marker for this row, and the marker
 /// is render-only navigation TEXT (no form/button/onclick — the human gate stays the CLI).
 pub fn assert_list_flag_links_to_thread(body: &str, countered_cid: &str) {
-    let _ = (body, countered_cid);
-    todo!(
-        "slice-12 assert_list_flag_links_to_thread: assert the 'Countered' marker on the \
-         countered row is the render-only anchor `<a href=\"/claims/{{cid}}\">Countered</a>` \
-         (one-hop link to the slice-11 thread; never a control; I-LF-1/I-LF-6). \
-         RED until DELIVER."
-    )
+    // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
+    // whitespace inside the element). Scan the rendered HTML only.
+    let anchor = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&anchor),
+        "assert_list_flag_links_to_thread: the 'Countered' marker on the countered row for \
+         {countered_cid:?} must be the render-only one-hop link {anchor:?} to its slice-11 \
+         thread (navigation TEXT, never a control; US-LF-002 / I-LF-1 / I-LF-6); body \
+         was:\n{body}"
+    );
+    // It is a plain anchor — never an executable write/sign/counter control. The list flag
+    // never emits a form, button, or onclick wrapping the marker (the human gate stays the
+    // CLI; I-LF-1).
+    for control in ["<form", "<button", "onclick"] {
+        assert!(
+            !body.to_ascii_lowercase().contains(control),
+            "assert_list_flag_links_to_thread: the list flag must be a render-only anchor, \
+             never an executable control ({control:?}); the only write path is the CLI \
+             (I-LF-1); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a claim countered by N (>1) authors shows EXACTLY ONE neutral "Countered" marker
@@ -10626,14 +10766,47 @@ pub fn assert_list_flag_links_to_thread(body: &str, countered_cid: &str) {
 /// the list body carries NONE of the count/verdict phrasings ("disputed by", "consensus",
 /// "net verdict", "disputed", "refuted", "is false", "is wrong").
 pub fn assert_list_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
-    let _ = (body, target_cid);
-    todo!(
-        "slice-12 assert_list_flag_is_single_neutral_presence: assert the row for \
-         target_cid carries EXACTLY one neutral 'Countered' marker (presence-only) AND the \
-         list body carries no count/verdict phrasing ('disputed by'/'consensus'/'net \
-         verdict'/'disputed'/'refuted'/'is false'/'is wrong'); I-LF-3 / KPI-AV-2. \
-         RED until DELIVER."
-    )
+    // PRESENCE-only: a CID countered by N distinct authors collapses (DISTINCT
+    // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
+    // marker on its row, NEVER one-per-counter and never a count. Count the exact anchor
+    // occurrences for this CID — it must appear EXACTLY once.
+    let marker = format!(
+        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    let occurrences = body.matches(&marker).count();
+    assert_eq!(
+        occurrences, 1,
+        "assert_list_flag_is_single_neutral_presence: the row for {target_cid:?} (countered \
+         by ≥2 distinct authors) must carry EXACTLY ONE neutral 'Countered' marker \
+         (presence membership → one flag, DISTINCT referenced_cid; I-LF-3 / KPI-AV-2), got \
+         {occurrences} occurrences of {marker:?}; body was:\n{body}"
+    );
+
+    // The flag is PRESENCE-only: the list body carries NONE of the count / verdict /
+    // merged-judgement phrasings — never "disputed by N", never a consensus or net
+    // verdict. Lowercased so a capitalized variant can never sneak through (mirrors the
+    // slice-11 `assert_counter_thread_presence_flag_is_neutral` blocklist on the LIST).
+    let lowered = body.to_ascii_lowercase();
+    for verdict in [
+        // count-based / merged-judgement phrasing (never a count aggregated to a verdict)
+        "disputed by",
+        "consensus",
+        "net verdict",
+        "people disagree",
+        // verdict words — the flag asserts presence, never correctness of the counter
+        "disputed",
+        "refuted",
+        "is false",
+        "is wrong",
+    ] {
+        assert!(
+            !lowered.contains(verdict),
+            "assert_list_flag_is_single_neutral_presence: the list 'Countered' flag is \
+             presence-only — it must NEVER emit a count / verdict / merged-judgement \
+             phrasing ({verdict:?}); a twice-countered row shows ONE neutral marker, never \
+             'disputed by 2' (I-LF-3 / KPI-AV-2); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the flagged `/claims` LIST render is byte-identical to the slice-06 reference
