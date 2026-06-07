@@ -10174,14 +10174,26 @@ pub fn assert_no_counter_thread_noise(body: &str) {
 /// ">follow<", "counter this", "add counter", a `<form`/`<button` wrapping a write
 /// action) — the viewer renders counters, never offers to author one.
 pub fn assert_detail_html_has_no_write_or_sign_control(body: &str) {
-    let _ = body;
-    todo!(
-        "DELIVER (assert_detail_html_has_no_write_or_sign_control): assert the body \
-         renders NO write/sign/counter/publish control ('name=\"sign\"', 'sign claim', \
-         'sign & publish', 'subscribe', '>follow<', 'counter this', 'add counter') — \
-         authoring stays the slice-03 CLI; counter CID links are render-only `<a href>` \
-         navigation TEXT (I-CT-1)"
-    )
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "name=\"sign\"",
+        "sign claim",
+        "sign & publish",
+        "sign &amp; publish",
+        "subscribe",
+        ">follow<",
+        "counter this",
+        "add counter",
+    ] {
+        assert!(
+            !lowered.contains(banned),
+            "I-CT-1: the `/claims/{{cid}}` detail surface (countered or not, full page \
+             or fragment) must render NO write / sign / counter / publish / follow / \
+             subscribe control (authoring stays the slice-03 CLI; the counter CID \
+             drill-links are render-only `<a href>` navigation TEXT); found {banned:?} \
+             in body:\n{body}"
+        );
+    }
 }
 
 /// Assert the shown-never-applied invariant (CT-3 / CT-INV-ShownNeverApplied / I-CT-2 /

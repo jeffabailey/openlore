@@ -98,15 +98,58 @@ fn every_detail_route_with_counters_leaves_the_store_read_only() {
     // lock is RELEASED before the `after` snapshot.
     // THEN the persisted-store row counts are UNCHANGED (assert_store_read_only; any
     // change is an UNSHIPPABLE write-surface breach — I-CT-1).
-    todo!(
-        "DELIVER (CT-INV-ReadOnly): seed_claim_two_counters_distinct_authors (own + \
-         peer counter so the universe is non-trivial across BOTH tables); capture \
-         before = capture_store_row_count_universe(&env); in a scope, start \
-         ViewerServer and GET the countered CID + a non-existent CID, each via get + \
-         get_htmx (all 200/404 as appropriate); drop the viewer; after = \
-         capture_store_row_count_universe(&env); assert_store_read_only(&before, \
-         &after) (all slots unchanged; the thread persists nothing — I-CT-1)"
-    );
+    let env = TestEnv::initialized();
+
+    // GIVEN a countered claim with BOTH an OWN counter (→ `claims`) AND a PEER counter
+    // (→ `peer_claims`) so the read-only universe is NON-TRIVIAL across BOTH tables —
+    // a populated store, so the unchanged delta proves the viewer leaves a POPULATED
+    // store untouched (not a vacuous `0 == 0`).
+    let thread = seed_claim_two_counters_distinct_authors(&env);
+
+    // Capture the read-only universe (the two port-exposed counts) BEFORE any route.
+    let before = capture_store_row_count_universe(&env);
+
+    // WHEN the detail route is exercised across postures × shapes — the countered CID
+    // AND a non-existent CID, each via get (full page) + get_htmx (fragment) — inside a
+    // scope so the viewer's exclusive DuckDB lock is RELEASED before the `after`
+    // snapshot.
+    {
+        let viewer = ViewerServer::start(&env);
+        let countered_path = format!("/claims/{}", thread.target_cid);
+        let missing_path = "/claims/does-not-exist-cid";
+
+        let countered_full = viewer.get(&countered_path);
+        let countered_fragment = viewer.get_htmx(&countered_path);
+        let missing_full = viewer.get(missing_path);
+        let missing_fragment = viewer.get_htmx(missing_path);
+
+        assert_eq!(
+            countered_full.status, 200,
+            "the countered detail full page must render 200; body was:\n{}",
+            countered_full.body
+        );
+        assert_eq!(
+            countered_fragment.status, 200,
+            "the countered detail fragment must render 200; body was:\n{}",
+            countered_fragment.body
+        );
+        assert_eq!(
+            missing_full.status, 404,
+            "a non-existent CID detail (full) must render 404; body was:\n{}",
+            missing_full.body
+        );
+        assert_eq!(
+            missing_fragment.status, 404,
+            "a non-existent CID detail (fragment) must render 404; body was:\n{}",
+            missing_fragment.body
+        );
+    }
+
+    // THEN the persisted-store row counts are UNCHANGED — the thread is computed per
+    // query and persists nothing. Any change is an UNSHIPPABLE write-surface breach
+    // (I-CT-1).
+    let after = capture_store_row_count_universe(&env);
+    assert_store_read_only(&before, &after);
 }
 
 // =============================================================================
@@ -137,15 +180,75 @@ fn no_detail_response_with_counters_adds_a_write_or_sign_control() {
     // I-CT-1), AND any counter CID drill-link present is render-only navigation TEXT —
     // an `<a href>` anchor, never an executable write/sign/counter control. The viewer
     // holds no key (the no-key audit is structural — xtask check-arch).
-    todo!(
-        "DELIVER (CT-INV-NoWrite): seed a countered claim (seed_claim_with_counter) AND \
-         an un-countered claim (seed_uncountered_claim); collect every detail response \
-         shape (countered + un-countered, get + get_htmx) in a scope; for each, assert \
-         status renders content + assert_detail_html_has_no_write_or_sign_control(&body) \
-         (no sign/publish/counter/subscribe control) + any '/claims/' drill-link is \
-         wrapped in an `<a href` anchor (render-only navigation TEXT, never a control — \
-         I-CT-1)"
-    );
+    // GIVEN a store seeded with a countered claim AND an un-countered claim. Both share
+    // the SAME claim shape (Rachel's claim at 0.91); the un-countered one needs its own
+    // env (the countered seed adds the counters to the SAME target), so use two
+    // independent TestEnvs — each renders both shapes.
+    let countered_env = TestEnv::initialized();
+    let countered = seed_claim_with_counter(&countered_env);
+
+    let uncountered_env = TestEnv::initialized();
+    let uncountered_cid = seed_uncountered_claim(&uncountered_env);
+
+    // WHEN every detail response shape (countered + un-countered, get + get_htmx) is
+    // collected in a scope (so both viewers' DuckDB locks release on drop).
+    let bodies: Vec<(String, String)> = {
+        let countered_viewer = ViewerServer::start(&countered_env);
+        let uncountered_viewer = ViewerServer::start(&uncountered_env);
+
+        let countered_path = format!("/claims/{}", countered.target_cid);
+        let uncountered_path = format!("/claims/{}", uncountered_cid);
+
+        let shapes = [
+            (
+                "countered full page",
+                countered_viewer.get(&countered_path),
+            ),
+            (
+                "countered fragment",
+                countered_viewer.get_htmx(&countered_path),
+            ),
+            (
+                "un-countered full page",
+                uncountered_viewer.get(&uncountered_path),
+            ),
+            (
+                "un-countered fragment",
+                uncountered_viewer.get_htmx(&uncountered_path),
+            ),
+        ];
+
+        shapes
+            .into_iter()
+            .map(|(label, response)| {
+                assert_eq!(
+                    response.status, 200,
+                    "the {label} detail must render 200 content; body was:\n{}",
+                    response.body
+                );
+                (label.to_string(), response.body)
+            })
+            .collect()
+    };
+
+    // THEN no shape carries a write/sign/counter/publish affordance, AND any
+    // `/claims/` drill-link present is render-only navigation TEXT — an `<a href>`
+    // anchor, never an executable write/sign/counter control (I-CT-1).
+    for (label, body) in &bodies {
+        assert_detail_html_has_no_write_or_sign_control(body);
+
+        if let Some(idx) = body.find("/claims/") {
+            // The `/claims/{cid}` reference must be an anchor target — the preceding
+            // markup opens an `<a href` (render-only navigation TEXT), never a control.
+            let prefix = &body[..idx];
+            assert!(
+                prefix.to_ascii_lowercase().contains("<a href"),
+                "I-CT-1: every `/claims/` drill-link on the {label} detail must be \
+                 render-only `<a href>` navigation TEXT (never a write/sign/counter \
+                 control); body was:\n{body}"
+            );
+        }
+    }
 }
 
 // =============================================================================
