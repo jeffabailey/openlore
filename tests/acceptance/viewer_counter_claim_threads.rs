@@ -617,17 +617,55 @@ fn a_countered_claim_shows_a_neutral_countered_presence_flag_not_a_verdict() {
 #[test]
 fn an_unknown_cid_keeps_the_existing_guided_not_found_with_no_thread_added() {
     // GIVEN a store with at least one real (countered) claim, but NOT the mistyped CID.
-    // WHEN Maria opens a detail page for a CID that is not in her store.
-    // THEN she sees the EXISTING slice-06 guided not-found message ("No claim with that
-    // identifier in your store") + a back link to /claims, and the 404 path carries NO
-    // "Counter-claims" section and NO "Countered" flag (the thread is built only on the
-    // claim-found arm — no regression of slice-06 V-7).
-    todo!(
-        "DELIVER (CT-9 unknown CID no-regression): seed_claim_with_counter (so the \
-         store is non-empty), start ViewerServer, GET a NON-existent /claims/{{cid}}; \
-         assert the existing guided not-found text 'No claim with that identifier in \
-         your store' + a '/claims' back link render UNCHANGED, AND the 404 body carries \
-         NO 'Counter-claims' section and NO 'Countered' flag (no slice-06 V-7 \
-         regression)"
+    // seed_claim_with_counter makes the store non-empty (a real claim + its counter
+    // exist) so the not-found arm is reached for a DIFFERENT, absent CID — not because
+    // the store is empty.
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+
+    // WHEN Maria opens a detail page for a CID that is NOT in her store (neither in
+    // `claims` nor in `peer_claims`) — the 01-01 peer-fallback `get_claim` returns
+    // Ok(None) for it, which flows to the EXISTING slice-06 guided not-found arm
+    // (never the thread-building Ok(Some(detail)) arm).
+    let unknown_cid = "bafyreigh2akzzz-not-a-real-cid";
+    assert_ne!(
+        unknown_cid, seeded.target_cid,
+        "CT-9: the not-found CID must differ from the seeded claim's CID so the \
+         not-found arm is exercised by absence, not by an empty store"
+    );
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{unknown_cid}"));
+
+    // THEN: the EXISTING slice-06 guided not-found message renders UNCHANGED — the
+    // guided 404 reuses `render_error` (no stack trace; NFR-VIEW-6 / V-7).
+    assert!(
+        response.body_contains("No claim with that identifier in your store"),
+        "CT-9: an unknown CID must STILL show the slice-06 guided not-found message \
+         (no regression of V-7);\n--- body ---\n{}",
+        response.body
+    );
+    assert!(
+        response.body_contains("/claims"),
+        "CT-9: the not-found page must STILL link back to the My Claims list \
+         (slice-06 V-7 back link, unchanged);\n--- body ---\n{}",
+        response.body
+    );
+
+    // THEN: the 404 path gains NO counter-thread / presence flag — the thread is built
+    // ONLY on the Ok(Some(detail)) found arm, never the not-found arm. NO "Counter-claims"
+    // section heading and NO "Countered" presence flag leak onto the 404 body.
+    assert!(
+        !response.body.contains("Counter-claims"),
+        "CT-9: the not-found 404 body must carry NO 'Counter-claims' section (the thread \
+         is built only on the claim-found arm; no slice-06 V-7 regression);\n\
+         --- body ---\n{}",
+        response.body
+    );
+    assert!(
+        !response.body.contains("Countered"),
+        "CT-9: the not-found 404 body must carry NO 'Countered' presence flag (the flag \
+         is rendered only for a found, countered claim);\n--- body ---\n{}",
+        response.body
     );
 }
