@@ -11404,13 +11404,77 @@ pub fn seed_peer_claims_target_two_counters_distinct_authors(
 /// `countered_cids` (every CID is in `uncountered_cids`).
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn seed_peer_claims_none_countered(_env: &TestEnv) -> SeededPeerClaimsList {
-    todo!(
-        "slice-13 RED scaffold: seed a /peer-claims page with several plain pulled peer \
-         claims and NO counter authored against any of them (counter_presence_for \
-         returns the EMPTY set), via the PRODUCTION federation path; return the \
-         SeededPeerClaimsList with an EMPTY countered_cids"
-    )
+pub fn seed_peer_claims_none_countered(env: &TestEnv) -> SeededPeerClaimsList {
+    // Pull several PLAIN peer claims from ONE surveyed peer (Rachel) via the PRODUCTION
+    // `peer add` + `peer pull` federation path — NOTHING counters any of them, so
+    // `counter_presence_for` returns the EMPTY set and the list renders byte-identically
+    // to slice-06. NO counter is authored, NO second peer is added/pulled.
+    let surveyed_peer = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_peer,
+        rachel_seed,
+        &[
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+        ],
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_peer, rachel_records);
+
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", surveyed_peer],
+        surveyed_peer,
+        rachel_pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_peer_claims_none_countered: peer add for {surveyed_peer} must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[PeerSeam {
+            peer_did: surveyed_peer,
+            peer_endpoint: rachel_pds.endpoint_url(),
+            peer_pubkey_hex: &rachel_pubkey_hex,
+        }],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_peer_claims_none_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Recover every peer-claim CID in the slice-06 `/peer-claims` render order. With no
+    // counter authored, EVERY row is un-countered: countered_cids is EMPTY and every CID
+    // lands in uncountered_cids.
+    let ordered_cids = read_peer_claim_cids_in_list_order(env);
+    let uncountered_cids = ordered_cids.clone();
+
+    SeededPeerClaimsList {
+        ordered_cids,
+        countered_cids: Vec::new(),
+        uncountered_cids,
+        peer_did: surveyed_peer.to_string(),
+    }
 }
 
 /// Seed a `/project?subject=<entity>` survey with EXACTLY ONE countered edge among
@@ -11603,12 +11667,17 @@ pub fn assert_peer_claim_flag_is_single_neutral_presence(_body: &str, _target_ci
 /// rendered HTML only.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claim_row_origin_unchanged(_body: &str, _peer_did: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the flagged /peer-claims body still shows the peer \
-         origin (the peer's author_did) verbatim beside the flag — the flag is additive \
-         and changes nothing about the origin column (US-CF-002 / I-CF-4)"
-    )
+pub fn assert_peer_claim_row_origin_unchanged(body: &str, peer_did: &str) {
+    // The peer-origin column renders the peer's `author_did` VERBATIM (viewer-domain
+    // `render_peer_origin` -> `{author_did} (via {pds})`). The flag is ADDITIVE: it lives
+    // in the trailing CID cell and changes NOTHING about the origin column, so the bare
+    // peer DID still appears verbatim in the rendered body beside the flag.
+    assert!(
+        body.contains(peer_did),
+        "assert_peer_claim_row_origin_unchanged: the flagged /peer-claims body must still \
+         show the peer origin {peer_did:?} verbatim beside the flag — the flag is additive \
+         and changes nothing about the origin column (US-CF-002 / I-CF-4); body was:\n{body}"
+    );
 }
 
 /// Assert the flagged `/peer-claims` render is byte-identical to the slice-06 reference
@@ -11618,13 +11687,51 @@ pub fn assert_peer_claim_row_origin_unchanged(_body: &str, _peer_did: &str) {
 /// the `/peer-claims` order.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claims_order_byte_identical(_flagged: &str, _ordered_cids: &[String]) {
-    todo!(
-        "slice-13 RED scaffold: with the additive 'Countered' anchors elided, assert the \
-         flagged /peer-claims body honours the recorded slice-06 /peer-claims order \
-         (ordered_cids) byte-for-byte — the flag re-ordered / re-paged NOTHING \
-         (US-CF-002 / I-CF-2); marker-elision tactic from slice-12"
-    )
+pub fn assert_peer_claims_order_byte_identical(flagged: &str, ordered_cids: &[String]) {
+    // ELIDE the additive markers: remove every `<a href="/claims/{cid}">Countered</a>`
+    // anchor (the ONLY thing slice-13 adds — appended INSIDE the CID `<td>`, see
+    // viewer-domain `render_peer_claim_row` / `render_peer_list_presence_flag`). What
+    // remains IS the slice-06 `/peer-claims` byte-stream for this store. Eliding for EVERY
+    // recorded CID (countered rows carry one; un-countered rows carry none, so the replace
+    // is a no-op there) keeps the helper agnostic to WHICH rows were flagged.
+    let mut elided = flagged.to_string();
+    for cid in ordered_cids {
+        let anchor = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        elided = elided.replace(&anchor, "");
+    }
+    // No additive marker survives the elision — the remaining body is pure slice-06.
+    assert!(
+        !elided.contains(LIST_COUNTERED_FLAG_TEXT),
+        "assert_peer_claims_order_byte_identical: every additive {LIST_COUNTERED_FLAG_TEXT:?} \
+         anchor must elide cleanly so the remaining body is the slice-06 /peer-claims render; \
+         a residual marker means the flag is NOT purely the recorded `<a href>` anchor \
+         (US-CF-002 / I-CF-2); elided body was:\n{elided}"
+    );
+
+    // ROW ORDER byte-identity: every recorded peer-claim CID appears in the elided
+    // (no-flag) body, and their first-seen byte offsets are STRICTLY INCREASING in the
+    // recorded `/peer-claims` render order — the flag re-ordered / re-paged NOTHING
+    // (US-CF-002 / I-CF-2).
+    let mut prev_offset: Option<usize> = None;
+    for cid in ordered_cids {
+        let offset = elided.find(cid.as_str()).unwrap_or_else(|| {
+            panic!(
+                "assert_peer_claims_order_byte_identical: the elided slice-06 /peer-claims body \
+                 must contain every recorded row CID; {cid:?} was missing — the flag \
+                 dropped/replaced a row (a re-count/re-page regression); elided body was:\n{elided}"
+            )
+        });
+        if let Some(prev) = prev_offset {
+            assert!(
+                offset > prev,
+                "assert_peer_claims_order_byte_identical: the elided slice-06 /peer-claims row \
+                 order must follow the recorded render order {ordered_cids:?} VERBATIM — {cid:?} \
+                 rendered out of position, so the flag RE-ORDERED the list (US-CF-002 / I-CF-2); \
+                 elided body was:\n{elided}"
+            );
+        }
+        prev_offset = Some(offset);
+    }
 }
 
 /// Assert a rendered traversal survey body (`/project` or `/philosophy`, fragment OR
