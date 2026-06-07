@@ -466,22 +466,33 @@ fn render_claim_row(row: &ClaimRowView) -> Markup {
     }
 }
 
-/// Render the at-a-glance "Countered" PRESENCE flag for one LIST row (slice-12 /
-/// US-LF-002 / ADR-048): a render-only `<a href="/claims/{cid}">Countered</a>`
-/// one-hop link to that claim's slice-11 counter thread — navigation TEXT, never an
-/// executable write/sign/counter control (I-LF-1). PRESENCE-only: a single neutral
-/// marker, NEVER a count ("disputed by N") or a verdict. An UN-countered row
-/// (`is_countered == false`) renders NOTHING — no marker, no "0 counters" noise
-/// (no-noise discipline, I-LF-2). PURE total function over the row's `is_countered`
-/// flag, so the render is a total function of (page, presence). The flag text is the
-/// shared [`COUNTERED_PRESENCE_FLAG`] constant (one source of truth with the detail
-/// view's presence flag).
-fn render_list_presence_flag(row: &ClaimRowView) -> Markup {
+/// Render the at-a-glance "Countered" PRESENCE flag for ONE surface row, keyed only by
+/// its claim `cid` and `is_countered` flag — the single SSOT body shared by every list /
+/// federated / traversal presence flag (slice-12/13 / US-LF-002 / US-CF-002/003 /
+/// ADR-048/049). A render-only `<a href="/claims/{cid}">Countered</a>` one-hop link to
+/// that claim's slice-11 counter thread — navigation TEXT, never an executable
+/// write/sign/counter control (I-LF-1 / I-CF-1). PRESENCE-only: a single neutral marker,
+/// NEVER a count ("disputed by N") or a verdict. An UN-countered row (`is_countered ==
+/// false`) renders NOTHING — no marker, no "0 counters" noise (no-noise discipline, I-LF-2
+/// / I-CF-2). PURE total function over (`cid`, `is_countered`), so each caller's render
+/// stays a total function of (page, presence). The flag text is the shared
+/// [`COUNTERED_PRESENCE_FLAG`] constant (one source of truth across every surface).
+/// (Distinct from the detail view's [`render_presence_flag`], which emits a non-link
+/// `<p>` marker over the [`CounterThread`] ADT rather than this linked list/edge form.)
+fn render_countered_link(cid: &str, is_countered: bool) -> Markup {
     html! {
-        @if row.is_countered {
-            a href=(format!("/claims/{}", row.cid)) { (COUNTERED_PRESENCE_FLAG) }
+        @if is_countered {
+            a href=(format!("/claims/{cid}")) { (COUNTERED_PRESENCE_FLAG) }
         }
     }
+}
+
+/// Render the at-a-glance "Countered" PRESENCE flag for one LIST row (slice-12 /
+/// US-LF-002 / ADR-048). Thin surface-typed wrapper over the shared
+/// [`render_countered_link`] SSOT body (one source of truth with the federated + edge
+/// presence flags).
+fn render_list_presence_flag(row: &ClaimRowView) -> Markup {
+    render_countered_link(&row.cid, row.is_countered)
 }
 
 /// Render the guided empty state (FR-VIEW-7 / NFR-VIEW-6): a first-run operator
@@ -1096,21 +1107,12 @@ fn render_peer_claim_row(row: &PeerClaimRowView) -> Markup {
 }
 
 /// Render the at-a-glance "Countered" PRESENCE flag for one FEDERATED `/peer-claims`
-/// LIST row (slice-13 / US-CF-002 / ADR-049): a render-only
-/// `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11 counter
-/// thread — navigation TEXT, never an executable write/sign/counter control (I-CF-1). The
-/// FEDERATED-surface sibling of [`render_list_presence_flag`], emitting the SAME shared
-/// [`COUNTERED_PRESENCE_FLAG`] constant (one source of truth across surfaces). PRESENCE-only:
-/// a single neutral marker, NEVER a count or verdict. An UN-countered row
-/// (`is_countered == false`) renders NOTHING — no marker, no "0 counters" noise (no-noise
-/// discipline, I-CF-2). PURE total function over the row's `is_countered` flag, so the
-/// render is a total function of (page, presence).
+/// LIST row (slice-13 / US-CF-002 / ADR-049). The FEDERATED-surface sibling of
+/// [`render_list_presence_flag`]: a thin surface-typed wrapper over the shared
+/// [`render_countered_link`] SSOT body, emitting the SAME shared [`COUNTERED_PRESENCE_FLAG`]
+/// constant (one source of truth across surfaces).
 fn render_peer_list_presence_flag(row: &PeerClaimRowView) -> Markup {
-    html! {
-        @if row.is_countered {
-            a href=(format!("/claims/{}", row.cid)) { (COUNTERED_PRESENCE_FLAG) }
-        }
-    }
+    render_countered_link(&row.cid, row.is_countered)
 }
 
 /// Render a peer claim's ORIGIN for display (FR-VIEW-4 — the load-bearing
@@ -2437,20 +2439,12 @@ fn render_edge_row(edge: &EdgeRow) -> Markup {
     }
 }
 
-/// Render the slice-13 "Countered" PRESENCE flag for ONE traversal edge — appended
-/// inside the edge's cid `<td>` ONLY when the edge `is_countered`: a render-only
-/// `<a href="/claims/{cid}">Countered</a>` one-hop link to that claim's slice-11 counter
-/// thread (US-CF-003 / I-CF-6), navigation TEXT, never an executable write/sign/counter
-/// control (I-CF-1). PRESENCE-only: a single neutral marker, NEVER a count or a verdict.
-/// An UN-countered edge (`is_countered == false`) renders NOTHING — no marker, no noise
-/// (I-CF-2). PURE total function over the edge's flag. REUSES the shared
-/// [`COUNTERED_PRESENCE_FLAG`] (one SSOT with the list + detail + peer presence flags).
+/// Render the slice-13 "Countered" PRESENCE flag for ONE traversal edge (US-CF-003 /
+/// I-CF-6) — appended inside the edge's cid `<td>`. A thin surface-typed wrapper over the
+/// shared [`render_countered_link`] SSOT body, REUSING the shared [`COUNTERED_PRESENCE_FLAG`]
+/// (one SSOT with the list + peer presence flags).
 fn render_edge_presence_flag(edge: &EdgeRow) -> Markup {
-    html! {
-        @if edge.is_countered {
-            a href=(format!("/claims/{}", edge.cid)) { (COUNTERED_PRESENCE_FLAG) }
-        }
-    }
+    render_countered_link(&edge.cid, edge.is_countered)
 }
 
 /// Render the distinct "Contributors who claimed" list: each contributor DID as an
