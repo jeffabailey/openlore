@@ -176,6 +176,104 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-07T22:10:10Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:12:24Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:13:28Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: empty-presence -> no-edge-flag oracle exists from 02-01 (from_row_with_presence + flatten-once render arm); CF-7 gap was the seed only",
+      "t": "2026-06-07T22:13:29Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:22:07Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:22:31Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:24:53Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:27:17Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: slice-12 counter_presence_for 1/N/5N + empty->no-query bound inherited; the edge-CID flatten is a viewer-shell concern already covered by 02-01 one-call wiring",
+      "t": "2026-06-07T22:27:18Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:30:20Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:30:47Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:32:40Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:34:22Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: gold reuses inherited read-only (assert_store_read_only/capture_store_row_count_universe) + no-write (assert_traversal_html_has_no_write_or_sign_control) harness from slices 06-12; all three surfaces reuse counter_presence_for (StoreReadPort, no key) shipped in 01-xx/02-xx \u2014 no unit gap",
+      "t": "2026-06-07T22:34:27Z"
+    },
+    {
+      "sid": "03-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-07T22:35:02Z"
     }
   ],
   "project_id": "viewer-counter-flags-graph-surfaces"
