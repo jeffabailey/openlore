@@ -12139,14 +12139,168 @@ pub fn seed_survey_none_countered(env: &TestEnv, dimension: &str) -> SeededSurve
 ///
 /// SCAFFOLD: true (slice-13).
 pub fn seed_project_survey_many_groups_known_countered_subset(
-    _env: &TestEnv,
+    env: &TestEnv,
 ) -> SeededSurveyEdges {
-    todo!(
-        "slice-13 RED scaffold: seed a LARGE /project survey with MANY edges across MANY \
-         groups and a KNOWN countered subset spread across DISTINCT groups (so the \
-         ADR-050 single-flattened-call must flag every countered edge — and only those — \
-         in ONE request), all via PRODUCTION paths; return the SeededSurveyEdges"
-    )
+    // Rachel is the SURVEYED contributor asserting the SHARED project subject across MANY
+    // DISTINCT philosophies — eight edges. Since `/project` groups by `object`
+    // (philosophy), eight DISTINCT objects yield EIGHT groups: a genuinely LARGE,
+    // multi-group survey over which a per-group or per-edge presence call would be
+    // observably wrong, but the ADR-050 single flattened call (every EdgeRow.cid across
+    // every group, collected from the FLAT survey rows BEFORE grouping) must flag every
+    // countered edge — and only those — in ONE request. THREE of the eight edges are then
+    // countered, each by a DISTINCT peer, and the targets are spread across DISTINCT
+    // groups (the 1st, 4th, and 7th surveyed objects) so the proxy genuinely exercises the
+    // cross-group flatten — a per-group call would miss the groups it never visits.
+    //
+    // Build ALL FOUR peers' verifiable wire records UP FRONT, holding each `PeerPds` ALIVE
+    // for the whole function so a SINGLE `peer pull` over all of them succeeds (a second
+    // pull after a peer is already subscribed would re-resolve it with no resolver wired
+    // and fail).
+    let surveyed_project = "github:peer/rachel-cargo";
+    let surveyed_author = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [41u8; 32];
+    // EIGHT distinct philosophy objects → eight edges across eight groups. Distinct
+    // confidences keep each triple genuinely distinct (no canonical-CID aliasing).
+    let surveyed_objects = [
+        TRAVERSAL_PHILOSOPHY_DEP_PINNING,
+        TRAVERSAL_PHILOSOPHY_REPRO_BUILDS,
+        "org.openlore.philosophy.memory-safety",
+        "org.openlore.philosophy.unix-philosophy",
+        "org.openlore.philosophy.federation-first",
+        "org.openlore.philosophy.capability-security",
+        "org.openlore.philosophy.zero-copy",
+        "org.openlore.philosophy.actor-model",
+    ];
+    let triples = surveyed_objects
+        .iter()
+        .enumerate()
+        .map(|(i, object)| {
+            // Confidences in (0,1], distinct per edge: 0.90, 0.81, 0.72, ...
+            let confidence = 0.90 - (i as f64) * 0.09;
+            (surveyed_project, *object, confidence)
+        })
+        .collect::<Vec<_>>();
+    let (rachel_records, rachel_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(surveyed_author, rachel_seed, &triples);
+
+    // The KNOWN countered subset: the surveyed edges at indices 0, 3, and 6 — spread
+    // across THREE DISTINCT groups (objects), so a per-group presence read could not flag
+    // them all from a single group's CIDs. Their deterministic CIDs are the counter
+    // targets (the pull pipeline recomputes the SAME CID the builder computed).
+    let countered_indices = [0usize, 3, 6];
+    let target_cids = countered_indices
+        .iter()
+        .map(|&i| {
+            rachel_records
+                .get(i)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "seed_project_survey_many_groups_known_countered_subset: Rachel's \
+                         surveyed record #{i} must exist"
+                    )
+                })
+                .rkey
+                .clone()
+        })
+        .collect::<Vec<_>>();
+
+    // THREE DISTINCT counter authors, one per target (distinct seeds → distinct keys;
+    // distinct target CIDs → distinct counter-record CIDs). Each lands in
+    // `peer_claim_references` with `referenced_cid == its target`, the peer arm of the
+    // UNION-ALL the single flattened presence read exercises.
+    let counter_authors: [(&str, [u8; 32]); 3] = [
+        (COUNTER_AUTHOR_TOBIAS, [9u8; 32]),
+        ("did:plc:uli-test", [11u8; 32]),
+        ("did:plc:wren-test", [13u8; 32]),
+    ];
+    let counters = counter_authors
+        .iter()
+        .zip(target_cids.iter())
+        .map(|((did, seed), target_cid)| {
+            let (record, pubkey_hex) = build_verifiable_peer_counter_record(
+                did,
+                *seed,
+                target_cid,
+                Some(COUNTER_PEER_REASON_VERBATIM),
+            );
+            (*did, record, pubkey_hex)
+        })
+        .collect::<Vec<_>>();
+
+    let rachel_pds = PeerPds::for_peer(surveyed_author, rachel_records);
+    let counter_pds = counters
+        .iter()
+        .map(|(did, record, _)| (*did, PeerPds::for_peer(did, vec![record.clone()])))
+        .collect::<Vec<_>>();
+
+    // STEP 2 — subscribe to every peer via the real `peer add` verb (resolver wired per
+    // peer), then `peer pull` ALL of them in ONE invocation while every PDS is alive.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", surveyed_author],
+        surveyed_author,
+        rachel_pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_project_survey_many_groups_known_countered_subset: peer add for \
+         {surveyed_author} must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    for (did, pds) in &counter_pds {
+        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        assert_eq!(
+            added.status, 0,
+            "seed_project_survey_many_groups_known_countered_subset: peer add for {did} must \
+             succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+
+    let mut seams = vec![PeerSeam {
+        peer_did: surveyed_author,
+        peer_endpoint: rachel_pds.endpoint_url(),
+        peer_pubkey_hex: &rachel_pubkey_hex,
+    }];
+    for ((did, _record, pubkey_hex), (_, pds)) in counters.iter().zip(counter_pds.iter()) {
+        seams.push(PeerSeam {
+            peer_did: did,
+            peer_endpoint: pds.endpoint_url(),
+            peer_pubkey_hex: pubkey_hex,
+        });
+    }
+    let pulled = run_openlore_pull_multi(env, &["peer", "pull"], &seams);
+    assert_eq!(
+        pulled.status, 0,
+        "seed_project_survey_many_groups_known_countered_subset: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 3 — recover the survey's edge CIDs in the slice-10 grouped render order (the
+    // flat union of every EdgeRow.cid across every EdgeGroup — ADR-050's flatten point),
+    // then split the KNOWN countered subset + the rest un-countered. (Every counter row
+    // carries a DIFFERENT subject, so none appear in THIS project's survey.)
+    let ordered_cids = read_survey_edge_cids_in_render_order(env, "project", surveyed_project);
+    for target_cid in &target_cids {
+        assert!(
+            ordered_cids.contains(target_cid),
+            "seed_project_survey_many_groups_known_countered_subset: the countered target CID \
+             {target_cid:?} must be among the surveyed project's edges; got {ordered_cids:?}"
+        );
+    }
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| !target_cids.contains(cid))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededSurveyEdges {
+        entity: surveyed_project.to_string(),
+        ordered_cids,
+        countered_cids: target_cids,
+        uncountered_cids,
+    }
 }
 
 /// Assert a rendered `/peer-claims` LIST body (fragment OR full page) FLAGS the given
