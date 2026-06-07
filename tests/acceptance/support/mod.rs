@@ -10628,13 +10628,30 @@ pub fn seed_claims_list_target_two_counters_distinct_authors(env: &TestEnv) -> S
 /// `uncountered_cids` with an empty `countered_cids`. NO counter is authored. NO
 /// hand-inserted store rows.
 pub fn seed_claims_list_none_countered(env: &TestEnv) -> SeededClaimsList {
-    let _ = env;
-    todo!(
-        "slice-12 seed_claims_list_none_countered: sign several plain own claims \
-         (seed_own_claim_with_evidence, distinct subjects); recover CIDs in composed_at \
-         DESC, cid order; return SeededClaimsList with countered_cids = [] and \
-         uncountered_cids = all. NO counter authored → empty presence set. RED until DELIVER."
-    )
+    // Sign several PLAIN own claims via the production `claim add` write path (distinct
+    // subjects → distinct CIDs). NOTHING references any of them as a counter, so
+    // `counter_presence_for` returns the EMPTY set and the list renders byte-identically
+    // to slice-06. NO counter is authored, NO peer is added/pulled.
+    for (subject, predicate, object) in [
+        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
+        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
+        ("github:rust-lang/cargo", "embodiesPhilosophy", "org.openlore.philosophy.dependency-pinning"),
+    ] {
+        seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
+    }
+
+    // Recover every own-claim CID in the slice-06 `composed_at DESC, cid` list order.
+    // With no counter authored, EVERY row is un-countered: countered_cids is EMPTY and
+    // every CID lands in uncountered_cids.
+    let ordered_cids = read_own_claim_cids_in_list_order(env);
+    let uncountered_cids = ordered_cids.clone();
+
+    SeededClaimsList {
+        ordered_cids,
+        countered_cids: Vec::new(),
+        uncountered_cids,
+    }
 }
 
 /// Seed an own-claims `/claims` page MIXING countered + un-countered claims in a known

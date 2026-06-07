@@ -372,13 +372,39 @@ fn a_store_with_no_counters_renders_the_list_exactly_as_slice_06() {
     // THEN every row renders as in slice-06 (V-1), the body carries NO "Countered" marker
     // and NO "0 counters" / "no disagreement" empty-state text
     // (assert_list_row_not_flagged for each cid + a body-wide no-noise scan).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-5 (no-noise): seed_claims_list_none_countered(&env) → Vec<cid>; \
-         ViewerServer::start; page = get(\"/claims\"); assert 200 + text/html; for each \
-         cid assert_list_row_not_flagged(&page.body, &cid); assert the body contains \
-         NO 'Countered' marker and no '0 counters' empty-state noise. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_none_countered(&env);
+    let server = ViewerServer::start(&env);
+
+    let page = server.get("/claims");
+
+    assert_eq!(
+        page.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        page.body
+    );
+    assert!(
+        page.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        page.content_type
+    );
+
+    // Every row renders as in slice-06: NO "Countered" marker on any row, and the body
+    // carries NO "0 counters" / "no disagreement" empty-state noise. assert_list_row_not_flagged
+    // checks BOTH the per-CID marker absence AND the body-wide no-noise scan, so an empty
+    // presence set leaves the list byte-unaffected (I-LF-2).
+    for cid in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&page.body, cid);
+    }
+    // Defensive whole-body scan: with NO counters, the "Countered" flag text appears NOWHERE
+    // on the list page (the empty presence set renders nothing additive at all).
+    assert!(
+        !page.body.contains(LIST_COUNTERED_FLAG_TEXT),
+        "LF-5 (no-noise): a store with NO counters must carry NO {LIST_COUNTERED_FLAG_TEXT:?} \
+         marker anywhere on the list (empty presence set → nothing rendered; US-LF-003 / \
+         I-LF-2); body was:\n{}",
+        page.body
+    );
 }
 
 /// LF-6 / GOLD shown-never-applied + no-regression (US-LF-003; I-LF-2 / OD-AV-7 /
