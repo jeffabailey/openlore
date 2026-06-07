@@ -1053,4 +1053,111 @@ mod tests {
             "expected no triples for an unreferenced CID; got {none:?}"
         );
     }
+
+    /// D5 (review revision — adapter-level anti-merging coverage): the pure-crate
+    /// mutation gate does not reach `adapter-duckdb`, so this focused real-I/O test
+    /// pins the load-bearing anti-merging shape of the ADR-046 read DIRECTLY at the
+    /// adapter. A claim countered by TWO DISTINCT authors — the operator's OWN counter
+    /// plus a subscribed peer's counter, each living in its own store — must yield
+    /// EXACTLY 2 `CounterClaimRow` from `query_counter_claims(target)`, one per distinct
+    /// `(author_did, cid)`, with NO merge / dedup / aggregation across the two stores.
+    /// The two counters are written through the REAL production write surfaces
+    /// (`StoragePort::write_signed_claim` + `PeerStoragePort::write_peer_claim`, real
+    /// DuckDB + on-disk artifacts, Mandate 6), then read back over the read adapter
+    /// SHARING the same connection (BR-VIEW-4).
+    #[test]
+    fn query_counter_claims_keeps_two_distinct_authors_as_two_rows_never_merged() {
+        use ports::{PeerOrigin, StoragePort, StoreReadPort};
+
+        let local_did = "did:plc:test-jeff";
+        let peer_did = "did:plc:rachel-test";
+        let (_dir, storage, peer) = open_peer_adapter(local_did);
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+
+        // The shared TARGET both authors counter (need not exist as a row — the
+        // ref FK is on `referencing_cid`, the counter itself, never the target).
+        let target_cid = "bafytargetclaim0000000000000000000000000000";
+
+        // OWN counter (lands in `claims` via the production write path, carrying a
+        // `Counters` reference + its on-disk artifact).
+        let own_counter_cid = "bafyowncounter00000000000000000000000000000";
+        let own_counter = signed_counter_authored_by(local_did, own_counter_cid, target_cid);
+        storage
+            .write_signed_claim(&own_counter)
+            .expect("write own counter via StoragePort");
+
+        // PEER counter (lands in `peer_claims` via the production peer write path,
+        // carrying its `Counters` reference + its on-disk artifact). A DISTINCT
+        // author from the own counter — the two must NEVER merge.
+        let peer_counter_cid = "bafypeercounter000000000000000000000000000";
+        let peer_counter = signed_counter_authored_by(peer_did, peer_counter_cid, target_cid);
+        let written = peer
+            .write_peer_claim(&Did(peer_did.to_string()), &peer_counter, &endpoint, Utc::now())
+            .expect("write peer counter via PeerStoragePort");
+        assert!(written.written, "the peer counter must be newly written");
+
+        // Read back over the SHARED-connection read adapter (BR-VIEW-4): the ADR-046
+        // 2-step query_counter_claims.
+        let read = storage.read_adapter();
+        let mut counters = read
+            .query_counter_claims(target_cid)
+            .expect("query_counter_claims must succeed");
+
+        // EXACTLY two rows — one per distinct (author_did, cid). NO merge / dedup /
+        // aggregation collapsed the cross-store UNION ALL into one (anti-merging,
+        // I-CT-3).
+        assert_eq!(
+            counters.len(),
+            2,
+            "D5: a claim countered by TWO distinct authors must yield EXACTLY two \
+             CounterClaimRow (own + peer), never a merged/deduped/aggregated row; got \
+             {counters:?}"
+        );
+
+        // Both distinct (author_did, cid) identities survive, each attributed — the
+        // own counter under the local DID, the peer counter under the peer DID with a
+        // Known peer origin (anti-merging by construction).
+        counters.sort_by(|a, b| a.cid.cmp(&b.cid));
+        let cids: Vec<&str> = counters.iter().map(|c| c.cid.as_str()).collect();
+        assert!(
+            cids.contains(&own_counter_cid) && cids.contains(&peer_counter_cid),
+            "D5: both distinct counter CIDs must be present (no dedup); got cids {cids:?}"
+        );
+
+        let own_row = counters
+            .iter()
+            .find(|c| c.cid == own_counter_cid)
+            .expect("the own counter row must be present");
+        assert!(
+            own_row.author_did.starts_with(local_did),
+            "D5: the own counter must be attributed to the local author {local_did:?}; \
+             got {:?}",
+            own_row.author_did
+        );
+
+        let peer_row = counters
+            .iter()
+            .find(|c| c.cid == peer_counter_cid)
+            .expect("the peer counter row must be present");
+        assert_eq!(
+            peer_row.author_did, peer_did,
+            "D5: the peer counter must be attributed to the peer author {peer_did:?}; \
+             got {:?}",
+            peer_row.author_did
+        );
+        assert!(
+            matches!(peer_row.origin, PeerOrigin::Known { .. }),
+            "D5: the peer counter must carry a Known peer origin (attributed, not \
+             elided); got {:?}",
+            peer_row.origin
+        );
+
+        // The two authors are DISTINCT — the precondition that makes "no merge"
+        // meaningful (two identities, two rows).
+        assert_ne!(
+            own_row.author_did, peer_row.author_did,
+            "D5: the two counters must be by DISTINCT authors for the anti-merging \
+             assertion to be meaningful"
+        );
+    }
 }

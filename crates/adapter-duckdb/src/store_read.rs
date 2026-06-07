@@ -80,21 +80,28 @@ impl DuckDbStoreReadAdapter {
     /// `claims/`; peer-counter rows store a path RELATIVE to the storage root
     /// (`peer_claims/<encoded_did>/<cid>.json`) resolved under `peer_claims_root`
     /// — mirroring `DuckDbStorageAdapter::read_artifact_at`. READ-ONLY: a plain
-    /// `fs::read`, LOCAL only, no network. A missing/undeserializable artifact
-    /// surfaces as [`StoreReadError::QueryFailed`] (never a panic).
-    fn read_reason_at(&self, artifact_path: &str) -> Result<Option<String>, StoreReadError> {
+    /// `fs::read`, LOCAL only, no network.
+    ///
+    /// BEST-EFFORT (graceful degradation, review D2): the counter entry itself is
+    /// authoritative from the Step-A DB ref lookup (its `author_did` + `cid` are
+    /// already in hand); only the free-text `reason` lives in the artifact. A
+    /// MISSING / unreadable / undeserializable artifact — a plausible real scenario
+    /// for a PULLED PEER counter whose artifact isn't local — therefore yields
+    /// `None` (the existing "no reason provided" render state), NOT an error. The
+    /// counter STILL renders. This NEVER panics and NEVER fails the enclosing
+    /// `query_counter_claims` call (which would 5xx the `/claims/{cid}` detail page).
+    /// Only the per-row artifact/reason read is best-effort; genuine DB / Step-A
+    /// errors are still surfaced by the caller.
+    fn read_reason_at(&self, artifact_path: &str) -> Option<String> {
         let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
             Some(relative) => self.peer_claims_root.join(relative),
             None => PathBuf::from(artifact_path),
         };
-        let bytes = fs::read(&resolved).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("read counter artifact {}: {err}", resolved.display()),
-        })?;
-        let signed: SignedClaim =
-            serde_json::from_slice(&bytes).map_err(|err| StoreReadError::QueryFailed {
-                detail: format!("deserialize counter artifact {}: {err}", resolved.display()),
-            })?;
-        Ok(signed.unsigned.reason)
+        // fs read error (missing / unreadable) -> None (degrade, do not error).
+        let bytes = fs::read(&resolved).ok()?;
+        // deserialize error (corrupt / unexpected shape) -> None (degrade).
+        let signed: SignedClaim = serde_json::from_slice(&bytes).ok()?;
+        signed.unsigned.reason
     }
 
     /// Lock the shared connection, mapping a poisoned mutex to a plain-language
@@ -671,12 +678,15 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         drop(conn);
 
         // ADR-046 STEP B: per-row artifact read for the free-text `reason` (NOT a DB
-        // column — ADR-015). LOCAL `fs::read`, no network. A blank `author_did`
-        // (defensive, bypassing the slice-03 CHECK) projects to `Unknown` so the
-        // viewer labels rather than drops it.
+        // column — ADR-015). LOCAL `fs::read`, no network. BEST-EFFORT (review D2): a
+        // missing / unreadable / undeserializable artifact degrades `reason` to
+        // `None` (the "no reason provided" state) rather than failing the whole
+        // query — the counter still renders from its authoritative DB `author_did` +
+        // `cid`. A blank `author_did` (defensive, bypassing the slice-03 CHECK)
+        // projects to `Unknown` so the viewer labels rather than drops it.
         let mut counters = Vec::with_capacity(staged.len());
         for (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path) in staged {
-            let reason = self.read_reason_at(&artifact_path)?;
+            let reason = self.read_reason_at(&artifact_path);
             let origin = peer_origin(&author_did, fetched_from_pds);
             counters.push(CounterClaimRow {
                 author_did,

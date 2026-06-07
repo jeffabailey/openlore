@@ -669,3 +669,106 @@ fn an_unknown_cid_keeps_the_existing_guided_not_found_with_no_thread_added() {
         response.body
     );
 }
+
+// =============================================================================
+// Review D2 — graceful degradation on a missing / unreadable counter artifact.
+// =============================================================================
+
+/// D2 (review revision — graceful degradation): the counter's free-text `reason` lives
+/// in its on-disk `SignedClaim` artifact (NOT a DB column; ADR-015), read per-row in the
+/// ADR-046 Step-B of `query_counter_claims`. A counter whose artifact is MISSING /
+/// unreadable locally — a plausible real scenario (e.g. a pulled PEER counter whose
+/// artifact was never fetched) — must NOT fail the whole detail read (which would 5xx the
+/// `/claims/{cid}` page). The counter's `author_did` + `cid` come from the AUTHORITATIVE
+/// DB Step-A ref lookup, so the entry STILL renders; only the best-effort `reason`
+/// degrades to the existing "no reason provided" state.
+///
+/// Given Rachel's claim is countered by Maria's OWN counter (with a verbatim reason) AND
+///   that counter's on-disk artifact is then DELETED;
+/// When Maria opens the claim detail (`GET /claims/{cid}`);
+/// Then she receives 200 (NOT a 5xx) — the counter is STILL listed under its author DID +
+///   its CID with the explicit "no reason provided" state, and the countered claim still
+///   renders VERBATIM (0.91, unchanged).
+///
+/// @us-ct-002 @driving_port @real-io @graceful-degradation @missing-artifact @i-ct-2
+/// @i-ct-3 @review-d2 @error
+#[test]
+fn a_counter_with_a_missing_artifact_still_renders_degrading_only_its_reason() {
+    // GIVEN Rachel's claim countered by Maria's OWN counter (with a verbatim reason),
+    // seeded via the production federation + `claim counter` paths.
+    let env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&env);
+    let counter = seeded
+        .counters
+        .first()
+        .expect("D2: seed_claim_with_counter must seed exactly one counter")
+        .clone();
+
+    // GIVEN that counter's on-disk artifact is then DELETED (it carried the reason; the
+    // DB ref row — its author_did + cid — is left UNTOUCHED, still authoritative).
+    delete_counter_artifact(&env, &counter.cid);
+
+    // WHEN Maria opens the claim detail.
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    // THEN: 200 (NOT a 5xx) — the missing artifact degrades gracefully, never failing
+    // the whole detail read.
+    assert_eq!(
+        response.status, 200,
+        "D2: GET /claims/{{cid}} over a counter whose artifact is MISSING must return 200 \
+         (graceful degradation, NOT a 5xx);\n--- body ---\n{}",
+        response.body
+    );
+    assert!(
+        response.content_type.contains("text/html"),
+        "D2: the detail must still be served as text/html; content_type was {:?}",
+        response.content_type
+    );
+
+    // THEN: the counter is STILL listed under its AUTHORITATIVE author DID + its CID (the
+    // DB ref lookup, not the artifact, supplies these — attribution is never elided).
+    assert!(
+        response.body.contains(&counter.author_did),
+        "D2: the counter's author DID {:?} must STILL render (it comes from the DB ref \
+         lookup, not the deleted artifact);\n--- body ---\n{}",
+        counter.author_did, response.body
+    );
+    assert!(
+        response.body.contains(&counter.cid),
+        "D2: the counter's CID {:?} must STILL render (the drill-link target, from the DB \
+         ref lookup);\n--- body ---\n{}",
+        counter.cid, response.body
+    );
+
+    // THEN: only the best-effort `reason` degrades — the entry shows the explicit "no
+    // reason provided" state (the artifact that held the reason is gone) rather than the
+    // original verbatim reason.
+    assert!(
+        response.body.contains("no reason provided"),
+        "D2: a counter whose artifact (and thus reason) is missing must render the explicit \
+         'no reason provided' state;\n--- body ---\n{}",
+        response.body
+    );
+    let original_reason = counter
+        .reason
+        .as_deref()
+        .expect("D2: the seeded own counter carried a verbatim reason before deletion");
+    assert!(
+        !response.body.contains(original_reason),
+        "D2: with the artifact deleted, the original verbatim reason {original_reason:?} \
+         must NOT appear (the reason source is gone — it degraded to 'no reason \
+         provided');\n--- body ---\n{}",
+        response.body
+    );
+
+    // THEN: the countered claim itself still renders VERBATIM (0.91, unchanged) — the
+    // claim is authoritative from `get_claim`, untouched by the artifact loss
+    // (shown-never-applied; I-CT-2).
+    assert!(
+        response.body.contains("0.91"),
+        "D2: the countered claim's confidence must STILL render verbatim + unchanged \
+         (0.91) despite the missing counter artifact;\n--- body ---\n{}",
+        response.body
+    );
+}

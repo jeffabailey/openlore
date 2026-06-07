@@ -9917,6 +9917,36 @@ pub fn seed_uncountered_claim(env: &TestEnv) -> String {
     target_cids.into_iter().next().expect("one target CID")
 }
 
+/// Locate and DELETE an OWN counter's on-disk `SignedClaim` artifact (review D2):
+/// the operator's own counter (authored via `claim counter`) persists its artifact at
+/// `{claims_dir}/{counter_cid}.json` (the absolute own-claim path the slice-06 read
+/// resolves). Deleting it simulates a counter whose artifact is missing/unreadable
+/// locally — a plausible real scenario (e.g. a pulled peer counter whose artifact was
+/// never fetched) — WITHOUT touching the authoritative DB ref row. The counter STILL
+/// has its `author_did` + `cid` in the DB; only the artifact (the free-text `reason`
+/// source) is gone. Asserts the artifact existed first (so the test fails loudly if the
+/// seed shape changes) and that the delete succeeds.
+pub fn delete_counter_artifact(env: &TestEnv, counter_cid: &str) {
+    let artifact_path = env.claims_dir().join(format!("{counter_cid}.json"));
+    assert!(
+        artifact_path.exists(),
+        "delete_counter_artifact: the own counter's artifact must exist before deletion \
+         (the seed persists it at {}); the test's premise depends on it",
+        artifact_path.display()
+    );
+    std::fs::remove_file(&artifact_path).unwrap_or_else(|e| {
+        panic!(
+            "delete_counter_artifact: failed to delete the counter artifact {}: {e}",
+            artifact_path.display()
+        )
+    });
+    assert!(
+        !artifact_path.exists(),
+        "delete_counter_artifact: the counter artifact {} must be gone after deletion",
+        artifact_path.display()
+    );
+}
+
 /// Assert a rendered claim-detail body (fragment OR full page) renders the
 /// counter-thread correctly: every expected counter's `author_did` is attributed, its
 /// OWN `cid` is shown, and its verbatim `reason` text appears byte-for-byte — and the
@@ -10231,22 +10261,57 @@ pub fn assert_counter_claim_verbatim_unchanged(
 
     // The claim region (subject/predicate/object/confidence/author/composed_at/cid +
     // its evidence) is the `<dl>…</dl>` + evidence block inside `#claim-detail`. The
-    // counter is additive context only — the neutral "Countered" flag is inserted ABOVE
-    // the fields and the thread `<section>` BELOW the evidence; the FIELD block itself
-    // is byte-identical. Extract that contiguous claim-region byte-run from the
-    // un-countered render and assert it appears VERBATIM inside the countered render.
-    // Any divergence is an UNSHIPPABLE shown-never-applied breach (I-CT-2 / OD-AV-7 /
-    // ADR-015).
+    // counter is additive context only — the neutral "Countered" presence flag is
+    // inserted ABOVE the fields (between the `#claim-detail` open and the `<dl>`) and the
+    // thread `<section>` BELOW the evidence (between the evidence and the `#claim-detail`
+    // close); the FIELD + EVIDENCE block itself is byte-identical. Extract that
+    // contiguous claim-region byte-run from the un-countered render by STABLE delimiters
+    // and assert it appears VERBATIM inside the countered render. Any divergence is an
+    // UNSHIPPABLE shown-never-applied breach (I-CT-2 / OD-AV-7 / ADR-015).
+    //
+    // STABLE delimiters (D1 — replaces the fragile `rfind("</div>")` heuristic, which
+    // could anchor on a coincidental chrome `</div>` and let a byte-shifted claim region
+    // pass): the region is pinned by the `#claim-detail` swap-target open, the `<dl>`
+    // field-list open as the START, and the FIRST structural boundary that follows the
+    // evidence as the END. In the COUNTERED render that boundary is the counter thread's
+    // `<section`; in the UN-countered render (no thread) it is the `#claim-detail`-closing
+    // `</div>`. We take whichever appears FIRST after the fields so the extracted run is
+    // EXACTLY the field + evidence block — never trailing chrome — and the comparison
+    // genuinely pins those bytes as identical countered-vs-uncountered.
+    assert!(
+        uncountered_body.contains(&format!("id=\"{CLAIM_DETAIL_REGION_ID}\"")),
+        "D1: the un-countered detail must carry the #{CLAIM_DETAIL_REGION_ID} swap-target \
+         region (the stable claim-region anchor);\n--- uncountered ---\n{uncountered_body}"
+    );
     let region_start = uncountered_body
         .find("<dl>")
         .expect("the un-countered detail must render the claim-field <dl> region");
     let region_tail = &uncountered_body[region_start..];
-    // The claim region ends where the `#claim-detail` div closes (the un-countered
-    // render carries no counter section, so the trailing `</div>` is the region end).
-    let region_end = region_tail
-        .rfind("</div>")
-        .expect("the claim-detail region must close with </div>");
+    // The claim region ends at the FIRST of: the counter thread `<section` (absent in the
+    // un-countered baseline) or the `#claim-detail`-closing `</div>`. Taking the earlier
+    // boundary excludes any trailing chrome from the extracted run (D1 tightening).
+    let section_end = region_tail.find("<section");
+    let div_end = region_tail.find("</div>");
+    let region_end = match (section_end, div_end) {
+        (Some(s), Some(d)) => s.min(d),
+        (Some(s), None) => s,
+        (None, Some(d)) => d,
+        (None, None) => panic!(
+            "the claim-detail region must close with </div> (or a counter <section>); \
+             un-countered render:\n{uncountered_body}"
+        ),
+    };
     let claim_region = &region_tail[..region_end];
+
+    // Guard: the extracted region must actually carry the claim FIELDS and the EVIDENCE
+    // heading — so the byte-identical assertion below pins the real claim region, not an
+    // empty / truncated substring that could pass coincidentally (D1).
+    assert!(
+        claim_region.contains("</dl>") && claim_region.contains("Evidence"),
+        "D1: the extracted claim region must span the field `<dl>…</dl>` AND the Evidence \
+         section (so the byte-identical pin is meaningful, not a coincidental substring); \
+         extracted:\n{claim_region}"
+    );
 
     assert!(
         countered_body.contains(claim_region),
