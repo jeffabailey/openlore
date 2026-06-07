@@ -404,15 +404,53 @@ fn the_list_order_and_confidence_are_byte_identical_with_and_without_flags() {
     // flagged and un-flagged renders — the flag is additive only
     // (assert_list_order_and_confidence_byte_identical; I-LF-2 / I-LF-4). Any divergence is
     // an UNSHIPPABLE no-regression breach.
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-INV-ShownNeverApplied: seed_claims_list_mixed_pages(&env) (known order + \
-         countered/un-countered mix); {{ ViewerServer::start; flagged_full = \
-         get(\"/claims\"); flagged_fragment = get_htmx(\"/claims\") }}; (baseline = the \
-         slice-06 reference render of the SAME store — DELIVER pins this via a no-flag \
-         render path or the recorded slice-06 ordering); \
-         assert_list_order_and_confidence_byte_identical for BOTH shapes (row order, \
-         position indicator, total count, each row's confidence byte-identical; only the \
-         additive marker differs). RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a mixed store (known order/count; some own rows peer-countered, some not),
+    // seeded via the production `claim add` / `peer add` + `peer pull` paths.
+    let _seeded = seed_claims_list_mixed_pages(&env);
+
+    // BASELINE-CAPTURE TACTIC (b) — the RECORDED slice-06 ordering (the same tactic the
+    // LF-6 story scenario uses). There is NO pre-flag binary and NO no-flag HTTP render
+    // seam (the `/claims` route ALWAYS reads `counter_presence_for`; adding a
+    // presence-suppression mode would be a production test-seam, out of scope). Tactic
+    // (a)'s twin no-counter store is ALSO unusable: a claim's CID canonicalizes its
+    // `composed_at` (claim-domain `canonicalize` → `compute_cid`), so re-seeding the same
+    // claims at a different instant yields DIFFERENT CIDs and the two renders could never
+    // be byte-identical. So the slice-06 reference is the RECORDED order + total count +
+    // verbatim confidence read from the SAME `claims` table in the SAME
+    // `composed_at DESC, cid` order the slice-06 list SQL uses (`read_slice06_list_baseline`).
+    // The store-only baseline is shape-independent, so the SAME recorded baseline pins both
+    // the full-page and the htmx-fragment render.
+    let baseline = read_slice06_list_baseline(&env);
+
+    // WHEN both shapes of the slice-12 flagged `/claims` list render over the SAME store —
+    // the no-header full page (`get`) AND the htmx fragment (`get_htmx`). The scope releases
+    // the viewer's exclusive DuckDB lock on drop.
+    let shapes: Vec<(&str, ViewerResponse)> = {
+        let server = ViewerServer::start(&env);
+        vec![
+            ("full page", server.get("/claims")),
+            ("htmx fragment", server.get_htmx("/claims")),
+        ]
+    };
+
+    // THEN for EACH shape, with the additive "Countered" markers elided, the row ORDER
+    // (composed_at DESC, cid), the position indicator / page boundaries, the total COUNT, and
+    // EVERY row's verbatim CONFIDENCE are byte-IDENTICAL to the recorded slice-06 baseline of
+    // the SAME store — the flag is additive ONLY across BOTH shapes (I-LF-2 / I-LF-4). Any
+    // divergence (re-order, re-page, re-count, re-weight) is an UNSHIPPABLE no-regression
+    // breach.
+    for (label, flagged) in &shapes {
+        assert_eq!(
+            flagged.status, 200,
+            "LF-INV-ShownNeverApplied: GET /claims ({label}) must be 200; body was:\n{}",
+            flagged.body
+        );
+        assert!(
+            flagged.content_type.contains("text/html"),
+            "LF-INV-ShownNeverApplied: GET /claims ({label}) must serve text/html; got {:?}",
+            flagged.content_type
+        );
+        assert_list_order_and_confidence_byte_identical(&flagged.body, &baseline);
+    }
 }
