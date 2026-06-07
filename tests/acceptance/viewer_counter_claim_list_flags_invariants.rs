@@ -98,14 +98,38 @@ fn every_claims_list_render_with_flags_leaves_the_store_read_only() {
     // RELEASED before the `after` snapshot.
     // THEN the persisted-store row counts are UNCHANGED (assert_store_read_only; any
     // change is an UNSHIPPABLE write-surface breach — I-LF-1).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-INV-ReadOnly: seed_claims_list_one_countered(&env) (populated, countered own \
-         claim); before = capture_store_row_count_universe(&env); {{ ViewerServer::start; \
-         get(\"/claims\"); get_htmx(\"/claims\"); assert each 200 }}; \
-         after = capture_store_row_count_universe(&env); assert_store_read_only(&before, \
-         &after). RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a populated, NON-TRIVIAL store: a list with one peer-countered own claim
+    // among several plain own claims (seeded via the production `claim add` / `peer add` +
+    // `peer pull` paths). The countered + un-countered postures both appear in this ONE
+    // store, so exercising the list covers both postures over a POPULATED store (a
+    // `0 == 0` delta would not prove the viewer leaves a populated store untouched).
+    let _seeded = seed_claims_list_one_countered(&env);
+
+    // Capture the read-only universe (the two port-exposed row counts) BEFORE any route.
+    let before = capture_store_row_count_universe(&env);
+
+    // WHEN the `/claims` list is exercised in BOTH shapes (full page + htmx fragment) —
+    // inside a scope so the viewer's exclusive DuckDB lock is RELEASED before the `after`
+    // snapshot is read.
+    {
+        let server = ViewerServer::start(&env);
+        let full = server.get("/claims");
+        let fragment = server.get_htmx("/claims");
+        for (label, response) in [("full page", &full), ("fragment", &fragment)] {
+            assert_eq!(
+                response.status, 200,
+                "LF-INV-ReadOnly: GET /claims ({label}) must be 200; body was:\n{}",
+                response.body
+            );
+        }
+    }
+
+    // THEN the persisted-store row counts are UNCHANGED — any change is an UNSHIPPABLE
+    // write-surface breach (I-LF-1 / KPI-VIEW-2). The presence read is a read-only SELECT
+    // and persists nothing.
+    let after = capture_store_row_count_universe(&env);
+    assert_store_read_only(&before, &after);
 }
 
 // =============================================================================
@@ -136,16 +160,62 @@ fn no_claims_list_render_with_flags_adds_a_write_or_sign_control() {
     // (assert_detail_html_has_no_write_or_sign_control reused over each list body — the
     // viewer holds no key; the no-key audit is structural, xtask check-arch), AND every
     // `/claims/{cid}` flag-link present is a render-only `<a href>` anchor (I-LF-1).
-    let _countered_env = TestEnv::initialized();
-    let _uncountered_env = TestEnv::initialized();
-    todo!(
-        "LF-INV-NoWrite: seed_claims_list_one_countered(&countered_env) + \
-         seed_claims_list_none_countered(&uncountered_env); collect the four shapes \
-         (countered/un-countered × get/get_htmx) of \"/claims\" in a scope; for each body \
-         assert_detail_html_has_no_write_or_sign_control(&body) and assert every \
-         '/claims/' reference is preceded by '<a href' (render-only navigation TEXT, never \
-         a control; I-LF-1). RED until DELIVER."
-    )
+    let countered_env = TestEnv::initialized();
+    let uncountered_env = TestEnv::initialized();
+    // GIVEN two stores: one with a peer-countered own claim (the FLAGGED list) and one
+    // all-un-countered (the UN-flagged list), seeded via the production write paths.
+    let _countered_seeded = seed_claims_list_one_countered(&countered_env);
+    let _uncountered_seeded = seed_claims_list_none_countered(&uncountered_env);
+
+    // WHEN every list response shape (countered + un-countered, get + get_htmx) is
+    // collected in a scope so both viewers' DuckDB locks release on drop.
+    let bodies: Vec<(&str, String)> = {
+        let countered_server = ViewerServer::start(&countered_env);
+        let uncountered_server = ViewerServer::start(&uncountered_env);
+
+        let shapes = [
+            ("countered full page", countered_server.get("/claims")),
+            ("countered fragment", countered_server.get_htmx("/claims")),
+            ("un-countered full page", uncountered_server.get("/claims")),
+            ("un-countered fragment", uncountered_server.get_htmx("/claims")),
+        ];
+
+        shapes
+            .into_iter()
+            .map(|(label, response)| {
+                assert_eq!(
+                    response.status, 200,
+                    "LF-INV-NoWrite: GET /claims ({label}) must be 200; body was:\n{}",
+                    response.body
+                );
+                (label, response.body)
+            })
+            .collect()
+    };
+
+    // THEN no shape carries a write / sign / counter / publish / follow / subscribe
+    // affordance (the viewer holds no key; authoring stays the slice-03 CLI), AND every
+    // `/claims/{cid}` reference is a render-only `<a href>` anchor (navigation TEXT, never
+    // an executable control; I-LF-1).
+    for (label, body) in &bodies {
+        // No write/sign/counter/publish control on any list shape.
+        assert_detail_html_has_no_write_or_sign_control(body);
+
+        // Every `/claims/` reference is preceded by `<a href` — a render-only navigation
+        // anchor, never a form action or other control. We scan each occurrence and
+        // require that the nearest preceding `<a href` opens the anchor that carries it.
+        for (idx, _) in body.match_indices("/claims/") {
+            let prefix = &body[..idx];
+            let anchor_open = prefix.rfind("<a href");
+            let tag_open = prefix.rfind('<');
+            assert!(
+                anchor_open.is_some() && anchor_open == tag_open,
+                "I-LF-1 ({label}): every `/claims/` reference must be a render-only \
+                 `<a href>` navigation anchor (never a write/control); the reference at \
+                 byte {idx} is not inside an `<a href` tag; body was:\n{body}"
+            );
+        }
+    }
 }
 
 // =============================================================================
