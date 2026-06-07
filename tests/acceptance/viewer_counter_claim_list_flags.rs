@@ -176,14 +176,56 @@ fn the_list_flags_render_identically_under_htmx_and_no_js() {
     // is_fragment() (no chrome); BOTH list regions carry the SAME flag on the countered
     // row and NO flag on the un-countered rows (parity — the page embeds the fragment
     // fn; I-LF-6).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-2 (parity): seed_claims_list_one_countered(&env); ViewerServer::start; \
-         full = get(\"/claims\"); fragment = get_htmx(\"/claims\"); assert both 200 + \
-         text/html; assert full.is_full_page() && fragment.is_fragment(); \
-         assert_list_row_flagged_countered on BOTH bodies for the countered cid; \
-         assert_list_row_not_flagged on BOTH for each un-countered cid. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_one_countered(&env);
+    let server = ViewerServer::start(&env);
+
+    // WHEN: the list renders as a full page (no JS, no HX-Request) AND as an htmx
+    // fragment (HX-Request) over the SAME store.
+    let full = server.get("/claims");
+    let fragment = server.get_htmx("/claims");
+
+    // Both are 200 text/html.
+    for (label, response) in [("full page", &full), ("fragment", &fragment)] {
+        assert_eq!(
+            response.status, 200,
+            "GET /claims ({label}) must be 200; body was:\n{}",
+            response.body
+        );
+        assert!(
+            response.content_type.contains("text/html"),
+            "GET /claims ({label}) must serve text/html; got {:?}",
+            response.content_type
+        );
+    }
+
+    // The no-JS request is a COMPLETE full page (chrome present); the htmx request is
+    // ONLY the swap-target fragment (no chrome).
+    assert!(
+        full.is_full_page(),
+        "GET /claims WITHOUT HX-Request must return a COMPLETE full page (chrome present); \
+         body was:\n{}",
+        full.body
+    );
+    assert!(
+        fragment.is_fragment(),
+        "GET /claims WITH HX-Request must return ONLY the list-panel fragment (no chrome); \
+         body was:\n{}",
+        fragment.body
+    );
+
+    // THEN: BOTH shapes carry the SAME "Countered" marker on the countered row — parity
+    // by construction (the full page EMBEDS the same fragment fn; the flag is rendered
+    // INSIDE the row; I-LF-6).
+    for countered in &seeded.countered_cids {
+        assert_list_row_flagged_countered(&full.body, countered);
+        assert_list_row_flagged_countered(&fragment.body, countered);
+    }
+    // And NEITHER shape flags any un-countered row.
+    for uncountered in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&full.body, uncountered);
+        assert_list_row_not_flagged(&fragment.body, uncountered);
+    }
 }
 
 /// LF-3 / GOLD presence-only (US-LF-002; I-LF-3 / KPI-AV-2): a claim countered by TWO
