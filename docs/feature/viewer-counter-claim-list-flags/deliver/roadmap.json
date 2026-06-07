@@ -1,0 +1,418 @@
+{
+  "roadmap": {
+    "project_id": "viewer-counter-claim-list-flags",
+    "created_at": "2026-06-07T00:00:00Z",
+    "total_steps": 10
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton \u2014 the at-a-glance Countered flag on GET /claims (THICK)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only counter_presence_for batch read + ClaimRowView.is_countered projection + the render-only Countered flag into GET /claims and return the htmx list fragment flagging the countered row (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-LF-001 capability + US-LF-002 render, LF-1). It forces the WHOLE at-a-glance flag thread into existence end-to-end. (ports) Add `counter_presence_for(&self, target_cids: &[String]) -> Result<HashSet<String>, StoreReadError>` to the read-only StoreReadPort trait \u2014 NO mutation method added (I-LF-1); the return is a presence SET, never a count (anti-merging by type, I-LF-3). (adapter-duckdb) Impl it on DuckDbStoreReadAdapter (src/store_read.rs) as the ADR-048 ONE-aggregate read: a generated `?,?,\u2026` placeholder run (count == input length) bound via duckdb::params_from_iter(target_cids.iter().chain(target_cids.iter())) into a single `SELECT DISTINCT referenced_cid FROM (claim_references WHERE referenced_cid IN (\u2026) AND ref_type='counters' UNION ALL peer_claim_references WHERE referenced_cid IN (\u2026) AND ref_type='counters')` over the SAME shared connection \u2014 ref-tables-only (no JOIN to claims/peer_claims, no artifact read), indexed on referenced_cid, LOCAL/offline, collected into a HashSet<String>; EMPTY input short-circuits to Ok(HashSet::new()) WITHOUT preparing a statement (the empty `IN ()` guard, ADR-048 sub-decision 4). (viewer-domain) Add `pub is_countered: bool` to ClaimRowView + the presence-aware projection `ClaimRowView::from_row_with_presence(row, &presence)` computing is_countered = presence.contains(&row.cid), and EXTEND render_claim_row to emit, only when is_countered, the REUSED slice-11 COUNTERED_PRESENCE_FLAG (LIST_COUNTERED_FLAG_TEXT = \"Countered\") as a render-only `<a href=\"/claims/{cid}\">Countered</a>` marker beside the existing cells \u2014 an un-countered row renders byte-identically to slice-06 (no marker). The flag NEVER re-orders/filters/re-weights/re-paginates (shown-never-applied; the renderer iterates page.rows in the shell-supplied composed_at DESC, cid order unchanged). (adapter-http-viewer) In claims_page (src/lib.rs) the SANDWICH gains ONE read between the existing read and render: read_page = store.list_claims(request) UNCHANGED, then presence = store.counter_presence_for(&page CIDs).unwrap_or_default() (degrade \u2192 empty set, no flags, never a 5xx), project each ClaimRow + presence \u2192 ClaimRowView::from_row_with_presence, then PageView::paged + the UNCHANGED Shape fork (render_claims_view_panel_fragment vs render_claims_page). NO new route, NO new crate (workspace stays 21), NO cli change (the existing DuckDbStoreReadAdapter implements the new method). Materialize the seed_claims_list_one_countered support seam (several plain own claims via seed_own_claim_with_evidence + one own claim countered by a PEER via build_verifiable_peer_counter_record + peer add + peer pull, landing in peer_claim_references; recover all own CIDs in composed_at DESC, cid order \u2192 SeededClaimsList) + the assert_list_row_flagged_countered / assert_list_row_not_flagged helper bodies in support/mod.rs. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the presence read is a LOCAL read). xtask delta: NONE (ADR-048 \u2014 no new dep edge; the ref-tables-only literal does not trip no_cross_table_join_elides_author; the viewer capability boundary is unchanged).",
+          "criteria": [
+            "GET /claims with the HX-Request header, over a seeded local store where exactly one of Maria's own claims (the peer-countered one from seed_claims_list_one_countered) has a counter and the others do not, returns 200 text/html containing ONLY the list-panel fragment (no page chrome, no <head>): the countered row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's thread, and every un-countered row carries NO marker.",
+            "StoreReadPort gains a single read-only method counter_presence_for(&[String]) -> Result<HashSet<String>, StoreReadError> returning the countered subset of the input CIDs as a presence SET (never a count); NO mutation method is added to the port; the DuckDbStoreReadAdapter implements it as the ADR-048 single aggregate IN(...) UNION-ALL DISTINCT read over claim_references and peer_claim_references filtered to ref_type='counters', with bound placeholders (never string interpolation), LOCAL with no network call, returning the empty set for an all-un-countered or empty-CID page.",
+            "The /claims route reads the store the ViewerServer ALREADY holds (no new field), holds NO signing key, adds no write/sign/counter route, and degrades a presence-read failure to an empty presence set (no flags) rather than a 5xx; the 'Countered' marker renders only as render-only navigation TEXT toward /claims/{cid}.",
+            "Each row's confidence renders through the single render_confidence site verbatim, and the list order, paging, and total count are unchanged by the presence of the flag (the flag is an additive marker beside the row, never a sort/filter/group key)."
+          ],
+          "acceptance_criteria": [
+            "GET /claims with the HX-Request header, over a seeded local store where exactly one of Maria's own claims (the peer-countered one from seed_claims_list_one_countered) has a counter and the others do not, returns 200 text/html containing ONLY the list-panel fragment (no page chrome, no <head>): the countered row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's thread, and every un-countered row carries NO marker.",
+            "StoreReadPort gains a single read-only method counter_presence_for(&[String]) -> Result<HashSet<String>, StoreReadError> returning the countered subset of the input CIDs as a presence SET (never a count); NO mutation method is added to the port; the DuckDbStoreReadAdapter implements it as the ADR-048 single aggregate IN(...) UNION-ALL DISTINCT read over claim_references and peer_claim_references filtered to ref_type='counters', with bound placeholders (never string interpolation), LOCAL with no network call, returning the empty set for an all-un-countered or empty-CID page.",
+            "The /claims route reads the store the ViewerServer ALREADY holds (no new field), holds NO signing key, adds no write/sign/counter route, and degrades a presence-read failure to an empty presence set (no flags) rather than a 5xx; the 'Countered' marker renders only as render-only navigation TEXT toward /claims/{cid}.",
+            "Each row's confidence renders through the single render_confidence site verbatim, and the list order, paging, and total count are unchanged by the presence of the flag (the flag is an additive marker beside the row, never a sort/filter/group key)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "open_the_claims_list_with_htmx_flags_only_the_countered_row",
+          "n_scenarios": [
+            "LF-1"
+          ],
+          "us_trace": [
+            "US-LF-001",
+            "US-LF-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (ClaimRowView.is_countered + the presence.contains projection + the presence-gated render_claim_row flag branch) AND the ADR-048 single-aggregate IN(...) UNION-ALL DISTINCT adapter read. Extend nightly mutation testing to this projection/read (presence.contains true/false flag branch, the ref_type='counters' filter, the UNION-ALL two-arm bind, the empty-input short-circuit, and the DISTINCT one-flag-per-CID collapse)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Flag shape \u2014 parity, single-neutral-presence, one-hop link, no-noise (mostly confirmatory)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "GET /claims no-JS full page + htmx fragment flag parity (page embeds the same list fragment fn, flag included)",
+          "description": "Complete the render contract for the list flag (LF-2; I-LF-6). GET /claims WITHOUT HX-Request serves a COMPLETE full page (chrome + the SAME list region with the flagged row) for the no-JS no-regression path; the list region inside the full page is structurally IDENTICAL to the htmx fragment \u2014 parity by construction because the full-page render EMBEDS render_claims_view_panel_fragment (the flag is rendered INSIDE render_claim_row, the row fn both shapes embed). Confirmatory once 01-01 exists (no new read; the flag already renders inside the fragment fn \u2014 this pins that the full page embeds it). The full page is the contract; the htmx swap is a nicety.",
+          "criteria": [
+            "GET /claims over the one-countered store (seed_claims_list_one_countered) WITHOUT HX-Request returns a complete full HTML page (is_full_page(): <head>, page chrome, and the embedded list region); WITH HX-Request returns the bare list fragment (is_fragment(), no chrome).",
+            "The countered row carries the SAME 'Countered' marker in BOTH the full-page body and the htmx-fragment body, and every un-countered row carries NO marker in either \u2014 the full page embeds the same list fragment fn (parity by construction, I-LF-6).",
+            "No divergence between the two shapes: the same rows in the same order, the same flagged row, and the same verbatim confidences render in both."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over the one-countered store (seed_claims_list_one_countered) WITHOUT HX-Request returns a complete full HTML page (is_full_page(): <head>, page chrome, and the embedded list region); WITH HX-Request returns the bare list fragment (is_fragment(), no chrome).",
+            "The countered row carries the SAME 'Countered' marker in BOTH the full-page body and the htmx-fragment body, and every un-countered row carries NO marker in either \u2014 the full page embeds the same list fragment fn (parity by construction, I-LF-6).",
+            "No divergence between the two shapes: the same rows in the same order, the same flagged row, and the same verbatim confidences render in both."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "the_list_flags_render_identically_under_htmx_and_no_js",
+          "n_scenarios": [
+            "LF-2"
+          ],
+          "us_trace": [
+            "US-LF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "A two-author-countered row shows exactly one neutral presence marker (anti-merging GOLD) and the marker is a render-only one-hop link to the thread",
+          "description": "The presence-only anti-merging GOLD + the one-hop drill-link for US-LF-002 (LF-3 GOLD + LF-4; I-LF-3 / KPI-AV-2 / I-LF-6). (LF-3) A claim countered by TWO DISTINCT authors (Maria's own counter via `claim counter` \u2192 claim_references AND peer Tobias's counter via peer pull \u2192 peer_claim_references) shows on its LIST row EXACTLY ONE neutral 'Countered' marker \u2014 a PRESENCE marker, NEVER 'disputed by 2', never a count, never a merged verdict (the DISTINCT referenced_cid in the presence read collapses both to one membership \u2192 one flag). The per-counter attribution lives in the slice-11 thread the marker LINKS to. (LF-4) The marker on a countered list row is a render-only `<a href=\"/claims/{cid}\">` ONE-HOP link navigable without JS, and GET-ing that href lands on the slice-11 detail thread for that claim. Reuses the slice-11 seed_claim_two_counters_distinct_authors fixture observed on the LIST surface + seed_claims_list_one_countered; materializes assert_list_flag_is_single_neutral_presence + assert_list_flag_links_to_thread helper bodies in support/mod.rs. Largely confirmatory once 01-01's flag render exists \u2014 the DISTINCT collapse and the <a href> link shape already hold; this pins the neutral single-marker phrasing and the one-hop drill on the observable surface.",
+          "criteria": [
+            "GET /claims over a store where a claim is countered by two DISTINCT authors (seed_claim_two_counters_distinct_authors observed on the list) shows that row with EXACTLY ONE neutral 'Countered' marker, and the list body carries NO count / 'disputed by N' / consensus / net-verdict phrasing anywhere (presence-only, anti-merging; assert_list_flag_is_single_neutral_presence).",
+            "The 'Countered' marker on a countered row (seed_claims_list_one_countered) is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_list_flag_links_to_thread), and GET-ing that href returns 200 with the slice-11 counter thread for that claim.",
+            "assert_list_flag_is_single_neutral_presence and assert_list_flag_links_to_thread are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over a store where a claim is countered by two DISTINCT authors (seed_claim_two_counters_distinct_authors observed on the list) shows that row with EXACTLY ONE neutral 'Countered' marker, and the list body carries NO count / 'disputed by N' / consensus / net-verdict phrasing anywhere (presence-only, anti-merging; assert_list_flag_is_single_neutral_presence).",
+            "The 'Countered' marker on a countered row (seed_claims_list_one_countered) is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_list_flag_links_to_thread), and GET-ing that href returns 200 with the slice-11 counter thread for that claim.",
+            "assert_list_flag_is_single_neutral_presence and assert_list_flag_links_to_thread are materialized in support/mod.rs and assert on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "a_claim_with_two_counters_shows_one_neutral_presence_marker_on_the_list",
+          "n_scenarios": [
+            "LF-3",
+            "LF-4"
+          ],
+          "us_trace": [
+            "US-LF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single-neutral-presence render (one marker per countered CID, no count/verdict phrasing) and the render-only <a href=\"/claims/{cid}\"> one-hop link are load-bearing anti-merging + drill-link logic; mutation-test the one-flag-per-CID branch and the link href construction so a mutant that emits a 'disputed by N' count, a verdict, or a non-anchor control is killed."
+        },
+        {
+          "id": "02-03",
+          "name": "A store with no counters renders the list exactly as slice-06 (no-noise, empty presence set)",
+          "description": "The no-noise discipline scenario for US-LF-003 (LF-5; I-LF-2). An all-un-countered store (seed_claims_list_none_countered \u2014 several plain own claims, nothing references any of them as a counter) yields an EMPTY presence set from counter_presence_for \u2192 no row is flagged \u2192 the list renders byte-identically to slice-06: NO 'Countered' marker anywhere AND NO '0 counters' / 'no disagreement' empty-state noise. This is the byte-unaffected guarantee for the common case (the no-noise half of the trust contract). Reuses seed_claims_list_none_countered + assert_list_row_not_flagged; materializes the seed body in support/mod.rs. Confirmatory once 01-01 exists (the empty-set \u2192 no-flag branch already holds); pins the no-noise property on the observable surface.",
+          "criteria": [
+            "GET /claims over an all-un-countered store (seed_claims_list_none_countered) returns 200 text/html in which EVERY row renders as in slice-06 with NO 'Countered' marker (assert_list_row_not_flagged for each cid).",
+            "The list body carries NO '0 counters' / 'no disagreement' / empty-state noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, I-LF-2).",
+            "seed_claims_list_none_countered is materialized in support/mod.rs by signing plain own claims through the production paths (no hand-inserted rows), returning every CID as uncountered_cids with an empty countered_cids."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over an all-un-countered store (seed_claims_list_none_countered) returns 200 text/html in which EVERY row renders as in slice-06 with NO 'Countered' marker (assert_list_row_not_flagged for each cid).",
+            "The list body carries NO '0 counters' / 'no disagreement' / empty-state noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, I-LF-2).",
+            "seed_claims_list_none_countered is materialized in support/mod.rs by signing plain own claims through the production paths (no hand-inserted rows), returning every CID as uncountered_cids with an empty countered_cids."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "a_store_with_no_counters_renders_the_list_exactly_as_slice_06",
+          "n_scenarios": [
+            "LF-5"
+          ],
+          "us_trace": [
+            "US-LF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The empty-presence-set \u2192 no-flag / no-noise branch is load-bearing; mutation-test the empty-set no-marker path so a mutant that emits a '0 counters' empty-state noise string or a spurious marker on an un-countered row is killed."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "No-regression byte-identity + N+1 proxy + GOLD guardrails (REAL work + invariants LAST)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "A mixed page flags only the countered rows in their unchanged composed_at DESC positions, each confidence verbatim",
+          "description": "The mixed-page positional scenario for US-LF-003 (LF-7; I-LF-2 / I-LF-4). On a page mixing countered + un-countered rows (seed_claims_list_mixed_pages, with OWN and PEER counters so both UNION-ALL arms are exercised), ONLY the genuinely-countered rows carry the 'Countered' marker, and they appear in their ORIGINAL composed_at DESC, cid positions \u2014 the flag does NOT pull the countered rows together or to the top \u2014 and each flagged claim's confidence renders verbatim (byte-identical to a no-flag render). Materializes the seed_claims_list_mixed_pages body in support/mod.rs (shared with 03-02/03-03/03-06). Confirmatory once 01-01 exists (the per-row presence.contains projection over the shell-supplied page order already holds); pins the only-countered-rows-flagged-in-position property on the observable surface.",
+          "criteria": [
+            "GET /claims over a mixed page (seed_claims_list_mixed_pages \u2014 countered + un-countered rows in a known composed_at DESC, cid order) flags ONLY the countered rows (assert_list_row_flagged_countered for each countered cid) and flags NO un-countered row (assert_list_row_not_flagged for each un-countered cid).",
+            "The flagged + un-flagged rows appear in the SAME composed_at DESC, cid order as the slice-06 render \u2014 the countered rows are NOT grouped, pulled to the top, or re-ordered by the flag (shown-never-applied, I-LF-2).",
+            "Each row's confidence renders verbatim through the single render_confidence site, unchanged by the presence of the flag (the flag re-weights nothing, I-LF-4); seed_claims_list_mixed_pages is materialized in support/mod.rs via the production claim add / claim counter / peer pull paths (no hand-inserted rows)."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over a mixed page (seed_claims_list_mixed_pages \u2014 countered + un-countered rows in a known composed_at DESC, cid order) flags ONLY the countered rows (assert_list_row_flagged_countered for each countered cid) and flags NO un-countered row (assert_list_row_not_flagged for each un-countered cid).",
+            "The flagged + un-flagged rows appear in the SAME composed_at DESC, cid order as the slice-06 render \u2014 the countered rows are NOT grouped, pulled to the top, or re-ordered by the flag (shown-never-applied, I-LF-2).",
+            "Each row's confidence renders verbatim through the single render_confidence site, unchanged by the presence of the flag (the flag re-weights nothing, I-LF-4); seed_claims_list_mixed_pages is materialized in support/mod.rs via the production claim add / claim counter / peer pull paths (no hand-inserted rows)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "a_mixed_page_flags_only_the_countered_rows_in_their_unchanged_positions",
+          "n_scenarios": [
+            "LF-7"
+          ],
+          "us_trace": [
+            "US-LF-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The per-row presence.contains projection over the shell-supplied page order (only-countered-rows-flagged-in-position) is load-bearing shown-never-applied logic; mutation-test the per-row flag mapping so a mutant that mis-aligns the flag to the wrong row, groups countered rows, or re-weights a confidence is killed."
+        },
+        {
+          "id": "03-02",
+          "name": "The flag never reorders, repages, recounts, or reweights the list \u2014 byte-identical to the slice-06 baseline render (shown-never-applied GOLD, REAL work: baseline capture)",
+          "description": "The load-bearing shown-never-applied + no-regression story GOLD (LF-6; I-LF-2 / I-LF-4 / OD-AV-7 / ADR-015). The SAME store (seed_claims_list_mixed_pages \u2014 a known order/count + a mix of countered + un-countered rows) rendered WITH the flag must have row ORDER (composed_at DESC, cid), PAGING / position indicator, total COUNT, and EVERY row's CONFIDENCE byte-identical to the slice-06 `/claims` render of the SAME store. REAL work / BASELINE-CAPTURE TACTIC: DELIVER MUST obtain the slice-06 reference render of the same store to compare against \u2014 there is NO pre-flag binary, so the baseline is captured either by (a) a no-flag render path (e.g. rendering the list with an empty presence set forced, or a recorded slice-06 ordering of the same seeded store) OR (b) the recorded ordered_cids + per-row confidence from SeededClaimsList. DELIVER MUST decide and document which baseline source it uses; the contract is that the flag changed nothing but the additive marker. The presence read is a SEPARATE set lookup mapped onto rows AFTER list_claims pages them; the list_claims SQL (ORDER BY composed_at DESC, cid LIMIT ? OFFSET ? + its COUNT(*)) is UNTOUCHED. Materializes assert_list_order_and_confidence_byte_identical in support/mod.rs. A regression silently lets the flag pick a triage order or re-score a claim; this gold makes it unshippable.",
+          "criteria": [
+            "GET /claims over a known mixed store (seed_claims_list_mixed_pages) renders the row ORDER (composed_at DESC, cid), the position indicator / page boundaries, the total COUNT, and EVERY row's confidence byte-IDENTICAL to the slice-06 baseline render of the SAME store \u2014 only the additive 'Countered' marker differs (assert_list_order_and_confidence_byte_identical; I-LF-2 / I-LF-4).",
+            "The baseline is the slice-06 reference render of the SAME store, obtained by DELIVER via a documented no-flag render path OR the recorded slice-06 ordering + per-row confidence (the baseline-capture tactic), since there is no pre-flag binary; the list_claims SQL (ORDER BY composed_at DESC, cid + COUNT(*)) is byte-untouched.",
+            "Any divergence in order, paging, count, or confidence between the flagged and baseline renders is an UNSHIPPABLE no-regression breach; assert_list_order_and_confidence_byte_identical is materialized in support/mod.rs and asserts on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over a known mixed store (seed_claims_list_mixed_pages) renders the row ORDER (composed_at DESC, cid), the position indicator / page boundaries, the total COUNT, and EVERY row's confidence byte-IDENTICAL to the slice-06 baseline render of the SAME store \u2014 only the additive 'Countered' marker differs (assert_list_order_and_confidence_byte_identical; I-LF-2 / I-LF-4).",
+            "The baseline is the slice-06 reference render of the SAME store, obtained by DELIVER via a documented no-flag render path OR the recorded slice-06 ordering + per-row confidence (the baseline-capture tactic), since there is no pre-flag binary; the list_claims SQL (ORDER BY composed_at DESC, cid + COUNT(*)) is byte-untouched.",
+            "Any divergence in order, paging, count, or confidence between the flagged and baseline renders is an UNSHIPPABLE no-regression breach; assert_list_order_and_confidence_byte_identical is materialized in support/mod.rs and asserts on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "the_flag_never_reorders_repages_recounts_or_reweights_the_list",
+          "n_scenarios": [
+            "LF-6"
+          ],
+          "us_trace": [
+            "US-LF-003"
+          ],
+          "estimate_hours": 7,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The load-bearing shown-never-applied gate: the presence set is mapped onto rows AFTER list_claims pages them, never feeding back into order/paging/count/confidence. Mutation-test the byte-identity across flagged/baseline \u2014 a mutant that lets the flag re-order, re-page, re-count, or re-weight (the I-LF-2/I-LF-4 gate toward the Phase-5 mutation threshold) must be killed."
+        },
+        {
+          "id": "03-03",
+          "name": "A large mixed page flags every countered row correctly in one request (N+1-guard behavioral proxy, REAL work)",
+          "description": "The N+1-guard behavioral proxy for US-LF-001/003 (LF-8; I-LF-8 / ADR-048). A LARGE page mixing MANY countered + un-countered rows flags EVERY countered row correctly in ONE request, with no per-row degradation \u2014 the at-this-layer behavioral proxy for the single-query guarantee (the strict 1-query bound is a DELIVER adapter-duckdb unit/property assertion; query count is not observable at the subprocess AT layer). If the presence read were N+1, a large page would either degrade or mis-flag under the per-row fan-out; this proxy pins that the whole page is flagged correctly in one shot. REAL work: requires seed_claims_list_mixed_pages to seed a LARGE page (many own claims, a known countered subset spanning both OWN and PEER counters) so the proxy is meaningful, and verifies the single-aggregate IN(...) read scales to the full page-size-50 CID set. NOTE for DELIVER: also add the strict single-query bound as an adapter-duckdb unit/property test (query count invariant to page size) per ADR-048 / I-LF-8 \u2014 the AT here is the behavioral proxy, the adapter test is the strict bound.",
+          "criteria": [
+            "GET /claims over a LARGE mixed page (seed_claims_list_mixed_pages with many rows and a known countered subset spanning OWN and PEER counters) flags EVERY countered row (assert_list_row_flagged_countered for every countered cid) and flags NO un-countered row (assert_list_row_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-row degradation.",
+            "The whole page is flagged correctly from a single GET request, exercising the ADR-048 single-aggregate IN(...) UNION-ALL DISTINCT read over the full page CID set (the subprocess-layer behavioral proxy for the no-N+1 guarantee, I-LF-8).",
+            "DELIVER additionally adds the strict single-query bound as an adapter-duckdb unit/property assertion (the presence query count is invariant to page size), per ADR-048; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "acceptance_criteria": [
+            "GET /claims over a LARGE mixed page (seed_claims_list_mixed_pages with many rows and a known countered subset spanning OWN and PEER counters) flags EVERY countered row (assert_list_row_flagged_countered for every countered cid) and flags NO un-countered row (assert_list_row_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-row degradation.",
+            "The whole page is flagged correctly from a single GET request, exercising the ADR-048 single-aggregate IN(...) UNION-ALL DISTINCT read over the full page CID set (the subprocess-layer behavioral proxy for the no-N+1 guarantee, I-LF-8).",
+            "DELIVER additionally adds the strict single-query bound as an adapter-duckdb unit/property assertion (the presence query count is invariant to page size), per ADR-048; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags.rs",
+          "scenario_name": "a_large_mixed_page_flags_every_countered_row_correctly_in_one_request",
+          "n_scenarios": [
+            "LF-8"
+          ],
+          "us_trace": [
+            "US-LF-001",
+            "US-LF-003"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags.rs",
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "mutation_note": "The single-aggregate IN(...) UNION-ALL DISTINCT read over the full page CID set (the no-N+1 guarantee) is the load-bearing performance contract; mutation-test the adapter-duckdb unit/property single-query bound + the full-page correctness so a mutant that fans the read out per row, drops a CID from the bound list, or mis-collapses the DISTINCT set is killed."
+        },
+        {
+          "id": "03-04",
+          "name": "Every flagged-list render leaves the store read-only + no list render adds a write/sign control (gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-02 are done (LF-INV-ReadOnly + LF-INV-NoWrite; I-LF-1 / KPI-VIEW-2). (ReadOnly) Exercising `/claims` across postures (countered + un-countered) AND both shapes (full page + htmx fragment) leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts) \u2014 over a NON-TRIVIAL store (seed_claims_list_one_countered so the read-only delta is over a populated store). The batch presence read is a read-only SELECT and persists nothing. (NoWrite) No list response shape (full page or fragment, countered or un-countered) renders a write / sign / counter / publish control; every '/claims/{cid}' flag-link present is render-only <a href> navigation TEXT (authoring stays the slice-03 CLI). Both reuse the inherited harnesses (assert_store_read_only, capture_store_row_count_universe, assert_detail_html_has_no_write_or_sign_control). Lands in viewer_counter_claim_list_flags_invariants.rs.",
+          "criteria": [
+            "Exercising /claims (countered + un-countered postures, full page + htmx fragment) over a non-trivial store (seed_claims_list_one_countered) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-LF-1); the batch presence read is a read-only SELECT and persists nothing.",
+            "No list response shape (full page or fragment, countered or un-countered \u2014 the four shapes over seed_claims_list_one_countered + seed_claims_list_none_countered) renders a write / sign / counter / publish control (assert_detail_html_has_no_write_or_sign_control over every shape x posture).",
+            "Every '/claims/{cid}' flag-link present is render-only navigation TEXT (an <a href> anchor), never an executable control; the assertions enter through the real openlore ui subprocess + HTTP only."
+          ],
+          "acceptance_criteria": [
+            "Exercising /claims (countered + un-countered postures, full page + htmx fragment) over a non-trivial store (seed_claims_list_one_countered) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-LF-1); the batch presence read is a read-only SELECT and persists nothing.",
+            "No list response shape (full page or fragment, countered or un-countered \u2014 the four shapes over seed_claims_list_one_countered + seed_claims_list_none_countered) renders a write / sign / counter / publish control (assert_detail_html_has_no_write_or_sign_control over every shape x posture).",
+            "Every '/claims/{cid}' flag-link present is render-only navigation TEXT (an <a href> anchor), never an executable control; the assertions enter through the real openlore ui subprocess + HTTP only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+          "scenario_name": "every_claims_list_render_with_flags_leaves_the_store_read_only",
+          "n_scenarios": [
+            "LF-INV-ReadOnly",
+            "LF-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-LF-002",
+            "US-LF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        },
+        {
+          "id": "03-05",
+          "name": "The flagged list page chrome stays offline (no CDN) and the flagged list renders fully offline (gold)",
+          "description": "Two offline gold guardrails (LF-INV-OfflineChrome + LF-INV-Offline; I-LF-5 / KPI-HX-G2 and I-LF-5 / KPI-5). (OfflineChrome) The flagged `/claims` full page references ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false in both shapes). (Offline) The flagged list renders fully with NO network seam wired (plain ViewerServer::start) over a store seeded with a row countered by a PULLED PEER (verified at peer pull time) \u2014 the presence read (indexed referenced_cid IN (...) ref lookup, ref-tables-only, no artifact read) is LOCAL with NO outbound edge to take down, so the countered row STILL carries its marker in both shapes with no Unavailable / degraded notice (the viewer re-verifies nothing). Reuses seed_claims_list_one_countered (peer-counter posture) + the slice-06 references_external_cdn + assert_list_row_flagged_countered. Lands in viewer_counter_claim_list_flags_invariants.rs; flips green for free once 01-01 + the chrome exist.",
+          "criteria": [
+            "The flagged /claims full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both the full-page and htmx-fragment shapes over seed_claims_list_one_countered (no CDN / off-host reference, I-LF-5 / KPI-HX-G2).",
+            "GET /claims over a store with a row countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), renders the countered row STILL carrying the 'Countered' marker in BOTH shapes from the LOCAL store with no network call (assert_list_row_flagged_countered on both bodies; the presence read is a LOCAL ref-tables-only lookup).",
+            "Neither shape renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged-list route has no outbound edge (I-LF-5 / KPI-5)."
+          ],
+          "acceptance_criteria": [
+            "The flagged /claims full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both the full-page and htmx-fragment shapes over seed_claims_list_one_countered (no CDN / off-host reference, I-LF-5 / KPI-HX-G2).",
+            "GET /claims over a store with a row countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), renders the countered row STILL carrying the 'Countered' marker in BOTH shapes from the LOCAL store with no network call (assert_list_row_flagged_countered on both bodies; the presence read is a LOCAL ref-tables-only lookup).",
+            "Neither shape renders a network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged-list route has no outbound edge (I-LF-5 / KPI-5)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+          "scenario_name": "the_flagged_claims_list_page_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "LF-INV-OfflineChrome",
+            "LF-INV-Offline"
+          ],
+          "us_trace": [
+            "US-LF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "03-06",
+          "name": "SHOWN-NEVER-APPLIED GOLD \u2014 the list order and confidence are byte-identical with and without flags, in both shapes (LAST)",
+          "description": "The CARDINAL shown-never-applied gold guardrail (LF-INV-ShownNeverApplied; I-LF-2 / I-LF-4 / OD-AV-7 / ADR-015 \u2014 the load-bearing slice-12 invariant; release-blocking). The SAME store (seed_claims_list_mixed_pages \u2014 a known order + a mix of countered + un-countered claims) rendered once un-flagged (the slice-06 baseline) and once flagged shows row ORDER (composed_at DESC, cid), PAGING / position indicator, total COUNT, and EVERY row's CONFIDENCE byte-IDENTICAL in BOTH shapes (full page + htmx fragment) \u2014 the flag never filters, re-ranks, re-paginates, down-weights, or re-orders the list. BASELINE-CAPTURE: as in 03-02, DELIVER pins the slice-06 reference render of the SAME store via the documented no-flag render path OR the recorded slice-06 ordering + per-row confidence (no pre-flag binary). Generalizes the 03-02 story-local byte-identity to the cross-cutting release gate over BOTH shapes. Reuses assert_list_order_and_confidence_byte_identical (materialized in 03-02). LAST roadmap step (it tends to flip green for free once 01-01 + 03-02 hold, because the rows are built from list_claims UNCHANGED and the flag is a separate marker mapped on after paging). A shown-never-applied breach silently lets the flag pick a triage order or re-score a claim; this gold makes it unshippable.",
+          "criteria": [
+            "The SAME store (seed_claims_list_mixed_pages) rendered un-flagged (slice-06 baseline) and flagged shows the row ORDER (composed_at DESC, cid), the position indicator / page boundaries, the total COUNT, and EVERY row's confidence byte-IDENTICAL in BOTH shapes (full page + htmx fragment) \u2014 only the additive 'Countered' marker differs (assert_list_order_and_confidence_byte_identical; I-LF-2 / I-LF-4).",
+            "The byte-identity holds because the rows are built from list_claims UNCHANGED and the presence set is mapped onto them AFTER paging \u2014 no code path feeds the flag back into order, paging, count, or confidence; the baseline is the slice-06 reference render of the SAME store (the documented baseline-capture tactic from 03-02).",
+            "Any divergence in order, paging, count, or confidence between the un-flagged and flagged renders in either shape is an UNSHIPPABLE shown-never-applied breach (release-blocking); the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "The SAME store (seed_claims_list_mixed_pages) rendered un-flagged (slice-06 baseline) and flagged shows the row ORDER (composed_at DESC, cid), the position indicator / page boundaries, the total COUNT, and EVERY row's confidence byte-IDENTICAL in BOTH shapes (full page + htmx fragment) \u2014 only the additive 'Countered' marker differs (assert_list_order_and_confidence_byte_identical; I-LF-2 / I-LF-4).",
+            "The byte-identity holds because the rows are built from list_claims UNCHANGED and the presence set is mapped onto them AFTER paging \u2014 no code path feeds the flag back into order, paging, count, or confidence; the baseline is the slice-06 reference render of the SAME store (the documented baseline-capture tactic from 03-02).",
+            "Any divergence in order, paging, count, or confidence between the un-flagged and flagged renders in either shape is an UNSHIPPABLE shown-never-applied breach (release-blocking); the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+          "scenario_name": "the_list_order_and_confidence_are_byte_identical_with_and_without_flags",
+          "n_scenarios": [
+            "LF-INV-ShownNeverApplied"
+          ],
+          "us_trace": [
+            "US-LF-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_claim_list_flags_invariants.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release-blocking shown-never-applied gate. Mutation-test the list-region byte-identity across flagged/un-flagged in both shapes \u2014 a mutant that lets the flag re-order, re-page, re-count, or re-weight (feeding the presence set back into order/paging/count/confidence; the I-LF-2/I-LF-4 gate toward the Phase-5 mutation threshold) must be killed."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-solution-architect-reviewer",
+    "note": "APPROVED 0 critical/high; 13/13 scenarios covered; baseline-capture documented"
+  },
+  "total_steps": 10
+}
