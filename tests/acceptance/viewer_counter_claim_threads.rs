@@ -237,14 +237,46 @@ fn the_countered_claim_is_shown_verbatim_never_re_weighted_by_its_counter() {
     // THEN the countered render shows the claim's confidence VERBATIM (0.91) and its
     // fields IDENTICAL to the un-countered render — the counter is additive context
     // BELOW, never a re-weight ABOVE (assert_counter_claim_verbatim_unchanged; I-CT-2).
-    todo!(
-        "DELIVER (CT-3 shown-never-applied gold): render the SAME claim un-countered \
-         (seed_uncountered_claim) and countered (seed_claim_with_counter); assert via \
-         assert_counter_claim_verbatim_unchanged that the countered render shows \
-         confidence \"0.91\" verbatim and the claim fields are byte-identical to the \
-         un-countered render — the counter never re-weights/filters/merges the claim \
-         (I-CT-2 / I-CT-4)"
+    // GIVEN two independent stores seeding the SAME claim shape (Rachel's claim at
+    // 0.91): one with NOTHING countering it, one with the operator's OWN counter.
+    let uncountered_env = TestEnv::initialized();
+    let uncountered_cid = seed_uncountered_claim(&uncountered_env);
+
+    let countered_env = TestEnv::initialized();
+    let seeded = seed_claim_with_counter(&countered_env);
+
+    // The two stores seed the SAME content-addressed target — so the claim region the
+    // shown-never-applied gold diffs is the SAME claim, not two different ones.
+    assert_eq!(
+        uncountered_cid, seeded.target_cid,
+        "CT-3: the un-countered and countered seeds must target the SAME claim CID \
+         (same subject/predicate/object/confidence) for the byte-diff to be meaningful; \
+         uncountered {uncountered_cid:?} vs countered {:?}",
+        seeded.target_cid
     );
+
+    // WHEN each claim's detail renders.
+    let uncountered_viewer = ViewerServer::start(&uncountered_env);
+    let uncountered = uncountered_viewer.get(&format!("/claims/{uncountered_cid}"));
+
+    let countered_viewer = ViewerServer::start(&countered_env);
+    let countered = countered_viewer.get(&format!("/claims/{}", seeded.target_cid));
+
+    assert_eq!(
+        uncountered.status, 200,
+        "CT-3: the un-countered detail must return 200;\n--- body ---\n{}",
+        uncountered.body
+    );
+    assert_eq!(
+        countered.status, 200,
+        "CT-3: the countered detail must return 200;\n--- body ---\n{}",
+        countered.body
+    );
+
+    // THEN: the countered render shows the claim's confidence VERBATIM (0.91) and the
+    // claim region is byte-identical to the un-countered render — the counter is additive
+    // context BELOW, never a re-weight/filter/merge ABOVE (I-CT-2 / OD-AV-7 / ADR-015).
+    assert_counter_claim_verbatim_unchanged(&uncountered.body, &countered.body, "0.91");
 }
 
 /// CT-4 / GOLD anti-merging (US-CT-002; I-CT-3 / KPI-AV-2 / KPI-GRAPH-2 / KPI-FED-1):
@@ -457,12 +489,45 @@ fn an_un_countered_claim_shows_no_counter_section_and_no_empty_noise() {
     // "Counter-claims" section, NO "Countered" presence flag, and NO "0 counters" /
     // "no disagreement" empty-state text (assert_no_counter_thread_noise; I-CT-2 —
     // `CounterThread::None` renders nothing extra).
-    todo!(
-        "DELIVER (CT-7 no-noise): seed_uncountered_claim; start ViewerServer, GET \
-         /claims/{{cid}}; assert status==200 + the claim fields render (slice-06 \
-         parity) + assert_no_counter_thread_noise (no 'Counter-claims' section, no \
-         'Countered' flag, no '0 counters'/'no disagreement' empty-state text)"
+    let env = TestEnv::initialized();
+    let target_cid = seed_uncountered_claim(&env);
+
+    let viewer = ViewerServer::start(&env);
+    let response = viewer.get(&format!("/claims/{target_cid}"));
+
+    // THEN: 200 text/html, the claim renders (slice-06 parity — confidence 0.91
+    // verbatim + the subject), and NO counter-thread noise.
+    assert_eq!(
+        response.status, 200,
+        "CT-7: GET /claims/{{cid}} over an un-countered claim must return 200;\n\
+         --- body ---\n{}",
+        response.body
     );
+    assert!(
+        response.content_type.contains("text/html"),
+        "CT-7: the detail must be served as text/html; content_type was {:?}",
+        response.content_type
+    );
+
+    // THEN: the claim + evidence render as in slice-06 (the confidence renders verbatim;
+    // the subject is shown) — the common-case detail is byte-unaffected by slice-11.
+    assert!(
+        response.body.contains("0.91"),
+        "CT-7: the un-countered claim's confidence must render verbatim (slice-06 \
+         parity);\n--- body ---\n{}",
+        response.body
+    );
+    assert!(
+        response.body.contains("github:rust-lang/cargo"),
+        "CT-7: the un-countered claim's subject must render (slice-06 parity);\n\
+         --- body ---\n{}",
+        response.body
+    );
+
+    // THEN: NO "Counter-claims" section, NO "Countered" presence flag, and NO
+    // "0 counters" / "no disagreement" empty-state noise (assert_no_counter_thread_noise;
+    // I-CT-2 — `CounterThread::None` renders nothing extra).
+    assert_no_counter_thread_noise(&response.body);
 }
 
 /// CT-8 (US-CT-003 — neutral presence flag; I-CT-3): a countered claim shows a neutral

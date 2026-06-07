@@ -9884,13 +9884,37 @@ pub fn seed_counter_empty_reason(env: &TestEnv) -> SeededCounterThread {
 /// `seed_claim_with_counter`, minus any counter) and returns the recovered target CID.
 /// The IDENTICAL claim shape is what makes the shown-never-applied byte-diff meaningful.
 pub fn seed_uncountered_claim(env: &TestEnv) -> String {
-    let _ = env;
-    todo!(
-        "DELIVER (seed_uncountered_claim): seed Rachel's claim at 0.91 via \
-         seed_peer_authored_graph (the SAME target shape as seed_claim_with_counter, \
-         with NOTHING countering it); return the recovered target CID so the scenario \
-         opens /claims/{{cid}} (CounterThread::None — renders the claim alone)"
-    )
+    // Seed Rachel's claim (confidence 0.91) as a PULLED PEER claim via the production
+    // `peer add` + `peer pull` federation path — the EXACT step 1 of
+    // `seed_claim_with_counter`, minus any counter. ONE triple at 0.91 so the target
+    // shape is byte-identical to the countered baseline (what makes the
+    // shown-never-applied diff meaningful, CT-3). Rachel's seed `[7u8; 32]` mirrors the
+    // slice-03 counter_claim.rs convention.
+    let rachel_seed = [7u8; 32];
+    let _graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+            seed: rachel_seed,
+            triples: &[(
+                "github:rust-lang/cargo",
+                "org.openlore.philosophy.dependency-pinning",
+                0.91,
+            )],
+        }],
+    );
+
+    // Recover the production-recomputed target CID from the real `peer_claims` table
+    // (the pull pipeline verified + content-addressed it — no hand-inserted row). With
+    // NOTHING countering it, `query_counter_claims` returns empty → CounterThread::None.
+    let target_cids = read_peer_claim_cids_for(env, COUNTER_TARGET_AUTHOR_RACHEL);
+    assert_eq!(
+        target_cids.len(),
+        1,
+        "seed_uncountered_claim: expected exactly ONE pulled Rachel claim; \
+         got {target_cids:?}"
+    );
+    target_cids.into_iter().next().expect("one target CID")
 }
 
 /// Assert a rendered claim-detail body (fragment OR full page) renders the
@@ -10097,13 +10121,21 @@ pub fn assert_counter_thread_presence_flag_is_neutral(body: &str) {
 /// claims", "Countered", "0 counters", "no disagreement", "no counter" — the
 /// un-countered claim renders exactly as slice-06 (byte-unaffected for the common case).
 pub fn assert_no_counter_thread_noise(body: &str) {
-    let _ = body;
-    todo!(
-        "DELIVER (assert_no_counter_thread_noise): assert the body contains NONE of \
-         'Counter-claims', 'Countered', '0 counters', 'no disagreement' — an \
-         un-countered claim (CounterThread::None) renders nothing extra (slice-06 \
-         parity; I-CT-2)"
-    )
+    // An un-countered claim (CounterThread::None) renders NOTHING extra: no
+    // "Counter-claims" section heading, no "Countered" presence flag, and no
+    // empty-state "0 counters" / "no disagreement" noise (slice-06 parity; I-CT-2).
+    for noise in [
+        "Counter-claims",
+        "Countered",
+        "0 counters",
+        "no disagreement",
+    ] {
+        assert!(
+            !body.contains(noise),
+            "I-CT-2: an un-countered claim must render NO {noise:?} noise \
+             (CounterThread::None renders nothing extra);\n--- body ---\n{body}"
+        );
+    }
 }
 
 /// Assert NO detail response shape renders a write / sign / counter / publish control
@@ -10144,12 +10176,45 @@ pub fn assert_counter_claim_verbatim_unchanged(
     countered_body: &str,
     expected_confidence_verbatim: &str,
 ) {
-    let _ = (uncountered_body, countered_body, expected_confidence_verbatim);
-    todo!(
-        "DELIVER (assert_counter_claim_verbatim_unchanged): assert \
-         countered_body.contains(expected_confidence_verbatim) byte-for-byte; AND assert \
-         the claim region (subject/predicate/object/confidence/author/cid) of the \
-         countered render is byte-identical to the un-countered render — the counter \
-         never re-weights/filters/merges/re-ranks the claim (I-CT-2 / OD-AV-7 / ADR-015)"
-    )
+    // The countered claim's confidence renders VERBATIM (0.91, never 0.9/91%) and
+    // UNCHANGED by the counter — the load-bearing shown-never-applied pin (I-CT-2 /
+    // I-CT-4). It must be present in BOTH renders byte-for-byte.
+    assert!(
+        uncountered_body.contains(expected_confidence_verbatim),
+        "I-CT-4: the un-countered baseline must render confidence \
+         {expected_confidence_verbatim:?} verbatim;\n--- uncountered ---\n{uncountered_body}"
+    );
+    assert!(
+        countered_body.contains(expected_confidence_verbatim),
+        "I-CT-2/I-CT-4: the countered claim's confidence must render \
+         {expected_confidence_verbatim:?} verbatim + UNCHANGED by the counter;\n\
+         --- countered ---\n{countered_body}"
+    );
+
+    // The claim region (subject/predicate/object/confidence/author/composed_at/cid +
+    // its evidence) is the `<dl>…</dl>` + evidence block inside `#claim-detail`. The
+    // counter is additive context only — the neutral "Countered" flag is inserted ABOVE
+    // the fields and the thread `<section>` BELOW the evidence; the FIELD block itself
+    // is byte-identical. Extract that contiguous claim-region byte-run from the
+    // un-countered render and assert it appears VERBATIM inside the countered render.
+    // Any divergence is an UNSHIPPABLE shown-never-applied breach (I-CT-2 / OD-AV-7 /
+    // ADR-015).
+    let region_start = uncountered_body
+        .find("<dl>")
+        .expect("the un-countered detail must render the claim-field <dl> region");
+    let region_tail = &uncountered_body[region_start..];
+    // The claim region ends where the `#claim-detail` div closes (the un-countered
+    // render carries no counter section, so the trailing `</div>` is the region end).
+    let region_end = region_tail
+        .rfind("</div>")
+        .expect("the claim-detail region must close with </div>");
+    let claim_region = &region_tail[..region_end];
+
+    assert!(
+        countered_body.contains(claim_region),
+        "I-CT-2 / OD-AV-7 / ADR-015 (shown-never-applied): the claim region must be \
+         BYTE-IDENTICAL with and without a counter (the counter never \
+         re-weights/filters/merges/re-ranks the claim);\n--- expected claim region ---\n\
+         {claim_region}\n--- countered ---\n{countered_body}"
+    );
 }
