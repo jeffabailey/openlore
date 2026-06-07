@@ -11786,15 +11786,109 @@ pub fn seed_project_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyEdge
 /// Returns the [`SeededSurveyEdges`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn seed_philosophy_survey_one_edge_countered(_env: &TestEnv) -> SeededSurveyEdges {
-    todo!(
-        "slice-13 RED scaffold: seed a /philosophy survey (REUSE \
-         seed_philosophy_survey_trail -> edges across groups in peer_claims) and counter \
-         a KNOWN subset of edge claim cids via a DISTINCT peer (peer add + peer pull -> \
-         peer_claim_references), all via PRODUCTION paths; return the SeededSurveyEdges \
-         (entity + ordered + countered + uncountered edge cids) — the SYMMETRIC mirror \
-         of seed_project_survey_one_edge_countered"
-    )
+pub fn seed_philosophy_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyEdges {
+    // The SYMMETRIC mirror of `seed_project_survey_one_edge_countered`, swapping
+    // subject↔object: Rachel embodies the SHARED philosophy OBJECT across THREE DISTINCT
+    // subjects (projects), so three projects-that-embody edges across the philosophy
+    // survey's groups land in `peer_claims` (the LOCAL `/philosophy` survey rows, Pillar 3
+    // / I-GT-2). Tobias is the DISTINCT peer hosting a COUNTER referencing ONE of Rachel's
+    // edge claims. Rachel's target CID is DETERMINISTIC (the pull pipeline recomputes the
+    // SAME CID the builder computes), so Tobias's counter references it before either is
+    // pulled. Build BOTH peers' verifiable wire records UP FRONT, holding each `PeerPds`
+    // ALIVE for the whole function so a SINGLE `peer pull` over BOTH peers succeeds.
+    let surveyed_philosophy = TRAVERSAL_PHILOSOPHY_DEP_PINNING;
+    let surveyed_author = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [42u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_author,
+        rachel_seed,
+        &[
+            (TRAVERSAL_PROJECT_NIXPKGS, surveyed_philosophy, 0.92),
+            (TRAVERSAL_PROJECT_BAZEL, surveyed_philosophy, 0.85),
+            ("github:rust-lang/cargo", surveyed_philosophy, 0.74),
+        ],
+    );
+    // Counter Rachel's FIRST surveyed edge — its deterministic CID is the counter target.
+    let target_cid = rachel_records
+        .first()
+        .expect("seed_philosophy_survey_one_edge_countered: Rachel's first surveyed record")
+        .rkey
+        .clone();
+
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_author, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    for (did, pds) in [
+        (surveyed_author, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_philosophy_survey_one_edge_countered: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: surveyed_author,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_philosophy_survey_one_edge_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Recover the survey's edge CIDs in the slice-10 grouped render order (the flat union of
+    // every EdgeRow.cid across every EdgeGroup — ADR-050's flatten point), then split the
+    // ONE countered edge + the rest un-countered. (Tobias's counter row carries a DIFFERENT
+    // object, so it never appears in THIS philosophy's survey.)
+    let ordered_cids =
+        read_survey_edge_cids_in_render_order(env, "philosophy", surveyed_philosophy);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_philosophy_survey_one_edge_countered: the countered target CID {target_cid:?} \
+         must be among the surveyed philosophy's edges; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededSurveyEdges {
+        entity: surveyed_philosophy.to_string(),
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a `/project?subject=<entity>` survey where ONE edge is countered by TWO
@@ -11808,15 +11902,125 @@ pub fn seed_philosophy_survey_one_edge_countered(_env: &TestEnv) -> SeededSurvey
 ///
 /// SCAFFOLD: true (slice-13).
 pub fn seed_project_survey_edge_two_counters_distinct_authors(
-    _env: &TestEnv,
+    env: &TestEnv,
 ) -> SeededSurveyEdges {
-    todo!(
-        "slice-13 RED scaffold: seed a /project survey where ONE edge's claim cid is \
-         countered by TWO DISTINCT peer authors (both target the SAME edge cid via one \
-         peer pull -> peer_claim_references with the SAME referenced_cid) so the DISTINCT \
-         read collapses them to ONE presence membership; return the SeededSurveyEdges \
-         whose single countered entry is that edge"
-    )
+    // Rachel is the SURVEYED contributor asserting the SHARED project subject across THREE
+    // DISTINCT philosophies (three edges across three groups land in `peer_claims` — the
+    // LOCAL `/project` survey rows, Pillar 3 / I-GT-2). TWO DISTINCT peers (Tobias + Uli)
+    // each author a verifiable COUNTER referencing the SAME edge claim CID (Rachel's first
+    // edge), so BOTH land in `peer_claim_references` with the SAME `referenced_cid` → the
+    // DISTINCT read collapses them to ONE presence membership → the edge carries EXACTLY ONE
+    // neutral marker (never "disputed by 2"). Build ALL THREE peers' records UP FRONT,
+    // holding each `PeerPds` ALIVE so a SINGLE `peer pull` over all three succeeds.
+    let surveyed_project = "github:peer/rachel-cargo";
+    let surveyed_author = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [41u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_author,
+        rachel_seed,
+        &[
+            (surveyed_project, TRAVERSAL_PHILOSOPHY_DEP_PINNING, 0.90),
+            (surveyed_project, TRAVERSAL_PHILOSOPHY_REPRO_BUILDS, 0.74),
+            (surveyed_project, "org.openlore.philosophy.memory-safety", 0.25),
+        ],
+    );
+    // BOTH counters target Rachel's FIRST surveyed edge — its deterministic CID.
+    let target_cid = rachel_records
+        .first()
+        .expect("seed_project_survey_edge_two_counters_distinct_authors: Rachel's first record")
+        .rkey
+        .clone();
+
+    // TWO DISTINCT counter authors, each referencing the SAME target CID (distinct reasons
+    // so they are genuinely two separate signed records, collapsed only by DISTINCT
+    // referenced_cid — never merged into a count).
+    let second_counter_author = "did:plc:uli-test";
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let uli_seed = [11u8; 32];
+    let (uli_record, uli_pubkey_hex) = build_verifiable_peer_counter_record(
+        second_counter_author,
+        uli_seed,
+        &target_cid,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_author, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+    let uli_pds = PeerPds::for_peer(second_counter_author, vec![uli_record]);
+
+    for (did, pds) in [
+        (surveyed_author, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+        (second_counter_author, &uli_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_project_survey_edge_two_counters_distinct_authors: peer add for {did} must \
+             succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: surveyed_author,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: second_counter_author,
+                peer_endpoint: uli_pds.endpoint_url(),
+                peer_pubkey_hex: &uli_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_project_survey_edge_two_counters_distinct_authors: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // Recover the survey's edge CIDs in slice-10 render order, then split the ONE
+    // twice-countered edge + the rest. (Both counters' rows carry a DIFFERENT subject, so
+    // they never appear in THIS project's survey.)
+    let ordered_cids = read_survey_edge_cids_in_render_order(env, "project", surveyed_project);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_project_survey_edge_two_counters_distinct_authors: the twice-countered target \
+         CID {target_cid:?} must be among the surveyed project's edges; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededSurveyEdges {
+        entity: surveyed_project.to_string(),
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a survey with NO counters at all (the EDGE no-noise fixture): several plain
@@ -12119,12 +12323,32 @@ pub fn assert_edge_not_flagged(body: &str, uncountered_cid: &str) {
 /// The EDGE sibling of [`assert_list_flag_links_to_thread`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_edge_flag_links_to_thread(_body: &str, _countered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the 'Countered' marker on the traversal edge for \
-         countered_cid is the render-only one-hop link to its slice-11 thread \
-         (navigation TEXT, never a control; US-CF-003 / I-CF-1 / I-CF-6)"
-    )
+pub fn assert_edge_flag_links_to_thread(body: &str, countered_cid: &str) {
+    // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
+    // whitespace inside the element). Scan the rendered HTML only. The EDGE sibling of
+    // [`assert_peer_claim_flag_links_to_thread`].
+    let anchor = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&anchor),
+        "assert_edge_flag_links_to_thread: the 'Countered' marker on the countered traversal \
+         edge for {countered_cid:?} must be the render-only one-hop link {anchor:?} to its \
+         slice-11 thread (navigation TEXT, never a control; US-CF-003 / I-CF-1 / I-CF-6); \
+         body was:\n{body}"
+    );
+    // It is a plain anchor — never an executable write/sign/counter control. The edge flag
+    // never emits a form, button, or onclick wrapping the marker (the human gate stays the
+    // CLI; I-CF-1).
+    for control in ["<form", "<button", "onclick"] {
+        assert!(
+            !body.to_ascii_lowercase().contains(control),
+            "assert_edge_flag_links_to_thread: the traversal-edge flag must be a render-only \
+             anchor, never an executable control ({control:?}); the only write path is the \
+             CLI (I-CF-1); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a traversal EDGE countered by N (>1) authors shows EXACTLY ONE neutral
@@ -12133,13 +12357,48 @@ pub fn assert_edge_flag_links_to_thread(_body: &str, _countered_cid: &str) {
 /// sibling of [`assert_list_flag_is_single_neutral_presence`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_edge_flag_is_single_neutral_presence(_body: &str, _target_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the traversal edge for target_cid (countered by \
-         >= 2 distinct authors) carries EXACTLY ONE neutral 'Countered' marker (DISTINCT \
-         referenced_cid -> one presence membership -> one flag) and the body carries NO \
-         count/verdict/merged-judgement phrasing; I-CF-3 / KPI-GRAPH-2"
-    )
+pub fn assert_edge_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
+    // PRESENCE-only: an edge countered by N distinct authors collapses (DISTINCT
+    // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
+    // marker on its edge, NEVER one-per-counter and never a count. Count the exact anchor
+    // occurrences for this CID — it must appear EXACTLY once. The EDGE sibling of
+    // [`assert_peer_claim_flag_is_single_neutral_presence`].
+    let marker = format!(
+        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    let occurrences = body.matches(&marker).count();
+    assert_eq!(
+        occurrences, 1,
+        "assert_edge_flag_is_single_neutral_presence: the traversal edge for {target_cid:?} \
+         (countered by ≥2 distinct authors) must carry EXACTLY ONE neutral 'Countered' marker \
+         (presence membership → one flag, DISTINCT referenced_cid; I-CF-3 / KPI-GRAPH-2), got \
+         {occurrences} occurrences of {marker:?}; body was:\n{body}"
+    );
+
+    // The flag is PRESENCE-only: the survey body carries NONE of the count / verdict /
+    // merged-judgement phrasings — never "disputed by N", never a consensus or net verdict.
+    // Lowercased so a capitalized variant can never sneak through (mirrors the LIST sibling).
+    let lowered = body.to_ascii_lowercase();
+    for verdict in [
+        // count-based / merged-judgement phrasing (never a count aggregated to a verdict)
+        "disputed by",
+        "consensus",
+        "net verdict",
+        "people disagree",
+        // verdict words — the flag asserts presence, never correctness of the counter
+        "disputed",
+        "refuted",
+        "is false",
+        "is wrong",
+    ] {
+        assert!(
+            !lowered.contains(verdict),
+            "assert_edge_flag_is_single_neutral_presence: the traversal-edge 'Countered' flag \
+             is presence-only — it must NEVER emit a count / verdict / merged-judgement \
+             phrasing ({verdict:?}); a twice-countered edge shows ONE neutral marker, never \
+             'disputed by 2' (I-CF-3 / KPI-GRAPH-2); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the flagged traversal-survey render is byte-identical to the slice-10
