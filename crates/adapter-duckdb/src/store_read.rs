@@ -199,14 +199,7 @@ impl DuckDbStoreReadAdapter {
             // an own row carries an empty PDS; a peer row carries the PDS it was
             // fetched from. A blank author_did (defensive, bypassing the slice-03
             // CHECK) projects to `Unknown` so the viewer labels rather than drops it.
-            let origin = if author_did.is_empty() {
-                PeerOrigin::Unknown
-            } else {
-                PeerOrigin::Known {
-                    author_did: author_did.clone(),
-                    fetched_from_pds,
-                }
-            };
+            let origin = peer_origin(&author_did, fetched_from_pds);
             let _ = source_table;
             survey.push(SurveyRow {
                 author_did,
@@ -449,14 +442,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                     // dropping the row (step 03-03 / V-10). The production
                     // `peer pull` path always yields a non-empty author_did, so
                     // step 03-01 produces only `Known`.
-                    let origin = if author_did.is_empty() {
-                        PeerOrigin::Unknown
-                    } else {
-                        PeerOrigin::Known {
-                            author_did,
-                            fetched_from_pds,
-                        }
-                    };
+                    let origin = peer_origin(&author_did, fetched_from_pds);
                     Ok(PeerClaimRow {
                         cid: row.get::<_, String>(0)?,
                         subject: row.get::<_, String>(1)?,
@@ -691,14 +677,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         let mut counters = Vec::with_capacity(staged.len());
         for (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path) in staged {
             let reason = self.read_reason_at(&artifact_path)?;
-            let origin = if author_did.is_empty() {
-                PeerOrigin::Unknown
-            } else {
-                PeerOrigin::Known {
-                    author_did: author_did.clone(),
-                    fetched_from_pds,
-                }
-            };
+            let origin = peer_origin(&author_did, fetched_from_pds);
             counters.push(CounterClaimRow {
                 author_did,
                 cid,
@@ -709,6 +688,25 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             });
         }
         Ok(counters)
+    }
+}
+
+/// Project a `(author_did, fetched_from_pds)` pair from a `peer_claims`-shaped row
+/// into the [`PeerOrigin`] ADT — the SINGLE site for the "blank author_did ->
+/// `Unknown`" defensive rule (BR-VIEW-5 / step 03-03 / V-10). A NON-EMPTY
+/// `author_did` (the schema-guaranteed common case, slice-03 CHECK) yields
+/// [`PeerOrigin::Known`]; a blank one (data bypassing the CHECK) yields
+/// [`PeerOrigin::Unknown`] so the viewer LABELS rather than DROPS the row. Shared
+/// by `query_survey`, `list_peer_claims`, and `query_counter_claims` (one mapping,
+/// one place to attack).
+fn peer_origin(author_did: &str, fetched_from_pds: String) -> PeerOrigin {
+    if author_did.is_empty() {
+        PeerOrigin::Unknown
+    } else {
+        PeerOrigin::Known {
+            author_did: author_did.to_string(),
+            fetched_from_pds,
+        }
     }
 }
 
