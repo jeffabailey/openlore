@@ -11386,15 +11386,147 @@ pub fn seed_peer_claims_one_countered(env: &TestEnv) -> SeededPeerClaimsList {
 /// SCAFFOLD: true (slice-13) — adapts `seed_claims_list_target_two_counters_distinct_
 /// authors` to the FEDERATED surface (the target is a PEER claim on `/peer-claims`).
 pub fn seed_peer_claims_target_two_counters_distinct_authors(
-    _env: &TestEnv,
+    env: &TestEnv,
 ) -> SeededPeerClaimsList {
-    todo!(
-        "slice-13 RED scaffold: seed a /peer-claims page where ONE peer claim is \
-         countered by TWO DISTINCT peer authors (both counters target the SAME peer cid \
-         via a single peer pull, landing in peer_claim_references with the SAME \
-         referenced_cid) so the DISTINCT read collapses them to ONE presence membership; \
-         return the SeededPeerClaimsList whose single countered entry is that peer row"
-    )
+    // STEP 1 — build the SURVEYED peer's (Rachel's) plain claims + BOTH distinct COUNTER
+    // authors' verifiable records UP FRONT, holding every `PeerPds` ALIVE for the whole
+    // function so a SINGLE `peer pull` over all three peers succeeds. Rachel hosts the
+    // `/peer-claims` rows; Tobias and Maria are the TWO DISTINCT counter authors, each
+    // referencing the SAME Rachel-claim CID (the twice-countered target). Rachel's target
+    // CID is DETERMINISTIC (the pull pipeline recomputes the SAME CID the builder computes),
+    // so both counters can reference it before any record is pulled.
+    let surveyed_peer = COUNTER_TARGET_AUTHOR_RACHEL;
+    let rachel_seed = [7u8; 32];
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        surveyed_peer,
+        rachel_seed,
+        &[
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+        ],
+    );
+    // Counter Rachel's FIRST surveyed claim — its deterministic CID is the shared target of
+    // BOTH distinct-author counters.
+    let target_cid = rachel_records
+        .first()
+        .expect("seed_peer_claims_target_two_counters_distinct_authors: Rachel's first record")
+        .rkey
+        .clone();
+
+    // TWO DISTINCT counter authors (Tobias + Maria), each authoring a verifiable
+    // `counters`-referencing record targeting the SAME `target_cid` (ADR-015). Both land in
+    // `peer_claim_references` with the SAME `referenced_cid` — two DISTINCT authors, one
+    // referenced CID. The `counter_presence_for` UNION-ALL DISTINCT collapses them to ONE
+    // presence membership → ONE flag.
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let maria_did = "did:plc:maria-test";
+    let maria_seed = [11u8; 32];
+    let (maria_record, maria_pubkey_hex) = build_verifiable_peer_counter_record(
+        maria_did,
+        maria_seed,
+        &target_cid,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(surveyed_peer, rachel_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+    let maria_pds = PeerPds::for_peer(maria_did, vec![maria_record]);
+
+    // STEP 2 — subscribe to ALL THREE peers via the real `peer add` verb (resolver wired per
+    // peer), then `peer pull` ALL in ONE invocation while every PDS is alive. The production
+    // pull pipeline verifies each record, recomputes its CID, and writes `peer_claims` (+
+    // `peer_claim_references` for BOTH counters, each landing with
+    // `referenced_cid == target_cid`).
+    for (did, pds) in [
+        (surveyed_peer, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+        (maria_did, &maria_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_peer_claims_target_two_counters_distinct_authors: peer add for {did} must \
+             succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: surveyed_peer,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: maria_did,
+                peer_endpoint: maria_pds.endpoint_url(),
+                peer_pubkey_hex: &maria_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_peer_claims_target_two_counters_distinct_authors: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 3 — recover the SURVEYED peer's claim CIDs; split the ONE twice-countered target +
+    // the rest un-countered. (The two counters live under Tobias + Maria in `peer_claims`,
+    // NOT under Rachel — so the surveyed set is exactly Rachel's three rows.)
+    let surveyed_cids = read_peer_claim_cids_for(env, surveyed_peer);
+    assert!(
+        surveyed_cids.contains(&target_cid),
+        "seed_peer_claims_target_two_counters_distinct_authors: the twice-countered target \
+         CID {target_cid:?} must be among the surveyed peer's claims; got {surveyed_cids:?}"
+    );
+    let uncountered_cids = surveyed_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // Every peer-claim CID in the slice-06 `/peer-claims` render order (for the
+    // no-regression gold). Includes both counter rows + Rachel's rows.
+    let ordered_cids = read_peer_claim_cids_in_list_order(env);
+
+    SeededPeerClaimsList {
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+        peer_did: surveyed_peer.to_string(),
+    }
 }
 
 /// Seed a FEDERATED `/peer-claims` page with NO counters at all (the CF no-noise
@@ -11638,12 +11770,31 @@ pub fn assert_peer_claim_row_not_flagged(body: &str, uncountered_cid: &str) {
 /// The FEDERATED sibling of [`assert_list_flag_links_to_thread`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claim_flag_links_to_thread(_body: &str, _countered_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the 'Countered' marker on the /peer-claims row \
-         for countered_cid is the render-only one-hop link to its slice-11 thread \
-         (navigation TEXT, never a control; US-CF-002 / I-CF-1 / I-CF-6)"
-    )
+pub fn assert_peer_claim_flag_links_to_thread(body: &str, countered_cid: &str) {
+    // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
+    // whitespace inside the element). Scan the rendered HTML only.
+    let anchor = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&anchor),
+        "assert_peer_claim_flag_links_to_thread: the 'Countered' marker on the countered \
+         /peer-claims row for {countered_cid:?} must be the render-only one-hop link \
+         {anchor:?} to its slice-11 thread (navigation TEXT, never a control; US-CF-002 / \
+         I-CF-1 / I-CF-6); body was:\n{body}"
+    );
+    // It is a plain anchor — never an executable write/sign/counter control. The peer list
+    // flag never emits a form, button, or onclick wrapping the marker (the human gate stays
+    // the CLI; I-CF-1).
+    for control in ["<form", "<button", "onclick"] {
+        assert!(
+            !body.to_ascii_lowercase().contains(control),
+            "assert_peer_claim_flag_links_to_thread: the /peer-claims flag must be a \
+             render-only anchor, never an executable control ({control:?}); the only write \
+             path is the CLI (I-CF-1); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert a `/peer-claims` row countered by N (>1) authors shows EXACTLY ONE neutral
@@ -11652,13 +11803,48 @@ pub fn assert_peer_claim_flag_links_to_thread(_body: &str, _countered_cid: &str)
 /// [`assert_list_flag_is_single_neutral_presence`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_peer_claim_flag_is_single_neutral_presence(_body: &str, _target_cid: &str) {
-    todo!(
-        "slice-13 RED scaffold: assert the /peer-claims row for target_cid (countered by \
-         >= 2 distinct authors) carries EXACTLY ONE neutral 'Countered' marker (DISTINCT \
-         referenced_cid -> one presence membership -> one flag) and the body carries NO \
-         count/verdict/merged-judgement phrasing; I-CF-3 / KPI-AV-2"
-    )
+pub fn assert_peer_claim_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
+    // PRESENCE-only: a peer CID countered by N distinct authors collapses (DISTINCT
+    // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
+    // marker on its row, NEVER one-per-counter and never a count. Count the exact anchor
+    // occurrences for this CID — it must appear EXACTLY once.
+    let marker = format!(
+        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    let occurrences = body.matches(&marker).count();
+    assert_eq!(
+        occurrences, 1,
+        "assert_peer_claim_flag_is_single_neutral_presence: the /peer-claims row for \
+         {target_cid:?} (countered by ≥2 distinct authors) must carry EXACTLY ONE neutral \
+         'Countered' marker (presence membership → one flag, DISTINCT referenced_cid; \
+         I-CF-3 / KPI-AV-2), got {occurrences} occurrences of {marker:?}; body was:\n{body}"
+    );
+
+    // The flag is PRESENCE-only: the list body carries NONE of the count / verdict /
+    // merged-judgement phrasings — never "disputed by N", never a consensus or net
+    // verdict. Lowercased so a capitalized variant can never sneak through (mirrors the
+    // slice-11 `assert_counter_thread_presence_flag_is_neutral` blocklist on the LIST).
+    let lowered = body.to_ascii_lowercase();
+    for verdict in [
+        // count-based / merged-judgement phrasing (never a count aggregated to a verdict)
+        "disputed by",
+        "consensus",
+        "net verdict",
+        "people disagree",
+        // verdict words — the flag asserts presence, never correctness of the counter
+        "disputed",
+        "refuted",
+        "is false",
+        "is wrong",
+    ] {
+        assert!(
+            !lowered.contains(verdict),
+            "assert_peer_claim_flag_is_single_neutral_presence: the /peer-claims 'Countered' \
+             flag is presence-only — it must NEVER emit a count / verdict / merged-judgement \
+             phrasing ({verdict:?}); a twice-countered row shows ONE neutral marker, never \
+             'disputed by 2' (I-CF-3 / KPI-AV-2); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the `/peer-claims` row for the given peer still shows its peer ORIGIN (the
