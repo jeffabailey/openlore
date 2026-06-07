@@ -10671,15 +10671,123 @@ pub fn seed_claims_list_none_countered(env: &TestEnv) -> SeededClaimsList {
 /// match the slice-06 render of the SAME store (the no-regression baseline). NO
 /// hand-inserted store rows.
 pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
-    let _ = env;
-    todo!(
-        "slice-12 seed_claims_list_mixed_pages: sign N plain own claims; counter a KNOWN \
-         subset (mix of OWN `claim counter` → claim_references and PEER \
-         build_verifiable_peer_counter_record → peer pull → peer_claim_references); \
-         recover all own-claim CIDs in composed_at DESC, cid order; return SeededClaimsList \
-         (ordered_cids known + countered_cids subset + uncountered_cids rest), large enough \
-         for the LF-8 N+1 proxy. RED until DELIVER."
-    )
+    // STEP 1 — sign N plain own claims via the production `claim add` write path (distinct
+    // subjects → distinct CIDs). A page large enough that the LF-8 N+1-guard behavioral
+    // proxy is meaningful (many rows, a known countered subset interleaved among them).
+    let mut own_targets: Vec<String> = Vec::new();
+    for (subject, predicate, object) in [
+        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
+        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
+        ("github:rust-lang/cargo", "embodiesPhilosophy", "org.openlore.philosophy.dependency-pinning"),
+        ("github:golang/go", "embodiesPhilosophy", "org.openlore.philosophy.simplicity"),
+        ("github:python/cpython", "embodiesPhilosophy", "org.openlore.philosophy.readability"),
+        ("github:nodejs/node", "embodiesPhilosophy", "org.openlore.philosophy.event-driven"),
+        ("github:elixir-lang/elixir", "embodiesPhilosophy", "org.openlore.philosophy.fault-tolerance"),
+    ] {
+        own_targets.push(seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]));
+    }
+
+    // STEP 2 — counter a KNOWN subset of Maria's OWN claims via distinct PEER counters
+    // (the operator can NEVER counter her OWN claim — `claim counter` rejects a self-target
+    // with "use retract instead" — so an OWN list row is flagged ONLY through the
+    // `peer_claim_references` arm: a PEER who authored a `counters`-referencing record
+    // targeting that own CID). The countered targets are spread across the list (indices
+    // 1, 4, 6) so the flagged rows INTERLEAVE with un-countered rows in the rendered order,
+    // never grouped (LF-7). Rachel authors TWO counters (targets A + B) and Tobias ONE
+    // (target C), exercising one peer with MULTIPLE counters + a second DISTINCT peer —
+    // three DISTINCT `referenced_cid`s, three flagged own rows.
+    let peer_target_a = own_targets[1].clone();
+    let peer_target_b = own_targets[4].clone();
+    let peer_target_c = own_targets[6].clone();
+
+    // PEER arm — build BOTH peers' records up front, hold each PDS alive for the whole
+    // function, and pull BOTH in a SINGLE `peer pull` so each `counters` reference lands in
+    // `peer_claim_references` with `referenced_cid == <own target CID>`.
+    let rachel_seed = [7u8; 32];
+    let (rachel_record_a, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &peer_target_a,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+    let (rachel_record_b, _) = build_verifiable_peer_counter_record(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &peer_target_b,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &peer_target_c,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds =
+        PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, vec![rachel_record_a, rachel_record_b]);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    for (did, pds) in [
+        (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        assert_eq!(
+            added.status, 0,
+            "seed_claims_list_mixed_pages: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_claims_list_mixed_pages: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 3 — recover EVERY own-claim CID in the slice-06 `composed_at DESC, cid` list
+    // order. The countered subset is the three peer-countered targets; everything else (the
+    // remaining plain own rows) is un-countered. The peer counters live in `peer_claims`,
+    // NOT `claims`, so the own list is exactly the eight `claim add` rows.
+    let ordered_cids = read_own_claim_cids_in_list_order(env);
+    let countered_cids = vec![peer_target_a, peer_target_b, peer_target_c];
+    for cid in &countered_cids {
+        assert!(
+            ordered_cids.contains(cid),
+            "seed_claims_list_mixed_pages: countered target CID {cid:?} must be among the \
+             own claims; got {ordered_cids:?}"
+        );
+    }
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| !countered_cids.contains(cid))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededClaimsList {
+        ordered_cids,
+        countered_cids,
+        uncountered_cids,
+    }
 }
 
 /// Assert a rendered `/claims` LIST body (fragment OR full page) FLAGS the given countered

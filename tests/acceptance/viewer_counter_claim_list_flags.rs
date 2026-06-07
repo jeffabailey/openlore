@@ -471,15 +471,59 @@ fn a_mixed_page_flags_only_the_countered_rows_in_their_unchanged_positions() {
     // assert_list_row_not_flagged per row), they appear in the SAME composed_at DESC
     // order (NOT pulled together / to the top), and each row's confidence renders verbatim
     // (the flag re-weights nothing; I-LF-2 / I-LF-4).
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-7 (mixed page): seed_claims_list_mixed_pages(&env) → an ordered page with \
-         countered + un-countered rows; ViewerServer::start; page = get(\"/claims\"); \
-         assert 200; assert_list_row_flagged_countered for each countered cid + \
-         assert_list_row_not_flagged for each un-countered cid; assert the rendered row \
-         order is composed_at DESC, cid (countered rows NOT grouped/pulled up) and each \
-         confidence renders verbatim. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    let seeded = seed_claims_list_mixed_pages(&env);
+    let server = ViewerServer::start(&env);
+
+    let page = server.get("/claims");
+
+    assert_eq!(
+        page.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        page.body
+    );
+    assert!(
+        page.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        page.content_type
+    );
+
+    // ONLY the genuinely-countered rows carry the neutral "Countered" marker (one-hop
+    // link to their slice-11 thread); EVERY un-countered row carries NO marker.
+    for countered in &seeded.countered_cids {
+        assert_list_row_flagged_countered(&page.body, countered);
+    }
+    for uncountered in &seeded.uncountered_cids {
+        assert_list_row_not_flagged(&page.body, uncountered);
+    }
+
+    // The flag is ADDITIVE — it never moves/reorders a row. The rendered row order is the
+    // UNCHANGED slice-06 `composed_at DESC, cid` order (`seeded.ordered_cids`): the flagged
+    // and un-flagged rows INTERLEAVE in their natural positions, never grouped/pulled to the
+    // top. Assert every CID appears EXACTLY once and that their first-seen byte offsets are
+    // STRICTLY INCREASING in `ordered_cids` order (the flag is a per-row marker, never a
+    // sort/group key; I-LF-2 / I-LF-4).
+    let mut prev_offset: Option<usize> = None;
+    for cid in &seeded.ordered_cids {
+        let offset = page.body.find(cid.as_str()).unwrap_or_else(|| {
+            panic!(
+                "LF-7: every list row's CID must appear in the rendered body; {cid:?} was \
+                 missing; body was:\n{}",
+                page.body
+            )
+        });
+        if let Some(prev) = prev_offset {
+            assert!(
+                offset > prev,
+                "LF-7 (order unchanged): the rendered row order must follow the slice-06 \
+                 `composed_at DESC, cid` order {:?} verbatim — the additive 'Countered' flag \
+                 must NOT move/reorder/group any row; {cid:?} rendered out of position (the \
+                 flag is a per-row marker, never a sort key; I-LF-2 / I-LF-4); body was:\n{}",
+                seeded.ordered_cids, page.body
+            );
+        }
+        prev_offset = Some(offset);
+    }
 }
 
 /// LF-8 (US-LF-003 — N+1-guard behavioral proxy; I-LF-8 / ADR-048): a LARGE page mixing
