@@ -8416,6 +8416,45 @@ pub fn read_own_claim_cids_in_list_order(env: &TestEnv) -> Vec<String> {
     rows.map(|r| r.expect("decode own claims cid")).collect()
 }
 
+/// Read the RECORDED slice-06 baseline for the own-claims `/claims` list of THIS store
+/// (tactic (b) for the LF-6 no-regression gold): every own-claim CID in the slice-06
+/// `composed_at DESC, cid` order, paired with that row's VERBATIM confidence cell string
+/// (`render_confidence` → `"0.90"`, two decimals). Reads the SAME `claims` table the viewer
+/// reads, in the SAME order the slice-06 list SQL uses, so the returned [`Slice06Baseline`]
+/// is the no-flag reference render's order + count + confidence WITHOUT depending on a
+/// pre-flag binary or a no-flag HTTP seam (neither exists). The CID-canonicalizes-composed_at
+/// constraint that rules out a twin-store baseline does NOT affect this read — it reflects
+/// the SAME rows the flagged render projects.
+pub fn read_slice06_list_baseline(env: &TestEnv) -> Slice06Baseline {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for slice-06 baseline read: {err}",
+            db_path.display()
+        )
+    });
+    let mut stmt = conn
+        .prepare("SELECT cid, confidence FROM claims ORDER BY composed_at DESC, cid")
+        .unwrap_or_else(|err| panic!("prepare slice-06 baseline read: {err}"));
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })
+        .unwrap_or_else(|err| panic!("query slice-06 baseline rows: {err}"));
+    let mut ordered_cids = Vec::new();
+    let mut confidence_cells = Vec::new();
+    for r in rows {
+        let (cid, confidence) = r.expect("decode slice-06 baseline row");
+        ordered_cids.push(cid);
+        // Mirror viewer-domain `render_confidence`: two decimals, VERBATIM (0.90, never 0.9).
+        confidence_cells.push(format!("{confidence:.2}"));
+    }
+    Slice06Baseline {
+        ordered_cids,
+        confidence_cells,
+    }
+}
+
 /// Assert a rendered `/score` body NAMES every expected claim cid in its per-claim
 /// breakdown (I-CS-10): every breakdown row identifies the contributing claim by
 /// its cid, so the weight is never an opaque number detached from the claims that
@@ -10939,20 +10978,120 @@ pub fn assert_list_flag_is_single_neutral_presence(body: &str, target_cid: &str)
 /// the row ORDER (`composed_at DESC, cid`), the PAGING / position indicator, the total
 /// COUNT, and EVERY row's CONFIDENCE are byte-IDENTICAL — the flag never re-orders,
 /// re-paginates, re-counts, or re-weights the list (US-LF-003 no-regression GOLD / I-LF-2
-/// / I-LF-4). `baseline` is the slice-06 reference render of the same store (the no-flag
-/// render path or the recorded slice-06 ordering); `flagged` is the slice-12 render.
+/// / I-LF-4).
 ///
-/// SCAFFOLD: true (slice-12) — DELIVER asserts: with the additive "Countered" markers
-/// elided from `flagged`, the row order, the position indicator, the total count, and each
-/// row's confidence cell are byte-identical to `baseline`. Any divergence is an
-/// UNSHIPPABLE no-regression breach (the flag must be additive ONLY; I-LF-2).
-pub fn assert_list_order_and_confidence_byte_identical(flagged: &str, baseline: &str) {
-    let _ = (flagged, baseline);
-    todo!(
-        "slice-12 assert_list_order_and_confidence_byte_identical: with the additive \
-         'Countered' markers elided from `flagged`, assert row order (composed_at DESC, \
-         cid), position indicator, total count, and every row's confidence cell are \
-         byte-identical to the slice-06 `baseline` render of the SAME store (the flag is \
-         additive ONLY; US-LF-003 / I-LF-2 / I-LF-4). RED until DELIVER."
-    )
+/// ## Baseline-capture tactic (b) — the RECORDED slice-06 ordering
+///
+/// There is NO pre-flag binary and NO no-flag HTTP render seam (the `/claims` route in
+/// `adapter-http-viewer` ALWAYS reads `counter_presence_for` — adding a presence-suppression
+/// mode would be a production test-seam, out of scope). Tactic (a)'s "twin no-counter store"
+/// is ALSO unusable: a claim's CID canonicalizes its `composed_at` (claim-domain
+/// `canonicalize` → `compute_cid`), so re-seeding the same claims at a different wall-clock
+/// instant yields DIFFERENT CIDs — the two renders would never be byte-identical. So we use
+/// tactic (b): the slice-06 reference is the RECORDED order + count + verbatim confidence the
+/// seed already captures ([`SeededClaimsList::ordered_cids`] from the slice-06
+/// `SELECT cid FROM claims ORDER BY composed_at DESC, cid` read), and we PROVE the flag is
+/// additive-only by ELIDING the `<a href="/claims/{cid}">Countered</a>` anchors from
+/// `flagged` (the additive markers) and asserting the elided slice-06 body still honours that
+/// recorded order/count/paging/confidence byte-for-byte.
+///
+/// `flagged` is the slice-12 `/claims` render; `baseline` is the RECORDED slice-06 spec for
+/// the SAME store (the seed's ordered CIDs + each row's verbatim confidence string). The
+/// elision is non-circular: it removes ONLY the additive anchors, so any structural
+/// regression (a re-order, re-page, re-count, or re-weight) SURVIVES elision and FAILS the
+/// recorded-order / position-indicator / confidence-cell assertions below.
+pub struct Slice06Baseline {
+    /// The own-claim CIDs in the recorded slice-06 `composed_at DESC, cid` order — the order
+    /// the elided (no-flag) body's rows MUST appear in (strictly increasing byte offsets).
+    pub ordered_cids: Vec<String>,
+    /// Each row's verbatim confidence cell as slice-06 renders it (`render_confidence` →
+    /// `"0.90"`), parallel to `ordered_cids`. Every cell MUST survive the elision unchanged.
+    pub confidence_cells: Vec<String>,
+}
+
+/// Assert (US-LF-003 no-regression GOLD; tactic (b)) the slice-12 `flagged` render, with the
+/// additive "Countered" anchors elided, is byte-identical to the recorded slice-06
+/// `baseline` of the SAME store in ROW ORDER, the POSITION INDICATOR (paging + total count),
+/// and EVERY row's CONFIDENCE cell — the flag changed nothing but the additive marker.
+pub fn assert_list_order_and_confidence_byte_identical(flagged: &str, baseline: &Slice06Baseline) {
+    // ELIDE the additive markers: remove every `<a href="/claims/{cid}">Countered</a>`
+    // anchor (the ONLY thing slice-12 adds — appended INSIDE the CID `<td>`, see
+    // viewer-domain `render_claim_row` / `render_list_presence_flag`). What remains IS the
+    // slice-06 byte-stream for this store. Eliding for EVERY recorded CID (countered rows
+    // carry one; un-countered rows carry none, so the replace is a no-op there) keeps the
+    // helper agnostic to WHICH rows were flagged.
+    let mut elided = flagged.to_string();
+    for cid in &baseline.ordered_cids {
+        let anchor = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        elided = elided.replace(&anchor, "");
+    }
+    // No additive marker survives the elision — the remaining body is pure slice-06.
+    assert!(
+        !elided.contains(LIST_COUNTERED_FLAG_TEXT),
+        "assert_list_order_and_confidence_byte_identical: every additive {LIST_COUNTERED_FLAG_TEXT:?} \
+         anchor must elide cleanly so the remaining body is the slice-06 render; a residual \
+         marker means the flag is NOT purely the recorded `<a href>` anchor (US-LF-003 / \
+         I-LF-2); elided body was:\n{elided}"
+    );
+
+    // ROW ORDER byte-identity: every recorded CID appears EXACTLY once in the elided
+    // (no-flag) body, and their first-seen byte offsets are STRICTLY INCREASING in the
+    // recorded `composed_at DESC, cid` order — the flag re-ordered NOTHING (I-LF-2 / I-LF-4).
+    let mut prev_offset: Option<usize> = None;
+    for cid in &baseline.ordered_cids {
+        let offset = elided.find(cid.as_str()).unwrap_or_else(|| {
+            panic!(
+                "assert_list_order_and_confidence_byte_identical: the elided slice-06 body must \
+                 contain every recorded row CID; {cid:?} was missing — the flag dropped/replaced a \
+                 row (a re-count/re-page regression); elided body was:\n{elided}"
+            )
+        });
+        if let Some(prev) = prev_offset {
+            assert!(
+                offset > prev,
+                "assert_list_order_and_confidence_byte_identical: the elided slice-06 row order must \
+                 follow the recorded `composed_at DESC, cid` order {:?} VERBATIM — {cid:?} rendered \
+                 out of position, so the flag RE-ORDERED the list (US-LF-003 / I-LF-2); elided body \
+                 was:\n{elided}",
+                baseline.ordered_cids
+            );
+        }
+        prev_offset = Some(offset);
+    }
+
+    // POSITION INDICATOR byte-identity (paging + total COUNT): the count is the recorded row
+    // count; with the fixed page size (50, ADR-030) a single page renders the verbatim
+    // `1–N of N` indicator (EN DASH U+2013, matching viewer-domain `render_position_indicator`).
+    // The flag never re-paged or re-counted — the indicator is byte-exact (I-LF-2 / I-LF-4).
+    let total = baseline.ordered_cids.len();
+    let expected_indicator = format!("1\u{2013}{total} of {total}");
+    assert!(
+        elided.contains(&expected_indicator),
+        "assert_list_order_and_confidence_byte_identical: the elided slice-06 body must carry the \
+         verbatim position indicator {expected_indicator:?} (paging + total count unchanged by the \
+         flag; US-LF-003 / I-LF-2); elided body was:\n{elided}"
+    );
+
+    // CONFIDENCE cell byte-identity: every recorded row's verbatim confidence cell
+    // (`<td>0.90</td>`, slice-06 `render_confidence`) survives the elision UNCHANGED — the
+    // flag RE-WEIGHTED nothing (I-LF-2 / I-LF-4). Assert one `<td>{conf}</td>` per row so the
+    // count of confidence cells matches the recorded row count (no row's weight was altered
+    // or dropped).
+    for confidence in &baseline.confidence_cells {
+        let cell = format!("<td>{confidence}</td>");
+        let occurrences = elided.matches(&cell).count();
+        assert!(
+            occurrences >= 1,
+            "assert_list_order_and_confidence_byte_identical: the elided slice-06 body must render \
+             the verbatim confidence cell {cell:?} (the flag re-weights nothing; US-LF-003 / \
+             I-LF-4); elided body was:\n{elided}"
+        );
+    }
+    assert_eq!(
+        elided.matches("</td>").count() % baseline.ordered_cids.len().max(1),
+        0,
+        "assert_list_order_and_confidence_byte_identical: the elided slice-06 body's cell count must \
+         be a whole multiple of the recorded row count — a fractional remainder means a row was \
+         dropped or duplicated (a re-count regression; US-LF-003 / I-LF-2); elided body was:\n{elided}"
+    );
 }

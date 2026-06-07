@@ -436,17 +436,46 @@ fn the_flag_never_reorders_repages_recounts_or_reweights_the_list() {
     // byte-IDENTICAL between the flagged and the un-flagged render — the flag is additive
     // only (assert_list_order_and_confidence_byte_identical; I-LF-2). Any divergence
     // (re-order, re-page, re-count, re-weight) is an UNSHIPPABLE no-regression breach.
-    let _env = TestEnv::initialized();
-    todo!(
-        "LF-6 (shown-never-applied gold): seed_claims_list_mixed_pages(&env) → a store \
-         with a known order/count + a mix of countered + un-countered rows; \
-         ViewerServer::start; flagged = get(\"/claims\"); (baseline = the slice-06 \
-         reference render of the SAME store — DELIVER pins this via a no-flag render or \
-         the recorded slice-06 ordering); \
-         assert_list_order_and_confidence_byte_identical(&flagged.body, &baseline) — row \
-         order, position indicator, total count, and each row's confidence byte-identical; \
-         only the additive marker differs. RED until DELIVER."
-    )
+    let env = TestEnv::initialized();
+    // GIVEN a mixed store (known order/count; some own rows peer-countered, some not).
+    let _seeded = seed_claims_list_mixed_pages(&env);
+
+    // BASELINE-CAPTURE TACTIC (b) — the RECORDED slice-06 ordering. There is NO pre-flag
+    // binary and NO no-flag HTTP render seam (the `/claims` route ALWAYS reads
+    // `counter_presence_for`; adding a presence-suppression mode would be a production
+    // test-seam, out of scope). Tactic (a)'s twin no-counter store is ALSO unusable: a
+    // claim's CID canonicalizes its `composed_at` (claim-domain `canonicalize` →
+    // `compute_cid`), so re-seeding the same claims at a different instant yields DIFFERENT
+    // CIDs and the two renders could never be byte-identical. So the slice-06 reference is
+    // the RECORDED order + total count + verbatim confidence read from the SAME `claims`
+    // table in the SAME `composed_at DESC, cid` order the slice-06 list SQL uses
+    // (`read_slice06_list_baseline`). The assert then ELIDES the additive
+    // `<a href="/claims/{cid}">Countered</a>` anchors from the flagged render and proves the
+    // remaining slice-06 body still honours that recorded order/count/paging/confidence
+    // byte-for-byte — a non-circular gold: any re-order/re-page/re-count/re-weight survives
+    // the additive-marker elision and FAILS.
+    let baseline = read_slice06_list_baseline(&env);
+
+    let server = ViewerServer::start(&env);
+
+    // WHEN the slice-12 flagged `/claims` list renders.
+    let flagged = server.get("/claims");
+    assert_eq!(
+        flagged.status, 200,
+        "GET /claims must be 200; body was:\n{}",
+        flagged.body
+    );
+    assert!(
+        flagged.content_type.contains("text/html"),
+        "GET /claims must serve text/html; got {:?}",
+        flagged.content_type
+    );
+
+    // THEN with the additive "Countered" markers elided, the row ORDER (composed_at DESC,
+    // cid), the position indicator / page boundaries, the total COUNT, and EVERY row's
+    // verbatim CONFIDENCE are byte-IDENTICAL to the recorded slice-06 baseline — the flag is
+    // additive ONLY (I-LF-2 / I-LF-4). Any divergence is an UNSHIPPABLE no-regression breach.
+    assert_list_order_and_confidence_byte_identical(&flagged.body, &baseline);
 }
 
 /// LF-7 (US-LF-003 — mixed page, only countered rows flagged in unchanged order; I-LF-2):
