@@ -222,6 +222,12 @@ fn no_flagged_score_render_adds_a_write_or_sign_control() {
 /// Then the only htmx asset reference is the local /static/htmx.min.js — no CDN.
 ///
 /// @us-cf-002 @property @driving_port @real-io @offline @no-cdn @i-cf-5 @gold
+///
+/// DELIVERED slice-14 step 03-02 (SF-INV-OfflineChrome): GREEN with NO production delta —
+/// offline chrome is STRUCTURAL. The flagged `/score` full page already references ONLY
+/// the local `/static/htmx.min.js` (shipped with the chrome); `references_external_cdn()`
+/// is false by construction. This GOLD guardrail pins that the flag DELTA never reaches
+/// for a CDN.
 #[test]
 fn the_flagged_score_chrome_stays_offline_no_cdn() {
     let env = TestEnv::initialized();
@@ -275,6 +281,13 @@ fn the_flagged_score_chrome_stays_offline_no_cdn() {
 ///   state and no network call.
 ///
 /// @us-cf-002 @property @driving_port @real-io @offline @local-first @i-cf-5 @kpi-5 @gold
+///
+/// DELIVERED slice-14 step 03-02 (SF-INV-Offline): GREEN with NO production delta —
+/// offline render is STRUCTURAL. Under the plain store-only `ViewerServer::start` (NO
+/// /scrape GitHub seam, NO /search indexer seam), the presence read is a LOCAL DB-index
+/// lookup + the score is a LOCAL feed read + PURE compute, so there is NO outbound edge to
+/// degrade. The peer-countered contribution STILL carries its marker (verified at pull
+/// time; the viewer re-verifies nothing) and the surface shows NO degraded notice.
 #[test]
 fn the_flagged_score_surface_renders_fully_offline() {
     let env = TestEnv::initialized();
