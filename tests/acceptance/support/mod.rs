@@ -3538,6 +3538,82 @@ pub fn build_verifiable_peer_records_for_triples(
     (records, pubkey_hex)
 }
 
+/// Build a verifiable peer record set over caller-supplied
+/// `(subject, object, confidence, evidence)` quadruples — the IDENTICAL-SUBTOTAL
+/// TWIN sibling of [`build_verifiable_peer_records_for_triples`] (which derives
+/// `evidence` from `subject`, so two records sharing `(subject, object,
+/// confidence)` canonicalize IDENTICALLY → the SAME deterministic CID → a row
+/// collision). The slice-14 anti-misread twin fixture (SF-5) needs TWO claims in
+/// the SAME `(subject, object)` pairing with the SAME `confidence` (so the pure
+/// `scoring::score` apportions IDENTICAL subtotals — same author rank, same
+/// triangulation status, same base) yet DISTINCT CIDs so the store keeps both
+/// rows and a DISTINCT peer can counter EXACTLY ONE of them. `evidence` is the
+/// ONLY canonicalized field that perturbs the CID WITHOUT touching the subtotal
+/// (the subtotal reads `confidence` × author-rank-share + triangulation, never
+/// `evidence`), so threading a DISTINCT `evidence` per twin yields distinct CIDs +
+/// byte-equal subtotals.
+///
+/// Returns `(records, peer_pubkey_hex)` exactly like
+/// [`build_verifiable_peer_records_for_triples`]. Test-support is the only place
+/// this construction is acceptable; the production populate path is `peer pull`.
+pub fn build_verifiable_peer_records_for_quadruples(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    quadruples: &[(&str, &str, f64, &str)],
+) -> (Vec<FakePeerRecord>, String) {
+    use claim_domain::{canonicalize, compute_cid, sign, SigningKey, VerifyingKey};
+    use ed25519_dalek::SigningKey as DalekSigningKey;
+
+    let dalek_sk = DalekSigningKey::from_bytes(&peer_seed);
+    let dalek_vk = dalek_sk.verifying_key();
+    let signing_key = SigningKey(dalek_sk.to_bytes().to_vec());
+    let pubkey_hex = hex_lower(&VerifyingKey(dalek_vk.to_bytes().to_vec()).0);
+
+    let records = quadruples
+        .iter()
+        .map(|(subject, object, confidence, evidence)| {
+            let confidence_wrapper: claim_domain::Confidence =
+                serde_json::from_value(serde_json::json!(confidence))
+                    .expect("confidence value is well-formed");
+            let unsigned = claim_domain::UnsignedClaim {
+                subject: (*subject).to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: (*object).to_string(),
+                evidence: vec![(*evidence).to_string()],
+                confidence: confidence_wrapper,
+                author_did: claim_domain::Did(format!("{peer_did}#org.openlore.application")),
+                composed_at: "2026-05-22T09:18:44Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+
+            let canonical = canonicalize(&unsigned).expect("canonicalize quadruple claim");
+            let cid = compute_cid(&canonical);
+            let signature = sign(&cid, &signing_key).expect("sign quadruple claim");
+            let sig_b64 = base64url_no_pad(&signature.signature_bytes);
+
+            let body = serde_json::json!({
+                "subject": subject,
+                "predicate": "embodiesPhilosophy",
+                "object": object,
+                "evidence": [evidence],
+                "confidence": confidence,
+                "author": format!("{peer_did}#org.openlore.application"),
+                "composedAt": "2026-05-22T09:18:44Z",
+                "references": [],
+                "signature": {
+                    "kid": format!("{peer_did}#org.openlore.application"),
+                    "alg": "EdDSA",
+                    "sig": sig_b64,
+                }
+            });
+            FakePeerRecord::claim(cid.0, body)
+        })
+        .collect();
+
+    (records, pubkey_hex)
+}
+
 /// Build ONE verifiable PEER COUNTER record: a signed claim authored by `peer_did`
 /// that carries `references: [{ type: "counters", cid: target_cid }]` (ADR-015) +
 /// an optional free-text `reason`, so that when it is `peer pull`ed through the
@@ -13156,15 +13232,161 @@ pub fn seed_score_breakdown_target_two_counters_distinct_authors(
 pub fn seed_score_breakdown_identical_subtotals_one_countered(
     env: &TestEnv,
 ) -> SeededScoreBreakdown {
-    let _ = env;
-    todo!(
-        "slice-14 RED scaffold: seed a /score breakdown with TWO contributions in one \
-         pairing carrying IDENTICAL confidence + author bonus + triangulation bonus \
-         (→ identical rendered subtotals), EXACTLY ONE of which is countered by a \
-         DISTINCT peer; return the SeededScoreBreakdown so the scenario asserts both \
-         render the identical subtotal but only the countered one shows the marker \
-         (anti-misread: the counter subtracts nothing)"
+    // The scored contributor (a DISTINCT peer DID, so its rows land in `peer_claims`
+    // attributed to it; the local user is NOT the contributor here). The trail is
+    // shaped so the PURE `scoring::score` yields TWO contributions in the SAME
+    // `(subject, object)` pairing with IDENTICAL confidence + author bonus +
+    // triangulation bonus → IDENTICAL rendered subtotals (the anti-misread twins),
+    // EXACTLY ONE of which a DISTINCT peer counters.
+    let contributor_did = CONTRIBUTOR_RICH_DID;
+    let contributor_seed = [23u8; 32];
+    let object = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let twin_subject = "github:bazelbuild/bazel";
+    // The shared confidence of the two TWINS. Both twins are by the SAME author on
+    // the SAME `(twin_subject, object)` pairing at this SAME confidence → same author
+    // rank (1) → same author-distinct share, same triangulation status (the author
+    // asserts `object` on ≥2 distinct subjects below) → BYTE-EQUAL subtotals. They
+    // differ ONLY in `evidence`, the one canonicalized field that perturbs the CID
+    // WITHOUT touching the subtotal, so the store keeps BOTH rows (distinct CIDs) and
+    // a peer can counter EXACTLY one twin.
+    let twin_confidence = 0.74_f64;
+    // A SECOND distinct subject for the SAME object so the author triangulates
+    // `object` (≥2 distinct subjects → `cross_project_span ≥ 2`: a real weight + a
+    // non-`[SPARSE]` breakdown, and the triangulation bonus applies EQUALLY to both
+    // twins since triangulation is keyed on `(author, object)`, not on subject).
+    let triangulating_subject = "github:NixOS/nixpkgs";
+
+    // STEP 1 — build the contributor's verifiable trail UP FRONT. Two TWINS share
+    // `(twin_subject, object, twin_confidence)` but carry DISTINCT `evidence`
+    // (distinct CIDs, byte-equal subtotals); a third claim on a DISTINCT subject for
+    // the SAME object triangulates it. Each record's `rkey` IS its deterministic CID,
+    // so we can pick ONE twin as the counter target BEFORE anything is pulled.
+    let contributor_quadruples: [(&str, &str, f64, &str); 3] = [
+        (twin_subject, object, twin_confidence, "https://example.test/twin-a"),
+        (twin_subject, object, twin_confidence, "https://example.test/twin-b"),
+        (
+            triangulating_subject,
+            object,
+            0.90,
+            "https://example.test/triangulating",
+        ),
+    ];
+    let (contributor_records, contributor_pubkey_hex) =
+        build_verifiable_peer_records_for_quadruples(
+            contributor_did,
+            contributor_seed,
+            &contributor_quadruples,
+        );
+    // The two twins are records #0 and #1 (same pairing + confidence, distinct
+    // evidence → distinct CIDs). The counter targets the FIRST twin; the SECOND is
+    // its identical-subtotal un-countered twin.
+    let countered_twin_cid = contributor_records[0].rkey.clone();
+    let uncountered_twin_cid = contributor_records[1].rkey.clone();
+    assert_ne!(
+        countered_twin_cid, uncountered_twin_cid,
+        "seed_score_breakdown_identical_subtotals_one_countered: the two identical-\
+         subtotal twins must have DISTINCT CIDs (distinct evidence) so the store keeps \
+         both rows and the counter targets exactly one; got {countered_twin_cid:?}"
     );
+
+    // STEP 2 — a DISTINCT peer (Tobias) authors a verifiable COUNTER referencing the
+    // FIRST twin's CID (self-counter is BLOCKED, so the counter MUST be a peer's).
+    // When pulled it lands in `peer_claims` (under Tobias's own DID) and its
+    // `counters` reference lands in `peer_claim_references` with `referenced_cid ==
+    // countered_twin_cid` — the peer arm of the presence UNION-ALL.
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &countered_twin_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 3 — subscribe to BOTH peers via the real `peer add` verb, holding each PDS
+    // ALIVE so a SINGLE `peer pull` over BOTH succeeds (single-pull discipline).
+    for (did, pds) in [
+        (contributor_did, &contributor_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_score_breakdown_identical_subtotals_one_countered: peer add for {did} \
+             must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: contributor_did,
+                peer_endpoint: contributor_pds.endpoint_url(),
+                peer_pubkey_hex: &contributor_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_score_breakdown_identical_subtotals_one_countered: peer pull must \
+         succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every contribution CID in the contributor's breakdown (the
+    // `peer_claims` rows attributed to its DID — Tobias's counter is under Tobias's
+    // OWN DID, so it is excluded). Pin that BOTH twins survived (distinct CIDs → no
+    // collision) and split the ONE countered twin from the rest (its identical-
+    // subtotal twin + the triangulating contribution).
+    let ordered_cids = read_score_contribution_cids(env, contributor_did);
+    for twin in [&countered_twin_cid, &uncountered_twin_cid] {
+        assert!(
+            ordered_cids.contains(twin),
+            "seed_score_breakdown_identical_subtotals_one_countered: the twin CID \
+             {twin:?} must be among the contributor's contribution CIDs (both twins \
+             must survive the pull); got {ordered_cids:?}"
+        );
+    }
+    assert!(
+        ordered_cids.len() >= 3,
+        "seed_score_breakdown_identical_subtotals_one_countered: the trail must yield a \
+         MULTI-row breakdown (the two identical-subtotal twins + the triangulating \
+         contribution) so exactly one twin is countered and the rest are not; got \
+         {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &countered_twin_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        uncountered_cids.contains(&uncountered_twin_cid),
+        "seed_score_breakdown_identical_subtotals_one_countered: the un-countered \
+         identical-subtotal twin {uncountered_twin_cid:?} must be in uncountered_cids \
+         so the scenario can assert it renders the SAME subtotal but NO marker; got \
+         {uncountered_cids:?}"
+    );
+
+    SeededScoreBreakdown {
+        contributor_did: contributor_did.to_string(),
+        ordered_cids,
+        countered_cids: vec![countered_twin_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a SCORED `/score` breakdown with a RICH-trail contributor but NO counters at

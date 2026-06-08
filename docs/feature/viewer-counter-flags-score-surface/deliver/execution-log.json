@@ -176,6 +176,48 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-08T13:37:42Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:38:23Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:41:53Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:47:04Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: legend blocklist-clean already pinned by 01-01 unit test score_legend_renders_once_in_scored_arm_blocklist_clean_and_absent_otherwise",
+      "t": "2026-06-08T13:47:05Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:47:05Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:47:52Z"
     }
   ],
   "project_id": "viewer-counter-flags-score-surface"
