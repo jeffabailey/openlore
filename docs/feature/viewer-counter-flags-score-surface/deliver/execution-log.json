@@ -281,6 +281,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-08T13:56:54Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:57:35Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T13:59:09Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: GOLD behavioral invariants \u2014 read-only/no-write enforced at acceptance layer; no new pure behavior",
+      "t": "2026-06-08T13:59:12Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T14:01:44Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-08T14:01:45Z"
     }
   ],
   "project_id": "viewer-counter-flags-score-surface"
