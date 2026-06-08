@@ -12826,19 +12826,14 @@ pub struct SeededScoreBreakdown {
 ///
 /// SCAFFOLD: true (slice-14).
 pub fn read_score_contribution_cids(env: &TestEnv, contributor_did: &str) -> Vec<String> {
-    // The contributor's scoring trail rows are `peer_claims` attributed to its DID
-    // (the rich-trail seed pulls them via `peer add` + `peer pull`). Recover them
-    // through the EXISTING read helper — no new SQL. (DELIVER may re-order these to
-    // the exact rendered ranked order if the byte-identity gold needs it; the CONTRACT
-    // is the recovered CID SET + order matching the rendered breakdown.)
-    let _ = env;
-    let _ = contributor_did;
-    todo!(
-        "slice-14 RED scaffold: read every contribution CID in the contributor's \
-         scored breakdown (the `peer_claims` rows attributed to {contributor_did:?}, \
-         in the slice-09 ranked render order) so a /score flag scenario can address \
-         exact rows + the byte-identity gold can pin order"
-    );
+    // The contributor's scoring trail rows are `peer_claims` attributed to its BARE
+    // DID (the rich-trail seed pulls them via `peer add` + `peer pull`; the production
+    // pull stores `peer_claims.author_did` as the bare DID — see slice-09's
+    // `read_peer_claim_cids_for(&env, CONTRIBUTOR_RICH_DID)`). Recover them through the
+    // EXISTING `read_peer_claim_cids_for` read — no new SQL. The score breakdown is
+    // built from exactly these rows (a DISTINCT counter-author peer's counter lives
+    // under ITS own author DID, so it is excluded by construction).
+    read_peer_claim_cids_for(env, contributor_did)
 }
 
 /// Seed a SCORED `/score` breakdown for a RICH-trail contributor with EXACTLY ONE
@@ -12862,15 +12857,127 @@ pub fn read_score_contribution_cids(env: &TestEnv, contributor_did: &str) -> Vec
 /// BOTH `PeerSeam`s in ONE pull; (5) recovering every contribution CID
 /// (`read_score_contribution_cids`) and splitting the ONE countered + the rest.
 pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededScoreBreakdown {
-    let _ = env;
-    todo!(
-        "slice-14 RED scaffold: seed a RICH-trail contributor whose multi-row /score \
-         breakdown has EXACTLY ONE contribution countered by a DISTINCT peer (Tobias) \
-         — via build_verifiable_peer_records_for_triples (the contributor's trail) + \
-         build_verifiable_peer_counter_record (Tobias's counter of one contribution \
-         CID) + ONE run_openlore_pull_multi; return the SeededScoreBreakdown (the ONE \
-         countered + the rest un-countered, the contributor DID, the ordered CIDs)"
+    // The scored contributor (a DISTINCT peer DID, so its rows land in `peer_claims`
+    // attributed to it; the local user is NOT the contributor here). Its rich trail
+    // (FOUR distinct subjects on the shared reproducible-builds object at varied
+    // confidences → cross_project_span ≥ 2, a real weight + a MULTI-ROW breakdown,
+    // NOT `[SPARSE]`) reuses the slice-09 rich-trail shape VERBATIM.
+    let contributor_did = CONTRIBUTOR_RICH_DID;
+    let contributor_seed = [23u8; 32];
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let contributor_triples: [(&str, &str, f64); 4] = [
+        ("github:bazelbuild/bazel", repro, 0.86),
+        ("github:NixOS/nixpkgs", repro, 0.90),
+        ("github:reproducible-builds/diffoscope", repro, 0.74),
+        ("github:GNOME/meson", repro, 0.62),
+    ];
+
+    // STEP 1 — build the contributor's verifiable trail records UP FRONT (the same
+    // REAL Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies).
+    // Each record's `rkey` IS its deterministic CID, so we can pick ONE as the
+    // counter's target BEFORE either is pulled.
+    let (contributor_records, contributor_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(
+            contributor_did,
+            contributor_seed,
+            &contributor_triples,
+        );
+    // The counter targets the FIRST contribution CID (any one of the rich trail's
+    // rows; a DISTINCT peer counters it — self-counter is BLOCKED by construction).
+    let target_cid = contributor_records
+        .first()
+        .expect("the rich trail yields ≥1 contribution record")
+        .rkey
+        .clone();
+
+    // STEP 2 — a DISTINCT peer (Tobias) authors a verifiable COUNTER referencing that
+    // ONE contribution CID (a `references[].type == counters` entry whose `cid ==
+    // target_cid`, ADR-015). When pulled it lands in `peer_claims` (under Tobias's own
+    // DID) and its `counters` reference lands in `peer_claim_references` with
+    // `referenced_cid == target_cid` — the peer arm of the presence UNION-ALL.
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
     );
+
+    let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+
+    // STEP 3 — subscribe to BOTH peers via the real `peer add` verb (resolver wired
+    // per peer), holding each PDS ALIVE for the whole function so a SINGLE `peer pull`
+    // over BOTH succeeds (single-pull discipline). The contributor IS a subscribed
+    // peer (its trail rides the federation path), and so is Tobias (the counter).
+    for (did, pds) in [
+        (contributor_did, &contributor_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_score_breakdown_one_contribution_countered: peer add for {did} must \
+             succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: contributor_did,
+                peer_endpoint: contributor_pds.endpoint_url(),
+                peer_pubkey_hex: &contributor_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_score_breakdown_one_contribution_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every contribution CID in the contributor's breakdown (the
+    // `peer_claims` rows attributed to its DID — Tobias's counter is under Tobias's
+    // OWN DID, so it is excluded). Split the ONE countered from the rest.
+    let ordered_cids = read_score_contribution_cids(env, contributor_did);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_score_breakdown_one_contribution_countered: the countered target CID \
+         {target_cid:?} must be among the contributor's contribution CIDs; got \
+         {ordered_cids:?}"
+    );
+    assert!(
+        ordered_cids.len() >= 2,
+        "seed_score_breakdown_one_contribution_countered: the rich trail must yield a \
+         MULTI-row breakdown (≥2 contributions) so exactly one is countered and the \
+         rest are not; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededScoreBreakdown {
+        contributor_did: contributor_did.to_string(),
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a SCORED `/score` breakdown where ONE contribution is countered by TWO
@@ -12986,12 +13093,18 @@ pub fn seed_score_breakdown_many_pairings_known_countered_subset(
 ///
 /// SCAFFOLD: true (slice-14).
 pub fn assert_score_row_flagged_countered(body: &str, countered_cid: &str) {
-    let _ = body;
-    let _ = countered_cid;
-    todo!(
-        "slice-14 RED scaffold: assert the countered /score contribution row for \
-         {countered_cid:?} carries the REUSED render-only marker \
-         `<a href=\"/claims/{countered_cid}\">Countered</a>` (AC-002-MARKER / AC-002-LINK)"
+    // The flag is the REUSED slice-13 `render_countered_link` render-only one-hop anchor
+    // `<a href="/claims/{cid}">Countered</a>` (maud emits no whitespace inside the
+    // element), rendered BESIDE the contribution's verbatim subtotal. Scan the rendered
+    // HTML only (Mandate 8 universe = the port-exposed rendered surface).
+    let marker = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&marker),
+        "assert_score_row_flagged_countered: the countered /score contribution row for \
+         {countered_cid:?} must carry the render-only marker {marker:?} (neutral presence \
+         flag + one-hop link; US-CF-002 / AC-002-MARKER / AC-002-LINK); body was:\n{body}"
     );
 }
 
@@ -13003,14 +13116,28 @@ pub fn assert_score_row_flagged_countered(body: &str, countered_cid: &str) {
 ///
 /// SCAFFOLD: true (slice-14).
 pub fn assert_score_row_not_flagged(body: &str, uncountered_cid: &str) {
-    let _ = body;
-    let _ = uncountered_cid;
-    todo!(
-        "slice-14 RED scaffold: assert the un-countered /score contribution row for \
-         {uncountered_cid:?} carries NO `<a href=\"/claims/{uncountered_cid}\">Countered</a>` \
-         marker and no `0 counters` / `no disagreement` noise (renders exactly as \
-         slice-09; AC-002-NO-NOISE)"
+    // The un-countered contribution row carries NO `<a href="/claims/{cid}">Countered</a>`
+    // flag anchor. (Its bare CID still appears in the row's CID cell — we assert the
+    // absence of the FLAG anchor specifically, not the CID text.) Renders exactly as
+    // slice-09 (AC-002-NO-NOISE / I-CF-2).
+    let marker = format!(
+        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
     );
+    assert!(
+        !body.contains(&marker),
+        "assert_score_row_not_flagged: the un-countered /score contribution row for \
+         {uncountered_cid:?} must carry NO 'Countered' flag marker {marker:?} (renders \
+         exactly as slice-09; AC-002-NO-NOISE / I-CF-2); body was:\n{body}"
+    );
+    // And NO "0 counters" / "no disagreement" empty-state noise anywhere on the page.
+    for noise in ["0 counters", "no disagreement", "no counters"] {
+        assert!(
+            !body.to_lowercase().contains(noise),
+            "assert_score_row_not_flagged: an un-countered /score breakdown must carry no \
+             {noise:?} empty-state noise (no-noise discipline; AC-002-NO-NOISE); body \
+             was:\n{body}"
+        );
+    }
 }
 
 /// Assert a `/score` contribution row countered by N (>1) authors shows EXACTLY ONE
@@ -13070,16 +13197,33 @@ pub fn assert_score_html_breakdown_sums_to_weight_with_flag(
     body: &str,
     countered_cids: &[String],
 ) {
-    let _ = body;
-    let _ = countered_cids;
-    todo!(
-        "slice-14 RED scaffold: on a FLAGGED /score breakdown, ELIDE the additive \
-         `<a href=\"/claims/{{cid}}\">Countered</a>` markers (for every {countered_cids:?}), \
-         then assert (via the REUSED slice-09 parse_score_pairings) the per-contribution \
-         subtotals STILL sum to the displayed pairing weight AND the countered \
-         contribution's subtotal is its FULL original value (the counter subtracts \
-         nothing); AC-SCORE-SUMWEIGHT (CARDINAL)"
-    );
+    // ELIDE every additive `<a href="/claims/{cid}">Countered</a>` marker from the
+    // FLAGGED body so the subtotal parse sees the UNCHANGED slice-09 breakdown markup
+    // (the marker is additive markup BESIDE the verbatim subtotal cell; eliding it must
+    // leave the per-row subtotal value untouched).
+    let mut elided = body.to_string();
+    for cid in countered_cids {
+        let marker = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        elided = elided.replace(&marker, "");
+    }
+    // After eliding the markers, NO residual flag anchor for any countered CID may
+    // survive (a stray marker inside a subtotal cell would corrupt the parse).
+    for cid in countered_cids {
+        let marker = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        assert!(
+            !elided.contains(&marker),
+            "assert_score_html_breakdown_sums_to_weight_with_flag: every additive marker \
+             {marker:?} must elide cleanly so the remaining body is the slice-09 \
+             breakdown; residual marker survived in:\n{elided}"
+        );
+    }
+    // On the marker-elided breakdown, the per-contribution subtotals STILL sum to the
+    // displayed pairing weight — the CARDINAL sum-to-weight orthogonality gate, reusing
+    // the slice-09 reproduce-by-hand parser VERBATIM. Because the countered
+    // contribution's subtotal cell is byte-identical to slice-09 once the marker is
+    // elided, this proves the counter subtracts NOTHING (the contribution keeps its
+    // FULL original value; AC-SCORE-SUMWEIGHT).
+    assert_score_html_breakdown_sums_to_displayed_weight(&elided);
 }
 
 /// Assert the scored `/score` breakdown carries the anti-misread legend
@@ -13094,13 +13238,32 @@ pub fn assert_score_html_breakdown_sums_to_weight_with_flag(
 /// the pairings; never per row/pairing), AND the lowercased body contains none of
 /// `SCORE_LEGEND_BLOCKLIST`.
 pub fn assert_score_legend_present_and_blocklist_clean(body: &str) {
-    let _ = body;
-    todo!(
-        "slice-14 RED scaffold: assert the scored /score body carries \
-         SCORE_COUNTER_LEGEND_TEXT EXACTLY once (one legend per scored breakdown, never \
-         per row/pairing) AND the lowercased body contains NONE of \
-         SCORE_LEGEND_BLOCKLIST; AC-SCORE-ANTIMISREAD"
+    // A scored breakdown carries the anti-misread legend EXACTLY ONCE (ABOVE the
+    // pairings; ADR-051 §6.3 / DD-14-3 — one legend per scored breakdown, never per
+    // row/pairing). The legend copy mirrors the production `viewer-domain::
+    // SCORE_COUNTER_LEGEND` SSOT (held here as `SCORE_COUNTER_LEGEND_TEXT` so the
+    // assert never drifts).
+    let occurrences = body.matches(SCORE_COUNTER_LEGEND_TEXT).count();
+    assert_eq!(
+        occurrences, 1,
+        "assert_score_legend_present_and_blocklist_clean: the scored /score breakdown \
+         must carry the anti-misread legend EXACTLY ONCE (one legend per scored \
+         breakdown, never per row/pairing; AC-SCORE-ANTIMISREAD); found {occurrences} \
+         occurrence(s) of {SCORE_COUNTER_LEGEND_TEXT:?}; body was:\n{body}"
     );
+    // The WHOLE rendered body is BLOCKLIST-CLEAN — it contains NONE of the
+    // verdict/penalty/subtraction words a reader could misread as a score deduction.
+    // Lowercased at the comparison site so a capitalized variant cannot sneak through.
+    let lowered = body.to_ascii_lowercase();
+    for banned in SCORE_LEGEND_BLOCKLIST {
+        assert!(
+            !lowered.contains(banned),
+            "assert_score_legend_present_and_blocklist_clean: the scored /score body must \
+             be blocklist-clean — it must NEVER contain the verdict/penalty word \
+             {banned:?} (a reader must not misread the flag as a score deduction; \
+             AC-SCORE-ANTIMISREAD); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the `/score` body does NOT carry the anti-misread legend

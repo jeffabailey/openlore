@@ -492,10 +492,45 @@ fn score_page(
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let state = resolve_score_state(store, query);
+    // Read the per-contribution counter PRESENCE for the WHOLE breakdown in ONE
+    // flattened aggregate lookup (slice-14 / US-CF-002 / ADR-051). Only the `Scored`
+    // arm has contributions to flag; `Form`/`NoClaims` build no view → no query → the
+    // empty set (so the render signature stays uniform across shapes/states).
+    let presence = score_counter_presence(store, &state);
     match shape {
-        Shape::Fragment => html_ok(render_score_results_fragment(&state).into_string()),
-        Shape::FullPage => html_ok(render_score_page(&state)),
+        Shape::Fragment => html_ok(render_score_results_fragment(&state, &presence).into_string()),
+        Shape::FullPage => html_ok(render_score_page(&state, &presence)),
     }
+}
+
+/// Read the per-contribution counter PRESENCE for a WHOLE `/score` breakdown in ONE
+/// aggregate `counter_presence_for` lookup (slice-14 / US-CF-002 / ADR-051). The
+/// SCORING-surface sibling of [`survey_counter_presence`]: it FLATTENS every
+/// `Contribution.cid` across EVERY `WeightedPairing` in `ScoreState::Scored { view }`
+/// — the union over all pairings — and reads the presence set ONCE (never per-pairing,
+/// never per-contribution / the N+1 guard, AC-001-ONE-CALL / I-CF-8). REUSES the
+/// slice-12 `StoreReadPort::counter_presence_for` VERBATIM (NO new method, NO new SQL,
+/// NO network, NO key). The render is then a TOTAL function of the
+/// `(ScoreState, presence)` pair — the presence set can ONLY gate the additive
+/// "Countered" marker, NEVER reach a weight/subtotal/rank (the sum-to-weight
+/// orthogonality, ADR-051 §7). `Form`/`NoClaims` carry no view → NO query is issued →
+/// the EMPTY set. A presence-read FAILURE degrades to an EMPTY set
+/// (`unwrap_or_default`) → NO flags, never a 5xx (graceful degradation).
+fn score_counter_presence(
+    store: &dyn StoreReadPort,
+    state: &ScoreState,
+) -> std::collections::HashSet<String> {
+    let ScoreState::Scored { view } = state else {
+        // Form / NoClaims build no view → no contribution CIDs → no query.
+        return std::collections::HashSet::new();
+    };
+    let cids = view
+        .ranked
+        .iter()
+        .flat_map(|pairing| pairing.contributions())
+        .map(|contribution| contribution.cid.0.clone())
+        .collect::<Vec<_>>();
+    store.counter_presence_for(&cids).unwrap_or_default()
 }
 
 /// Resolve the [`ScoreState`] for a `/score` request (the read + pure-compute

@@ -689,6 +689,24 @@ pub const COUNTER_NO_REASON_NOTICE: &str = "no reason provided";
 /// flag text is a single source of truth.
 pub const COUNTERED_PRESENCE_FLAG: &str = "Countered";
 
+/// The anti-misread legend rendered ONCE per scored `/score` breakdown (slice-14 /
+/// US-CF-002 / ADR-051 §6.3 / AC-SCORE-ANTIMISREAD). A `/score` breakdown carries
+/// SCORING SEMANTICS, so the at-a-glance "Countered" marker MUST be provably
+/// ORTHOGONAL to the score — SHOWN, never APPLIED. This plain-language legend states,
+/// in NEUTRAL terms, that the marker means another claim disagrees ELSEWHERE, that it
+/// is shown for the reader to judge, and that it does NOT change the contributor's
+/// score (each contribution keeps its full weight). It carries NONE of the
+/// verdict/penalty/subtraction words a reader could misread as a deduction
+/// ("disputed"/"refuted"/"false"/"penalty"/"deduction"/"lowered"/"disputed score").
+/// Held in ONE place (the SSOT for the legend copy) and rendered EXACTLY ONCE in
+/// [`render_score_result`]'s `Scored` arm (ADR-051 §6.3 / DD-14-3 — one legend per
+/// scored breakdown governs every marker below it; never per row, never per pairing).
+/// The `Form`/`NoClaims` arms render NO legend (it governs markers that do not appear).
+pub const SCORE_COUNTER_LEGEND: &str =
+    "A “Countered” marker means another claim disagrees with this one elsewhere. \
+     It is shown for you to judge and does not change this contributor's score — \
+     each contribution keeps its full weight.";
+
 /// The counter-thread section heading rendered above the attributed counter
 /// entries (slice-11 / US-CT-002). Held in ONE place; absent entirely when a
 /// claim is un-countered ([`CounterThread::None`] renders nothing, I-CT-2).
@@ -1850,10 +1868,13 @@ pub enum ScoreState {
 /// action). [`render_score_page`] EMBEDS this SAME fn beneath the form, so the
 /// fragment and the full page's score region are byte-identical by construction
 /// (I-CS-7 parity — the score-rendering logic is NOT duplicated).
-pub fn render_score_results_fragment(state: &ScoreState) -> Markup {
+pub fn render_score_results_fragment(
+    state: &ScoreState,
+    presence: &std::collections::HashSet<String>,
+) -> Markup {
     html! {
         div id=(SCORE_RESULTS_ID) {
-            (render_score_result(state))
+            (render_score_result(state, presence))
         }
     }
 }
@@ -1871,7 +1892,10 @@ pub fn render_score_results_fragment(state: &ScoreState) -> Markup {
 /// render logic (I-CS-7). The `<head>` emits exactly ONE local
 /// `<script src="/static/htmx.min.js">` (offline-first, never a CDN) so the form's
 /// `hx-get` swap works in-browser instead of falling back to a full GET.
-pub fn render_score_page(state: &ScoreState) -> String {
+pub fn render_score_page(
+    state: &ScoreState,
+    presence: &std::collections::HashSet<String>,
+) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
@@ -1882,7 +1906,7 @@ pub fn render_score_page(state: &ScoreState) -> String {
                     a href=(MY_CLAIMS_URL) { "My Claims" }
                 }
                 (render_score_form())
-                (render_score_results_fragment(state))
+                (render_score_results_fragment(state, presence))
             }
         }
     };
@@ -1912,13 +1936,22 @@ fn render_score_form() -> Markup {
 /// total match over the ADT: the GET form shows nothing yet; a scored contributor
 /// shows the ranked pairings; no-claims shows the guided empty state naming the
 /// queried DID.
-fn render_score_result(state: &ScoreState) -> Markup {
+fn render_score_result(
+    state: &ScoreState,
+    presence: &std::collections::HashSet<String>,
+) -> Markup {
     html! {
         @match state {
             ScoreState::Form => {}
             ScoreState::Scored { view } => {
+                // The anti-misread legend renders EXACTLY ONCE, ABOVE the pairings
+                // (ADR-051 §6.3 / DD-14-3): one legend per scored breakdown governs
+                // every "Countered" marker below it. SHOWN, never APPLIED — the copy
+                // states the marker does not change the score. Additive markup only:
+                // the byte-identity gold elides it (AC-SCORE-BYTEID).
+                p { (SCORE_COUNTER_LEGEND) }
                 @for pairing in &view.ranked {
-                    (render_score_pairing(pairing))
+                    (render_score_pairing(pairing, presence))
                 }
             }
             // No-claims (OD-CS-6 / I-CS-5): the guided plain-language empty state
@@ -1937,7 +1970,10 @@ fn render_score_result(state: &ScoreState) -> Markup {
 /// KPI-GRAPH-3 reproduce-by-hand). The weight is rendered VERBATIM (the exact
 /// consumed `f64`, two decimals — never a bucket-midpoint rounding). A score is
 /// NEVER shown without its breakdown (I-CS-2; the J-002c thesis).
-fn render_score_pairing(pairing: &scoring::WeightedPairing) -> Markup {
+fn render_score_pairing(
+    pairing: &scoring::WeightedPairing,
+    presence: &std::collections::HashSet<String>,
+) -> Markup {
     html! {
         section {
             h2 { (pairing.subject) " — " (pairing.object) }
@@ -1952,7 +1988,7 @@ fn render_score_pairing(pairing: &scoring::WeightedPairing) -> Markup {
             @if matches!(pairing.bucket, scoring::WeightBucket::Sparse) {
                 p { (render_sparse_honesty_line(pairing.claim_count, pairing.distinct_author_count)) }
             }
-            (render_score_breakdown(pairing))
+            (render_score_breakdown(pairing, presence))
         }
     }
 }
@@ -1965,7 +2001,10 @@ fn render_score_pairing(pairing: &scoring::WeightedPairing) -> Markup {
 /// author-distinct + cross-project-triangulation bonuses, and the subtotal. The
 /// subtotals sum to the pairing's headline weight (Gate 2) because both are
 /// projected from the SAME `WeightedPairing`.
-fn render_score_breakdown(pairing: &scoring::WeightedPairing) -> Markup {
+fn render_score_breakdown(
+    pairing: &scoring::WeightedPairing,
+    presence: &std::collections::HashSet<String>,
+) -> Markup {
     html! {
         table {
             thead {
@@ -1986,7 +2025,19 @@ fn render_score_breakdown(pairing: &scoring::WeightedPairing) -> Markup {
                         td { (render_confidence(contribution.base)) }
                         td { (render_weight(contribution.author_distinct_bonus)) }
                         td { (render_weight(contribution.cross_project_triangulation_bonus)) }
-                        td { (render_weight(contribution.subtotal)) }
+                        // The VERBATIM subtotal (UNCHANGED — read straight off the pure
+                        // core's `WeightedPairing`, never recomputed) THEN the additive
+                        // "Countered" marker BESIDE it (ADR-051 §7). The REUSED slice-13
+                        // `render_countered_link` SSOT emits the render-only one-hop link
+                        // `<a href="/claims/{cid}">Countered</a>` IFF the contribution's
+                        // CID is in the threaded presence set; an un-countered
+                        // contribution emits NOTHING, so its cell is byte-identical to
+                        // slice-09. The presence bool can ONLY gate the marker — it NEVER
+                        // reaches the subtotal (the sum-to-weight orthogonality).
+                        td {
+                            (render_weight(contribution.subtotal))
+                            (render_countered_link(&contribution.cid.0, presence.contains(&contribution.cid.0)))
+                        }
                     }
                 }
             }
@@ -5019,7 +5070,11 @@ mod tests {
     /// projection at the unit level (the cardinal anti-opaque-number contract).
     #[test]
     fn score_fragment_renders_per_claim_breakdown_attributed_and_verbatim() {
-        let html = render_score_results_fragment(&rich_scored_state()).into_string();
+        let html = render_score_results_fragment(
+            &rich_scored_state(),
+            &std::collections::HashSet::new(),
+        )
+        .into_string();
 
         assert!(
             html.contains(SCORE_RESULTS_ID),
@@ -5071,7 +5126,11 @@ mod tests {
         assert_eq!(view.ranked.len(), 1, "fixture must produce exactly one pairing");
         let pairing = &view.ranked[0];
 
-        let html = render_score_results_fragment(&ScoreState::Scored { view: view.clone() }).into_string();
+        let html = render_score_results_fragment(
+            &ScoreState::Scored { view: view.clone() },
+            &std::collections::HashSet::new(),
+        )
+        .into_string();
 
         // The headline weight renders VERBATIM (two decimals).
         let weight_str = format!("{:.2}", pairing.weight);
@@ -5137,8 +5196,9 @@ mod tests {
         };
 
         for (posture, state) in [("rich", &rich), ("sparse", &sparse), ("conflicting", &conflicting)] {
-            let fragment = render_score_results_fragment(state).into_string();
-            let page = render_score_page(state);
+            let empty_presence = std::collections::HashSet::new();
+            let fragment = render_score_results_fragment(state, &empty_presence).into_string();
+            let page = render_score_page(state, &empty_presence);
             for (shape, html) in [("fragment", &fragment), ("page", &page)] {
                 // The surface must actually show a weight (else the structural guard
                 // would pass vacuously).
@@ -5200,8 +5260,9 @@ mod tests {
         let pairing = &view.ranked[0];
         let weight_verbatim = format!("Weight: {}", render_weight(pairing.weight));
 
-        let fragment = render_score_results_fragment(&state).into_string();
-        let page = render_score_page(&state);
+        let empty_presence = std::collections::HashSet::new();
+        let fragment = render_score_results_fragment(&state, &empty_presence).into_string();
+        let page = render_score_page(&state, &empty_presence);
 
         for (shape, html) in [("fragment", &fragment), ("page", &page)] {
             // The 0.90 claim renders "0.90" verbatim — never truncated, never a percent.
@@ -5259,7 +5320,11 @@ mod tests {
             "the one pairing must decompose into TWO contributions (one per author), never merged"
         );
 
-        let html = render_score_results_fragment(&ScoreState::Scored { view }).into_string();
+        let html = render_score_results_fragment(
+            &ScoreState::Scored { view },
+            &std::collections::HashSet::new(),
+        )
+        .into_string();
 
         // BOTH distinct author DIDs render (per-row attribution; non-Option author_did).
         for did in ["did:plc:test-jeff", "did:plc:test-jeff-collaborator"] {
@@ -5302,7 +5367,11 @@ mod tests {
         // One claim, one author, one subject, HIGH confidence.
         let feed = vec![attributed("did:plc:bjorn-test", "bafysparse", "github:torvalds/linux", repro, 0.95)];
         let view = score(&feed, &ScoringConfig::DEFAULT);
-        let html = render_score_results_fragment(&ScoreState::Scored { view }).into_string();
+        let html = render_score_results_fragment(
+            &ScoreState::Scored { view },
+            &std::collections::HashSet::new(),
+        )
+        .into_string();
 
         assert!(
             html.contains("[SPARSE]"),
@@ -5332,9 +5401,12 @@ mod tests {
     /// a fabricated zero score, never a `[SPARSE]`/weight leak.
     #[test]
     fn score_fragment_renders_guided_no_claims_state_naming_the_did() {
-        let html = render_score_results_fragment(&ScoreState::NoClaims {
-            contributor: "did:plc:nobody-local".to_string(),
-        })
+        let html = render_score_results_fragment(
+            &ScoreState::NoClaims {
+                contributor: "did:plc:nobody-local".to_string(),
+            },
+            &std::collections::HashSet::new(),
+        )
         .into_string();
 
         assert!(
@@ -5361,8 +5433,9 @@ mod tests {
     #[test]
     fn score_page_embeds_the_fragment_and_adds_chrome_and_form() {
         let state = rich_scored_state();
-        let fragment = render_score_results_fragment(&state).into_string();
-        let page = render_score_page(&state);
+        let empty_presence = std::collections::HashSet::new();
+        let fragment = render_score_results_fragment(&state, &empty_presence).into_string();
+        let page = render_score_page(&state, &empty_presence);
 
         assert!(
             page.contains(&fragment),
@@ -5382,6 +5455,225 @@ mod tests {
             !fragment.contains("<!DOCTYPE") && !fragment.contains("<html"),
             "the fragment must carry NO full-page chrome; fragment:\n{fragment}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Contributor-Score COUNTER-PRESENCE FLAG (slice-14; US-CF-002 / ADR-051) —
+    // the threaded `&presence` render chain over the REUSED slice-13
+    // `render_countered_link` + the SCORE_COUNTER_LEGEND SSOT. These pin the NEW
+    // pure-core behavior for the mutation gate (cargo-mutants -p viewer-domain):
+    // the legend renders ONCE in the Scored arm + is blocklist-clean; the marker
+    // is emitted IFF the presence set contains the contribution CID; an empty
+    // presence set renders byte-identically to slice-09; and the presence bool
+    // NEVER reaches a subtotal/weight (the sum-to-weight orthogonality). The render
+    // fn IS its own driving port — calling it directly is port-to-port at domain
+    // scope (nw-tdd-methodology Hexagonal Domain Layer).
+    // -------------------------------------------------------------------------
+
+    /// The render-only marker the REUSED `render_countered_link` emits for a
+    /// countered contribution CID (maud emits no whitespace inside the element).
+    fn score_marker(cid: &str) -> String {
+        format!("<a href=\"/claims/{cid}\">{COUNTERED_PRESENCE_FLAG}</a>")
+    }
+
+    /// Build a presence set from string CIDs (the threaded `&presence` argument).
+    fn presence_of(cids: &[&str]) -> std::collections::HashSet<String> {
+        cids.iter().map(|c| (*c).to_string()).collect()
+    }
+
+    /// Behavior / CARDINAL anti-misread (US-CF-002 / ADR-051 §6.3 / AC-SCORE-
+    /// ANTIMISREAD): a Scored breakdown renders the `SCORE_COUNTER_LEGEND` EXACTLY
+    /// ONCE (one legend per scored breakdown, never per row/pairing), in BOTH the
+    /// fragment and the full page, and the WHOLE rendered body is blocklist-clean —
+    /// it contains NONE of the verdict/penalty/subtraction words. The `Form` and
+    /// `NoClaims` arms render NO legend (it governs markers that do not appear).
+    /// Pins the legend SSOT render site + the blocklist-clean copy for the mutation
+    /// gate (a mutant deleting the legend, rendering it twice, or emitting a verdict
+    /// word is killed).
+    #[test]
+    fn score_legend_renders_once_in_scored_arm_blocklist_clean_and_absent_otherwise() {
+        let scored = rich_scored_state();
+        let empty = std::collections::HashSet::new();
+        let blocklist = [
+            "disputed", "refuted", "false", "penalty", "deduction", "lowered",
+            "disputed score",
+        ];
+
+        // The Scored arm carries the legend EXACTLY ONCE in BOTH shapes ...
+        for (shape, html) in [
+            ("fragment", render_score_results_fragment(&scored, &empty).into_string()),
+            ("page", render_score_page(&scored, &empty)),
+        ] {
+            assert_eq!(
+                html.matches(SCORE_COUNTER_LEGEND).count(),
+                1,
+                "the Scored {shape} must render SCORE_COUNTER_LEGEND EXACTLY once (one \
+                 legend per scored breakdown, never per row/pairing); got:\n{html}"
+            );
+            // ... and the WHOLE body is blocklist-clean (lowercased compare).
+            let lowered = html.to_ascii_lowercase();
+            for banned in blocklist {
+                assert!(
+                    !lowered.contains(banned),
+                    "the Scored {shape} body must be blocklist-clean — never the \
+                     verdict/penalty word {banned:?} (AC-SCORE-ANTIMISREAD); got:\n{html}"
+                );
+            }
+        }
+
+        // The Form + NoClaims arms render NO legend (it governs markers that never
+        // appear; ADR-051 §6.3 / DD-14-3 placement: Scored arm only).
+        for state in [
+            ScoreState::Form,
+            ScoreState::NoClaims { contributor: "did:plc:nobody".to_string() },
+        ] {
+            let html = render_score_results_fragment(&state, &empty).into_string();
+            assert!(
+                !html.contains(SCORE_COUNTER_LEGEND),
+                "the {state:?} arm must render NO SCORE_COUNTER_LEGEND (Scored arm only); \
+                 got:\n{html}"
+            );
+        }
+    }
+
+    /// Behavior / CARDINAL flag-gating (US-CF-002 / AC-002-MARKER / AC-002-NO-NOISE):
+    /// `render_score_breakdown` (via the threaded chain) emits the REUSED
+    /// `render_countered_link` one-hop marker for a contribution row IFF the threaded
+    /// presence set CONTAINS that contribution's CID — and emits NOTHING for an
+    /// un-countered row. Property over the rich state's three CIDs: for an arbitrary
+    /// SUBSET chosen as the presence set, every CID in the set is flagged, every CID
+    /// NOT in the set is not. Pins the `presence.contains(&cid)` branch (a mutant
+    /// inverting the condition, dropping the marker, or flagging an un-countered row
+    /// is killed) AND the no-noise discipline.
+    #[test]
+    fn score_breakdown_emits_the_marker_iff_presence_contains_the_cid() {
+        let all = ["bafyone", "bafytwo", "bafythree"];
+        // Enumerate every subset of the three CIDs (2^3 = 8) as the presence set —
+        // a property over the full membership lattice, exhaustively, at unit cost.
+        for mask in 0u8..8 {
+            let chosen: Vec<&str> = all
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, c)| *c)
+                .collect();
+            let presence = presence_of(&chosen);
+            let html =
+                render_score_results_fragment(&rich_scored_state(), &presence).into_string();
+
+            for cid in all {
+                let marker = score_marker(cid);
+                if chosen.contains(&cid) {
+                    assert!(
+                        html.contains(&marker),
+                        "presence {chosen:?}: the countered contribution row for {cid:?} \
+                         must carry the marker {marker:?}; got:\n{html}"
+                    );
+                } else {
+                    assert!(
+                        !html.contains(&marker),
+                        "presence {chosen:?}: the un-countered contribution row for \
+                         {cid:?} must carry NO marker {marker:?} (no-noise); got:\n{html}"
+                    );
+                }
+            }
+            // No-noise discipline: no empty-state "0 counters" / "no disagreement"
+            // text ever leaks regardless of the presence set.
+            let lowered = html.to_ascii_lowercase();
+            for noise in ["0 counters", "no disagreement", "no counters"] {
+                assert!(
+                    !lowered.contains(noise),
+                    "presence {chosen:?}: the breakdown must carry no {noise:?} \
+                     empty-state noise; got:\n{html}"
+                );
+            }
+        }
+    }
+
+    /// Behavior / CARDINAL byte-identity + sum-to-weight orthogonality (US-CF-002 /
+    /// ADR-051 §7 / AC-SCORE-BYTEID + AC-SCORE-SUMWEIGHT): with the additive markers
+    /// AND the additive legend elided, the FLAGGED render is byte-identical to the
+    /// empty-presence (slice-09) render — the presence set is PURELY additive markup
+    /// and NEVER perturbs a weight/subtotal/confidence/bucket/rank/row-order. Pins
+    /// the shown-never-applied contract at the unit level: a mutant that lets the
+    /// presence bool reach a number, re-order a row, or that renders the marker
+    /// anywhere but beside the subtotal is killed (the elided bytes would diverge).
+    #[test]
+    fn flagged_score_render_is_byte_identical_to_slice09_with_markers_and_legend_elided() {
+        let state = rich_scored_state();
+        let empty = std::collections::HashSet::new();
+        // The slice-09 baseline: the SAME state rendered with an EMPTY presence set
+        // (no markers) and the legend stripped.
+        let baseline = render_score_results_fragment(&state, &empty)
+            .into_string()
+            .replace(SCORE_COUNTER_LEGEND, "");
+
+        // Flag ALL three contributions, then elide the additive markers AND the legend.
+        let presence = presence_of(&["bafyone", "bafytwo", "bafythree"]);
+        let mut flagged_elided = render_score_results_fragment(&state, &presence).into_string();
+        for cid in ["bafyone", "bafytwo", "bafythree"] {
+            flagged_elided = flagged_elided.replace(&score_marker(cid), "");
+        }
+        flagged_elided = flagged_elided.replace(SCORE_COUNTER_LEGEND, "");
+
+        assert_eq!(
+            flagged_elided, baseline,
+            "with the additive markers AND the legend elided, the FLAGGED /score render \
+             must be byte-identical to the empty-presence (slice-09) render — the \
+             presence set is additive markup ONLY and must never perturb a number, a \
+             rank, or a row order (AC-SCORE-BYTEID / shown-never-applied)"
+        );
+    }
+
+    /// Behavior (US-CF-002 / AC-SCORE-SUMWEIGHT): the per-contribution subtotals the
+    /// FLAGGED render emits STILL sum to the headline weight it renders for the SAME
+    /// pairing — the counter subtracts nothing. Property: for ANY presence subset, each
+    /// flagged pairing's running Σ-subtotal equals its displayed weight (the marker
+    /// never reaches the number). Reuses the SAME WeightedPairing the renderer projects,
+    /// proving the subtotal cells are byte-identical to the un-flagged render.
+    #[test]
+    fn flagged_score_subtotals_still_sum_to_the_displayed_weight() {
+        let ScoreState::Scored { view } = rich_scored_state() else {
+            panic!("rich_scored_state must be Scored");
+        };
+        let all = ["bafyone", "bafytwo", "bafythree"];
+        for mask in 0u8..8 {
+            let chosen: Vec<&str> = all
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, c)| *c)
+                .collect();
+            let presence = presence_of(&chosen);
+            let html = render_score_results_fragment(
+                &ScoreState::Scored { view: view.clone() },
+                &presence,
+            )
+            .into_string();
+            // The flagged render's subtotal cells are the SAME projected values, so each
+            // pairing's running Σ-subtotal equals its displayed weight (reproduce-by-hand
+            // over the SAME WeightedPairing the renderer consumed).
+            for pairing in &view.ranked {
+                let mut running = 0.0_f64;
+                for c in pairing.contributions() {
+                    let subtotal_str = format!("{:.2}", c.subtotal);
+                    assert!(
+                        html.contains(&subtotal_str),
+                        "presence {chosen:?}: the flagged breakdown must render the \
+                         subtotal {subtotal_str:?} verbatim (the counter subtracts \
+                         nothing); got:\n{html}"
+                    );
+                    running += c.subtotal;
+                }
+                assert!(
+                    (running - pairing.weight).abs() < 1e-9,
+                    "presence {chosen:?}: Σ subtotal ({running}) must equal the displayed \
+                     weight ({}) on a FLAGGED render — the presence bool never reaches a \
+                     number (AC-SCORE-SUMWEIGHT)",
+                    pairing.weight
+                );
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
