@@ -433,8 +433,49 @@ See `dor-checklist.md`. Verdict: **PASS (9/9)**.
 
 ---
 
+## Wave: DESIGN / [REF] Architecture delta (Morgan, 2026-06-08)
+
+DESIGN artifacts: `design/architecture-design.md`, `design/component-boundaries.md`,
+`design/technology-stack.md`; ADR `docs/adrs/ADR-051-*.md`; decisions in
+`discuss/wave-decisions.md` (DD-14-*). Reuse-only confirmed; workspace stays **21 members**.
+
+- **Projection seam (the load-bearing decision, ADR-051)**: thread `presence:
+  &HashSet<String>` down the `/score` render chain (`render_score_results_fragment` →
+  `render_score_result` → `render_score_pairing` → `render_score_breakdown`); the render
+  becomes a TOTAL function of `(ScoreState, presence)`. This DIVERGES from slice-13's
+  bool-on-the-view-model (ADR-050) because the contribution rows project `scoring::Contribution`
+  — a `scoring`-crate type the viewer must NOT mutate or recompute. `render_score_breakdown`
+  emits the REUSED `render_countered_link(&c.cid.0, presence.contains(&c.cid.0))` BESIDE the
+  verbatim subtotal. NO field added to `scoring::Contribution`; `scoring` UNCHANGED.
+- **Effect shell (flatten-once, N+1 guard)**: a NEW `score_counter_presence(store, &view)`
+  helper (mirrors slice-13's `survey_counter_presence`) flattens EVERY `Contribution.cid` across
+  EVERY `WeightedPairing` via `view.ranked.flat_map(contributions)` → ONE
+  `counter_presence_for` call (REUSED slice-12 read) → `unwrap_or_default()`. `Form`/`NoClaims` →
+  no call (0 queries).
+- **Anti-misread legend (the one genuinely-new artifact)**: SSOT constant `SCORE_COUNTER_LEGEND`
+  in `viewer-domain`, rendered ONCE per scored breakdown. Copy: *"A "Countered" marker means
+  another claim disagrees with this one elsewhere. It is shown for you to judge and does not
+  change this contributor's score — each contribution keeps its full weight."* Honors
+  AC-SCORE-ANTIMISREAD's blocklist (no disputed/refuted/false/penalty/deduction/lowered/disputed
+  score). Part of the byte-identity elision set (markers AND legend elided → byte-identical to
+  slice-09).
+- **Sum-to-weight orthogonality BY CONSTRUCTION (I-CF-9 / the cardinal)**: the render projects
+  the SAME unchanged `WeightedPairing` (slice-09 sum-to-weight doc-comment holds verbatim); the
+  presence set only GATES an additive marker — no presence value reaches any
+  weight/confidence/bonus/subtotal/bucket/rank/order; the `scoring` types have no mutation
+  surface from the viewer side.
+- **Confirmations**: NO new crate / route / read-method / render-fn / SQL / KPI ID. xtask delta
+  NONE (`viewer-domain → scoring` edge already exists from slice-09; REUSED ref-table-only query;
+  capability boundary unchanged). NO external integration → no contract-test annotation.
+
 ## Changelog
 
+- 2026-06-08 — slice-14 DESIGN (Morgan / nw-solution-architect). Projection seam = thread
+  `&presence` into the score render (ADR-051; diverges from slice-13 ADR-050 because the rows
+  project the foreign-immutable `scoring::Contribution`). Effect shell = `score_counter_presence`
+  flatten-once helper reusing slice-12 `counter_presence_for`. Anti-misread legend
+  `SCORE_COUNTER_LEGEND` (the one new artifact). Sum-to-weight orthogonality guaranteed by
+  construction. ADR-051 written. NO new crate/route/read-method/render-fn (workspace stays 21).
 - 2026-06-08 — slice-14 (`viewer-counter-flags-score-surface`) DISCUSS. Traces to J-003b (the
   at-a-glance facet of the VIEW half, extended to the LAST viewer surface — the `/score`
   contributor-scoring breakdown; authoring stays the slice-03 CLI, drill-in thread is slice-11,
