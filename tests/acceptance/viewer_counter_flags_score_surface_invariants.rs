@@ -75,7 +75,12 @@
 //! gold companions to the US-CF-001/002 story scenarios in
 //! `viewer_counter_flags_score_surface.rs`).
 //
-// SCAFFOLD: true
+// SCAFFOLD: false — DELIVERED (slice-14 step 03-03, the CARDINAL release gate). All six
+// guardrail invariants are GREEN; the two cardinals (SF-INV-ByteId + SF-INV-N1) flipped
+// green for free with NO production delta — they are STRUCTURAL: the rows are built from
+// the UNCHANGED `scoring::score` output and the "Countered" markers + the
+// `SCORE_COUNTER_LEGEND` are separate additive markup, and the presence read is the
+// single flattened `score_counter_presence` call across all pairings.
 
 mod support;
 
@@ -360,6 +365,14 @@ fn the_flagged_score_surface_renders_fully_offline() {
 ///
 /// @us-cf-002 @property @driving_port @real-io @shown-never-applied @no-regression
 /// @cardinal-sum-to-weight @cardinal @i-cf-9 @gold
+///
+/// DELIVERED slice-14 step 03-03 (SF-INV-ByteId, THE slice-14 CARDINAL): GREEN with NO
+/// production delta — byte-identity + sum-to-weight are STRUCTURAL. The rows are built
+/// from the UNCHANGED `scoring::score` output; the additive "Countered" markers AND the
+/// `SCORE_COUNTER_LEGEND` are separate additive markup that the presence set can ONLY
+/// gate (never reach a number). With the markers + legend elided the render is
+/// byte-identical to the recorded slice-09 baseline, and the per-contribution subtotals
+/// still sum to the displayed pairing weight on the FLAGGED render.
 #[test]
 fn the_score_render_is_byte_identical_with_and_without_the_flag() {
     // GIVEN a scored breakdown with a MIX of countered + un-countered contributions across
@@ -423,6 +436,14 @@ fn the_score_render_is_byte_identical_with_and_without_the_flag() {
 ///   ranking unchanged.
 ///
 /// @us-cf-001 @property @driving_port @real-io @n-plus-1-guard @i-cf-8 @gold
+///
+/// DELIVERED slice-14 step 03-03 (SF-INV-N1): GREEN with NO production delta — the
+/// N+1-flatten is STRUCTURAL. The `score_counter_presence` helper flattens every
+/// `Contribution.cid` across every `WeightedPairing` from `view.ranked` and queries the
+/// REUSED `counter_presence_for` ONCE (ADR-051 / DD-14-2), so the whole large
+/// multi-pairing breakdown is flagged correctly in ONE request. The strict 1-query bound
+/// is the inherited DELIVER `adapter-duckdb` unit/property test; this is the
+/// subprocess-layer behavioral proxy.
 #[test]
 fn a_large_multi_pairing_breakdown_resolves_presence_in_one_request() {
     let env = TestEnv::initialized();
