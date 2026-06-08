@@ -1,0 +1,487 @@
+{
+  "roadmap": {
+    "project_id": "viewer-counter-flags-score-surface",
+    "created_at": "2026-06-08T00:00:00Z",
+    "total_steps": 11
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Foundation \u2014 the at-a-glance Countered flag on the SCORING-BEARING GET /score per-contribution breakdown rows (US-CF-002, THICK) + the flatten-once wiring confirmations",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the SCORE_COUNTER_LEGEND SSOT constant + the threaded &presence render chain (render_score_results_fragment \u2192 render_score_pairing \u2192 render_score_breakdown) + the score_counter_presence flatten-once helper into GET /score and return the htmx fragment flagging the countered contribution row beside its verbatim subtotal, legend present, subtotals summing to weight (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-CF-002, SF-1). It forces the WHOLE /score at-a-glance flag thread into existence end-to-end and REUSES the slice-12 read VERBATIM (ADR-048 \u2014 NO new port method, NO new SQL, NO adapter-duckdb edit) + the slice-13 render_countered_link SSOT VERBATIM (NO new render fn). (viewer-domain) Add the NEW pub const SCORE_COUNTER_LEGEND anti-misread legend SSOT constant (blocklist-clean: never disputed/refuted/false/penalty/deduction/lowered/disputed score; ADR-051 \u00a76.3). Thread presence: &HashSet<String> DOWN the render call chain alongside the UNCHANGED &ScoreState: render_score_results_fragment(state, presence) (the fragment fn BOTH shapes embed) \u2192 render_score_page(state, presence) wraps the SAME fragment in chrome \u2192 render_score_result(state, presence) renders the SCORE_COUNTER_LEGEND ONCE before the pairings ONLY in the Scored arm (Form/NoClaims render no legend, no flag) then iterates view.ranked calling render_score_pairing(pairing, presence) \u2192 render_score_breakdown(pairing, presence). render_score_breakdown renders the existing six cells VERBATIM (author/cid/confidence/author-bonus/triangulation-bonus/subtotal) THEN the additive render_countered_link(&contribution.cid.0, presence.contains(&contribution.cid.0)) BESIDE the verbatim subtotal \u2014 an un-countered contribution renders byte-identically to slice-09 (the REUSED link fn emits NOTHING when is_countered == false). The render becomes a TOTAL function of (ScoreState, presence): it NEVER re-orders/re-ranks/re-weights/re-groups/subtracts; it reads each number straight off the UNCHANGED WeightedPairing scoring::score produced; the presence set can ONLY gate the additive marker, NEVER reach a number (the sum-to-weight orthogonality, guaranteed by construction, ADR-051 \u00a77). The scoring crate is UNTOUCHED (NO is_countered field on scoring::Contribution \u2014 the bool lives nowhere; presence is threaded, ADR-051 \u00a74). (adapter-http-viewer) In resolve_score_state's Scored arm the SANDWICH gains ONE REUSED read + the flatten: feed = store.query_contributor_scoring_feed UNCHANGED, view = scoring::score UNCHANGED pure compute, then the NEW effect-shell helper presence = score_counter_presence(store, &view) which flattens view.ranked.iter().flat_map(|p| p.contributions()).map(|c| c.cid.0.clone()) into ONE Vec<String> and calls store.counter_presence_for(&cids).unwrap_or_default() ONCE across ALL pairings (degrade \u2192 empty set, no flags, never a 5xx), then render by Shape threading &presence (render_score_results_fragment for Fragment, render_score_page for FullPage). Form/NoClaims build NO view \u2192 score_counter_presence is never called \u2192 0 queries; render with &HashSet::new() so the signature is uniform. NO new route, NO new crate (workspace stays 21), NO ports/adapter-duckdb/cli change (the existing DuckDbStoreReadAdapter already implements counter_presence_for; the existing startup store probe covers it \u2014 Earned-Trust: no new probe owed, architecture-design.md \u00a7Earned-Trust). Materialize the seed_score_breakdown_one_contribution_countered support seam (a scored contributor's multi-row breakdown via the production peer add + peer pull federation path + exactly one contribution countered by a DISTINCT peer's verifiable counter landing in peer_claim_references; recover the render-order CIDs \u2192 SeededScoreBreakdown with contributor_did + countered_cids + uncountered_cids + ordered_cids) + the assert_score_row_flagged_countered / assert_score_row_not_flagged / assert_score_legend_present_and_blocklist_clean / assert_score_html_breakdown_sums_to_weight_with_flag helper bodies in support/mod.rs. BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build -p cli --bin openlore before executing these ATs. NO second binary (the presence read is a LOCAL read). xtask delta: NONE (ADR-051 \u00a78 / component-boundaries.md \u2014 no new dep edge: viewer-domain \u2192 scoring already exists from slice-09; the REUSED ref-tables-only read does not trip no_cross_table_join_elides_author; the viewer capability boundary is unchanged).",
+          "criteria": [
+            "GET /score?contributor=<did> with the HX-Request header, over a seeded local store where exactly one contribution of a scored contributor's multi-row breakdown (the one countered by a DISTINCT peer from seed_score_breakdown_one_contribution_countered) has a counter and the others do not, returns 200 text/html containing ONLY the #score-results fragment (no page chrome, no <head>): the countered contribution row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's slice-11 thread BESIDE its verbatim subtotal, and every un-countered contribution row carries NO marker.",
+            "The /score route reuses the slice-12 StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> batch read VERBATIM (no new port method, no new SQL) via the NEW score_counter_presence helper that flattens EVERY Contribution.cid across EVERY WeightedPairing into ONE call, reusing the slice-13 render_countered_link SSOT VERBATIM (no new render fn), holding NO signing key, adding no write/sign/counter route, and degrading a presence-read failure to an empty presence set (no flags) rather than a 5xx.",
+            "The breakdown carries the NEW SCORE_COUNTER_LEGEND anti-misread legend rendered ONCE (blocklist-clean \u2014 never disputed/refuted/false/penalty/deduction/lowered/disputed score), and the per-contribution subtotals STILL sum to the displayed pairing weight WITH the flag present (the countered contribution renders its FULL original subtotal \u2014 the counter subtracts nothing; the flag is SHOWN, never APPLIED)."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> with the HX-Request header, over a seeded local store where exactly one contribution of a scored contributor's multi-row breakdown (the one countered by a DISTINCT peer from seed_score_breakdown_one_contribution_countered) has a counter and the others do not, returns 200 text/html containing ONLY the #score-results fragment (no page chrome, no <head>): the countered contribution row carries the neutral 'Countered' marker rendered as a render-only <a href=\"/claims/{cid}\"> one-hop link to that claim's slice-11 thread BESIDE its verbatim subtotal, and every un-countered contribution row carries NO marker.",
+            "The /score route reuses the slice-12 StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> batch read VERBATIM (no new port method, no new SQL) via the NEW score_counter_presence helper that flattens EVERY Contribution.cid across EVERY WeightedPairing into ONE call, reusing the slice-13 render_countered_link SSOT VERBATIM (no new render fn), holding NO signing key, adding no write/sign/counter route, and degrading a presence-read failure to an empty presence set (no flags) rather than a 5xx.",
+            "The breakdown carries the NEW SCORE_COUNTER_LEGEND anti-misread legend rendered ONCE (blocklist-clean \u2014 never disputed/refuted/false/penalty/deduction/lowered/disputed score), and the per-contribution subtotals STILL sum to the displayed pairing weight WITH the flag present (the countered contribution renders its FULL original subtotal \u2014 the counter subtracts nothing; the flag is SHOWN, never APPLIED)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "open_the_score_breakdown_with_htmx_flags_only_the_countered_contribution",
+          "n_scenarios": [
+            "SF-1"
+          ],
+          "us_trace": [
+            "US-CF-001",
+            "US-CF-002"
+          ],
+          "estimate_hours": 10,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (the threaded &presence render chain + render_score_breakdown's presence.contains(&cid) flag branch over the REUSED slice-12 read + the SCORE_COUNTER_LEGEND constant + the score_counter_presence flatten) over the REUSED slice-12 read + slice-13 render fn. Extend nightly mutation testing to this projection/render (presence.contains true/false flag branch, the un-countered byte-identity arm, the legend-once render site, the flatten that collects every Contribution.cid across every pairing, and that the presence bool never reaches a weight/subtotal/rank/order).",
+          "scenario_fns": [
+            "open_the_score_breakdown_with_htmx_flags_only_the_countered_contribution"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "A contribution countered by TWO distinct authors shows exactly ONE neutral presence marker on its /score row (anti-merging GOLD) and the marker is a render-only one-hop link to the thread (mostly confirmatory)",
+          "description": "The /score presence-only anti-merging GOLD + the one-hop drill-link (US-CF-002, SF-2; AC-SCORE-PRESENCE / AC-002-LINK). Largely confirmatory once 01-01's flag render exists \u2014 the DISTINCT collapse and the <a href> link shape already hold; this pins the neutral single-marker phrasing and the one-hop drill on the observable score surface. A contribution countered by TWO DISTINCT authors shows on its /score breakdown row EXACTLY ONE neutral 'Countered' marker (the DISTINCT referenced_cid collapses both counters to one membership in the HashSet \u2192 one flag), never 'countered by 2', never a count/verdict \u2014 the per-counter attribution lives in the slice-11 thread the marker LINKS to. The marker on the countered row is a render-only <a href=\"/claims/{cid}\"> ONE-HOP link navigable without JS to the slice-11 detail thread. The flag is orthogonal to the score: the twice-countered contribution's subtotal, its pairing weight, and the pairing rank are unchanged (the subtotals still sum to the weight). Materializes seed_score_breakdown_target_two_counters_distinct_authors, assert_score_flag_is_single_neutral_presence, assert_score_flag_links_to_thread in support/mod.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over a store where a contribution is countered by two DISTINCT authors (seed_score_breakdown_target_two_counters_distinct_authors) shows that contribution's breakdown row with EXACTLY ONE neutral 'Countered' marker, and the body carries NO count / 'countered by N' / verdict phrasing anywhere (presence-only, anti-merging; assert_score_flag_is_single_neutral_presence, AC-SCORE-PRESENCE).",
+            "The 'Countered' marker on the twice-countered /score row is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_score_flag_links_to_thread) linking to the slice-11 thread where the two counters are individually attributed (AC-002-LINK).",
+            "The un-countered contribution rows carry NO marker and the subtotals STILL sum to the displayed pairing weight \u2014 the marker is orthogonal to the score (its subtotal, the pairing weight, and the pairing rank are unchanged; assert_score_html_breakdown_sums_to_weight_with_flag)."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over a store where a contribution is countered by two DISTINCT authors (seed_score_breakdown_target_two_counters_distinct_authors) shows that contribution's breakdown row with EXACTLY ONE neutral 'Countered' marker, and the body carries NO count / 'countered by N' / verdict phrasing anywhere (presence-only, anti-merging; assert_score_flag_is_single_neutral_presence, AC-SCORE-PRESENCE).",
+            "The 'Countered' marker on the twice-countered /score row is a render-only <a href=\"/claims/{cid}\"> one-hop anchor (navigation TEXT, never an executable control; assert_score_flag_links_to_thread) linking to the slice-11 thread where the two counters are individually attributed (AC-002-LINK).",
+            "The un-countered contribution rows carry NO marker and the subtotals STILL sum to the displayed pairing weight \u2014 the marker is orthogonal to the score (its subtotal, the pairing weight, and the pairing rank are unchanged; assert_score_html_breakdown_sums_to_weight_with_flag)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "a_contribution_with_two_counters_shows_one_neutral_presence_marker_on_the_score",
+          "n_scenarios": [
+            "SF-2"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single-neutral-presence render (one marker per countered contribution-cid, no count/verdict phrasing) and the render-only <a href=\"/claims/{cid}\"> one-hop link href are load-bearing anti-merging + drill-link logic; mutation-test the one-flag-per-cid branch (DISTINCT HashSet membership collapse) and the link href construction so a mutant emitting a 'countered by N' count, a verdict, or a non-anchor control is killed.",
+          "scenario_fns": [
+            "a_contribution_with_two_counters_shows_one_neutral_presence_marker_on_the_score"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "A large multi-pairing/multi-contribution /score breakdown flags every countered contribution correctly in one request (N+1-flatten behavioral proxy, REAL work + adapter-duckdb single-query note)",
+          "description": "The N+1-flatten behavioral proxy on the score surface (US-CF-001, SF-N1; AC-001-ONE-CALL / AC-001-INVARIANT / ADR-051). A LARGE /score breakdown with MANY pairings \u00d7 MANY contributions and a KNOWN countered subset flags EVERY countered contribution correctly \u2014 and only those \u2014 in ONE request, with no per-pairing/per-contribution degradation. This is the at-this-layer behavioral proxy for the single flattened presence call (the score_counter_presence helper collects every Contribution.cid across every WeightedPairing from view.ranked.flat_map(contributions) and queries ONCE, ADR-051 / DD-14-2); if the presence read were per-pairing or per-contribution, a large multi-pairing breakdown would degrade or mis-flag under the fan-out, so this proxy pins the whole breakdown is flagged correctly in one shot. REAL work: requires seed_score_breakdown_many_pairings_known_countered_subset to seed a genuinely large multi-pairing breakdown with a real countered subset AND un-countered contributions (a MIXED breakdown) so the proxy is meaningful (the AT pins both subsets non-empty so the seed cannot silently shrink). The render's ranking/order + every number stays byte-identical to slice-09 even at this size (asserted via assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids). ADAPTER NOTE for DELIVER: the strict 1-query bound is NOT observable at the subprocess AT layer \u2014 confirm the REUSED slice-12 adapter-duckdb counter_presence_for single-aggregate IN(...) read already carries its N+1 unit/property assertion (inherited from slice-12 / ADR-048); only add a fresh adapter-duckdb assertion if the flattened multi-pairing contribution-CID set exercises a path the slice-12 test does not already cover (query count invariant to pairing/contribution count). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over a LARGE multi-pairing breakdown (seed_score_breakdown_many_pairings_known_countered_subset, a MIXED breakdown with a non-empty countered subset AND un-countered contributions) flags EVERY countered contribution (assert_score_row_flagged_countered for every countered cid) and flags NO un-countered contribution (assert_score_row_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-pairing/per-contribution degradation (AC-001-ONE-CALL).",
+            "The whole multi-pairing breakdown is flagged correctly from a single GET request, exercising the ADR-051 single flattened score_counter_presence call over the union of EVERY Contribution.cid across EVERY WeightedPairing (the subprocess-layer behavioral proxy for the no-N+1 guarantee); the ranking/row order + every number stays byte-identical to slice-09 even at this size (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids, AC-001-INVARIANT).",
+            "DELIVER confirms the strict single-query bound is covered by the inherited slice-12 adapter-duckdb counter_presence_for unit/property assertion (query count invariant to input size, ADR-048), adding a fresh adapter-duckdb assertion ONLY if the flattened multi-pairing contribution-CID set exercises an uncovered path; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over a LARGE multi-pairing breakdown (seed_score_breakdown_many_pairings_known_countered_subset, a MIXED breakdown with a non-empty countered subset AND un-countered contributions) flags EVERY countered contribution (assert_score_row_flagged_countered for every countered cid) and flags NO un-countered contribution (assert_score_row_not_flagged for every un-countered cid) \u2014 all in the ONE response, with no per-pairing/per-contribution degradation (AC-001-ONE-CALL).",
+            "The whole multi-pairing breakdown is flagged correctly from a single GET request, exercising the ADR-051 single flattened score_counter_presence call over the union of EVERY Contribution.cid across EVERY WeightedPairing (the subprocess-layer behavioral proxy for the no-N+1 guarantee); the ranking/row order + every number stays byte-identical to slice-09 even at this size (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids, AC-001-INVARIANT).",
+            "DELIVER confirms the strict single-query bound is covered by the inherited slice-12 adapter-duckdb counter_presence_for unit/property assertion (query count invariant to input size, ADR-048), adding a fresh adapter-duckdb assertion ONLY if the flattened multi-pairing contribution-CID set exercises an uncovered path; the AT in this step is the behavioral proxy, not the strict bound."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "a_large_multi_pairing_breakdown_flags_every_countered_contribution_in_one_request",
+          "n_scenarios": [
+            "SF-N1"
+          ],
+          "us_trace": [
+            "US-CF-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single flattened contribution-CID score_counter_presence call across all pairings (the no-N+1 guarantee) is the load-bearing performance contract; mutation-test the flatten (every pairing's contribution CID included in the one bound set) + the inherited adapter-duckdb single-query bound so a mutant that fans the read out per pairing/per contribution or drops a CID from the flattened set is killed.",
+          "scenario_fns": [
+            "a_large_multi_pairing_breakdown_flags_every_countered_contribution_in_one_request"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Scoring semantics \u2014 the CARDINAL sum-to-weight + byte-identity orthogonality, the anti-misread copy, the no-noise baseline, and htmx/no-JS parity on the flagged /score surface (mostly confirmatory once Phase 01 holds)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "On a FLAGGED breakdown the per-contribution subtotals STILL sum to the displayed pairing weight and the countered contribution renders its FULL original subtotal (the CARDINAL sum-to-weight, the counter subtracts nothing)",
+          "description": "The slice-14 CARDINAL sum-to-weight on a FLAGGED breakdown (US-CF-002, SF-3; AC-SCORE-SUMWEIGHT). Confirmatory once 01-01 exists \u2014 the render projects the SAME unchanged WeightedPairing and the presence set only gates an additive marker, so the orthogonality holds by construction (ADR-051 \u00a77); this step PINS it on the observable flagged surface. On a breakdown WHERE one contribution carries the 'Countered' marker, the displayed per-contribution subtotals STILL sum to the displayed pairing weight, and the countered contribution's subtotal is its FULL original value (the counter subtracts nothing \u2014 SHOWN, never APPLIED). Reuses/adapts the slice-09 reproduce-by-hand parser on the FLAGGED render (markers elided so the subtotal parse is unaffected) via assert_score_html_breakdown_sums_to_weight_with_flag, plus assert_score_legend_present_and_blocklist_clean for the legend. Reuses seed_score_breakdown_one_contribution_countered. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_one_contribution_countered renders the countered contribution row WITH its 'Countered' marker (the breakdown IS flagged; assert_score_row_flagged_countered for every countered cid), yet the displayed per-contribution subtotals STILL sum to the displayed pairing weight (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the slice-14 CARDINAL: the reproduce-by-hand sum-to-weight gate holds on a FLAGGED render (AC-SCORE-SUMWEIGHT).",
+            "The countered contribution's subtotal is its FULL original value \u2014 the counter subtracts nothing; there is no code path by which the presence set reaches a weight/subtotal/base/bonus/bucket/rank/order (the flag is additive markup BESIDE the verbatim subtotal, ADR-051 \u00a77).",
+            "The breakdown carries the SCORE_COUNTER_LEGEND anti-misread legend (the breakdown is scored + flagged; assert_score_legend_present_and_blocklist_clean) and the assertion enters through the real openlore ui subprocess + HTTP, asserting on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_one_contribution_countered renders the countered contribution row WITH its 'Countered' marker (the breakdown IS flagged; assert_score_row_flagged_countered for every countered cid), yet the displayed per-contribution subtotals STILL sum to the displayed pairing weight (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the slice-14 CARDINAL: the reproduce-by-hand sum-to-weight gate holds on a FLAGGED render (AC-SCORE-SUMWEIGHT).",
+            "The countered contribution's subtotal is its FULL original value \u2014 the counter subtracts nothing; there is no code path by which the presence set reaches a weight/subtotal/base/bonus/bucket/rank/order (the flag is additive markup BESIDE the verbatim subtotal, ADR-051 \u00a77).",
+            "The breakdown carries the SCORE_COUNTER_LEGEND anti-misread legend (the breakdown is scored + flagged; assert_score_legend_present_and_blocklist_clean) and the assertion enters through the real openlore ui subprocess + HTTP, asserting on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "the_per_contribution_subtotals_still_sum_to_the_pairing_weight_with_the_flag",
+          "n_scenarios": [
+            "SF-3"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The sum-to-weight-on-a-flagged-render orthogonality (the countered contribution keeps its FULL subtotal; the presence bool never reaches a number) is the slice-14 CARDINAL; mutation-test that no presence-set value can perturb a subtotal/weight/bonus/bucket/rank/order so a mutant that subtracts on counter, scales a subtotal, or feeds presence into the weight is killed.",
+          "scenario_fns": [
+            "the_per_contribution_subtotals_still_sum_to_the_pairing_weight_with_the_flag"
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "Adding the score flag changes NO weight/ranking/row order versus slice-09 \u2014 with markers + legend elided the /score render is byte-identical to the slice-09 baseline (the CARDINAL byte-identity, marker+legend elision)",
+          "description": "The CARDINAL byte-identity vs the slice-09 baseline (US-CF-002, SF-4; AC-SCORE-BYTEID / I-CF-9). Confirmatory once 01-01 exists (the rows are built from the UNCHANGED scoring::score output and the flag + legend are separate additive markup), but it is the load-bearing shown-never-applied gate on the score numbers. Adding the flag changes NO weight, ranking, or row order versus the slice-09 baseline: with the 'Countered' markers AND the SCORE_COUNTER_LEGEND elided, the /score render is byte-identical to slice-09 \u2014 every displayed weight, confidence, author bonus, triangulation bonus, subtotal, headline total, bucket, [SPARSE] line, the pairing ranking, and the contribution row order. Uses the slice-12/13 baseline+marker-elision tactic EXTENDED to also elide the legend: there is NO pre-flag binary and NO no-flag HTTP seam (the route ALWAYS reads counter_presence_for), so the slice-09 reference is the RECORDED ranked render order (the seed's ordered_cids), and the gold ELIDES the additive <a href=\"/claims/{cid}\">Countered</a> anchors AND the legend, proving the remaining slice-09 body honours that recorded ranking/order + every number byte-for-byte (assert_score_render_byte_identical_to_slice09). Reuses seed_score_breakdown_many_pairings_known_countered_subset (a MIXED breakdown so the elision is non-trivial). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_many_pairings_known_countered_subset renders exactly the countered contributions WITH the marker (assert_score_row_flagged_countered) and every un-countered contribution exactly as slice-09 (assert_score_row_not_flagged), and with the additive 'Countered' markers AND the SCORE_COUNTER_LEGEND elided the render is byte-identical to the recorded slice-09 baseline \u2014 every weight/confidence/author-bonus/triangulation-bonus/subtotal/headline-total/bucket/[SPARSE]-line/pairing-ranking/contribution-row-order unchanged (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids, AC-SCORE-BYTEID).",
+            "The baseline is the RECORDED slice-09 ranked render order (ordered_cids) of the SAME store, since there is no pre-flag binary and no no-flag HTTP seam (the route ALWAYS reads counter_presence_for); the gold elides the <a href=\"/claims/{cid}\">Countered</a> anchors AND the legend and proves the remaining body honours that recorded ranking/order byte-for-byte (the slice-12/13 baseline+marker-elision tactic extended to the legend).",
+            "Any divergence is an UNSHIPPABLE shown-never-applied breach (I-CF-9); the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_many_pairings_known_countered_subset renders exactly the countered contributions WITH the marker (assert_score_row_flagged_countered) and every un-countered contribution exactly as slice-09 (assert_score_row_not_flagged), and with the additive 'Countered' markers AND the SCORE_COUNTER_LEGEND elided the render is byte-identical to the recorded slice-09 baseline \u2014 every weight/confidence/author-bonus/triangulation-bonus/subtotal/headline-total/bucket/[SPARSE]-line/pairing-ranking/contribution-row-order unchanged (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids, AC-SCORE-BYTEID).",
+            "The baseline is the RECORDED slice-09 ranked render order (ordered_cids) of the SAME store, since there is no pre-flag binary and no no-flag HTTP seam (the route ALWAYS reads counter_presence_for); the gold elides the <a href=\"/claims/{cid}\">Countered</a> anchors AND the legend and proves the remaining body honours that recorded ranking/order byte-for-byte (the slice-12/13 baseline+marker-elision tactic extended to the legend).",
+            "Any divergence is an UNSHIPPABLE shown-never-applied breach (I-CF-9); the assertion enters through the real openlore ui subprocess + HTTP and asserts on the observable rendered HTML only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "adding_the_score_flag_changes_no_weight_ranking_or_row_order_versus_slice09",
+          "n_scenarios": [
+            "SF-4"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The byte-identity-with-markers+legend-elided gate (the flag never perturbs a number, re-ranks a pairing, or re-orders a contribution row) is load-bearing shown-never-applied logic; mutation-test the byte-identity across flagged/elided so a mutant that lets the flag or legend perturb a subtotal/total/bucket/[SPARSE]-line, re-rank, or re-order is killed.",
+          "scenario_fns": [
+            "adding_the_score_flag_changes_no_weight_ranking_or_row_order_versus_slice09"
+          ]
+        },
+        {
+          "id": "02-03",
+          "name": "Two contributions with identical confidence+bonuses render IDENTICAL subtotals \u2014 only the countered one shows the marker, the legend is present, and the copy never uses a verdict/penalty word (anti-misread)",
+          "description": "The anti-misread copy on identical-subtotal twins (US-CF-002, SF-5; AC-SCORE-ANTIMISREAD). The flag is shown for the reader to judge and is unmistakably orthogonal to the score. Two contributions in the SAME pairing with IDENTICAL confidence + bonuses render IDENTICAL subtotals \u2014 one countered, one not \u2014 and only the countered one shows the marker; the breakdown carries the plain-language SCORE_COUNTER_LEGEND; the WHOLE rendered body is blocklist-clean (NEVER disputed/refuted/false/penalty/deduction/lowered/disputed score). The identical-subtotal twin proves the counter subtracts nothing: the countered contribution and its twin fold into the same displayed weight (the twin lives in uncountered_cids, so the per-row subtotals are equal). Reuses assert_score_row_flagged_countered / assert_score_row_not_flagged / assert_score_html_breakdown_sums_to_weight_with_flag / assert_score_legend_present_and_blocklist_clean. Materializes seed_score_breakdown_identical_subtotals_one_countered in support/mod.rs. Confirmatory once 01-01 + 02-01 hold. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_identical_subtotals_one_countered (two contributions in the same pairing with identical confidence + bonuses, one countered, one not) shows ONLY the countered one with the 'Countered' marker (assert_score_row_flagged_countered) and its identical-subtotal twin none (assert_score_row_not_flagged), proving the marker is orthogonal to the number.",
+            "Both contributions render the IDENTICAL subtotal (the counter subtracts nothing) and the subtotals STILL sum to the displayed pairing weight (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the countered contribution kept its FULL original value, its identical-subtotal twin's subtotal is equal, and both fold into the same displayed weight.",
+            "The breakdown carries the plain-language SCORE_COUNTER_LEGEND anti-misread legend and the WHOLE rendered body is blocklist-clean \u2014 never disputed/refuted/false/penalty/deduction/lowered/disputed score (assert_score_legend_present_and_blocklist_clean, AC-SCORE-ANTIMISREAD)."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_identical_subtotals_one_countered (two contributions in the same pairing with identical confidence + bonuses, one countered, one not) shows ONLY the countered one with the 'Countered' marker (assert_score_row_flagged_countered) and its identical-subtotal twin none (assert_score_row_not_flagged), proving the marker is orthogonal to the number.",
+            "Both contributions render the IDENTICAL subtotal (the counter subtracts nothing) and the subtotals STILL sum to the displayed pairing weight (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the countered contribution kept its FULL original value, its identical-subtotal twin's subtotal is equal, and both fold into the same displayed weight.",
+            "The breakdown carries the plain-language SCORE_COUNTER_LEGEND anti-misread legend and the WHOLE rendered body is blocklist-clean \u2014 never disputed/refuted/false/penalty/deduction/lowered/disputed score (assert_score_legend_present_and_blocklist_clean, AC-SCORE-ANTIMISREAD)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "two_identical_subtotal_contributions_render_identically_only_one_flagged",
+          "n_scenarios": [
+            "SF-5"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The identical-subtotal-twins render (equal subtotals, only the countered one flagged) + the blocklist-clean legend copy are load-bearing anti-misread logic; mutation-test the legend blocklist scan and the twin-subtotal equality so a mutant emitting a verdict/penalty word, perturbing the countered twin's subtotal, or flagging the un-countered twin is killed.",
+          "scenario_fns": [
+            "two_identical_subtotal_contributions_render_identically_only_one_flagged"
+          ]
+        },
+        {
+          "id": "02-04",
+          "name": "A contributor with NO countered contributions renders /score with no markers, no noise, byte-identical to the slice-09 baseline (no-noise, empty presence set)",
+          "description": "The no-noise + byte-identity baseline on the score surface (US-CF-002, SF-6; AC-002-NO-NOISE / AC-SCORE-BYTEID). A contributor with NO countered contributions: counter_presence_for returns the EMPTY set \u2192 no contribution row is flagged \u2192 every contribution renders exactly as slice-09, no 'Countered' marker anywhere AND no empty-state / '0 counters' noise, and (since there is nothing to flag) the breakdown is byte-identical to the slice-09 baseline with the additive legend elided. This is the byte-unaffected guarantee for the common case (the no-noise half of the trust contract) on the scoring surface. Reuses assert_score_row_not_flagged + assert_score_render_byte_identical_to_slice09; materializes seed_score_breakdown_none_countered in support/mod.rs by seeding the contributor's scoring trail through the production paths with NO counter (every contribution CID uncountered, empty countered set). Confirmatory once 01-01 exists (the empty-set \u2192 no-flag branch already holds). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_none_countered renders EVERY contribution as in slice-09 with NO 'Countered' marker (assert_score_row_not_flagged for each contribution cid) and the flag anchor appears NOWHERE in the body (empty presence set \u2192 nothing rendered; AC-002-NO-NOISE).",
+            "The breakdown carries NO empty-state / '0 counters' noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, AC-002-NO-NOISE).",
+            "With nothing flagged and the additive legend elided, the render is byte-identical to the slice-09 baseline (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids) \u2014 no flag re-ordered/re-ranked anything (AC-SCORE-BYTEID baseline); seed_score_breakdown_none_countered is materialized in support/mod.rs by seeding through the production paths (no hand-inserted rows)."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_none_countered renders EVERY contribution as in slice-09 with NO 'Countered' marker (assert_score_row_not_flagged for each contribution cid) and the flag anchor appears NOWHERE in the body (empty presence set \u2192 nothing rendered; AC-002-NO-NOISE).",
+            "The breakdown carries NO empty-state / '0 counters' noise anywhere \u2014 the empty presence set produces an additive-nothing render (the un-countered common case is byte-unaffected, AC-002-NO-NOISE).",
+            "With nothing flagged and the additive legend elided, the render is byte-identical to the slice-09 baseline (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids) \u2014 no flag re-ordered/re-ranked anything (AC-SCORE-BYTEID baseline); seed_score_breakdown_none_countered is materialized in support/mod.rs by seeding through the production paths (no hand-inserted rows)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "a_contributor_with_no_countered_contributions_renders_score_with_no_markers",
+          "n_scenarios": [
+            "SF-6"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The empty-presence-set \u2192 no-flag / no-noise / legend-elided byte-identity branch is load-bearing; mutation-test the empty-set no-marker path so a mutant emitting an empty-state '0 counters' noise string or a spurious marker on an un-countered contribution is killed.",
+          "scenario_fns": [
+            "a_contributor_with_no_countered_contributions_renders_score_with_no_markers"
+          ]
+        },
+        {
+          "id": "02-05",
+          "name": "The /score flag renders identically under htmx fragment and no-JS full page \u2014 both offline (parity by construction, the page embeds the same fragment fn)",
+          "description": "The htmx-fragment / no-JS full-page parity on the flagged score surface (US-CF-002, SF-7; AC-002-PARITY / AC-SCORE-LOCAL). GET /score?contributor=<did> WITH HX-Request serves the #score-results fragment WITH the flag; WITHOUT HX-Request serves a COMPLETE full page whose score region renders the SAME flags \u2014 parity by construction (the page EMBEDS the same render_score_results_fragment fn; the flag + legend live INSIDE the fragment, ADR-051 \u00a76.1). Both render fully with NO network access (the presence read is a LOCAL indexed lookup; the page references only the vendored local /static/htmx.min.js). The full page is is_full_page() (chrome present); the fragment is is_fragment() (no chrome); BOTH carry the SAME 'Countered' marker on the countered contribution and the SAME legend, NEITHER flags an un-countered contribution. Reuses assert_score_row_flagged_countered / assert_score_row_not_flagged / assert_score_legend_present_and_blocklist_clean + seed_score_breakdown_one_contribution_countered. Confirmatory once 01-01 exists (the flag + legend live in the single fragment fn both shapes embed). Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> WITHOUT HX-Request returns a complete full page (is_full_page(), chrome present) and WITH HX-Request returns ONLY the #score-results fragment (is_fragment(), no chrome); BOTH are 200 text/html.",
+            "The countered contribution row carries the SAME 'Countered' marker in BOTH shapes (assert_score_row_flagged_countered on full + fragment) and every un-countered contribution row carries NONE in either (assert_score_row_not_flagged), and BOTH shapes carry the SCORE_COUNTER_LEGEND (assert_score_legend_present_and_blocklist_clean) \u2014 parity by construction (the full page EMBEDS the same render_score_results_fragment fn; AC-002-PARITY).",
+            "Both shapes render fully with NO network access \u2014 the presence read is a LOCAL indexed lookup and the page references only the vendored local /static/htmx.min.js (AC-SCORE-LOCAL); the assertion enters through the real openlore ui subprocess + HTTP."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> WITHOUT HX-Request returns a complete full page (is_full_page(), chrome present) and WITH HX-Request returns ONLY the #score-results fragment (is_fragment(), no chrome); BOTH are 200 text/html.",
+            "The countered contribution row carries the SAME 'Countered' marker in BOTH shapes (assert_score_row_flagged_countered on full + fragment) and every un-countered contribution row carries NONE in either (assert_score_row_not_flagged), and BOTH shapes carry the SCORE_COUNTER_LEGEND (assert_score_legend_present_and_blocklist_clean) \u2014 parity by construction (the full page EMBEDS the same render_score_results_fragment fn; AC-002-PARITY).",
+            "Both shapes render fully with NO network access \u2014 the presence read is a LOCAL indexed lookup and the page references only the vendored local /static/htmx.min.js (AC-SCORE-LOCAL); the assertion enters through the real openlore ui subprocess + HTTP."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface.rs",
+          "scenario_name": "the_score_flag_renders_identically_under_htmx_and_no_js",
+          "n_scenarios": [
+            "SF-7"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The full-page-embeds-fragment parity (the flag + legend live in the single render_score_results_fragment fn both shapes embed) is load-bearing; mutation-test the parity so a mutant that flags only one shape, drifts the marker/legend between shapes, or flags an un-countered contribution in either shape is killed.",
+          "scenario_fns": [
+            "the_score_flag_renders_identically_under_htmx_and_no_js"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "GOLD invariants \u2014 read-only / no-write + offline chrome / offline render + the CARDINAL sum-to-weight byte-identity + the N+1-flatten proxy over the WHOLE flagged /score surface (mostly confirmatory, release gates LAST)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Every flagged /score render leaves the store read-only + no flagged /score render adds a write/sign/counter control (read-only / no-write gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-02 are done (US-CF-002, SF-INV-ReadOnly + SF-INV-NoWrite; I-CF-1 / KPI-VIEW-2). (ReadOnly) Exercising /score across postures (countered + un-countered) AND both shapes (full page + htmx fragment) leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts, all unchanged) over a NON-TRIVIAL seeded store \u2014 the REUSED batch presence read is a read-only SELECT and the score is computed per query, nothing persisted on ANY surface. (NoWrite) No /score response shape (full page or fragment, countered or not) renders a write / sign / counter / publish / subscribe control \u2014 authoring stays the slice-03 CLI; every '/claims/{cid}' reference is render-only <a href> navigation TEXT (the per-reference anchor scan: every '/claims/' byte sits inside an '<a href' tag). Reuses the inherited harnesses (assert_store_read_only, capture_store_row_count_universe, assert_score_html_has_no_write_or_sign_control \u2014 the slice-09 score no-write blocklist) + seed_score_breakdown_one_contribution_countered. Lands in viewer_counter_flags_score_surface_invariants.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "Exercising /score (countered posture, full page + htmx fragment) over a non-trivial seeded store (seed_score_breakdown_one_contribution_countered) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CF-1 / KPI-VIEW-2); the REUSED batch presence read is a read-only SELECT and the score is computed per query, nothing persisted on any surface.",
+            "No /score response shape (full page or fragment, countered or un-countered) renders a write / sign / counter / publish / subscribe control (assert_score_html_has_no_write_or_sign_control), and every '/claims/{cid}' reference is render-only navigation TEXT inside an <a href> anchor, never an executable control (the per-reference anchor scan: every '/claims/' byte sits inside an '<a href' tag; I-CF-1).",
+            "Both guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML / the port-exposed row-count universe only."
+          ],
+          "acceptance_criteria": [
+            "Exercising /score (countered posture, full page + htmx fragment) over a non-trivial seeded store (seed_score_breakdown_one_contribution_countered) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-CF-1 / KPI-VIEW-2); the REUSED batch presence read is a read-only SELECT and the score is computed per query, nothing persisted on any surface.",
+            "No /score response shape (full page or fragment, countered or un-countered) renders a write / sign / counter / publish / subscribe control (assert_score_html_has_no_write_or_sign_control), and every '/claims/{cid}' reference is render-only navigation TEXT inside an <a href> anchor, never an executable control (the per-reference anchor scan: every '/claims/' byte sits inside an '<a href' tag; I-CF-1).",
+            "Both guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML / the port-exposed row-count universe only."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+          "scenario_name": "every_flagged_score_render_leaves_the_store_read_only",
+          "n_scenarios": [
+            "SF-INV-ReadOnly",
+            "SF-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "scenario_fns": [
+            "every_flagged_score_render_leaves_the_store_read_only",
+            "no_flagged_score_render_adds_a_write_or_sign_control"
+          ]
+        },
+        {
+          "id": "03-02",
+          "name": "The flagged /score chrome stays offline (no CDN) and the flagged /score surface renders fully offline (offline gold)",
+          "description": "Two offline gold guardrails (US-CF-002, SF-INV-OfflineChrome + SF-INV-Offline; I-CF-5 / KPI-HX-G2 / KPI-5 / AC-SCORE-LOCAL). (OfflineChrome) the flagged /score full page references ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false), so the page CHROME \u2014 and, since the presence read is LOCAL, the FLAG itself \u2014 stays offline-capable. (Offline) the flagged /score surface renders fully with NO network seam wired (plain ViewerServer::start, NEITHER the /scrape GitHub seam NOR the /search indexer seam) over a store seeded with a contribution countered by a PULLED PEER (verified at peer pull time) \u2014 the presence read is a LOCAL DB-index lookup + the score is a LOCAL feed read + PURE compute with NO outbound edge, so the countered contribution STILL carries its marker with NO degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again'; the viewer re-verifies nothing). Reuses references_external_cdn + assert_score_row_flagged_countered + seed_score_breakdown_one_contribution_countered. Lands in viewer_counter_flags_score_surface_invariants.rs; flips green for free once 01-01 + the chrome exist. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "The flagged /score full page references NO off-host CDN (references_external_cdn() is false \u2014 only the local /static/htmx.min.js, I-CF-5 / KPI-HX-G2), so the page chrome and (since the presence read is LOCAL) the flag itself stay offline-capable.",
+            "GET /score?contributor=<did> over a store with a contribution countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), renders the countered contribution STILL carrying the 'Countered' marker from the LOCAL store with no network call (assert_score_row_flagged_countered; the presence read is a LOCAL ref-tables-only lookup + the score is a LOCAL compute, AC-SCORE-LOCAL).",
+            "The surface renders NO network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged /score route has no outbound edge to take down; the viewer re-verifies nothing (I-CF-5 / KPI-5)."
+          ],
+          "acceptance_criteria": [
+            "The flagged /score full page references NO off-host CDN (references_external_cdn() is false \u2014 only the local /static/htmx.min.js, I-CF-5 / KPI-HX-G2), so the page chrome and (since the presence read is LOCAL) the flag itself stay offline-capable.",
+            "GET /score?contributor=<did> over a store with a contribution countered by a PULLED PEER, with NO network seam wired (plain ViewerServer::start), renders the countered contribution STILL carrying the 'Countered' marker from the LOCAL store with no network call (assert_score_row_flagged_countered; the presence read is a LOCAL ref-tables-only lookup + the score is a LOCAL compute, AC-SCORE-LOCAL).",
+            "The surface renders NO network-degraded notice (none of 'unavailable', 'network error', 'could not reach', 'try again') \u2014 the flagged /score route has no outbound edge to take down; the viewer re-verifies nothing (I-CF-5 / KPI-5)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+          "scenario_name": "the_flagged_score_chrome_stays_offline_no_cdn",
+          "n_scenarios": [
+            "SF-INV-OfflineChrome",
+            "SF-INV-Offline"
+          ],
+          "us_trace": [
+            "US-CF-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "scenario_fns": [
+            "the_flagged_score_chrome_stays_offline_no_cdn",
+            "the_flagged_score_surface_renders_fully_offline"
+          ]
+        },
+        {
+          "id": "03-03",
+          "name": "CARDINAL byte-identity GOLD \u2014 the /score render is byte-identical with and without the flag (markers + legend elided) AND the subtotals still sum to the weight on a FLAGGED render + the N+1-flatten proxy resolves presence in one request (LAST, release gate)",
+          "description": "The CARDINAL shown-never-applied / sum-to-weight byte-identity gold + the N+1-flatten behavioral proxy (US-CF-001/002, SF-INV-ByteId + SF-INV-N1; I-CF-9 / D-14-2 / AC-SCORE-BYTEID + AC-SCORE-SUMWEIGHT + I-CF-8 / ADR-051; release-blocking). (ByteId, THE slice-14 CARDINAL) the SAME store's rendered breakdown \u2014 every weight, confidence, author bonus, triangulation bonus, subtotal, headline total, bucket, [SPARSE] line, pairing ranking, and contribution row order \u2014 is byte-IDENTICAL whether or not the flag is active (the additive 'Countered' markers AND the SCORE_COUNTER_LEGEND elided), AND the per-contribution subtotals STILL sum to the displayed pairing weight on the FLAGGED render. BASELINE TACTIC (the slice-12/13 recorded-ordering + marker-elision tactic extended to the legend): there is NO pre-flag binary and NO no-flag HTTP seam (the route ALWAYS reads counter_presence_for), so the slice-09 reference is the RECORDED ranked render order (the seed's ordered_cids), and the gold ELIDES the additive anchors AND the legend and proves the remaining slice-09 body honours that recorded ranking/order + every number byte-for-byte (assert_score_render_byte_identical_to_slice09 + assert_score_html_breakdown_sums_to_weight_with_flag) over a MIXED countered + un-countered subset. A byte-identity / sum breach silently lets the flag perturb a subtotal or re-rank a pairing; this gold makes it unshippable. (N1) a LARGE multi-pairing breakdown flags the countered subset correctly in ONE request \u2014 the contribution-CID flatten across pairings is a single presence call (the subprocess-layer behavioral proxy; the strict 1-query bound is the DELIVER adapter-duckdb unit/property test). LAST roadmap step (tends to flip green for free once 01-01 + 02-02 hold, because the rows are built from the UNCHANGED scoring::score output and the flag + legend are separate additive markup, but it is the release gate). Reuses seed_score_breakdown_many_pairings_known_countered_subset + assert_score_render_byte_identical_to_slice09 + assert_score_html_breakdown_sums_to_weight_with_flag + assert_score_row_flagged_countered / assert_score_row_not_flagged. Lands in viewer_counter_flags_score_surface_invariants.rs. Build-before-run as 01-01. xtask delta: NONE.",
+          "criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_many_pairings_known_countered_subset (a MIX of countered + un-countered contributions across pairings) renders, with the additive 'Countered' markers AND the SCORE_COUNTER_LEGEND elided, a render byte-IDENTICAL to the recorded slice-09 baseline \u2014 every weight / confidence / author-bonus / triangulation-bonus / subtotal / headline-total / bucket / [SPARSE]-line / pairing-ranking / contribution-row-order unchanged (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids) AND the per-contribution subtotals STILL sum to the displayed pairing weight on the FLAGGED render (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the flag is additive ONLY (I-CF-9 / AC-SCORE-BYTEID + AC-SCORE-SUMWEIGHT); any divergence is an UNSHIPPABLE release-blocking shown-never-applied breach.",
+            "A LARGE multi-pairing breakdown flags EVERY countered contribution (assert_score_row_flagged_countered) and NO un-countered contribution (assert_score_row_not_flagged) in ONE request \u2014 the at-this-layer behavioral proxy for the ADR-051 single flattened score_counter_presence call over the union of EVERY Contribution.cid across EVERY WeightedPairing (the strict 1-query bound is the inherited DELIVER adapter-duckdb unit/property test; query count is not observable at the subprocess AT layer, I-CF-8).",
+            "Both gold guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML only; the baseline is the RECORDED slice-09 ranked order (ordered_cids) of the SAME store since there is no pre-flag binary and no no-flag HTTP seam (the slice-12/13 baseline+marker-elision tactic extended to also elide the legend)."
+          ],
+          "acceptance_criteria": [
+            "GET /score?contributor=<did> over seed_score_breakdown_many_pairings_known_countered_subset (a MIX of countered + un-countered contributions across pairings) renders, with the additive 'Countered' markers AND the SCORE_COUNTER_LEGEND elided, a render byte-IDENTICAL to the recorded slice-09 baseline \u2014 every weight / confidence / author-bonus / triangulation-bonus / subtotal / headline-total / bucket / [SPARSE]-line / pairing-ranking / contribution-row-order unchanged (assert_score_render_byte_identical_to_slice09 over seeded.ordered_cids) AND the per-contribution subtotals STILL sum to the displayed pairing weight on the FLAGGED render (assert_score_html_breakdown_sums_to_weight_with_flag) \u2014 the flag is additive ONLY (I-CF-9 / AC-SCORE-BYTEID + AC-SCORE-SUMWEIGHT); any divergence is an UNSHIPPABLE release-blocking shown-never-applied breach.",
+            "A LARGE multi-pairing breakdown flags EVERY countered contribution (assert_score_row_flagged_countered) and NO un-countered contribution (assert_score_row_not_flagged) in ONE request \u2014 the at-this-layer behavioral proxy for the ADR-051 single flattened score_counter_presence call over the union of EVERY Contribution.cid across EVERY WeightedPairing (the strict 1-query bound is the inherited DELIVER adapter-duckdb unit/property test; query count is not observable at the subprocess AT layer, I-CF-8).",
+            "Both gold guardrails enter through the real openlore ui subprocess + HTTP and assert on the observable rendered HTML only; the baseline is the RECORDED slice-09 ranked order (ordered_cids) of the SAME store since there is no pre-flag binary and no no-flag HTTP seam (the slice-12/13 baseline+marker-elision tactic extended to also elide the legend)."
+          ],
+          "test_file": "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+          "scenario_name": "the_score_render_is_byte_identical_with_and_without_the_flag",
+          "n_scenarios": [
+            "SF-INV-ByteId",
+            "SF-INV-N1"
+          ],
+          "us_trace": [
+            "US-CF-001",
+            "US-CF-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_counter_flags_score_surface_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The CARDINAL release-blocking byte-identity + sum-to-weight gate (the flag never perturbs a number, re-ranks a pairing, re-orders a contribution row, or subtracts on counter) + the single flattened contribution-CID presence call across all pairings (the no-N+1 guarantee). Mutation-test the byte-identity across flagged/elided + the sum-to-weight on a flagged render + the flatten (every pairing's contribution CID in the one bound set) \u2014 a mutant that feeds the presence bool into a subtotal/weight/rank/order or fans the read out per pairing/per contribution must be killed.",
+          "scenario_fns": [
+            "the_score_render_is_byte_identical_with_and_without_the_flag",
+            "a_large_multi_pairing_breakdown_resolves_presence_in_one_request"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "APPROVED \u2014 all 6 dimensions PASS; 11 steps / 14 scenarios; two CARDINALs provable by construction",
+    "status": "approved"
+  },
+  "total_steps": 11
+}
