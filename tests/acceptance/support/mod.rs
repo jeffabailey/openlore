@@ -12705,3 +12705,447 @@ pub fn assert_survey_grouping_and_order_byte_identical(
         prev_offset = Some(offset);
     }
 }
+
+// =============================================================================
+// slice-14 (viewer-counter-flags-score-surface; DISTILL) — the SAME neutral
+// "Countered" presence flag (slice-11/12/13 `COUNTERED_PRESENCE_FLAG`, REUSED
+// verbatim) extended to the LAST LOCAL surface the operator scans: the
+// SCORING-BEARING `GET /score?contributor=<did>` per-contribution breakdown rows
+// (US-CF-001 infra wiring + US-CF-002 user-visible flag). REUSES the slice-12
+// `StoreReadPort::counter_presence_for(&[cid]) -> HashSet<String>` batch read
+// (ADR-048 / ADR-051) — NO new read method, NO new SQL, NO new route. The flag is
+// the REUSED slice-13 `render_countered_link(&c.cid.0, presence.contains(&c.cid.0))`
+// SSOT (`<a href="/claims/{cid}">Countered</a>`) — NO new render fn, NO new string.
+//
+// The slice-14 CARDINAL distinction from slices 12/13 (D-14-2 / I-CF-9): `/score`
+// carries SCORING SEMANTICS, so the flag must be provably ORTHOGONAL to the score —
+// SHOWN, never APPLIED. The per-contribution subtotals STILL sum to the displayed
+// pairing weight WITH the flag present; a countered contribution renders its FULL
+// original subtotal (the counter subtracts nothing); and with the markers AND the
+// `SCORE_COUNTER_LEGEND` anti-misread legend elided, the `/score` render is
+// byte-identical to the slice-09 baseline (every weight / confidence / author bonus
+// / triangulation bonus / subtotal / headline total / bucket / `[SPARSE]` line /
+// pairing ranking / contribution row order unchanged). The legend (the ONE genuinely
+// NEW artifact, DD-14-3) carries plain-language orthogonality copy and NEVER any
+// verdict/penalty word ("disputed"/"refuted"/"false"/"penalty"/"deduction"/
+// "lowered"/"disputed score").
+//
+// Seeding drives the PRODUCTION paths (Pillar 3 / BR-VIEW-4): the contributor's
+// scoring trail lands via `peer add` + `peer pull` (REUSING the slice-09
+// `build_verifiable_peer_records_for_triples` rich-trail shape — several DISTINCT
+// subjects on the shared object so the pure `scoring::score` yields a real weight +
+// a MULTI-ROW breakdown that decomposes, NOT `[SPARSE]`). The COUNTER targeting ONE
+// contribution's CID lands via a DISTINCT peer's `build_verifiable_peer_counter_
+// record` + `peer add` + `peer pull` (so its `counters` reference lands in
+// `peer_claim_references` with `referenced_cid == <target cid>`, the peer arm of the
+// presence UNION-ALL). SELF-COUNTER IS BLOCKED, so the countered contribution must be
+// authored such that a *peer* (Tobias) counters it — the contributor's own claims are
+// pulled-peer rows, and the counter is a SECOND distinct peer's record. ALL rows land
+// in the SAME local store `openlore ui` reads in ONE `peer pull` (the single-pull
+// discipline the slice-09 score seeds document — pulling one peer at a time would
+// drop the other's now-dead PDS and 404 its DID resolution). NO hand-inserted store
+// rows. The presence read is LOCAL (DB-index only); NO network seam on `/score`
+// (offline by construction, AC-SCORE-LOCAL).
+//
+// Layer placement (Mandate 9/11): every slice-14 scenario is a layer-3/layer-5
+// subprocess + real-I/O test — EXAMPLE-only. The sad/edge paths (none-countered,
+// multi-author counter, identical-subtotal anti-misread) are enumerated explicitly,
+// never PBT-generated at this layer. The strict 1-query N+1 bound is a DELIVER
+// `adapter-duckdb` unit/property assertion (REUSED slice-12 read); at this subprocess
+// AT layer the N+1 guard is asserted via its behavioral proxy (a multi-pairing,
+// multi-contribution breakdown flags the countered subset correctly in ONE request).
+//
+// Mandate 7 RED scaffolds (ADR-025): every seed + assert below is `todo!()` — it
+// COMPILES now (signatures resolve so the AT files build), then PANICS at runtime →
+// classifies RED (MISSING_FUNCTIONALITY), NOT BROKEN. They stay RED until DELIVER's
+// per-scenario RED→GREEN→COMMIT cycles.
+// =============================================================================
+
+/// The exact slice-14 anti-misread legend copy (DD-14-3 / AC-SCORE-ANTIMISREAD) the
+/// rendered scored `/score` breakdown MUST carry ONCE — the `viewer-domain`
+/// `SCORE_COUNTER_LEGEND` SSOT constant mirrored here so the seeds + asserts never
+/// drift from the production string. The copy is deliberately NEUTRAL: it states the
+/// marker is shown for the reader to judge and does NOT change the score; it carries
+/// NONE of the verdict/penalty words on [`SCORE_LEGEND_BLOCKLIST`]. Held in ONE place
+/// (the byte-identity elision + the legend-present-and-clean assert both reference it).
+pub const SCORE_COUNTER_LEGEND_TEXT: &str =
+    "A “Countered” marker means another claim disagrees with this one elsewhere. \
+     It is shown for you to judge and does not change this contributor's score — \
+     each contribution keeps its full weight.";
+
+/// The verdict / penalty / subtraction blocklist the anti-misread legend (and the
+/// whole scored `/score` body) must NEVER contain (AC-SCORE-ANTIMISREAD; reuses the
+/// slice-11 verdict-word blocklist + the score-specific subtraction words). A reader
+/// must not be able to misread the flag as a score deduction, so none of these may
+/// appear anywhere on the rendered breakdown. Lowercased at the comparison site so a
+/// capitalized variant ("Disputed", "Penalty") can never sneak through.
+pub const SCORE_LEGEND_BLOCKLIST: &[&str] = &[
+    "disputed",
+    "refuted",
+    "false",
+    "penalty",
+    "deduction",
+    "lowered",
+    "disputed score",
+];
+
+/// The handle a `/score` flag seed returns: the contributor whose breakdown is
+/// rendered (`contributor_did`), the set of every contribution CID across every
+/// pairing in the rendered breakdown (the flatten point of DD-14-2 / ADR-051), split
+/// into the COUNTERED subset (contribution rows that MUST carry the "Countered"
+/// marker linking to `/claims/{cid}`) and the UN-COUNTERED subset (contribution rows
+/// that MUST render exactly as slice-09 — no marker). Mirrors [`SeededPeerClaimsList`]
+/// / [`SeededSurveyEdges`] for the SCORING surface.
+#[derive(Debug, Clone)]
+pub struct SeededScoreBreakdown {
+    /// The contributor DID the scenario queries (`/score?contributor=<did>`).
+    pub contributor_did: String,
+    /// Every contribution CID across the whole rendered breakdown, in the slice-09
+    /// rendered (ranked pairing → row) order. The byte-identity gold pins this order
+    /// + every weight/subtotal byte-identical to slice-09 with markers + legend
+    /// elided (AC-SCORE-BYTEID / I-CF-9).
+    pub ordered_cids: Vec<String>,
+    /// The subset of `ordered_cids` whose contribution has >= 1 counter — each row
+    /// MUST carry the neutral "Countered" marker in its UNCHANGED position, its FULL
+    /// original subtotal preserved (US-CF-002 / AC-SCORE-SUMWEIGHT).
+    pub countered_cids: Vec<String>,
+    /// The subset of `ordered_cids` with NO counter — each row MUST render exactly as
+    /// slice-09 (no marker, no noise; AC-002-NO-NOISE).
+    pub uncountered_cids: Vec<String>,
+}
+
+/// Read every contribution CID a `/score` breakdown is built from, in the slice-09
+/// rendered (ranked) order — every `peer_claims` row attributed to `contributor_did`
+/// (the contributor's scoring feed `claims ∪ peer_claims`; the trail seeds land the
+/// rows in `peer_claims`). Reads the SAME store the viewer's local feed read returns,
+/// so the slice-14 score-flag seeds can return the EXACT contribution CID set the
+/// breakdown renders (and the byte-identity gold can pin order). Read-only; opens a
+/// SECOND short-lived connection. The SCORING-surface sibling of
+/// [`read_peer_claim_cids_in_list_order`] — reuses [`read_peer_claim_cids_for`]
+/// (the contributor's rows are `peer_claims` attributed to its DID).
+///
+/// SCAFFOLD: true (slice-14).
+pub fn read_score_contribution_cids(env: &TestEnv, contributor_did: &str) -> Vec<String> {
+    // The contributor's scoring trail rows are `peer_claims` attributed to its DID
+    // (the rich-trail seed pulls them via `peer add` + `peer pull`). Recover them
+    // through the EXISTING read helper — no new SQL. (DELIVER may re-order these to
+    // the exact rendered ranked order if the byte-identity gold needs it; the CONTRACT
+    // is the recovered CID SET + order matching the rendered breakdown.)
+    let _ = env;
+    let _ = contributor_did;
+    todo!(
+        "slice-14 RED scaffold: read every contribution CID in the contributor's \
+         scored breakdown (the `peer_claims` rows attributed to {contributor_did:?}, \
+         in the slice-09 ranked render order) so a /score flag scenario can address \
+         exact rows + the byte-identity gold can pin order"
+    );
+}
+
+/// Seed a SCORED `/score` breakdown for a RICH-trail contributor with EXACTLY ONE
+/// countered contribution among several un-countered contributions (the WS + Scenario
+/// 1/2/3/4 fixture). The contributor's trail (several DISTINCT subjects on the shared
+/// reproducible-builds object → `cross_project_span >= 2`, a real weight + a MULTI-ROW
+/// breakdown, NOT `[SPARSE]`) is pulled via the PRODUCTION `peer add` + `peer pull`
+/// path so its rows land in `peer_claims`; a DISTINCT peer (Tobias) counters ONE of
+/// those contribution CIDs (self-counter is BLOCKED, so the counter MUST be a peer's),
+/// landing in `peer_claim_references` with `referenced_cid == target_cid` (the peer
+/// arm of the presence UNION-ALL). ALL rows ride ONE `peer pull` (single-pull
+/// discipline). Returns the [`SeededScoreBreakdown`] so the scenario addresses the
+/// exact countered + un-countered contribution rows.
+///
+/// SCAFFOLD: true (slice-14) — DELIVER materializes it by: (1) building the
+/// contributor's rich-trail records UP FRONT via `build_verifiable_peer_records_for_
+/// triples(contributor_did, seed, &[(subject, repro, conf); 4])`, keeping the PDS
+/// ALIVE; (2) recovering ONE record's deterministic CID as the counter target; (3)
+/// building Tobias's `build_verifiable_peer_counter_record(COUNTER_AUTHOR_TOBIAS,
+/// seed, &target_cid, …)`; (4) `peer add` BOTH then `run_openlore_pull_multi` over
+/// BOTH `PeerSeam`s in ONE pull; (5) recovering every contribution CID
+/// (`read_score_contribution_cids`) and splitting the ONE countered + the rest.
+pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededScoreBreakdown {
+    let _ = env;
+    todo!(
+        "slice-14 RED scaffold: seed a RICH-trail contributor whose multi-row /score \
+         breakdown has EXACTLY ONE contribution countered by a DISTINCT peer (Tobias) \
+         — via build_verifiable_peer_records_for_triples (the contributor's trail) + \
+         build_verifiable_peer_counter_record (Tobias's counter of one contribution \
+         CID) + ONE run_openlore_pull_multi; return the SeededScoreBreakdown (the ONE \
+         countered + the rest un-countered, the contributor DID, the ordered CIDs)"
+    );
+}
+
+/// Seed a SCORED `/score` breakdown where ONE contribution is countered by TWO
+/// DISTINCT authors (the presence-only GOLD fixture; AC-SCORE-PRESENCE). Two distinct
+/// peers each author a verifiable `counters`-referencing record targeting the SAME
+/// contribution CID, delivered through the PRODUCTION `peer add` + `peer pull` path,
+/// so BOTH land in `peer_claim_references` with the SAME `referenced_cid`. The
+/// `counter_presence_for` UNION-ALL DISTINCT collapses the two distinct-author
+/// counters of the SAME CID to ONE presence membership → the contribution row carries
+/// EXACTLY ONE neutral "Countered" marker (never "countered by 2"). Returns the
+/// [`SeededScoreBreakdown`] whose single `countered_cids` entry is the twice-countered
+/// contribution.
+///
+/// SCAFFOLD: true (slice-14) — adapts [`seed_score_breakdown_one_contribution_
+/// countered`] with a SECOND distinct counter-author peer (e.g. Rachel) ALSO
+/// countering the SAME target contribution CID, all riding the ONE `peer pull`.
+pub fn seed_score_breakdown_target_two_counters_distinct_authors(
+    env: &TestEnv,
+) -> SeededScoreBreakdown {
+    let _ = env;
+    todo!(
+        "slice-14 RED scaffold: seed a RICH-trail contributor whose breakdown has ONE \
+         contribution countered by TWO DISTINCT peer authors (Tobias + a second \
+         distinct peer) BOTH referencing the SAME contribution CID, all in ONE \
+         run_openlore_pull_multi; return the SeededScoreBreakdown whose single \
+         countered_cids entry is the twice-countered contribution (presence-only proof)"
+    );
+}
+
+/// Seed a SCORED `/score` breakdown with TWO contributions in the SAME pairing that
+/// have IDENTICAL confidence + author bonus + triangulation bonus (so they render the
+/// IDENTICAL subtotal), of which EXACTLY ONE is countered (the anti-misread GOLD
+/// fixture; AC-SCORE-ANTIMISREAD). The countered contribution's subtotal is its FULL
+/// original value — identical to its un-countered twin — proving the counter
+/// subtracts nothing; only the countered one shows the marker; the breakdown carries
+/// the [`SCORE_COUNTER_LEGEND_TEXT`] legend. Returns the [`SeededScoreBreakdown`] so
+/// the scenario can address the countered + the identical-subtotal un-countered row.
+///
+/// SCAFFOLD: true (slice-14) — DELIVER seeds the contributor's trail so two
+/// contributions FALL IN THE SAME pairing with IDENTICAL confidence + bonuses (same
+/// object, same rank tier — the pure scorer yields equal subtotals), then a DISTINCT
+/// peer counters EXACTLY ONE of the two via `build_verifiable_peer_counter_record` +
+/// the ONE `peer pull`. The `countered_cids` carries the countered twin; the
+/// `uncountered_cids` carries (at least) its identical-subtotal twin.
+pub fn seed_score_breakdown_identical_subtotals_one_countered(
+    env: &TestEnv,
+) -> SeededScoreBreakdown {
+    let _ = env;
+    todo!(
+        "slice-14 RED scaffold: seed a /score breakdown with TWO contributions in one \
+         pairing carrying IDENTICAL confidence + author bonus + triangulation bonus \
+         (→ identical rendered subtotals), EXACTLY ONE of which is countered by a \
+         DISTINCT peer; return the SeededScoreBreakdown so the scenario asserts both \
+         render the identical subtotal but only the countered one shows the marker \
+         (anti-misread: the counter subtracts nothing)"
+    );
+}
+
+/// Seed a SCORED `/score` breakdown with a RICH-trail contributor but NO counters at
+/// all (the no-noise + byte-identity-baseline fixture; AC-002-NO-NOISE / AC-SCORE-
+/// BYTEID). `counter_presence_for` returns the EMPTY set → NO contribution row is
+/// flagged, NO legend-induced diff vs the slice-09 baseline beyond the additive legend
+/// markup (which the byte-identity gold elides). Returns the [`SeededScoreBreakdown`]
+/// with an EMPTY `countered_cids` (every contribution un-countered).
+///
+/// SCAFFOLD: true (slice-14) — DELIVER seeds ONLY the contributor's rich trail (REUSE
+/// the slice-09 `seed_contributor_rich_trail` shape via `build_verifiable_peer_
+/// records_for_triples`), pulling NO counter peer; recovers every contribution CID
+/// into `ordered_cids` + `uncountered_cids` with `countered_cids` EMPTY.
+pub fn seed_score_breakdown_none_countered(env: &TestEnv) -> SeededScoreBreakdown {
+    let _ = env;
+    todo!(
+        "slice-14 RED scaffold: seed a RICH-trail contributor's multi-row /score \
+         breakdown with NO counters at all (empty presence set); return the \
+         SeededScoreBreakdown with an EMPTY countered_cids (no-noise + byte-identity \
+         baseline)"
+    );
+}
+
+/// Seed a SCORED `/score` breakdown spanning MANY pairings × MANY contributions with a
+/// KNOWN countered subset (the N+1-flatten behavioral proxy fixture; AC-001-ONE-CALL /
+/// AC-001-INVARIANT). Mirrors the slice-13 `seed_project_survey_many_groups_known_
+/// countered_subset`: the breakdown is genuinely LARGE (multiple ranked pairings,
+/// multiple contributions per pairing) so that a per-pairing or per-contribution
+/// presence read would degrade or mis-flag under fan-out; this proxy pins that the
+/// WHOLE breakdown is flagged correctly in ONE request from the single flattened
+/// `counter_presence_for` call (DD-14-2 / ADR-051). Returns the [`SeededScoreBreakdown`].
+///
+/// SCAFFOLD: true (slice-14) — DELIVER seeds the contributor's trail across MANY
+/// DISTINCT subjects/objects (→ many ranked pairings, many contributions), then a
+/// DISTINCT peer counters a KNOWN SUBSET of those contribution CIDs, all riding the
+/// ONE `peer pull`; returns the SeededScoreBreakdown with the known countered subset +
+/// the un-countered remainder.
+pub fn seed_score_breakdown_many_pairings_known_countered_subset(
+    env: &TestEnv,
+) -> SeededScoreBreakdown {
+    let _ = env;
+    todo!(
+        "slice-14 RED scaffold: seed a LARGE /score breakdown (MANY pairings × MANY \
+         contributions) with a KNOWN countered subset (and un-countered contributions \
+         too), all in ONE run_openlore_pull_multi; return the SeededScoreBreakdown so \
+         the N+1 proxy pins the whole breakdown flags correctly in one request"
+    );
+}
+
+/// Assert a rendered `/score` body (fragment OR full page) FLAGS the given countered
+/// contribution row: the row carries the neutral "Countered" marker
+/// ([`LIST_COUNTERED_FLAG_TEXT`]) rendered as the REUSED slice-13 `render_countered_
+/// link` one-hop link `<a href="/claims/{cid}">Countered</a>` to that claim's slice-11
+/// thread (US-CF-002 / AC-002-MARKER / AC-002-LINK). The SCORING-surface sibling of
+/// [`assert_peer_claim_row_flagged_countered`] / [`assert_edge_flagged_countered`].
+/// Scans the rendered HTML only (Mandate 8 universe = port-exposed rendered surface).
+///
+/// SCAFFOLD: true (slice-14).
+pub fn assert_score_row_flagged_countered(body: &str, countered_cid: &str) {
+    let _ = body;
+    let _ = countered_cid;
+    todo!(
+        "slice-14 RED scaffold: assert the countered /score contribution row for \
+         {countered_cid:?} carries the REUSED render-only marker \
+         `<a href=\"/claims/{countered_cid}\">Countered</a>` (AC-002-MARKER / AC-002-LINK)"
+    );
+}
+
+/// Assert a rendered `/score` body does NOT flag the given un-countered contribution
+/// row: the row for `uncountered_cid` carries NO "Countered" marker and NO empty-state
+/// noise — it renders exactly as slice-09 (AC-002-NO-NOISE). The SCORING sibling of
+/// [`assert_peer_claim_row_not_flagged`] / [`assert_edge_not_flagged`]. Scans the
+/// rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14).
+pub fn assert_score_row_not_flagged(body: &str, uncountered_cid: &str) {
+    let _ = body;
+    let _ = uncountered_cid;
+    todo!(
+        "slice-14 RED scaffold: assert the un-countered /score contribution row for \
+         {uncountered_cid:?} carries NO `<a href=\"/claims/{uncountered_cid}\">Countered</a>` \
+         marker and no `0 counters` / `no disagreement` noise (renders exactly as \
+         slice-09; AC-002-NO-NOISE)"
+    );
+}
+
+/// Assert a `/score` contribution row countered by N (>1) authors shows EXACTLY ONE
+/// neutral "Countered" marker — presence-only, NEVER a count ("countered by N" /
+/// "disputed by N"), a verdict, or a merged consensus row (US-CF-002 /
+/// AC-SCORE-PRESENCE). The SCORING sibling of
+/// [`assert_peer_claim_flag_is_single_neutral_presence`] /
+/// [`assert_edge_flag_is_single_neutral_presence`]. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14).
+pub fn assert_score_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
+    let _ = body;
+    let _ = target_cid;
+    todo!(
+        "slice-14 RED scaffold: assert the /score contribution row for {target_cid:?} \
+         (countered by ≥2 distinct authors) carries EXACTLY ONE neutral 'Countered' \
+         marker (presence membership → one flag, DISTINCT referenced_cid), and the \
+         body carries NONE of the count/verdict phrasings ('countered by N', 'disputed \
+         by N', 'consensus', 'net verdict'); AC-SCORE-PRESENCE"
+    );
+}
+
+/// Assert the "Countered" marker on a countered `/score` contribution row is a
+/// render-only `<a href="/claims/{cid}">` ONE-HOP link to that claim's slice-11 thread
+/// — navigation TEXT, never an executable write/sign/counter control (US-CF-002 /
+/// AC-002-LINK). The SCORING sibling of [`assert_peer_claim_flag_links_to_thread`] /
+/// [`assert_edge_flag_links_to_thread`].
+///
+/// SCAFFOLD: true (slice-14).
+pub fn assert_score_flag_links_to_thread(body: &str, countered_cid: &str) {
+    let _ = body;
+    let _ = countered_cid;
+    todo!(
+        "slice-14 RED scaffold: assert the 'Countered' marker on the countered /score \
+         row for {countered_cid:?} is the render-only one-hop link \
+         `<a href=\"/claims/{countered_cid}\">Countered</a>` to its slice-11 thread \
+         (navigation TEXT, never a `<form`/`<button`/`onclick` control); AC-002-LINK"
+    );
+}
+
+/// Assert the running sum of a pairing's per-contribution subtotals STILL EQUALS its
+/// displayed weight on a FLAGGED `/score` breakdown — the CARDINAL sum-to-weight
+/// orthogonality gate (AC-SCORE-SUMWEIGHT). REUSES/extends the slice-09 reproduce-by-
+/// hand parser ([`assert_score_html_breakdown_sums_to_displayed_weight`]) but on a
+/// breakdown WHERE a contribution carries the additive "Countered" marker: the marker
+/// is elided (so the subtotal parse is unaffected) and the per-row subtotals must
+/// STILL sum to the displayed weight, AND the countered contribution's subtotal must
+/// be its FULL original value (the counter subtracts nothing). Scans the OBSERVABLE
+/// rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14) — DELIVER elides every additive
+/// `<a href="/claims/{cid}">Countered</a>` marker from the flagged body, then reuses
+/// the slice-09 `parse_score_pairings` + Σ-subtotal==weight check on the remaining
+/// slice-09 breakdown markup; ALSO asserts the countered contribution's parsed
+/// subtotal equals its un-countered twin's (FULL original value preserved).
+pub fn assert_score_html_breakdown_sums_to_weight_with_flag(
+    body: &str,
+    countered_cids: &[String],
+) {
+    let _ = body;
+    let _ = countered_cids;
+    todo!(
+        "slice-14 RED scaffold: on a FLAGGED /score breakdown, ELIDE the additive \
+         `<a href=\"/claims/{{cid}}\">Countered</a>` markers (for every {countered_cids:?}), \
+         then assert (via the REUSED slice-09 parse_score_pairings) the per-contribution \
+         subtotals STILL sum to the displayed pairing weight AND the countered \
+         contribution's subtotal is its FULL original value (the counter subtracts \
+         nothing); AC-SCORE-SUMWEIGHT (CARDINAL)"
+    );
+}
+
+/// Assert the scored `/score` breakdown carries the anti-misread legend
+/// ([`SCORE_COUNTER_LEGEND_TEXT`]) EXACTLY ONCE and that the WHOLE rendered body is
+/// BLOCKLIST-CLEAN — it contains NONE of the verdict/penalty/subtraction words on
+/// [`SCORE_LEGEND_BLOCKLIST`] ("disputed"/"refuted"/"false"/"penalty"/"deduction"/
+/// "lowered"/"disputed score"). The orthogonality copy makes the flag unmistakably
+/// SHOWN-not-APPLIED (AC-SCORE-ANTIMISREAD). Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14) — DELIVER asserts the body contains
+/// `SCORE_COUNTER_LEGEND_TEXT` exactly once (a scored breakdown → one legend, ABOVE
+/// the pairings; never per row/pairing), AND the lowercased body contains none of
+/// `SCORE_LEGEND_BLOCKLIST`.
+pub fn assert_score_legend_present_and_blocklist_clean(body: &str) {
+    let _ = body;
+    todo!(
+        "slice-14 RED scaffold: assert the scored /score body carries \
+         SCORE_COUNTER_LEGEND_TEXT EXACTLY once (one legend per scored breakdown, never \
+         per row/pairing) AND the lowercased body contains NONE of \
+         SCORE_LEGEND_BLOCKLIST; AC-SCORE-ANTIMISREAD"
+    );
+}
+
+/// Assert the `/score` body does NOT carry the anti-misread legend
+/// ([`SCORE_COUNTER_LEGEND_TEXT`]) — for the `NoClaims` arm where there is NO scored
+/// breakdown at all the legend is NOT rendered (it governs markers that do not appear;
+/// DD-14-3 placement: `render_score_result`'s `Scored` arm only). Used by the
+/// no-claims scenario so the legend is provably scoped to scored breakdowns. Scans the
+/// rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14).
+pub fn assert_score_legend_absent(body: &str) {
+    let _ = body;
+    todo!(
+        "slice-14 RED scaffold: assert the /score body does NOT carry \
+         SCORE_COUNTER_LEGEND_TEXT (the NoClaims arm renders no scored breakdown → no \
+         legend; DD-14-3 placement)"
+    );
+}
+
+/// Assert the flagged `/score` render is byte-identical to the slice-09 reference
+/// render of the SAME store in every weight / confidence / author bonus / triangulation
+/// bonus / subtotal / headline total / bucket / `[SPARSE]` line / pairing ranking /
+/// contribution row order EXCEPT the additive "Countered" markers AND the additive
+/// [`SCORE_COUNTER_LEGEND_TEXT`] legend — the flag changes NOTHING about the score
+/// (the CARDINAL byte-identity gold, AC-SCORE-BYTEID / I-CF-9). Uses the slice-12/13
+/// baseline+marker-elision tactic extended to ALSO elide the legend: elide every
+/// additive "Countered" anchor AND the legend string, then prove the remaining
+/// slice-09 body honours the recorded ranked render order (`ordered_cids`, strictly
+/// increasing byte offsets) byte-for-byte. Scans the rendered HTML only.
+///
+/// SCAFFOLD: true (slice-14) — DELIVER elides every
+/// `<a href="/claims/{cid}">Countered</a>` anchor (for every recorded CID) AND the
+/// `SCORE_COUNTER_LEGEND_TEXT` legend string from the flagged body, asserts no residual
+/// marker/legend survives, then pins every recorded contribution CID present + in
+/// strictly-increasing byte order (the slice-09 ranked order) — the flag + legend are
+/// purely additive markup.
+pub fn assert_score_render_byte_identical_to_slice09(flagged: &str, ordered_cids: &[String]) {
+    let _ = flagged;
+    let _ = ordered_cids;
+    todo!(
+        "slice-14 RED scaffold: ELIDE every additive \
+         `<a href=\"/claims/{{cid}}\">Countered</a>` anchor (for every {ordered_cids:?}) \
+         AND the SCORE_COUNTER_LEGEND_TEXT legend from the flagged /score body; assert \
+         no residual marker/legend survives, then pin every recorded contribution CID \
+         present in strictly-increasing byte order (the slice-09 ranked render order) — \
+         byte-identical to slice-09 (AC-SCORE-BYTEID / CARDINAL)"
+    );
+}

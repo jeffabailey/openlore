@@ -617,3 +617,51 @@ harness = true
 name = "viewer_counter_flags_graph_surfaces_invariants"
 path = "../../tests/acceptance/viewer_counter_flags_graph_surfaces_invariants.rs"
 harness = true
+
+# Slice-14 (viewer-counter-flags-score-surface; DISTILL) — the SAME neutral "Countered"
+# presence flag (slice-11/12/13 COUNTERED_PRESENCE_FLAG, REUSED verbatim) extended to the
+# LAST LOCAL surface: the SCORING-BEARING GET /score?contributor=<did> per-contribution
+# breakdown rows (US-CF-001 infra wiring + US-CF-002 user-visible flag; ADR-051). REUSES
+# the slice-12 counter_presence_for batch read VERBATIM (ADR-048) wired into the /score
+# handler — NO new read method, NO new SQL, NO new route. The page CID set is the UNION of
+# every Contribution.cid across every WeightedPairing, flattened ONCE in the effect-shell
+# score_counter_presence helper and queried in ONE aggregate read per render (the N+1
+# guard, AC-001). The flag is the REUSED slice-13 render_countered_link (one-hop
+# <a href="/claims/{cid}">Countered</a> link). The CARDINAL distinction from slices 12/13:
+# /score carries SCORING SEMANTICS, so the flag must be provably ORTHOGONAL to the score —
+# SHOWN, never APPLIED: the per-contribution subtotals STILL sum to the displayed pairing
+# weight with the flag present (AC-SCORE-SUMWEIGHT), and with the markers + the
+# SCORE_COUNTER_LEGEND anti-misread legend elided the render is byte-identical to slice-09
+# (AC-SCORE-BYTEID). Presence-only (N counters -> ONE neutral marker), no-noise,
+# parity-by-construction (htmx fragment == no-JS full page). Drives the REAL `openlore ui`
+# verb via ViewerServer + in-test HTTP (get/get_htmx) over a REAL seeded LOCAL DuckDB; NO
+# mocked boundary (LOCAL read + PURE compute). Per Mandate 9/11 example-based, never
+# PBT-generated at this layer (the strict 1-query bound is a DELIVER adapter-duckdb
+# unit/property test). Build-before-run: `cargo build` the `openlore` bin. DISTILL
+# registers + RED gate; SF-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_flags_score_surface"
+path = "../../tests/acceptance/viewer_counter_flags_score_surface.rs"
+harness = true
+
+# Slice-14 (viewer-counter-flags-score-surface; DISTILL) GOLD / guardrail invariants over
+# the whole flagged /score surface (cross-cutting I-CF-1/5/8/9 + the slice-14 CARDINAL):
+# every_flagged_score_render_leaves_the_store_read_only (read-only state-delta, Mandate 8 —
+# the REUSED presence read + per-query score compute persist nothing),
+# no_flagged_score_render_adds_a_write_or_sign_control (no sign/publish/counter/subscribe
+# control on any shape — markers are render-only <a href> TEXT; authoring stays the slice-03
+# CLI), the_flagged_score_chrome_stays_offline_no_cdn (local /static/htmx.min.js, no CDN),
+# the_flagged_score_surface_renders_fully_offline (the presence read is LOCAL DB-index only +
+# the score is a LOCAL compute; renders network-down; the viewer re-verifies nothing), the
+# CARDINAL shown-never-applied / sum-to-weight / byte-identity gold
+# the_score_render_is_byte_identical_with_and_without_the_flag (I-CF-9 / D-14-2 /
+# AC-SCORE-BYTEID + AC-SCORE-SUMWEIGHT — the flag perturbs NO weight/subtotal/ranking/order,
+# subtotals still sum to weight on a FLAGGED render), and the N+1-flatten behavioral proxy
+# a_large_multi_pairing_breakdown_resolves_presence_in_one_request (I-CF-8 / ADR-051). Drives
+# the REAL `openlore ui` via ViewerServer over a REAL seeded local store; NO mocked boundary.
+# Per Mandate 9/11 example-based, never PBT-generated at this layer. DISTILL registers + RED
+# gate; SF-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_counter_flags_score_surface_invariants"
+path = "../../tests/acceptance/viewer_counter_flags_score_surface_invariants.rs"
+harness = true
