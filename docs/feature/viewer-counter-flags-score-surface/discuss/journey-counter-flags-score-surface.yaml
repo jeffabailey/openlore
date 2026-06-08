@@ -1,0 +1,129 @@
+schema_version: 1
+
+journey:
+  name: "Spot countered contributions on the contributor-score surface"
+  goal: >
+    While reading a contributor's /score breakdown, instantly see which contributions
+    have drawn a counter — without the flag ever changing any weight, confidence, bonus,
+    subtotal, headline total, bucket, ranking, or row order, and without misreading the
+    flag as a deduction from the score. The slice-09 sum-to-weight CARDINAL is preserved;
+    the counter is SHOWN, never APPLIED.
+  persona: "P-001 (Maria, counter-claim-scanner hat — the /score contributor-scoring surface)"
+  feature_id: viewer-counter-flags-score-surface
+  slice: slice-14
+  job: J-003b
+  decorates_job: J-002c  # the transparent-weighting job; must NOT be disturbed
+  brownfield_delta_on: [slice-09, slice-11, slice-12, slice-13]
+  reused_read: "StoreReadPort::counter_presence_for(&[String]) -> HashSet<String> (slice-12 / ADR-048) — NO new read method"
+  reused_render: "render_countered_link(cid, is_countered) + COUNTERED_PRESENCE_FLAG (slice-13-unified SSOT) — NO new render fn / string"
+
+  emotional_arc:
+    start: "Curious + slightly wary — can I trust this score? which of these contributions were pushed back on?"
+    middle: "Relief — I can SEE which contributions are contested without opening each + reassurance that the counter didn't secretly lower the score."
+    end: "Calibrated trust — the score is unchanged; contested contributions are simply marked for me to go judge; being countered is NOT a deduction."
+
+steps:
+  - id: 1
+    name: "Flag countered contributions on /score (score-orthogonal)"
+    command: "GET /score?contributor=<did>"
+    story: US-CF-002
+
+    tui_mockup: |
+      +-- GET /score?contributor=did:plc:t0bi --------------------------------------------+
+      | Contributor adherence score: did:plc:t0bi   (read-only, LOCAL compute)            |
+      |                                                                                   |
+      |  github:rust-lang/cargo — dependency-pinning   Weight: 1.42 [well-evidenced]      |
+      |   Author        CID         Conf  AuthBon  TriBon  Subtotal                       |
+      |   did:plc:t0bi  bafy...t0bi 0.88  0.10     0.05    1.03  [Countered] -> /claims/bafy...t0bi
+      |   did:plc:mr    bafy...mr1  0.91  0.00     0.00    0.39        (no marker)         |
+      |        ^ 1.03 + 0.39 = 1.42 == Weight  (sum-to-weight CARDINAL; flag changed neither)
+      |  ℹ "Countered" = disagreed with elsewhere — shown for you to judge; does NOT lower the score
+      +-----------------------------------------------------------------------------------+
+      ^ every weight/confidence/bonus/subtotal/total/bucket/rank/order byte-identical to slice-09 (markers elided)
+
+    shared_artifacts:
+      - name: "COUNTERED_PRESENCE_FLAG / render_countered_link"
+        source: "crates/viewer-domain/src/lib.rs (slice-11 const ~679 + slice-13-unified render_countered_link)"
+        displayed_as: "Countered"
+        consumers: ["/claims list (slice-12)", "/claims/{cid} thread (slice-11)", "/peer-claims + /project + /philosophy (slice-13)", "/score contribution rows (slice-14)"]
+      - name: "counter_presence_for batch read"
+        source: "crates/ports/src/store_read.rs (slice-12 / ADR-048) — REUSED, no new method"
+        displayed_as: "presence set -> per-contribution is_countered bool"
+        consumers: ["/claims (slice-12)", "graph surfaces (slice-13)", "/score (slice-14)"]
+      - name: "claim thread link"
+        source: "GET /claims/{cid} (slice-11)"
+        displayed_as: "<a href=\"/claims/{cid}\">Countered</a>"
+        consumers: ["all slice-12/13/14 flags"]
+      - name: "WeightedPairing (sum-to-weight host)"
+        source: "scoring::WeightedView / WeightedPairing (slice-04, projected by slice-09 render_score_breakdown ~1968)"
+        displayed_as: "weight + per-claim subtotals (subtotals sum to weight BY CONSTRUCTION)"
+        consumers: ["/score render — UNCHANGED by the flag (the flag is a render-only annotation; no WeightedPairing changes)"]
+
+    emotional_state:
+      entry: "Wary — must I open every contribution to find disagreement, and does the flag mean the score was lowered?"
+      exit: "Calibrated trust — contested contributions are marked in place; the score, ranking, and sum-to-weight are unchanged; the flag is shown for me to judge, not applied."
+
+    integration_checkpoint: |
+      The handler collects every Contribution.cid across every WeightedPairing in the
+      ScoreState::Scored{view} and calls counter_presence_for ONCE; the contribution-row
+      projection sets is_countered in the effect shell; render_score_breakdown emits the
+      slice-13 render_countered_link only when is_countered. The slice-09 sum-to-weight
+      CARDINAL holds (subtotals still sum to weight); every weight/confidence/bonus/subtotal/
+      total/bucket/rank/order is byte-identical to slice-09 (markers + legend elided). The
+      anti-misread legend states the flag is orthogonal to the score.
+
+    failure_modes:
+      - "Per-contribution counter_presence_for call (N+1) instead of one batch call per page."
+      - "The flag changes a subtotal, the pairing weight, the bucket, or the ranking (sum-to-weight / shown-never-applied violated)."
+      - "Copy that reads the flag as a deduction ('counter lowered the score', 'penalty', 'disputed score') — the anti-misread requirement."
+      - "A contribution countered by N authors shows a count ('disputed by N') instead of ONE neutral marker."
+      - "A confidence/bonus/subtotal renders differently when the flag is present (verbatim violated)."
+      - "Recomputing the score in the viewer instead of projecting the reused WeightedView."
+
+    gherkin: |
+      Scenario: A countered contribution shows the neutral marker and its weight is unchanged
+        Given Maria's /score?contributor=did:plc:t0bi has, under the cargo dependency-pinning pairing (weight 1.42), a contribution "bafy...t0bi" (confidence 0.88, subtotal 1.03) with >= 1 counter
+        When she opens GET /score?contributor=did:plc:t0bi in the viewer
+        Then that contribution row shows the neutral "Countered" marker
+        And the marker is a render-only <a href="/claims/bafy...t0bi"> one-hop link to the slice-11 thread
+        And the row still shows confidence 0.88, the same bonuses, and the same subtotal 1.03
+        And the pairing weight is still 1.42 and the contribution subtotals still sum to 1.42
+        And the breakdown copy states the counter is shown for the reader to judge and does NOT lower the contributor's score
+        And a contribution countered by two authors shows exactly ONE neutral marker
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "COUNTERED_PRESENCE_FLAG / render_countered_link"
+      must_match_across: [1]
+      failure_message: "The marker string + render must be the SAME slice-11/12/13 constant + render_countered_link on /score (no new string, no new render fn)."
+    - artifact: "counter_presence_for batch read"
+      must_match_across: [1]
+      failure_message: "/score must REUSE the slice-12 read (no new read method); ONE aggregate query per render (no N+1)."
+    - artifact: "WeightedPairing (sum-to-weight host)"
+      must_match_across: [1]
+      failure_message: "The flag must change no WeightedPairing; subtotals must still sum to weight; every weight/confidence/bonus/subtotal/total/bucket/rank/order byte-identical to slice-09."
+
+cardinal_invariants:
+  - "SUM-TO-WEIGHT preserved (slice-14 CARDINAL): the per-claim subtotals still sum to the displayed pairing weight with the flag present; the counter is SHOWN, never APPLIED — a countered claim keeps its FULL original weight (I-CF-9)."
+  - "Shown, never applied: the flag never re-orders/re-ranks/filters/re-weights/subtracts on the breakdown; byte-identical to slice-09 with markers elided (ADR-015 / I-CF-2)."
+  - "Anti-misread copy: plain-language legend makes it unmistakable the flag is orthogonal to the score; never 'penalty'/'deduction'/'lowered'/'disputed score' (I-CF-9)."
+  - "Presence-only: a contribution countered by N authors shows ONE neutral marker, never a count (I-CF-3)."
+  - "Read-only: StoreReadPort only; no key; no write/sign/counter control; authoring stays the CLI (I-CF-1)."
+  - "Batch, not N+1: one counter_presence_for call per render, REUSED from slice-12 (I-CF-8)."
+  - "LOCAL + offline: indexed ref-tables lookup, no network on /score, no per-row artifact read, vendored htmx only (I-CF-5)."
+  - "Verbatim confidence/weight/bonuses/subtotal: every value renders exactly as slice-09 (I-CF-4)."
+
+out_of_scope:
+  - "Applying/subtracting the counter from the score; recomputing any scoring math (the viewer projects the reused WeightedView)."
+  - "The slices 12/13 surfaces (/claims, /peer-claims, /project, /philosophy); the slice-11 /claims/{cid} thread; the slice-08 /search annotation — all shipped."
+  - "Authoring/composing a counter on the viewer; any count/verdict/'disputed score'; any reason text on a flag; any network seam; any new read method / render fn / route / crate."
+
+changelog:
+  - date: "2026-06-08"
+    feature: "viewer-counter-flags-score-surface"
+    change: >
+      Initial DISCUSS journey — slice-14. Extends the slice-12/13 'Countered' flag to the
+      LAST viewer surface: the /score contributor-scoring breakdown (REUSING
+      counter_presence_for + render_countered_link, no new read/render/route/crate). The
+      load-bearing nuance: the flag must be provably ORTHOGONAL to the score — slice-09
+      sum-to-weight CARDINAL preserved, counter SHOWN never APPLIED, anti-misread copy added.
