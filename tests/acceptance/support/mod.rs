@@ -13205,13 +13205,190 @@ pub fn seed_score_breakdown_none_countered(env: &TestEnv) -> SeededScoreBreakdow
 pub fn seed_score_breakdown_many_pairings_known_countered_subset(
     env: &TestEnv,
 ) -> SeededScoreBreakdown {
-    let _ = env;
-    todo!(
-        "slice-14 RED scaffold: seed a LARGE /score breakdown (MANY pairings × MANY \
-         contributions) with a KNOWN countered subset (and un-countered contributions \
-         too), all in ONE run_openlore_pull_multi; return the SeededScoreBreakdown so \
-         the N+1 proxy pins the whole breakdown flags correctly in one request"
+    // The scored contributor (a DISTINCT peer DID, so its rows land in `peer_claims`
+    // attributed to it). Its trail spans MANY (subject, object) pairings: SEVERAL
+    // DISTINCT philosophy objects, each asserted across SEVERAL DISTINCT subjects, so
+    // the contributor's scoring feed decomposes into a genuinely LARGE multi-pairing /
+    // multi-contribution breakdown (NOT `[SPARSE]` — every object spans ≥ 2 projects →
+    // cross_project_span ≥ 2). A per-pairing or per-contribution presence read would
+    // degrade or mis-flag under this fan-out; the ADR-051 single flattened
+    // `counter_presence_for` call (every Contribution.cid across every WeightedPairing,
+    // DD-14-2) must flag every countered contribution — and only those — in ONE request.
+    let contributor_did = CONTRIBUTOR_RICH_DID;
+    let contributor_seed = [23u8; 32];
+
+    // THREE distinct philosophy objects, each across FOUR distinct subjects → a large,
+    // multi-pairing breakdown (≥ 3 pairings, ≥ 12 contributions). Distinct confidences
+    // keep every triple genuinely distinct (no canonical-CID aliasing → no row collision).
+    let objects = [
+        SCORE_OBJECT_REPRODUCIBLE_BUILDS,
+        "org.openlore.philosophy.dependency-pinning",
+        "org.openlore.philosophy.memory-safety",
+    ];
+    let subjects = [
+        "github:bazelbuild/bazel",
+        "github:NixOS/nixpkgs",
+        "github:reproducible-builds/diffoscope",
+        "github:GNOME/meson",
+    ];
+    let contributor_triples = objects
+        .iter()
+        .enumerate()
+        .flat_map(|(obj_idx, object)| {
+            subjects.iter().enumerate().map(move |(subj_idx, subject)| {
+                // Confidences in (0,1], distinct per (object, subject): 0.86, 0.83, ...
+                let confidence = 0.86 - ((obj_idx * subjects.len() + subj_idx) as f64) * 0.03;
+                (*subject, *object, confidence)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // STEP 1 — build the contributor's verifiable trail records UP FRONT (the same REAL
+    // Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies). Each
+    // record's `rkey` IS its deterministic CID, so we can pick a KNOWN SUBSET as the
+    // counter targets BEFORE anything is pulled.
+    let (contributor_records, contributor_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(
+            contributor_did,
+            contributor_seed,
+            &contributor_triples,
+        );
+
+    // The KNOWN countered subset: contributions at indices 0, 5, and 10 — spread across
+    // the THREE DISTINCT objects (index 0 in object #0, index 5 in object #1, index 10 in
+    // object #2), so the targets fall in DISTINCT pairings. A per-pairing presence read
+    // could not flag them all from a single pairing's CIDs — the flatten must collect
+    // EVERY Contribution.cid across EVERY WeightedPairing into ONE call (ADR-051).
+    let countered_indices = [0usize, 5, 10];
+    let target_cids = countered_indices
+        .iter()
+        .map(|&i| {
+            contributor_records
+                .get(i)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "seed_score_breakdown_many_pairings_known_countered_subset: the \
+                         contributor's trail record #{i} must exist (large multi-pairing trail)"
+                    )
+                })
+                .rkey
+                .clone()
+        })
+        .collect::<Vec<_>>();
+
+    // STEP 2 — THREE DISTINCT counter authors, one per target (distinct seeds → distinct
+    // keys; distinct target CIDs → distinct counter-record CIDs). Each lands in
+    // `peer_claims` (under its OWN DID) and its `counters` reference lands in
+    // `peer_claim_references` with `referenced_cid == its target` — the peer arm of the
+    // presence UNION-ALL across DISTINCT pairings.
+    let counter_authors: [(&str, [u8; 32]); 3] = [
+        (COUNTER_AUTHOR_TOBIAS, [9u8; 32]),
+        ("did:plc:uli-test", [11u8; 32]),
+        ("did:plc:wren-test", [13u8; 32]),
+    ];
+    let counters = counter_authors
+        .iter()
+        .zip(target_cids.iter())
+        .map(|((did, seed), target_cid)| {
+            let (record, pubkey_hex) = build_verifiable_peer_counter_record(
+                did,
+                *seed,
+                target_cid,
+                Some(COUNTER_PEER_REASON_VERBATIM),
+            );
+            (*did, record, pubkey_hex)
+        })
+        .collect::<Vec<_>>();
+
+    let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
+    let counter_pds = counters
+        .iter()
+        .map(|(did, record, _)| (*did, PeerPds::for_peer(did, vec![record.clone()])))
+        .collect::<Vec<_>>();
+
+    // STEP 3 — subscribe to every peer via the real `peer add` verb (resolver wired per
+    // peer), holding each PDS ALIVE for the whole function, then `peer pull` ALL of them
+    // in ONE invocation (single-pull discipline). The contributor IS a subscribed peer
+    // (its large trail rides the federation path); the three counter authors are the
+    // DISTINCT counters spread across pairings.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", contributor_did],
+        contributor_did,
+        contributor_pds.endpoint_url(),
     );
+    assert_eq!(
+        added.status, 0,
+        "seed_score_breakdown_many_pairings_known_countered_subset: peer add for \
+         {contributor_did} must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    for (did, pds) in &counter_pds {
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        assert_eq!(
+            added.status, 0,
+            "seed_score_breakdown_many_pairings_known_countered_subset: peer add for {did} \
+             must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+
+    let mut seams = vec![PeerSeam {
+        peer_did: contributor_did,
+        peer_endpoint: contributor_pds.endpoint_url(),
+        peer_pubkey_hex: &contributor_pubkey_hex,
+    }];
+    for ((did, _record, pubkey_hex), (_, pds)) in counters.iter().zip(counter_pds.iter()) {
+        seams.push(PeerSeam {
+            peer_did: did,
+            peer_endpoint: pds.endpoint_url(),
+            peer_pubkey_hex: pubkey_hex,
+        });
+    }
+    let pulled = run_openlore_pull_multi(env, &["peer", "pull"], &seams);
+    assert_eq!(
+        pulled.status, 0,
+        "seed_score_breakdown_many_pairings_known_countered_subset: peer pull must \
+         succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every contribution CID in the contributor's breakdown (the
+    // `peer_claims` rows attributed to its DID — every counter lives under ITS OWN DID,
+    // so the counters are excluded by construction). Split the KNOWN countered subset
+    // from the un-countered remainder. The N+1 proxy pins BOTH non-empty so the seed
+    // cannot silently shrink.
+    let ordered_cids = read_score_contribution_cids(env, contributor_did);
+    for target_cid in &target_cids {
+        assert!(
+            ordered_cids.contains(target_cid),
+            "seed_score_breakdown_many_pairings_known_countered_subset: the countered \
+             target CID {target_cid:?} must be among the contributor's contribution CIDs; \
+             got {ordered_cids:?}"
+        );
+    }
+    assert!(
+        ordered_cids.len() > target_cids.len(),
+        "seed_score_breakdown_many_pairings_known_countered_subset: the large breakdown \
+         must yield MORE contributions than the countered subset (a MIXED breakdown with \
+         un-countered contributions too); got {} contribution(s), {} countered; \
+         {ordered_cids:?}",
+        ordered_cids.len(),
+        target_cids.len()
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| !target_cids.contains(cid))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededScoreBreakdown {
+        contributor_did: contributor_did.to_string(),
+        ordered_cids,
+        countered_cids: target_cids,
+        uncountered_cids,
+    }
 }
 
 /// Assert a rendered `/score` body (fragment OR full page) FLAGS the given countered
@@ -13503,14 +13680,64 @@ pub fn assert_score_legend_absent(body: &str) {
 /// strictly-increasing byte order (the slice-09 ranked order) — the flag + legend are
 /// purely additive markup.
 pub fn assert_score_render_byte_identical_to_slice09(flagged: &str, ordered_cids: &[String]) {
-    let _ = flagged;
-    let _ = ordered_cids;
-    todo!(
-        "slice-14 RED scaffold: ELIDE every additive \
-         `<a href=\"/claims/{{cid}}\">Countered</a>` anchor (for every {ordered_cids:?}) \
-         AND the SCORE_COUNTER_LEGEND_TEXT legend from the flagged /score body; assert \
-         no residual marker/legend survives, then pin every recorded contribution CID \
-         present in strictly-increasing byte order (the slice-09 ranked render order) — \
-         byte-identical to slice-09 (AC-SCORE-BYTEID / CARDINAL)"
+    // ELIDE the additive markup the flag adds over the slice-09 baseline: (1) every
+    // `<a href="/claims/{cid}">Countered</a>` anchor (rendered BESIDE the verbatim
+    // subtotal by the REUSED slice-13 `render_countered_link`; un-countered rows carry
+    // none, so the replace is a no-op there — the helper stays agnostic to WHICH rows
+    // were flagged) AND (2) the `SCORE_COUNTER_LEGEND_TEXT` legend (rendered ONCE ABOVE
+    // the pairings in the `Scored` arm). What remains IS the slice-09 `/score` byte-stream
+    // for this store (the slice-12/13 baseline+marker-elision tactic extended to the legend).
+    let mut elided = flagged.to_string();
+    for cid in ordered_cids {
+        let anchor = format!("<a href=\"/claims/{cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
+        elided = elided.replace(&anchor, "");
+    }
+    elided = elided.replace(SCORE_COUNTER_LEGEND_TEXT, "");
+
+    // No additive marker survives the elision — the remaining body is pure slice-09. A
+    // residual marker would mean the flag is NOT purely the recorded `<a href>` anchor.
+    assert!(
+        !elided.contains(LIST_COUNTERED_FLAG_TEXT),
+        "assert_score_render_byte_identical_to_slice09: every additive \
+         {LIST_COUNTERED_FLAG_TEXT:?} anchor must elide cleanly so the remaining body is the \
+         slice-09 /score render; a residual marker means the flag is NOT purely the recorded \
+         `<a href>` anchor (AC-SCORE-BYTEID / I-CF-9); elided body was:\n{elided}"
     );
+    // No residual legend survives either — the legend is purely additive markup.
+    assert!(
+        !elided.contains(SCORE_COUNTER_LEGEND_TEXT),
+        "assert_score_render_byte_identical_to_slice09: the additive anti-misread legend \
+         must elide cleanly so the remaining body is the slice-09 /score render (the legend \
+         is purely additive, never perturbs a number/order; AC-SCORE-BYTEID); elided body \
+         was:\n{elided}"
+    );
+
+    // ROW ORDER + RANKING byte-identity: every recorded contribution CID appears in the
+    // elided (no-flag) body, and their first-seen byte offsets are STRICTLY INCREASING in
+    // the recorded slice-09 ranked render order — the flag re-ordered / re-ranked NOTHING
+    // (AC-SCORE-BYTEID / I-CF-9). Because eliding the anchor leaves each subtotal cell
+    // byte-identical to slice-09, this also pins every weight/confidence/bonus/subtotal/
+    // total/bucket/[SPARSE]-line unchanged.
+    let mut prev_offset: Option<usize> = None;
+    for cid in ordered_cids {
+        let offset = elided.find(cid.as_str()).unwrap_or_else(|| {
+            panic!(
+                "assert_score_render_byte_identical_to_slice09: the elided slice-09 /score \
+                 body must contain every recorded contribution CID; {cid:?} was missing — the \
+                 flag dropped/replaced a row (a re-rank/re-order regression); elided body \
+                 was:\n{elided}"
+            )
+        });
+        if let Some(prev) = prev_offset {
+            assert!(
+                offset > prev,
+                "assert_score_render_byte_identical_to_slice09: the elided slice-09 /score \
+                 contribution row order must follow the recorded ranked render order \
+                 {ordered_cids:?} VERBATIM — {cid:?} rendered out of position, so the flag \
+                 RE-ORDERED / RE-RANKED the breakdown (AC-SCORE-BYTEID / I-CF-9); elided body \
+                 was:\n{elided}"
+            );
+        }
+        prev_offset = Some(offset);
+    }
 }
