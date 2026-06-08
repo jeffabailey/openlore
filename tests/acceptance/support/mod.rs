@@ -13401,13 +13401,93 @@ pub fn seed_score_breakdown_identical_subtotals_one_countered(
 /// records_for_triples`), pulling NO counter peer; recovers every contribution CID
 /// into `ordered_cids` + `uncountered_cids` with `countered_cids` EMPTY.
 pub fn seed_score_breakdown_none_countered(env: &TestEnv) -> SeededScoreBreakdown {
-    let _ = env;
-    todo!(
-        "slice-14 RED scaffold: seed a RICH-trail contributor's multi-row /score \
-         breakdown with NO counters at all (empty presence set); return the \
-         SeededScoreBreakdown with an EMPTY countered_cids (no-noise + byte-identity \
-         baseline)"
+    // The scored contributor reuses the slice-09 rich-trail shape VERBATIM (mirrors
+    // `seed_score_breakdown_one_contribution_countered`): a DISTINCT peer DID whose
+    // FOUR distinct subjects on the shared reproducible-builds object at varied
+    // confidences → cross_project_span ≥ 2, a real weight + a MULTI-ROW breakdown,
+    // NOT `[SPARSE]`. The ONLY difference from the one-countered seed: NO counter peer
+    // is built or pulled, so EVERY contribution CID is un-countered (genuinely no
+    // counters land in `peer_claim_references` — not a synthetic empty set).
+    //
+    // Confidences are STRICTLY DESCENDING in insertion order (0.90 > 0.86 > 0.74 >
+    // 0.62), so each single-contribution pairing's weight descends in the same order —
+    // the DB row order `read_score_contribution_cids` recovers therefore MATCHES the
+    // render's weight-descending ranked order BY CONSTRUCTION (the byte-identity gold
+    // pins `ordered_cids` against the rendered ranking; this mirrors the
+    // `seed_score_breakdown_many_pairings_known_countered_subset` monotone-confidence
+    // tactic that keeps insertion order == ranked render order).
+    let contributor_did = CONTRIBUTOR_RICH_DID;
+    let contributor_seed = [23u8; 32];
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let contributor_triples: [(&str, &str, f64); 4] = [
+        ("github:NixOS/nixpkgs", repro, 0.90),
+        ("github:bazelbuild/bazel", repro, 0.86),
+        ("github:reproducible-builds/diffoscope", repro, 0.74),
+        ("github:GNOME/meson", repro, 0.62),
+    ];
+
+    // STEP 1 — build the contributor's verifiable trail records UP FRONT (the same
+    // REAL Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies).
+    let (contributor_records, contributor_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(
+            contributor_did,
+            contributor_seed,
+            &contributor_triples,
+        );
+    let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
+
+    // STEP 2 — subscribe to the contributor via the real `peer add` verb (resolver
+    // wired per peer), holding the PDS ALIVE for the whole function so the `peer pull`
+    // succeeds. NO counter peer is added — there is genuinely NOTHING to counter.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", contributor_did],
+        contributor_did,
+        contributor_pds.endpoint_url(),
     );
+    assert_eq!(
+        added.status, 0,
+        "seed_score_breakdown_none_countered: peer add for {contributor_did} must \
+         succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // STEP 3 — pull the contributor's trail (single peer; no counter rides this pull).
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[PeerSeam {
+            peer_did: contributor_did,
+            peer_endpoint: contributor_pds.endpoint_url(),
+            peer_pubkey_hex: &contributor_pubkey_hex,
+        }],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_score_breakdown_none_countered: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every contribution CID in the contributor's breakdown (the
+    // `peer_claims` rows attributed to its DID). With NO counter pulled, the
+    // `peer_claim_references` counter arm is EMPTY → `counter_presence_for` returns the
+    // empty set → no row is flagged. EVERY CID is un-countered; `countered_cids` is
+    // genuinely empty (no synthetic empty set).
+    let ordered_cids = read_score_contribution_cids(env, contributor_did);
+    assert!(
+        ordered_cids.len() >= 2,
+        "seed_score_breakdown_none_countered: the rich trail must yield a MULTI-row \
+         breakdown (≥2 contributions) so the no-noise + byte-identity baseline is \
+         exercised over several un-countered rows; got {ordered_cids:?}"
+    );
+
+    SeededScoreBreakdown {
+        contributor_did: contributor_did.to_string(),
+        uncountered_cids: ordered_cids.clone(),
+        ordered_cids,
+        countered_cids: Vec::new(),
+    }
 }
 
 /// Seed a SCORED `/score` breakdown spanning MANY pairings × MANY contributions with a
