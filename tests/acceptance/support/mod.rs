@@ -12997,14 +12997,145 @@ pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededS
 pub fn seed_score_breakdown_target_two_counters_distinct_authors(
     env: &TestEnv,
 ) -> SeededScoreBreakdown {
-    let _ = env;
-    todo!(
-        "slice-14 RED scaffold: seed a RICH-trail contributor whose breakdown has ONE \
-         contribution countered by TWO DISTINCT peer authors (Tobias + a second \
-         distinct peer) BOTH referencing the SAME contribution CID, all in ONE \
-         run_openlore_pull_multi; return the SeededScoreBreakdown whose single \
-         countered_cids entry is the twice-countered contribution (presence-only proof)"
+    // The scored contributor (a DISTINCT peer DID, so its rows land in `peer_claims`
+    // attributed to it). Its rich trail (FOUR distinct subjects on the shared
+    // reproducible-builds object at varied confidences → cross_project_span ≥ 2, a
+    // real weight + a MULTI-ROW breakdown, NOT `[SPARSE]`) reuses the slice-09
+    // rich-trail shape VERBATIM (mirrors `seed_score_breakdown_one_contribution_
+    // countered`).
+    let contributor_did = CONTRIBUTOR_RICH_DID;
+    let contributor_seed = [23u8; 32];
+    let repro = SCORE_OBJECT_REPRODUCIBLE_BUILDS;
+    let contributor_triples: [(&str, &str, f64); 4] = [
+        ("github:bazelbuild/bazel", repro, 0.86),
+        ("github:NixOS/nixpkgs", repro, 0.90),
+        ("github:reproducible-builds/diffoscope", repro, 0.74),
+        ("github:GNOME/meson", repro, 0.62),
+    ];
+
+    // STEP 1 — build the contributor's verifiable trail records UP FRONT. Each
+    // record's `rkey` IS its deterministic CID, so we can pick ONE as the SHARED
+    // counter target BEFORE either peer is pulled.
+    let (contributor_records, contributor_pubkey_hex) =
+        build_verifiable_peer_records_for_triples(
+            contributor_did,
+            contributor_seed,
+            &contributor_triples,
+        );
+    // Both counters target the SAME (FIRST) contribution CID — the presence-only
+    // proof: TWO distinct authors, ONE referenced_cid → ONE marker.
+    let target_cid = contributor_records
+        .first()
+        .expect("the rich trail yields ≥1 contribution record")
+        .rkey
+        .clone();
+
+    // STEP 2 — TWO DISTINCT peers (Tobias + Rachel) each author a verifiable COUNTER
+    // referencing the SAME contribution CID (a `references[].type == counters` entry
+    // whose `cid == target_cid`, ADR-015). When pulled BOTH land in `peer_claims`
+    // (each under its OWN DID) and BOTH `counters` references land in
+    // `peer_claim_references` with the SAME `referenced_cid == target_cid` — two
+    // DISTINCT authors, one referenced CID. The `counter_presence_for` UNION-ALL
+    // DISTINCT collapses them to ONE presence membership.
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_AUTHOR_TOBIAS,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
     );
+    let rachel_seed = [7u8; 32];
+    let (rachel_record, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        rachel_seed,
+        &target_cid,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+
+    let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
+    let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
+    let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, vec![rachel_record]);
+
+    // STEP 3 — subscribe to ALL THREE peers via the real `peer add` verb (resolver
+    // wired per peer), holding each PDS ALIVE for the whole function so a SINGLE
+    // `peer pull` over ALL THREE succeeds (single-pull discipline). The contributor
+    // IS a subscribed peer (its trail rides the federation path); Tobias and Rachel
+    // are the two DISTINCT counter authors.
+    for (did, pds) in [
+        (contributor_did, &contributor_pds),
+        (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
+        (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_score_breakdown_target_two_counters_distinct_authors: peer add for \
+             {did} must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: contributor_did,
+                peer_endpoint: contributor_pds.endpoint_url(),
+                peer_pubkey_hex: &contributor_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_AUTHOR_TOBIAS,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_score_breakdown_target_two_counters_distinct_authors: peer pull must \
+         succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // STEP 4 — recover every contribution CID in the contributor's breakdown (the
+    // `peer_claims` rows attributed to its DID — the two counters live under Tobias's
+    // and Rachel's OWN DIDs, so they are excluded). Split the ONE twice-countered from
+    // the rest.
+    let ordered_cids = read_score_contribution_cids(env, contributor_did);
+    assert!(
+        ordered_cids.contains(&target_cid),
+        "seed_score_breakdown_target_two_counters_distinct_authors: the twice-countered \
+         target CID {target_cid:?} must be among the contributor's contribution CIDs; \
+         got {ordered_cids:?}"
+    );
+    assert!(
+        ordered_cids.len() >= 2,
+        "seed_score_breakdown_target_two_counters_distinct_authors: the rich trail must \
+         yield a MULTI-row breakdown (≥2 contributions) so exactly one is countered and \
+         the rest are not; got {ordered_cids:?}"
+    );
+    let uncountered_cids = ordered_cids
+        .iter()
+        .filter(|cid| *cid != &target_cid)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    SeededScoreBreakdown {
+        contributor_did: contributor_did.to_string(),
+        ordered_cids,
+        countered_cids: vec![target_cid],
+        uncountered_cids,
+    }
 }
 
 /// Seed a SCORED `/score` breakdown with TWO contributions in the SAME pairing that
@@ -13149,15 +13280,56 @@ pub fn assert_score_row_not_flagged(body: &str, uncountered_cid: &str) {
 ///
 /// SCAFFOLD: true (slice-14).
 pub fn assert_score_flag_is_single_neutral_presence(body: &str, target_cid: &str) {
-    let _ = body;
-    let _ = target_cid;
-    todo!(
-        "slice-14 RED scaffold: assert the /score contribution row for {target_cid:?} \
-         (countered by ≥2 distinct authors) carries EXACTLY ONE neutral 'Countered' \
-         marker (presence membership → one flag, DISTINCT referenced_cid), and the \
-         body carries NONE of the count/verdict phrasings ('countered by N', 'disputed \
-         by N', 'consensus', 'net verdict'); AC-SCORE-PRESENCE"
+    // PRESENCE-only: a contribution countered by N distinct authors collapses (DISTINCT
+    // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
+    // marker on its breakdown row, NEVER one-per-counter and never a count. Count the
+    // exact anchor occurrences for this CID — it must appear EXACTLY once. The SCORING
+    // sibling of [`assert_edge_flag_is_single_neutral_presence`] /
+    // [`assert_list_flag_is_single_neutral_presence`].
+    let marker = format!(
+        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
     );
+    let occurrences = body.matches(&marker).count();
+    assert_eq!(
+        occurrences, 1,
+        "assert_score_flag_is_single_neutral_presence: the /score contribution row for \
+         {target_cid:?} (countered by ≥2 distinct authors) must carry EXACTLY ONE neutral \
+         'Countered' marker (presence membership → one flag, DISTINCT referenced_cid; \
+         AC-SCORE-PRESENCE), got {occurrences} occurrences of {marker:?}; body was:\n{body}"
+    );
+
+    // The flag is PRESENCE-only: the score body carries NONE of the count / verdict /
+    // merged-judgement phrasings — never "countered by N", never a consensus or net
+    // verdict, and (the SCORING-surface anti-misread extension) never a penalty/deduction
+    // word that would misread the orthogonal flag as a score adjustment. Lowercased so a
+    // capitalized variant can never sneak through (mirrors the LIST/EDGE blocklist plus
+    // the score anti-misread words).
+    let lowered = body.to_ascii_lowercase();
+    for verdict in [
+        // count-based / merged-judgement phrasing (never a count aggregated to a verdict)
+        "countered by",
+        "disputed by",
+        "consensus",
+        "net verdict",
+        "people disagree",
+        // verdict words — the flag asserts presence, never correctness of the counter
+        "disputed",
+        "refuted",
+        "is false",
+        "is wrong",
+        // SCORING-surface anti-misread — the flag is SHOWN, never APPLIED to the score
+        "penalty",
+        "deduction",
+        "lowered",
+    ] {
+        assert!(
+            !lowered.contains(verdict),
+            "assert_score_flag_is_single_neutral_presence: the /score 'Countered' flag is \
+             presence-only — it must NEVER emit a count / verdict / merged-judgement / \
+             penalty phrasing ({verdict:?}); a twice-countered contribution shows ONE \
+             neutral marker, never 'countered by 2' (AC-SCORE-PRESENCE); body was:\n{body}"
+        );
+    }
 }
 
 /// Assert the "Countered" marker on a countered `/score` contribution row is a
@@ -13168,13 +13340,43 @@ pub fn assert_score_flag_is_single_neutral_presence(body: &str, target_cid: &str
 ///
 /// SCAFFOLD: true (slice-14).
 pub fn assert_score_flag_links_to_thread(body: &str, countered_cid: &str) {
-    let _ = body;
-    let _ = countered_cid;
-    todo!(
-        "slice-14 RED scaffold: assert the 'Countered' marker on the countered /score \
-         row for {countered_cid:?} is the render-only one-hop link \
-         `<a href=\"/claims/{countered_cid}\">Countered</a>` to its slice-11 thread \
-         (navigation TEXT, never a `<form`/`<button`/`onclick` control); AC-002-LINK"
+    // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
+    // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
+    // whitespace inside the element). Scan the rendered HTML only. The SCORING sibling of
+    // [`assert_list_flag_links_to_thread`] / [`assert_edge_flag_links_to_thread`].
+    let anchor = format!(
+        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
+    );
+    assert!(
+        body.contains(&anchor),
+        "assert_score_flag_links_to_thread: the 'Countered' marker on the countered /score \
+         row for {countered_cid:?} must be the render-only one-hop link {anchor:?} to its \
+         slice-11 thread (navigation TEXT, never a control; US-CF-002 / AC-002-LINK); body \
+         was:\n{body}"
+    );
+    // The MARKER is a plain anchor — never an executable write/sign/counter control wrapping
+    // the "Countered" text. (NB: the full `/score` page legitimately carries the chrome
+    // search `<form method="get" action="/score">` + its submit `<button>` — that is NOT a
+    // flag control, so we scope the check to the marker's immediate wrapping, not the whole
+    // body.) The flag never renders the "Countered" text as a form/button/onclick control;
+    // the only write path is the CLI (I-LF-1).
+    for control in ["form", "button"] {
+        let wrapped = format!("<{control}");
+        let countered_control = format!("{wrapped} href=\"/claims/{countered_cid}\"");
+        assert!(
+            !body.contains(&countered_control),
+            "assert_score_flag_links_to_thread: the /score flag must render the 'Countered' \
+             marker as a render-only anchor, never an executable <{control}> control \
+             ({countered_control:?}); the only write path is the CLI (I-LF-1); body was:\n{body}"
+        );
+    }
+    // The marker carries no inline onclick handler (it is navigation TEXT only).
+    let onclick_marker = format!("/claims/{countered_cid}\" onclick");
+    assert!(
+        !body.contains(&onclick_marker),
+        "assert_score_flag_links_to_thread: the /score 'Countered' marker must be a \
+         render-only anchor with NO onclick handler (navigation TEXT only; I-LF-1); body \
+         was:\n{body}"
     );
 }
 
