@@ -909,7 +909,7 @@ async fn resolve_search_state(
     // degrades to the EMPTY set (`unwrap_or_default`) → every author `NetworkUnfollowed`
     // (the slice-08 status quo; C-7 / WD-SF-6 — the enrichment's failure never breaks
     // discovery, never a 5xx). The set is transient (never persisted, WD-SF-9).
-    let active: std::collections::HashSet<String> = index_query_active_set(store);
+    let active: std::collections::HashSet<String> = read_local_active_set(store);
     match index_query.search(dimension, &query_value, None).await {
         Ok(raw) if raw.results.is_empty() => SearchState::NoResults {
             // Name the DISPLAY value the operator typed (the handle for the
@@ -1040,7 +1040,7 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
 /// leaked transport internal. `peer_did` is already the bare DID (the active-set row
 /// shape, slice-15), so it is collected verbatim; the result-side fragment strip happens
 /// in [`to_indexed_claim`] via [`bare_did`].
-fn index_query_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
+fn read_local_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
     active_set_read_with_fault_seam(store.list_active_peer_subscriptions())
         .map(|peers| peers.into_iter().map(|peer| peer.peer_did).collect())
         .unwrap_or_default()
@@ -1055,7 +1055,7 @@ fn index_query_active_set(store: &dyn StoreReadPort) -> std::collections::HashSe
 /// When `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` is set (acceptance fault-injection
 /// only), this substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
 /// read result so the SAME production `unwrap_or_default()` degrade branch in
-/// [`index_query_active_set`] runs — collapsing to an EMPTY active set → every author
+/// [`read_local_active_set`] runs — collapsing to an EMPTY active set → every author
 /// `NetworkUnfollowed` (the slice-08 status quo). The PRODUCTION degrade path is the
 /// thing under test; the seam only INDUCES the `Err` the path already handles.
 ///
