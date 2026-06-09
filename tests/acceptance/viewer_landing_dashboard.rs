@@ -223,7 +223,6 @@ fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
 ///
 /// @us-ld-001 @driving_port @real-io @discoverability @c-3 @happy
 #[test]
-#[ignore = "enabled in roadmap step 01-02 (LD-DISCOVER) — progressive implementation"]
 fn the_front_door_links_every_shipped_surface_and_no_deep_route() {
     // GIVEN a seeded store (so the page renders fully, with the hub over real content).
     let env = TestEnv::initialized();
@@ -255,7 +254,6 @@ fn the_front_door_links_every_shipped_surface_and_no_deep_route() {
 ///
 /// @us-ld-001 @driving_port @real-io @discoverability @scrape-url @happy
 #[test]
-#[ignore = "enabled in roadmap step 01-02 (LD-URLCONST) — progressive implementation"]
 fn each_surface_link_uses_the_routes_url_constant_including_scrape() {
     // GIVEN a seeded store + the viewer rendering the nav hub on GET /.
     let env = TestEnv::initialized();
