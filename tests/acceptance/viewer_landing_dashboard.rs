@@ -525,7 +525,6 @@ fn the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record() 
 ///
 /// @us-ld-000 @driving_port @real-io @active-only @br-ld-2 @boundary
 #[test]
-#[ignore = "enabled in roadmap step 02-03 (LD-SOFTREMOVED) — progressive implementation"]
 fn a_soft_removed_peer_is_not_counted_in_the_active_peer_summary() {
     // GIVEN Maria subscribed + pulled Rachel, THEN soft-removed her (no --purge — the
     // subscription's `removed_at` is set, the cached claims survive). She still
