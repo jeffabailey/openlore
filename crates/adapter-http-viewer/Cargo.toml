@@ -76,3 +76,9 @@ tokio = { workspace = true, features = ["rt", "net", "macros"] }
 # `0.10` line `claim-domain` uses (no workspace `sha2` entry exists).
 [dev-dependencies]
 sha2 = "0.10"
+# TEST-ONLY (slice-16 step 02-01): the pure `to_indexed_claim` resolution unit
+# tests construct a `NetworkResultRowRaw` whose `composed_at` is a
+# `chrono::DateTime<Utc>`. A dev-dependency only — the production viewer takes NO
+# new edge (the timestamp arrives already-built on the transport row; capability
+# surface + xtask check-arch unchanged). Same workspace `chrono` line `ports` uses.
+chrono = { workspace = true }

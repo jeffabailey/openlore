@@ -1339,8 +1339,12 @@ mod tests {
     //! Adapter-level unit tests for the slice-07 htmx surface. The asset integrity
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
-    use super::{HTMX_ASSET, HTMX_ASSET_SHA256};
+    use super::{bare_did, to_indexed_claim, HTMX_ASSET, HTMX_ASSET_SHA256};
+    use chrono::Utc;
+    use claim_domain::{Cid, Did, KeyId};
+    use ports::{AuthorRelationship, NetworkResultRowRaw};
     use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
 
     /// Behavior (ADR-031 — vendored-asset integrity): the embedded
     /// `assets/htmx.min.js` bytes hash to the pinned [`HTMX_ASSET_SHA256`]
@@ -1363,5 +1367,106 @@ mod tests {
             "the embedded htmx asset SHA-256 must equal the pinned value — the \
              vendored bytes drifted (update the pin deliberately if the asset changed)"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-16 (step 02-01) — the PURE per-row relationship resolution
+    // (`to_indexed_claim`) that the SF-5/SF-6 ATs exercise only through the slow
+    // subprocess + real-I/O `GET /search` path. These fast (<1ms) port-to-port
+    // unit tests pin the resolution edges directly: SF-6's fragment-strip
+    // membership (a `#org.openlore.application`-fragmented result `author_did`
+    // reconciled against a BARE active-set `peer_did` via `bare_did` before
+    // `HashSet::contains`) and SF-5's LOCAL-set-drives-the-relationship invariant
+    // (the SAME row resolves DIFFERENTLY depending only on the LOCAL active set;
+    // the transport row carries no relationship of its own). The pure function's
+    // signature IS the port — calling it directly is port-to-port at domain scope.
+    // -------------------------------------------------------------------------
+
+    /// One flat attributed transport row whose `author_did` carries the
+    /// `#org.openlore.application` signing fragment (the SAME fragmented shape the
+    /// indexer/viewer carry — SF-6). Every other field is a deterministic stub; the
+    /// resolution under test reads ONLY `author_did`.
+    fn fragmented_row(bare: &str) -> NetworkResultRowRaw {
+        NetworkResultRowRaw {
+            author_did: Did(format!("{bare}#org.openlore.application")),
+            cid: Cid("bafyresolutionfixture".to_string()),
+            subject: "reproducible-builds".to_string(),
+            predicate: "supports".to_string(),
+            object: "supply-chain-integrity".to_string(),
+            confidence: 0.88,
+            composed_at: Utc::now(),
+            verified_against: KeyId("did:key:fixture".to_string()),
+            evidence: vec![],
+            references: vec![],
+        }
+    }
+
+    /// SF-6 (R-SF-5 / FR-SF-3): a fragmented result `author_did`
+    /// (`did:plc:rachel-test#org.openlore.application`) is matched against the BARE
+    /// `did:plc:rachel-test` in the LOCAL active set — the fragment is stripped via
+    /// `bare_did` on the result side BEFORE membership, so the row resolves to
+    /// `SubscribedPeer` (never misclassified as `NetworkUnfollowed`).
+    #[test]
+    fn fragmented_author_did_matches_a_bare_active_set_entry_as_subscribed_peer() {
+        let active: HashSet<String> = ["did:plc:rachel-test".to_string()].into_iter().collect();
+
+        let claim = to_indexed_claim(fragmented_row("did:plc:rachel-test"), &active);
+
+        assert_eq!(
+            claim.relationship,
+            AuthorRelationship::SubscribedPeer,
+            "a fragmented result DID must reconcile against the bare active-set DID \
+             via the bare_did strip before membership (R-SF-5) → SubscribedPeer"
+        );
+        // …and the fragmented `author_did` is carried through UNCHANGED (the render
+        // still shows the app-identity shape; only the relationship is enriched).
+        assert_eq!(claim.author_did.0, "did:plc:rachel-test#org.openlore.application");
+    }
+
+    /// SF-5 (C-3 / NFR-SF-4): the relationship is resolved against the LOCAL active
+    /// set, not anything on the transport row. The SAME fragmented row resolves to
+    /// `NetworkUnfollowed` when its bare DID is ABSENT from the active set (a
+    /// different author is followed) and to `SubscribedPeer` only when present —
+    /// proving the affordance tracks the LOCAL set, and that an empty set (the
+    /// graceful-degrade target, C-7) yields the slice-08 `NetworkUnfollowed` status quo.
+    #[test]
+    fn the_same_row_resolves_by_local_active_set_membership_only() {
+        let row = fragmented_row("did:plc:rachel-test");
+
+        // Empty active set (no subscriptions OR a read that degraded) → status quo.
+        let empty: HashSet<String> = HashSet::new();
+        assert_eq!(
+            to_indexed_claim(row.clone(), &empty).relationship,
+            AuthorRelationship::NetworkUnfollowed,
+            "an empty LOCAL active set must yield the slice-08 NetworkUnfollowed status quo (C-7)"
+        );
+
+        // A non-member active set (a DIFFERENT author followed) → NetworkUnfollowed.
+        let other: HashSet<String> = ["did:plc:priya-test".to_string()].into_iter().collect();
+        assert_eq!(
+            to_indexed_claim(row.clone(), &other).relationship,
+            AuthorRelationship::NetworkUnfollowed,
+            "a row whose bare DID is absent from the LOCAL set stays NetworkUnfollowed"
+        );
+
+        // The SAME row, once the LOCAL set contains its bare DID → SubscribedPeer.
+        let following: HashSet<String> = ["did:plc:rachel-test".to_string()].into_iter().collect();
+        assert_eq!(
+            to_indexed_claim(row, &following).relationship,
+            AuthorRelationship::SubscribedPeer,
+            "the relationship flips with the LOCAL active set only (SF-5) → SubscribedPeer"
+        );
+    }
+
+    /// `bare_did` SSOT (R-SF-5): strips a `#fragment` signing locator; a bare DID
+    /// passes through unchanged. The total-function property underlying both SF-6
+    /// (the result-side strip) and the active-set bare-DID convention.
+    #[test]
+    fn bare_did_strips_the_signing_fragment_and_is_identity_on_a_bare_did() {
+        assert_eq!(
+            bare_did("did:plc:rachel-test#org.openlore.application"),
+            "did:plc:rachel-test"
+        );
+        assert_eq!(bare_did("did:plc:rachel-test"), "did:plc:rachel-test");
     }
 }
