@@ -1,0 +1,366 @@
+{
+  "roadmap": {
+    "project_id": "viewer-search-follow-state",
+    "created_at": "2026-06-09T00:00:00Z",
+    "total_steps": 8
+  },
+  "total_steps": 8,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Follow-state accuracy (walking skeleton + close confirmations)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Thick walking skeleton: resolve a followed author to a render-only Following indicator against the LOCAL active set",
+          "description": "The thick foundational walking-skeleton step (SF-1, the riskiest load-bearing thread of US-SF-002 / Theme A). Force the WHOLE slice-16 seam into existence end-to-end: thread `store: &dyn StoreReadPort` into `search_page` in the effect shell (crates/adapter-http-viewer/src/lib.rs ~865, mirroring the peers_page/claims_page signature) and update the route call site (~345) to pass it. In `resolve_search_state` (~884) read `list_active_peer_subscriptions` ONCE into a `HashSet<String>` of BARE peer DIDs (the slice-15 read, REUSED, batch-once; an `Err` degrades to an EMPTY set), and pass `&active` into `to_indexed_claim` (~1021). `to_indexed_claim` computes `bare_did(author_did) \u2208 active \u2192 AuthorRelationship::SubscribedPeer else NetworkUnfollowed`, REPLACING the hardcoded `NetworkUnfollowed`. In the pure core (crates/viewer-domain/src/lib.rs) add the `SEARCH_FOLLOWING_INDICATOR` const + `render_following_indicator()` (the sibling of `SEARCH_FOLLOW_GUIDANCE_PREFIX` / `render_follow_guidance`), and add a `SubscribedPeer` arm to `render_search_result_row` (~1745) that renders the neutral render-only 'Following' indicator TEXT while the `NetworkUnfollowed` arm keeps `render_follow_guidance` (the `openlore peer add <did>` TEXT). Both render-only TEXT \u2014 no executable control. Outcome: in ONE `/search` over a reachable seeded index returning BOTH a followed author (Rachel, an active LOCAL subscription) AND an unfollowed author (Priya), Rachel's row shows 'Following' + NO `peer add` while Priya's row keeps the slice-08 `openlore peer add did:plc:priya-test` affordance. RED today because `to_indexed_claim` hardcodes `NetworkUnfollowed` (the `SubscribedPeer` resolution + the `render_following_indicator` arm + `SEARCH_FOLLOWING_INDICATOR` do not exist yet). BUILD-BEFORE-RUN (mirrors slice-08): the AT spawns BOTH the `openlore` (viewer) bin AND the `openlore-indexer` bin, so the run must `cargo build` both before executing.",
+          "criteria": [
+            "GET /search over a reachable seeded index returning a followed author (Rachel, seeded as an active LOCAL subscription via the REAL slice-03 `peer add`) and an unfollowed author (Priya) returns 200 and renders BOTH authors verified + attributed (attribution unchanged \u2014 the relationship is a per-row enrichment).",
+            "Rachel's row (resolved to SubscribedPeer against the LOCAL active set) shows the neutral render-only 'Following' indicator and NO `openlore peer add` command (R-SF-3, the core bug fixed).",
+            "Priya's row (NetworkUnfollowed) keeps the slice-08 render-only `openlore peer add did:plc:priya-test` affordance (no over-correction, R-SF-4).",
+            "The effect shell threads `store: &dyn StoreReadPort` into `search_page`, reads `list_active_peer_subscriptions` ONCE into a HashSet of bare peer DIDs, and `to_indexed_claim` resolves `bare_did(author_did) \u2208 active \u2192 SubscribedPeer else NetworkUnfollowed` (replacing the hardcoded NetworkUnfollowed); the pure core adds `SEARCH_FOLLOWING_INDICATOR` + `render_following_indicator` + the `SubscribedPeer` arm of `render_search_result_row`.",
+            "viewer-domain remains pure (the new indicator is render-only TEXT; no new control, no key, no new route); both the `openlore` and `openlore-indexer` bins are built before the AT runs."
+          ],
+          "acceptance_criteria": [
+            "GET /search over a reachable seeded index returning a followed author (Rachel, seeded as an active LOCAL subscription via the REAL slice-03 `peer add`) and an unfollowed author (Priya) returns 200 and renders BOTH authors verified + attributed (attribution unchanged \u2014 the relationship is a per-row enrichment).",
+            "Rachel's row (resolved to SubscribedPeer against the LOCAL active set) shows the neutral render-only 'Following' indicator and NO `openlore peer add` command (R-SF-3, the core bug fixed).",
+            "Priya's row (NetworkUnfollowed) keeps the slice-08 render-only `openlore peer add did:plc:priya-test` affordance (no over-correction, R-SF-4).",
+            "The effect shell threads `store: &dyn StoreReadPort` into `search_page`, reads `list_active_peer_subscriptions` ONCE into a HashSet of bare peer DIDs, and `to_indexed_claim` resolves `bare_did(author_did) \u2208 active \u2192 SubscribedPeer else NetworkUnfollowed` (replacing the hardcoded NetworkUnfollowed); the pure core adds `SEARCH_FOLLOWING_INDICATOR` + `render_following_indicator` + the `SubscribedPeer` arm of `render_search_result_row`.",
+            "viewer-domain remains pure (the new indicator is render-only TEXT; no new control, no key, no new route); both the `openlore` and `openlore-indexer` bins are built before the AT runs."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "a_followed_author_shows_following_while_an_unfollowed_author_keeps_peer_add",
+          "scenario_fns": [
+            "a_followed_author_shows_following_while_an_unfollowed_author_keeps_peer_add"
+          ],
+          "n_scenarios": [
+            "SF-1"
+          ],
+          "us_trace": [
+            "US-SF-001",
+            "US-SF-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (SEARCH_FOLLOWING_INDICATOR + render_following_indicator + the SubscribedPeer arm) and the shell resolution (bare_did membership against the active set). Extend nightly mutation testing to the resolution branch (\u2208 active \u2192 SubscribedPeer vs NetworkUnfollowed) and the render arm (Following indicator vs peer-add guidance)."
+        },
+        {
+          "id": "01-02",
+          "name": "All-followed shows Following everywhere; none-followed preserves the slice-08 status quo",
+          "description": "Close the accuracy edges of US-SF-002 / Theme A (SF-2 all-followed \u00b7 SF-3 none-followed status quo). (SF-2) When EVERY result author is followed (Rachel + Tobias, both seeded as active subscriptions, an index whose results are only those two), every row shows the neutral 'Following' indicator and the `openlore peer add` verb is ABSENT entirely from the rendered surface. (SF-3) When the operator follows NOBODY who appears in the results (a fresh store, the slice-08 nine-unfollowed-authors corpus), every row keeps the render-only `openlore peer add <did>` guidance and NO 'Following' indicator appears \u2014 EXACTLY the slice-08 status quo, which is also the OBSERVABLE degrade-target SF-8 degrades TO over an empty active set. Both edges are direct consequences of the 01-01 resolution; this step confirms the all-followed and empty-set boundaries.",
+          "criteria": [
+            "SF-2: with Rachel + Tobias both seeded as active subscriptions and an index returning only those two, every row shows the 'Following' indicator and the `openlore peer add` verb is absent ANYWHERE in the results (the strongest all-followed guarantee).",
+            "SF-2: both authors remain verified + attributed (attribution unchanged by the all-followed resolution).",
+            "SF-3: with a fresh store (zero active subscriptions) over the slice-08 nine-unfollowed-authors corpus, every row keeps the render-only `openlore peer add <did>` affordance (slice-08 behavior, unchanged).",
+            "SF-3: NO 'Following' indicator appears anywhere (every author resolves to NetworkUnfollowed over the empty active set \u2014 the slice-08 status quo / SF-8 degrade-target)."
+          ],
+          "acceptance_criteria": [
+            "SF-2: with Rachel + Tobias both seeded as active subscriptions and an index returning only those two, every row shows the 'Following' indicator and the `openlore peer add` verb is absent ANYWHERE in the results (the strongest all-followed guarantee).",
+            "SF-2: both authors remain verified + attributed (attribution unchanged by the all-followed resolution).",
+            "SF-3: with a fresh store (zero active subscriptions) over the slice-08 nine-unfollowed-authors corpus, every row keeps the render-only `openlore peer add <did>` affordance (slice-08 behavior, unchanged).",
+            "SF-3: NO 'Following' indicator appears anywhere (every author resolves to NetworkUnfollowed over the empty active set \u2014 the slice-08 status quo / SF-8 degrade-target)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "all_followed_results_show_following_everywhere_and_no_add_command_anywhere",
+          "scenario_fns": [
+            "all_followed_results_show_following_everywhere_and_no_add_command_anywhere",
+            "none_followed_results_preserve_the_slice08_status_quo"
+          ],
+          "n_scenarios": [
+            "SF-2",
+            "SF-3"
+          ],
+          "us_trace": [
+            "US-SF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The all-followed (every row SubscribedPeer) and empty-set (every row NetworkUnfollowed) boundaries are load-bearing; cover the set-membership branch with mutation testing (empty set never yields a Following indicator; full set never yields a peer-add verb)."
+        },
+        {
+          "id": "01-03",
+          "name": "Neither follow-state affordance is an executable control (CARDINAL read-only)",
+          "description": "US-SF-002 / Theme B (C-1, CARDINAL): SF-4. Over a mix render carrying BOTH the NEW 'Following' indicator (Rachel) AND the slice-08 `peer add` affordance (Priya), in BOTH shapes (full page + htmx fragment), NEITHER affordance is an executable control \u2014 no `<button>`, no `<form>`, no mutating `<a>`, no follow/unfollow/subscribe input, no mutating `hx-*`. The viewer holds no key and exposes no follow/unfollow route. This locks the read-only-ness of the NEW 'Following' arm specifically (the slice-08 sign/publish-control absence is inherited).",
+          "criteria": [
+            "Over the mix render (Rachel 'Following' + Priya `peer add`) the full-page response returns 200 and neither affordance is an executable control (no follow/unfollow/subscribe control element, no mutating hx-*).",
+            "The htmx fragment response returns 200 and likewise renders neither affordance as an executable control.",
+            "Both the 'Following' indicator and the `peer add` guidance are render-only TEXT in both shapes (the NEW arm adds no write surface).",
+            "The viewer exposes no follow/unfollow/subscribe route and holds no signing key (I-NS-1 preserved)."
+          ],
+          "acceptance_criteria": [
+            "Over the mix render (Rachel 'Following' + Priya `peer add`) the full-page response returns 200 and neither affordance is an executable control (no follow/unfollow/subscribe control element, no mutating hx-*).",
+            "The htmx fragment response returns 200 and likewise renders neither affordance as an executable control.",
+            "Both the 'Following' indicator and the `peer add` guidance are render-only TEXT in both shapes (the NEW arm adds no write surface).",
+            "The viewer exposes no follow/unfollow/subscribe route and holds no signing key (I-NS-1 preserved)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "neither_follow_state_affordance_is_an_executable_control",
+          "scenario_fns": [
+            "neither_follow_state_affordance_is_an_executable_control"
+          ],
+          "n_scenarios": [
+            "SF-4"
+          ],
+          "us_trace": [
+            "US-SF-002"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The render-only-ness of the Following arm is CARDINAL; cover the render_following_indicator output with mutation testing (it emits TEXT, never a control element / mutating hx-*)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Resolution edges (LOCAL / fragment-strip / no-N+1 / graceful degrade / parity / attribution)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "LOCAL resolution against the active set, and fragment-strip matching of the signing-key DID",
+          "description": "US-SF-001 / Theme C: SF-5 (LOCAL resolution) + SF-6 (fragment-strip). (SF-5) The relationship is resolved against the LOCAL active-subscription set, not the network: the SAME per-user-neutral index + SAME query produces DIFFERENT per-row affordances depending only on the LOCAL active set \u2014 Rachel (a LOCAL active subscription) \u2192 'Following', Priya (absent from the LOCAL set) \u2192 `peer add` \u2014 proving the resolution is LOCAL and the index never learns who follows whom. (SF-6) A followed author is matched DESPITE the `#org.openlore.application` signing-key fragment on the result DID: the active set stores BARE DIDs, the result row's `author_did` carries the fragment, and the production `bare_did` SSOT strips the fragment on BOTH sides before set membership so `did:plc:rachel-test#org.openlore.application` matches the bare `did:plc:rachel-test` \u2192 'Following' (never misclassified as NetworkUnfollowed). Confirms the 01-01 `bare_did` reconciliation across the fragmented result-DID shape.",
+          "criteria": [
+            "SF-5: over the per-user-neutral index, Rachel (a LOCAL active subscription) resolves to 'Following' and Priya (absent from the LOCAL active set) keeps `peer add` \u2014 the affordance tracks the LOCAL active set, not any network state.",
+            "SF-5: the network index query is unchanged and per-user-neutral (it returns the same rows regardless of the LOCAL active set).",
+            "SF-6: the viewer renders Rachel's app-identity (fragmented) DID `did:plc:rachel-test#org.openlore.application`, and that fragmented row still resolves to 'Following' (the fragment is stripped via `bare_did` on both sides before set membership, R-SF-5).",
+            "SF-6: the followed fragmented author is never misclassified as NetworkUnfollowed (the bare active-set DID reconciles against the fragmented result DID)."
+          ],
+          "acceptance_criteria": [
+            "SF-5: over the per-user-neutral index, Rachel (a LOCAL active subscription) resolves to 'Following' and Priya (absent from the LOCAL active set) keeps `peer add` \u2014 the affordance tracks the LOCAL active set, not any network state.",
+            "SF-5: the network index query is unchanged and per-user-neutral (it returns the same rows regardless of the LOCAL active set).",
+            "SF-6: the viewer renders Rachel's app-identity (fragmented) DID `did:plc:rachel-test#org.openlore.application`, and that fragmented row still resolves to 'Following' (the fragment is stripped via `bare_did` on both sides before set membership, R-SF-5).",
+            "SF-6: the followed fragmented author is never misclassified as NetworkUnfollowed (the bare active-set DID reconciles against the fragmented result DID)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "the_relationship_is_resolved_against_the_local_active_set_not_the_network",
+          "scenario_fns": [
+            "the_relationship_is_resolved_against_the_local_active_set_not_the_network",
+            "a_followed_author_is_matched_despite_the_signing_key_fragment_on_the_result_did"
+          ],
+          "n_scenarios": [
+            "SF-5",
+            "SF-6"
+          ],
+          "us_trace": [
+            "US-SF-001"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The fragment-strip-before-membership is load-bearing (a missing strip on either side breaks SF-6); cover the bare_did reconciliation with mutation testing (strip applied to both the result DID and the active-set DID)."
+        },
+        {
+          "id": "02-02",
+          "name": "A large multi-result search resolves every row in one render (no-N+1 proxy)",
+          "description": "US-SF-001 / Theme D (C-4 / NFR-SF-3 \u2014 the no-N+1 behavioral proxy): SF-7. The active-subscription set is read ONCE per render, invariant to the result count. Behavioral proxy: a LARGE multi-result search (8 distinct authors, exactly ONE followed) resolves ALL rows correctly in ONE render \u2014 Rachel \u2192 'Following', the other 7 \u2192 `peer add` \u2014 proving the resolution scales over the result set against a single in-memory active set (no per-result subscription query). Confirms the 01-01 batch-once read holds over a many-row result set (the strict 1-read bound is a DELIVER adapter/property concern).",
+          "criteria": [
+            "Over an index returning 8 distinct result authors with exactly one (Rachel) followed, GET /search returns 200 and resolves all rows in a single render.",
+            "Rachel (the one followed author) resolves to 'Following'.",
+            "Representative other authors (e.g. did:plc:sf-author1-test, did:plc:sf-author7-test) keep the `peer add` affordance.",
+            "The resolution scales over the multi-result set against a single in-memory active set (one batch read; no per-result subscription query)."
+          ],
+          "acceptance_criteria": [
+            "Over an index returning 8 distinct result authors with exactly one (Rachel) followed, GET /search returns 200 and resolves all rows in a single render.",
+            "Rachel (the one followed author) resolves to 'Following'.",
+            "Representative other authors (e.g. did:plc:sf-author1-test, did:plc:sf-author7-test) keep the `peer add` affordance.",
+            "The resolution scales over the multi-result set against a single in-memory active set (one batch read; no per-result subscription query)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "a_large_multi_result_search_resolves_all_rows_in_one_render",
+          "scenario_fns": [
+            "a_large_multi_result_search_resolves_all_rows_in_one_render"
+          ],
+          "n_scenarios": [
+            "SF-7"
+          ],
+          "us_trace": [
+            "US-SF-001"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The single-batch in-memory membership over a many-row set is the no-N+1 proxy; cover the per-row resolution loop with mutation testing (every row resolved against the SAME set, not a per-row query)."
+        },
+        {
+          "id": "02-03",
+          "name": "A failed active-set read degrades to the slice-08 status quo without crashing (fault-injection seam)",
+          "description": "US-SF-001 / Theme E (C-7 / FR-SF-7 / NFR-SF-6 / ADR-053 \u00a7Earned-Trust): SF-8 \u2014 the one step carrying genuinely-NEW fault-injection work. A failed LOCAL active-set read during a search render degrades to the slice-08 status quo (every result \u2192 NetworkUnfollowed \u2192 keeps `openlore peer add <did>`) and the search results STILL render with no crash, blank region, leaked error, or 5xx. DELIVER materializes the `start_viewer_with_failing_active_set_read` fault-injection seam in support/mod.rs (currently a `todo!()` RED scaffold), picking the mechanism (e.g. an `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` test seam in the effect shell, or a poisonable per-request connection) with the SAME observable contract: the failed read in `resolve_search_state` collapses to an EMPTY active set (the `Err \u2192 empty set` graceful-degrade path), so the relationship enrichment's failure never breaks discovery. The OBSERVABLE degrade-target (empty set \u2192 all `peer add`) is already pinned by SF-3; this step adds the TRUE read-failure path.",
+          "criteria": [
+            "With the LOCAL active-set read forced to FAIL mid-request, GET /search over a reachable index returns 200 (a guided degrade, NOT a crash/5xx).",
+            "The degraded render is not a blank region.",
+            "Every result (even Rachel, despite her real active subscription) falls back to the `openlore peer add <did>` guidance, and NO 'Following' indicator appears (the failed read yields an empty set \u2192 all NetworkUnfollowed).",
+            "The degraded render leaks no transport/internal error (the enrichment failure is swallowed into the status quo); DELIVER materializes the `start_viewer_with_failing_active_set_read` fault-injection seam with the `Err \u2192 empty set` contract."
+          ],
+          "acceptance_criteria": [
+            "With the LOCAL active-set read forced to FAIL mid-request, GET /search over a reachable index returns 200 (a guided degrade, NOT a crash/5xx).",
+            "The degraded render is not a blank region.",
+            "Every result (even Rachel, despite her real active subscription) falls back to the `openlore peer add <did>` guidance, and NO 'Following' indicator appears (the failed read yields an empty set \u2192 all NetworkUnfollowed).",
+            "The degraded render leaks no transport/internal error (the enrichment failure is swallowed into the status quo); DELIVER materializes the `start_viewer_with_failing_active_set_read` fault-injection seam with the `Err \u2192 empty set` contract."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "a_failed_active_set_read_degrades_to_the_slice08_status_quo_without_crashing",
+          "scenario_fns": [
+            "a_failed_active_set_read_degrades_to_the_slice08_status_quo_without_crashing"
+          ],
+          "n_scenarios": [
+            "SF-8"
+          ],
+          "us_trace": [
+            "US-SF-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The `Err \u2192 empty set` graceful-degrade branch in resolve_search_state is load-bearing no-crash logic; cover with mutation testing (a failed read collapses to the empty set \u2192 all NetworkUnfollowed, never propagates an error or panics)."
+        },
+        {
+          "id": "02-04",
+          "name": "Parity across htmx + no-JS, and attribution + ranking unchanged (anti-merging)",
+          "description": "US-SF-002 / Theme F (parity) + Theme G (attribution): SF-9 + SF-10. (SF-9) The resolved follow-state renders IDENTICALLY under the htmx `#search-results` fragment and the no-JS full page \u2014 the resolution happens in the shell BEFORE the render, both shapes consume the SAME SearchState, so Rachel's 'Following' indicator + Priya's `peer add` affordance appear in BOTH shapes (parity by construction). (SF-10) Following + unfollowed authors render side by side with attribution + order preserved \u2014 the resolution sets the per-row relationship ONLY: both rows stay attributed to their own authors, no merged 'network consensus' row appears (compose_results unchanged), each row's `[verified]` marker + verbatim confidence (Rachel 0.88, Priya 0.82, never rounded to 90%/80%) are unchanged from slice-08.",
+          "criteria": [
+            "SF-9: the htmx shape returns ONLY the #search-results fragment and the no-JS shape returns the COMPLETE full page; both carry Rachel's 'Following' indicator + no add and Priya's `peer add` (parity by construction over the SAME resolved SearchState).",
+            "SF-10: both authors stay verified + attributed to their own DIDs and NO merged 'network consensus' row appears (anti-merging held; compose_results unchanged).",
+            "SF-10: Rachel's row shows 'Following' + no add and Priya's row keeps `openlore peer add did:plc:priya-test` (the differentiated per-row affordance does not collapse the two rows).",
+            "SF-10: each row's verbatim confidence is unchanged from slice-08 (Rachel 0.88, Priya 0.82) and is never rounded (no 90%/80%) \u2014 the relationship enrichment perturbs no confidence value, grouping, or order."
+          ],
+          "acceptance_criteria": [
+            "SF-9: the htmx shape returns ONLY the #search-results fragment and the no-JS shape returns the COMPLETE full page; both carry Rachel's 'Following' indicator + no add and Priya's `peer add` (parity by construction over the SAME resolved SearchState).",
+            "SF-10: both authors stay verified + attributed to their own DIDs and NO merged 'network consensus' row appears (anti-merging held; compose_results unchanged).",
+            "SF-10: Rachel's row shows 'Following' + no add and Priya's row keeps `openlore peer add did:plc:priya-test` (the differentiated per-row affordance does not collapse the two rows).",
+            "SF-10: each row's verbatim confidence is unchanged from slice-08 (Rachel 0.88, Priya 0.82) and is never rounded (no 90%/80%) \u2014 the relationship enrichment perturbs no confidence value, grouping, or order."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state.rs",
+          "scenario_name": "the_follow_state_renders_identically_under_htmx_and_no_js",
+          "scenario_fns": [
+            "the_follow_state_renders_identically_under_htmx_and_no_js",
+            "following_and_unfollowed_authors_render_side_by_side_attribution_and_order_preserved"
+          ],
+          "n_scenarios": [
+            "SF-9",
+            "SF-10"
+          ],
+          "us_trace": [
+            "US-SF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Parity is by construction (both shapes embed the SAME render_search_results_fragment over the SAME resolved SearchState) and the per-row enrichment must touch neither grouping/order nor confidence; cover the no-merge / confidence-passthrough branches with mutation testing."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrail invariants (follow-state)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Gold: the four follow-state guardrail invariants (no control, read-only, per-user-neutral, attribution unchanged)",
+          "description": "The four cross-cutting GOLD guardrails (SF-INV-*) that must hold over the WHOLE /search follow-state surface \u2014 the BEHAVIORAL layer of the three-layer ADR-053 enforcement (subtype + xtask check-arch are the other two). (SF-INV-NoControl, C-1 CARDINAL) over a render carrying BOTH the NEW 'Following' indicator AND the `peer add` affordance, in BOTH shapes, NEITHER affordance is an executable control. (SF-INV-ReadOnly, C-1 / Mandate 8) resolving relationships against the LOCAL active set \u2014 a READ \u2014 leaves the `peer_subscriptions` + `claims` + `peer_claims` row counts UNCHANGED across every shape (universe-bound `assert_store_read_only`). (SF-INV-LocalPerUserNeutral, C-3) the SAME index + SAME query produces the SAME attributed result ROWS for a following operator and a none-following operator; only the per-row AFFORDANCE flips with the LOCAL set (the index never learns who follows whom). (SF-INV-AttributionUnchanged, C-5 / J-003a) the resolution sets the per-row relationship ONLY \u2014 grouping + order + `[verified]` + verbatim confidence (0.88 / 0.82) are unchanged whether or not an active subscription is present (no merged / re-ranked output).",
+          "criteria": [
+            "SF-INV-NoControl: over the mix render in BOTH shapes (full page + htmx fragment), neither the 'Following' indicator nor the `peer add` guidance is an executable control (no follow/unfollow/subscribe input or element, no mutating hx-post/hx-delete/hx-put); the viewer holds no key and exposes no follow/unfollow route.",
+            "SF-INV-ReadOnly: across both shapes, the `peer_subscriptions` + `claims` + `peer_claims` row counts are UNCHANGED (the LOCAL active-set READ + in-memory resolution persist nothing), asserted via the universe-bound `assert_store_read_only` (Mandate 8).",
+            "SF-INV-LocalPerUserNeutral: a following operator and a none-following operator over the SAME per-user-neutral index render the SAME attributed + verified result ROWS; only the per-row affordance differs (the following operator sees Rachel 'Following', the none operator sees Rachel `peer add`; Priya `peer add` for both).",
+            "SF-INV-AttributionUnchanged: the with-subscription and without-subscription renders carry the SAME attributed rows, SAME verified markers, SAME verbatim confidence (0.88 / 0.82), and NO merged consensus row; only the per-row affordance flips (a per-row enrichment, never a merge/re-rank)."
+          ],
+          "acceptance_criteria": [
+            "SF-INV-NoControl: over the mix render in BOTH shapes (full page + htmx fragment), neither the 'Following' indicator nor the `peer add` guidance is an executable control (no follow/unfollow/subscribe input or element, no mutating hx-post/hx-delete/hx-put); the viewer holds no key and exposes no follow/unfollow route.",
+            "SF-INV-ReadOnly: across both shapes, the `peer_subscriptions` + `claims` + `peer_claims` row counts are UNCHANGED (the LOCAL active-set READ + in-memory resolution persist nothing), asserted via the universe-bound `assert_store_read_only` (Mandate 8).",
+            "SF-INV-LocalPerUserNeutral: a following operator and a none-following operator over the SAME per-user-neutral index render the SAME attributed + verified result ROWS; only the per-row affordance differs (the following operator sees Rachel 'Following', the none operator sees Rachel `peer add`; Priya `peer add` for both).",
+            "SF-INV-AttributionUnchanged: the with-subscription and without-subscription renders carry the SAME attributed rows, SAME verified markers, SAME verbatim confidence (0.88 / 0.82), and NO merged consensus row; only the per-row affordance flips (a per-row enrichment, never a merge/re-rank)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_follow_state_invariants.rs",
+          "scenario_name": "no_search_follow_state_render_adds_an_executable_control",
+          "scenario_fns": [
+            "no_search_follow_state_render_adds_an_executable_control",
+            "every_search_follow_state_render_leaves_the_store_read_only",
+            "the_relationship_resolution_adds_no_network_seam_index_stays_per_user_neutral",
+            "the_follow_state_resolution_does_not_merge_or_rerank"
+          ],
+          "n_scenarios": [
+            "SF-INV-NoControl",
+            "SF-INV-ReadOnly",
+            "SF-INV-LocalPerUserNeutral",
+            "SF-INV-AttributionUnchanged"
+          ],
+          "us_trace": [
+            "US-SF-001",
+            "US-SF-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_follow_state_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "These four guardrails are the behavioral layer of the ADR-053 three-layer enforcement; ensure mutation testing of the pure resolution/render core (Following vs peer-add arm, no-merge, confidence passthrough, empty-set degrade) is green so the gold guardrails are not the only line of defense."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "APPROVED \u2014 all 7 dimensions PASS; 8 steps/14 scenarios"
+  }
+}
