@@ -1512,6 +1512,19 @@ pub const SEARCH_CONTRIBUTOR_FOOTER: &str =
 /// accepted form) is appended by [`render_follow_guidance`].
 pub const SEARCH_FOLLOW_GUIDANCE_PREFIX: &str = "Follow this author from the CLI: openlore peer add";
 
+/// The neutral render-only "Following" indicator a SubscribedPeer network-author row
+/// carries (slice-16 / US-SF-002 / ADR-053 D3) — the SIBLING of
+/// [`SEARCH_FOLLOW_GUIDANCE_PREFIX`]. When the operator ALREADY follows a search-result
+/// author (resolved against the LOCAL active-subscription set in the effect shell), the
+/// row shows this neutral LABEL instead of the `openlore peer add <did>` guidance — an
+/// already-followed author is NOT re-offered a follow (R-SF-3). It is a NEUTRAL copy:
+/// no command, no verb-phrase, no DID — distinct from the follow guidance. It is render-
+/// only TEXT (C-1, CARDINAL): NO executable follow/unfollow/subscribe control, NO `hx-*`
+/// mutation; the read-only viewer holds no key and exposes no follow route. Held in ONE
+/// place (mirrors `SEARCH_FOLLOW_GUIDANCE_PREFIX`) so the "Following" copy is a single
+/// source of truth + a single mutation site; emitted by [`render_following_indicator`].
+pub const SEARCH_FOLLOWING_INDICATOR: &str = "Following";
+
 /// The state the network-search results region renders (the pure render input). An
 /// ADT over the four outcomes of a `/search` interaction so the renderer matches
 /// totally (nw-fp-domain-modeling §1): the empty GET form, a populated per-author
@@ -1738,12 +1751,22 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
                     " (" (counter.referencing_cid.0) ")"
                 }
             }
-            // N-17 / AC-004.5 / WD-NS-3 / I-NS-1: when this row's author is NOT yet
-            // followed, show the render-only `openlore peer add <bare-did>` CLI follow
-            // GUIDANCE as TEXT (never an executable control). Following stays a
-            // deliberate CLI action; the read-only viewer holds no key.
-            @if matches!(row.relationship, AuthorRelationship::NetworkUnfollowed) {
-                (render_follow_guidance(&row.author_did.0))
+            // slice-16 (US-SF-002 / Theme A / ADR-053 D3) — the per-row follow-state
+            // affordance, resolved in the effect shell against the LOCAL active set:
+            //   • SubscribedPeer → the NEUTRAL render-only "Following" indicator (the
+            //     author the operator ALREADY follows is NOT re-offered a follow,
+            //     R-SF-3) — NO `peer add` command.
+            //   • NetworkUnfollowed → the slice-08 render-only `openlore peer add
+            //     <bare-did>` CLI follow GUIDANCE as TEXT (N-17 / AC-004.5 / WD-NS-3 /
+            //     I-NS-1), UNCHANGED.
+            // Both arms are render-only TEXT (C-1, CARDINAL): no executable control, no
+            // `hx-*` mutation; following stays a deliberate CLI action and the read-only
+            // viewer holds no key. `You` / `UnsubscribedCache` never arise on `/search`
+            // (ADR-053 D2) — neither renders an affordance.
+            @match row.relationship {
+                AuthorRelationship::SubscribedPeer => (render_following_indicator()),
+                AuthorRelationship::NetworkUnfollowed => (render_follow_guidance(&row.author_did.0)),
+                AuthorRelationship::You | AuthorRelationship::UnsubscribedCache => {}
             }
         }
     }
@@ -1760,6 +1783,23 @@ fn render_follow_guidance(author_did: &str) -> Markup {
     html! {
         " "
         p { (SEARCH_FOLLOW_GUIDANCE_PREFIX) " " (bare_did(author_did)) }
+    }
+}
+
+/// Render the neutral render-only "Following" indicator for an ALREADY-FOLLOWED network
+/// author (slice-16 / US-SF-002 / ADR-053 D3) as plain TEXT inside a `<p>` — the SIBLING
+/// of [`render_follow_guidance`]. It surfaces the [`SEARCH_FOLLOWING_INDICATOR`] copy as
+/// a NEUTRAL LABEL (no command, no verb-phrase, no DID): a developer the operator ALREADY
+/// follows is shown as such rather than re-offered a follow (R-SF-3). It is render-only
+/// TEXT (C-1, CARDINAL): NO `<button>`/`<form>`/mutating `<a>`/`hx-*` control, NO
+/// follow/unfollow/subscribe input — the read-only viewer holds no key. The copy is
+/// prefixed with a neutral "Relationship:" label so the indicator is never a bare
+/// `>Following<` element (it reads as descriptive TEXT, never a control). PURE total
+/// function — takes no input, returns the fixed neutral marker.
+fn render_following_indicator() -> Markup {
+    html! {
+        " "
+        p { "Relationship: " (SEARCH_FOLLOWING_INDICATOR) }
     }
 }
 
@@ -5211,6 +5251,164 @@ mod tests {
             "an UNCOUNTERED row (counter_annotation == None) must render NO \
              'countered by' annotation; got:\n{html}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Follow-state render arm (slice-16; US-SF-002 / ADR-053 D3) — the NEW
+    // `SubscribedPeer` arm of `render_search_result_row`. These in-crate unit
+    // tests carry the mutation gate for the pure-core render surface this slice
+    // adds (the "Following" indicator vs the `peer add` guidance, per resolved
+    // relationship). Port-to-port at the render-fn scope: input is the resolved
+    // `SearchState::Results`; output is the rendered HTML.
+    // -------------------------------------------------------------------------
+
+    /// Build a one-author `SearchState::Results` whose single row carries the given
+    /// resolved `relationship` — the discriminating input the follow-state render arm
+    /// branches on (everything else held byte-equal so the arm is the ONLY variable).
+    fn search_state_one_row(author: &str, relationship: AuthorRelationship) -> SearchState {
+        let mut row = search_row(
+            author,
+            "bafyrelrow",
+            "org.openlore.philosophy.reproducible-builds",
+            0.88,
+        );
+        row.relationship = relationship;
+        SearchState::Results {
+            result: NetworkSearchResult {
+                by_author: vec![(ports::claim_domain::Did(author.to_string()), vec![row])],
+                distinct_author_count: 1,
+                total_claims: 1,
+                suggestion: None,
+            },
+            dimension: appview_domain::SearchDimension::Object,
+        }
+    }
+
+    /// Behavior (US-SF-002 / Theme A / R-SF-3 — the load-bearing accuracy fix): a row
+    /// resolved to `SubscribedPeer` renders the neutral render-only "Following"
+    /// indicator and NO `openlore peer add` command — an already-followed author is NOT
+    /// re-offered a follow. Pins the NEW arm (mutation: the arm must emit
+    /// `SEARCH_FOLLOWING_INDICATOR`, never the guidance prefix).
+    #[test]
+    fn search_subscribed_peer_row_shows_following_and_no_peer_add() {
+        let html = render_search_results_fragment(&search_state_one_row(
+            "did:plc:rachel-test#org.openlore.application",
+            AuthorRelationship::SubscribedPeer,
+        ))
+        .into_string();
+
+        assert!(
+            html.contains(SEARCH_FOLLOWING_INDICATOR),
+            "a SubscribedPeer row must show the neutral {SEARCH_FOLLOWING_INDICATOR:?} \
+             indicator (the NEW arm); got:\n{html}"
+        );
+        assert!(
+            !html.contains("openlore peer add"),
+            "a SubscribedPeer row must NOT re-offer a follow — NO `openlore peer add` \
+             command (R-SF-3); got:\n{html}"
+        );
+    }
+
+    /// Behavior (US-SF-002 / Theme A / R-SF-4 — no over-correction): a row resolved to
+    /// `NetworkUnfollowed` keeps the slice-08 render-only `openlore peer add <bare-did>`
+    /// guidance and shows NO "Following" indicator — UNCHANGED from slice-08. Pins the
+    /// complementary arm (mutation: the NetworkUnfollowed arm must emit the guidance,
+    /// never the "Following" indicator).
+    #[test]
+    fn search_network_unfollowed_row_keeps_peer_add_and_no_following() {
+        let html = render_search_results_fragment(&search_state_one_row(
+            "did:plc:priya-test#org.openlore.application",
+            AuthorRelationship::NetworkUnfollowed,
+        ))
+        .into_string();
+
+        // The bare-DID `openlore peer add did:plc:priya-test` guidance is present.
+        assert!(
+            html.contains("openlore peer add did:plc:priya-test"),
+            "a NetworkUnfollowed row must KEEP the render-only `openlore peer add \
+             <bare-did>` guidance (R-SF-4, slice-08 unchanged); got:\n{html}"
+        );
+        assert!(
+            !html.contains(SEARCH_FOLLOWING_INDICATOR),
+            "a NetworkUnfollowed row must NOT show the {SEARCH_FOLLOWING_INDICATOR:?} \
+             indicator (binary resolution, C-6); got:\n{html}"
+        );
+    }
+
+    /// Behavior (US-SF-002 / Theme B / C-1, CARDINAL — render-only): NEITHER follow-state
+    /// affordance is an executable control. Over a render carrying BOTH a SubscribedPeer
+    /// row ("Following") AND a NetworkUnfollowed row (`peer add`), the markup contains no
+    /// `<button>`/`<form>`/mutating `<a>`/`hx-*` follow control and no bare `>Following<`
+    /// control element. Pins the render-only-ness of the NEW arm at the unit level (the
+    /// mutation gate for the CARDINAL no-control contract).
+    #[test]
+    fn search_follow_state_affordances_are_render_only_text() {
+        // A two-author MIX: Rachel (SubscribedPeer) + Priya (NetworkUnfollowed).
+        let mut rachel = search_row(
+            "did:plc:rachel-test#org.openlore.application",
+            "bafyrachel",
+            "org.openlore.philosophy.reproducible-builds",
+            0.88,
+        );
+        rachel.relationship = AuthorRelationship::SubscribedPeer;
+        let priya = search_row(
+            "did:plc:priya-test#org.openlore.application",
+            "bafypriya",
+            "org.openlore.philosophy.reproducible-builds",
+            0.82,
+        );
+        let state = SearchState::Results {
+            result: NetworkSearchResult {
+                by_author: vec![
+                    (
+                        ports::claim_domain::Did(
+                            "did:plc:rachel-test#org.openlore.application".to_string(),
+                        ),
+                        vec![rachel],
+                    ),
+                    (
+                        ports::claim_domain::Did(
+                            "did:plc:priya-test#org.openlore.application".to_string(),
+                        ),
+                        vec![priya],
+                    ),
+                ],
+                distinct_author_count: 2,
+                total_claims: 2,
+                suggestion: None,
+            },
+            dimension: appview_domain::SearchDimension::Object,
+        };
+
+        let html = render_search_results_fragment(&state).into_string();
+        let lowered = html.to_ascii_lowercase();
+
+        // Both affordances ARE present (the mix is genuine).
+        assert!(
+            html.contains(SEARCH_FOLLOWING_INDICATOR)
+                && html.contains("openlore peer add did:plc:priya-test"),
+            "the mix render must carry BOTH the Following indicator AND the peer-add \
+             guidance; got:\n{html}"
+        );
+        // …and NEITHER is an executable control (C-1, CARDINAL).
+        for banned in [
+            "name=\"follow\"",
+            "name=\"unfollow\"",
+            "name=\"subscribe\"",
+            ">follow<",
+            ">unfollow<",
+            ">subscribe<",
+            ">following<",
+            "hx-post",
+            "hx-delete",
+            "hx-put",
+        ] {
+            assert!(
+                !lowered.contains(banned),
+                "C-1 (CARDINAL): the follow-state affordances must be render-only TEXT — \
+                 found executable-control marker {banned:?} in:\n{html}"
+            );
+        }
     }
 
     // -------------------------------------------------------------------------

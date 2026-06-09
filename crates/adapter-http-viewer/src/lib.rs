@@ -342,7 +342,13 @@ async fn route(
     // other enhanced route uses (ADR-033). Reads ONLY public signed claims; persists
     // NOTHING (WD-NS-7); holds NO signing key (I-NS-1).
     if path == SEARCH_URL {
-        return Ok(search_page(index_query.as_deref(), query.as_deref(), shape).await);
+        return Ok(search_page(
+            index_query.as_deref(),
+            store.as_ref(),
+            query.as_deref(),
+            shape,
+        )
+        .await);
     }
     match path.as_str() {
         "/" => Ok(landing_page()),
@@ -864,10 +870,11 @@ fn claim_detail_page(store: &dyn StoreReadPort, cid: &str, shape: Shape) -> Resp
 /// bare `GET /search` with no dimension value renders the empty `Form`.
 async fn search_page(
     index_query: Option<&dyn IndexQueryPort>,
+    store: &dyn StoreReadPort,
     query: Option<&str>,
     shape: Shape,
 ) -> Response<Full<Bytes>> {
-    let state = resolve_search_state(index_query, query).await;
+    let state = resolve_search_state(index_query, store, query).await;
     match shape {
         Shape::Fragment => html_ok(render_search_results_fragment(&state).into_string()),
         Shape::FullPage => html_ok(render_search_page(&state)),
@@ -883,6 +890,7 @@ async fn search_page(
 /// (graceful degradation, never a leak).
 async fn resolve_search_state(
     index_query: Option<&dyn IndexQueryPort>,
+    store: &dyn StoreReadPort,
     query: Option<&str>,
 ) -> SearchState {
     let Some((dimension, query_value, display_value)) = parse_search_dimension(query) else {
@@ -894,6 +902,14 @@ async fn resolve_search_state(
     let Some(index_query) = index_query else {
         return SearchState::Unavailable;
     };
+    // slice-16 (US-SF-001 / ADR-053): read the operator's LOCAL active-subscription set
+    // ONCE per render (the slice-15 `list_active_peer_subscriptions` read, REUSED — NO
+    // new method, NO per-result query → no N+1). Materialize the BARE `peer_did`s into a
+    // `HashSet` for O(1) in-memory membership during per-row resolution. A read FAILURE
+    // degrades to the EMPTY set (`unwrap_or_default`) → every author `NetworkUnfollowed`
+    // (the slice-08 status quo; C-7 / WD-SF-6 — the enrichment's failure never breaks
+    // discovery, never a 5xx). The set is transient (never persisted, WD-SF-9).
+    let active: std::collections::HashSet<String> = index_query_active_set(store);
     match index_query.search(dimension, &query_value, None).await {
         Ok(raw) if raw.results.is_empty() => SearchState::NoResults {
             // Name the DISPLAY value the operator typed (the handle for the
@@ -909,7 +925,11 @@ async fn resolve_search_state(
             // dimension-specific honest-framing footer (CONTRIBUTOR → "not a
             // community consensus", US-NS-003 / AC-003.2); the grouping is identical
             // across dimensions.
-            let claims = raw.results.into_iter().map(to_indexed_claim).collect();
+            let claims = raw
+                .results
+                .into_iter()
+                .map(|row| to_indexed_claim(row, &active))
+                .collect();
             let result: NetworkSearchResult = compose_results(claims, dimension);
             SearchState::Results { result, dimension }
         }
@@ -1010,15 +1030,48 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
         .map(percent_decode_form)
 }
 
+/// Read the operator's LOCAL active-subscription set ONCE and materialize the BARE
+/// `peer_did`s into a `HashSet` for O(1) in-memory membership during `/search`
+/// relationship resolution (slice-16 / US-SF-001 / ADR-053). REUSES the slice-15
+/// `StoreReadPort::list_active_peer_subscriptions` read VERBATIM (NO new method, NO new
+/// SQL, NO network, NO key — `removed_at IS NULL` already filters soft-removed peers).
+/// A read FAILURE degrades to the EMPTY set (`unwrap_or_default`) → every author resolves
+/// to `NetworkUnfollowed` (the slice-08 status quo; C-7 / WD-SF-6) — never a 5xx, never a
+/// leaked transport internal. `peer_did` is already the bare DID (the active-set row
+/// shape, slice-15), so it is collected verbatim; the result-side fragment strip happens
+/// in [`to_indexed_claim`] via [`bare_did`].
+fn index_query_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
+    store
+        .list_active_peer_subscriptions()
+        .map(|peers| peers.into_iter().map(|peer| peer.peer_did).collect())
+        .unwrap_or_default()
+}
+
 /// Map one flat attributed transport row ([`NetworkResultRowRaw`]) into the
 /// [`IndexedClaim`] the pure `compose_results` consumes. Carries every load-bearing
 /// field through unchanged — `author_did` (anti-merging, WD-103) and
 /// `verified_against` (the `[verified]` marker, WD-104) are preserved byte-equal.
-/// The relationship is always `NetworkUnfollowed`: the read-only viewer is
-/// per-user-neutral (it holds no follow-graph state), so every network-author row
-/// carries the render-only `openlore peer add <did>` follow GUIDANCE (N-17 / WD-NS-3
-/// — following stays a deliberate CLI action).
-fn to_indexed_claim(row: NetworkResultRowRaw) -> IndexedClaim {
+///
+/// slice-16 (US-SF-001/002 / ADR-053 D1): the `relationship` is RESOLVED against the
+/// operator's LOCAL active-subscription set (`active`, the bare peer DIDs read ONCE per
+/// render in [`resolve_search_state`]). The author's `author_did` may carry the
+/// `#org.openlore.application` signing fragment; the active set's `peer_did` is already
+/// bare — so the membership test strips the fragment via [`bare_did`] on the result side
+/// before `HashSet::contains` (R-SF-5). The resolution is BINARY (C-6):
+/// `bare_did(author_did) ∈ active → SubscribedPeer` (→ the neutral render-only
+/// "Following" indicator, no command); else → `NetworkUnfollowed` (→ the slice-08
+/// render-only `openlore peer add <did>` GUIDANCE, N-17 / WD-NS-3, UNCHANGED). An empty
+/// `active` (no subscriptions OR a read failure that degraded gracefully) yields all
+/// `NetworkUnfollowed` — exactly the slice-08 status quo (C-7).
+fn to_indexed_claim(
+    row: NetworkResultRowRaw,
+    active: &std::collections::HashSet<String>,
+) -> IndexedClaim {
+    let relationship = if active.contains(bare_did(&row.author_did.0)) {
+        AuthorRelationship::SubscribedPeer
+    } else {
+        AuthorRelationship::NetworkUnfollowed
+    };
     IndexedClaim {
         author_did: Did(row.author_did.0),
         cid: Cid(row.cid.0),
@@ -1030,7 +1083,20 @@ fn to_indexed_claim(row: NetworkResultRowRaw) -> IndexedClaim {
         verified_against: KeyId(row.verified_against.0),
         evidence: row.evidence,
         references: row.references,
-        relationship: AuthorRelationship::NetworkUnfollowed,
+        relationship,
+    }
+}
+
+/// Reduce a DID to its BARE form — everything before a `#fragment` signing locator
+/// (`did:plc:x#org.openlore.application` → `did:plc:x`). PURE total function; a DID
+/// without a fragment passes through unchanged. The adapter mirror of `viewer-domain`'s
+/// `bare_did` SSOT (one bare-DID convention across the shell + the pure core) — used to
+/// reconcile a fragmented result `author_did` against the bare `peer_did`s in the LOCAL
+/// active-subscription set before membership (R-SF-5 / ADR-053).
+fn bare_did(did: &str) -> &str {
+    match did.split_once('#') {
+        Some((bare, _)) => bare,
+        None => did,
     }
 }
 
