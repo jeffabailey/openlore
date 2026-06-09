@@ -301,7 +301,6 @@ fn each_surface_link_uses_the_routes_url_constant_including_scrape() {
 ///
 /// @us-ld-001 @driving_port @real-io @read-only @c-1 @cardinal @happy
 #[test]
-#[ignore = "enabled in roadmap step 01-04 (LD-READONLY) — progressive implementation"]
 fn the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control() {
     // GIVEN a seeded store (so the no-control scan is over REAL rendered content, not
     // an error/empty page).
