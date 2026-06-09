@@ -413,7 +413,6 @@ fn a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx() 
 ///
 /// @us-ld-001 @driving_port @real-io @offline @no-cdn @c-2 @happy
 #[test]
-#[ignore = "enabled in roadmap step 02-02 (LD-OFFLINE) — progressive implementation"]
 fn the_front_door_renders_fully_with_the_network_down() {
     // GIVEN a seeded store. The viewer is started with NO network reachability wired
     // (no GitHub seam, no indexer seam) — the front door is LOCAL by construction, so
@@ -463,7 +462,6 @@ fn the_front_door_renders_fully_with_the_network_down() {
 ///
 /// @us-ld-001 @driving_port @real-io @anti-merging @c-7 @br-ld-1 @happy
 #[test]
-#[ignore = "enabled in roadmap step 02-02 (LD-AGGREGATE) — progressive implementation"]
 fn the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record() {
     // GIVEN a store seeded with peer claims from Rachel + an active Tobias subscription
     // (two distinct authors in the active set).
