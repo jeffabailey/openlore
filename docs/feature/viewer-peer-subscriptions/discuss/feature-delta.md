@@ -441,8 +441,53 @@ See `dor-checklist.md`. Verdict: **PASS (9/9)** for all 3 stories.
 
 ---
 
+---
+
+## Wave: DESIGN / [REF] Solution architecture (Morgan, 2026-06-09)
+
+DESIGN artifacts under `docs/feature/viewer-peer-subscriptions/design/`
+(`architecture-design.md`, `component-boundaries.md`, `data-models.md`,
+`technology-stack.md`) + **ADR-052**. Mirrors the slice-10 DESIGN shape
+(net-new read-only route + net-new read method + new pure render, reuse-first).
+Style UNCHANGED (Hexagonal + Modular Monolith, ADR-009; functional, ADR-007).
+
+- **Read seam (effect, US-PS-001):** `StoreReadPort::list_active_peer_subscriptions(&self)
+  -> Result<Vec<PeerSubscriptionSummary>, StoreReadError>` — ONE aggregate query:
+  `peer_subscriptions LEFT JOIN peer_claims ON author_did = peer_did`,
+  `WHERE removed_at IS NULL`, `GROUP BY` the subscription identity,
+  `COUNT(pc.cid)` (zero-safe for never-pulled peers). No N+1 (per-peer
+  `count_peer_claims` fold REJECTED). Read-only (no mutation method on the port).
+- **Read DTO:** `ports::PeerSubscriptionSummary { peer_did (non-Option),
+  peer_handle, subscribed_at, local_claim_count: u64 }` — beside the slice-10
+  `SurveyRow` (ADR-042 precedent).
+- **Pure render (viewer-domain, US-PS-002/003):** `PeersView` ADT
+  (`Subscriptions { peers } | NoSubscriptions`) + `render_peers_fragment` /
+  `render_peers_page` (page = chrome + SAME fragment). Render-only revocation
+  command via `PEER_REMOVE_GUIDANCE_PREFIX` + `render_remove_guidance(peer_did)`
+  (bare-DID strip, `<p>`/`<code>` TEXT) — mirrors slice-08
+  `render_follow_guidance`. Empty-state `PEER_ADD_GUIDANCE_PREFIX`.
+- **New route (effect):** `GET /peers` handler — read → map to `PeersView` →
+  `Shape` fork → render; read failure degrades gracefully; nav link added.
+- **xtask check-arch: UNCHANGED** (read-only DB read; NO new pure-core edge — the
+  render is a total fn of the flat DTO; capability rule unchanged; anti-merging
+  SQL rule GREEN by construction — the SQL names `peer_subscriptions` +
+  `peer_claims`, not the standalone `claims` table).
+- **Cardinals enforced:** read-only (type + xtask + behavioral gold), active-only
+  (`removed_at IS NULL` → removed peer absent), per-peer counts (grouped per peer,
+  never merged), no-N+1 (ONE aggregate query). External integrations: NONE on this
+  route (LOCAL-only) → no contract-test annotation required.
+- **Confirmation:** NO new crate (workspace stays 21), no new dependency edge, no
+  new external dependency, no new persisted type, loopback-only bind.
+
+---
+
 ## Changelog
 
+- 2026-06-09 — Morgan — slice-15 DESIGN: ONE read-only `GET /peers` route +
+  `StoreReadPort::list_active_peer_subscriptions` (active-only + per-peer count in
+  ONE aggregate query, `LEFT JOIN` + `GROUP BY`) + `PeerSubscriptionSummary` DTO
+  in `ports` + `PeersView` ADT + render-only `peer remove` command reusing the
+  slice-08 pattern. ADR-052. xtask UNCHANGED. No new crate (21).
 - 2026-06-09 — slice-15 (`viewer-peer-subscriptions`) DISCUSS. Traces to J-003c (the
   VIEWING / LEGIBILITY side of "subscription is revocable without residue"; the
   without-residue GUARANTEE itself stays the slice-03 CLI `peer remove`). 3 stories (1
