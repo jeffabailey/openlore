@@ -1,0 +1,402 @@
+{
+  "roadmap": {
+    "project_id": "viewer-landing-dashboard",
+    "created_at": "2026-06-09T00:00:00Z",
+    "total_steps": 8
+  },
+  "total_steps": 8,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Front-door summary + nav hub (walking skeleton + close confirmations) \u2014 GET /",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only store + 3 LOCAL aggregate counts into landing_page and render the front-door summary + 8-surface nav hub (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (LD-WS, US-LD-001 Theme 1 \u2014 the riskiest-assumption thread). It forces the WHOLE landing-dashboard thread into existence end-to-end: viewer \u2192 3 LOCAL aggregate reads \u2192 LandingSummary \u2192 pure render \u2192 full HTML page (summary + hub). (ports) Add `count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError>` to StoreReadPort \u2014 a read-only sibling of the existing `count_claims`/`count_peer_claims` (ADR-054 D3); NO mutation method added to the port (ADR-030 / I-VIEW-1). (adapter-duckdb) Impl it as ONE aggregate `SELECT COUNT(*) FROM peer_subscriptions WHERE removed_at IS NULL` over the SAME shared connection (mirrors `count_claims` ~281), the SAME active-only definition as ADR-052's `list_active_peer_subscriptions` (a soft-removed row is residue, excluded; BR-LD-2); touches ONLY `peer_subscriptions` (no JOIN \u2014 `no_cross_table_join_elides_author` stays GREEN by construction). (viewer-domain) Add `pub struct LandingSummary { own_claims: Option<usize>, peer_claims: Option<usize>, active_peers: Option<usize> }` (ADR-054 D1 \u2014 three INDEPENDENT Option<usize>), `pub const MISSING_COUNT_MARKER = \"\u2014\"`, and `pub const SCRAPE_URL = \"/scrape\"` (ADR-054 D4 \u2014 the 8th URL const, the one entry-point surface lacking one); extend `render_landing(&LandingSummary) -> String` (~554) from the slice-06 storeless shape (h1 + READ_ONLY_NOTICE + single /claims link) to render the 3 counts (Some(n) \u2192 the number; None \u2192 MISSING_COUNT_MARKER) + the 8-surface nav hub (plain `<a href>` via the URL consts MY_CLAIMS_URL/PEER_CLAIMS_URL/PROJECT_URL/PHILOSOPHY_URL/SCORE_URL/SEARCH_URL/SCRAPE_URL/PEERS_URL) + keep the `<h1>` + READ_ONLY_NOTICE. Full-page-only \u2014 `render_landing` returns a complete document, NO Shape fork (ADR-054 D5; parity by construction). The pure render is a TOTAL function of LandingSummary (every Option combination renders; no panic, no I/O). (adapter-http-viewer) Thread `store: &dyn StoreReadPort` into `landing_page` (~414, mirroring peers_page/claims_page), and update the route arm `\"/\" => Ok(landing_page(store.as_ref()))` (~354) to pass the store the ViewerServer ALREADY holds (NO new Option<Shared*> field); resolve the 3 counts INDEPENDENTLY via `.ok()` (Result\u2192Option, the slice-12 graceful-degrade precedent ADR-048 generalized), build the LandingSummary, call `render_landing(&summary)` and wrap html_ok (always 200). (xtask) UNCHANGED \u2014 a read-only count method changes no crate-dependency edge, so `check_viewer_capability_boundary` stays GREEN. Outcome: a seeded store (12 own, 7 peer, 2 active) + GET / returns a 200 full page showing \"12 own claims, 7 peer claims, 2 active peers\" AND nav links to all 8 surfaces (+ keeps h1 + READ_ONLY_NOTICE). BUILD-BEFORE-RUN (mirrors slice-06..16): the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the three reads are LOCAL DuckDB COUNT(*) aggregates). The seeds (seed_landing_store_summary) + asserts (assert_landing_shows_count, assert_landing_links_all_surfaces) already compile in support/mod.rs (they drive the EXISTING claim add/peer add/peer pull verbs + scan strings).",
+          "criteria": [
+            "GET / over a REAL local store seeded (production `claim add` + `peer add` + `peer pull` paths, Pillar 3) with 12 own claims, 7 peer claims, and 2 active peer subscriptions returns a 200 full page (is_full_page()) showing the three counts (12 own claims, 7 peer claims, 2 active peers), the full 8-surface nav hub, and the preserved READ_ONLY_NOTICE.",
+            "StoreReadPort gains a single read-only method `count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError>`; NO mutation method is added to the port (ADR-030 / I-VIEW-1).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate `SELECT COUNT(*) FROM peer_subscriptions WHERE removed_at IS NULL` over the shared connection (the active-only definition, BR-LD-2) \u2014 touching ONLY peer_subscriptions, no JOIN.",
+            "viewer-domain adds `LandingSummary` (3 \u00d7 Option<usize>), `MISSING_COUNT_MARKER`, and `SCRAPE_URL` (the 8th URL const); `render_landing(&LandingSummary)` renders the 3 counts (Some(n) \u2192 number, None \u2192 marker) + the 8-surface plain-<a-href> hub + keeps h1 + READ_ONLY_NOTICE, full-page-only (no Shape fork, ADR-054 D5) as a TOTAL function of the summary.",
+            "adapter-http-viewer threads `store: &dyn StoreReadPort` into landing_page (no new Option<Shared*> field), resolves the 3 counts INDEPENDENTLY via `.ok()`, builds the LandingSummary, calls render_landing(&summary), and always returns 200; xtask check-arch stays GREEN (the read-only count method changes no crate-dependency edge, check_viewer_capability_boundary unchanged)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a REAL local store seeded (production `claim add` + `peer add` + `peer pull` paths, Pillar 3) with 12 own claims, 7 peer claims, and 2 active peer subscriptions returns a 200 full page (is_full_page()) showing the three counts (12 own claims, 7 peer claims, 2 active peers), the full 8-surface nav hub, and the preserved READ_ONLY_NOTICE.",
+            "StoreReadPort gains a single read-only method `count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError>`; NO mutation method is added to the port (ADR-030 / I-VIEW-1).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate `SELECT COUNT(*) FROM peer_subscriptions WHERE removed_at IS NULL` over the shared connection (the active-only definition, BR-LD-2) \u2014 touching ONLY peer_subscriptions, no JOIN.",
+            "viewer-domain adds `LandingSummary` (3 \u00d7 Option<usize>), `MISSING_COUNT_MARKER`, and `SCRAPE_URL` (the 8th URL const); `render_landing(&LandingSummary)` renders the 3 counts (Some(n) \u2192 number, None \u2192 marker) + the 8-surface plain-<a-href> hub + keeps h1 + READ_ONLY_NOTICE, full-page-only (no Shape fork, ADR-054 D5) as a TOTAL function of the summary.",
+            "adapter-http-viewer threads `store: &dyn StoreReadPort` into landing_page (no new Option<Shared*> field), resolves the 3 counts INDEPENDENTLY via `.ok()`, builds the LandingSummary, calls render_landing(&summary), and always returns 200; xtask check-arch stays GREEN (the read-only count method changes no crate-dependency edge, check_viewer_capability_boundary unchanged)."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub",
+          "scenario_fns": [
+            "the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub"
+          ],
+          "n_scenarios": [
+            "LD-WS"
+          ],
+          "us_trace": [
+            "US-LD-000",
+            "US-LD-001"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (LandingSummary + the extended render_landing rendering 3 counts as Some(n)\u2192number / None\u2192MISSING_COUNT_MARKER + the 8-surface hub) and the count-only read seam (count_active_peer_subscriptions). Extend nightly mutation testing to the per-count render branch (Some(n) renders n, None renders the marker), the COUNT(*) WHERE removed_at IS NULL active-only filter, and the hub-link set (all 8 consts present)."
+        },
+        {
+          "id": "01-02",
+          "name": "The hub links every shipped surface (8) as plain <a href> with no deep route, each via its URL constant (incl. the minted /scrape)",
+          "description": "Close the discoverability contract of US-LD-001 Theme 2 (LD-DISCOVER C-3 + LD-URLCONST). (LD-DISCOVER) The nav hub links ALL 8 shipped top-level surfaces \u2014 My Claims (/claims), Peer Claims (/peer-claims), Project Survey (/project), Philosophy Survey (/philosophy), Contributor Score (/score), Network Search (/search), Live Scrape (/scrape), Peer Subscriptions (/peers) \u2014 each as a plain `<a href>` (no-JS navigable), and NO deep/parameterized route (/claims/{cid}, /score?contributor, /project?subject) is a top-level hub link (FR-LD-5). Closes the discoverability gap (today only /claims is reachable from /). (LD-URLCONST) Each hub link's href equals the route's single-source-of-truth URL const value (MY_CLAIMS_URL, PEER_CLAIMS_URL, PROJECT_URL, PHILOSOPHY_URL, SCORE_URL, SEARCH_URL, PEERS_URL, and the NEW SCRAPE_URL = \"/scrape\") \u2014 no link is a hardcoded literal that could drift (R-LD-4). The minted SCRAPE_URL (01-01) closes the one missing const, making the hub 8 consistent consts. Direct confirmations of the 01-01 hub render; pin the hrefs (incl. the explicit href=\"/scrape\") and the no-deep-route guard.",
+          "criteria": [
+            "GET / over a seeded store renders the nav hub linking all 8 shipped top-level surfaces (/claims, /peer-claims, /project, /philosophy, /score, /search, /scrape, /peers), each a plain `<a href>` (assert_landing_links_all_surfaces).",
+            "NO deep/parameterized route (e.g. /claims/{cid}, /score?contributor, /project?subject) is a top-level hub link (assert_landing_no_deep_route_toplevel; FR-LD-5).",
+            "Each hub link's href equals its route's canonical URL-const value (no drifting literal, R-LD-4) \u2014 the 8 hrefs match the consts MY_CLAIMS_URL/PEER_CLAIMS_URL/PROJECT_URL/PHILOSOPHY_URL/SCORE_URL/SEARCH_URL/PEERS_URL + the minted SCRAPE_URL.",
+            "The newly-minted /scrape link is present (href=\"/scrape\", ADR-054 D4) \u2014 the one const that did not exist before slice-17 \u2014 making every hub link a URL const."
+          ],
+          "acceptance_criteria": [
+            "GET / over a seeded store renders the nav hub linking all 8 shipped top-level surfaces (/claims, /peer-claims, /project, /philosophy, /score, /search, /scrape, /peers), each a plain `<a href>` (assert_landing_links_all_surfaces).",
+            "NO deep/parameterized route (e.g. /claims/{cid}, /score?contributor, /project?subject) is a top-level hub link (assert_landing_no_deep_route_toplevel; FR-LD-5).",
+            "Each hub link's href equals its route's canonical URL-const value (no drifting literal, R-LD-4) \u2014 the 8 hrefs match the consts MY_CLAIMS_URL/PEER_CLAIMS_URL/PROJECT_URL/PHILOSOPHY_URL/SCORE_URL/SEARCH_URL/PEERS_URL + the minted SCRAPE_URL.",
+            "The newly-minted /scrape link is present (href=\"/scrape\", ADR-054 D4) \u2014 the one const that did not exist before slice-17 \u2014 making every hub link a URL const."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "the_front_door_links_every_shipped_surface_and_no_deep_route",
+          "scenario_fns": [
+            "the_front_door_links_every_shipped_surface_and_no_deep_route",
+            "each_surface_link_uses_the_routes_url_constant_including_scrape"
+          ],
+          "n_scenarios": [
+            "LD-DISCOVER",
+            "LD-URLCONST"
+          ],
+          "us_trace": [
+            "US-LD-001"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The 8-link hub (each href = its URL const, no deep route as a top-level link) is load-bearing for discoverability; mutation-test the hub-link set so a mutant that drops a surface, swaps a const for a drifting literal, or promotes a deep route to a top-level link is killed."
+        },
+        {
+          "id": "01-03",
+          "name": "A fresh empty store shows honest zero counts (0/0/0), DISTINCT from the missing-number marker, plus the full hub",
+          "description": "The honest-zeros edge (LD-ZEROS; US-LD-001 Theme 1 Ex 2 \u2014 the success side of `0 \u2260 missing`). A fresh operator with 0 own claims, 0 peer claims, and 0 active subscriptions (seed_empty_store_for_landing \u2014 the three reads return Ok(0) \u2192 Some(0)) opens GET / and sees the summary showing 0 own claims, 0 peer claims, and 0 active peers \u2014 each a SUCCESSFUL read of zero (an honest empty store), NOT the missing-number marker \u2014 plus the full nav hub (so a brand-new operator can reach /scrape or /search to start). Confirmatory once 01-01 exists: the Some(0) \u2192 \"0\" render branch is exercised, and the assertion that the missing marker is ABSENT pins the success side of the type-level `0 \u2260 missing` distinction (WD-LD-8; the failure side is pinned by 02-01 / 03-01).",
+          "criteria": [
+            "GET / over a fresh initialized store with ZERO claims, peer claims, and subscriptions (seed_empty_store_for_landing) returns a 200 full page.",
+            "The summary shows honest zeros: 0 own claims, 0 peer claims, 0 active peers (each Some(0) \u2192 \"0\", a SUCCESSFUL read of zero).",
+            "The missing-number marker (MISSING_COUNT_MARKER \"\u2014\") is ABSENT \u2014 an empty store is a successful read of zero, NOT a failed read (the success side of `0 \u2260 missing`, WD-LD-8).",
+            "The full 8-surface nav hub still renders so a brand-new operator can navigate (assert_landing_links_all_surfaces)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a fresh initialized store with ZERO claims, peer claims, and subscriptions (seed_empty_store_for_landing) returns a 200 full page.",
+            "The summary shows honest zeros: 0 own claims, 0 peer claims, 0 active peers (each Some(0) \u2192 \"0\", a SUCCESSFUL read of zero).",
+            "The missing-number marker (MISSING_COUNT_MARKER \"\u2014\") is ABSENT \u2014 an empty store is a successful read of zero, NOT a failed read (the success side of `0 \u2260 missing`, WD-LD-8).",
+            "The full 8-surface nav hub still renders so a brand-new operator can navigate (assert_landing_links_all_surfaces)."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub",
+          "scenario_fns": [
+            "a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub"
+          ],
+          "n_scenarios": [
+            "LD-ZEROS"
+          ],
+          "us_trace": [
+            "US-LD-001"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The Some(0) \u2192 \"0\" (not the missing marker) render branch is the success side of `0 \u2260 missing`; mutation-test it so a mutant that renders Some(0) as the missing marker (or blanks the zero) is killed."
+        },
+        {
+          "id": "01-04",
+          "name": "The front door exposes no write/compose/sign/subscribe/follow control \u2014 every affordance is a plain link (CARDINAL read-only)",
+          "description": "The read-only / no-write story scenario (LD-READONLY; US-LD-001 Theme 3 / C-1 CARDINAL). When Maria inspects the rendered GET / page over a seeded store, it contains no `<form>`, no `<button>`, and no control to compose/sign/subscribe/follow \u2014 every navigation affordance is a plain `<a href>` link, not a mutating control (assert_landing_read_only_no_control). The no-key guarantee is structural (the slice-06 web_process_holds_no_signing_key gold + xtask check-arch); here the operator-facing surface carries no mutating control. Confirmatory once the hub render (01-01/01-02) exists \u2014 the 8 hub links are plain links by construction; this step pins that NO mutating control crept into the new richer page. Mirrors the slice-15 PS-INV-NoWrite story-level guardrail.",
+          "criteria": [
+            "GET / over a seeded store returns 200 so the no-control scan is over REAL rendered content (not an error/empty page).",
+            "The page contains no `<form>`, no `<button>`, and no compose/sign/subscribe/follow control (assert_landing_read_only_no_control) \u2014 C-1 CARDINAL.",
+            "Every navigation affordance on the front door is a plain `<a href>` link, never a mutating control.",
+            "No write/compose/sign/subscribe/follow affordance is introduced by the new summary + hub render (the slice-06 no-key guarantee is inherited; the new page adds no write surface)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a seeded store returns 200 so the no-control scan is over REAL rendered content (not an error/empty page).",
+            "The page contains no `<form>`, no `<button>`, and no compose/sign/subscribe/follow control (assert_landing_read_only_no_control) \u2014 C-1 CARDINAL.",
+            "Every navigation affordance on the front door is a plain `<a href>` link, never a mutating control.",
+            "No write/compose/sign/subscribe/follow affordance is introduced by the new summary + hub render (the slice-06 no-key guarantee is inherited; the new page adds no write surface)."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control",
+          "scenario_fns": [
+            "the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control"
+          ],
+          "n_scenarios": [
+            "LD-READONLY"
+          ],
+          "us_trace": [
+            "US-LD-001"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The render-only-ness of the front door is CARDINAL; mutation-test the render so a mutant that wraps a hub link in a <form>/<button> or emits a compose/sign/subscribe/follow control is killed."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Front-door edges \u2014 missing\u2260zero degrade (new fault seam + xtask guard), offline, aggregate-not-merge, active-only",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "A failed peer-claims-count read degrades to the missing-number state \"\u2014\" without a 5xx (the genuinely-new fault seam + xtask release-gate guard)",
+          "description": "The one step carrying genuinely-NEW fault-injection work (LD-DEGRADE; US-LD-000/001 Theme 4 / C-2 CARDINAL \u2014 the per-count independent degrade). Maria's peer-claims-count read fails transiently while the own-claims and active-peer reads succeed (12 own, 2 active). When she opens GET /, the nav hub renders in full, own-claims shows 12 and active-peers shows 2, the peer-claims number renders as the missing-number marker \"\u2014\" (MISSING_COUNT_MARKER, NOT a fabricated 0), and the page is a normal 200 \u2014 never a 5xx, never a raw stack trace. The per-count independent degrade: each count is resolved by its own `.ok()` (Result \u2192 Option), so a failed `count_peer_claims` maps to None \u2192 marker while the other two stay Some(_) \u2192 number (ADR-054 D2; the slice-12 ADR-048 unwrap_or_default precedent generalized). DELIVER materializes the test-only effect-shell fault seam `start_viewer_with_failing_peer_claims_count` \u2192 the `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` env var, MIRRORING slice-16's `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` (adapter-http-viewer ~1064): a `#[cfg(debug_assertions)]`-gated `peer_claims_count_with_fault_seam(read)` that substitutes `Err(StoreReadError::Unreadable)` when the env var is set so the SAME production `.ok()` degrade branch runs, plus the `#[cfg(not(debug_assertions))]` release identity (NO env-var read compiled in). The DISTILL harness already references `start_viewer_with_failing_peer_claims_count` + the start_inner param (a todo!() RED scaffold until DELIVER materializes it). (xtask) Add the NEW release-gate guard for this seam: a `scan_viewer_fail_seam_guard`-style scan for the `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` token (check_arch.rs ~1029-1049, mirroring `VIEWER_FAIL_ACTIVE_SET_READ_SEAM_TOKEN`) so an UNGATED read in a release build fails check-arch \u2014 extend the guard to cover BOTH tokens (the slice-16 one stays, the slice-17 one is added). This pins Earned Trust on the store-read dependency: the design exercises the substrate LYING (a transient StoreReadError) and proves the front door survives it without 5xx and without fabricating 0.",
+          "criteria": [
+            "GET / against a viewer whose peer-claims count read is forced to FAIL mid-request (start_viewer_with_failing_peer_claims_count \u2192 OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT; own + active reads still succeed) returns a NORMAL 200 \u2014 never a 5xx (C-2 CARDINAL / NFR-VIEW-6).",
+            "The nav hub still renders in full (the failure is per-count, not page-wide), and the two SUCCESSFUL counts still show their numbers (own claims 12, active peers 2).",
+            "The FAILED peer-claims count renders the missing-number marker \"\u2014\" (MISSING_COUNT_MARKER, via None \u2192 marker), NOT a fabricated 0; no raw stack trace (\"panicked at\" / \"RUST_BACKTRACE\" / \"stack backtrace\") leaks to the rendered surface.",
+            "DELIVER materializes the test-only `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` seam behind `#[cfg(debug_assertions)]` (release identity is a no-op, mirroring slice-16's OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ), and the xtask release-gate guard is extended to scan for the new token (an UNGATED read fails check-arch); the per-count `.ok()` degrade is the production path under test."
+          ],
+          "acceptance_criteria": [
+            "GET / against a viewer whose peer-claims count read is forced to FAIL mid-request (start_viewer_with_failing_peer_claims_count \u2192 OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT; own + active reads still succeed) returns a NORMAL 200 \u2014 never a 5xx (C-2 CARDINAL / NFR-VIEW-6).",
+            "The nav hub still renders in full (the failure is per-count, not page-wide), and the two SUCCESSFUL counts still show their numbers (own claims 12, active peers 2).",
+            "The FAILED peer-claims count renders the missing-number marker \"\u2014\" (MISSING_COUNT_MARKER, via None \u2192 marker), NOT a fabricated 0; no raw stack trace (\"panicked at\" / \"RUST_BACKTRACE\" / \"stack backtrace\") leaks to the rendered surface.",
+            "DELIVER materializes the test-only `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` seam behind `#[cfg(debug_assertions)]` (release identity is a no-op, mirroring slice-16's OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ), and the xtask release-gate guard is extended to scan for the new token (an UNGATED read fails check-arch); the per-count `.ok()` degrade is the production path under test."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx",
+          "scenario_fns": [
+            "a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx"
+          ],
+          "n_scenarios": [
+            "LD-DEGRADE"
+          ],
+          "us_trace": [
+            "US-LD-000",
+            "US-LD-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "The per-count `.ok()` degrade (failed peer-claims read \u2192 None \u2192 MISSING_COUNT_MARKER while the other two stay Some(_) \u2192 number, never a 5xx, never a fabricated 0) is load-bearing no-crash logic; mutation-test it so a mutant that fabricates 0 on failure, blanks the other counts, or propagates a 5xx is killed. The `#[cfg(debug_assertions)]`-gated seam + xtask guard are the release-safety enforcement (the seam never ships)."
+        },
+        {
+          "id": "02-02",
+          "name": "The front door renders fully offline referencing only the vendored htmx asset, and the counts are aggregates never a merged consensus record",
+          "description": "Two front-door edges that flip green for free once 01-01 exists (LD-OFFLINE; US-LD-000/001 Theme 5 / C-2 + LD-AGGREGATE; US-LD-001 Theme 7 / C-7 / BR-LD-1). (LD-OFFLINE) With the store seeded and NO outbound network seam wired (plain ViewerServer::start), GET / renders the store summary + the full nav hub fully offline \u2014 the three reads are LOCAL COUNT(*) aggregates with NO outbound edge (no PDS fetch, no DID re-resolution, no peer pull, no network search \u2014 offline-STRONGER than /search/scrape), and the page references ONLY the vendored local /static/htmx.min.js (references_external_cdn() is false). (LD-AGGREGATE) The summary shows a SINGLE peer-claims count (an aggregate \u2014 how many), and renders NO per-author content/score/merged \"consensus\" row on the front door: the per-author DIDs (LANDING_PEER_RACHEL_DID, LANDING_PEER_TOBIAS_DID) must NOT appear on / (they are reached THROUGH /peer-claims, /peers, /score), and no merged-consensus phrasing (\"consensus\", \"authors agree\", \"the network says\") appears. The anti-merging invariant protects per-author CONTENT rendering; a store-wide count is a legitimate aggregate (WD-LD-6 / BR-LD-1).",
+          "criteria": [
+            "GET / over a seeded store with NO outbound network seam wired (plain ViewerServer::start) returns 200 and renders the full summary (12 own, 7 peer, 2 active) + the full 8-surface hub fully offline \u2014 the three LOCAL reads have no outbound edge to take down.",
+            "The page references ONLY the vendored local /static/htmx.min.js \u2014 references_external_cdn() is false (no off-host CDN; I-VIEW-6 / KPI-HX-G2).",
+            "The summary shows the SINGLE aggregate peer-claims count (7) \u2014 an aggregate, not a per-author breakdown \u2014 and the front door renders NO per-author content/score/merged-consensus row.",
+            "The per-author peer DIDs (LANDING_PEER_RACHEL_DID, LANDING_PEER_TOBIAS_DID) do NOT appear on / (content stays on the attributed surfaces), and no merged-consensus phrasing (\"consensus\", \"authors agree\", \"the network says\") appears (BR-LD-1)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a seeded store with NO outbound network seam wired (plain ViewerServer::start) returns 200 and renders the full summary (12 own, 7 peer, 2 active) + the full 8-surface hub fully offline \u2014 the three LOCAL reads have no outbound edge to take down.",
+            "The page references ONLY the vendored local /static/htmx.min.js \u2014 references_external_cdn() is false (no off-host CDN; I-VIEW-6 / KPI-HX-G2).",
+            "The summary shows the SINGLE aggregate peer-claims count (7) \u2014 an aggregate, not a per-author breakdown \u2014 and the front door renders NO per-author content/score/merged-consensus row.",
+            "The per-author peer DIDs (LANDING_PEER_RACHEL_DID, LANDING_PEER_TOBIAS_DID) do NOT appear on / (content stays on the attributed surfaces), and no merged-consensus phrasing (\"consensus\", \"authors agree\", \"the network says\") appears (BR-LD-1)."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "the_front_door_renders_fully_with_the_network_down",
+          "scenario_fns": [
+            "the_front_door_renders_fully_with_the_network_down",
+            "the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record"
+          ],
+          "n_scenarios": [
+            "LD-OFFLINE",
+            "LD-AGGREGATE"
+          ],
+          "us_trace": [
+            "US-LD-000",
+            "US-LD-001"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The offline (no outbound edge / vendored-only htmx) + aggregate-not-merge (single peer-claims count, no per-author DID, no consensus phrasing) renders are load-bearing; mutation-test the no-CDN chrome reference and the aggregate-only render so a mutant that adds a CDN reference, emits a per-author DID, or renders a merged-consensus row is killed."
+        },
+        {
+          "id": "02-03",
+          "name": "A soft-removed peer is not counted in the active-peer summary (the active-only removed_at IS NULL definition)",
+          "description": "The active-only boundary (LD-SOFTREMOVED; US-LD-000 Theme 8 / BR-LD-2). Maria subscribed to did:plc:rachel-test then ran `openlore peer remove did:plc:rachel-test` (no --purge, via seed_peer_subscribed_then_removed \u2014 removed_at set, cached claims survive), and she still actively follows did:plc:tobias-test (a fresh active subscription via seed_active_subscription_for). When she opens GET /, the active-peer count is 1 (only the active Tobias subscription) and the soft-removed Rachel is NOT counted, and her DID does not appear on the front door (aggregate-only, Theme 7). This pins the active-only definition of count_active_peer_subscriptions (COUNT(*) WHERE removed_at IS NULL, ADR-054 D3 / BR-LD-2) on the rendered surface \u2014 the residue of a soft-removed peer is excluded from the front-door count even though its cached claims remain on disk. Confirmatory once the 01-01 count read + the 02-02 aggregate-only render exist; pins the residue-excluded property end-to-end.",
+          "criteria": [
+            "GET / after Rachel was soft-removed via the real `openlore peer remove` verb (removed_at set, cached claims survive, no --purge \u2014 seed_peer_subscribed_then_removed) while Tobias stays an active subscription returns 200.",
+            "The active-peer count is 1 (only the active Tobias subscription \u2014 the active-only `removed_at IS NULL` set, BR-LD-2); the soft-removed Rachel is NOT counted.",
+            "The soft-removed Rachel's DID (LANDING_PEER_RACHEL_DID) does NOT appear on the front door (excluded from the active-peer count by the removed_at IS NULL filter; aggregate-only, Theme 7).",
+            "The count_active_peer_subscriptions COUNT(*) WHERE removed_at IS NULL active-only definition holds on the OBSERVABLE render \u2014 a soft-removed row is residue, never counted, even though its cached peer_claims remain on disk."
+          ],
+          "acceptance_criteria": [
+            "GET / after Rachel was soft-removed via the real `openlore peer remove` verb (removed_at set, cached claims survive, no --purge \u2014 seed_peer_subscribed_then_removed) while Tobias stays an active subscription returns 200.",
+            "The active-peer count is 1 (only the active Tobias subscription \u2014 the active-only `removed_at IS NULL` set, BR-LD-2); the soft-removed Rachel is NOT counted.",
+            "The soft-removed Rachel's DID (LANDING_PEER_RACHEL_DID) does NOT appear on the front door (excluded from the active-peer count by the removed_at IS NULL filter; aggregate-only, Theme 7).",
+            "The count_active_peer_subscriptions COUNT(*) WHERE removed_at IS NULL active-only definition holds on the OBSERVABLE render \u2014 a soft-removed row is residue, never counted, even though its cached peer_claims remain on disk."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard.rs",
+          "scenario_name": "a_soft_removed_peer_is_not_counted_in_the_active_peer_summary",
+          "scenario_fns": [
+            "a_soft_removed_peer_is_not_counted_in_the_active_peer_summary"
+          ],
+          "n_scenarios": [
+            "LD-SOFTREMOVED"
+          ],
+          "us_trace": [
+            "US-LD-000"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard.rs",
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "mutation_note": "The active-only filter (COUNT(*) WHERE removed_at IS NULL) is the CARDINAL residue boundary for the active-peer count; mutation-test it so a mutant that drops the filter (counting a soft-removed peer) is killed \u2014 the soft-removed residue must never inflate the front-door active-peer count."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrail invariants (front door \u2014 read-only, no-write, offline, no-N+1, missing\u2260zero, discoverability)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Gold: the seven front-door guardrail invariants (read-only, no-write, offline-chrome, offline, no-N+1, missing\u2260zero, discoverability completeness)",
+          "description": "The seven cross-cutting GOLD guardrails (LD-INV-*) that must hold over the WHOLE GET / front-door surface \u2014 the BEHAVIORAL layer of the three-layer ADR-054 enforcement (type [StoreReadPort declares no mutation method] + xtask check_viewer_capability_boundary are the other two). They drive the REAL openlore ui subprocess + HTTP over a REAL seeded LOCAL DuckDB, no mocked boundary (/ is a LOCAL read + PURE render). (LD-INV-ReadOnly, C-1 / WD-LD-1) exercising GET / over a seeded store leaves the claims + peer_claims row counts UNCHANGED (universe-bound assert_store_read_only over capture_store_row_count_universe; the LandingSummary is computed per request and persists nothing, I-LD-6). (LD-INV-NoWrite, C-1 CARDINAL) no GET / response renders a write/compose/sign/subscribe/follow control \u2014 every affordance a plain <a href> (assert_landing_read_only_no_control). (LD-INV-OfflineChrome, C-2 / KPI-HX-G2) the page references ONLY the local /static/htmx.min.js, NO off-host CDN (references_external_cdn() false). (LD-INV-Offline, C-2 / KPI-5) the summary + full hub (the DATA, not just chrome) render fully network-down \u2014 offline-STRONGER (no outbound edge). (LD-INV-NoNPlus1, C-4 / I-LD-7) a LARGE store (120 own claims via seed_own_claims_via_cli + 2 active peers) renders the correct counts in ONE request \u2014 the read count is a FIXED set of 3 aggregate reads invariant to store size (the strict 3-fixed-reads bound is the DELIVER adapter-duckdb unit/property test). (LD-INV-MissingNotZero, C-2 / BR-LD-3 CARDINAL) BOTH sides: an empty store renders \"0\" for peer claims (NOT the marker), while a failed peer-claims read (via the 02-01 fault seam) renders the missing marker \"\u2014\" (NOT a fabricated 0) \u2014 a fabricated 0 on failure is unrepresentable (the shell maps a failed read to None, never Some(0)). (LD-INV-Discoverability, C-3 / WD-LD-7) the hub links ALL 8 shipped top-level surfaces + no deep route as a top-level link (a missing surface is an unshippable navigation gap). These INHERIT the slice-06 viewer golds (viewer_is_read_only / store_views_work_offline / web_process_holds_no_signing_key) and add the FRONT-DOOR specifics. Flip green for free once 01-01..02-03 exist (the MissingNotZero failure side reuses the 02-01 fault seam). LAST roadmap step.",
+          "criteria": [
+            "LD-INV-ReadOnly: exercising GET / over a seeded store leaves the claims + peer_claims row counts UNCHANGED (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 the LandingSummary persists nothing (I-LD-6 / WD-LD-1).",
+            "LD-INV-NoWrite (CARDINAL): no GET / response renders a write/compose/sign/subscribe/follow control \u2014 every affordance a plain <a href> (assert_landing_read_only_no_control); the viewer holds no key.",
+            "LD-INV-OfflineChrome + LD-INV-Offline: the page references ONLY the vendored local /static/htmx.min.js (references_external_cdn() false), AND the summary + full hub (the DATA) render fully network-down with NO outbound edge (offline-STRONGER than /search).",
+            "LD-INV-NoNPlus1 + LD-INV-MissingNotZero + LD-INV-Discoverability: a LARGE store (120 own claims + 2 active peers) renders the correct counts in ONE request (3 fixed aggregate reads, invariant to size); the empty store renders \"0\" for peer claims (NOT the marker) while the failed-read path (02-01 seam) renders the marker \"\u2014\" (NOT a fabricated 0) \u2014 both sides of `0 \u2260 missing`; and the hub links ALL 8 surfaces with no deep route as a top-level link."
+          ],
+          "acceptance_criteria": [
+            "LD-INV-ReadOnly: exercising GET / over a seeded store leaves the claims + peer_claims row counts UNCHANGED (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 the LandingSummary persists nothing (I-LD-6 / WD-LD-1).",
+            "LD-INV-NoWrite (CARDINAL): no GET / response renders a write/compose/sign/subscribe/follow control \u2014 every affordance a plain <a href> (assert_landing_read_only_no_control); the viewer holds no key.",
+            "LD-INV-OfflineChrome + LD-INV-Offline: the page references ONLY the vendored local /static/htmx.min.js (references_external_cdn() false), AND the summary + full hub (the DATA) render fully network-down with NO outbound edge (offline-STRONGER than /search).",
+            "LD-INV-NoNPlus1 + LD-INV-MissingNotZero + LD-INV-Discoverability: a LARGE store (120 own claims + 2 active peers) renders the correct counts in ONE request (3 fixed aggregate reads, invariant to size); the empty store renders \"0\" for peer claims (NOT the marker) while the failed-read path (02-01 seam) renders the marker \"\u2014\" (NOT a fabricated 0) \u2014 both sides of `0 \u2260 missing`; and the hub links ALL 8 surfaces with no deep route as a top-level link."
+          ],
+          "test_file": "tests/acceptance/viewer_landing_dashboard_invariants.rs",
+          "scenario_name": "every_landing_render_leaves_the_store_read_only",
+          "scenario_fns": [
+            "every_landing_render_leaves_the_store_read_only",
+            "no_landing_response_adds_a_write_or_mutating_control",
+            "the_landing_page_chrome_stays_offline_no_cdn",
+            "the_landing_surface_works_fully_offline",
+            "the_landing_summary_is_a_fixed_set_of_reads_invariant_to_store_size",
+            "missing_is_distinct_from_zero_on_the_front_door",
+            "the_front_door_links_all_eight_surfaces"
+          ],
+          "n_scenarios": [
+            "LD-INV-ReadOnly",
+            "LD-INV-NoWrite",
+            "LD-INV-OfflineChrome",
+            "LD-INV-Offline",
+            "LD-INV-NoNPlus1",
+            "LD-INV-MissingNotZero",
+            "LD-INV-Discoverability"
+          ],
+          "us_trace": [
+            "US-LD-000",
+            "US-LD-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_landing_dashboard_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "These seven guardrails are the behavioral layer of the ADR-054 three-layer enforcement; ensure mutation testing of the pure render core (per-count Some(n)\u2192number / None\u2192marker, the 8-link hub, no-control, no-CDN) and the per-count `.ok()` degrade is green so the gold guardrails are not the only line of defense. The no-N+1 (3 fixed aggregate reads invariant to store size) + missing\u2260zero (both sides) + discoverability (all 8 surfaces) are the front-door-specific additions over the inherited slice-06 golds."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "APPROVED \u2014 all 6 dimensions PASS; 8 steps/16 scenarios"
+  }
+}
