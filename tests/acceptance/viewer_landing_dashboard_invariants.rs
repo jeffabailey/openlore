@@ -306,13 +306,19 @@ fn missing_is_distinct_from_zero_on_the_front_door() {
         let page = viewer.get(LANDING_PATH);
         assert_eq!(page.status, 200, "the empty store must render a 200 front door");
         assert_landing_shows_count(&page.body, "peer claims", 0);
-        assert!(
-            !page.body_contains(LANDING_MISSING_COUNT_MARKER),
-            "an empty store is a SUCCESSFUL read of 0 — it must NOT render the \
-             missing-number marker {LANDING_MISSING_COUNT_MARKER:?} (the success side of \
-             `0 ≠ missing`, WD-LD-8); body was:\n{}",
-            page.body
-        );
+        // Scan each COUNT position (`"— <label>"`), NOT the bare marker: the page chrome
+        // title ("OpenLore — Viewer") legitimately carries the em-dash, so a bare-marker
+        // scan would collide with the title rather than the count surface.
+        for label in ["own claims", "peer claims", "active peers"] {
+            let missing_count = format!("{LANDING_MISSING_COUNT_MARKER} {label}");
+            assert!(
+                !page.body_contains(&missing_count),
+                "an empty store is a SUCCESSFUL read of 0 — it must NOT render the \
+                 missing-number count {missing_count:?} (the success side of \
+                 `0 ≠ missing`, WD-LD-8); body was:\n{}",
+                page.body
+            );
+        }
     }
 
     // SIDE 2 — a store whose peer-claims read FAILS mid-request (own + active still

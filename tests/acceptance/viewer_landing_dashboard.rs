@@ -172,7 +172,6 @@ fn the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub() {
 ///
 /// @us-ld-001 @driving_port @real-io @empty-state @edge
 #[test]
-#[ignore = "enabled in roadmap step 01-03 (LD-ZEROS) — progressive implementation"]
 fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
     // GIVEN a fresh, initialized store with ZERO claims, peer claims, and
     // subscriptions (the three reads return Ok(0) → Some(0)).
@@ -190,14 +189,19 @@ fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
     assert_landing_shows_count(&page.body, "peer claims", 0);
     assert_landing_shows_count(&page.body, "active peers", 0);
     // The zeros must NOT be the missing-number marker — an empty store is a SUCCESSFUL
-    // read of zero, not a failed read (the `0 ≠ missing` distinction, WD-LD-8).
-    assert!(
-        !page.body_contains(LANDING_MISSING_COUNT_MARKER),
-        "a fresh empty store renders honest zeros (Some(0)), NOT the missing-number \
-         marker {LANDING_MISSING_COUNT_MARKER:?} (which means a FAILED read); body \
-         was:\n{}",
-        page.body
-    );
+    // read of zero, not a failed read (the `0 ≠ missing` distinction, WD-LD-8). Scan
+    // each COUNT position (`"— <label>"`), NOT the bare marker: the page chrome title
+    // ("OpenLore — Viewer") legitimately carries the em-dash, so a bare-marker scan
+    // would collide with the title rather than the count surface.
+    for label in ["own claims", "peer claims", "active peers"] {
+        let missing_count = format!("{LANDING_MISSING_COUNT_MARKER} {label}");
+        assert!(
+            !page.body_contains(&missing_count),
+            "a fresh empty store renders honest zeros (Some(0)), NOT the missing-number \
+             count {missing_count:?} (which would mean a FAILED read); body was:\n{}",
+            page.body
+        );
+    }
     // The full hub is present so a brand-new operator can reach /scrape or /search.
     assert_landing_links_all_surfaces(&page.body);
 }
