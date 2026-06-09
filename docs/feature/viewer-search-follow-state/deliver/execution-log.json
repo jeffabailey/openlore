@@ -134,6 +134,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-09T15:37:21Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-09T15:38:12Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-09T15:39:40Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-09T15:40:11Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: batch-once active-set read is structural (read once in resolve_search_state, in-memory resolution); the strict 1-read bound is the adapter concern, proxied at the acceptance layer (SF-7)",
+      "t": "2026-06-09T15:40:11Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-09T15:40:34Z"
     }
   ],
   "project_id": "viewer-search-follow-state"
