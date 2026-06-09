@@ -481,8 +481,95 @@ Style UNCHANGED (Hexagonal + Modular Monolith, ADR-009; functional, ADR-007).
 
 ---
 
+## Wave: DISTILL / [REF] Acceptance tests (Quinn, 2026-06-09)
+
+DISTILL artifacts under `docs/feature/viewer-peer-subscriptions/distill/`
+(`test-scenarios.md`, `walking-skeleton.md`). Mirrors the slice-10
+(`viewer-graph-traversal`) DISTILL shape: one thick walking-skeleton scenario first
++ story scenarios mapping the AC IDs + a GOLD invariants file. Authored as scaffolded
+RED (ADR-025 — DISTILL is the canonical AT author; DELIVER unskips + adds unit/PBT).
+
+### [REF] Scenario list with tags
+
+Story scenarios — `tests/acceptance/viewer_peer_subscriptions.rs`:
+
+| ID | Scenario | Story | AC theme | Tags |
+|---|---|---|---|---|
+| PS-1 | open /peers WITH HX-Request → ONLY the #peers fragment; two rows (DID + per-peer count + render-only revoke command) | US-PS-002 | 1 | `@walking_skeleton @driving_port @driving_adapter @real-io @htmx-fragment @i-ps-2 @i-ps-3 @i-ps-5 @i-ps-8 @kpi-fed-4 @happy` |
+| PS-2 | full page + fragment render the SAME #peers region (parity) | US-PS-002 | 6 | `@driving_port @real-io @no-js @full-page @parity @i-ps-5 @happy` |
+| PS-3 | per-peer count is never a merged total (5 + 3, never 8; no "all peers" row) | US-PS-002 | 7 | `@driving_port @real-io @anti-merging @i-ps-3 @kpi-av-2 @boundary` |
+| PS-4 | a CLI-removed peer is ABSENT even though its cache remains (residue made visible, CARDINAL) | US-PS-002 | 2 | `@driving_port @real-io @active-only @residue-made-visible @i-ps-2 @kpi-fed-4 @boundary` |
+| PS-5 | a zero-claims (subscribed-but-never-pulled) peer appears with count 0 + its revoke command | US-PS-002 | 1 | `@driving_port @real-io @left-join @zero-claims @i-ps-8 @boundary` |
+| PS-6 | no active subscriptions → guided empty state (both shapes) | US-PS-003 | 4 | `@driving_port @real-io @empty-state @parity @i-ps-5 @error` |
+| PS-7 | only-a-soft-removed-peer → guided empty state (residue, not active) | US-PS-003 | 4 | `@driving_port @real-io @empty-state @active-only @i-ps-2 @error` |
+
+GOLD invariants — `tests/acceptance/viewer_peer_subscriptions_invariants.rs`:
+PS-INV-ReadOnly (`@property @read-only @i-ps-1 @gold`), PS-INV-NoWrite
+(`@property @no-write @i-ps-1 @gold`), PS-INV-OfflineChrome
+(`@property @offline @no-cdn @i-ps-4 @gold`), PS-INV-Offline
+(`@property @offline @local-first @i-ps-4 @kpi-5 @gold`), PS-INV-NoNPlus1
+(`@property @no-n-plus-1 @i-ps-8 @gold`).
+
+### [REF] WS strategy
+
+Brownfield DELTA — no new walking-skeleton Feature 0; PS-1 is the thinnest complete
+thread (viewer → LOCAL active-subscription read → pure projection → #peers fragment).
+Port treatments inherited from the Project Infrastructure Policy: driving = real
+`openlore ui` subprocess + HTTP; driven-internal = real DuckDB seeded via the real
+`peer add`/`peer pull`/`peer remove` verbs; driven-external = NONE on this route
+(LOCAL/offline; the `PeerPds` double is used only in the SEED path). The policy's
+viewer row was extended this wave to record `GET /peers`.
+
+### [REF] Adapter coverage table (Mandate 6)
+
+| Adapter | @real-io scenario | Covered by |
+|---|---|---|
+| `adapter-duckdb` `StoreReadPort::list_active_peer_subscriptions` (new read impl + active-only + per-peer-count LEFT JOIN SQL) | YES | every scenario reads the REAL seeded LOCAL DuckDB through the real viewer |
+| `PeerPds` double (seed path only) | n/a (seed) | drives the real `peer add` + `peer pull`; NOT on the `/peers` read path |
+
+### [REF] Scaffolds (RED-ready) + Test placement
+
+`tests/acceptance/viewer_peer_subscriptions.rs` + `viewer_peer_subscriptions_invariants.rs`
+(both `// SCAFFOLD: true`), `tests/acceptance/support/mod.rs` (slice-15 block appended —
+seeds `seed_peers_two_active_with_claims` / `seed_peer_subscribed_then_removed` /
+`seed_peer_subscribed_zero_claims` / `seed_no_active_subscriptions` /
+`seed_only_subscription_removed` / `seed_many_active_peers_known_counts`; asserts
+`assert_peer_row_present` / `assert_peer_absent` /
+`assert_peer_remove_command_is_render_only` / `assert_peers_empty_state_present` /
+`assert_peers_no_write_or_subscribe_control` / `assert_one_active_subscription_for`),
+`crates/cli/Cargo.toml` ([[test]] entries). Placement mirrors slice-10's net-new-route
+pair verbatim.
+
+### [REF] RED confirmation (pre-DELIVER fail-for-the-right-reason gate)
+
+Both binaries COMPILE (`cargo test --no-run`, zero errors). PS-1 + PS-INV-ReadOnly run:
+seeding (production `peer add` + `peer pull`) SUCCEEDS, the viewer spawns, the GET reaches
+the route, and `GET /peers` returns 404 `<p>Not found.</p>` → genuine RED
+(MISSING_FUNCTIONALITY: the route does not exist yet), NOT BROKEN. `cargo xtask check-arch`
+OK (21 members). The slice-10 suite still compiles (support changes are additive). The
+production seams to land in DELIVER: `list_active_peer_subscriptions` + `PeerSubscription
+Summary` (ports), the active-only + per-peer-count SQL (adapter-duckdb), `PeersView` +
+`render_peers_*` + `render_remove_guidance` + `PEER_REMOVE_GUIDANCE_PREFIX` /
+`PEER_ADD_GUIDANCE_PREFIX` (viewer-domain), the `GET /peers` handler + route arm + nav link
+(adapter-http-viewer).
+
+### [REF] Tier B decision (Mandate 10)
+
+Tier B SKIPPED. The `/peers` journey is 1-2 observable scenarios per posture and the input
+space is not domain-rich (an active set of DIDs + counts; no free-text/dates/payloads at the
+journey level) — Tier A example coverage is sufficient.
+
+---
+
 ## Changelog
 
+- 2026-06-09 — Quinn — slice-15 DISTILL: 7 story scenarios (PS-1..PS-7) + 5 GOLD
+  invariants (PS-INV-*) authored as scaffolded RED (ADR-025). Net-new `GET /peers` route
+  driven port-to-port via the real `ViewerServer` (htmx fragment vs no-JS full page).
+  Mirrors slice-10's net-new-route structure + the slice-08 render-only-command assert.
+  New seeds/asserts in support (`seed_peers_two_active_with_claims` + 5 siblings;
+  `assert_peer_row_present` + 5 siblings). RED confirmed: GET /peers 404s
+  (MISSING_FUNCTIONALITY, not BROKEN). check-arch OK (21). slice-10 suite still compiles.
 - 2026-06-09 — Morgan — slice-15 DESIGN: ONE read-only `GET /peers` route +
   `StoreReadPort::list_active_peer_subscriptions` (active-only + per-peer count in
   ONE aggregate query, `LEFT JOIN` + `GROUP BY`) + `PeerSubscriptionSummary` DTO

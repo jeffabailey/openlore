@@ -14043,3 +14043,526 @@ pub fn assert_score_render_byte_identical_to_slice09(flagged: &str, ordered_cids
         prev_offset = Some(offset);
     }
 }
+
+// =============================================================================
+// slice-15 (viewer-peer-subscriptions) — the read-only `GET /peers` view (US-PS-002/003;
+// ADR-052). The new route lists the operator's ACTIVE subscriptions (`peer_subscriptions`
+// WHERE `removed_at IS NULL`) — each peer's DID VERBATIM + its PER-PEER local claim count
+// (`COUNT(pc.cid) FROM peer_claims WHERE author_did = peer_did`) — plus a RENDER-ONLY
+// `openlore peer remove <did>` revocation command per peer (mirrors the slice-08
+// `render_follow_guidance` render-only `openlore peer add` precedent). A guided empty
+// state when there are none. The read is ONE aggregate query, invariant to peer count
+// (no N+1; DD-PS-1). Active-only / residue-made-visible (I-PS-2): a `peer remove`d peer
+// VANISHES even though its cached `peer_claims` survive on disk.
+//
+// These seeds drive the SAME production federation write path slices 03/09/10 use — the
+// real `peer add` + `peer pull` verbs against `PeerPds` doubles (built with
+// `build_verifiable_peer_records_for_triples`) — so the rows the `/peers` read returns are
+// produced by production code, never hand-inserted (Pillar 3 / BR-VIEW-4). A
+// subscribe-but-never-pull seed (`seed_peer_subscribed_zero_claims`) drives `peer add`
+// ALONE (no pull) so the LEFT JOIN + `COUNT(pc.cid)` zero-claims design (DD-PS-2) is
+// exercised. A `seed_peer_subscribed_then_removed` runs `peer add` + `peer pull` THEN the
+// real `peer remove` verb (soft-remove, no `--purge`) so the cached claims survive while
+// the subscription's `removed_at` is set — the precondition for the active-only filter.
+//
+// The asserts scan ONLY the rendered HTML the operator's browser shows (Mandate 8 universe
+// = port-exposed rendered surface, never an internal `viewer-domain` struct field). NO
+// scenario calls `list_active_peer_subscriptions` / `render_peers_*` directly — every
+// assertion is on the `/peers` HTTP response (Mandate 1, driving-port discipline). The
+// read-only / no-write / offline-chrome / offline-data / N+1 gold invariants REUSE the
+// slice-06/08/10 `capture_store_row_count_universe` + `assert_store_read_only` +
+// `references_external_cdn` harness VERBATIM.
+//
+// SCAFFOLD: true (slice-15) — the seeds + asserts COMPILE now (they drive EXISTING
+// `peer add`/`peer pull`/`peer remove` verbs + scan strings); the SCENARIOS stay RED
+// because the production `/peers` route + `list_active_peer_subscriptions` read +
+// `PeersView` / `render_peers_*` / `render_remove_guidance` seams do NOT exist yet (the
+// route 404s / renders no `#peers` region). RED = MISSING_FUNCTIONALITY, never BROKEN.
+// =============================================================================
+
+/// The `/peers` route path (the slice-15 net-new read-only route; DD-PS-7).
+pub const PEERS_PATH: &str = "/peers";
+
+/// The swap-target id the `/peers` fragment carries (mirrors the slice-10
+/// `TRAVERSAL_RESULTS_ID` / the slice-08 search region id). The htmx fragment IS this
+/// region; the no-JS full page EMBEDS it (parity by construction, I-PS-5).
+pub const PEERS_REGION_ID: &str = "peers";
+
+/// The two ACTIVE peers the walking-skeleton + anti-merging + per-peer-count scenarios
+/// follow: Rachel (5 cached claims) and Tobias (3 cached claims). REAL DIDs, REUSED from
+/// the slice-09/10 traversal constants so the seeded attribution shape is consistent
+/// across the viewer slices.
+pub const PEERS_RACHEL_DID: &str = TRAVERSAL_AUTHOR_RACHEL; // did:plc:rachel-test
+pub const PEERS_TOBIAS_DID: &str = TRAVERSAL_AUTHOR_TOBIAS; // did:plc:tobias-test
+pub const PEERS_RACHEL_CLAIM_COUNT: usize = 5;
+pub const PEERS_TOBIAS_CLAIM_COUNT: usize = 3;
+
+/// A subscribed-but-never-pulled peer (count 0 — proves the LEFT JOIN + `COUNT(pc.cid)`
+/// design keeps the row at 0, DD-PS-2). REAL DID.
+pub const PEERS_NEWPEER_DID: &str = "did:plc:newpeer-test";
+
+/// The render-only revocation command verb shape (the slice-03 `peer remove` verb, the
+/// SINGLE source of truth held in the production `PEER_REMOVE_GUIDANCE_PREFIX`; mirrors the
+/// slice-08 `openlore peer add` follow-guidance shape). The assert scans for
+/// `openlore peer remove <bare-did>` as render-only TEXT.
+pub const PEER_REMOVE_COMMAND_VERB: &str = "openlore peer remove";
+
+/// The empty-state starting command verb shape (`openlore peer add`, the slice-03
+/// subscribe verb; the production `PEER_ADD_GUIDANCE_PREFIX`).
+pub const PEER_ADD_COMMAND_VERB: &str = "openlore peer add";
+
+/// A held subscription seam: a subscribed peer's `PeerPds` double kept ALIVE so the
+/// subscription stays resolvable for the lifetime of the test. Returned by the
+/// zero-claims seed (subscribe-without-pull) so the caller can keep the PDS alive while
+/// the `/peers` read runs. Dropping it tears down the peer's PDS (harmless after the
+/// subscription row is written — the `/peers` read is LOCAL and never re-resolves).
+pub struct HeldSubscriptions {
+    _peers: Vec<PeerPds>,
+}
+
+/// Seed TWO ACTIVE peers with KNOWN per-peer claim counts through the PRODUCTION
+/// federation write path: Rachel (5 cached claims) and Tobias (3 cached claims), each via
+/// the real `peer add` + `peer pull` verbs (DISTINCT subjects per triple so the canonical
+/// CIDs do not alias). The walking-skeleton + anti-merging + per-peer-count seed
+/// (US-PS-002 Ex 1; AC theme 1/7). After seeding, the `peer_subscriptions` table holds two
+/// ACTIVE rows and `peer_claims` holds 5 Rachel + 3 Tobias rows — exactly what the new
+/// `list_active_peer_subscriptions` read must surface as two attributed rows with counts
+/// 5 and 3 (NEVER a merged 8). The counts are pinned with `assert_peer_claims_row_count_for`
+/// so the fixture is the GENUINE per-peer shape, not merely "the verbs exited 0".
+///
+/// SCAFFOLD: true (slice-15) — drives the EXISTING `peer add` + `peer pull` verbs via
+/// `seed_peer_authored_graph` (the SAME seam slice-09/10 use); the rows land in the REAL
+/// `peer_subscriptions` + `peer_claims` tables the viewer's LOCAL `/peers` read returns.
+pub fn seed_peers_two_active_with_claims(env: &TestEnv) {
+    let dep = "org.openlore.philosophy.dependency-pinning";
+    let repro = "org.openlore.philosophy.reproducible-builds";
+    let workspace = "org.openlore.philosophy.workspace-cohesion";
+    let memory = "org.openlore.philosophy.memory-safety";
+    let actor = "org.openlore.philosophy.actor-model";
+
+    // Rachel: 5 DISTINCT triples (5 cached claims). Tobias: 3 DISTINCT triples (3 cached
+    // claims). DISTINCT (subject, object) per triple so the canonical CIDs are distinct
+    // (the store keys on cid; identical triples would collide into one row). Materialized
+    // through the PRODUCTION `peer add` + `peer pull` path (ONE pull over BOTH peers).
+    let graph = seed_peer_authored_graph(
+        env,
+        &[
+            SeedPeer {
+                peer_did: PEERS_RACHEL_DID,
+                seed: [7u8; 32],
+                triples: &[
+                    ("github:rust-lang/cargo", dep, 0.90),
+                    ("github:NixOS/nixpkgs", repro, 0.74),
+                    ("github:bazelbuild/bazel", workspace, 0.61),
+                    ("github:rust-lang/rust", memory, 0.88),
+                    ("github:erlang/otp", actor, 0.55),
+                ],
+            },
+            SeedPeer {
+                peer_did: PEERS_TOBIAS_DID,
+                seed: [9u8; 32],
+                triples: &[
+                    ("github:denoland/deno", dep, 0.42),
+                    ("github:torvalds/linux", repro, 0.71),
+                    ("github:GNOME/meson", workspace, 0.33),
+                ],
+            },
+        ],
+    );
+    drop(graph);
+
+    // Pin the GENUINE per-peer cached-claim shape so the fixture is the real two-peer
+    // distinct-count state (5 vs 3), not merely "the verbs exited 0" — the load-bearing
+    // anti-merging precondition (J-003a / I-PS-3).
+    assert_peer_claims_row_count_for(env, PEERS_RACHEL_DID, PEERS_RACHEL_CLAIM_COUNT);
+    assert_peer_claims_row_count_for(env, PEERS_TOBIAS_DID, PEERS_TOBIAS_CLAIM_COUNT);
+}
+
+/// Seed a peer SUBSCRIBED but NEVER pulled (active subscription, ZERO cached claims) via
+/// the real `peer add` verb ALONE (no `peer pull`). Proves the LEFT JOIN + `COUNT(pc.cid)`
+/// design (DD-PS-2): a never-pulled peer stays in the `/peers` result at count 0 — not
+/// dropped (inner-JOIN bug), not counted as 1 (`COUNT(*)`-of-NULL bug). US-PS-002 Ex 2.
+/// Returns the held `PeerPds` so the caller keeps it alive while seeding (the subscription
+/// row is already written by `peer add`; the `/peers` read is LOCAL + never re-resolves,
+/// so the PDS may drop after this returns — the handle is returned for symmetry / explicit
+/// lifetime control).
+///
+/// SCAFFOLD: true (slice-15) — drives the EXISTING `peer add` verb (resolver wired for the
+/// peer) with NO pull; one ACTIVE `peer_subscriptions` row, ZERO `peer_claims` rows.
+pub fn seed_peer_subscribed_zero_claims(env: &TestEnv) -> HeldSubscriptions {
+    // Build a verifiable record set + start the peer's PDS so `peer add` can resolve the
+    // DID and register the subscription. We deliberately do NOT `peer pull`, so NO
+    // `peer_claims` row lands — the active subscription has a per-peer count of 0.
+    let (records, _pubkey_hex) =
+        build_verifiable_peer_records_for_triples(PEERS_NEWPEER_DID, [13u8; 32], &[(
+            "github:newpeer/repo",
+            "org.openlore.philosophy.dependency-pinning",
+            0.50,
+        )]);
+    let pds = PeerPds::for_peer(PEERS_NEWPEER_DID, records);
+
+    // Subscribe via the real `peer add` verb (resolver wired for THIS peer) — NO pull.
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", PEERS_NEWPEER_DID],
+        PEERS_NEWPEER_DID,
+        pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_peer_subscribed_zero_claims: `peer add {PEERS_NEWPEER_DID}` must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // Pin the GENUINE zero-claims shape: ONE active subscription, ZERO cached claims (the
+    // never-pulled state the LEFT JOIN + COUNT(pc.cid) design must keep at count 0).
+    assert_one_active_subscription_for(env, PEERS_NEWPEER_DID);
+    assert_peer_claims_row_count_for(env, PEERS_NEWPEER_DID, 0);
+
+    HeldSubscriptions { _peers: vec![pds] }
+}
+
+/// Seed a peer SUBSCRIBED + PULLED, THEN soft-removed via the real `peer remove` verb (no
+/// `--purge`): the subscription row's `removed_at` is set, but the cached `peer_claims`
+/// rows SURVIVE on disk. The active-only / residue-made-visible precondition (I-PS-2 /
+/// US-PS-002 Ex 3): a `peer remove`d peer must be ABSENT from `/peers` on the next render
+/// even though its cached claims remain (no `--purge`). REUSES the slice-03 soft-remove
+/// storage contract pinned by `assert_subscription_soft_removed_for` +
+/// `assert_peer_claims_row_count_for` (the cache is RETAINED).
+///
+/// SCAFFOLD: true (slice-15) — drives the EXISTING `peer add` + `peer pull` + `peer remove`
+/// verbs; the soft-removed subscription is residue the `/peers` read must EXCLUDE while its
+/// cached claims remain on disk.
+pub fn seed_peer_subscribed_then_removed(env: &TestEnv) {
+    let dep = "org.openlore.philosophy.dependency-pinning";
+    let repro = "org.openlore.philosophy.reproducible-builds";
+
+    // Subscribe + pull Rachel (2 cached claims) through the PRODUCTION federation path.
+    let graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: PEERS_RACHEL_DID,
+            seed: [7u8; 32],
+            triples: &[
+                ("github:rust-lang/cargo", dep, 0.90),
+                ("github:NixOS/nixpkgs", repro, 0.74),
+            ],
+        }],
+    );
+    let cached = graph.seeded.len();
+    drop(graph);
+
+    // Soft-remove Rachel via the real `peer remove` verb (no `--purge`): sets `removed_at`,
+    // RETAINS the cached `peer_claims` rows (slice-03 WD-25 / ADR-014).
+    let removed = run_openlore(env, &["peer", "remove", PEERS_RACHEL_DID]);
+    assert_eq!(
+        removed.status, 0,
+        "seed_peer_subscribed_then_removed: `peer remove {PEERS_RACHEL_DID}` (soft, no \
+         --purge) must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        removed.stdout, removed.stderr
+    );
+
+    // Pin the GENUINE residue state: the subscription is soft-removed (`removed_at IS NOT
+    // NULL`) AND every cached peer claim is RETAINED on disk (no --purge). This is the
+    // precondition the active-only `/peers` filter must render as ABSENCE.
+    assert_subscription_soft_removed_for(env, PEERS_RACHEL_DID);
+    assert_peer_claims_row_count_for(env, PEERS_RACHEL_DID, cached);
+}
+
+/// Seed a store with NO active subscriptions (the guided empty-state precondition;
+/// US-PS-003 Ex 1). A no-op over a fresh `TestEnv::initialized()` store (no `peer add` ever
+/// run), named explicitly so the empty-state scenarios read in the domain language and the
+/// intent ("the operator follows no one") is legible at the call site.
+///
+/// SCAFFOLD: true (slice-15) — the empty store IS the precondition; the `/peers` read must
+/// return an empty result (not an error) and the viewer must render the guided empty state.
+pub fn seed_no_active_subscriptions(_env: &TestEnv) {
+    // Intentionally empty: a freshly `initialized()` store has zero `peer_subscriptions`
+    // rows. The named seed documents the empty-state precondition at the call site.
+}
+
+/// Seed a store whose ONLY subscription was soft-removed (US-PS-003 Ex 2): there is ONE
+/// `peer_subscriptions` row, soft-removed (`removed_at` set), and the operator follows no
+/// one ELSE. The active-only filter must yield an EMPTY active set → the SAME guided empty
+/// state (the soft-removed row is residue, not an active subscription). Distinct from
+/// `seed_peer_subscribed_then_removed` (which leaves the removed peer's CACHE on disk too —
+/// here that cache also remains, but no OTHER active peer exists, so `/peers` is empty).
+///
+/// SCAFFOLD: true (slice-15) — drives the EXISTING `peer add` + `peer pull` + `peer remove`
+/// verbs; REUSES `seed_peer_subscribed_then_removed` (the single soft-removed peer IS the
+/// only-subscription-removed shape).
+pub fn seed_only_subscription_removed(env: &TestEnv) {
+    // The single soft-removed peer IS the only-subscription-removed shape: one
+    // `peer_subscriptions` row, soft-removed, no other active peer. REUSE the residue seed
+    // (the chained-narrative precondition: Given+When of the residue scenario = Given of
+    // the empty-state-via-residue scenario, Pillar 2).
+    seed_peer_subscribed_then_removed(env);
+}
+
+/// Seed `N` ACTIVE peers with KNOWN per-peer claim counts for the N+1 behavioral proxy
+/// (US-PS-001 single-aggregate-query / I-PS-8): the `/peers` read must resolve the whole
+/// active set + every per-peer count in ONE aggregate query, invariant to peer count. The
+/// behavioral proxy mirrors the slice-10/13/14 N+1 proxies — a MULTI-peer breakdown
+/// resolved correctly in ONE request (the strict 1-query bound is the DELIVER adapter-duckdb
+/// unit/property test). Returns the seeded `(did, count)` pairs in seeded order so the
+/// scenario can assert every peer row is present with its correct per-peer count.
+///
+/// SCAFFOLD: true (slice-15) — drives the EXISTING `peer add` + `peer pull` verbs over `N`
+/// peers in ONE pull (single-pull discipline); each peer gets a DISTINCT, KNOWN number of
+/// cached claims so a wrong/merged/N+1 count is detectable.
+pub fn seed_many_active_peers_known_counts(env: &TestEnv) -> Vec<(String, usize)> {
+    let dep = "org.openlore.philosophy.dependency-pinning";
+    let repro = "org.openlore.philosophy.reproducible-builds";
+    let workspace = "org.openlore.philosophy.workspace-cohesion";
+    let memory = "org.openlore.philosophy.memory-safety";
+
+    // FOUR active peers with DISTINCT known counts (4, 3, 2, 1) so the per-peer breakdown
+    // is non-trivial and a merged/dropped/N+1-miscount is detectable in ONE request.
+    let alice = "did:plc:alice-test";
+    let bob = "did:plc:bob-test";
+    let carol = "did:plc:carol-test";
+    let dave = "did:plc:dave-test";
+
+    let graph = seed_peer_authored_graph(
+        env,
+        &[
+            SeedPeer {
+                peer_did: alice,
+                seed: [31u8; 32],
+                triples: &[
+                    ("github:a/one", dep, 0.90),
+                    ("github:a/two", repro, 0.80),
+                    ("github:a/three", workspace, 0.70),
+                    ("github:a/four", memory, 0.60),
+                ],
+            },
+            SeedPeer {
+                peer_did: bob,
+                seed: [33u8; 32],
+                triples: &[
+                    ("github:b/one", dep, 0.55),
+                    ("github:b/two", repro, 0.45),
+                    ("github:b/three", workspace, 0.35),
+                ],
+            },
+            SeedPeer {
+                peer_did: carol,
+                seed: [35u8; 32],
+                triples: &[("github:c/one", dep, 0.66), ("github:c/two", repro, 0.44)],
+            },
+            SeedPeer {
+                peer_did: dave,
+                seed: [37u8; 32],
+                triples: &[("github:d/one", dep, 0.50)],
+            },
+        ],
+    );
+    drop(graph);
+
+    let expected = vec![
+        (alice.to_string(), 4usize),
+        (bob.to_string(), 3usize),
+        (carol.to_string(), 2usize),
+        (dave.to_string(), 1usize),
+    ];
+    // Pin the GENUINE per-peer cached-claim shape so the proxy is over a REAL non-trivial
+    // multi-peer breakdown (a wrong count is a real bug, not a seeding artifact).
+    for (did, count) in &expected {
+        assert_peer_claims_row_count_for(env, did, *count);
+    }
+    expected
+}
+
+/// Universe-bound: "the `peer_subscriptions` store holds exactly ONE ACTIVE row
+/// (`removed_at IS NULL`) for `peer_did`". Port-exposed name:
+/// `peer_storage.subscriptions.active_row_count[did] == 1`. The active-subscription
+/// sibling of `assert_subscription_soft_removed_for`; used by the zero-claims seed to pin
+/// the subscribe-without-pull state (one active row, no cache).
+pub fn assert_one_active_subscription_for(env: &TestEnv, peer_did: &str) {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for active-subscription assertion: {err}",
+            db_path.display()
+        )
+    });
+
+    let active: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM peer_subscriptions \
+             WHERE peer_did = ? AND removed_at IS NULL",
+            duckdb::params![peer_did],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|err| panic!("query active peer_subscriptions for {peer_did}: {err}"));
+
+    assert_eq!(
+        active, 1,
+        "expected exactly ONE ACTIVE subscription row (removed_at IS NULL) for {peer_did}; \
+         got {active} (subscribe-without-pull must leave one active row)"
+    );
+}
+
+/// Assert the `/peers` rendered HTML carries a row for `peer_did` showing its DID VERBATIM
+/// AND its per-peer `local_claim_count` (US-PS-002; AC theme 1/7/8). Universe (port-exposed
+/// rendered surface): the rendered body contains the DID verbatim and the count. The count
+/// is asserted PER-PEER — a merged total would render a DIFFERENT number, so a 5/3 →
+/// merged-8 regression fails (the count this peer's row shows must be ITS OWN count).
+///
+/// SCAFFOLD: true (slice-15).
+pub fn assert_peer_row_present(body: &str, peer_did: &str, count: usize) {
+    // The peer DID is rendered VERBATIM (attribution discipline, I-PS-3 — never elided,
+    // never merged into a faceless "all peers" row).
+    assert!(
+        body.contains(peer_did),
+        "US-PS-002 (I-PS-3): the /peers render must show a row attributing {peer_did:?} \
+         VERBATIM (each peer is its own attributed row keyed by its DID); body was:\n{body}"
+    );
+    // The PER-PEER local claim count is rendered for THIS peer (never a merged total). The
+    // count appears as a standalone token in the body — a 5/3 → merged-8 regression would
+    // show the wrong number on this peer's row.
+    let count_str = count.to_string();
+    assert!(
+        body.contains(&count_str),
+        "US-PS-002 (J-003a / I-PS-3): the /peers row for {peer_did:?} must show its PER-PEER \
+         local claim count {count} (never a merged total); body was:\n{body}"
+    );
+}
+
+/// Assert the `/peers` rendered HTML does NOT mention `peer_did` at all — the
+/// active-only / residue-made-visible guarantee (I-PS-2 / US-PS-002 Ex 3 / US-PS-003 Ex 2):
+/// a `peer remove`d (soft-removed) peer VANISHES from `/peers` even though its cached
+/// `peer_claims` remain on disk. Universe (port-exposed rendered surface): the DID does NOT
+/// appear in the rendered body.
+///
+/// SCAFFOLD: true (slice-15).
+pub fn assert_peer_absent(body: &str, peer_did: &str) {
+    assert!(
+        !body.contains(peer_did),
+        "I-PS-2 (active-only / residue made visible): a soft-removed peer must be ABSENT \
+         from the /peers render (its absence IS the J-003c residue-free promise rendered) \
+         even though its cached peer_claims remain on disk; found {peer_did:?} in body:\n{body}"
+    );
+}
+
+/// Assert the `/peers` rendered HTML shows the RENDER-ONLY `openlore peer remove <bare-did>`
+/// revocation command for `peer_did` as TEXT — never an executable control (I-PS-1 / I-PS-8;
+/// mirrors the slice-08 `render_follow_guidance` render-only `openlore peer add` assert,
+/// N-17). The `bare_did` is the DID with any app-identity `#…` fragment stripped (the
+/// `render_remove_guidance` bare-DID strip). Universe (port-exposed rendered surface): the
+/// body contains the `openlore peer remove <bare-did>` command text, and there is NO
+/// executable revoke/unsubscribe control (no `<button>`, no `<form>`, no mutating
+/// `hx-post`, no `name="remove"`).
+///
+/// SCAFFOLD: true (slice-15).
+pub fn assert_peer_remove_command_is_render_only(body: &str, peer_did: &str) {
+    // The bare DID (strip any `#…` app-identity fragment — the render_remove_guidance
+    // bare-DID strip; the slice-03 `peer remove` verb accepts the bare form).
+    let bare_did = peer_did.split('#').next().unwrap_or(peer_did);
+    let command = format!("{PEER_REMOVE_COMMAND_VERB} {bare_did}");
+    // THE render-only revocation command TEXT for this peer (the slice-03 verb, the single
+    // source of truth `PEER_REMOVE_GUIDANCE_PREFIX`).
+    assert!(
+        body.contains(&command),
+        "US-PS-002 (I-PS-8 / WD-PS-6): the /peers row for {peer_did:?} must show the \
+         render-only revocation command TEXT {command:?} (mirrors the slice-08 \
+         render_follow_guidance render-only `openlore peer add` precedent); body was:\n{body}"
+    );
+    // …and the command is TEXT ONLY — NO executable revoke/unsubscribe control anywhere on
+    // the surface. The unsubscribe stays a deliberate CLI action; the viewer is read-only
+    // and holds no key (I-PS-1 / WD-PS-1). No `name="remove"` input, no `Unsubscribe`
+    // affordance, no `>Remove<` button label, no `hx-post`/`hx-delete` mutating swap, no
+    // `--purge` control.
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "name=\"remove\"",
+        "name=\"unsubscribe\"",
+        ">remove<",
+        ">unsubscribe<",
+        "hx-post",
+        "hx-delete",
+        "hx-put",
+        "--purge",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "I-PS-1 / WD-PS-1: the revocation command must be render-only TEXT — NO \
+             executable remove/unsubscribe/purge control on /peers (the viewer holds no \
+             key; unsubscribe stays the slice-03 CLI); found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+/// Assert the `/peers` rendered HTML is the GUIDED EMPTY STATE (US-PS-003): a plain-language
+/// "you follow no peers" notice + the render-only `openlore peer add <did>` STARTING command
+/// — never blank, never an error, never a stack trace. Universe (port-exposed rendered
+/// surface): the body names the empty state AND carries the `openlore peer add` starting
+/// command, AND leaks no stack trace / 5xx internals.
+///
+/// SCAFFOLD: true (slice-15).
+pub fn assert_peers_empty_state_present(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    // The guided plain-language empty-state notice: emptiness is recognized as emptiness
+    // ("you are not subscribed to any peers" / "no peers"), naming that the operator
+    // follows no one (US-PS-003; never blank, never an error).
+    assert!(
+        lowered.contains("not subscribed to any peers") || lowered.contains("no peers"),
+        "US-PS-003: an empty active subscription set must render the guided empty state \
+         (\"You are not subscribed to any peers.\"), never blank, never an error; body \
+         was:\n{body}"
+    );
+    // The render-only STARTING command (`openlore peer add <did>`, the slice-03 subscribe
+    // verb) points the operator at how to start following — in-context, not a dead end.
+    assert!(
+        body.contains(PEER_ADD_COMMAND_VERB),
+        "US-PS-003: the guided empty state must show the render-only starting command \
+         {PEER_ADD_COMMAND_VERB:?} so the operator learns how to start subscribing; body \
+         was:\n{body}"
+    );
+    // The empty state is NOT a blank page and NOT an error surface — no leaked stack trace
+    // / panic / 5xx internals (graceful degradation, NFR-PS-6).
+    for banned in ["panicked", "RUST_BACKTRACE", "thread 'main'", "stack backtrace", "500 Internal"] {
+        assert!(
+            !body.contains(banned),
+            "US-PS-003: the guided empty state must leak NO stack trace / error internal \
+             (found {banned:?}); body was:\n{body}"
+        );
+    }
+}
+
+/// Assert the `/peers` rendered HTML carries NO write / subscribe / unsubscribe / purge
+/// control on ANY shape — the read-only-surface guarantee on the `/peers` route (I-PS-1 /
+/// WD-PS-1, CARDINAL; the sibling of slice-10's
+/// `assert_traversal_html_has_no_write_or_sign_control`). The ONLY revocation affordance is
+/// the render-only `openlore peer remove <did>` command TEXT; every reference is
+/// non-executable. Universe (port-exposed rendered surface): the body contains none of the
+/// write/subscribe/unsubscribe/purge control markers.
+///
+/// SCAFFOLD: true (slice-15).
+pub fn assert_peers_no_write_or_subscribe_control(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "name=\"subscribe\"",
+        "name=\"unsubscribe\"",
+        "name=\"remove\"",
+        "name=\"follow\"",
+        ">subscribe<",
+        ">unsubscribe<",
+        ">follow<",
+        ">remove<",
+        "hx-post",
+        "hx-delete",
+        "hx-put",
+        "--purge",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "I-PS-1 / WD-PS-1 (CARDINAL): the /peers surface must render NO write / \
+             subscribe / unsubscribe / remove / purge control (the viewer is read-only and \
+             holds no key; the only revocation affordance is the render-only \
+             `openlore peer remove <did>` command TEXT; subscribe/unsubscribe stays the \
+             slice-03 CLI); found {banned:?} in body:\n{body}"
+        );
+    }
+}

@@ -665,3 +665,47 @@ harness = true
 name = "viewer_counter_flags_score_surface_invariants"
 path = "../../tests/acceptance/viewer_counter_flags_score_surface_invariants.rs"
 harness = true
+
+# Slice-15 (viewer-peer-subscriptions; DISTILL) subprocess + real-I/O acceptance: the
+# `openlore ui` PEER-SUBSCRIPTIONS view (US-PS-002/003; ADR-052). A NEW net-new read-only
+# `GET /peers` route forks by `Shape` (slice-07 HX-Request fork) and reads the operator's
+# ACTIVE subscription set through a NEW read-only `StoreReadPort::list_active_peer_
+# subscriptions` (peer_subscriptions LEFT JOIN peer_claims, removed_at IS NULL, GROUP BY,
+# COUNT(pc.cid) — ONE aggregate query, no N+1, DD-PS-1/2), maps it to a PURE `PeersView` ADT
+# (Subscriptions { peers } | NoSubscriptions, DD-PS-5), and renders each ACTIVE peer's DID
+# VERBATIM + its PER-PEER local claim count + the RENDER-ONLY `openlore peer remove <did>`
+# revocation command (render_remove_guidance, mirroring slice-08 render_follow_guidance,
+# DD-PS-6); a guided empty state when none. CARDINAL: active-only / residue-made-visible
+# (a `peer remove`d peer VANISHES even though its cached peer_claims remain — I-PS-2);
+# per-peer never merged (5 + 3, never 8 — J-003a / I-PS-3); read-only / no key (I-PS-1);
+# LOCAL / offline (I-PS-4). Drives the REAL `openlore ui` verb via `ViewerServer` + in-test
+# HTTP (get/get_htmx) over a REAL seeded LOCAL DuckDB; NO mocked boundary (LOCAL read + PURE
+# projection). Seeded via the production `peer add` + `peer pull` + `peer remove` verbs
+# (seed_peers_two_active_with_claims / seed_peer_subscribed_then_removed /
+# seed_peer_subscribed_zero_claims — the SAME seam slice-09/10 use). Per Mandate 9/11
+# example-based, never PBT-generated at this layer (the strict 1-query bound is a DELIVER
+# adapter-duckdb unit/property test). Build-before-run: `cargo build` the `openlore` bin.
+# DISTILL registers + RED gate; PS-* stay RED (the /peers route 404s until DELIVER).
+[[test]]
+name = "viewer_peer_subscriptions"
+path = "../../tests/acceptance/viewer_peer_subscriptions.rs"
+harness = true
+
+# Slice-15 (viewer-peer-subscriptions; DISTILL) GOLD / guardrail invariants over the whole
+# `GET /peers` surface (cross-cutting I-PS-1/2/4/5/8): every_peers_render_leaves_the_store_
+# read_only (read-only state-delta, Mandate 8 — the subscription list computed per request
+# persists nothing), no_peers_response_adds_a_write_or_subscribe_control (no write/subscribe/
+# unsubscribe/remove/purge control on any shape — the revocation is render-only `openlore
+# peer remove <did>` command TEXT; subscribe/unsubscribe stays the slice-03 CLI), the_peers_
+# page_chrome_stays_offline_no_cdn (local /static/htmx.min.js, no CDN), the_peers_surface_
+# works_fully_offline (the read is LOCAL DB-only — no PDS fetch / DID re-resolution / peer
+# pull; renders network-down), and the N+1 behavioral proxy a_large_active_set_resolves_per_
+# peer_counts_in_one_request (I-PS-8 / DD-PS-1 — a multi-peer active set with known distinct
+# counts rendered correctly in ONE request; the strict 1-query bound is a DELIVER
+# adapter-duckdb unit/property test). Drives the REAL `openlore ui` via `ViewerServer` over a
+# REAL seeded local store; NO mocked boundary. Per Mandate 9/11 example-based, never
+# PBT-generated at this layer. DISTILL registers + RED gate; PS-INV-* stay RED (`todo!()`).
+[[test]]
+name = "viewer_peer_subscriptions_invariants"
+path = "../../tests/acceptance/viewer_peer_subscriptions_invariants.rs"
+harness = true
