@@ -424,10 +424,58 @@ async fn route(
 fn landing_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
     let summary = LandingSummary {
         own_claims: store.count_claims().ok(),
-        peer_claims: store.count_peer_claims().ok(),
+        // The peer-claims count flows through the TEST-ONLY fault seam
+        // ([`peer_claims_count_with_fault_seam`], `#[cfg(debug_assertions)]`-gated):
+        // in a release build it is the identity, so the real read result flows
+        // verbatim; in a debug/test build with `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT`
+        // set it substitutes a genuine `Err`, exercising the SAME `.ok() → None →
+        // MISSING_COUNT_MARKER` per-count degrade the production path already runs
+        // (ADR-054 D2 / C-2 CARDINAL). The degrade is NOT weakened — the seam only
+        // INDUCES the `Err` the `.ok()` already handles.
+        peer_claims: peer_claims_count_with_fault_seam(store.count_peer_claims()).ok(),
         active_peers: store.count_active_peer_subscriptions().ok(),
     };
     html_ok(render_landing(&summary))
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, mirroring the slice-16 [`active_set_read_with_fault_seam`]
+/// + the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam discipline, enforced by `xtask
+/// check-arch`'s viewer-fail-seam guard).
+///
+/// slice-17 (US-LD-000/001 / Theme 4 / C-2 CARDINAL / WD-LD-2 / WD-LD-8 / ADR-054 D2):
+/// the substrate "lie" the landing dashboard must survive is a MID-REQUEST per-count
+/// read FAILURE — specifically the peer-claims count. When
+/// `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` is set (acceptance fault-injection only),
+/// this substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
+/// `count_peer_claims` result so the SAME production `.ok() → None →
+/// MISSING_COUNT_MARKER "—"` per-count degrade branch in [`landing_page`] runs — the
+/// own-claims + active-peer counts STILL resolve to their numbers, the nav hub renders
+/// in full, the page stays 200 (never a 5xx, never a fabricated 0, never a raw stack
+/// trace). The PRODUCTION per-count degrade path is the thing under test; the seam only
+/// INDUCES the `Err` the path already handles.
+///
+/// In a release build (`debug_assertions` off) this is the identity function: the
+/// real read result flows through verbatim, with NO env-var read compiled in.
+#[cfg(debug_assertions)]
+fn peer_claims_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable {
+            detail: "peer-claims count read fault injected (test-only seam)".to_string(),
+        });
+    }
+    read
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn peer_claims_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    read
 }
 
 /// Parse the 1-based `?page=N` query into a page number, defaulting to 1 and

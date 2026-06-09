@@ -1016,26 +1016,37 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
 // (slice-16 / US-SF-001 / Theme E / C-7 / ADR-053 §Earned-Trust)
 // -----------------------------------------------------------------------------
 //
-// The slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` env seam exists ONLY to let
-// the SF-8 acceptance scenario INDUCE a mid-request active-set read failure and
-// observe the production graceful-degrade path (`Err → empty set →
-// all-NetworkUnfollowed`, the slice-08 status quo). Exactly like the ADR-026
-// pubkey seam, this fault injector is RELEASE-FORBIDDEN: every read of the token
-// MUST sit behind a `#[cfg(debug_assertions)]` gate so it compiles ONLY in
-// debug/test builds and can NEVER force a degrade in a release binary. An UNGATED
-// read in the viewer would ship a fault-injection backdoor — a guard violation.
+// The viewer fault-injection env seams exist ONLY to let acceptance scenarios
+// INDUCE a mid-request read failure and observe the production graceful-degrade
+// path:
+//   - slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ`: a `/search` active-set read
+//     failure → empty set → all-NetworkUnfollowed (the slice-08 status quo).
+//   - slice-17 `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT`: a `GET /` peer-claims count
+//     read failure → `.ok() → None → MISSING_COUNT_MARKER "—"` (ADR-054 D2; the other
+//     two counts still render, the page stays 200, never a 5xx / fabricated 0).
+// Exactly like the ADR-026 pubkey seam, EACH fault injector is RELEASE-FORBIDDEN:
+// every read of EACH token MUST sit behind a `#[cfg(debug_assertions)]` gate so it
+// compiles ONLY in debug/test builds and can NEVER force a degrade in a release
+// binary. An UNGATED read in the viewer would ship a fault-injection backdoor — a
+// guard violation.
 
-/// The release-forbidden viewer active-set-read fault-injection env-var token.
-const VIEWER_FAIL_ACTIVE_SET_READ_SEAM_TOKEN: &str = "OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ";
+/// The release-forbidden viewer fault-injection env-var tokens — EACH must sit
+/// behind a `#[cfg(debug_assertions)]` gate. The active-set-read token is slice-16;
+/// the peer-claims-count token is slice-17 (ADR-054 D2). New per-count/per-read
+/// fault seams append their token here so the ONE guard covers them all.
+const VIEWER_FAIL_SEAM_TOKENS: &[&str] = &[
+    "OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ",
+    "OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT",
+];
 
-/// The viewer source file the active-set-read fault-seam guard scans.
+/// The viewer source file the fault-seam guard scans.
 const VIEWER_FAIL_SEAM_GUARDED_SOURCES: &[&str] = &["crates/adapter-http-viewer/src/lib.rs"];
 
-/// Effect shell for the viewer fault-seam release-build guard (slice-16 / ADR-053):
-/// scan the viewer for an UNGATED `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` read.
-/// Reuses the cfg-attribute-aware [`classify_cfg_gated_token`] (same brace-depth /
-/// `#[cfg(...)]` discipline as the pubkey + autoconfirm guards). A missing file is
-/// "nothing to scan".
+/// Effect shell for the viewer fault-seam release-build guard (slice-16 / ADR-053 +
+/// slice-17 / ADR-054): scan the viewer for an UNGATED read of ANY
+/// [`VIEWER_FAIL_SEAM_TOKENS`] entry. Reuses the cfg-attribute-aware
+/// [`classify_cfg_gated_token`] (same brace-depth / `#[cfg(...)]` discipline as the
+/// pubkey + autoconfirm guards) once per token. A missing file is "nothing to scan".
 pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
     let mut findings = Vec::new();
     for rel in VIEWER_FAIL_SEAM_GUARDED_SOURCES {
@@ -1044,14 +1055,16 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
             continue;
         }
         let src = std::fs::read_to_string(&path)?;
-        if let Some(line) = classify_cfg_gated_token(&src, VIEWER_FAIL_ACTIVE_SET_READ_SEAM_TOKEN) {
-            findings.push(format!(
-                "{}: `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` fault-injection seam read is NOT \
-                 behind a `#[cfg(...)]` gate — it would ship a degrade backdoor in a release \
-                 binary (slice-16 / ADR-053 §Earned-Trust): {}",
-                path.display(),
-                line
-            ));
+        for token in VIEWER_FAIL_SEAM_TOKENS {
+            if let Some(line) = classify_cfg_gated_token(&src, token) {
+                findings.push(format!(
+                    "{}: `{token}` fault-injection seam read is NOT behind a `#[cfg(...)]` gate \
+                     — it would ship a degrade backdoor in a release binary (slice-16 / ADR-053 \
+                     + slice-17 / ADR-054 §Earned-Trust): {}",
+                    path.display(),
+                    line
+                ));
+            }
         }
     }
     Ok(findings)

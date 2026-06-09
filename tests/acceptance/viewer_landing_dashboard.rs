@@ -356,7 +356,6 @@ fn the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control() {
 /// @us-ld-000 @us-ld-001 @driving_port @real-io @infrastructure-failure @missing-not-zero
 /// @c-2 @cardinal @error
 #[test]
-#[ignore = "enabled in roadmap step 02-01 (LD-DEGRADE) — needs the peer-claims-count fault seam"]
 fn a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx() {
     // GIVEN a store seeded with 12 own + 2 active peers, BUT the peer-claims count read
     // forced to FAIL mid-request (the own-claims + active-peer reads still succeed).

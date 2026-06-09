@@ -15190,12 +15190,15 @@ pub fn assert_landing_shows_count(body: &str, label: &str, n: usize) {
 /// Assert the landing render shows the MISSING-NUMBER marker "—" for the surface
 /// labelled `label` (a FAILED count read, ADR-054 D2 / WD-LD-8), DISTINCT from a
 /// successful `0`. Universe (port-exposed rendered surface): the rendered body
-/// contains the `label` text AND the `MISSING_COUNT_MARKER` "—". Used by the
-/// failed-read degrade scenario (Theme 4). The caller separately asserts the OTHER
-/// counts still render their numbers + the page is 200 (the degrade is per-count,
-/// independent).
-///
-/// SCAFFOLD: true (slice-17).
+/// contains the marker AT THE COUNT POSITION for this surface — i.e. the substring
+/// `"— <label>"` (the SAME `render_count(count) " <label>"` shape the pure render
+/// emits). We scan the COUNT POSITION, NOT the bare marker: the page chrome title
+/// ("OpenLore — Viewer") legitimately carries the em-dash, so a bare-marker scan
+/// would collide with the title and pass trivially even when the count rendered a
+/// number — mirroring the honest-zeros scenario's `"— <label>"`-position scan
+/// (the falsifiable form of `0 ≠ missing`). Used by the failed-read degrade
+/// scenario (Theme 4). The caller separately asserts the OTHER counts still render
+/// their numbers + the page is 200 (the degrade is per-count, independent).
 pub fn assert_landing_count_missing(body: &str, label: &str) {
     assert!(
         body.contains(label),
@@ -15203,10 +15206,12 @@ pub fn assert_landing_count_missing(body: &str, label: &str) {
          FAILED (the surface is present, only the number is missing, Theme 4); body \
          was:\n{body}"
     );
+    let missing_count = format!("{LANDING_MISSING_COUNT_MARKER} {label}");
     assert!(
-        body.contains(LANDING_MISSING_COUNT_MARKER),
-        "a FAILED count read must render the missing-number marker {LANDING_MISSING_COUNT_MARKER:?} \
-         (ADR-054 D2 / WD-LD-8) — DISTINCT from a fabricated 0; body was:\n{body}"
+        body.contains(&missing_count),
+        "a FAILED count read must render the missing-number marker at the count \
+         position ({missing_count:?}) — DISTINCT from a fabricated 0 AND from the chrome \
+         title's em-dash (ADR-054 D2 / WD-LD-8); body was:\n{body}"
     );
 }
 
