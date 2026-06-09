@@ -7242,7 +7242,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None, None, None)
+        Self::start_inner(env, None, None, None, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7253,7 +7253,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
-        Self::start_inner(env, Some(github), None, None)
+        Self::start_inner(env, Some(github), None, None, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7278,7 +7278,7 @@ impl ViewerServer {
     /// the `OPENLORE_INDEXER_URL` env-var thread.
     pub fn start_with_indexer(env: &TestEnv, indexer: IndexerHandle) -> Self {
         let url = indexer.indexer_url();
-        Self::start_inner(env, None, Some(url), Some(indexer))
+        Self::start_inner(env, None, Some(url), Some(indexer), false)
     }
 
     /// Start a `openlore ui --port 0` viewer whose `/search` route is wired to an
@@ -7292,7 +7292,13 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-08).
     pub fn start_with_unreachable_indexer(env: &TestEnv, closed: &ClosedIndexerPort) -> Self {
-        Self::start_inner(env, None, Some(closed.indexer_url().to_string()), None)
+        Self::start_inner(
+            env,
+            None,
+            Some(closed.indexer_url().to_string()),
+            None,
+            false,
+        )
     }
 
     /// Shared spawn + readiness core. Spawns the REAL `openlore ui --port 0`
@@ -7310,6 +7316,7 @@ impl ViewerServer {
         github: Option<GithubServer>,
         indexer_url: Option<String>,
         indexer: Option<IndexerHandle>,
+        fail_active_set_read: bool,
     ) -> Self {
         use std::io::{BufRead, BufReader};
 
@@ -7342,6 +7349,15 @@ impl ViewerServer {
         // attempting a network call (I-NS-2).
         if let Some(url) = &indexer_url {
             cmd.env("OPENLORE_INDEXER_URL", url);
+        }
+        // slice-16 (US-SF-001 / Theme E / C-7 / ADR-053 §Earned-Trust): the TEST-ONLY
+        // mid-request active-set-read fault-injection seam. When set, the viewer's
+        // effect-shell `active_set_read_with_fault_seam` (a `#[cfg(debug_assertions)]`
+        // gate, release-forbidden + xtask-guarded) substitutes a genuine read `Err`,
+        // forcing the PRODUCTION degrade path (`Err → empty set → all-NetworkUnfollowed`,
+        // the slice-08 status quo) — never a crash/blank/5xx/leak.
+        if fail_active_set_read {
+            cmd.env("OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ", "1");
         }
 
         let mut child = cmd
@@ -14882,22 +14898,19 @@ pub fn assert_search_follow_state_is_render_only(body: &str) {
 /// seam in the effect shell, or a per-request connection that can be poisoned) with the
 /// SAME observable contract: a failed active-set read degrades to all-NetworkUnfollowed.
 ///
-/// SCAFFOLD: true (slice-16) — `todo!()` body classifies the E2 scenario RED
-/// (MISSING_FUNCTIONALITY: the fault-injection seam does not exist yet), NOT BROKEN.
+/// MATERIALIZED (slice-16 DELIVER, step 02-03): the fault-injection mechanism is the
+/// `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` env seam, honored ONLY by the effect shell's
+/// `#[cfg(debug_assertions)]`-gated `active_set_read_with_fault_seam` (release-forbidden,
+/// mirroring the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam discipline; enforced by
+/// `xtask check-arch`). The seam substitutes a genuine `Err(StoreReadError::Unreadable)`
+/// for the REAL mid-request active-set read, so the PRODUCTION degrade path
+/// (`Err → unwrap_or_default() → EMPTY set → every author NetworkUnfollowed`, the
+/// slice-08 status quo, ADR-053 D5) is the thing exercised. The index stays reachable —
+/// ONLY the LOCAL active-set read fails — so the degrade is observed against a live render.
 pub fn start_viewer_with_failing_active_set_read(
-    _env: &TestEnv,
-    _indexer: IndexerHandle,
+    env: &TestEnv,
+    indexer: IndexerHandle,
 ) -> ViewerServer {
-    // SCAFFOLD: true (slice-16) — DELIVER materializes the mid-request active-set-read
-    // fault-injection seam (the effect shell must map a read `Err(_)` to an EMPTY set →
-    // all-NetworkUnfollowed, ADR-053 D5). Until then this `todo!()` keeps the E2
-    // scenario RED for the RIGHT reason (the degrade-on-read-failure path is missing).
-    todo!(
-        "slice-16 (US-SF-001 / C-7 / WD-SF-6 / ADR-053 D5): DELIVER materializes the \
-         mid-request active-set-read fault-injection seam so the viewer degrades a failed \
-         LOCAL active-subscription read to an EMPTY set (every author NetworkUnfollowed, \
-         the slice-08 status quo) — no crash, no blank, no 5xx, no leaked error. The \
-         OBSERVABLE degrade-target contract is already pinned by the none-followed \
-         scenario; this seam exercises the TRUE read-failure path."
-    )
+    let url = indexer.indexer_url();
+    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true)
 }

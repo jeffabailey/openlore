@@ -514,10 +514,18 @@ fn classify_cfg_gated_token(source: &str, token: &str) -> Option<String> {
         if was_top && depth > 0 {
             item_gated = Some(pending_cfg);
         }
-        if depth <= 0 {
+        // Reset the gate state ONLY when an item actually CLOSED (a `}` brought
+        // depth back to 0) — NOT on lines that merely stay at depth 0 (e.g. a
+        // multi-line `fn(...)` signature, where the `#[cfg]` attribute precedes
+        // the opening `{` across several depth-0 lines). Resetting on every
+        // depth-0 line would drop a pending cfg gate before the item opens,
+        // misclassifying a correctly-gated multi-line-signature item as ungated.
+        if depth <= 0 && closes > 0 {
             depth = 0;
             item_gated = None;
             pending_cfg = false;
+        } else if depth < 0 {
+            depth = 0;
         }
     }
 
@@ -1003,6 +1011,52 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// Viewer active-set-read fault-injection seam release-build guard
+// (slice-16 / US-SF-001 / Theme E / C-7 / ADR-053 §Earned-Trust)
+// -----------------------------------------------------------------------------
+//
+// The slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` env seam exists ONLY to let
+// the SF-8 acceptance scenario INDUCE a mid-request active-set read failure and
+// observe the production graceful-degrade path (`Err → empty set →
+// all-NetworkUnfollowed`, the slice-08 status quo). Exactly like the ADR-026
+// pubkey seam, this fault injector is RELEASE-FORBIDDEN: every read of the token
+// MUST sit behind a `#[cfg(debug_assertions)]` gate so it compiles ONLY in
+// debug/test builds and can NEVER force a degrade in a release binary. An UNGATED
+// read in the viewer would ship a fault-injection backdoor — a guard violation.
+
+/// The release-forbidden viewer active-set-read fault-injection env-var token.
+const VIEWER_FAIL_ACTIVE_SET_READ_SEAM_TOKEN: &str = "OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ";
+
+/// The viewer source file the active-set-read fault-seam guard scans.
+const VIEWER_FAIL_SEAM_GUARDED_SOURCES: &[&str] = &["crates/adapter-http-viewer/src/lib.rs"];
+
+/// Effect shell for the viewer fault-seam release-build guard (slice-16 / ADR-053):
+/// scan the viewer for an UNGATED `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` read.
+/// Reuses the cfg-attribute-aware [`classify_cfg_gated_token`] (same brace-depth /
+/// `#[cfg(...)]` discipline as the pubkey + autoconfirm guards). A missing file is
+/// "nothing to scan".
+pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for rel in VIEWER_FAIL_SEAM_GUARDED_SOURCES {
+        let path = workspace_root.join(rel);
+        if !path.is_file() {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path)?;
+        if let Some(line) = classify_cfg_gated_token(&src, VIEWER_FAIL_ACTIVE_SET_READ_SEAM_TOKEN) {
+            findings.push(format!(
+                "{}: `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` fault-injection seam read is NOT \
+                 behind a `#[cfg(...)]` gate — it would ship a degrade backdoor in a release \
+                 binary (slice-16 / ADR-053 §Earned-Trust): {}",
+                path.display(),
+                line
+            ));
+        }
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -1014,12 +1068,14 @@ pub fn run() -> anyhow::Result<i32> {
     let index_store_sql_findings = scan_adapter_index_store_sql(&workspace_root)?;
     let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
     let pubkey_seam_findings = scan_pubkey_seam_guard(&workspace_root)?;
+    let viewer_fail_seam_findings = scan_viewer_fail_seam_guard(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
     rendered.extend(index_store_sql_findings);
     rendered.extend(autoconfirm_findings);
     rendered.extend(pubkey_seam_findings);
+    rendered.extend(viewer_fail_seam_findings);
 
     if rendered.is_empty() {
         println!(

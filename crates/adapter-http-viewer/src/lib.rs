@@ -34,7 +34,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
     AuthorRelationship, GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim,
-    NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadPort, TargetKind,
+    NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
 };
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
@@ -1041,10 +1041,45 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
 /// shape, slice-15), so it is collected verbatim; the result-side fragment strip happens
 /// in [`to_indexed_claim`] via [`bare_did`].
 fn index_query_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
-    store
-        .list_active_peer_subscriptions()
+    active_set_read_with_fault_seam(store.list_active_peer_subscriptions())
         .map(|peers| peers.into_iter().map(|peer| peer.peer_did).collect())
         .unwrap_or_default()
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, mirroring the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam
+/// discipline and enforced by `xtask check-arch`'s active-set-fail-seam guard).
+///
+/// slice-16 (US-SF-001 / Theme E / C-7 / WD-SF-6 / ADR-053 §Earned-Trust): the
+/// substrate "lie" this slice must survive is a MID-REQUEST active-set read FAILURE.
+/// When `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` is set (acceptance fault-injection
+/// only), this substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
+/// read result so the SAME production `unwrap_or_default()` degrade branch in
+/// [`index_query_active_set`] runs — collapsing to an EMPTY active set → every author
+/// `NetworkUnfollowed` (the slice-08 status quo). The PRODUCTION degrade path is the
+/// thing under test; the seam only INDUCES the `Err` the path already handles.
+///
+/// In a release build (`debug_assertions` off) this is the identity function: the
+/// real read result flows through verbatim, with NO env-var read compiled in.
+#[cfg(debug_assertions)]
+fn active_set_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ").is_some() {
+        return Err(StoreReadError::Unreadable {
+            detail: "active-set read fault injected (test-only seam)".to_string(),
+        });
+    }
+    read
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn active_set_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    read
 }
 
 /// Map one flat attributed transport row ([`NetworkResultRowRaw`]) into the
