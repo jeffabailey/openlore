@@ -287,8 +287,50 @@ author (N+1). Full list in `user-stories.md` §"Out of scope".
 
 ---
 
+---
+
+## Wave: DESIGN / [REF] Architecture (Morgan, 2026-06-09)
+
+DESIGN artifacts under `docs/feature/viewer-search-follow-state/design/`
+(`architecture-design.md`, `component-boundaries.md`, `technology-stack.md`,
+`data-models.md`) + **ADR-053** + the `wave-decisions.md` DESIGN section. Style
+UNCHANGED (Hexagonal + Modular Monolith, ADR-009); paradigm functional (ADR-007).
+
+**The resolution.** Relationship resolution lands in the **EFFECT shell**
+(`adapter-http-viewer :: resolve_search_state`): after the `IndexQueryPort::search`
+call and before `compose_results`, read the operator's LOCAL active-subscription set
+ONCE via the REUSED slice-15 `list_active_peer_subscriptions` (no new read method, no
+new SQL), materialize the bare `peer_did`s into a `HashSet<String>`, and thread it into
+`to_indexed_claim` — which STOPS hardcoding `NetworkUnfollowed` and instead resolves
+`bare_did(author_did) ∈ set → SubscribedPeer`, else `NetworkUnfollowed` (binary; `You`
+deferred). ONE read per render, in-memory resolution (no N+1). A failed read degrades to
+an EMPTY set → all-`NetworkUnfollowed` (the slice-08 status quo).
+
+**The render.** The pure render needs a **NEW arm**: `render_search_result_row`
+(`viewer-domain` ~line 1745) today branches ONLY on `NetworkUnfollowed →
+render_follow_guidance` — there is NO `SubscribedPeer` branch. slice-16 ADDS
+`SubscribedPeer → render_following_indicator()`, a neutral render-only **"Following"**
+label (`SEARCH_FOLLOWING_INDICATOR = "Following"`, the sibling of
+`SEARCH_FOLLOW_GUIDANCE_PREFIX`). The `NetworkUnfollowed` arm + `render_follow_guidance`
++ `bare_did` are REUSED verbatim.
+
+**Confirmation:** resolution in the effect shell; render needs a NEW `SubscribedPeer`
+arm; copy is `"Following"`; ADR-**053**; the active-set read is REUSED
+(`list_active_peer_subscriptions`, no new read method) and resolved ONCE per render (no
+N+1); NO new crate / route / `AuthorRelationship` variant / read method / persisted type;
+workspace stays **21**; xtask `check-arch` UNCHANGED (no new edge, no new SQL). No
+external integration introduced → no new contract-test annotation.
+
+---
+
 ## Changelog
 
+- 2026-06-09 — Morgan — slice-16 DESIGN. Effect-shell relationship resolution
+  (`resolve_search_state` reads the REUSED slice-15 active set ONCE into a `HashSet`,
+  threads it into `to_indexed_claim`, binary `SubscribedPeer`/`NetworkUnfollowed`, `You`
+  deferred, degrade-to-status-quo) + ONE new pure `SubscribedPeer → "Following"` render
+  arm (`render_following_indicator` + `SEARCH_FOLLOWING_INDICATOR`). No new
+  crate/route/variant/read-method/persisted-type (21 members); xtask UNCHANGED. ADR-053.
 - 2026-06-09 — Luna — slice-16 (`viewer-search-follow-state`) DISCUSS. Traces to J-005c (turn a
   discovery into a follow). 2 stories (1 infra + 1 user-visible). EXTENDS the existing read-only
   `GET /search` view (NO new route). REUSES the slice-15 active-subscription read

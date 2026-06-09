@@ -169,3 +169,52 @@ No DIVERGE artifacts exist for this slice (`docs/feature/viewer-search-follow-st
 absent) — consistent with all prior OpenLore slices. Journey work is grounded in the
 validated J-005c job statement (slice-05/08) and the slice-08
 `discover-the-network-from-the-browser` journey (the follow-guidance step on `/search`).
+
+---
+
+# Wave Decisions: viewer-search-follow-state (slice-16) — DESIGN
+
+> Wave: DESIGN (lean) · Owner: Morgan (nw-solution-architect) · 2026-06-09
+> Architecture style: Hexagonal + Modular Monolith (UNCHANGED, ADR-009) · Paradigm: functional (ADR-007).
+> Artifacts: `design/architecture-design.md`, `design/component-boundaries.md`,
+> `design/technology-stack.md`, `design/data-models.md`, ADR-053.
+
+DESIGN takes the DISCUSS-deferred questions and resolves them. The headline: relationship
+resolution lands in the EFFECT shell (`resolve_search_state`), reads the active set ONCE
+(REUSED slice-15 `list_active_peer_subscriptions`) into a `HashSet<String>`, and resolves
+each author IN MEMORY (binary `SubscribedPeer`/`NetworkUnfollowed`); the render gains ONE
+new `SubscribedPeer → "Following"` arm. ALL captured in **ADR-053**.
+
+## DESIGN-locked decisions (WD-SF-D*)
+
+| # | Decision | Rationale | ADR |
+|---|---|---|---|
+| WD-SF-D1 | **Resolution lands in the EFFECT shell, batch-once.** In `resolve_search_state`, read the active set ONCE via the REUSED `list_active_peer_subscriptions`, build a `HashSet<String>` of bare DIDs, thread it into `to_indexed_claim` (replaces the hardcoded `NetworkUnfollowed`), resolve each author in memory. | The slice-15 read returns the WHOLE active set in ONE aggregate query; reading once + in-memory `HashSet` membership bounds the read at 1 per render (no N+1, C-4). A per-result `is_subscribed` query is REJECTED. | ADR-053 D1/A1 |
+| WD-SF-D2 | **Binary resolution: `SubscribedPeer` (∈ set) vs `NetworkUnfollowed` (otherwise). `You` DEFERRED; `UnsubscribedCache` N/A.** | The network corpus is per-user-neutral and carries no own-marker; the read-only viewer does not cheaply hold the operator DID. A soft-removed peer is absent from the active set → `NetworkUnfollowed` (correctly re-offered). No new variant. | ADR-053 D2/A2/A3 |
+| WD-SF-D3 | **The render needs a NEW `SubscribedPeer` arm.** `render_search_result_row` today branches ONLY on `NetworkUnfollowed → render_follow_guidance`; slice-16 ADDS `SubscribedPeer → render_following_indicator()`. The `NetworkUnfollowed` arm is UNCHANGED. | There is NO `SubscribedPeer` "Following" branch today (confirmed at `viewer-domain` ~line 1745). The new arm is the sibling of `render_follow_guidance`, a total fn of the existing `NetworkResultRow`. | ADR-053 D3 |
+| WD-SF-D4 | **"Following" indicator copy = `"Following"`**, held in ONE `SEARCH_FOLLOWING_INDICATOR` const (mirrors `SEARCH_FOLLOW_GUIDANCE_PREFIX`). A neutral render-only LABEL — no command, no DID. | Single source of truth; a neutral label distinct from the follow guidance; render-only TEXT (no executable control, C-1). | ADR-053 D3 |
+| WD-SF-D5 | **Graceful degradation: a failed active-set read → EMPTY set → all `NetworkUnfollowed`** (the slice-08 status quo). | Mirrors the slice-15 `/peers` `Err → NoSubscriptions` precedent; the relationship is an enrichment whose failure must never break discovery (C-7 / WD-SF-6). | ADR-053 D1 |
+| WD-SF-D6 | **xtask check-arch UNCHANGED; no new dependency edge; no new SQL.** | Resolution reuses the held `StoreReadPort`; the new render arm is a total fn of the existing `NetworkResultRow`; slice-16 adds no SQL. Capability rule, pure-core no-I/O arm, and anti-merging SQL rule all unchanged. | ADR-053 Enforcement |
+
+## Confirmation (DESIGN gate)
+
+- Relationship resolution lands in the **EFFECT shell** (`resolve_search_state` /
+  `to_indexed_claim`, `adapter-http-viewer`).
+- The render **needs a NEW `SubscribedPeer` arm** — it does NOT already branch on
+  `SubscribedPeer` today (only `NetworkUnfollowed`).
+- "Following" indicator copy: **`"Following"`** (`SEARCH_FOLLOWING_INDICATOR`).
+- ADR number: **ADR-053**.
+- The active-set read is **REUSED** (`list_active_peer_subscriptions`, no new read method)
+  and **resolved ONCE per render** (in-memory `HashSet`, no N+1).
+- **NO new crate, route, `AuthorRelationship` variant, read method, or persisted type;
+  workspace stays 21.**
+
+## Handoff readiness
+
+DESIGN artifacts complete (lean set, mirroring slice-15): `architecture-design.md`
+(C4 L1+L2 + the resolution-flow diagram), `component-boundaries.md` (2 touched crates +
+5 unchanged context crates), `technology-stack.md` (unchanged stack), `data-models.md`
+(resolution flow + "Following" SSOT + zero new persisted type), ADR-053, this
+`wave-decisions.md` DESIGN section, and the `feature-delta.md` DESIGN section. No external
+integration introduced → no new contract-test annotation. Ready for DISTILL
+(acceptance-designer) once peer review approves.
