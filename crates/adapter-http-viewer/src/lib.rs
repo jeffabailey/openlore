@@ -42,12 +42,13 @@ use viewer_domain::{
     group_philosophy, group_project, render_claim_detail, render_claim_detail_fragment,
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
-    render_philosophy_fragment, render_philosophy_page, render_project_fragment, render_project_page,
+    peers_view, render_peers_fragment, render_peers_page, render_philosophy_fragment,
+    render_philosophy_page, render_project_fragment, render_project_page,
     render_score_page, render_score_results_fragment, render_scrape_page,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
     CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
-    ScoreState,
-    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PHILOSOPHY_URL, PROJECT_URL,
+    PeersView, ScoreState,
+    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHY_URL, PROJECT_URL,
     SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
 
@@ -374,6 +375,16 @@ async fn route(
         // and renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds NO
         // signing key (a read + pure compute); renders NO write/sign/follow control.
         PHILOSOPHY_URL => Ok(philosophy_page(store.as_ref(), query.as_deref(), shape)),
+        // `GET /peers` — the Peer Subscriptions view (slice-15; ADR-052 / US-PS-002/003).
+        // Reads the operator's ACTIVE subscriptions over the read-only store the viewer
+        // ALREADY holds (`list_active_peer_subscriptions` — ONE aggregate query, peer_
+        // subscriptions LEFT JOIN peer_claims, WHERE removed_at IS NULL, GROUP BY
+        // COUNT(pc.cid), NO N+1, NO network — I-PS-4/8), maps the flat rows to a `PeersView`
+        // in the PURE `viewer-domain::peers_view` core, and renders the `#peers` region.
+        // SYNCHRONOUS (no `.await`). Forks by `Shape` (ADR-033). Holds NO signing key (a
+        // read + pure compute); renders NO write/subscribe/unsubscribe control — the only
+        // revocation affordance is the render-only `openlore peer remove <did>` command TEXT.
+        PEERS_URL => Ok(peers_page(store.as_ref(), shape)),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
@@ -681,6 +692,35 @@ fn resolve_philosophy_view(store: &dyn StoreReadPort, query: Option<&str>) -> Tr
         // A read failure degrades to the SAME guided NoClaims state naming the queried
         // object — never a blank region, never a leaked stack trace (I-GT-4).
         Err(_) => TraversalView::NoClaims { entity: object },
+    }
+}
+
+/// Render the Peer Subscriptions page (`GET /peers`, US-PS-002/003; slice-15 /
+/// ADR-052). Reads the operator's ACTIVE subscriptions over the read-only store the
+/// viewer ALREADY holds (`list_active_peer_subscriptions` — ONE aggregate query,
+/// LEFT JOIN + GROUP BY COUNT(pc.cid), NO network / I-PS-4/8), maps the flat
+/// `Vec<PeerSubscriptionSummary>` to a [`PeersView`] in the PURE
+/// `viewer-domain::peers_view` core, and renders — forking by [`Shape`] (ADR-033):
+/// the htmx swap returns ONLY the `#peers` fragment; the no-JS / bookmark / direct-
+/// URL request returns the complete `/peers` full page. Both project the SAME view —
+/// the full page EMBEDS the fragment fn (I-PS-5 parity by construction).
+///
+/// SANDWICH (ADR-007): read (impure store call) → decide (PURE `peers_view`) →
+/// render (pure). The handler holds NO signing key — the view is a read + pure
+/// compute (I-PS-1); it renders NO write/subscribe/unsubscribe control. A store read
+/// failure degrades to the guided [`PeersView::NoSubscriptions`] empty state rather
+/// than a 5xx (graceful degradation; NFR-PS-6 — never a raw stack trace).
+fn peers_page(store: &dyn StoreReadPort, shape: Shape) -> Response<Full<Bytes>> {
+    // An empty active set OR a store read failure both map to NoSubscriptions (the
+    // guided empty state) — never a blank region, never a leaked stack trace (I-PS-2 /
+    // US-PS-003). A non-empty set maps to Subscriptions (one attributed row per peer).
+    let view = match store.list_active_peer_subscriptions() {
+        Ok(peers) => peers_view(peers),
+        Err(_) => PeersView::NoSubscriptions,
+    };
+    match shape {
+        Shape::Fragment => html_ok(render_peers_fragment(&view).into_string()),
+        Shape::FullPage => html_ok(render_peers_page(&view)),
     }
 }
 

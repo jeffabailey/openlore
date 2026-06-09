@@ -144,7 +144,7 @@ pub use indexed_claim::{CounterRef, IndexedClaim, SearchDimension};
 pub use ingest_source::{IngestError, IngestSourcePort, RawRecord};
 pub use store_read::{
     ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin,
-    StoreReadError, StoreReadPort, SurveyRow,
+    PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,
 };
 
 // -----------------------------------------------------------------------------

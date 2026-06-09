@@ -24,7 +24,7 @@ use claim_domain::{Cid, Did, SignedClaim};
 use duckdb::Connection;
 use ports::{
     AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest,
-    PeerClaimRow, PeerOrigin, StoreReadError, StoreReadPort, SurveyRow,
+    PeerClaimRow, PeerOrigin, PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,
 };
 
 use crate::bare_did;
@@ -756,6 +756,58 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
             })?);
         }
         Ok(presence)
+    }
+
+    fn list_active_peer_subscriptions(
+        &self,
+    ) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError> {
+        let conn = self.lock_conn()?;
+
+        // ADR-052 / DD-PS-1: ONE aggregate query for the WHOLE active subscription set
+        // + every per-peer count — invariant to peer count (NO N+1, NO per-peer fold).
+        // `peer_subscriptions ps LEFT JOIN peer_claims pc ON pc.author_did = ps.peer_did`,
+        // `WHERE ps.removed_at IS NULL` (active-only — a soft-removed row is residue,
+        // excluded; I-PS-2), `GROUP BY` the subscription identity, `COUNT(pc.cid)` per
+        // peer. The LEFT JOIN keeps a subscribed-but-never-pulled peer in the result;
+        // `COUNT(pc.cid)` counts the NULL right side as 0 (NOT an inner JOIN that would
+        // drop the row, NOT `COUNT(*)` that would count NULL as 1 — DD-PS-2). The `GROUP
+        // BY ps.peer_did` decomposition is PER-PEER, so two peers stay TWO rows whose
+        // counts are NEVER summed/averaged (anti-merging, J-003a / I-PS-3). The SELECT
+        // names `peer_subscriptions` + `peer_claims` and projects `author_did` as the
+        // GROUP BY key — the standalone `claims` table is never mentioned, so the
+        // `no_cross_table_join_elides_author` xtask rule stays GREEN. LOCAL only, no
+        // network (I-PS-4). READ-ONLY: a SELECT over the SAME shared connection (I-PS-1).
+        let sql = "SELECT ps.peer_did, ps.peer_handle, ps.subscribed_at, \
+                   COUNT(pc.cid) AS local_claim_count \
+                   FROM peer_subscriptions ps \
+                   LEFT JOIN peer_claims pc ON pc.author_did = ps.peer_did \
+                   WHERE ps.removed_at IS NULL \
+                   GROUP BY ps.peer_did, ps.peer_handle, ps.subscribed_at \
+                   ORDER BY ps.subscribed_at, ps.peer_did";
+
+        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
+            detail: format!("prepare list_active_peer_subscriptions: {err}"),
+        })?;
+        let row_iter = stmt
+            .query_map([], |row| {
+                Ok(PeerSubscriptionSummary {
+                    peer_did: row.get::<_, String>(0)?,
+                    peer_handle: row.get::<_, String>(1)?,
+                    subscribed_at: row.get::<_, DateTime<Utc>>(2)?,
+                    local_claim_count: row.get::<_, i64>(3)?.max(0) as u64,
+                })
+            })
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("query_map list_active_peer_subscriptions: {err}"),
+            })?;
+
+        let mut subscriptions = Vec::new();
+        for row in row_iter {
+            subscriptions.push(row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode list_active_peer_subscriptions: {err}"),
+            })?);
+        }
+        Ok(subscriptions)
     }
 }
 

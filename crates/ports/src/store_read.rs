@@ -207,6 +207,44 @@ pub struct CounterClaimRow {
     pub origin: PeerOrigin,
 }
 
+/// One ACTIVE peer-subscription row, projected for the read-only Peer
+/// Subscriptions view (`/peers`, slice-15 / US-PS-002 / ADR-052). A FLAT DTO
+/// (not the rich `peer_storage::PeerSubscription`): the pure `viewer-domain`
+/// `PeersView` renders these fields verbatim into one attributed row per peer.
+///
+/// Materialized by [`StoreReadPort::list_active_peer_subscriptions`] from ONE
+/// aggregate query — `peer_subscriptions LEFT JOIN peer_claims ON author_did =
+/// peer_did`, `WHERE removed_at IS NULL`, `GROUP BY` the subscription identity,
+/// `COUNT(pc.cid)` per peer (ADR-052 Q1/Q2). Only ACTIVE subscriptions
+/// (`removed_at IS NULL`) ever become a `PeerSubscriptionSummary`: a soft-removed
+/// row is residue, never a summary (I-PS-2).
+///
+/// `peer_did` is NON-`Option` (the load-bearing per-peer attribution contract,
+/// I-PS-3): each peer is its own attributed row keyed by its DID, NEVER merged
+/// into a faceless "all peers" aggregate. `peer_handle` is NON-`Option` (the
+/// stored handle column). `local_claim_count` is the per-peer `COUNT(pc.cid)`
+/// from the LEFT JOIN — a never-pulled peer stays at `0` (the LEFT JOIN keeps the
+/// row; `COUNT(pc.cid)` counts the NULL right side as `0`, not `1` — DD-PS-2),
+/// NEVER summed/averaged across peers (anti-merging, J-003a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerSubscriptionSummary {
+    /// The peer's DID — NON-`Option`, the bare `did:plc:...` stored in
+    /// `peer_subscriptions.peer_did`. Rendered VERBATIM (attribution, I-PS-3) +
+    /// the bare-DID source for the render-only `openlore peer remove <did>`
+    /// revocation command.
+    pub peer_did: String,
+    /// The peer's stored handle (`peer_subscriptions.peer_handle`). NON-`Option`
+    /// (the schema column is non-null); carried for display alongside the DID.
+    pub peer_handle: String,
+    /// When the operator subscribed (`peer_subscriptions.subscribed_at`). Carried
+    /// for display/ordering; the active-subscriptions read orders by it.
+    pub subscribed_at: DateTime<Utc>,
+    /// The PER-PEER cached local claim count — `COUNT(pc.cid)` from the LEFT JOIN
+    /// to `peer_claims` on `author_did = peer_did`. `0` for a subscribed-but-
+    /// never-pulled peer (DD-PS-2); NEVER a merged total across peers (J-003a).
+    pub local_claim_count: u64,
+}
+
 /// An offset/limit pagination request over the own-claim store. The viewer
 /// translates a `?page=N` query (page size 50, ADR-030) into one of these: the
 /// offset/limit selects one page, the bounds + position indicator are projected
@@ -381,4 +419,30 @@ pub trait StoreReadPort: Send + Sync {
         &self,
         cids: &[String],
     ) -> Result<std::collections::HashSet<String>, StoreReadError>;
+
+    /// List the operator's ACTIVE peer subscriptions for the read-only Peer
+    /// Subscriptions view (`GET /peers`, slice-15 / US-PS-002 / ADR-052): every
+    /// peer with `removed_at IS NULL`, each carrying its PER-PEER cached local
+    /// claim count. Read-only SQL only — NO mutation method is added to this trait
+    /// (ADR-030 / I-PS-1): a `Box<dyn StoreReadPort>` stays structurally incapable
+    /// of subscribing/unsubscribing. LOCAL only, no network (I-PS-4).
+    ///
+    /// ONE aggregate query (NO N+1, I-PS-8 / DD-PS-1): `peer_subscriptions ps LEFT
+    /// JOIN peer_claims pc ON pc.author_did = ps.peer_did`, `WHERE ps.removed_at IS
+    /// NULL`, `GROUP BY` the subscription identity, `COUNT(pc.cid)` as the per-peer
+    /// `local_claim_count`. The LEFT JOIN keeps a subscribed-but-never-pulled peer
+    /// at count `0` (DD-PS-2): `COUNT(pc.cid)` counts the NULL right side as `0`,
+    /// not `1` (NOT an inner JOIN that would drop the row, NOT `COUNT(*)`). The
+    /// `GROUP BY peer_did` decomposition is PER-PEER — two peers stay TWO rows,
+    /// their counts NEVER summed/averaged into a merged total (anti-merging,
+    /// J-003a / I-PS-3).
+    ///
+    /// Active-only by construction (I-PS-2): a peer soft-removed via the CLI `peer
+    /// remove` (`removed_at` set, cached claims retained on disk) is EXCLUDED — its
+    /// absence IS the J-003c residue-free promise rendered. Returns an EMPTY vec for
+    /// a store with no active subscriptions (the viewer renders the guided
+    /// `NoSubscriptions` empty state — never an error, US-PS-003).
+    fn list_active_peer_subscriptions(
+        &self,
+    ) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError>;
 }
