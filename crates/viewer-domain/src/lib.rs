@@ -546,12 +546,82 @@ pub fn loopback_url(bound_addr: &str) -> String {
     format!("http://{bound_addr}")
 }
 
+/// The real route the Live Scrape surface is served at (`/scrape`) — the 8th and
+/// final entry-point URL const, minted this slice (ADR-054 D4 / R-LD-4). The
+/// landing nav hub links every shipped surface via its URL const; `/scrape` was the
+/// one top-level surface lacking a const (the route arm spelled the literal). Held
+/// here so the hub link and the route reference the SAME path — no drifting literal.
+pub const SCRAPE_URL: &str = "/scrape";
+
+/// The marker the landing summary renders for a count whose read FAILED (a
+/// `LandingSummary` field is `None` → this marker, ADR-054 D2 / WD-LD-8). A
+/// horizontal bar "—", visually + semantically DISTINCT from the digit "0" (a
+/// SUCCESSFUL read of an empty store). Held in ONE place so the missing-number
+/// contract has a single source of truth (and a string mutation has exactly one
+/// site to attack — pinned by the unit tests below).
+pub const MISSING_COUNT_MARKER: &str = "—";
+
+/// The at-a-glance LOCAL store summary the landing dashboard renders (`GET /`,
+/// slice-17 / US-LD-000/001 / ADR-054 D1). THREE INDEPENDENT `Option<usize>` counts:
+/// each is `Some(n)` for a SUCCESSFUL read (rendered as the number `n`, including a
+/// genuine `Some(0)`) or `None` for a FAILED read (rendered as [`MISSING_COUNT_MARKER`]
+/// "—", NEVER a fabricated `0`). The three are independent so one count's read
+/// failing degrades ONLY that count — the other two still render their numbers (the
+/// per-count `.ok()` degrade, ADR-054 D2). A flat record (the building block for the
+/// pure render); the effect shell builds it by resolving each `Result<usize,
+/// StoreReadError>` via `.ok()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LandingSummary {
+    /// The operator's own-claim count (`count_claims`). `None` = the read failed.
+    pub own_claims: Option<usize>,
+    /// The federated peer-claim count (`count_peer_claims`). `None` = read failed.
+    pub peer_claims: Option<usize>,
+    /// The ACTIVE peer-subscription count (`count_active_peer_subscriptions`,
+    /// `removed_at IS NULL`). `None` = the read failed.
+    pub active_peers: Option<usize>,
+}
+
+/// The 8 shipped top-level entry-point surfaces the landing nav hub links, as
+/// `(label, url)` pairs. The `url` is the route's URL CONST (NOT a hardcoded
+/// literal that could drift, R-LD-4) — 7 existing consts + the slice-17
+/// [`SCRAPE_URL`]. The discoverability contract (WD-LD-7 / Theme 2 / C-3): the hub
+/// links ALL 8, each a plain `<a href>` (no-JS navigable). Held in ONE place so a
+/// dropped surface is a single, mutation-killable site.
+const LANDING_HUB_SURFACES: &[(&str, &str)] = &[
+    ("My Claims", MY_CLAIMS_URL),
+    ("Peer Claims", PEER_CLAIMS_URL),
+    ("Project Survey", PROJECT_URL),
+    ("Philosophy Survey", PHILOSOPHY_URL),
+    ("Contributor Score", SCORE_URL),
+    ("Network Search", SEARCH_URL),
+    ("Live Scrape", SCRAPE_URL),
+    ("Peer Subscriptions", PEERS_URL),
+];
+
+/// Render ONE count VERBATIM for the landing summary: `Some(n)` → the number `n`
+/// (including a genuine `Some(0)` → "0", a SUCCESSFUL read of an empty store),
+/// `None` → [`MISSING_COUNT_MARKER`] "—" (a FAILED read, NEVER a fabricated 0).
+/// PURE total function — the single site of the `0 ≠ missing` distinction, so a
+/// mutation collapsing the two is killed by one unit test.
+fn render_count(count: Option<usize>) -> String {
+    match count {
+        Some(n) => n.to_string(),
+        None => MISSING_COUNT_MARKER.to_string(),
+    }
+}
+
 /// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
-/// PURE: a total function — no I/O. States the view is read-only (the operator is
-/// told, up front, that nothing here can change her store — NFR-VIEW-1) and links
-/// to the My Claims list. The read-only assurance text is [`READ_ONLY_NOTICE`],
-/// shared verbatim with the launch banner.
-pub fn render_landing() -> String {
+/// PURE: a TOTAL function of the [`LandingSummary`] — no I/O, no panic on ANY of the
+/// 2³ `Option` combinations. States the view is read-only (the operator is told, up
+/// front, that nothing here can change her store — NFR-VIEW-1, the [`READ_ONLY_NOTICE`]
+/// shared verbatim with the launch banner), renders the THREE at-a-glance LOCAL
+/// counts (each `Some(n)` → the number, `None` → [`MISSING_COUNT_MARKER`] "—", ADR-054
+/// D2), and a navigation hub of plain `<a href>` links to ALL 8 shipped top-level
+/// surfaces ([`LANDING_HUB_SURFACES`], via their URL consts — no drifting literal,
+/// R-LD-4). Full-page-only (ADR-054 D5): returns a complete document, NO `Shape`
+/// fork. Every navigation affordance is a plain link — NO form/button/mutating
+/// control (the front door is read-only, C-1 CARDINAL).
+pub fn render_landing(summary: &LandingSummary) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
@@ -559,8 +629,26 @@ pub fn render_landing() -> String {
             body {
                 h1 { "OpenLore Viewer" }
                 p { (READ_ONLY_NOTICE) }
-                p {
-                    a href="/claims" { "View my claims" }
+                // The at-a-glance LOCAL store summary — three INDEPENDENT counts, each
+                // labelled so the operator reads WHICH count is which (Theme 1). A
+                // failed read renders the missing-number marker "—", DISTINCT from a
+                // genuine 0 (ADR-054 D2 / WD-LD-8).
+                section {
+                    p { (render_count(summary.own_claims)) " own claims" }
+                    p { (render_count(summary.peer_claims)) " peer claims" }
+                    p { (render_count(summary.active_peers)) " active peers" }
+                }
+                // The navigation hub — every shipped surface as a plain <a href>
+                // (no-JS navigable), via its URL const (no drift, R-LD-4). The ONLY
+                // affordances on the front door (read-only — no write control, C-1).
+                nav {
+                    ul {
+                        @for (label, url) in LANDING_HUB_SURFACES {
+                            li {
+                                a href=(url) { (label) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3639,11 +3727,23 @@ mod tests {
         }
     }
 
+    /// A `LandingSummary` with all three reads SUCCESSFUL — the walking-skeleton
+    /// shape (12 own, 7 peer, 2 active). One source of truth for the GREEN-path
+    /// landing unit tests below.
+    fn seeded_summary() -> LandingSummary {
+        LandingSummary {
+            own_claims: Some(12),
+            peer_claims: Some(7),
+            active_peers: Some(2),
+        }
+    }
+
     /// Behavior (AC-001.2 / NFR-VIEW-1): the landing page states the view is
-    /// read-only (VERBATIM assurance) and links back to the My Claims list.
+    /// read-only (VERBATIM assurance) and links back to the My Claims list — now
+    /// over the slice-17 `LandingSummary` signature.
     #[test]
     fn landing_page_states_read_only_and_links_to_claims() {
-        let html = render_landing();
+        let html = render_landing(&seeded_summary());
         assert!(
             html.contains("read-only"),
             "landing page must state the view is read-only; got:\n{html}"
@@ -3665,6 +3765,97 @@ mod tests {
             "landing page must reference the local htmx asset (offline-first; \
              I-HX-2); got:\n{html}"
         );
+    }
+
+    /// Behavior (slice-17 / US-LD-001 Theme 2 / C-3 / R-LD-4 / ADR-054 D4): the
+    /// landing nav hub links ALL 8 shipped top-level surfaces, each a plain
+    /// `<a href>` via its URL CONST — including the minted `SCRAPE_URL = "/scrape"`.
+    /// A dropped surface (or a const swapped for a drifting literal) is killed here.
+    #[test]
+    fn landing_hub_links_all_eight_surfaces_via_url_consts() {
+        let html = render_landing(&seeded_summary());
+        for url in [
+            MY_CLAIMS_URL,
+            PEER_CLAIMS_URL,
+            PROJECT_URL,
+            PHILOSOPHY_URL,
+            SCORE_URL,
+            SEARCH_URL,
+            SCRAPE_URL,
+            PEERS_URL,
+        ] {
+            assert!(
+                html.contains(&format!("href=\"{url}\"")),
+                "the landing hub must link {url:?} as a plain <a href> (discoverability \
+                 C-3 / no drift R-LD-4); got:\n{html}"
+            );
+        }
+        // The newly-minted /scrape const must hold its canonical value.
+        assert_eq!(SCRAPE_URL, "/scrape", "SCRAPE_URL is the canonical /scrape route");
+    }
+
+    /// Behavior (slice-17 / US-LD-001 Theme 3 / C-1 CARDINAL): the front door
+    /// renders NO write/compose/sign/subscribe/follow control — every navigation
+    /// affordance is a plain `<a href>` link. A mutation wrapping a hub link in a
+    /// `<form>`/`<button>` is killed here.
+    #[test]
+    fn landing_renders_no_write_control() {
+        let html = render_landing(&seeded_summary()).to_ascii_lowercase();
+        for banned in [
+            "<form", "<button", "hx-post", "hx-put", "hx-delete", ">compose<", ">sign<",
+            ">subscribe<", ">follow<",
+        ] {
+            assert!(
+                !html.contains(banned),
+                "the front door must render NO mutating control (C-1 CARDINAL); found \
+                 {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    // PROPERTY (slice-17 / US-LD-001 Theme 1+4 / ADR-054 D1+D2): `render_landing`
+    // is a TOTAL function of the `LandingSummary` over ALL 2³ `Option` combinations
+    // — it never panics, ALWAYS produces a full HTML page (DOCTYPE + chrome), keeps
+    // the read-only notice, and renders each count per the `0 ≠ missing` rule:
+    // `Some(n)` → the number `n` (with its surface label), `None` → the
+    // `MISSING_COUNT_MARKER` "—" (NEVER a fabricated 0). Each count is INDEPENDENT.
+    // This carries the in-crate mutation gate for the per-count render branch.
+    proptest! {
+        #[test]
+        fn render_landing_is_total_and_renders_each_count_independently(
+            own in proptest::option::of(0usize..10_000),
+            peer in proptest::option::of(0usize..10_000),
+            active in proptest::option::of(0usize..10_000),
+        ) {
+            let summary = LandingSummary { own_claims: own, peer_claims: peer, active_peers: active };
+            let html = render_landing(&summary);
+
+            // Always a complete full page (ADR-054 D5 full-page-only) with the
+            // read-only notice and the full 8-surface hub.
+            prop_assert!(html.contains("<!DOCTYPE html>"), "must be a full page; got:\n{html}");
+            prop_assert!(html.contains(READ_ONLY_NOTICE), "must keep the read-only notice; got:\n{html}");
+            prop_assert!(html.contains(&format!("href=\"{SCRAPE_URL}\"")), "must link /scrape; got:\n{html}");
+
+            // Each count renders per the 0 ≠ missing rule, attributed to its surface
+            // label. None → the marker; Some(n) → the number n (incl. Some(0) → "0").
+            for (count, label) in [
+                (own, "own claims"),
+                (peer, "peer claims"),
+                (active, "active peers"),
+            ] {
+                prop_assert!(html.contains(label), "must label {label:?}; got:\n{html}");
+                match count {
+                    Some(n) => prop_assert!(
+                        html.contains(&format!("{n} {label}")),
+                        "Some({n}) must render the number {n} for {label:?}; got:\n{html}"
+                    ),
+                    None => prop_assert!(
+                        html.contains(&format!("{MISSING_COUNT_MARKER} {label}")),
+                        "None must render the missing marker for {label:?} (NOT a 0); got:\n{html}"
+                    ),
+                }
+            }
+        }
     }
 
     /// Behavior (AC-002.3 / FR-VIEW-3 / NFR-VIEW-6): the guided not-found page

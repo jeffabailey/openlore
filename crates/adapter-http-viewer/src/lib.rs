@@ -42,6 +42,7 @@ use viewer_domain::{
     group_philosophy, group_project, render_claim_detail, render_claim_detail_fragment,
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
+    LandingSummary,
     peers_view, render_peers_fragment, render_peers_page, render_philosophy_fragment,
     render_philosophy_page, render_project_fragment, render_project_page,
     render_score_page, render_score_results_fragment, render_scrape_page,
@@ -351,7 +352,7 @@ async fn route(
         .await);
     }
     match path.as_str() {
-        "/" => Ok(landing_page()),
+        "/" => Ok(landing_page(store.as_ref())),
         // `GET /static/htmx.min.js` — serve the vendored htmx asset locally (no
         // CDN; I-HX-2 offline-first). GET-only, loopback, no write surface. The
         // route path is the SAME `HTMX_ASSET_URL` const the pure chrome references
@@ -409,10 +410,24 @@ async fn route(
     }
 }
 
-/// Render the read-only landing page (`GET /`). Pure render — needs no store read
-/// (the landing page states the read-only contract; it queries nothing).
-fn landing_page() -> Response<Full<Bytes>> {
-    html_ok(render_landing())
+/// Render the read-only landing dashboard (`GET /`, slice-17 / US-LD-000/001 /
+/// ADR-054). The SANDWICH (ADR-007): read (impure — THREE LOCAL `COUNT(*)`
+/// aggregates over the read-only store the viewer ALREADY holds: `count_claims`,
+/// `count_peer_claims`, `count_active_peer_subscriptions`) → build (pure — the flat
+/// [`LandingSummary`]) → render (pure — `render_landing`). Each count is resolved
+/// INDEPENDENTLY via `.ok()` (`Result<usize, StoreReadError>` → `Option<usize>`, the
+/// slice-12 ADR-048 graceful-degrade precedent generalized): a failed read maps to
+/// `None` → the missing-number marker "—", NEVER a fabricated 0 and NEVER a 5xx
+/// (ADR-054 D2 / C-2 CARDINAL). Always 200 (`html_ok`). LOCAL + OFFLINE — the three
+/// reads have NO outbound edge; the handler holds NO signing key and renders NO
+/// write/sign/follow control. Full-page-only (ADR-054 D5 — no `Shape` fork).
+fn landing_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
+    let summary = LandingSummary {
+        own_claims: store.count_claims().ok(),
+        peer_claims: store.count_peer_claims().ok(),
+        active_peers: store.count_active_peer_subscriptions().ok(),
+    };
+    html_ok(render_landing(&summary))
 }
 
 /// Parse the 1-based `?page=N` query into a page number, defaulting to 1 and

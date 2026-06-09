@@ -495,6 +495,25 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         Ok(total as usize)
     }
 
+    fn count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError> {
+        let conn = self.lock_conn()?;
+        // ONE aggregate over the SAME shared connection (mirrors `count_claims` /
+        // `count_peer_claims`). Active-only `WHERE removed_at IS NULL` — the SAME
+        // definition as `list_active_peer_subscriptions` (ADR-052 / BR-LD-2): a
+        // soft-removed row is residue, EXCLUDED. Touches ONLY `peer_subscriptions`
+        // (NO JOIN — it counts subscriptions, not claims).
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM peer_subscriptions WHERE removed_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("count_active_peer_subscriptions read failed: {err}"),
+            })?;
+        Ok(total as usize)
+    }
+
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,

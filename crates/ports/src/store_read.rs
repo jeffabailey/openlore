@@ -315,6 +315,23 @@ pub trait StoreReadPort: Send + Sync {
     /// `COUNT(*)` over `peer_claims`.
     fn count_peer_claims(&self) -> Result<usize, StoreReadError>;
 
+    /// Total number of ACTIVE peer subscriptions in the store — the count-only
+    /// sibling of [`StoreReadPort::count_claims`]/[`StoreReadPort::count_peer_claims`]
+    /// for the landing dashboard's at-a-glance summary (`GET /`, slice-17 /
+    /// US-LD-000/001 / ADR-054 D3). Read-only `COUNT(*)` aggregate — NO mutation
+    /// method is added to this trait (ADR-030 / I-VIEW-1): a `Box<dyn StoreReadPort>`
+    /// stays structurally incapable of subscribing/unsubscribing.
+    ///
+    /// Active-only by construction (BR-LD-2): a `COUNT(*)` over `peer_subscriptions`
+    /// `WHERE removed_at IS NULL` — the SAME active-only definition as
+    /// [`StoreReadPort::list_active_peer_subscriptions`] (ADR-052). A peer soft-removed
+    /// via the CLI `peer remove` (`removed_at` set, cached claims retained on disk) is
+    /// EXCLUDED — its residue never inflates the front-door active-peer count. Touches
+    /// ONLY `peer_subscriptions` (NO JOIN — it counts subscriptions, not claims).
+    /// Returns `Ok(0)` for a store with no active subscriptions (a SUCCESSFUL read of
+    /// zero, DISTINCT from a failed read).
+    fn count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError>;
+
     /// Read the LOCAL attributed-claim feed for ONE contributor (`/score`,
     /// slice-09 / ADR-039/040/041 / I-CS-5): every claim authored by `contributor`
     /// across all subjects, from the operator's OWN `claims` table UNION ALL the

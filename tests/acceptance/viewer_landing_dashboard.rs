@@ -172,6 +172,7 @@ fn the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub() {
 ///
 /// @us-ld-001 @driving_port @real-io @empty-state @edge
 #[test]
+#[ignore = "enabled in roadmap step 01-03 (LD-ZEROS) — progressive implementation"]
 fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
     // GIVEN a fresh, initialized store with ZERO claims, peer claims, and
     // subscriptions (the three reads return Ok(0) → Some(0)).
@@ -222,6 +223,7 @@ fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
 ///
 /// @us-ld-001 @driving_port @real-io @discoverability @c-3 @happy
 #[test]
+#[ignore = "enabled in roadmap step 01-02 (LD-DISCOVER) — progressive implementation"]
 fn the_front_door_links_every_shipped_surface_and_no_deep_route() {
     // GIVEN a seeded store (so the page renders fully, with the hub over real content).
     let env = TestEnv::initialized();
@@ -253,6 +255,7 @@ fn the_front_door_links_every_shipped_surface_and_no_deep_route() {
 ///
 /// @us-ld-001 @driving_port @real-io @discoverability @scrape-url @happy
 #[test]
+#[ignore = "enabled in roadmap step 01-02 (LD-URLCONST) — progressive implementation"]
 fn each_surface_link_uses_the_routes_url_constant_including_scrape() {
     // GIVEN a seeded store + the viewer rendering the nav hub on GET /.
     let env = TestEnv::initialized();
@@ -296,6 +299,7 @@ fn each_surface_link_uses_the_routes_url_constant_including_scrape() {
 ///
 /// @us-ld-001 @driving_port @real-io @read-only @c-1 @cardinal @happy
 #[test]
+#[ignore = "enabled in roadmap step 01-04 (LD-READONLY) — progressive implementation"]
 fn the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control() {
     // GIVEN a seeded store (so the no-control scan is over REAL rendered content, not
     // an error/empty page).
@@ -351,6 +355,7 @@ fn the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control() {
 /// @us-ld-000 @us-ld-001 @driving_port @real-io @infrastructure-failure @missing-not-zero
 /// @c-2 @cardinal @error
 #[test]
+#[ignore = "enabled in roadmap step 02-01 (LD-DEGRADE) — needs the peer-claims-count fault seam"]
 fn a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx() {
     // GIVEN a store seeded with 12 own + 2 active peers, BUT the peer-claims count read
     // forced to FAIL mid-request (the own-claims + active-peer reads still succeed).
@@ -408,6 +413,7 @@ fn a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx() 
 ///
 /// @us-ld-001 @driving_port @real-io @offline @no-cdn @c-2 @happy
 #[test]
+#[ignore = "enabled in roadmap step 02-02 (LD-OFFLINE) — progressive implementation"]
 fn the_front_door_renders_fully_with_the_network_down() {
     // GIVEN a seeded store. The viewer is started with NO network reachability wired
     // (no GitHub seam, no indexer seam) — the front door is LOCAL by construction, so
@@ -457,6 +463,7 @@ fn the_front_door_renders_fully_with_the_network_down() {
 ///
 /// @us-ld-001 @driving_port @real-io @anti-merging @c-7 @br-ld-1 @happy
 #[test]
+#[ignore = "enabled in roadmap step 02-02 (LD-AGGREGATE) — progressive implementation"]
 fn the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record() {
     // GIVEN a store seeded with peer claims from Rachel + an active Tobias subscription
     // (two distinct authors in the active set).
@@ -520,6 +527,7 @@ fn the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record() 
 ///
 /// @us-ld-000 @driving_port @real-io @active-only @br-ld-2 @boundary
 #[test]
+#[ignore = "enabled in roadmap step 02-03 (LD-SOFTREMOVED) — progressive implementation"]
 fn a_soft_removed_peer_is_not_counted_in_the_active_peer_summary() {
     // GIVEN Maria subscribed + pulled Rachel, THEN soft-removed her (no --purge — the
     // subscription's `removed_at` is set, the cached claims survive). She still
