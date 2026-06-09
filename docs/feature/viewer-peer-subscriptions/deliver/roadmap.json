@@ -1,0 +1,436 @@
+{
+  "roadmap": {
+    "project_id": "viewer-peer-subscriptions",
+    "created_at": "2026-06-09T00:00:00Z",
+    "total_steps": 9
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Active-subscriptions list (walking skeleton) \u2014 GET /peers",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire the read-only active-subscription read + pure PeersView projection into the viewer and render the /peers fragment (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (US-PS-001 capability + US-PS-002 render, PS-1). It forces the WHOLE peer-subscriptions thread into existence end-to-end. (ports) Add `list_active_peer_subscriptions(&self) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError>` to StoreReadPort and the flat `PeerSubscriptionSummary` DTO (non-Option peer_did + peer_handle, subscribed_at, local_claim_count: u64) beside ClaimRow/PeerClaimRow/SurveyRow (ADR-052 Q2) \u2014 NO mutation method added to the port (ADR-030). (adapter-duckdb) Impl it on DuckDbStoreReadAdapter as read-only SQL over the SAME shared connection \u2014 ONE aggregate query: peer_subscriptions LEFT JOIN peer_claims ON author_did = peer_did, WHERE removed_at IS NULL, GROUP BY the subscription identity, COUNT(pc.cid) as the per-peer local claim count (the LEFT JOIN keeps a zero-claims peer at 0 \u2014 ADR-052 Q1); LOCAL only, no network, no per-peer count_peer_claims fold (no N+1). (adapter-http-viewer) Add GET /peers to the route table as a SYNCHRONOUS arm (alongside /claims, /score, /project, /philosophy, /peer-claims \u2014 NO .await) with the slice-07 Shape fork; add the peers_page handler: read the active subscriptions via StoreReadPort -> map Vec<PeerSubscriptionSummary> to PeersView (PURE) -> fork by Shape at the render call \u2014 reading the store the ViewerServer ALREADY holds (NO new Option<Shared*> field, mirrors /project); add the nav link to /peers. (viewer-domain) Add the pure PeersView ADT (Subscriptions { peers } | NoSubscriptions), render_peers_fragment (the #peers region: per ACTIVE peer one row naming the DID VERBATIM + its per-peer local_claim_count + the render-only `openlore peer remove <bare-did>` command), render_remove_guidance(bare_did) + PEER_REMOVE_GUIDANCE_PREFIX + PEER_ADD_GUIDANCE_PREFIX consts (bare-DID strip via split('#').next(), render-only <p>/<code> TEXT \u2014 mirroring the slice-08 render_follow_guidance / SEARCH_FOLLOW_GUIDANCE_PREFIX precedent, DD-PS-6), and PEERS_URL nav const \u2014 NO new pure-core dependency edge (the render is a total function of the flat DTO; UNLIKE slice-10's viewer-domain->claim-domain). (xtask) UNCHANGED \u2014 read-only DB read, no new pure-core edge, no capability-rule change, the anti-merging no_cross_table_join_elides_author SQL rule stays GREEN by construction (the SELECT names peer_subscriptions + peer_claims, NOT the standalone claims table, and projects author_did as the GROUP BY key). Outcome: a seeded store with two active peers + HX-Request -> ONLY the #peers fragment, two attributed rows (DID verbatim + per-peer count + render-only remove command). BUILD-BEFORE-RUN: the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the read is a LOCAL DuckDB read). Materialize the assert_peer_row_present + assert_peer_remove_command_is_render_only helper bodies in support/mod.rs.",
+          "criteria": [
+            "GET /peers WITH HX-Request over a seeded local store (seed_peers_two_active_with_claims, Rachel 5 + Tobias 3) returns 200 text/html containing ONLY the #peers region fragment (is_fragment(), no page chrome, no <head>), with two attributed rows \u2014 each row the peer DID VERBATIM + its per-peer claim count (5 / 3) + the render-only `openlore peer remove <bare-did>` command.",
+            "StoreReadPort gains a single read-only method list_active_peer_subscriptions(&self) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError> + the flat PeerSubscriptionSummary DTO (non-Option peer_did + peer_handle, subscribed_at, local_claim_count); NO mutation method added to the port (ADR-030).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate query over the shared connection: peer_subscriptions LEFT JOIN peer_claims ON author_did = peer_did, WHERE removed_at IS NULL, GROUP BY the subscription identity, COUNT(pc.cid) per peer \u2014 LOCAL only, no network call, no per-peer fold (no N+1).",
+            "The /peers route reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), is SYNCHRONOUS (no .await), holds NO signing key, and adds no write/sign/subscribe/unsubscribe route; the nav link to /peers is added.",
+            "viewer-domain adds the PeersView ADT (Subscriptions { peers } | NoSubscriptions) + render_peers_fragment + render_remove_guidance + PEER_REMOVE_GUIDANCE_PREFIX + PEER_ADD_GUIDANCE_PREFIX + PEERS_URL with NO new pure-core dependency edge; xtask check-arch stays GREEN (pure-core no-I/O arm UNCHANGED, capability boundary UNCHANGED, the anti-merging SQL rule stays green over the new SELECT \u2014 peer_claims is not a standalone-claims mention)."
+          ],
+          "acceptance_criteria": [
+            "GET /peers WITH HX-Request over a seeded local store (seed_peers_two_active_with_claims, Rachel 5 + Tobias 3) returns 200 text/html containing ONLY the #peers region fragment (is_fragment(), no page chrome, no <head>), with two attributed rows \u2014 each row the peer DID VERBATIM + its per-peer claim count (5 / 3) + the render-only `openlore peer remove <bare-did>` command.",
+            "StoreReadPort gains a single read-only method list_active_peer_subscriptions(&self) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError> + the flat PeerSubscriptionSummary DTO (non-Option peer_did + peer_handle, subscribed_at, local_claim_count); NO mutation method added to the port (ADR-030).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate query over the shared connection: peer_subscriptions LEFT JOIN peer_claims ON author_did = peer_did, WHERE removed_at IS NULL, GROUP BY the subscription identity, COUNT(pc.cid) per peer \u2014 LOCAL only, no network call, no per-peer fold (no N+1).",
+            "The /peers route reads the store the ViewerServer ALREADY holds (no new Option<Shared*> field), is SYNCHRONOUS (no .await), holds NO signing key, and adds no write/sign/subscribe/unsubscribe route; the nav link to /peers is added.",
+            "viewer-domain adds the PeersView ADT (Subscriptions { peers } | NoSubscriptions) + render_peers_fragment + render_remove_guidance + PEER_REMOVE_GUIDANCE_PREFIX + PEER_ADD_GUIDANCE_PREFIX + PEERS_URL with NO new pure-core dependency edge; xtask check-arch stays GREEN (pure-core no-I/O arm UNCHANGED, capability boundary UNCHANGED, the anti-merging SQL rule stays green over the new SELECT \u2014 peer_claims is not a standalone-claims mention)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "open_peers_with_htmx_returns_only_the_peers_fragment_with_did_count_and_revoke_command",
+          "scenario_fns": [
+            "open_peers_with_htmx_returns_only_the_peers_fragment_with_did_count_and_revoke_command"
+          ],
+          "n_scenarios": [
+            "PS-1"
+          ],
+          "us_trace": [
+            "US-PS-001",
+            "US-PS-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (PeersView ADT + render_peers_fragment + render_remove_guidance projecting per-peer attributed rows). Extend nightly mutation testing to this projection (per-peer count fidelity, DID verbatim attribution, render-only command text + bare-DID strip). The ONE-aggregate-query LEFT JOIN + GROUP BY read seam lands here (ADR-052)."
+        },
+        {
+          "id": "01-02",
+          "name": "GET /peers no-JS full page + fragment parity (page embeds the same #peers region)",
+          "description": "Complete the /peers render contract (PS-2; I-PS-5 / DD-PS-8). GET /peers WITHOUT HX-Request serves a COMPLETE full page (chrome + the SAME #peers region) for the no-JS no-regression path; the #peers region inside the full page is structurally IDENTICAL to the htmx fragment \u2014 parity by construction because render_peers_page EMBEDS render_peers_fragment. Add render_peers_page to viewer-domain (chrome + embedded fragment fn) and the no-header full-page arm in peers_page. The full page is the contract; the htmx swap is a nicety (KPI-HX-G1).",
+          "criteria": [
+            "GET /peers with NO HX-Request returns a complete full HTML page: <head>, page chrome, and the embedded #peers region (is_full_page()).",
+            "GET /peers WITH HX-Request returns the bare #peers fragment (is_fragment(), no chrome).",
+            "The full page's #peers region is byte-identical to the htmx fragment body (the full page contains the fragment verbatim) \u2014 parity by construction (I-PS-5): render_peers_page EMBEDS render_peers_fragment.",
+            "No divergence between the two shapes: the same attributed peer rows (DID + per-peer count + render-only remove command) render in both."
+          ],
+          "acceptance_criteria": [
+            "GET /peers with NO HX-Request returns a complete full HTML page: <head>, page chrome, and the embedded #peers region (is_full_page()).",
+            "GET /peers WITH HX-Request returns the bare #peers fragment (is_fragment(), no chrome).",
+            "The full page's #peers region is byte-identical to the htmx fragment body (the full page contains the fragment verbatim) \u2014 parity by construction (I-PS-5): render_peers_page EMBEDS render_peers_fragment.",
+            "No divergence between the two shapes: the same attributed peer rows (DID + per-peer count + render-only remove command) render in both."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "the_peers_list_full_page_and_fragment_render_the_same_region",
+          "scenario_fns": [
+            "the_peers_list_full_page_and_fragment_render_the_same_region"
+          ],
+          "n_scenarios": [
+            "PS-2"
+          ],
+          "us_trace": [
+            "US-PS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "Two peers render their OWN per-peer counts (5 and 3), never a merged total of 8 (anti-merging, REAL work)",
+          "description": "The CARDINAL anti-merging scenario for the subscription surface (PS-3; J-003a / I-PS-3 / KPI-AV-2). Two followed peers (Rachel 5 + Tobias 3 via seed_peers_two_active_with_claims) render their OWN per-peer counts under their OWN attributed rows keyed by their DIDs \u2014 NEVER a merged total of 8, and there is NO merged \"all peers\" / \"consensus\" / \"combined total\" row. This is REAL work: it pins the per-peer GROUP BY decomposition on the rendered surface and the absence of any aggregate-across-peers row. The merged total (5 + 3 = 8 claims) must NEVER appear, and the banned merge phrases (\"all peers\", \"all subscriptions\", \"consensus\", \"combined total\", \"total across\") must be absent.",
+          "criteria": [
+            "GET /peers over a two-peer store (seed_peers_two_active_with_claims) renders Rachel's row with count 5 and Tobias's row with count 3, each its own attributed row keyed by its DID (per-peer; J-003a / I-PS-3).",
+            "The merged total of 8 claims (5 + 3 summed/averaged) NEVER appears as a claims count \u2014 the count is PER-PEER, never combined.",
+            "There is NO merged \"all peers\" / \"all subscriptions\" / \"consensus\" / \"combined total\" / \"total across\" aggregate row on the rendered surface (anti-merging).",
+            "The per-peer decomposition holds on the OBSERVABLE render: the SQL COUNT(pc.cid) GROUP BY peer_did never collapses two peers into one consensus row."
+          ],
+          "acceptance_criteria": [
+            "GET /peers over a two-peer store (seed_peers_two_active_with_claims) renders Rachel's row with count 5 and Tobias's row with count 3, each its own attributed row keyed by its DID (per-peer; J-003a / I-PS-3).",
+            "The merged total of 8 claims (5 + 3 summed/averaged) NEVER appears as a claims count \u2014 the count is PER-PEER, never combined.",
+            "There is NO merged \"all peers\" / \"all subscriptions\" / \"consensus\" / \"combined total\" / \"total across\" aggregate row on the rendered surface (anti-merging).",
+            "The per-peer decomposition holds on the OBSERVABLE render: the SQL COUNT(pc.cid) GROUP BY peer_did never collapses two peers into one consensus row."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "the_per_peer_count_is_never_a_merged_total",
+          "scenario_fns": [
+            "the_per_peer_count_is_never_a_merged_total"
+          ],
+          "n_scenarios": [
+            "PS-3"
+          ],
+          "us_trace": [
+            "US-PS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The per-peer no-merge projection (one row per peer_did, count never summed across peers, no aggregate row) is load-bearing anti-merging logic; mutation-test the per-peer-count branch so a mutant that sums/averages counts or emits an \"all peers\" row is killed."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Semantic edges \u2014 active-only residue, zero-claims LEFT JOIN, guided empty state",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "A peer soft-removed via the CLI is absent from /peers even though its cache remains (active-only / residue made visible, CARDINAL, REAL work)",
+          "description": "The CARDINAL active-only / residue-made-visible scenario (PS-4; I-PS-2). A peer the operator removed via the CLI `peer remove` (soft-remove, removed_at set, no --purge via seed_peer_subscribed_then_removed) is ABSENT from /peers on the next render \u2014 that absence IS the J-003c \"revocable without residue\" promise rendered \u2014 EVEN THOUGH its cached peer_claims remain on disk. REAL work: it pins that the active-only filter (WHERE removed_at IS NULL) actually excludes the soft-removed row on the rendered surface while its cache survives. A soft-remove must yield a calm 200 (the only remaining subscription was removed -> the guided empty state, never a 5xx). Materialize the assert_peer_absent helper body in support/mod.rs.",
+          "criteria": [
+            "GET /peers after Rachel was soft-removed via the real `openlore peer remove` verb (removed_at set, cached peer_claims survive, no --purge \u2014 seed_peer_subscribed_then_removed) returns a calm 200 (never a 5xx).",
+            "Rachel (soft-removed) is ABSENT from the rendered list \u2014 the active-only filter (removed_at IS NULL) excludes her; her absence IS the J-003c residue-free promise rendered (I-PS-2).",
+            "Her cached peer_claims remain on disk (no --purge) but NEVER surface on /peers \u2014 the residue is made visible by its ABSENCE from the active set.",
+            "assert_peer_absent is materialized in support/mod.rs and confirms the soft-removed peer's DID does not appear on the rendered surface."
+          ],
+          "acceptance_criteria": [
+            "GET /peers after Rachel was soft-removed via the real `openlore peer remove` verb (removed_at set, cached peer_claims survive, no --purge \u2014 seed_peer_subscribed_then_removed) returns a calm 200 (never a 5xx).",
+            "Rachel (soft-removed) is ABSENT from the rendered list \u2014 the active-only filter (removed_at IS NULL) excludes her; her absence IS the J-003c residue-free promise rendered (I-PS-2).",
+            "Her cached peer_claims remain on disk (no --purge) but NEVER surface on /peers \u2014 the residue is made visible by its ABSENCE from the active set.",
+            "assert_peer_absent is materialized in support/mod.rs and confirms the soft-removed peer's DID does not appear on the rendered surface."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "a_peer_removed_via_the_cli_is_absent_from_peers_even_though_its_cache_remains",
+          "scenario_fns": [
+            "a_peer_removed_via_the_cli_is_absent_from_peers_even_though_its_cache_remains"
+          ],
+          "n_scenarios": [
+            "PS-4"
+          ],
+          "us_trace": [
+            "US-PS-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The active-only filter (WHERE removed_at IS NULL) is the CARDINAL residue boundary; mutation-test it so a mutant that drops the filter (surfacing a soft-removed peer) is killed \u2014 the absence-IS-the-promise property."
+        },
+        {
+          "id": "02-02",
+          "name": "A followed peer with zero cached claims appears with count 0 and its revoke command (LEFT JOIN, REAL work)",
+          "description": "The zero-claims LEFT JOIN scenario (PS-5; AC theme 1 / DD-PS-2). A peer SUBSCRIBED but NEVER pulled (zero cached claims via seed_peer_subscribed_zero_claims) still appears on /peers with a per-peer claim count of 0 \u2014 proving the LEFT JOIN + COUNT(pc.cid) design keeps the row at 0 (not dropped by an inner JOIN, not counted as 1 by COUNT(*)-of-NULL) \u2014 alongside its render-only revoke command. REAL work: it pins the LEFT JOIN (not inner JOIN) and the COUNT(pc.cid) (not COUNT(*)) choices on the rendered surface. The seed returns a held PDS handle that must stay alive for the request duration.",
+          "criteria": [
+            "GET /peers with one subscribed-but-never-pulled peer (seed_peer_subscribed_zero_claims \u2014 ONE active subscription, ZERO cached claims) returns 200.",
+            "The never-pulled peer (newpeer) appears with a per-peer count of 0 \u2014 NOT dropped (LEFT JOIN, not inner JOIN), NOT counted as 1 (COUNT(pc.cid), not COUNT(*) of the NULL right side) \u2014 DD-PS-2 / I-PS-8.",
+            "The never-pulled peer's render-only `openlore peer remove <bare-did>` command is shown alongside its count-0 row.",
+            "The held PDS handle is kept alive for the request duration so the subscription stays consistent (the seed returns _held)."
+          ],
+          "acceptance_criteria": [
+            "GET /peers with one subscribed-but-never-pulled peer (seed_peer_subscribed_zero_claims \u2014 ONE active subscription, ZERO cached claims) returns 200.",
+            "The never-pulled peer (newpeer) appears with a per-peer count of 0 \u2014 NOT dropped (LEFT JOIN, not inner JOIN), NOT counted as 1 (COUNT(pc.cid), not COUNT(*) of the NULL right side) \u2014 DD-PS-2 / I-PS-8.",
+            "The never-pulled peer's render-only `openlore peer remove <bare-did>` command is shown alongside its count-0 row.",
+            "The held PDS handle is kept alive for the request duration so the subscription stays consistent (the seed returns _held)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "a_followed_peer_with_zero_cached_claims_appears_with_count_zero_and_its_revoke_command",
+          "scenario_fns": [
+            "a_followed_peer_with_zero_cached_claims_appears_with_count_zero_and_its_revoke_command"
+          ],
+          "n_scenarios": [
+            "PS-5"
+          ],
+          "us_trace": [
+            "US-PS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-duckdb/src/store_read.rs"
+          ],
+          "mutation_note": "The LEFT JOIN + COUNT(pc.cid) (not inner JOIN, not COUNT(*)) is load-bearing for the zero-claims row; mutation-test the SQL so a mutant that switches to inner JOIN (dropping the row) or COUNT(*) (counting NULL as 1) is killed."
+        },
+        {
+          "id": "02-03",
+          "name": "No active subscriptions shows the guided empty state in both shapes (NoSubscriptions arm)",
+          "description": "The guided empty state (PS-6; US-PS-003 Ex 1; AC theme 4 / I-PS-5). A store with NO active subscriptions (seed_no_active_subscriptions) maps to PeersView::NoSubscriptions and renders a guided empty state \u2014 \"You are not subscribed to any peers.\" + the render-only `openlore peer add <did>` starting command (PEER_ADD_GUIDANCE_PREFIX) \u2014 never blank, never an error. Both shapes (htmx fragment + no-JS full page) render the SAME guided empty state (parity by construction; both embed the SAME NoSubscriptions arm). Add the NoSubscriptions render arm + the empty-to-NoSubscriptions map. Materialize the assert_peers_empty_state_present helper body in support/mod.rs.",
+          "criteria": [
+            "GET /peers (no HX-Request) with no active subscriptions (seed_no_active_subscriptions) returns a calm 200 complete full page (is_full_page()) carrying the guided empty state, never blank, never a 5xx.",
+            "GET /peers (HX-Request) with no active subscriptions returns a calm 200 bare fragment (is_fragment()) carrying the SAME guided empty state.",
+            "Both shapes render the guided empty state naming \"no peers\" + the render-only `openlore peer add <did>` starting command (PEER_ADD_GUIDANCE_PREFIX) \u2014 the empty Vec maps to PeersView::NoSubscriptions; parity by construction (both embed the SAME arm).",
+            "assert_peers_empty_state_present is materialized in support/mod.rs and confirms the guided empty state in both shapes."
+          ],
+          "acceptance_criteria": [
+            "GET /peers (no HX-Request) with no active subscriptions (seed_no_active_subscriptions) returns a calm 200 complete full page (is_full_page()) carrying the guided empty state, never blank, never a 5xx.",
+            "GET /peers (HX-Request) with no active subscriptions returns a calm 200 bare fragment (is_fragment()) carrying the SAME guided empty state.",
+            "Both shapes render the guided empty state naming \"no peers\" + the render-only `openlore peer add <did>` starting command (PEER_ADD_GUIDANCE_PREFIX) \u2014 the empty Vec maps to PeersView::NoSubscriptions; parity by construction (both embed the SAME arm).",
+            "assert_peers_empty_state_present is materialized in support/mod.rs and confirms the guided empty state in both shapes."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "no_active_subscriptions_shows_the_guided_empty_state_in_both_shapes",
+          "scenario_fns": [
+            "no_active_subscriptions_shows_the_guided_empty_state_in_both_shapes"
+          ],
+          "n_scenarios": [
+            "PS-6"
+          ],
+          "us_trace": [
+            "US-PS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The NoSubscriptions arm (empty Vec -> NoSubscriptions map, the guided empty-state render with PEER_ADD_GUIDANCE_PREFIX, both shapes) is load-bearing; mutation-test the empty -> NoSubscriptions branch and the empty-state command text so a mutant that blanks or drops the guidance is killed."
+        },
+        {
+          "id": "02-04",
+          "name": "A store with only a soft-removed peer still shows the empty state (residue -> empty, chained continuation of 02-01)",
+          "description": "The residue -> empty-state mirror (PS-7; US-PS-003 Ex 2; I-PS-2). A store whose ONLY subscription was soft-removed (seed_only_subscription_removed \u2014 one peer_subscriptions row, soft-removed, no other active peer; the chained continuation of PS-4) still renders the guided empty state \u2014 the soft-removed row is residue, not an active subscription, so the active-only read yields an empty result that maps to NoSubscriptions. Confirmatory once 02-01 (active-only filter) + 02-03 (NoSubscriptions arm) exist; pins the residue-yields-empty property end-to-end. Reuses assert_peer_absent + assert_peers_empty_state_present.",
+          "criteria": [
+            "GET /peers with only a soft-removed subscription (seed_only_subscription_removed) returns a calm 200 guided empty state (never a 5xx).",
+            "The soft-removed peer (Rachel) is ABSENT (residue, not an active subscription) \u2014 the active-only read yields an empty result (I-PS-2).",
+            "The guided empty state renders (the empty active set maps to PeersView::NoSubscriptions) \u2014 the chained continuation of PS-4's residue narrative (Pillar 2).",
+            "assert_peer_absent + assert_peers_empty_state_present confirm both the absence and the guided empty state."
+          ],
+          "acceptance_criteria": [
+            "GET /peers with only a soft-removed subscription (seed_only_subscription_removed) returns a calm 200 guided empty state (never a 5xx).",
+            "The soft-removed peer (Rachel) is ABSENT (residue, not an active subscription) \u2014 the active-only read yields an empty result (I-PS-2).",
+            "The guided empty state renders (the empty active set maps to PeersView::NoSubscriptions) \u2014 the chained continuation of PS-4's residue narrative (Pillar 2).",
+            "assert_peer_absent + assert_peers_empty_state_present confirm both the absence and the guided empty state."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions.rs",
+          "scenario_name": "a_store_with_only_a_soft_removed_peer_still_shows_the_empty_state",
+          "scenario_fns": [
+            "a_store_with_only_a_soft_removed_peer_still_shows_the_empty_state"
+          ],
+          "n_scenarios": [
+            "PS-7"
+          ],
+          "us_trace": [
+            "US-PS-003"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrails \u2014 read-only, no-write, offline chrome, offline, no-N+1 (cross-cutting, LAST)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Every /peers render leaves the store read-only + no /peers response adds a write/subscribe control (gold)",
+          "description": "Two cross-cutting gold guardrails that tend to flip green for free once Phases 01-02 are done (PS-INV-ReadOnly + PS-INV-NoWrite; I-PS-1 / WD-PS-1 / KPI-VIEW-2). (ReadOnly) Exercising /peers across postures (populated AND empty) in BOTH shapes (full page + htmx fragment) leaves the claims + peer_claims row counts UNCHANGED, asserted via the inherited universe-bound assert_store_read_only over capture_store_row_count_universe (Mandate 8: the two port-exposed counts). The subscription list is computed per request and persists nothing (I-PS-6 \u2014 zero new persisted types). (NoWrite, CARDINAL) No /peers response shape renders a write/subscribe/unsubscribe/remove/purge control, and the only revocation affordance is the render-only `openlore peer remove <did>` command TEXT (a <p>/<code>, never an <a>/form/<button>). Both reuse the inherited harnesses (assert_store_read_only, capture_store_row_count_universe, assert_peer_remove_command_is_render_only materialized in 01-01) + the NEW assert_peers_no_write_or_subscribe_control. Lands in viewer_peer_subscriptions_invariants.rs. Materialize the assert_peers_no_write_or_subscribe_control helper body in support/mod.rs.",
+          "criteria": [
+            "Exercising /peers across postures (populated + empty) in BOTH shapes (full page + htmx fragment) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-PS-1 / WD-PS-1).",
+            "The subscription list is computed per request and persists nothing (I-PS-6 \u2014 zero new persisted types); the read-only universe is the inherited port-exposed counts (claims.row_count + peer_claims.row_count), not internal struct fields (Mandate 8).",
+            "No /peers response shape (full page or fragment) renders a write/subscribe/unsubscribe/remove/purge control (assert_peers_no_write_or_subscribe_control over EVERY shape) \u2014 CARDINAL.",
+            "The only revocation affordance present is the render-only `openlore peer remove <did>` command TEXT (a <p>/<code>, never an <a>/form/<button>) \u2014 assert_peer_remove_command_is_render_only over both active peers; assert_peers_no_write_or_subscribe_control is materialized in support/mod.rs."
+          ],
+          "acceptance_criteria": [
+            "Exercising /peers across postures (populated + empty) in BOTH shapes (full page + htmx fragment) leaves the claims and peer_claims row counts identical (assert_store_read_only over capture_store_row_count_universe, all slots unchanged) \u2014 any change is an UNSHIPPABLE write-surface breach (I-PS-1 / WD-PS-1).",
+            "The subscription list is computed per request and persists nothing (I-PS-6 \u2014 zero new persisted types); the read-only universe is the inherited port-exposed counts (claims.row_count + peer_claims.row_count), not internal struct fields (Mandate 8).",
+            "No /peers response shape (full page or fragment) renders a write/subscribe/unsubscribe/remove/purge control (assert_peers_no_write_or_subscribe_control over EVERY shape) \u2014 CARDINAL.",
+            "The only revocation affordance present is the render-only `openlore peer remove <did>` command TEXT (a <p>/<code>, never an <a>/form/<button>) \u2014 assert_peer_remove_command_is_render_only over both active peers; assert_peers_no_write_or_subscribe_control is materialized in support/mod.rs."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions_invariants.rs",
+          "scenario_name": "every_peers_render_leaves_the_store_read_only",
+          "scenario_fns": [
+            "every_peers_render_leaves_the_store_read_only",
+            "no_peers_response_adds_a_write_or_subscribe_control"
+          ],
+          "n_scenarios": [
+            "PS-INV-ReadOnly",
+            "PS-INV-NoWrite"
+          ],
+          "us_trace": [
+            "US-PS-002",
+            "US-PS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The no-write/subscribe-control render is load-bearing for the read-only guarantee; mutation-test the assert_peers_no_write_or_subscribe_control path + the render-only command (a mutant that wraps the remove command in an <a>/<form>/<button>, or renders a subscribe control, must be killed)."
+        },
+        {
+          "id": "03-02",
+          "name": "The /peers chrome stays offline (no CDN), the surface works fully offline, and a large active set resolves per-peer counts in one request (gold, LAST)",
+          "description": "Three offline + N+1 gold guardrails that flip green for free once 01-01..02-04 exist (PS-INV-OfflineChrome + PS-INV-Offline + PS-INV-NoNPlus1; I-PS-4 / KPI-HX-G2, I-PS-4 / KPI-5, I-PS-8 / DD-PS-1). (OfflineChrome) The /peers full page references ONLY the LOCAL /static/htmx.min.js script src and NO off-host CDN (references_external_cdn() is false in both shapes). (Offline) The /peers view renders the full subscription list + per-peer counts (the DATA, not just the chrome) with NO network seam wired (plain ViewerServer::start) \u2014 /peers has NO outbound edge to take down (no PDS fetch, no DID re-resolution, no peer pull), so neither shape renders a network-degraded notice (none of \"unavailable\", \"network error\", \"could not reach\", \"try again\") \u2014 offline-STRONGER than /search. (NoNPlus1) A multi-peer active set with KNOWN distinct per-peer counts (4, 3, 2, 1 via seed_many_active_peers_known_counts) renders correctly \u2014 every peer's OWN count, no merged total, no dropped/miscounted row \u2014 in ONE /peers request (the behavioral N+1 proxy; the strict 1-query bound is the DELIVER adapter-duckdb unit/property test). Reuses references_external_cdn + the network-disabled viewer posture + assert_peer_row_present. Lands in viewer_peer_subscriptions_invariants.rs. LAST roadmap step.",
+          "criteria": [
+            "The /peers full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both shapes (no CDN / off-host reference, I-PS-4 / KPI-HX-G2).",
+            "Both /peers shapes render the full subscription list + per-peer counts (the DATA, not just the chrome) with NO network seam wired (plain ViewerServer::start) \u2014 offline-STRONGER than /search (I-PS-4 / KPI-5); neither shape renders a network-degraded notice (none of \"unavailable\", \"network error\", \"could not reach\", \"try again\").",
+            "A multi-peer active set with KNOWN distinct per-peer counts (4, 3, 2, 1 via seed_many_active_peers_known_counts) renders every peer's OWN count correctly \u2014 no merged total, no dropped/miscounted row \u2014 in ONE /peers request (the behavioral N+1 proxy; I-PS-8 / DD-PS-1).",
+            "The merged total across the active set never appears as a claims count (anti-merging extends to the multi-peer render; J-003a / I-PS-3); each peer's render-only revoke command is present as TEXT."
+          ],
+          "acceptance_criteria": [
+            "The /peers full page's only <script src> is the local /static/htmx.min.js; references_external_cdn() returns false for both shapes (no CDN / off-host reference, I-PS-4 / KPI-HX-G2).",
+            "Both /peers shapes render the full subscription list + per-peer counts (the DATA, not just the chrome) with NO network seam wired (plain ViewerServer::start) \u2014 offline-STRONGER than /search (I-PS-4 / KPI-5); neither shape renders a network-degraded notice (none of \"unavailable\", \"network error\", \"could not reach\", \"try again\").",
+            "A multi-peer active set with KNOWN distinct per-peer counts (4, 3, 2, 1 via seed_many_active_peers_known_counts) renders every peer's OWN count correctly \u2014 no merged total, no dropped/miscounted row \u2014 in ONE /peers request (the behavioral N+1 proxy; I-PS-8 / DD-PS-1).",
+            "The merged total across the active set never appears as a claims count (anti-merging extends to the multi-peer render; J-003a / I-PS-3); each peer's render-only revoke command is present as TEXT."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_subscriptions_invariants.rs",
+          "scenario_name": "the_peers_page_chrome_stays_offline_no_cdn",
+          "scenario_fns": [
+            "the_peers_page_chrome_stays_offline_no_cdn",
+            "the_peers_surface_works_fully_offline",
+            "a_large_active_set_resolves_per_peer_counts_in_one_request"
+          ],
+          "n_scenarios": [
+            "PS-INV-OfflineChrome",
+            "PS-INV-Offline",
+            "PS-INV-NoNPlus1"
+          ],
+          "us_trace": [
+            "US-PS-001",
+            "US-PS-002",
+            "US-PS-003"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_subscriptions_invariants.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The offline (no outbound edge / no degraded notice) + ONE-request multi-peer render are load-bearing; mutation-test the multi-peer per-peer-count fidelity (a mutant that merges/drops a count across the 4/3/2/1 set must be killed) and the no-CDN chrome reference."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "total_steps": 9,
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "APPROVED \u2014 all 9 dimensions PASS; 9 steps/12 scenarios"
+  }
+}
