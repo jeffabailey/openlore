@@ -709,3 +709,63 @@ harness = true
 name = "viewer_peer_subscriptions_invariants"
 path = "../../tests/acceptance/viewer_peer_subscriptions_invariants.rs"
 harness = true
+
+# Slice-16 (viewer-search-follow-state; DISTILL) subprocess + real-I/O acceptance: the
+# `openlore ui` `/search` FOLLOW-STATE accuracy (US-SF-001/002; ADR-053). A thin DELTA on the
+# EXISTING read-only `GET /search` view (slice-08): the EFFECT shell (`resolve_search_state`)
+# reads the operator's LOCAL active-subscription set ONCE per render (the REUSED slice-15
+# `StoreReadPort::list_active_peer_subscriptions`, batch-once into a `HashSet<String>`, no new
+# read method / SQL / N+1) and resolves each result author IN MEMORY (binary
+# `bare_did(author_did) ∈ set → SubscribedPeer`, else `NetworkUnfollowed`; `You` deferred,
+# `UnsubscribedCache` N/A); the PURE `viewer-domain` render gains ONE new `SubscribedPeer →
+# render_following_indicator()` arm (a neutral render-only `SEARCH_FOLLOWING_INDICATOR =
+# "Following"` LABEL, the sibling of the unchanged slice-08 `render_follow_guidance` /
+# `SEARCH_FOLLOW_GUIDANCE_PREFIX`). So an already-followed author shows "Following" + NO
+# `openlore peer add` command; a genuinely-unfollowed author KEEPS the slice-08 render-only
+# `openlore peer add <did>` affordance. CARDINAL: read-only / no key (C-1 — both affordances
+# render-only TEXT, no control); LOCAL/offline resolution / index per-user-neutral (C-3); ONE
+# batch read / no N+1 (C-4); attribution + ranking UNCHANGED (C-5 / J-003a — per-row
+# enrichment, no merge/re-rank); binary, `You` deferred (C-6); graceful degradation to the
+# slice-08 status quo on a failed active-set read (C-7); htmx vs no-JS parity (C-8);
+# fragment-strip match via the production `bare_did` (R-SF-5). Drives the REAL `openlore ui`
+# verb via `ViewerServer::start_with_indexer` + in-test HTTP (get/get_htmx); the network index
+# is the ONLY mocked boundary (a REAL slice-05 `openlore-indexer serve` over a seeded corpus).
+# An active subscription whose bare DID equals a search-result author is seeded via the REAL
+# slice-03 `peer add` verb (`seed_active_subscription_for`) into the SAME REAL DuckDB the
+# viewer reads. Per Mandate 9/11 example-based, never PBT-generated at this layer; Tier B not
+# warranted (binary per-row resolution, not a chained state machine). Build-before-run: `cargo
+# build` BOTH the `openlore` (viewer) and `openlore-indexer` (seeded serve) bins. DISTILL
+# registers + RED gate; SF-* stay RED — the SubscribedPeer resolution + the "Following" render
+# arm do not exist yet, so a followed author still renders `peer add` and
+# `assert_search_row_following` FAILS for the RIGHT reason (MISSING_FUNCTIONALITY). The
+# graceful-degrade SF-8 panics at the `todo!()` fault-injection seam
+# (`start_viewer_with_failing_active_set_read`, also MISSING_FUNCTIONALITY).
+[[test]]
+name = "viewer_search_follow_state"
+path = "../../tests/acceptance/viewer_search_follow_state.rs"
+harness = true
+
+# Slice-16 (viewer-search-follow-state; DISTILL) GOLD / guardrail invariants over the whole
+# `/search` follow-state surface (cross-cutting C-1/-3/-4/-5):
+# no_search_follow_state_render_adds_an_executable_control (C-1 CARDINAL — over a render
+# carrying BOTH a "Following" indicator AND a `peer add` affordance, in both shapes, NEITHER is
+# an executable control; the NEW "Following" arm adds no write surface; the viewer holds no
+# key), every_search_follow_state_render_leaves_the_store_read_only (C-1 / Mandate 8 — the
+# LOCAL active-set READ + in-memory resolution persists nothing; peer_subscriptions + claims +
+# peer_claims counts UNCHANGED via assert_store_read_only),
+# the_relationship_resolution_adds_no_network_seam_index_stays_per_user_neutral (C-3 — the SAME
+# index + SAME query returns the SAME attributed ROWS for a following vs a non-following
+# operator; only the per-row affordance flips, resolved LOCALLY; the index never learns who
+# follows whom), and the_follow_state_resolution_does_not_merge_or_rerank (C-5 / J-003a — the
+# resolution is a per-row enrichment; grouping/order/[verified]/verbatim-confidence UNCHANGED
+# with-and-without a subscription; no merged consensus row). Drives the REAL `openlore ui` via
+# `ViewerServer` over a REAL seeded local store; the index is the ONLY mocked boundary. Per
+# Mandate 9/11 example-based, never PBT-generated. The offline-chrome (no-CDN), verified-by-
+# construction, and no-sign/publish-control golds INHERIT VERBATIM from
+# viewer_network_search_invariants.rs (slice-16 adds no new route/CDN/store-write/sign-control).
+# DISTILL registers + RED gate; SF-INV-* stay RED (the SubscribedPeer resolution + render arm
+# are MISSING, so the "Following"-where-seeded assertions fail for the RIGHT reason).
+[[test]]
+name = "viewer_search_follow_state_invariants"
+path = "../../tests/acceptance/viewer_search_follow_state_invariants.rs"
+harness = true

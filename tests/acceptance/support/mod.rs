@@ -4408,7 +4408,7 @@ pub fn seed_network_index(env: &TestEnv, fixture: NetworkIndexFixture) -> Indexe
 /// re-seed the SAME index with a GROWN corpus (the original claims + two more
 /// matching ones) and re-serve it, proving the share link re-runs the QUERY
 /// against the CURRENT index (US-AV-006 Ex4 / I-AV-8).
-fn seed_network_index_from_specs(
+pub fn seed_network_index_from_specs(
     env: &TestEnv,
     specs: Vec<openlore_test_support::RawRecordSpec>,
 ) -> IndexerHandle {
@@ -14565,4 +14565,339 @@ pub fn assert_peers_no_write_or_subscribe_control(body: &str) {
              slice-03 CLI); found {banned:?} in body:\n{body}"
         );
     }
+}
+
+// =============================================================================
+// Slice-16 (viewer-search-follow-state; DISTILL) — the `/search` FOLLOW-STATE
+// seeds + asserts. The slice resolves each `/search` result author's relationship
+// against the operator's LOCAL active peer subscriptions (the slice-15
+// `list_active_peer_subscriptions` read, REUSED) and renders a neutral "Following"
+// indicator for an already-followed author (SubscribedPeer, NO `peer add` command)
+// while keeping the slice-08 render-only `openlore peer add <did>` affordance for a
+// genuinely-unfollowed author (NetworkUnfollowed). ADR-053.
+//
+// Seeding composition (the load-bearing alignment): a search-result author IS made
+// an active subscription by `peer add`-ing the SAME bare DID the index corpus is
+// keyed on. The index corpus uses `RACHEL_DID` / `PRIYA_DID` / `TOBIAS_DID`
+// (`did:plc:rachel-test` etc.) and the `peer add` verb writes `peer_subscriptions`
+// rows keyed on the SAME bare DIDs — so Rachel (`did:plc:rachel-test`) seeded as an
+// active subscription AND present in the index resolves to SubscribedPeer. The
+// result row's `author_did` carries the `#org.openlore.application` signing fragment;
+// the bare active-set DID matches it after the production `bare_did` strip (R-SF-5).
+//
+// The active set is read from the SAME REAL DuckDB the viewer opens (OPENLORE_HOME),
+// so the seed and the viewer agree by construction (Pillar 3). The index is the ONLY
+// mocked boundary (a REAL slice-05 `openlore-indexer serve` over the seeded corpus).
+//
+// Layer placement (Mandate 9/11): layer-3/layer-5 subprocess + real-I/O, EXAMPLE-only.
+// Sad paths (none-followed status quo, failed active-set read) are enumerated, never
+// PBT-generated at this layer.
+//
+// SCAFFOLD: true (slice-16) — the seeds REUSE the slice-08 `seed_network_index_*` +
+// the slice-15 `peer add` seam (both real); the asserts carry concrete bodies (they
+// scan the OBSERVABLE rendered surface). The follow-state RED is the PRODUCTION arm:
+// today `to_indexed_claim` hardcodes `NetworkUnfollowed`, so a followed author still
+// renders `peer add` and `assert_search_row_following` FAILS for the RIGHT reason
+// (MISSING_FUNCTIONALITY — the SubscribedPeer resolution + render arm do not exist
+// yet), NOT a setup/import error.
+
+/// The headline reproducible-builds object NSID the slice-16 follow-state scenarios
+/// search on (the SAME object the slice-08 walking skeleton + the
+/// `IncludesAlreadyFollowedRachel` corpus are keyed on). One source of truth so the
+/// query value never drifts from the corpus.
+pub const SF_OBJECT_REPRODUCIBLE_BUILDS: &str = "org.openlore.philosophy.reproducible-builds";
+
+/// The render-only follow-guidance command verb a NetworkUnfollowed row carries (the
+/// slice-08 `SEARCH_FOLLOW_GUIDANCE_PREFIX` shape). The slice-16 asserts scan for
+/// `openlore peer add <bare-did>` as render-only TEXT — UNCHANGED from slice-08.
+pub const SF_FOLLOW_COMMAND_VERB: &str = "openlore peer add";
+
+/// The neutral render-only "Following" indicator a SubscribedPeer row carries
+/// (the slice-16 `SEARCH_FOLLOWING_INDICATOR` copy, ADR-053 D3). A NEUTRAL label —
+/// no command, no verb-phrase, no DID. The asserts scan for it as render-only TEXT.
+pub const SF_FOLLOWING_INDICATOR: &str = "Following";
+
+/// Seed ONE ACTIVE peer subscription for `peer_did` via the real `peer add` verb
+/// ALONE (no `peer pull` — the relationship resolution reads `peer_subscriptions`,
+/// NOT `peer_claims`, so no cached claim is needed). Mirrors
+/// [`seed_peer_subscribed_zero_claims`] but parameterized on the DID so a
+/// search-result author can be made followed. Returns the held `PeerPds` so the
+/// caller keeps the peer resolvable for the lifetime of the `peer add` (the
+/// subscription row is written by `peer add`; the LOCAL active-set read the viewer
+/// performs never re-resolves the peer, so the PDS may drop afterwards — the handle
+/// is returned for explicit lifetime control / symmetry with the slice-15 seed).
+///
+/// `seed` is the fixture keypair seed used to build verifiable wire records so the
+/// real `peer add` can resolve + register the subscription (the same shape
+/// `seed_peer_subscribed_zero_claims` uses). After this returns, the
+/// `peer_subscriptions` table holds ONE ACTIVE row (`removed_at IS NULL`) for
+/// `peer_did` — pinned with `assert_one_active_subscription_for` so the fixture is
+/// the GENUINE active state, not merely "the verb exited 0".
+///
+/// SCAFFOLD: true (slice-16) — drives the EXISTING slice-03 `peer add` verb via the
+/// slice-15 `PeerPds` + `run_openlore_with_peer_resolver` seam (REUSED, not net-new).
+pub fn seed_active_subscription_for(env: &TestEnv, peer_did: &str, seed: [u8; 32]) -> PeerPds {
+    // Build a verifiable record set + start the peer's PDS so `peer add` can resolve
+    // the DID and register the subscription. We deliberately do NOT `peer pull`, so
+    // NO `peer_claims` row lands — the relationship resolution only needs the ACTIVE
+    // `peer_subscriptions` row.
+    let (records, _pubkey_hex) = build_verifiable_peer_records_for_triples(
+        peer_did,
+        seed,
+        &[(
+            "github:seed/active-subscription",
+            "org.openlore.philosophy.dependency-pinning",
+            0.50,
+        )],
+    );
+    let pds = PeerPds::for_peer(peer_did, records);
+
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", peer_did],
+        peer_did,
+        pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_active_subscription_for: `peer add {peer_did}` must succeed (the slice-03 \
+         subscribe verb, REUSED);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+
+    // Pin the GENUINE active state: ONE active subscription row (removed_at IS NULL).
+    assert_one_active_subscription_for(env, peer_did);
+
+    pds
+}
+
+/// Slice-16 corpus: ONE followed author (Rachel, `did:plc:rachel-test`) + ONE
+/// genuinely-unfollowed author (Priya, `did:plc:priya-test`) EACH asserting the
+/// headline reproducible-builds object, so a single `?object=reproducible-builds`
+/// search returns BOTH rows. Built inline from the public `RawRecordSpec::valid`
+/// builder so the result authors are exactly Rachel + Priya (the
+/// `#org.openlore.application` app-identity shape the viewer renders), and the
+/// follow-state resolution must produce DIFFERENT affordances on the two rows
+/// (Rachel → "Following"; Priya → `peer add`). The two authors assert DISTINCT
+/// subjects so the canonical CIDs do not alias.
+pub fn sf_corpus_one_followed_one_unfollowed() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, PRIYA_DID, RACHEL_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![
+        // Rachel — the FOLLOWED author (seeded as an active subscription by the
+        // scenario). Her row must resolve to SubscribedPeer → "Following".
+        RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
+        // Priya — the genuinely-UNFOLLOWED author. Her row must stay
+        // NetworkUnfollowed → keep the `openlore peer add did:plc:priya-test` command.
+        RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82),
+    ]
+}
+
+/// Slice-16 corpus: ALL result authors are followed — Rachel + Tobias
+/// (`did:plc:rachel-test` + `did:plc:tobias-test`) EACH asserting the headline
+/// object, with NO unfollowed author present. The scenario seeds BOTH as active
+/// subscriptions, so every row resolves to SubscribedPeer → "Following" and NO
+/// `peer add` command appears ANYWHERE (the all-followed accuracy case).
+pub fn sf_corpus_all_authors_followed() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::RawRecordSpec;
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![
+        RawRecordSpec::valid(TRAVERSAL_AUTHOR_RACHEL, "github:NixOS/nixpkgs", object, 0.88),
+        RawRecordSpec::valid(
+            TRAVERSAL_AUTHOR_TOBIAS,
+            "github:rust-lang/cargo",
+            object,
+            0.74,
+        ),
+    ]
+}
+
+/// Slice-16 corpus: MANY result authors (8 distinct), exactly ONE of whom is
+/// followed (Rachel). The no-N+1 behavioral proxy (C-4 / WD-SF-3): a large
+/// multi-result search resolves ALL rows correctly against the active set read ONCE
+/// per render — Rachel → "Following", the other 7 → `peer add` — invariant to the
+/// result count. (The STRICT 1-read bound is a DELIVER adapter/property concern; this
+/// is the observable proxy.) Every author asserts a DISTINCT subject (no CID alias).
+pub fn sf_corpus_many_results_one_followed() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, RACHEL_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    let mut specs = vec![
+        // Rachel — the ONE followed author among many.
+        RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
+    ];
+    // Seven OTHER distinct (unfollowed) authors, each on a distinct subject.
+    for (i, subject) in [
+        "github:bazelbuild/bazel",
+        "github:rust-lang/rust",
+        "github:torvalds/linux",
+        "github:denoland/deno",
+        "github:guix/guix",
+        "github:void/voidlinux",
+        "github:alpine/aports",
+    ]
+    .iter()
+    .enumerate()
+    {
+        specs.push(RawRecordSpec::valid(
+            &format!("did:plc:sf-author{}-test", i + 1),
+            subject,
+            object,
+            0.60 + (i as f64) * 0.01,
+        ));
+    }
+    specs
+}
+
+/// Assert a `/search` rendered body shows the row for `peer_did` (a FOLLOWED author)
+/// as a SubscribedPeer: it carries the neutral render-only "Following" indicator AND
+/// it carries NO `openlore peer add <did>` command for that author (the load-bearing
+/// accuracy fix, C-2 / ADR-053). Universe (port-exposed rendered surface): the body
+/// contains the bare DID + the "Following" indicator, and contains NO
+/// `openlore peer add <bare-did>` command naming this author.
+///
+/// `peer_did` is the BARE DID (`did:plc:rachel-test`); the viewer renders the
+/// `did:plc:rachel-test#org.openlore.application` app-identity shape, which
+/// `contains(peer_did)` matches (the fragment is a suffix of the rendered DID).
+///
+/// SCAFFOLD: true (slice-16) — RED today: `to_indexed_claim` hardcodes
+/// `NetworkUnfollowed`, so a followed author still renders `peer add` and the
+/// "no add command" + "Following present" assertions FAIL for the RIGHT reason
+/// (the SubscribedPeer resolution + render arm are MISSING).
+pub fn assert_search_row_following(body: &str, peer_did: &str) {
+    // The followed author is still attributed VERBATIM (the resolution is a per-row
+    // enrichment; attribution is UNCHANGED — C-5).
+    assert!(
+        body.contains(peer_did),
+        "C-2 (slice-16): the /search render must still attribute a row to the followed \
+         author {peer_did:?} (the relationship label is a per-row enrichment, attribution \
+         unchanged); body was:\n{body}"
+    );
+    // The neutral render-only "Following" indicator is present (the SubscribedPeer arm,
+    // ADR-053 D3) — a developer she ALREADY follows is shown as such.
+    assert!(
+        body.contains(SF_FOLLOWING_INDICATOR),
+        "C-2 (slice-16): a followed author's row must show the neutral render-only \
+         {SF_FOLLOWING_INDICATOR:?} indicator (the SubscribedPeer arm); body was:\n{body}"
+    );
+    // …and the `openlore peer add <bare-did>` command for THIS author is ABSENT — an
+    // already-followed author is NOT re-offered a follow (the core bug this slice fixes,
+    // R-SF-3). The follow command names the BARE DID (the slice-03 verb form).
+    let follow_command = format!("{SF_FOLLOW_COMMAND_VERB} {peer_did}");
+    assert!(
+        !body.contains(&follow_command),
+        "C-2 (slice-16, R-SF-3): a followed author's row must NOT re-offer a follow — \
+         expected NO {follow_command:?} command for {peer_did:?}; body was:\n{body}"
+    );
+}
+
+/// Assert a `/search` rendered body shows the row for `peer_did` (a genuinely-
+/// UNFOLLOWED author) keeping the slice-08 render-only follow affordance: the
+/// `openlore peer add <bare-did>` command is present as plain TEXT (no over-correction,
+/// R-SF-4 / C-2). Universe (port-exposed rendered surface): the body contains the bare
+/// DID + the `openlore peer add <bare-did>` command. This is byte-equivalent to the
+/// slice-08 N-17 affordance — UNCHANGED for the NetworkUnfollowed arm.
+///
+/// SCAFFOLD: true (slice-16) — this assertion PASSES today for an unfollowed author
+/// (slice-08 already renders the affordance for the hardcoded NetworkUnfollowed); it
+/// pins the no-over-correction guarantee (the slice-16 resolution must NOT strip the
+/// affordance from a genuinely-unfollowed author).
+pub fn assert_search_row_offers_follow(body: &str, peer_did: &str) {
+    // The unfollowed author is attributed VERBATIM.
+    assert!(
+        body.contains(peer_did),
+        "C-2 (slice-16): the /search render must attribute a row to the unfollowed \
+         author {peer_did:?}; body was:\n{body}"
+    );
+    // The slice-08 render-only `openlore peer add <bare-did>` follow affordance is
+    // RETAINED for a genuinely-unfollowed author (no over-correction, R-SF-4).
+    let follow_command = format!("{SF_FOLLOW_COMMAND_VERB} {peer_did}");
+    assert!(
+        body.contains(&follow_command),
+        "C-2 (slice-16, R-SF-4): a genuinely-unfollowed author's row must KEEP the \
+         render-only {follow_command:?} affordance (the slice-08 status quo, unchanged); \
+         body was:\n{body}"
+    );
+    // …and the unfollowed row does NOT show the "Following" indicator (binary resolution,
+    // C-6 — not-in-active-set → NetworkUnfollowed, never SubscribedPeer).
+    // (We do not assert global absence of "Following" here — a MIX render carries both;
+    // the per-author discrimination is asserted by pairing this with
+    // `assert_search_row_following` on the followed author in the MIX scenario.)
+}
+
+/// Assert NEITHER `/search` follow-state affordance is an executable control (C-1,
+/// CARDINAL / WD-SF-1): both the "Following" indicator AND the `openlore peer add <did>`
+/// guidance are render-only TEXT — no `<button>`, no `<form>`, no mutating `<a>`, no
+/// `hx-*` control, no follow/subscribe input. The viewer holds no key and exposes no
+/// follow/unfollow route. The slice-16 companion to the slice-08 N-17 + the
+/// `no_search_response_adds_a_write_or_sign_control` gold scan — extended so it holds
+/// over a render that ALSO carries the new "Following" indicator (the new arm must add
+/// no control either). Universe (port-exposed rendered surface): the body contains
+/// NONE of the executable-control markers.
+///
+/// SCAFFOLD: true (slice-16).
+pub fn assert_search_follow_state_is_render_only(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        // executable FOLLOW / UNFOLLOW / SUBSCRIBE controls (reused from slice-08 N-17 +
+        // the slice-15 /peers no-control gold)
+        "name=\"follow\"",
+        "name=\"unfollow\"",
+        "name=\"subscribe\"",
+        ">follow<",
+        ">unfollow<",
+        ">subscribe<",
+        ">following<", // the indicator must be a neutral LABEL, never a >Following< control element
+        // mutating htmx swaps (a render-only affordance carries NO hx-* mutation)
+        "hx-post",
+        "hx-delete",
+        "hx-put",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "C-1 (slice-16, CARDINAL): the /search follow-state affordances must BOTH be \
+             render-only TEXT — NO executable follow/unfollow/subscribe control, NO \
+             mutating hx-* swap (the viewer holds no key; the follow stays the slice-03 \
+             CLI); found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+/// Slice-16 graceful-degrade (E) — the RED-scaffolded TRUE active-set-read-failure
+/// seam. Start the viewer wired to a reachable index BUT with the LOCAL
+/// active-subscription read forced to FAIL mid-request, so the relationship
+/// resolution must degrade to an EMPTY active set → every author NetworkUnfollowed
+/// (the slice-08 status quo) — no crash, no blank, no 5xx, no leaked error
+/// (C-7 / WD-SF-6 / ADR-053 D5 / §Earned-Trust).
+///
+/// SEEDING-SEAM NOTE (documented DISTILL choice): the slice-08/15 viewer harness
+/// holds ONE long-lived DuckDB connection taken at STARTUP (wire→probe→use,
+/// ADR-028/030), so the existing `make_store_unreadable` lock would refuse STARTUP
+/// rather than exercise a MID-REQUEST read failure. There is NO readily-available
+/// mid-request read-failure seam in the slice-08/15 harness. Per the DISTILL guidance,
+/// the OBSERVABLE degrade-TARGET contract (empty active set → all-`peer add`,
+/// byte-equal slice-08) is pinned by the none-followed scenario (fully exercisable
+/// today); this seam scaffolds the TRUE read-failure path for DELIVER to materialize
+/// (mirroring how slice-08 left `start_inner` as `todo!()` for DELIVER). DELIVER picks
+/// the fault-injection mechanism (e.g. an `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` test
+/// seam in the effect shell, or a per-request connection that can be poisoned) with the
+/// SAME observable contract: a failed active-set read degrades to all-NetworkUnfollowed.
+///
+/// SCAFFOLD: true (slice-16) — `todo!()` body classifies the E2 scenario RED
+/// (MISSING_FUNCTIONALITY: the fault-injection seam does not exist yet), NOT BROKEN.
+pub fn start_viewer_with_failing_active_set_read(
+    _env: &TestEnv,
+    _indexer: IndexerHandle,
+) -> ViewerServer {
+    // SCAFFOLD: true (slice-16) — DELIVER materializes the mid-request active-set-read
+    // fault-injection seam (the effect shell must map a read `Err(_)` to an EMPTY set →
+    // all-NetworkUnfollowed, ADR-053 D5). Until then this `todo!()` keeps the E2
+    // scenario RED for the RIGHT reason (the degrade-on-read-failure path is missing).
+    todo!(
+        "slice-16 (US-SF-001 / C-7 / WD-SF-6 / ADR-053 D5): DELIVER materializes the \
+         mid-request active-set-read fault-injection seam so the viewer degrades a failed \
+         LOCAL active-subscription read to an EMPTY set (every author NetworkUnfollowed, \
+         the slice-08 status quo) — no crash, no blank, no 5xx, no leaked error. The \
+         OBSERVABLE degrade-target contract is already pinned by the none-followed \
+         scenario; this seam exercises the TRUE read-failure path."
+    )
 }

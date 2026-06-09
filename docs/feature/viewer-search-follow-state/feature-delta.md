@@ -323,8 +323,79 @@ external integration introduced → no new contract-test annotation.
 
 ---
 
+## Wave: DISTILL / [REF] Acceptance scenarios (Quinn, 2026-06-09)
+
+DISTILL artifacts under `docs/feature/viewer-search-follow-state/distill/`
+(`test-scenarios.md`, `walking-skeleton.md`, `red-classification.md`) + the two executable
+`.feature`-equivalent Rust AT files. ALL scenarios scaffolded RED (ADR-025); DISTILL is the
+canonical AT author. Reconciliation HARD GATE: **0 contradictions** (DISCUSS WD-SF-1..11 vs
+DESIGN WD-SF-D1..D6 — DESIGN explicitly resolves the DISCUSS-deferred questions consistently;
+no DEVOPS file — thin brownfield slice, WARN + default matrix, mirroring slice-08/15).
+
+**Driving port:** `GET /search` port-to-port via the REAL `openlore ui` subprocess
+(`ViewerServer::start_with_indexer`, the slice-08 harness) + in-test HTTP (full page + htmx
+fragment). Network index = the ONLY mocked boundary (REAL slice-05 `openlore-indexer serve`
+over a seeded corpus). LOCAL DuckDB = REAL; an active subscription whose bare DID equals a
+search-result author is seeded via the REAL slice-03 `peer add` verb. Layer 3/5, EXAMPLE-only
+(Mandate 9/11). Tier A only — Tier B not warranted (binary per-row resolution, not a chained
+state machine; Mandate 10 skip).
+
+**Scenarios (14 total): 10 stories (SF-1..SF-10) + 4 GOLD (SF-INV-*).** Every AC theme A–G is
+covered; error/edge ratio 5/10 = 50% (≥40%). Files:
+`tests/acceptance/viewer_search_follow_state.rs`,
+`tests/acceptance/viewer_search_follow_state_invariants.rs`,
+`tests/acceptance/support/mod.rs` (seeds + asserts appended), `crates/cli/Cargo.toml` (two
+new `[[test]]` bins). Full table + tags + AC mapping in `distill/test-scenarios.md`.
+
+**Walking skeleton (SF-1):** `a_followed_author_shows_following_while_an_unfollowed_author_keeps_peer_add`
+— in ONE `/search`, a followed author (Rachel, seeded active sub) shows "Following" + no add
+while an unfollowed author (Priya) keeps `openlore peer add did:plc:priya-test`. Exercises all
+3 integration points (READ active set → RESOLVE per row → RENDER differentiated affordance).
+
+**Seeds/asserts:** `seed_active_subscription_for(env, did, seed)` (REAL `peer add`,
+subscribe-only); `sf_corpus_one_followed_one_unfollowed` / `_all_authors_followed` /
+`_many_results_one_followed`; `start_viewer_with_failing_active_set_read` (RED `todo!()` seam
+for Theme E); asserts `assert_search_row_following` / `assert_search_row_offers_follow` /
+`assert_search_follow_state_is_render_only`; REUSED slice-08/15 attribution / anti-merging /
+no-leak / read-only-delta helpers. `seed_network_index_from_specs` promoted to `pub` (no
+behavior change).
+
+**Graceful-degrade (Theme E) seam — documented choice:** the slice-08/15 harness holds ONE
+startup-acquired DuckDB connection, so no readily-available mid-request read-failure seam
+exists. E is scaffolded as TWO scenarios: SF-3 pins the OBSERVABLE degrade-TARGET (empty
+active set → slice-08 status quo, exercisable today, green guard); SF-8 scaffolds the TRUE
+read-failure path as a `todo!()` seam DELIVER materializes (ADR-053 §Earned-Trust).
+
+**RED confirmation (serial):** 8 story RED + 2 invariant RED — all MISSING_FUNCTIONALITY
+(`to_indexed_claim` hardcodes `NetworkUnfollowed`; the `SubscribedPeer` resolution +
+`render_following_indicator` + `SEARCH_FOLLOWING_INDICATOR` + the degrade seam don't exist).
+Zero BROKEN. 4 green guards (SF-3, SF-4, SF-INV-NoControl, SF-INV-ReadOnly) confirm the
+helpers don't false-RED. check-arch OK (21 members); slice-08 suite still compiles. Detail in
+`distill/red-classification.md`.
+
+**Mandate compliance:** CM-A (every scenario enters `GET /search` via the real subprocess; no
+internal-component imports) · CM-B (business-language scenario names; technical detail in
+helper bodies) · CM-C (complete discovery→follow-accuracy journeys) · CM-E/CM-H (Mandate 8
+read-only state-delta gold; Mandate 11 example-based sad paths) · CM-F (no PBT machinery at
+layer 3) · CM-G (Tier B correctly absent, documented).
+
+---
+
 ## Changelog
 
+- 2026-06-09 — Quinn — slice-16 DISTILL. 14 scaffolded-RED acceptance scenarios (10 stories
+  SF-1..SF-10 + 4 GOLD SF-INV-*) over the `/search` follow-state accuracy, driving the REAL
+  `openlore ui` `GET /search` via `ViewerServer::start_with_indexer` (slice-08 harness) with
+  an active subscription seeded via the REAL slice-03 `peer add` verb into the SAME REAL
+  DuckDB the viewer reads (the network index is the ONLY mocked boundary). Covers AC themes
+  A–G (accuracy / read-only / LOCAL-offline / no-N+1 / graceful-degrade / parity /
+  anti-merging); 50% error-edge ratio. Tier A only (binary per-row resolution; Tier B not
+  warranted). Theme-E true read-failure scaffolded as a `todo!()` fault-injection seam
+  (SF-8), the degrade-target pinned by SF-3 (documented seam choice). Reconciliation HARD GATE
+  passed (0 contradictions). RED genuine (MISSING_FUNCTIONALITY — the SubscribedPeer
+  resolution + "Following" render arm + degrade seam are absent); check-arch OK (21); slice-08
+  suite still compiles. No new crate/route/variant/read-method/persisted-type; no infra-policy
+  row appended (one-line slice-16 note added to the viewer row).
 - 2026-06-09 — Morgan — slice-16 DESIGN. Effect-shell relationship resolution
   (`resolve_search_state` reads the REUSED slice-15 active set ONCE into a `HashSet`,
   threads it into `to_indexed_claim`, binary `SubscribedPeer`/`NetworkUnfollowed`, `You`
