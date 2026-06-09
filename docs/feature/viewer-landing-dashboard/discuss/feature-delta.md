@@ -392,8 +392,48 @@ See `dor-checklist.md`. Verdict: **PASS (9/9)** for all 2 stories.
 
 ---
 
+## Wave: DESIGN / [REF] DESIGN-wave delta (Morgan, nw-solution-architect)
+
+> Wave: DESIGN (lean) · 2026-06-09 · ADR: **ADR-054** · Artifacts under `design/`
+> (`architecture-design.md`, `component-boundaries.md`, `technology-stack.md`,
+> `data-models.md`). Functional paradigm honored (ADR-007: pure render core, effect
+> shell). Architecture unchanged: Hexagonal + Modular Monolith (ADR-009).
+
+DESIGN resolved the three open DISCUSS sub-decisions and produced lean artifacts:
+
+- **WD-LD-5 (active-subs count-read) → COUNT-ONLY VARIANT (ADR-054 D3).** Add a
+  read-only `count_active_peer_subscriptions()` to `StoreReadPort`
+  (`SELECT COUNT(*) FROM peer_subscriptions WHERE removed_at IS NULL`). Chosen over
+  `.len()` for symmetry with `count_claims`/`count_peer_claims` and cheapness (avoids
+  materializing the LEFT JOIN/GROUP BY/per-peer-COUNT rows just to count rows). It is
+  a READ method — no mutation added; `ports` +1 sig, `adapter-duckdb` +1 `COUNT(*)`.
+- **WD-LD-7 (`/scrape` link) → MINT `SCRAPE_URL = "/scrape"` (ADR-054 D4).** The hub
+  links all 8 surfaces via URL consts (7 existing + the minted `SCRAPE_URL`); no
+  hardcoded path drifts.
+- **WD-LD-9 (shape) → FULL-PAGE-ONLY (ADR-054 D5).** `render_landing(summary) ->
+  String` returns a complete document; `GET /` does NOT fork by `Shape` (nothing
+  targets `/` with an htmx swap). Parity holds by construction (one render).
+- **View-model (ADR-054 D1/D2):** `LandingSummary { own_claims, peer_claims,
+  active_peers: Option<usize> }` — `Some(n)`=read, `None`=failed read (renders the
+  `MISSING_COUNT_MARKER` "—"), so `0 ≠ missing` is type-level and a fabricated 0 is
+  unrepresentable. Per-count INDEPENDENT degrade in the effect shell via `.ok()` (the
+  slice-12 `unwrap_or_default` precedent generalized). Never a 5xx.
+
+**Crate touch (NO new crate; workspace stays 21):** `viewer-domain` (pure —
+`render_landing(&LandingSummary)`, add `LandingSummary` + `SCRAPE_URL` +
+`MISSING_COUNT_MARKER`), `adapter-http-viewer` (effect — `landing_page` threads the
+store, resolves 3 counts, builds the summary), `ports` (+1 read-only count method),
+`adapter-duckdb` (+1 `COUNT(*)` impl). xtask check-arch UNCHANGED. NO new route. NO
+network. NO external integration (no contract-test annotation applies). Read-only
+preserved across all 3 enforcement layers (type + xtask + behavioral gold).
+
 ## Changelog
 
+- 2026-06-09 — slice-17 DESIGN (Morgan). ADR-054 captures the landing-dashboard
+  design: Option-shaped `LandingSummary` (per-count independent degrade), count-only
+  `count_active_peer_subscriptions` (WD-LD-5), nav hub of 8 URL consts incl. minted
+  `SCRAPE_URL` (WD-LD-7), full-page-only `GET /` (WD-LD-9), read-only. NO new
+  crate/route; workspace 21.
 - 2026-06-09 — slice-17 (`viewer-landing-dashboard`) DISCUSS. Traces to J-002 (the
   ORIENTATION / FRONT-DOOR facet of "explore the graph to inform a decision"). 2 stories
   (1 infra + 1 user-visible). EXTENDS the existing read-only `GET /` route (NO new route);
