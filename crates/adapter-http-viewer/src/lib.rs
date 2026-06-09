@@ -1437,12 +1437,22 @@ mod tests {
     //! Adapter-level unit tests for the slice-07 htmx surface. The asset integrity
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
-    use super::{bare_did, to_indexed_claim, HTMX_ASSET, HTMX_ASSET_SHA256};
+    use super::{
+        bare_did, landing_page, peer_claims_count_with_fault_seam, to_indexed_claim, SharedStore,
+        ViewerServer, HTMX_ASSET, HTMX_ASSET_SHA256,
+    };
+    use http_body_util::BodyExt;
+    use hyper::StatusCode;
     use chrono::Utc;
     use claim_domain::{Cid, Did, KeyId};
-    use ports::{AuthorRelationship, NetworkResultRowRaw};
+    use ports::{
+        AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow,
+        NetworkResultRowRaw, Page, PageRequest, PeerClaimRow, PeerSubscriptionSummary, StoreReadError,
+        StoreReadPort, SurveyRow,
+    };
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     /// Behavior (ADR-031 — vendored-asset integrity): the embedded
     /// `assets/htmx.min.js` bytes hash to the pinned [`HTMX_ASSET_SHA256`]
@@ -1566,5 +1576,284 @@ mod tests {
             "did:plc:rachel-test"
         );
         assert_eq!(bare_did("did:plc:rachel-test"), "did:plc:rachel-test");
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-17 (US-LD-000/001 / ADR-054) — the landing dashboard (`GET /`). The
+    // package-scoped `cargo mutants -p adapter-http-viewer --in-diff` harness runs
+    // ONLY these in-crate unit tests (NOT the cli-package acceptance suite that
+    // also covers this code), so these fast (<1ms) port-to-port tests pin the
+    // landing surface directly: the `landing_page` render (the read→build→render
+    // SANDWICH over a fake `StoreReadPort`), the `route` GET-/ dispatch (a real
+    // loopback request through the hyper accept loop), and the peer-claims-count
+    // fault seam (identity pass-through + the debug-only `Err` injection). Each
+    // test fails if its target line is mutated as the survivor described.
+    // -------------------------------------------------------------------------
+
+    /// A canned read-only [`StoreReadPort`] for the landing-surface unit tests: the
+    /// THREE landing counts (`count_claims`, `count_peer_claims`,
+    /// `count_active_peer_subscriptions`) return the values it was built with; every
+    /// other port method is unreachable on the `GET /` path and `unimplemented!()`s
+    /// (the landing handler reads ONLY the three counts — ADR-054 D1). Mirrors the
+    /// slice-16 fake-port-as-pure-function precedent: a hand-rolled stub at the port
+    /// boundary, no mock library.
+    struct FakeLandingStore {
+        own_claims: Result<usize, StoreReadError>,
+        peer_claims: Result<usize, StoreReadError>,
+        active_peers: Result<usize, StoreReadError>,
+    }
+
+    impl FakeLandingStore {
+        /// A fake whose three counts all succeed with the given numbers.
+        fn with_counts(own: usize, peer: usize, active: usize) -> Self {
+            Self {
+                own_claims: Ok(own),
+                peer_claims: Ok(peer),
+                active_peers: Ok(active),
+            }
+        }
+    }
+
+    fn cloned_count(read: &Result<usize, StoreReadError>) -> Result<usize, StoreReadError> {
+        match read {
+            Ok(n) => Ok(*n),
+            Err(_) => Err(StoreReadError::Unreadable {
+                detail: "fake landing-store count read fault".to_string(),
+            }),
+        }
+    }
+
+    impl StoreReadPort for FakeLandingStore {
+        fn count_claims(&self) -> Result<usize, StoreReadError> {
+            cloned_count(&self.own_claims)
+        }
+        fn count_peer_claims(&self) -> Result<usize, StoreReadError> {
+            cloned_count(&self.peer_claims)
+        }
+        fn count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError> {
+            cloned_count(&self.active_peers)
+        }
+
+        // Not on the `GET /` landing path — unreachable for these tests.
+        fn list_claims(&self, _r: PageRequest) -> Result<Page<ClaimRow>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn get_claim(&self, _cid: &str) -> Result<Option<ClaimDetail>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn list_peer_claims(&self, _r: PageRequest) -> Result<Page<PeerClaimRow>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn query_contributor_scoring_feed(
+            &self,
+            _c: &Did,
+        ) -> Result<Vec<AttributedClaim>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn query_project_survey(&self, _s: &str) -> Result<Vec<SurveyRow>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn query_philosophy_survey(&self, _o: &str) -> Result<Vec<SurveyRow>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn query_counter_claims(
+            &self,
+            _t: &str,
+        ) -> Result<Vec<CounterClaimRow>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn counter_presence_for(
+            &self,
+            _c: &[String],
+        ) -> Result<HashSet<String>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn list_active_peer_subscriptions(
+            &self,
+        ) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+    }
+
+    /// The 8 shipped nav-hub surface labels the landing dashboard MUST link
+    /// (WD-LD-7 / Theme 2). Pinned here so the in-crate render assertion checks the
+    /// full hub, not just one link — a dropped surface fails this test.
+    const LANDING_HUB_LABELS: &[&str] = &[
+        "My Claims",
+        "Peer Claims",
+        "Project Survey",
+        "Philosophy Survey",
+        "Contributor Score",
+        "Network Search",
+        "Live Scrape",
+        "Peer Subscriptions",
+    ];
+
+    /// Behavior (ADR-054 D1 / lib.rs:425): `landing_page` renders the at-a-glance
+    /// summary (the three LOCAL counts read over the store) PLUS the 8-surface nav
+    /// hub. With a fake store returning own=12 / peer=7 / active=2, the rendered body
+    /// contains each labelled count and every hub link. Kills the `:425 landing_page
+    /// -> empty Response` mutant: an empty body carries none of these markers, so the
+    /// assertions fail under the mutation.
+    #[tokio::test]
+    async fn landing_page_renders_the_three_counts_and_the_eight_surface_hub() {
+        let store = FakeLandingStore::with_counts(12, 7, 2);
+
+        let response = landing_page(&store);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("landing body collects")
+            .to_bytes();
+        let body = String::from_utf8(bytes.to_vec()).expect("landing body is UTF-8 HTML");
+
+        // The three at-a-glance counts, each with its label (read→build→render).
+        assert!(
+            body.contains("12 own claims"),
+            "the landing body must render the own-claims count: {body}"
+        );
+        assert!(
+            body.contains("7 peer claims"),
+            "the landing body must render the peer-claims count: {body}"
+        );
+        assert!(
+            body.contains("2 active peers"),
+            "the landing body must render the active-peers count: {body}"
+        );
+        // The full 8-surface discoverability hub (WD-LD-7) — a dropped surface fails.
+        for label in LANDING_HUB_LABELS {
+            assert!(
+                body.contains(label),
+                "the landing nav hub must link the {label:?} surface: {body}"
+            );
+        }
+    }
+
+    /// Behavior (lib.rs:355 + :321): `route` dispatches `GET /` to `landing_page` and
+    /// returns `200` with the landing body. Exercised through the REAL hyper accept
+    /// loop over a bound loopback `ViewerServer` (a raw HTTP/1.1 request on a TCP
+    /// socket — `Request<Incoming>` is not constructible directly, so this is an
+    /// in-crate wiring test that drives the genuine `route` path). Kills BOTH the
+    /// `:355 delete "/" arm` mutant (which would fall through to the `_` 404 arm — a
+    /// `404` "Not found." body, failing the 200 + landing-content assertion) AND the
+    /// `:321 route -> empty Response` mutant (an empty body carries no landing
+    /// markers).
+    #[tokio::test]
+    async fn route_dispatches_get_root_to_the_landing_page_with_200() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let store: SharedStore = Arc::new(FakeLandingStore::with_counts(12, 7, 2));
+        let addr = "127.0.0.1:0".parse().expect("loopback addr parses");
+        let server = ViewerServer::bind(addr, store).expect("bind loopback ephemeral port");
+        let bound = server.local_addr();
+
+        // Drive the real accept loop in the background; the client below sends one
+        // request over a fresh TCP connection, so the server routes a genuine
+        // `Request<Incoming>` through `route` -> the `GET /` arm -> `landing_page`.
+        tokio::spawn(server.serve());
+
+        let mut stream = TcpStream::connect(bound)
+            .await
+            .expect("connect to the bound viewer");
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write the GET / request");
+
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("read the full HTTP response");
+        let response = String::from_utf8_lossy(&raw);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "GET / must dispatch to the landing page with 200 (not a 404 route-miss): {response}"
+        );
+        // The landing body (the dispatch reached `landing_page`, not an empty/404 body).
+        assert!(
+            response.contains("12 own claims"),
+            "GET / must return the landing summary body: {response}"
+        );
+        assert!(
+            response.contains("My Claims"),
+            "GET / must return the landing nav hub: {response}"
+        );
+    }
+
+    /// Behavior (lib.rs:464/:478): the peer-claims-count fault seam is the IDENTITY on
+    /// the real read when the fault env-var is unset — the genuine `Ok(7)` flows
+    /// through verbatim. Kills BOTH the `:464/:478 -> Ok(0)` and `-> Ok(1)` mutants:
+    /// they would return `0` / `1`, not the `7` the real read carried, so the
+    /// `assert_eq!(_, Ok(7))` fails under either mutation. (Asserted via the rendered
+    /// landing count, since the seam fn is `#[cfg(debug_assertions)]` and returns the
+    /// `StoreReadError` enum which is not `PartialEq`.)
+    #[test]
+    fn peer_claims_count_seam_passes_the_real_read_through_when_unset() {
+        // Serialize with the sibling inject test so its `set_var` cannot leak into
+        // this pass-through read window (poison-recovering).
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Guard: the fault env-var must be unset for the identity behavior.
+        assert!(
+            std::env::var_os(FAULT_ENV).is_none(),
+            "the fault seam env-var must be unset for the pass-through assertion"
+        );
+        let passed = peer_claims_count_with_fault_seam(Ok(7));
+        match passed {
+            Ok(n) => assert_eq!(
+                n, 7,
+                "the seam must pass the real read through verbatim (kills Ok(0)/Ok(1))"
+            ),
+            Err(e) => panic!("the seam must not inject an error when unset: {e}"),
+        }
+    }
+
+    /// The fault-injection env-var the slice-17 peer-claims-count seam reads (the
+    /// production seam under test; ADR-054 D2). Pinned here so the env-var name has
+    /// one in-crate source of truth.
+    const FAULT_ENV: &str = "OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT";
+
+    /// `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` is process-global, and Rust runs unit
+    /// tests multi-threaded within one binary — so the pass-through test (asserts the
+    /// var is UNSET) and the inject test (SETs it) would race (the `set_var` leaking
+    /// into the pass-through read window). Serialize the two on this lock so each owns
+    /// the env var for its read window (poison-recovering — a panic in one must not
+    /// cascade), mirroring the serialized env-var discipline of commit 2629e56.
+    static FAULT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Behavior (lib.rs:464, `#[cfg(debug_assertions)]` only): with the fault env-var
+    /// SET, the seam substitutes a genuine `Err` for the real read — exercising the
+    /// SAME `.ok() -> None -> "—"` per-count degrade the production path runs (ADR-054
+    /// D2 / C-2 CARDINAL). Pins the fault injection so the `:464 -> Ok(0)/Ok(1)`
+    /// mutants (which would IGNORE the env-var and return a fabricated success) are
+    /// killed from the inject side too. The env-var is set+removed within this single
+    /// test (no parallel test reads it — the only other reader is this module's
+    /// pass-through test, which asserts the var is unset; the two never overlap
+    /// because this one removes the var before returning, mirroring the serialized
+    /// env-var discipline of commit 2629e56).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn peer_claims_count_seam_injects_err_when_the_fault_env_var_is_set() {
+        // Hold the env lock across the whole set -> exercise -> remove window so the
+        // sibling pass-through test never observes this fault pin (poison-recovering).
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Isolation: set, exercise, then ALWAYS remove before releasing the lock.
+        std::env::set_var(FAULT_ENV, "1");
+        let injected = peer_claims_count_with_fault_seam(Ok(7));
+        std::env::remove_var(FAULT_ENV);
+
+        assert!(
+            injected.is_err(),
+            "with the fault env-var set, the seam must inject a genuine Err so the \
+             production .ok() -> None -> missing-marker degrade runs (ADR-054 D2)"
+        );
     }
 }
