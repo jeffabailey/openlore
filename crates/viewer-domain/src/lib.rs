@@ -1754,13 +1754,12 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
 /// `openlore peer add <bare-did>` command the operator runs to follow the author.
 /// It is GUIDANCE ONLY: NO `<button>`/`<form>`/`hx-*` control, NO auto-subscribe.
 /// The BARE DID (the slice-03 `peer add` verb's accepted form) is derived by
-/// stripping any app-identity `#…` fragment, mirroring the CLI `search` follow
-/// affordance. PURE total function.
+/// stripping any app-identity `#…` fragment (via the shared [`bare_did`] SSOT),
+/// mirroring the CLI `search` follow affordance. PURE total function.
 fn render_follow_guidance(author_did: &str) -> Markup {
-    let bare = author_did.split('#').next().unwrap_or(author_did);
     html! {
         " "
-        p { (SEARCH_FOLLOW_GUIDANCE_PREFIX) " " (bare) }
+        p { (SEARCH_FOLLOW_GUIDANCE_PREFIX) " " (bare_did(author_did)) }
     }
 }
 
@@ -2779,12 +2778,12 @@ fn render_peer_row(peer: &PeerSubscriptionSummary) -> Markup {
 /// DID. It is GUIDANCE ONLY: NO `<button>`/`<form>`/`hx-*` control, NO executable
 /// unsubscribe — the read-only viewer holds no key, so revoking stays a deliberate
 /// CLI action. The BARE DID (the slice-03 `peer remove` verb's accepted form) is
-/// derived by stripping any app-identity `#…` fragment, mirroring the CLI affordance.
-/// PURE total function.
+/// derived by stripping any app-identity `#…` fragment (via the shared [`bare_did`]
+/// SSOT, the SAME strip the slice-08 follow guidance + `/score` cross-link use),
+/// mirroring the CLI affordance. PURE total function.
 fn render_remove_guidance(peer_did: &str) -> Markup {
-    let bare = peer_did.split('#').next().unwrap_or(peer_did);
     html! {
-        p { (PEER_REMOVE_GUIDANCE_PREFIX) " " (bare) }
+        p { (PEER_REMOVE_GUIDANCE_PREFIX) " " (bare_did(peer_did)) }
     }
 }
 
