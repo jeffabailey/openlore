@@ -427,7 +427,131 @@ store, resolves 3 counts, builds the summary), `ports` (+1 read-only count metho
 network. NO external integration (no contract-test annotation applies). Read-only
 preserved across all 3 enforcement layers (type + xtask + behavioral gold).
 
+## Wave: DISTILL / [REF] Inherited commitments
+
+| Origin | Commitment | DDD | Impact |
+|--------|------------|-----|--------|
+| DESIGN#ADR-054 D1/D2 | `LandingSummary { own/peer/active: Option<usize> }`; failed read → `None` → `MISSING_COUNT_MARKER`; `0 ≠ missing` type-level | n/a | Scenarios pin the rendered missing-marker "—" vs honest "0" (LD-DEGRADE, LD-INV-MissingNotZero); a fabricated 0 on failure is forbidden + unrepresentable |
+| DESIGN#ADR-054 D3 | count-only `count_active_peer_subscriptions()` (`COUNT(*) WHERE removed_at IS NULL`) | n/a | Active-peer count seeded via real `peer add`; LD-SOFTREMOVED pins the active-only filter (soft-removed peer not counted, BR-LD-2) |
+| DESIGN#ADR-054 D4 | mint `SCRAPE_URL = "/scrape"`; hub links 8 surfaces via URL consts | n/a | LD-URLCONST asserts the 8 hrefs incl. the newly-minted `/scrape`; no drift |
+| DESIGN#ADR-054 D5 | full-page-only `GET /` (no `Shape` fork) | n/a | Scenarios drive `viewer.get("/")` (no `get_htmx`); parity holds by construction (one render) |
+| DISCUSS#WD-LD-1 (CARDINAL) | read-only / no key — every affordance a plain `<a href>` | n/a | LD-READONLY + LD-INV-NoWrite scan no form/button/sign/compose/subscribe/follow control on any `/` render |
+| DISCUSS#WD-LD-2 (CARDINAL) | LOCAL-only / offline + graceful degrade (failed count → missing, never 5xx) | n/a | LD-OFFLINE + LD-INV-Offline + LD-INV-OfflineChrome; LD-DEGRADE asserts 200 + "—" + no stack trace |
+| DISCUSS#WD-LD-6 / BR-LD-1 | counts are aggregates, never merges; content stays on the surfaces | n/a | LD-AGGREGATE asserts a single peer-claims count + NO per-author DID/score/consensus on `/` |
+
+## Wave: DISTILL / [REF] Scenario list with tags + AC mapping
+
+> Two-tier: Tier A ONLY (Mandate 10 skip — single-shot orientation render, no chained
+> ≥3-scenario journey, no domain-rich input space). All scenarios are
+> layer-3/layer-5 subprocess + real-I/O, EXAMPLE-only (Mandate 9/11; no PBT machinery).
+> Driving port: the REAL `openlore ui` subprocess (`ViewerServer::start`) + in-test HTTP
+> `GET /`. SSOT for scenarios = the two `.feature`-equivalent Rust test files.
+
+**Story scenarios** — `tests/acceptance/viewer_landing_dashboard.rs`:
+
+| Scenario | Tags | AC theme |
+|---|---|---|
+| `the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub` | `@walking_skeleton @driving_port @driving_adapter @real-io @kpi-view-1 @happy` | Theme 1 (US-LD-001) |
+| `a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub` | `@driving_port @real-io @empty-state @edge` | Theme 1 Ex 2 |
+| `the_front_door_links_every_shipped_surface_and_no_deep_route` | `@driving_port @real-io @discoverability @c-3 @happy` | Theme 2 |
+| `each_surface_link_uses_the_routes_url_constant_including_scrape` | `@driving_port @real-io @discoverability @scrape-url @happy` | Theme 2 |
+| `the_front_door_exposes_no_write_compose_sign_subscribe_or_follow_control` | `@driving_port @real-io @read-only @c-1 @cardinal @happy` | Theme 3 |
+| `a_failed_peer_claims_read_degrades_to_a_missing_number_state_without_a_5xx` | `@driving_port @real-io @infrastructure-failure @missing-not-zero @c-2 @cardinal @error` | Theme 4 |
+| `the_front_door_renders_fully_with_the_network_down` | `@driving_port @real-io @offline @no-cdn @c-2 @happy` | Theme 5 |
+| `the_store_summary_shows_an_aggregate_count_never_a_merged_consensus_record` | `@driving_port @real-io @anti-merging @c-7 @br-ld-1 @happy` | Theme 7 |
+| `a_soft_removed_peer_is_not_counted_in_the_active_peer_summary` | `@driving_port @real-io @active-only @br-ld-2 @boundary` | Theme 8 (US-LD-000) |
+
+**GOLD invariants** — `tests/acceptance/viewer_landing_dashboard_invariants.rs`:
+
+| Invariant | Tags | Guards |
+|---|---|---|
+| `every_landing_render_leaves_the_store_read_only` | `@read-only @c-1 @gold` | C-1 / Mandate 8 (state-delta `unchanged`) |
+| `no_landing_response_adds_a_write_or_mutating_control` | `@read-only @no-write @c-1 @cardinal @gold` | C-1 CARDINAL |
+| `the_landing_page_chrome_stays_offline_no_cdn` | `@offline @no-cdn @c-2 @gold` | C-2 / KPI-HX-G2 |
+| `the_landing_surface_works_fully_offline` | `@offline @c-2 @gold` | C-2 / KPI-5 |
+| `the_landing_summary_is_a_fixed_set_of_reads_invariant_to_store_size` | `@property @no-n-plus-1 @c-4 @gold` | C-4 / I-LD-7 (N+1 proxy) |
+| `missing_is_distinct_from_zero_on_the_front_door` | `@missing-not-zero @c-2 @cardinal @infrastructure-failure @gold` | C-2 / WD-LD-8 / BR-LD-3 |
+| `the_front_door_links_all_eight_surfaces` | `@discoverability @c-3 @gold` | C-3 / WD-LD-7 |
+
+Theme 6 (htmx-vs-no-JS parity) is satisfied BY CONSTRUCTION (ADR-054 D5 full-page-only
+— one render, no `Shape` fork) and needs no separate parity scenario (a parity scenario
+would assert `get == get_htmx`, but there is no fragment to fork; the slice-15 `Shape`
+parity pattern is N/A here). Recorded as covered-by-design, not by a test.
+
+Error/edge ratio: 4 of 9 story scenarios are error/edge/boundary (empty-state,
+missing≠zero failed-read, active-only soft-removed, plus the no-deep-route negative) ≈
+44% — above the 40% mandate. The GOLD suite adds 2 more failure/degrade golds
+(missing≠zero, offline).
+
+## Wave: DISTILL / [REF] Walking-skeleton + new seeds/asserts + RED
+
+**WS strategy** (Architecture of Reference — driving port = real CLI subprocess; driven
+internal = real DuckDB via `OPENLORE_HOME`; no driven-external/non-deterministic port on
+`/`): ONE thick `@walking_skeleton` —
+`the_front_door_shows_the_local_store_summary_and_the_full_navigation_hub` — drives the
+production composition root (`openlore ui` over a REAL store seeded by the production
+`claim add` + `peer add` + `peer pull` verbs) and asserts the demo-able outcome: the
+front door shows the 3 LOCAL counts (12/7/2) + links all 8 surfaces + keeps the
+read-only notice. A non-technical stakeholder confirms "yes — open the viewer and orient:
+what's here + where to go."
+
+**New seeds/asserts** (`tests/acceptance/support/mod.rs`):
+- `seed_landing_store_summary(env) -> HeldSubscriptions` — 12 own (`claim add`) + 7 peer
+  (Rachel via `peer add`+`peer pull`) + 2 active (Rachel + Tobias via `peer add`); pins
+  the genuine 3-count shape.
+- `seed_empty_store_for_landing(env)` — the honest-zeros precondition (a fresh store).
+- `start_viewer_with_failing_peer_claims_count(env)` — the missing≠zero failed-read seam:
+  threads the test-only `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` env var into `start_inner`
+  (a new `fail_peer_claims_count` param, all prior callers pass `false`). Per the slice-16
+  SF-8 precedent (the viewer holds one long-lived startup DuckDB connection, so there is no
+  ready mid-request per-count read-failure seam) — DISTILL scaffolds the OBSERVABLE
+  missing-number contract; DELIVER materializes the `#[cfg(debug_assertions)]`-gated,
+  release-forbidden, xtask-guarded effect-shell branch substituting `Err(StoreReadError)`
+  for the real `count_peer_claims()` read. The SUCCESSFUL-zero side is fully exercised
+  today via `seed_empty_store_for_landing`.
+- asserts: `assert_landing_shows_count(body,label,n)`, `assert_landing_count_missing(body,
+  label)`, `assert_landing_links_all_surfaces(body)` [all 8 hrefs], `assert_landing_no_deep_
+  route_toplevel(body)`, `assert_landing_read_only_no_control(body)`. Plus consts
+  `LANDING_PATH`, `LANDING_OWN/PEER/ACTIVE` (12/7/2), `LANDING_MISSING_COUNT_MARKER` ("—"),
+  `LANDING_TOP_LEVEL_SURFACES` (8 label/href pairs), `READ_ONLY_NOTICE_TEXT`.
+
+**RED confirmation** (fail-for-the-right-reason gate — ADR-025 RED entry): both suites
+COMPILE; the slice-06/15/16 viewer suites still compile (the `start_inner` signature change
+is absorbed by all callers); `check-arch` workspace stays 21. Running against the current
+storeless `/` (slice-06 front door: `<h1>` + `READ_ONLY_NOTICE` + one `/claims` link), the
+9 story + 7 gold scenarios classify:
+- **8 story + 4 gold FAIL = RED (MISSING_FUNCTIONALITY)** — the 3 counts + 8-surface hub +
+  missing-marker are ABSENT (the production `LandingSummary` / extended `render_landing` /
+  `SCRAPE_URL` / `count_active_peer_subscriptions` / `MISSING_COUNT_MARKER` seams do not
+  exist yet). Each reaches its business assertion AFTER the real production seeds succeed —
+  no import/fixture/setup error. The ATs drive `GET /` via subprocess HTTP (never the Rust
+  `render_landing` signature), so the production signature change (adding `&LandingSummary`)
+  is DELIVER's job and does not break AT compilation.
+- **1 story + 3 gold PASS = legitimate GUARDRAILS, not Fixture Theater** — the read-only /
+  no-write / offline-chrome / store-read-only invariants hold TODAY on the near-empty `/`
+  and MUST stay green after DELIVER adds the counts + hub (they are regression guards over
+  the new richer page: the hub of `<a href>` links + counts must introduce no mutating
+  control, no CDN, no store write). These are inherited slice-06 guarantees re-pinned for
+  the front door; their green is the correct invariant-gold posture (they fail only if the
+  slice REGRESSES a CARDINAL invariant).
+- **Missing≠zero failed-read seam**: the `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` env var is
+  currently a no-op (the production effect shell does not yet honor it), so
+  `start_viewer_with_failing_peer_claims_count` starts the slice-06 storeless `/` and the
+  scenario fails at the hub/count assertion (MISSING_FUNCTIONALITY) — the SAME RED reason.
+  DELIVER materializes the seam + the degrade arm together.
+
 ## Changelog
+
+- 2026-06-09 — slice-17 DISTILL (Quinn). Authored ALL acceptance tests as scaffolded RED
+  (ADR-025): `viewer_landing_dashboard.rs` (9 story scenarios incl. the `@walking_skeleton`)
+  + `viewer_landing_dashboard_invariants.rs` (7 GOLD invariants). Extended
+  `tests/acceptance/support/mod.rs` with the landing seeds/asserts + the
+  `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` failed-read seam (new `start_inner` param).
+  Registered both test binaries in `crates/cli/Cargo.toml`. Wave-decision reconciliation:
+  0 contradictions (DESIGN resolved the 3 open DISCUSS sub-decisions consistently; CARDINALs
+  preserved). Both suites compile; prior viewer suites + workspace-21 unaffected; RED
+  confirmed (MISSING_FUNCTIONALITY) for the 12 unimplemented scenarios, the 4 invariant
+  guardrails legitimately green.
 
 - 2026-06-09 — slice-17 DESIGN (Morgan). ADR-054 captures the landing-dashboard
   design: Option-shaped `LandingSummary` (per-count independent degrade), count-only

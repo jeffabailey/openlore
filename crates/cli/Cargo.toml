@@ -769,3 +769,69 @@ harness = true
 name = "viewer_search_follow_state_invariants"
 path = "../../tests/acceptance/viewer_search_follow_state_invariants.rs"
 harness = true
+
+# Slice-17 (viewer-landing-dashboard; DISTILL) subprocess + real-I/O acceptance: the
+# `openlore ui` LANDING DASHBOARD (US-LD-000/001; ADR-054). Turns the storeless `GET /` front
+# door into a read-only navigation hub + at-a-glance LOCAL store summary. The EFFECT shell
+# (`landing_page`) threads the read-only store, resolves THREE LOCAL aggregate counts — own
+# claims via `count_claims`, peer claims via `count_peer_claims`, active peers via the NEW
+# count-only `count_active_peer_subscriptions` (`SELECT COUNT(*) FROM peer_subscriptions WHERE
+# removed_at IS NULL`, ADR-054 D3) — each `Result→Option` via `.ok()`, builds a flat
+# Option-shaped `LandingSummary { own_claims, peer_claims, active_peers }`, and passes it to the
+# extended PURE `render_landing(&summary)`. The pure render keeps the `<h1>` + `READ_ONLY_NOTICE`,
+# renders the 3 counts (`Some(n)`→number; `None`→`MISSING_COUNT_MARKER` "—", DISTINCT from a real
+# 0), and a nav hub of plain `<a href>` links to all 8 shipped surfaces (/claims, /peer-claims,
+# /project, /philosophy, /score, /search, /scrape [new SCRAPE_URL const], /peers) via URL consts.
+# Full-page-only — `GET /` does NOT fork by Shape (ADR-054 D5; parity by construction). CARDINAL:
+# read-only / no key (C-1 — every affordance a plain link, viewer holds no key); LOCAL/offline
+# (C-2 — 3 LOCAL COUNT(*) reads, no outbound edge, vendored htmx only); missing≠zero (WD-LD-8 —
+# a failed read → "—", a successful empty store → 0); no-N+1 (C-4 — 3 fixed reads invariant to
+# store size); discoverability (C-3 — all 8 surfaces linked, no deep/parameterized top-level
+# link); aggregates-never-merges (BR-LD-1 — no per-author content/score/consensus on /). Drives
+# the REAL `openlore ui` verb via `ViewerServer::start` + in-test HTTP GET over a REAL seeded
+# LOCAL DuckDB (own claims via `claim add`, peer claims via `peer add`+`peer pull`, active subs
+# via `peer add` — `seed_landing_store_summary` / `seed_empty_store_for_landing`); NO mocked
+# boundary (`/` is LOCAL + OFFLINE). Per Mandate 9/11 example-based, never PBT-generated at this
+# layer; Tier B NOT warranted (single-shot orientation render, no chained ≥3-scenario journey, no
+# domain-rich input space — Tier A example coverage is exact). Build-before-run: `cargo build`
+# the `openlore` bin (the viewer); `/` needs NO second binary (LOCAL reads). DISTILL registers +
+# RED gate; LD-* stay RED — the `/` route is storeless (render_landing takes no summary, renders
+# no counts, links only /claims) and the LandingSummary/SCRAPE_URL/count_active_peer_subscriptions/
+# MISSING_COUNT_MARKER seams do NOT exist yet, so the 3 counts + 8-surface hub are ABSENT
+# (MISSING_FUNCTIONALITY). The ATs drive `GET /` via subprocess HTTP (never the Rust
+# render_landing signature), so the production signature change is DELIVER's job and does not
+# affect AT compilation. The missing≠zero failed-read scenario drives the test-only
+# `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` effect-shell fault seam (slice-16 SF-8 precedent),
+# panicking at the `start_inner` `todo!()` body until DELIVER materializes it — also
+# MISSING_FUNCTIONALITY.
+[[test]]
+name = "viewer_landing_dashboard"
+path = "../../tests/acceptance/viewer_landing_dashboard.rs"
+harness = true
+
+# Slice-17 (viewer-landing-dashboard; DISTILL) GOLD / guardrail invariants over the whole
+# `GET /` front-door surface (cross-cutting C-1/-2/-3/-4 + WD-LD-8 missing≠zero):
+# every_landing_render_leaves_the_store_read_only (C-1 / Mandate 8 — the LandingSummary computed
+# per request persists nothing; claims + peer_claims counts UNCHANGED via assert_store_read_only),
+# no_landing_response_adds_a_write_or_mutating_control (C-1 CARDINAL — no form/button/sign/compose/
+# subscribe/follow control on the front door; every affordance a plain <a href>; viewer holds no
+# key), the_landing_page_chrome_stays_offline_no_cdn (C-2 — local /static/htmx.min.js, no CDN),
+# the_landing_surface_works_fully_offline (C-2 — the summary + hub are a LOCAL read with no
+# outbound edge; renders network-down, offline-STRONGER than /search/scrape),
+# the_landing_summary_is_a_fixed_set_of_reads_invariant_to_store_size (C-4 / I-LD-7 — a LARGE store
+# renders the correct counts in one request; the strict 3-fixed-reads bound is a DELIVER
+# adapter-duckdb unit/property test), missing_is_distinct_from_zero_on_the_front_door (C-2 /
+# WD-LD-8 / BR-LD-3 CARDINAL — both sides: an empty store shows "0", a failed read shows "—"; a
+# fabricated 0 on failure is unrepresentable since the shell maps a failed read to None), and
+# the_front_door_links_all_eight_surfaces (C-3 / WD-LD-7 — navigation completeness; all 8 surfaces
+# linked, no deep/parameterized top-level link). INHERITS the slice-06 viewer GOLD invariants
+# (viewer_is_read_only / store_views_work_offline / web_process_holds_no_signing_key) which cover
+# the whole-viewer read-only/offline/no-key guarantees; the slice-17 golds add the FRONT-DOOR
+# specifics. Drives the REAL `openlore ui` via `ViewerServer` over a REAL seeded local store; NO
+# mocked boundary. Per Mandate 9/11 example-based, never PBT-generated. DISTILL registers + RED
+# gate; LD-INV-* stay RED (the storeless `/` route + missing seams; the missing≠zero gold panics
+# at the `start_inner` `todo!()` fault seam — both MISSING_FUNCTIONALITY).
+[[test]]
+name = "viewer_landing_dashboard_invariants"
+path = "../../tests/acceptance/viewer_landing_dashboard_invariants.rs"
+harness = true

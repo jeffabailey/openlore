@@ -7242,7 +7242,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None, None, None, false)
+        Self::start_inner(env, None, None, None, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7253,7 +7253,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
-        Self::start_inner(env, Some(github), None, None, false)
+        Self::start_inner(env, Some(github), None, None, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7278,7 +7278,7 @@ impl ViewerServer {
     /// the `OPENLORE_INDEXER_URL` env-var thread.
     pub fn start_with_indexer(env: &TestEnv, indexer: IndexerHandle) -> Self {
         let url = indexer.indexer_url();
-        Self::start_inner(env, None, Some(url), Some(indexer), false)
+        Self::start_inner(env, None, Some(url), Some(indexer), false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer whose `/search` route is wired to an
@@ -7297,6 +7297,7 @@ impl ViewerServer {
             None,
             Some(closed.indexer_url().to_string()),
             None,
+            false,
             false,
         )
     }
@@ -7317,6 +7318,7 @@ impl ViewerServer {
         indexer_url: Option<String>,
         indexer: Option<IndexerHandle>,
         fail_active_set_read: bool,
+        fail_peer_claims_count: bool,
     ) -> Self {
         use std::io::{BufRead, BufReader};
 
@@ -7358,6 +7360,23 @@ impl ViewerServer {
         // the slice-08 status quo) — never a crash/blank/5xx/leak.
         if fail_active_set_read {
             cmd.env("OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ", "1");
+        }
+        // slice-17 (US-LD-000/001 / Theme 4 / C-2 CARDINAL / WD-LD-2 / WD-LD-8 / ADR-054 D2):
+        // the TEST-ONLY GET / peer-claims-count fault-injection seam. When set, the viewer's
+        // landing effect shell substitutes a genuine `Err(StoreReadError)` for the REAL
+        // `count_peer_claims()` read, forcing the PRODUCTION per-count degrade (`Err → .ok()
+        // → None → MISSING_COUNT_MARKER "—"`, ADR-054 D2) — the own-claims + active-peer
+        // counts STILL resolve, the nav hub renders in full, the page stays 200 (never a
+        // 5xx / blank / raw stack trace). Mirrors the slice-16
+        // `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam discipline (a
+        // `#[cfg(debug_assertions)]`-gated, release-forbidden, xtask-guarded effect-shell
+        // seam materialized by DELIVER); chosen per the slice-16 SF-8 precedent because the
+        // viewer holds ONE long-lived DuckDB connection taken at startup, so there is no
+        // readily-available mid-request per-count read-failure seam in the slice-06/15
+        // harness. DISTILL scaffolds the OBSERVABLE missing-number contract; DELIVER
+        // materializes the per-count fault seam with the SAME observable target.
+        if fail_peer_claims_count {
+            cmd.env("OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT", "1");
         }
 
         let mut child = cmd
@@ -14912,5 +14931,364 @@ pub fn start_viewer_with_failing_active_set_read(
     indexer: IndexerHandle,
 ) -> ViewerServer {
     let url = indexer.indexer_url();
-    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true)
+    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true, false)
+}
+
+// =============================================================================
+// Slice-17 (viewer-landing-dashboard; DISTILL) — the `GET /` LANDING DASHBOARD
+// seeds + asserts. The slice turns the storeless front door into a navigation
+// hub + at-a-glance LOCAL store summary: it threads the read-only store into
+// `landing_page`, resolves THREE LOCAL aggregate counts (own claims via
+// `count_claims`, peer claims via `count_peer_claims`, active peers via the NEW
+// count-only `count_active_peer_subscriptions`) — each `Result → Option` via
+// `.ok()` in the effect shell — into an Option-shaped `LandingSummary`, and
+// renders the three counts + a nav hub of plain `<a href>` links to all 8 shipped
+// surfaces via URL consts. ADR-054. Full-page-only (GET / does not fork by Shape —
+// parity by construction, ADR-054 D5).
+//
+// Seeding composition (Pillar 3 — production write paths, the SAME REAL DuckDB the
+// viewer reads, BR-VIEW-4): own claims via the real `claim add` verb
+// (`seed_own_claims_via_cli`, slice-06), peer claims via the real `peer add` +
+// `peer pull` federation path (`seed_peer_authored_graph`, slice-09/10/15), active
+// subscriptions via the real `peer add` verb (`seed_active_subscription_for`,
+// slice-16). NO hand-inserted rows. NO network/external boundary — `/` is LOCAL +
+// OFFLINE (offline-STRONGER than `/search`/`/scrape`; the three reads are LOCAL
+// `COUNT(*)` aggregates with no outbound edge).
+//
+// The asserts scan ONLY the rendered HTML the operator's browser shows (Mandate 8
+// universe = port-exposed rendered surface, never an internal `viewer-domain`
+// struct field). NO scenario calls `render_landing` / the count reads directly
+// (those are unit/property-level, exercised in DELIVER) — every assertion is on the
+// `GET /` HTTP response (Mandate 1, driving-port discipline). The read-only /
+// no-write / offline-chrome / no-N+1 / missing≠zero / discoverability gold
+// invariants REUSE the slice-06/15 `capture_store_row_count_universe` +
+// `assert_store_read_only` + `references_external_cdn` harness VERBATIM.
+//
+// Layer placement (Mandate 9/11): every scenario is a layer-3/layer-5 subprocess +
+// real-I/O test — EXAMPLE-only. The sad paths (honest empty store, failed
+// peer-claims-count read) are enumerated explicitly, never PBT-generated at this
+// layer (the generative exploration of the pure `render_landing` over the 2³
+// Option combinations is a layer-1/2 DELIVER concern). Tier B is NOT warranted:
+// `GET /` is a single-shot orientation render with no chained ≥3-scenario journey
+// and no domain-rich input space (three counts + 8 fixed links) — Tier A example
+// coverage is exact (Mandate 10 skip criteria).
+//
+// SCAFFOLD: true (slice-17) — the seeds + asserts COMPILE now (they drive EXISTING
+// `claim add` / `peer add` / `peer pull` verbs + scan strings); the SCENARIOS stay
+// RED because the production `/` route is STORELESS (`render_landing()` takes no
+// summary, renders only the `<h1>` + `READ_ONLY_NOTICE` + a single `/claims` link),
+// and `SCRAPE_URL` / `count_active_peer_subscriptions` / `LandingSummary` /
+// `MISSING_COUNT_MARKER` do NOT exist yet — so the three counts + the 8-surface hub
+// are ABSENT from the rendered body. RED = MISSING_FUNCTIONALITY, never BROKEN. The
+// ATs drive `GET /` via subprocess HTTP (never the Rust `render_landing` signature),
+// so the production signature change (adding the `&LandingSummary` param) is
+// DELIVER's job and does not affect AT compilation — the AT compiles and fails at
+// the HTTP body assertion.
+// =============================================================================
+
+/// The landing route path (`GET /` — the slice-06 front door, EXTENDED this slice).
+pub const LANDING_PATH: &str = "/";
+
+/// The substring the read-only notice carries on the front door (the slice-06
+/// `READ_ONLY_NOTICE` shape — "nothing here can change your store"). The slice-06 V-3
+/// test asserts `body_contains("read-only")`; this const pins the observable read-only
+/// assurance text so the landing scenarios scan the same surface. The full production
+/// const lives in `viewer-domain::READ_ONLY_NOTICE` (unchanged this slice).
+pub const READ_ONLY_NOTICE_TEXT: &str = "read-only";
+
+/// The known summary the walking-skeleton + counts-correct scenarios seed: 12 own
+/// claims, 7 peer claims, 2 active peers (did:plc:rachel-test + did:plc:tobias-test).
+/// The brief's headline numbers (US-LD-001 Theme 1). One source of truth so the seed
+/// and the assertions agree.
+pub const LANDING_OWN_CLAIMS: usize = 12;
+pub const LANDING_PEER_CLAIMS: usize = 7;
+pub const LANDING_ACTIVE_PEERS: usize = 2;
+
+/// The two ACTIVE peers the landing summary counts (REAL DIDs, REUSED from the
+/// slice-15 peer-subscription constants so the seeded attribution shape is
+/// consistent across the viewer slices).
+pub const LANDING_PEER_RACHEL_DID: &str = TRAVERSAL_AUTHOR_RACHEL; // did:plc:rachel-test
+pub const LANDING_PEER_TOBIAS_DID: &str = TRAVERSAL_AUTHOR_TOBIAS; // did:plc:tobias-test
+
+/// The missing-number marker the landing renders for a count whose read FAILED
+/// (the `LandingSummary` field is `None` → `MISSING_COUNT_MARKER`, ADR-054 D2 /
+/// WD-LD-8). A horizontal bar "—", visually + semantically DISTINCT from the digit
+/// "0" (a successful read of an empty store). The asserts scan for it as the
+/// missing-number state. SINGLE source of truth mirroring the production
+/// `viewer-domain::MISSING_COUNT_MARKER` const (DELIVER mints it).
+pub const LANDING_MISSING_COUNT_MARKER: &str = "—";
+
+/// The 8 shipped top-level entry-point surfaces the nav hub must link, as
+/// `(label, href)` pairs. The href is the route's URL CONST value from
+/// `viewer-domain` (7 existing + the slice-17 `SCRAPE_URL = "/scrape"`, ADR-054 D4) —
+/// NOT a hardcoded literal that could drift. The discoverability contract (WD-LD-7 /
+/// Theme 2 / C-3): the hub links ALL 8, each a plain `<a href>` (no-JS navigable).
+/// The labels are the human-facing surface names; the asserts scan the rendered body
+/// for the href (the load-bearing navigation target) — see
+/// [`assert_landing_links_all_surfaces`].
+pub const LANDING_TOP_LEVEL_SURFACES: &[(&str, &str)] = &[
+    ("My Claims", "/claims"),         // MY_CLAIMS_URL
+    ("Peer Claims", "/peer-claims"),  // PEER_CLAIMS_URL
+    ("Project Survey", "/project"),   // PROJECT_URL
+    ("Philosophy Survey", "/philosophy"), // PHILOSOPHY_URL
+    ("Contributor Score", "/score"),  // SCORE_URL
+    ("Network Search", "/search"),    // SEARCH_URL
+    ("Live Scrape", "/scrape"),       // SCRAPE_URL (NEW this slice)
+    ("Peer Subscriptions", "/peers"), // PEERS_URL
+];
+
+/// The deep / parameterized routes that must NOT appear as a top-level hub link
+/// (FR-LD-5 / Theme 2): drilling into who-said-what is reached THROUGH the 8
+/// top-level surfaces, never linked directly from the front door. The asserts scan
+/// that NONE of these appears as a hub `href=` target — see
+/// [`assert_landing_no_deep_route_toplevel`].
+pub const LANDING_DEEP_ROUTES_FORBIDDEN_AT_TOPLEVEL: &[&str] = &[
+    "/claims/bafy",      // /claims/{cid} detail (a CID-addressed deep route)
+    "?contributor=",     // /score?contributor=… parameterized
+    "?subject=",         // /project?subject=… parameterized
+    "?object=",          // /philosophy?object=… parameterized
+];
+
+/// Seed the env's REAL store to the KNOWN landing summary — 12 own claims (real
+/// `claim add`), 7 peer claims (real `peer add` + `peer pull` over ONE peer), 2
+/// ACTIVE peer subscriptions (Rachel + Tobias). The walking-skeleton + counts-correct
+/// precondition (US-LD-001 Theme 1/3). After seeding, `count_claims()` returns 12,
+/// `count_peer_claims()` returns 7, and `count_active_peer_subscriptions()` returns 2
+/// — exactly the three aggregates the landing summary must surface as "12 own claims,
+/// 7 peer claims, 2 active peers". The fixture is pinned with the existing per-table
+/// asserts so it is the GENUINE summary shape, not merely "the verbs exited 0".
+///
+/// Composition: 7 peer claims are seeded as 7 DISTINCT triples authored by Rachel via
+/// the production federation path (`seed_peer_authored_graph` — `peer add` + `peer
+/// pull`), making Rachel an ACTIVE subscription with 7 cached claims. Tobias is then
+/// added as a SECOND active subscription via `seed_active_subscription_for` (no pull —
+/// the active-peer COUNT reads `peer_subscriptions`, not `peer_claims`), so the active
+/// set is 2. Own claims are 12 via `seed_own_claims_via_cli`. The two PDS handles are
+/// returned so the caller keeps the peers resolvable for the lifetime of the seed.
+///
+/// SCAFFOLD: true (slice-17) — drives the EXISTING `claim add` / `peer add` / `peer
+/// pull` verbs (REUSED slice-06/15/16 seams); the rows land in the REAL `claims` +
+/// `peer_claims` + `peer_subscriptions` tables the viewer's LOCAL `GET /` reads.
+pub fn seed_landing_store_summary(env: &TestEnv) -> HeldSubscriptions {
+    let dep = "org.openlore.philosophy.dependency-pinning";
+    let repro = "org.openlore.philosophy.reproducible-builds";
+    let workspace = "org.openlore.philosophy.workspace-cohesion";
+    let memory = "org.openlore.philosophy.memory-safety";
+    let actor = "org.openlore.philosophy.actor-model";
+
+    // 12 OWN claims via the production `claim add` write path (DISTINCT subjects so
+    // distinct CIDs — `seed_own_claims_via_cli` handles the loop).
+    seed_own_claims_via_cli(env, LANDING_OWN_CLAIMS);
+
+    // 7 PEER claims authored by Rachel via the production `peer add` + `peer pull`
+    // federation path (7 DISTINCT triples so the canonical CIDs do not alias). Rachel
+    // becomes an ACTIVE subscription (1 of the 2) AND contributes the 7 peer claims.
+    let graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did: LANDING_PEER_RACHEL_DID,
+            seed: [7u8; 32],
+            triples: &[
+                ("github:rust-lang/cargo", dep, 0.90),
+                ("github:NixOS/nixpkgs", repro, 0.74),
+                ("github:bazelbuild/bazel", workspace, 0.61),
+                ("github:rust-lang/rust", memory, 0.88),
+                ("github:erlang/otp", actor, 0.55),
+                ("github:tokio-rs/tokio", dep, 0.66),
+                ("github:serde-rs/serde", repro, 0.42),
+            ],
+        }],
+    );
+    drop(graph);
+
+    // Tobias as a SECOND ACTIVE subscription via the real `peer add` verb (no pull —
+    // the active-peer COUNT reads `peer_subscriptions`, so a subscription with zero
+    // cached claims still counts as 1 active peer). Active set = {Rachel, Tobias} = 2.
+    let tobias_pds = seed_active_subscription_for(env, LANDING_PEER_TOBIAS_DID, [9u8; 32]);
+
+    // Pin the GENUINE summary shape: 12 own claims, 7 peer claims (all Rachel's), 2
+    // active subscriptions — so the fixture is the REAL three-count state the landing
+    // summary must surface (not merely "the verbs exited 0").
+    assert_user_author_claim_count(env, LANDING_OWN_CLAIMS);
+    assert_peer_claims_row_count_for(env, LANDING_PEER_RACHEL_DID, LANDING_PEER_CLAIMS);
+    assert_one_active_subscription_for(env, LANDING_PEER_RACHEL_DID);
+    assert_one_active_subscription_for(env, LANDING_PEER_TOBIAS_DID);
+
+    HeldSubscriptions {
+        _peers: vec![tobias_pds],
+    }
+}
+
+/// Seed a FRESH EMPTY store for the honest-zeros landing scenario (US-LD-001 Theme 1
+/// Ex 2 / Theme 4 Ex 2): NO own claims, NO peer claims, NO active subscriptions. A
+/// no-op over a freshly `initialized()` store (the production `init` ran, no write
+/// verb did), named explicitly so the empty-store scenario reads in the domain
+/// language. The three count reads must return `Some(0)` (a SUCCESSFUL read of zero —
+/// an honest empty store) so the landing renders "0 own claims / 0 peer claims / 0
+/// active peers", DISTINCT from the missing-number marker "—" (a FAILED read).
+///
+/// SCAFFOLD: true (slice-17) — the empty store IS the precondition; the three reads
+/// must return `Ok(0) → Some(0)` and the viewer renders honest zeros + the full hub.
+pub fn seed_empty_store_for_landing(_env: &TestEnv) {
+    // Intentionally empty: a freshly `initialized()` store has zero claims, zero peer
+    // claims, and zero peer_subscriptions rows. The named seed documents the
+    // honest-empty-store precondition at the call site (Pillar 1 domain language).
+}
+
+/// Start the `openlore ui` viewer over the env's REAL store with the LOCAL
+/// `count_peer_claims()` read forced to FAIL mid-request — the slice-17 graceful-degrade
+/// seam (US-LD-000/001 Theme 4 / C-2 CARDINAL / WD-LD-2 / WD-LD-8 / ADR-054 D2). The
+/// own-claims + active-peer count reads STILL succeed; ONLY the peer-claims count
+/// fails, so the landing must render the missing-number marker "—" for the peer-claims
+/// number while the OTHER TWO counts + the full nav hub render, the page staying a
+/// normal 200 (never a 5xx / blank / raw stack trace). The failed read maps to `None`
+/// (`.ok()`), DISTINCT from a fabricated `Some(0)`.
+///
+/// SEEDING-SEAM NOTE (documented DISTILL choice, mirroring the slice-16 SF-8 precedent):
+/// the slice-06/15 viewer harness holds ONE long-lived DuckDB connection taken at
+/// STARTUP (wire→probe→use, ADR-028/030), so the existing `make_store_unreadable` lock
+/// would refuse STARTUP rather than exercise a MID-REQUEST per-count read failure. There
+/// is NO readily-available mid-request per-count read-failure seam in the slice-06/15
+/// harness. Per the DISTILL guidance, the OBSERVABLE missing-number contract (a failed
+/// peer-claims read → "—" while the other two counts render, page 200) is scaffolded
+/// against a TEST-ONLY effect-shell fault seam (the `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_
+/// COUNT` env var, threaded by `start_inner`); the SUCCESSFUL-zero distinction is fully
+/// exercisable today via `seed_empty_store_for_landing`. DELIVER materializes the
+/// per-count fault seam (a `#[cfg(debug_assertions)]`-gated, release-forbidden,
+/// xtask-guarded effect-shell branch substituting `Err(StoreReadError)` for the REAL
+/// `count_peer_claims()` read) with the SAME observable target — exactly as slice-16
+/// materialized `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ`. Until then the scenario panics at
+/// the `todo!()` `start_inner` body (slice-06) → RED MISSING_FUNCTIONALITY, never BROKEN.
+///
+/// SCAFFOLD: true (slice-17).
+pub fn start_viewer_with_failing_peer_claims_count(env: &TestEnv) -> ViewerServer {
+    ViewerServer::start_inner(env, None, None, None, false, true)
+}
+
+/// Assert the landing render shows the count `n` for the surface labelled `label`
+/// (e.g. `("own claims", 12)`). Universe (Mandate 8 — port-exposed rendered surface):
+/// the rendered body contains both the number `n` and the `label` text, so the count
+/// is attributed to the right surface (not a stray digit). Scans the OBSERVABLE HTML
+/// the operator's browser shows; never an internal `LandingSummary` field. Used by the
+/// happy-path + counts-correct + honest-zeros scenarios.
+///
+/// SCAFFOLD: true (slice-17).
+pub fn assert_landing_shows_count(body: &str, label: &str, n: usize) {
+    assert!(
+        body.contains(label),
+        "the landing summary must label the {label:?} count so the operator can read \
+         WHICH count is which (Theme 1); body was:\n{body}"
+    );
+    let needle = n.to_string();
+    assert!(
+        body.contains(&needle),
+        "the landing summary must show the count {n} for {label:?} (the genuine \
+         seeded aggregate, Theme 3); body was:\n{body}"
+    );
+}
+
+/// Assert the landing render shows the MISSING-NUMBER marker "—" for the surface
+/// labelled `label` (a FAILED count read, ADR-054 D2 / WD-LD-8), DISTINCT from a
+/// successful `0`. Universe (port-exposed rendered surface): the rendered body
+/// contains the `label` text AND the `MISSING_COUNT_MARKER` "—". Used by the
+/// failed-read degrade scenario (Theme 4). The caller separately asserts the OTHER
+/// counts still render their numbers + the page is 200 (the degrade is per-count,
+/// independent).
+///
+/// SCAFFOLD: true (slice-17).
+pub fn assert_landing_count_missing(body: &str, label: &str) {
+    assert!(
+        body.contains(label),
+        "the landing summary must still label the {label:?} count even when its read \
+         FAILED (the surface is present, only the number is missing, Theme 4); body \
+         was:\n{body}"
+    );
+    assert!(
+        body.contains(LANDING_MISSING_COUNT_MARKER),
+        "a FAILED count read must render the missing-number marker {LANDING_MISSING_COUNT_MARKER:?} \
+         (ADR-054 D2 / WD-LD-8) — DISTINCT from a fabricated 0; body was:\n{body}"
+    );
+}
+
+/// Assert the landing nav hub links ALL 8 shipped top-level surfaces (the
+/// discoverability contract, WD-LD-7 / Theme 2 / C-3). Universe (port-exposed rendered
+/// surface): for each of the 8 surfaces, the rendered body contains an `<a>` anchor
+/// whose `href` equals the surface's route URL const value, AND each is a plain
+/// no-JS-navigable link (the `href` attribute is present — not an `hx-get`-only
+/// affordance). Scans the OBSERVABLE HTML; never the internal URL-const symbols. A
+/// missing surface is an UNSHIPPABLE discoverability gap (the front door must reach
+/// every shipped surface).
+///
+/// SCAFFOLD: true (slice-17).
+pub fn assert_landing_links_all_surfaces(body: &str) {
+    for (label, href) in LANDING_TOP_LEVEL_SURFACES {
+        // Each surface is reachable via a plain `<a href="…">` (no-JS navigable, C-5).
+        // We scan for the `href="<route>"` attribute — the load-bearing navigation
+        // target — so an `hx-get`-only affordance (no `href`) would NOT satisfy it.
+        let href_attr = format!("href=\"{href}\"");
+        assert!(
+            body.contains(&href_attr),
+            "the nav hub must link the {label:?} surface via a plain <a {href_attr}> \
+             (no-JS navigable, WD-LD-7 / C-3 / C-5) — discoverability gap otherwise; \
+             body was:\n{body}"
+        );
+    }
+}
+
+/// Assert the landing nav hub links NO deep / parameterized route as a top-level
+/// affordance (FR-LD-5 / Theme 2): `/claims/{cid}`, `/score?contributor=…`,
+/// `/project?subject=…`, `/philosophy?object=…` are reached THROUGH the 8 top-level
+/// surfaces, never linked directly from the front door. Universe (port-exposed
+/// rendered surface): the rendered body contains NONE of the forbidden deep-route
+/// fragments as an `href` target. Scans the OBSERVABLE HTML.
+///
+/// SCAFFOLD: true (slice-17).
+pub fn assert_landing_no_deep_route_toplevel(body: &str) {
+    for forbidden in LANDING_DEEP_ROUTES_FORBIDDEN_AT_TOPLEVEL {
+        let href_attr = format!("href=\"{forbidden}");
+        assert!(
+            !body.contains(&href_attr),
+            "the nav hub must NOT link a deep/parameterized route as a top-level \
+             affordance (FR-LD-5 / Theme 2 — drilling in is reached THROUGH the 8 \
+             surfaces); found a hub link to {forbidden:?}; body was:\n{body}"
+        );
+    }
+}
+
+/// Assert the landing render exposes NO write / compose / sign / subscribe / follow
+/// control — every navigation affordance is a plain link, not a mutating control
+/// (US-LD-001 Theme 3 / C-1 CARDINAL / WD-LD-1). Universe (port-exposed rendered
+/// surface): the rendered body contains no `<form>`, no `<button>`, and no
+/// mutating `hx-post`/`hx-put`/`hx-delete` swap. REUSES the slice-15 banned-control
+/// vocabulary; adds the form/button/sign/compose scan specific to the front door.
+/// The no-key guarantee is STRUCTURAL (the viewer process links no IdentityPort —
+/// proven by the slice-06 `web_process_holds_no_signing_key` gold + xtask check-arch);
+/// here we assert the operator-facing rendered surface carries no mutating control.
+///
+/// SCAFFOLD: true (slice-17).
+pub fn assert_landing_read_only_no_control(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in [
+        "<form",
+        "<button",
+        "hx-post",
+        "hx-put",
+        "hx-delete",
+        "name=\"compose\"",
+        "name=\"sign\"",
+        "name=\"subscribe\"",
+        "name=\"follow\"",
+        ">compose<",
+        ">sign<",
+        ">subscribe<",
+        ">follow<",
+    ] {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "C-1 (slice-17, CARDINAL): the front door must render NO write / compose / \
+             sign / subscribe / follow control — every navigation affordance is a plain \
+             <a href> link, never a mutating control (the viewer is read-only and holds \
+             no key, WD-LD-1); found {banned:?} in body:\n{body}"
+        );
+    }
 }
