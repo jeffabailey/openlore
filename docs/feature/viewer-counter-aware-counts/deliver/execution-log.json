@@ -64,6 +64,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-10T03:49:24Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-10T03:49:47Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-10T03:51:07Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-10T03:51:42Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: Some(0)->\"(0 countered)\" vs None->marker already pinned by the 01-01 render_countered unit test",
+      "t": "2026-06-10T03:51:49Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-10T03:52:53Z"
     }
   ],
   "project_id": "viewer-counter-aware-counts"
