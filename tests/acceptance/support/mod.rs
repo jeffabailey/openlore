@@ -7242,7 +7242,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None, None, None, false, false)
+        Self::start_inner(env, None, None, None, false, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7253,7 +7253,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
-        Self::start_inner(env, Some(github), None, None, false, false)
+        Self::start_inner(env, Some(github), None, None, false, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7278,7 +7278,7 @@ impl ViewerServer {
     /// the `OPENLORE_INDEXER_URL` env-var thread.
     pub fn start_with_indexer(env: &TestEnv, indexer: IndexerHandle) -> Self {
         let url = indexer.indexer_url();
-        Self::start_inner(env, None, Some(url), Some(indexer), false, false)
+        Self::start_inner(env, None, Some(url), Some(indexer), false, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer whose `/search` route is wired to an
@@ -7297,6 +7297,7 @@ impl ViewerServer {
             None,
             Some(closed.indexer_url().to_string()),
             None,
+            false,
             false,
             false,
         )
@@ -7319,6 +7320,7 @@ impl ViewerServer {
         indexer: Option<IndexerHandle>,
         fail_active_set_read: bool,
         fail_peer_claims_count: bool,
+        fail_countered_count: bool,
     ) -> Self {
         use std::io::{BufRead, BufReader};
 
@@ -7377,6 +7379,25 @@ impl ViewerServer {
         // materializes the per-count fault seam with the SAME observable target.
         if fail_peer_claims_count {
             cmd.env("OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT", "1");
+        }
+        // slice-18 (US-CC-000/001/002 / Theme 4 / C-2 / C-5 CARDINAL / WD-CC-2/6 / ADR-055
+        // D4): the TEST-ONLY GET / + GET /claims COUNTERED-count fault-injection seam. When
+        // set, the viewer's landing + claims effect shells substitute a genuine
+        // `Err(StoreReadError)` for the REAL `count_countered_own_claims()` read, forcing the
+        // PRODUCTION per-count degrade (`Err → .ok() → None → render_countered(None) →
+        // "(— countered)"`, ADR-055 D4) — the own-claims "12" + the other landing counts + the
+        // nav hub + the `/claims` rows STILL resolve, the page stays 200 (never a 5xx / blank /
+        // raw stack trace), and a fabricated "(0 countered)" is unrepresentable (the shell maps
+        // a failed read to `None`, never `Some(0)`). Mirrors the slice-17
+        // `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT` seam discipline VERBATIM (a
+        // `#[cfg(debug_assertions)]`-gated, release-forbidden, xtask-guarded effect-shell seam
+        // materialized by DELIVER) — chosen per the slice-16 SF-8 / slice-17 LD-DEGRADE
+        // precedent because the viewer holds ONE long-lived DuckDB connection taken at startup,
+        // so there is no readily-available mid-request per-count read-failure seam in the
+        // slice-06/15 harness. DISTILL scaffolds the OBSERVABLE missing-marker contract; DELIVER
+        // materializes the per-count fault seam with the SAME observable target.
+        if fail_countered_count {
+            cmd.env("OPENLORE_VIEWER_FAIL_COUNTERED_COUNT", "1");
         }
 
         let mut child = cmd
@@ -14931,7 +14952,7 @@ pub fn start_viewer_with_failing_active_set_read(
     indexer: IndexerHandle,
 ) -> ViewerServer {
     let url = indexer.indexer_url();
-    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true, false)
+    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true, false, false)
 }
 
 // =============================================================================
@@ -15162,7 +15183,7 @@ pub fn seed_empty_store_for_landing(_env: &TestEnv) {
 ///
 /// SCAFFOLD: true (slice-17).
 pub fn start_viewer_with_failing_peer_claims_count(env: &TestEnv) -> ViewerServer {
-    ViewerServer::start_inner(env, None, None, None, false, true)
+    ViewerServer::start_inner(env, None, None, None, false, true, false)
 }
 
 /// Assert the landing render shows the count `n` for the surface labelled `label`
@@ -15294,6 +15315,615 @@ pub fn assert_landing_read_only_no_control(body: &str) {
              sign / subscribe / follow control — every navigation affordance is a plain \
              <a href> link, never a mutating control (the viewer is read-only and holds \
              no key, WD-LD-1); found {banned:?} in body:\n{body}"
+        );
+    }
+}
+
+// =============================================================================
+// Slice-18 (viewer-counter-aware-counts; DISTILL) — the COUNTERED-OWN-CLAIMS count
+// rendered beside the own-claims count on the `GET /` landing summary AND in the
+// `GET /claims` list header: "12 own claims (3 countered)" (US-CC-000/001/002;
+// ADR-055). EXTENDS the slice-17 `LandingSummary` with a FOURTH additive
+// `Option<usize>` field `countered_own_claims` (`.ok()`-degraded), threaded into
+// `render_landing` (beside the unchanged own-claims line) + a NEW `render_claims_page`
+// `countered_own_claims: Option<usize>` param via a SHARED pure
+// `render_countered(Option<usize>) -> String` helper (single source — ADR-055 D3). The
+// count is `count_countered_own_claims()` = `COUNT(DISTINCT c.cid) FROM claims c WHERE
+// c.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION
+// SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')` — a
+// presence count (a claim countered by N peers counts ONCE), own-only by query shape,
+// invariant to store size (ADR-055 D1).
+//
+// The data shape (the load-bearing seeding fact): the self-counter rule BLOCKS the
+// operator from countering her OWN claim (`claim counter` rejects a self-target with
+// "use retract instead") — so an OWN claim is countered ONLY through the
+// `peer_claim_references` arm: a PEER who authored a `counters`-referencing record
+// targeting that own CID. The slice-18 seeds therefore reuse the slice-12
+// `build_verifiable_peer_counter_record` + `peer add` + `peer pull` path to land each
+// peer counter's `counters` reference in `peer_claim_references` with `referenced_cid ==
+// <own target CID>`. One own claim countered by TWO distinct peers (Rachel + Tobias)
+// proves the presence-once contract (`COUNT(DISTINCT)` collapses the two references of
+// the SAME own CID to ONE → "(1 countered)", never "(2 countered)").
+//
+// The asserts scan ONLY the rendered HTML the operator's browser shows (Mandate 8
+// universe = port-exposed rendered surface, never an internal `LandingSummary` field).
+// NO scenario calls `render_landing` / `render_countered` / the count read directly
+// (those are unit/property-level, exercised in DELIVER) — every assertion is on the
+// `GET /` or `GET /claims` HTTP response (Mandate 1 driving-port discipline). The seeds
+// pin the GENUINE countered-count with a DIRECT DuckDB `COUNT(DISTINCT)` assert (the
+// SAME ADR-055 SQL), so the fixture is the REAL countered shape, not merely "the verbs
+// exited 0".
+//
+// Layer placement (Mandate 9/11): every scenario is a layer-3/layer-5 subprocess +
+// real-I/O test — EXAMPLE-only. The sad paths (honest "(0 countered)", failed
+// countered-count read → "(— countered)") are enumerated explicitly, never
+// PBT-generated at this layer (the generative exploration of the pure `render_countered`
+// over the Some(0)/Some(n)/None cases is a layer-1/2 DELIVER concern). Tier B
+// (state-machine PBT) is NOT warranted: the count is a single-shot additive render with
+// no chained ≥3-scenario journey and no domain-rich input space (one Option<usize>) —
+// Tier A example coverage is exact (Mandate 10 skip criteria).
+//
+// SCAFFOLD: true (slice-18) — the seeds + asserts COMPILE now (they drive EXISTING
+// `claim add` / `peer add` / `peer pull` verbs + scan strings + read the REAL store);
+// the SCENARIOS stay RED because the production `/` + `/claims` routes do NOT render the
+// countered count yet, and `count_countered_own_claims` / `render_countered` / the 4th
+// `LandingSummary` field / the `render_claims_page` `Option<usize>` param do NOT exist —
+// so "(3 countered)" is ABSENT from both rendered surfaces → RED MISSING_FUNCTIONALITY,
+// never BROKEN. The ATs drive `GET /` + `GET /claims` via subprocess HTTP (never the
+// Rust `render_landing` / `render_claims_page` signatures), so the production signature
+// changes (the 4th field + the `/claims` param) are DELIVER's job and do not affect AT
+// compilation. The missing≠zero failed-read scenario drives the test-only
+// `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` effect-shell fault seam (slice-17 LD-DEGRADE
+// precedent), panicking at the `start_inner` `todo!()` body until DELIVER materializes
+// it — also MISSING_FUNCTIONALITY.
+// =============================================================================
+
+/// The `/claims` list route path (the slice-06 My Claims list, whose HEADER this slice
+/// extends with the countered count "(N countered)" — US-CC-002).
+pub const CLAIMS_LIST_PATH: &str = "/claims";
+
+/// The headline countered-own-claims count the slice-18 seeds pin: of Maria's 12 own
+/// claims, EXACTLY 3 are countered (one of them countered by TWO distinct peers, proving
+/// the presence-once `COUNT(DISTINCT)` collapses it to ONE). The brief's headline number
+/// ("12 own claims (3 countered)", US-CC-001). One source of truth so the seed and the
+/// assertions agree.
+pub const COUNTERED_OWN_CLAIMS: usize = 3;
+
+/// The missing-marker the countered count renders for a FAILED read — reusing the
+/// slice-17 `MISSING_COUNT_MARKER` "—" inside the parenthetical: `render_countered(None)`
+/// → "(— countered)" (ADR-055 D3). DISTINCT from a SUCCESSFUL `Some(0)` → "(0 countered)".
+/// The asserts scan the COUNTERED-COUNT POSITION (`"(— countered)"`), not the bare marker
+/// (the chrome title's em-dash would collide). SINGLE source mirroring the production
+/// `viewer-domain::MISSING_COUNT_MARKER` (DELIVER mints the helper).
+pub const COUNTERED_MISSING_MARKER: &str = "—";
+
+/// The two PEER counter authors the slice-18 seeds use to counter Maria's OWN claims
+/// (REUSED from the slice-11/12 counter constants so the seeded attribution shape is
+/// consistent across the viewer slices). The self-counter rule means an OWN claim is
+/// countered ONLY by a PEER (`peer_claim_references` arm).
+pub const COUNTERED_PEER_RACHEL_DID: &str = COUNTER_TARGET_AUTHOR_RACHEL; // did:plc:rachel-test
+pub const COUNTERED_PEER_TOBIAS_DID: &str = COUNTER_AUTHOR_TOBIAS; // did:plc:tobias-test
+
+/// The penalty / verdict / "disputed by N" vocabulary the neutral "(N countered)" copy
+/// must NEVER contain (C-6 / WD-CC-10 — the slice-14 anti-misread sensibility). A
+/// countered claim is contested, not wrong; the count is disputed-claim AWARENESS, never
+/// a score/deduction/verdict. The asserts scan the rendered body (lowercased) for NONE of
+/// these — see [`assert_countered_copy_is_neutral`].
+pub const COUNTERED_BANNED_VERDICT_COPY: &[&str] = &[
+    "disputed by",   // a "by N" total (the count is presence-once, never a tally)
+    "refuted",       // a verdict
+    "false",         // a verdict
+    "penalty",       // a deduction
+    "deduction",     // a deduction
+    "deducted",      // a deduction
+    "invalid",       // a verdict
+    "wrong",         // a verdict
+    "discredited",   // a verdict
+];
+
+/// Run the ADR-055 countered-own-claims `COUNT(DISTINCT)` aggregate DIRECTLY against the
+/// env's REAL DuckDB store and return the count — the SAME SQL `count_countered_own_claims`
+/// will implement (ADR-055 D1). Used by the seeds to PIN the genuine countered-count
+/// (e.g. assert it is exactly 3 — including the presence-once collapse of the
+/// twice-countered claim) so the fixture is the REAL countered shape, not merely "the
+/// verbs exited 0". This is a TEST-side oracle over the production-written rows (NO
+/// hand-inserted rows): the own claims came from `claim add`, the peer counters from
+/// `peer add` + `peer pull`, so the count this oracle returns is the count the production
+/// read will return.
+pub fn read_countered_own_claims_count(env: &TestEnv) -> usize {
+    let db_path = env.duckdb_path();
+    let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
+        panic!(
+            "open DuckDB at {} for countered-own-claims count read: {err}",
+            db_path.display()
+        )
+    });
+    // The EXACT ADR-055 D1 aggregate: COUNT(DISTINCT own cid) appearing as a countered
+    // referenced_cid across the two indexed ref tables (presence count via the de-duped
+    // UNION IN-set + COUNT(DISTINCT) — a claim countered N times counts ONCE; own-only by
+    // the outer `claims` table; parameter-free / injection-safe).
+    let sql = "SELECT COUNT(DISTINCT c.cid) FROM claims c WHERE c.cid IN (\
+                   SELECT referenced_cid FROM claim_references      WHERE ref_type = 'counters' \
+                   UNION \
+                   SELECT referenced_cid FROM peer_claim_references WHERE ref_type = 'counters')";
+    conn.query_row(sql, [], |row| row.get::<_, i64>(0))
+        .unwrap_or_else(|err| panic!("query countered-own-claims count: {err}")) as usize
+}
+
+/// Seed the env's REAL store to the KNOWN slice-18 landing summary — 12 own claims (real
+/// `claim add`), 3 of which are countered by PEERS (real `peer add` + `peer pull` of
+/// `counters`-referencing peer records targeting the own CIDs), ONE of those three
+/// countered by TWO distinct peers (Rachel + Tobias) to prove the presence-once
+/// `COUNT(DISTINCT)` collapse. The walking-skeleton + landing/header precondition
+/// (US-CC-001/002). After seeding, `count_claims()` returns 12 and
+/// `count_countered_own_claims()` returns 3 (NOT 4 — the twice-countered claim counts
+/// once) — exactly the two aggregates the landing summary + `/claims` header must surface
+/// as "12 own claims (3 countered)". The fixture is pinned with the direct
+/// `read_countered_own_claims_count` ADR-055 oracle so it is the GENUINE countered shape.
+///
+/// Composition: 12 own claims via `seed_own_claims_via_cli` (distinct subjects → distinct
+/// CIDs). Among them, 3 are then countered by peers:
+///   - own claim A (`github:slice18/aaa`) countered by Rachel (one peer);
+///   - own claim B (`github:slice18/bbb`) countered by Tobias (one peer);
+///   - own claim C (`github:slice18/ccc`) countered by BOTH Rachel AND Tobias (two peers
+///     → presence-once: contributes ONE to the count, never two).
+/// The 3 named countered own claims are seeded via `seed_own_claim_with_evidence` (so
+/// their CIDs are recoverable as the counter targets) ON TOP of the 12 plain own claims
+/// — so the own-claims total is 12 + 3 = 15? NO: the 3 countered claims ARE part of the
+/// 12 (the 12 includes them). DELIVER materializes the exact composition; the contract
+/// this seed PINS is `count_claims == 12` AND `count_countered_own_claims == 3`, asserted
+/// directly below.
+///
+/// The two PDS handles are returned (via `HeldSubscriptions`) so the caller keeps the
+/// peers resolvable for the lifetime of the seed.
+///
+/// SCAFFOLD: true (slice-18) — drives the EXISTING `claim add` / `peer add` / `peer pull`
+/// verbs + the slice-12 `build_verifiable_peer_counter_record` (REUSED slice-06/11/12
+/// seams); the rows land in the REAL `claims` + `peer_claims` + `peer_claim_references`
+/// tables the viewer's LOCAL `/` + `/claims` reads. DELIVER fills the exact own-claim
+/// composition that makes `count_claims == 12` AND the 3 named claims countered; the
+/// PINNING asserts below are the falsifiable contract.
+pub fn seed_landing_store_with_countered_own_claims(env: &TestEnv) -> HeldSubscriptions {
+    // STEP 1 — seed 3 NAMED own claims that peers will counter (their CIDs are the counter
+    // targets). These are part of the 12 own claims (the remaining 9 are plain).
+    let target_a = seed_own_claim_with_evidence(
+        env,
+        "github:slice18/aaa",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.dependency-pinning",
+        0.90,
+        &[],
+    );
+    let target_b = seed_own_claim_with_evidence(
+        env,
+        "github:slice18/bbb",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.memory-safety",
+        0.90,
+        &[],
+    );
+    let target_c = seed_own_claim_with_evidence(
+        env,
+        "github:slice18/ccc",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.reproducible-builds",
+        0.30,
+        &[],
+    );
+
+    // STEP 2 — seed the remaining 9 PLAIN own claims (no counters) so `count_claims == 12`.
+    seed_own_claims_via_cli(env, LANDING_OWN_CLAIMS - COUNTERED_OWN_CLAIMS);
+
+    // STEP 3 — peers author verifiable COUNTER records targeting the 3 own CIDs. The
+    // self-counter rule means an OWN claim is countered ONLY by a PEER. Build ALL peer
+    // records UP FRONT, holding each PDS ALIVE for the whole function so a SINGLE `peer
+    // pull` over both peers succeeds. Rachel counters A and C; Tobias counters B and C —
+    // so claim C is countered by BOTH (presence-once). Each `counters` reference lands in
+    // `peer_claim_references` with `referenced_cid == <own target CID>`.
+    let rachel_seed = [7u8; 32];
+    let tobias_seed = [9u8; 32];
+    let (rachel_counter_a, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_RACHEL_DID,
+        rachel_seed,
+        &target_a,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (rachel_counter_c, _rachel_pubkey_hex_c) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_RACHEL_DID,
+        rachel_seed,
+        &target_c,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (tobias_counter_b, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &target_b,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (tobias_counter_c, _tobias_pubkey_hex_c) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &target_c,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+
+    let rachel_pds = PeerPds::for_peer(
+        COUNTERED_PEER_RACHEL_DID,
+        vec![rachel_counter_a, rachel_counter_c],
+    );
+    let tobias_pds = PeerPds::for_peer(
+        COUNTERED_PEER_TOBIAS_DID,
+        vec![tobias_counter_b, tobias_counter_c],
+    );
+
+    for (did, pds) in [
+        (COUNTERED_PEER_RACHEL_DID, &rachel_pds),
+        (COUNTERED_PEER_TOBIAS_DID, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_landing_store_with_countered_own_claims: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTERED_PEER_RACHEL_DID,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTERED_PEER_TOBIAS_DID,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_landing_store_with_countered_own_claims: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // PIN the GENUINE summary shape: 12 own claims AND exactly 3 countered (the
+    // twice-countered claim C collapses to ONE via COUNT(DISTINCT) — the presence-once
+    // contract). The direct ADR-055 oracle proves the fixture is the REAL countered shape
+    // the production read will surface, NOT merely "the verbs exited 0".
+    assert_user_author_claim_count(env, LANDING_OWN_CLAIMS);
+    let countered = read_countered_own_claims_count(env);
+    assert_eq!(
+        countered, COUNTERED_OWN_CLAIMS,
+        "seed_landing_store_with_countered_own_claims: the ADR-055 COUNT(DISTINCT) must be \
+         exactly {COUNTERED_OWN_CLAIMS} (claim C countered by BOTH Rachel and Tobias counts \
+         ONCE — presence-once); got {countered}"
+    );
+
+    HeldSubscriptions {
+        _peers: vec![rachel_pds, tobias_pds],
+    }
+}
+
+/// Seed an own-claims store where NONE of Maria's claims is countered (the honest-zero
+/// fixture, US-CC-001/002 Theme 3 — C-5): several plain own claims via `claim add`,
+/// NOTHING references any of them as a counter, so `count_countered_own_claims()` returns
+/// `Some(0)` and both surfaces render "(0 countered)" — a SUCCESSFUL read of zero,
+/// DISTINCT from the missing marker "(— countered)". The direct ADR-055 oracle pins the
+/// count at 0.
+///
+/// SCAFFOLD: true (slice-18) — drives EXISTING `claim add`; NO counter is authored, NO
+/// peer is added/pulled.
+pub fn seed_landing_store_none_countered(env: &TestEnv) -> HeldSubscriptions {
+    // 12 plain own claims, NONE countered (the own-claims count is the same 12 as the
+    // headline so the "(0 countered)" honest-zero reads against the SAME own total).
+    seed_own_claims_via_cli(env, LANDING_OWN_CLAIMS);
+
+    // PIN: 12 own claims, exactly 0 countered (Some(0), an honest zero — not a failed read).
+    assert_user_author_claim_count(env, LANDING_OWN_CLAIMS);
+    let countered = read_countered_own_claims_count(env);
+    assert_eq!(
+        countered, 0,
+        "seed_landing_store_none_countered: with no counter authored the ADR-055 \
+         COUNT(DISTINCT) must be 0 (an honest Some(0), not a failed read); got {countered}"
+    );
+
+    HeldSubscriptions { _peers: vec![] }
+}
+
+/// Seed a store where EXACTLY ONE of Maria's own claims is countered by TWO DISTINCT
+/// peers (Rachel + Tobias) and NO other claim is countered — the presence-once boundary
+/// fixture (US-CC-000/001 Theme 2 — C-4 / BR-CC-1). The `COUNT(DISTINCT)` must collapse
+/// the two `peer_claim_references` rows (same `referenced_cid`, two distinct authors) to
+/// ONE → both surfaces render "(1 countered)", NEVER "(2 countered)". The direct ADR-055
+/// oracle pins the count at 1. Mirrors the slice-12
+/// `seed_claims_list_target_two_counters_distinct_authors` shape, here for the COUNT.
+///
+/// SCAFFOLD: true (slice-18) — drives EXISTING `claim add` + `build_verifiable_peer_
+/// counter_record` + `peer add` + `peer pull`. NO hand-inserted rows.
+pub fn seed_landing_store_one_own_claim_countered_twice(env: &TestEnv) -> HeldSubscriptions {
+    // STEP 1 — sign several plain own claims; ONE of them is the twice-countered target.
+    for (subject, predicate, object) in [
+        ("github:slice18/plain-rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
+        ("github:slice18/plain-deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+    ] {
+        seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
+    }
+    // The twice-countered target — confidence 0.30 so the anti-misread scenario can pin
+    // it renders VERBATIM, never re-weighted by the count (Theme 9).
+    let target_cid = seed_own_claim_with_evidence(
+        env,
+        "github:slice18/tdd",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.test-driven",
+        0.30,
+        &[],
+    );
+
+    // STEP 2 — TWO distinct peers each author a verifiable COUNTER referencing the SAME
+    // own target CID. Build BOTH up front, hold each PDS alive, pull BOTH in ONE pull so
+    // both `counters` references land in `peer_claim_references` with the SAME
+    // `referenced_cid == target_cid` — two DISTINCT authors, ONE referenced CID.
+    let rachel_seed = [7u8; 32];
+    let (rachel_record, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_RACHEL_DID,
+        rachel_seed,
+        &target_cid,
+        Some(COUNTER_REASON_VERBATIM),
+    );
+    let tobias_seed = [9u8; 32];
+    let (tobias_record, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &target_cid,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let rachel_pds = PeerPds::for_peer(COUNTERED_PEER_RACHEL_DID, vec![rachel_record]);
+    let tobias_pds = PeerPds::for_peer(COUNTERED_PEER_TOBIAS_DID, vec![tobias_record]);
+
+    for (did, pds) in [
+        (COUNTERED_PEER_RACHEL_DID, &rachel_pds),
+        (COUNTERED_PEER_TOBIAS_DID, &tobias_pds),
+    ] {
+        let added = run_openlore_with_peer_resolver(
+            env,
+            &["peer", "add", did],
+            did,
+            pds.endpoint_url(),
+        );
+        assert_eq!(
+            added.status, 0,
+            "seed_landing_store_one_own_claim_countered_twice: peer add for {did} must succeed;\n\
+             --- stdout ---\n{}\n--- stderr ---\n{}",
+            added.stdout, added.stderr
+        );
+    }
+    let pulled = run_openlore_pull_multi(
+        env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: COUNTERED_PEER_RACHEL_DID,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTERED_PEER_TOBIAS_DID,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
+        ],
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "seed_landing_store_one_own_claim_countered_twice: peer pull must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+
+    // PIN: exactly 1 countered own claim (the twice-countered target collapses to ONE via
+    // COUNT(DISTINCT) — the presence-once contract; NEVER 2).
+    let countered = read_countered_own_claims_count(env);
+    assert_eq!(
+        countered, 1,
+        "seed_landing_store_one_own_claim_countered_twice: a claim countered by TWO peers \
+         must count ONCE (presence-once, COUNT(DISTINCT)); got {countered}"
+    );
+
+    HeldSubscriptions {
+        _peers: vec![rachel_pds, tobias_pds],
+    }
+}
+
+/// Start the `openlore ui` viewer over the env's REAL store with the LOCAL
+/// `count_countered_own_claims()` read forced to FAIL mid-request — the slice-18
+/// graceful-degrade seam (US-CC-000/001/002 Theme 4 / C-2 / C-5 CARDINAL / WD-CC-2/6 /
+/// ADR-055 D4). The own-claims + the other landing counts STILL succeed; ONLY the
+/// countered-count read fails, so BOTH the landing summary and the `/claims` header must
+/// render the missing marker "(— countered)" while the own-claims "12" + the other
+/// counts + the nav hub + the `/claims` rows render, the page staying a normal 200 (never
+/// a 5xx / blank / raw stack trace). The failed read maps to `None` (`.ok()`), DISTINCT
+/// from a fabricated `Some(0)` → "(0 countered)".
+///
+/// SEEDING-SEAM NOTE (documented DISTILL choice, mirroring the slice-17 LD-DEGRADE
+/// precedent): the slice-06/15 viewer harness holds ONE long-lived DuckDB connection
+/// taken at STARTUP, so the existing `make_store_unreadable` lock would refuse STARTUP
+/// rather than exercise a MID-REQUEST per-count read failure. There is NO
+/// readily-available mid-request per-count read-failure seam in the slice-06/15 harness.
+/// Per the DISTILL guidance, the OBSERVABLE missing-marker contract (a failed
+/// countered-count read → "(— countered)" while the own-claims count + rows render, page
+/// 200) is scaffolded against a TEST-ONLY effect-shell fault seam (the
+/// `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` env var, threaded by `start_inner`); the
+/// SUCCESSFUL-zero distinction is fully exercisable today via
+/// `seed_landing_store_none_countered`. DELIVER materializes the per-count fault seam (a
+/// `#[cfg(debug_assertions)]`-gated, release-forbidden, xtask-guarded effect-shell branch
+/// substituting `Err(StoreReadError)` for the REAL `count_countered_own_claims()` read on
+/// BOTH the `/` and `/claims` handlers) with the SAME observable target — exactly as
+/// slice-17 materialized `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT`. Until then the scenario
+/// panics at the `todo!()` `start_inner` body (slice-06) → RED MISSING_FUNCTIONALITY,
+/// never BROKEN.
+///
+/// SCAFFOLD: true (slice-18).
+pub fn start_viewer_with_failing_countered_count(env: &TestEnv) -> ViewerServer {
+    ViewerServer::start_inner(env, None, None, None, false, false, true)
+}
+
+/// Assert the LANDING render shows the countered count "(`n` countered)" beside the
+/// own-claims line (US-CC-001 — the headline "12 own claims (3 countered)"). Universe
+/// (Mandate 8 — port-exposed rendered surface): the rendered body contains the exact
+/// parenthetical `"({n} countered)"` (the `render_countered(Some(n))` output, ADR-055 D3).
+/// Scans the OBSERVABLE HTML the operator's browser shows; never an internal
+/// `LandingSummary` field. The caller separately asserts the own-claims "12" still renders
+/// (the count is additive, never a re-weight — C-4).
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_landing_countered_count(body: &str, n: usize) {
+    let needle = format!("({n} countered)");
+    assert!(
+        body.contains(&needle),
+        "the landing summary must show the countered-own-claims count {needle:?} beside the \
+         own-claims count (US-CC-001 — \"12 own claims (3 countered)\"; the genuine seeded \
+         presence count, ADR-055 D3); body was:\n{body}"
+    );
+}
+
+/// Assert the LANDING render shows the MISSING-marker "(— countered)" for the countered
+/// count (a FAILED read, ADR-055 D4 / C-5), DISTINCT from a successful "(0 countered)".
+/// Universe (port-exposed rendered surface): the rendered body contains the exact
+/// `"(— countered)"` parenthetical (the `render_countered(None)` output). We scan the
+/// COUNTERED-COUNT POSITION, NOT the bare marker: the page chrome title ("OpenLore —
+/// Viewer") legitimately carries the em-dash, so a bare-marker scan would collide with the
+/// title and pass trivially even when the count rendered a number. Used by the failed-read
+/// degrade scenario (Theme 4). The caller separately asserts the own-claims count still
+/// renders + the page is 200 (the degrade is per-count, independent).
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_landing_countered_missing(body: &str) {
+    let needle = format!("({COUNTERED_MISSING_MARKER} countered)");
+    assert!(
+        body.contains(&needle),
+        "a FAILED countered-count read must render the missing-marker at the count position \
+         {needle:?} — DISTINCT from a fabricated \"(0 countered)\" AND from the chrome title's \
+         em-dash (ADR-055 D4 / C-5); body was:\n{body}"
+    );
+    // The failed read must NOT fabricate a "(0 countered)" (that would mislead "nothing of
+    // mine is disputed" — C-5 / R-CC-1). `Option` makes 0 ≠ missing representable.
+    assert!(
+        !body.contains("(0 countered)"),
+        "a FAILED countered-count read must NOT fabricate \"(0 countered)\" — `None` renders \
+         the missing marker, never a fabricated zero (C-5); body was:\n{body}"
+    );
+}
+
+/// Assert the `/claims` HEADER render shows the countered count "(`n` countered)" — the
+/// SAME helper output the landing renders (US-CC-002, single source — ADR-055 D3).
+/// Universe (port-exposed rendered surface): the rendered `/claims` body contains the
+/// exact `"({n} countered)"` parenthetical in the header region (near the "My Claims"
+/// heading + read-only notice). The caller separately asserts the list rows / order /
+/// paging are byte-identical to the no-header-count baseline (the header count is
+/// additive, never a re-order/filter/re-weight — C-4 / WD-CC-9).
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_claims_header_countered_count(body: &str, n: usize) {
+    let needle = format!("({n} countered)");
+    assert!(
+        body.contains(&needle),
+        "the `/claims` list header must show the countered count {needle:?} (the SAME \
+         single-source count the landing shows, US-CC-002 / ADR-055 D3); body was:\n{body}"
+    );
+}
+
+/// Assert the `/claims` HEADER render shows the MISSING-marker "(— countered)" for the
+/// countered count (a FAILED read, ADR-055 D4 / C-5) while the list rows still render.
+/// Universe (port-exposed rendered surface): the rendered `/claims` body contains the
+/// exact `"(— countered)"` parenthetical, NOT a fabricated "(0 countered)". Used by the
+/// `/claims` failed-read degrade scenario (Theme 4). The caller separately asserts the
+/// list rows still render + the page is 200.
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_claims_header_countered_missing(body: &str) {
+    let needle = format!("({COUNTERED_MISSING_MARKER} countered)");
+    assert!(
+        body.contains(&needle),
+        "a FAILED countered-count read on `/claims` must render the missing-marker at the \
+         header count position {needle:?} — DISTINCT from a fabricated \"(0 countered)\" \
+         (ADR-055 D4 / C-5); body was:\n{body}"
+    );
+    assert!(
+        !body.contains("(0 countered)"),
+        "a FAILED countered-count read on `/claims` must NOT fabricate \"(0 countered)\" \
+         (C-5); body was:\n{body}"
+    );
+}
+
+/// Assert the LANDING "(N countered)" count EQUALS the `/claims` header "(N countered)"
+/// count for the SAME store (US-CC-002 single-source consistency — WD-CC-8 / R-CC-6). The
+/// shared `render_countered` helper renders the SAME number on both surfaces; this pins
+/// the equality on the OBSERVABLE rendered surfaces (Mandate 8). Universe (port-exposed):
+/// the `"(N countered)"` parenthetical extracted from each body matches. A divergence is
+/// an UNSHIPPABLE single-source breach (the two orientation surfaces must agree).
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_landing_and_claims_countered_consistent(landing_body: &str, claims_body: &str) {
+    let landing_count = extract_countered_parenthetical(landing_body).unwrap_or_else(|| {
+        panic!(
+            "assert_landing_and_claims_countered_consistent: the landing body must carry a \
+             \"(N countered)\" parenthetical to compare; body was:\n{landing_body}"
+        )
+    });
+    let claims_count = extract_countered_parenthetical(claims_body).unwrap_or_else(|| {
+        panic!(
+            "assert_landing_and_claims_countered_consistent: the `/claims` body must carry a \
+             \"(N countered)\" parenthetical to compare; body was:\n{claims_body}"
+        )
+    });
+    assert_eq!(
+        landing_count, claims_count,
+        "the landing \"({landing_count} countered)\" must EQUAL the `/claims` header \
+         \"({claims_count} countered)\" for the same store (single source — WD-CC-8 / \
+         R-CC-6); the two orientation surfaces diverged"
+    );
+}
+
+/// Extract the inner token of the FIRST `"(<token> countered)"` parenthetical in a
+/// rendered body (the digit string, or "—" for the missing marker). Returns `None` when
+/// no countered parenthetical is present. Used by
+/// [`assert_landing_and_claims_countered_consistent`] to compare the two surfaces'
+/// rendered counts on the OBSERVABLE surface (never an internal field).
+fn extract_countered_parenthetical(body: &str) -> Option<String> {
+    let suffix = " countered)";
+    let close = body.find(suffix)?;
+    // Walk back to the opening '(' before the token.
+    let open = body[..close].rfind('(')?;
+    Some(body[open + 1..close].trim().to_string())
+}
+
+/// Assert the countered-count COPY is NEUTRAL disputed-claim awareness — it carries NONE
+/// of the penalty / deduction / verdict / "disputed by N" vocabulary (C-6 / WD-CC-10 —
+/// the slice-14 anti-misread sensibility). Universe (port-exposed rendered surface): the
+/// rendered body (lowercased) contains none of [`COUNTERED_BANNED_VERDICT_COPY`]. A
+/// countered claim is contested, not wrong; the count is awareness, never a score. Used
+/// by the anti-misread scenario (Theme 9). NOTE: scans the WHOLE rendered surface around
+/// the count — the count must read as neutral presence, never a verdict.
+///
+/// SCAFFOLD: true (slice-18).
+pub fn assert_countered_copy_is_neutral(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in COUNTERED_BANNED_VERDICT_COPY {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "C-6 / WD-CC-10 (slice-18 anti-misread): the countered-count copy must be NEUTRAL \
+             disputed-claim awareness — never a penalty / deduction / verdict / \"disputed by \
+             N\" total; found {banned:?} in body:\n{body}"
         );
     }
 }

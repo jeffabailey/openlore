@@ -315,8 +315,115 @@ DESIGN resolved the two inherited open questions and produced the lean architect
 
 ---
 
+## Wave: DISTILL (2026-06-09 · Quinn, nw-acceptance-designer)
+
+### [REF] Reconciliation HARD GATE
+
+**Reconciliation passed — 0 contradictions.** Read DISCUSS `wave-decisions.md` (WD-CC-1..12) +
+DESIGN (ADR-055 + the DESIGN section above). No separate DESIGN/DEVOPS `wave-decisions.md` files
+(brownfield; DESIGN decisions recorded in ADR-055 + feature-delta). DESIGN resolves the two open
+DISCUSS questions CONSISTENTLY (WD-CC-5 → count-only aggregate; WD-CC-7 → own-claims-only) and
+upholds every CARDINAL DISCUSS commitment (read-only, LOCAL/offline, missing≠zero, presence-once,
+single-source, additive-no-regression, anti-misread). No contradiction. No DEVOPS wave (inherits
+the viewer infra — clean local DuckDB + subprocess HTTP).
+
+### [REF] Scenario list with tags
+
+15 story scenarios (`tests/acceptance/viewer_counter_aware_counts.rs`) + 9 GOLD invariants
+(`tests/acceptance/viewer_counter_aware_counts_invariants.rs`). Full table + AC mapping:
+`distill/test-scenarios.md`. Headlines:
+
+- **CC-WS** (`@walking_skeleton @driving_port @driving_adapter @real-io`): GET / over a seeded
+  store (12 own, 3 countered by peers, one by 2) renders "12 own claims (3 countered)".
+- **CC-HEADER** (`@single-source @wd-cc-8`): GET /claims renders the SAME "(3 countered)";
+  landing == header.
+- **CC-PRESENCE** (`@presence-once @c-4 @cardinal`): a claim countered by 2 peers counts ONCE.
+- **CC-ZERO-LANDING / CC-ZERO-HEADER** (`@honest-zero @c-5 @edge`): "(0 countered)" Some(0).
+- **CC-DEGRADE-LANDING / CC-DEGRADE-HEADER** (`@infrastructure-failure @missing-not-zero @c-2
+  @c-5 @cardinal @error`): failed read → "(— countered)", page 200.
+- **CC-NO-REWEIGHT / CC-NO-REORDER** (`@additive @no-regression @c-4 @wd-cc-9`): "12" unchanged;
+  /claims list byte-identical.
+- **CC-READONLY-* / CC-OFFLINE-*** (`@read-only @c-1 @cardinal` / `@offline @no-cdn @c-2`).
+- **CC-NO-N-PLUS-1** (`@property @no-n-plus-1 @c-3 @cardinal`): one aggregate read, invariant to
+  store size.
+- **CC-ANTI-MISREAD** (`@anti-misread @c-6 @wd-cc-10`): neutral copy, confidence verbatim.
+
+### [REF] WS strategy
+
+Brownfield DELTA — no Feature-0 walking skeleton (the viewer + LandingSummary + counter-ref
+tables are SHIPPED). ONE `@walking_skeleton` scenario closing the new vertical (count read →
+4th LandingSummary field → render_countered → "12 own claims (3 countered)") through the
+production composition root (real `openlore ui` subprocess). Driving treatment per the
+Architecture of Reference: REAL HTTP subprocess (driving) + REAL local DuckDB (driven-internal)
+seeded via production verbs; no external/non-deterministic port (the count is LOCAL, no network
+edge). `[policy-mode] inherit`, `[port-mode] inherit`. Full detail: `distill/walking-skeleton.md`.
+
+### [REF] Driving-adapter coverage
+
+`GET /` and `GET /claims` both exercised via the REAL `openlore ui` subprocess + in-test HTTP
+GET (status + rendered-HTML body asserted). NO scenario calls `render_landing` / `render_countered`
+/ the count read directly (Mandate 1). Both routes are covered by ≥1 subprocess HTTP scenario.
+
+### [REF] Adapter coverage table
+
+| Driven adapter | @real-io scenario | Covered by |
+|---|---|---|
+| `count_countered_own_claims` (DuckDB COUNT(DISTINCT) read) | YES | CC-WS + every story scenario (real seeded DuckDB; the seed pins the genuine count via the direct ADR-055 `read_countered_own_claims_count` oracle) |
+| the `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` fault seam | YES (failure path) | CC-DEGRADE-LANDING / CC-DEGRADE-HEADER / CC-INV-MissingNotZero (test-only effect-shell seam, slice-17 precedent — DELIVER materializes) |
+
+No NEW external adapter (the count is a LOCAL aggregate over the slice-12 indexed ref tables —
+no network edge). No contract-test annotation needed.
+
+### [REF] Scaffolds (RED-ready)
+
+- `tests/acceptance/viewer_counter_aware_counts.rs` — `// SCAFFOLD: true`, 15 story scenarios.
+- `tests/acceptance/viewer_counter_aware_counts_invariants.rs` — `// SCAFFOLD: true`, 9 GOLD.
+- `tests/acceptance/support/mod.rs` — slice-18 seeds + asserts + consts + the
+  `start_inner` 7th `fail_countered_count` param + the `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT`
+  seam (all `// SCAFFOLD: true (slice-18)`).
+- `crates/cli/Cargo.toml` — the two new `[[test]]` registrations.
+
+RED confirmed: both binaries COMPILE; the WS + 4 sampled scenarios were RUN and FAIL for the
+right reason (MISSING_FUNCTIONALITY — "(N countered)" absent because the routes don't render the
+count + `count_countered_own_claims`/`render_countered`/the 4th field don't exist). The seeds'
+ADR-055 oracle confirmed the genuine seeded counts (3/0/1, presence-once collapse included).
+`check-arch: OK (21 workspace members)`. slice-17 + slice-12 suites still compile (start_inner
+ripple clean). DELIVER unskips + implements per ADR-025 (DISTILL is the canonical AT author).
+
+### [REF] Test placement
+
+`tests/acceptance/` (the established OpenLore viewer-slice convention; slice-06..17 all live
+here, registered as `[[test]]` bins in `crates/cli/Cargo.toml`). Shared harness in
+`tests/acceptance/support/mod.rs`.
+
+### [REF] Pre-requisites (DELIVER inherits)
+
+- DESIGN driving ports: `GET /` + `GET /claims` (ADR-055 D3/D4).
+- The new read `StoreReadPort::count_countered_own_claims` + the `adapter-duckdb`
+  `COUNT(DISTINCT)` impl (ADR-055 D1).
+- The 4th `LandingSummary.countered_own_claims: Option<usize>` field + the shared
+  `render_countered(Option<usize>)` helper + the `render_claims_page` `Option<usize>` param
+  (ADR-055 D2/D3).
+- The `.ok()` per-route resolution in `landing_page` + `claims_page` (ADR-055 D4).
+- The `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` `#[cfg(debug_assertions)]`-gated fault seam on both
+  handlers (slice-17 precedent).
+
+---
+
 ## Changelog
 
+- 2026-06-09 — slice-18 (`viewer-counter-aware-counts`) DISTILL (Quinn). Reconciliation HARD GATE
+  PASSED (0 contradictions). Authored 15 story scenarios + 9 GOLD invariants (all scaffolded RED,
+  ADR-025) driving `GET /` + `GET /claims` via the REAL `openlore ui` subprocess; mirrors the
+  slice-17 landing test structure + the slice-12 counter-seeding conventions. Added seeds
+  (`seed_landing_store_with_countered_own_claims` / `seed_landing_store_none_countered` /
+  `seed_landing_store_one_own_claim_countered_twice` / `start_viewer_with_failing_countered_count`
+  / `read_countered_own_claims_count` ADR-055 oracle) + asserts (`assert_landing_countered_count`
+  / `assert_landing_countered_missing` / `assert_claims_header_countered_count` /
+  `assert_claims_header_countered_missing` / `assert_landing_and_claims_countered_consistent` /
+  `assert_countered_copy_is_neutral`) + the `start_inner` 7th `fail_countered_count` param + the
+  `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` seam. Registered the two new test bins. RED confirmed
+  (MISSING_FUNCTIONALITY); check-arch OK (21); slice-17 + slice-12 suites still compile.
 - 2026-06-09 — slice-18 (`viewer-counter-aware-counts`) DESIGN (Morgan / ADR-055). Resolved
   WD-CC-5 (count-only `count_countered_own_claims` aggregate) + WD-CC-7 (own-claims-only). Added a
   4th additive `Option<usize>` field on `LandingSummary` + a shared `render_countered` helper for
