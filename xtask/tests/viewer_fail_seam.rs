@@ -226,3 +226,126 @@ fn both_viewer_fault_seams_gated_passes_the_scan() {
          MUST pass the scan, got: {findings:?}"
     );
 }
+
+// -----------------------------------------------------------------------------
+// slice-18 (ADR-055 D4): the countered-own-claims-count fault seam is covered by the
+// SAME extended guard (the new token appended to the guard's scanned-token set), so an
+// UNGATED `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` read also fails check-arch. The seam
+// is wired around the countered-count read in BOTH the `GET /` landing and `GET /claims`
+// header handlers — one fault, both surfaces degrade to "(— countered)".
+// -----------------------------------------------------------------------------
+
+/// slice-18 (ADR-055 D4): the SAFE shape for the countered-count seam — the
+/// `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` read sits inside a `#[cfg(debug_assertions)]`
+/// function, compiling ONLY in debug/test builds, never release. MUST pass the scan.
+/// Same multi-line-signature layout as production.
+const COUNTERED_COUNT_GATED_SEAM: &str = r#"
+#[cfg(debug_assertions)]
+fn countered_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_COUNTERED_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable { detail: "fault injected".to_string() });
+    }
+    read
+}
+
+#[cfg(not(debug_assertions))]
+fn countered_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    read
+}
+"#;
+
+/// slice-18: an UNSAFE shape — the `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT` read leaks
+/// into a function with NO cfg gate, so it WOULD compile into a release binary (a
+/// production `GET /` + `GET /claims` countered count could be forced to degrade to the
+/// missing marker "(— countered)"). MUST be flagged.
+const COUNTERED_COUNT_UNGATED_LEAK: &str = r#"
+fn countered_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_COUNTERED_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable { detail: "fault injected".to_string() });
+    }
+    read
+}
+"#;
+
+/// The post-slice-18 PRODUCTION layout: ALL THREE viewer fault seams (active-set +
+/// peer-claims-count + countered-count) gated in the same source. The guard must pass
+/// when EVERY token is correctly gated — the realistic post-slice-18 viewer shape.
+const ALL_THREE_SEAMS_GATED: &str = r#"
+#[cfg(debug_assertions)]
+fn active_set_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ").is_some() {
+        return Err(StoreReadError::Unreadable { detail: "fault injected".to_string() });
+    }
+    read
+}
+
+#[cfg(debug_assertions)]
+fn peer_claims_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable { detail: "fault injected".to_string() });
+    }
+    read
+}
+
+#[cfg(debug_assertions)]
+fn countered_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_COUNTERED_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable { detail: "fault injected".to_string() });
+    }
+    read
+}
+"#;
+
+#[test]
+fn cfg_gated_countered_count_seam_passes_the_scan() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_viewer_src(tmp.path(), COUNTERED_COUNT_GATED_SEAM);
+
+    let findings = scan_viewer_fail_seam_guard(tmp.path()).expect("scan runs");
+    assert!(
+        findings.is_empty(),
+        "a #[cfg(debug_assertions)]-gated OPENLORE_VIEWER_FAIL_COUNTERED_COUNT read MUST \
+         pass the scan (release-forbidden satisfied), got: {findings:?}"
+    );
+}
+
+#[test]
+fn ungated_countered_count_seam_in_release_path_is_rejected() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_viewer_src(tmp.path(), COUNTERED_COUNT_UNGATED_LEAK);
+
+    let findings = scan_viewer_fail_seam_guard(tmp.path()).expect("scan runs");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("OPENLORE_VIEWER_FAIL_COUNTERED_COUNT")
+                && f.contains("adapter-http-viewer")),
+        "an OPENLORE_VIEWER_FAIL_COUNTERED_COUNT read NOT behind a cfg gate would ship a \
+         degrade backdoor in a release binary and MUST be flagged, got: {findings:?}"
+    );
+}
+
+#[test]
+fn all_three_viewer_fault_seams_gated_passes_the_scan() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_viewer_src(tmp.path(), ALL_THREE_SEAMS_GATED);
+
+    let findings = scan_viewer_fail_seam_guard(tmp.path()).expect("scan runs");
+    assert!(
+        findings.is_empty(),
+        "the production viewer with ALL THREE fault seams gated (active-set + \
+         peer-claims-count + countered-count) MUST pass the scan, got: {findings:?}"
+    );
+}

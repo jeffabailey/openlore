@@ -1024,6 +1024,10 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
 //   - slice-17 `OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT`: a `GET /` peer-claims count
 //     read failure → `.ok() → None → MISSING_COUNT_MARKER "—"` (ADR-054 D2; the other
 //     two counts still render, the page stays 200, never a 5xx / fabricated 0).
+//   - slice-18 `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT`: a `GET /` + `GET /claims`
+//     countered-own-claims count read failure → `.ok() → None → render_countered(None)
+//     → "(— countered)"` (ADR-055 D4; the own-claims count + the `/claims` list rows
+//     still render, the page stays 200, never a 5xx / fabricated "(0 countered)").
 // Exactly like the ADR-026 pubkey seam, EACH fault injector is RELEASE-FORBIDDEN:
 // every read of EACH token MUST sit behind a `#[cfg(debug_assertions)]` gate so it
 // compiles ONLY in debug/test builds and can NEVER force a degrade in a release
@@ -1032,11 +1036,13 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
 
 /// The release-forbidden viewer fault-injection env-var tokens — EACH must sit
 /// behind a `#[cfg(debug_assertions)]` gate. The active-set-read token is slice-16;
-/// the peer-claims-count token is slice-17 (ADR-054 D2). New per-count/per-read
-/// fault seams append their token here so the ONE guard covers them all.
+/// the peer-claims-count token is slice-17 (ADR-054 D2); the countered-count token is
+/// slice-18 (ADR-055 D4). New per-count/per-read fault seams append their token here so
+/// the ONE guard covers them all.
 const VIEWER_FAIL_SEAM_TOKENS: &[&str] = &[
     "OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ",
     "OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT",
+    "OPENLORE_VIEWER_FAIL_COUNTERED_COUNT",
 ];
 
 /// The viewer source file the fault-seam guard scans.
@@ -1060,7 +1066,7 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
                 findings.push(format!(
                     "{}: `{token}` fault-injection seam read is NOT behind a `#[cfg(...)]` gate \
                      — it would ship a degrade backdoor in a release binary (slice-16 / ADR-053 \
-                     + slice-17 / ADR-054 §Earned-Trust): {}",
+                     + slice-17 / ADR-054 + slice-18 / ADR-055 §Earned-Trust): {}",
                     path.display(),
                     line
                 ));
