@@ -370,13 +370,23 @@ pub fn render_claims_table_fragment(page: &PageView<ClaimRowView>) -> Markup {
 /// `<script src="/static/htmx.min.js">` (offline-first, never a CDN; I-HX-2).
 /// Because the table region is the SAME fn in both shapes, fragment/full-page
 /// parity is structural, not asserted by duplicating render logic (I-HX-5).
-pub fn render_claims_page(page: &PageView<ClaimRowView>) -> String {
+pub fn render_claims_page(
+    page: &PageView<ClaimRowView>,
+    countered_own_claims: Option<usize>,
+) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
             (page_head("OpenLore — My Claims"))
             body {
-                h1 { "My Claims" }
+                // slice-18 (ADR-055 D3): the countered count renders in the list HEADER,
+                // beside the "My Claims" heading, through the SAME shared `render_countered`
+                // helper the landing summary uses (single source — the two surfaces resolve
+                // from the SAME `count_countered_own_claims` read + render through the SAME
+                // helper, so they cannot diverge, WD-CC-8). Additive header text ONLY — the
+                // slice-06 list order/paging/count + the slice-12 per-row flags are
+                // UNTOUCHED (C-4 / WD-CC-9).
+                h1 { "My Claims " (render_countered(countered_own_claims)) }
                 p { "This is a read-only view of the claims you have signed." }
                 (render_tab_nav())
                 (render_claims_view_panel_fragment(page))
@@ -3349,7 +3359,7 @@ mod tests {
             "The Rust Project",
             0.90,
         )]);
-        let html = render_claims_page(&page);
+        let html = render_claims_page(&page, None);
         for needle in [
             "rust-lang/rust",
             "is-maintained-by",
@@ -3362,6 +3372,52 @@ mod tests {
                 "rendered My Claims page must contain {needle:?}; got:\n{html}"
             );
         }
+    }
+
+    /// Behavior (slice-18 / US-CC-002 / ADR-055 D3 — single source, prime mutation
+    /// target): `render_claims_page` renders the countered count in the list HEADER
+    /// through the SAME `render_countered` helper the landing uses, so the two
+    /// surfaces cannot diverge. `Some(n)` → "(n countered)" beside "My Claims",
+    /// `Some(0)` → "(0 countered)" (honest zero), `None` → "(— countered)" (missing
+    /// marker, NEVER a fabricated 0). Pins that the header render is exactly the
+    /// `render_countered` output — a mutant that drops the header count, fabricates
+    /// 0 for a missing read, or diverges the copy from the helper is killed.
+    #[test]
+    fn render_claims_page_header_shows_the_countered_count_via_render_countered() {
+        let one_claim = || {
+            PageView::new(vec![row(
+                "bafyrust",
+                "rust-lang/rust",
+                "is-maintained-by",
+                "The Rust Project",
+                0.90,
+            )])
+        };
+        // Some(n) → the header carries EXACTLY the render_countered(Some(n)) output,
+        // beside the "My Claims" heading (single source — the helper, not a literal).
+        let html_some = render_claims_page(&one_claim(), Some(3));
+        assert!(
+            html_some.contains(&render_countered(Some(3))),
+            "the /claims header must render the countered count via render_countered \
+             (Some(3) → \"(3 countered)\", single source — ADR-055 D3); got:\n{html_some}"
+        );
+        // Some(0) → the honest zero "(0 countered)" (a successful read of zero),
+        // DISTINCT from the missing marker.
+        let html_zero = render_claims_page(&one_claim(), Some(0));
+        assert!(
+            html_zero.contains("(0 countered)") && !html_zero.contains("(— countered)"),
+            "Some(0) must render the honest zero \"(0 countered)\", NOT the missing \
+             marker (0 ≠ missing, C-5); got:\n{html_zero}"
+        );
+        // None → the missing marker "(— countered)", NEVER a fabricated "(0 countered)"
+        // (a failed read degrades to None → the marker, ADR-055 D4 / C-5).
+        let html_missing = render_claims_page(&one_claim(), None);
+        assert!(
+            html_missing.contains(&render_countered(None))
+                && !html_missing.contains("(0 countered)"),
+            "None must render the missing marker \"(— countered)\" via render_countered, \
+             NEVER a fabricated \"(0 countered)\" (C-5); got:\n{html_missing}"
+        );
     }
 
     /// Behavior (FR-VIEW-8, prime mutation target): confidence `0.9` renders
@@ -3426,7 +3482,7 @@ mod tests {
                 })
                 .collect();
             let page = PageView::new(rows.clone());
-            let html = render_claims_page(&page);
+            let html = render_claims_page(&page, None);
             for r in &rows {
                 prop_assert!(html.contains(&r.cid), "page must contain cid {:?}", r.cid);
                 prop_assert!(html.contains(&r.subject), "page must contain subject {:?}", r.subject);
@@ -3541,7 +3597,7 @@ mod tests {
         assert_eq!(render_position_indicator(&only), "1\u{2013}12 of 12");
         assert!(!only.has_prev(), "a single page has no Previous");
         assert!(!only.has_next(), "a single page has no Next");
-        let html = render_claims_page(&only);
+        let html = render_claims_page(&only, None);
         assert!(
             !html.contains("?page="),
             "a single-page store must render no ?page= controls; got:\n{html}"
@@ -3557,7 +3613,7 @@ mod tests {
     /// FR-VIEW-6). Pins the exact href arithmetic (a mutation to `+1`/`-1` fails).
     #[test]
     fn a_middle_page_links_prev_and_next_to_adjacent_pages() {
-        let html = render_claims_page(&paged(50, 4, 50, 312));
+        let html = render_claims_page(&paged(50, 4, 50, 312), None);
         assert!(
             html.contains("?page=3"),
             "page 4 must link Prev to ?page=3; got:\n{html}"
@@ -3660,7 +3716,7 @@ mod tests {
         ) {
             let view: PageView<ClaimRowView> = PageView::paged(Vec::new(), page, page_size, 0);
             prop_assert_eq!(render_position_indicator(&view), String::new());
-            let html = render_claims_page(&view);
+            let html = render_claims_page(&view, None);
             prop_assert!(!html.contains("?page="), "an empty set must render no controls");
         }
     }
@@ -3674,7 +3730,7 @@ mod tests {
     #[test]
     fn empty_page_renders_only_the_guided_empty_state() {
         let page: PageView<ClaimRowView> = PageView::new(vec![]);
-        let html = render_claims_page(&page);
+        let html = render_claims_page(&page, None);
         // (a) the guided CLI text IS present — never a blank page.
         assert!(
             html.contains("not signed any claims yet")
@@ -4984,7 +5040,7 @@ mod tests {
     fn claims_page_embeds_the_fragment_and_emits_one_local_htmx_script() {
         let view = paged(50, 2, 50, 312);
         let fragment = render_claims_table_fragment(&view).into_string();
-        let page = render_claims_page(&view);
+        let page = render_claims_page(&view, None);
 
         // The full page EMBEDS the fragment verbatim (parity by construction).
         assert!(
@@ -5032,7 +5088,7 @@ mod tests {
         ) {
             let view = PageView::paged(Vec::new(), page, page_size, total);
             let fragment = render_claims_table_fragment(&view).into_string();
-            let full = render_claims_page(&view);
+            let full = render_claims_page(&view, None);
             prop_assert!(
                 full.contains(&fragment),
                 "the full page must embed the fragment verbatim for page {page}/{page_size}/{total}"

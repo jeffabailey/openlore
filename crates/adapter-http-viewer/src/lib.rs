@@ -550,7 +550,16 @@ fn claims_page(
     // the NESTED `#claims-table` (H-1a) — both land on this one response.
     match shape {
         Shape::Fragment => html_ok(render_claims_view_panel_fragment(&page_view).into_string()),
-        Shape::FullPage => html_ok(render_claims_page(&page_view)),
+        // slice-18 (ADR-055 D3): the full page header renders the countered count from the
+        // SAME `count_countered_own_claims` read the landing uses, resolved INDEPENDENTLY
+        // via `.ok()` (`Result<usize, StoreReadError>` → `Option<usize>`) — a failed read
+        // degrades to `None` → "(— countered)", never blanks the list, never a 5xx (the
+        // list read above is INDEPENDENT of the countered-count read, ADR-055 D4). Both
+        // surfaces render through the SAME `render_countered` helper (single source).
+        Shape::FullPage => html_ok(render_claims_page(
+            &page_view,
+            store.count_countered_own_claims().ok(),
+        )),
     }
 }
 
