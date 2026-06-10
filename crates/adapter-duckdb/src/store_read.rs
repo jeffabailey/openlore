@@ -514,6 +514,36 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         Ok(total as usize)
     }
 
+    fn count_countered_own_claims(&self) -> Result<usize, StoreReadError> {
+        let conn = self.lock_conn()?;
+        // ADR-055 D1: ONE aggregate over the SAME shared connection (mirrors
+        // `count_claims` / `count_peer_claims` / `count_active_peer_subscriptions`).
+        // COUNT(DISTINCT own cid) where the own CID appears as a COUNTERED
+        // `referenced_cid` across the two INDEXED ref tables (`claim_references` ∪
+        // `peer_claim_references`, `ref_type = 'counters'`). The inner `UNION` (set
+        // union — de-duped, not `UNION ALL`) collapses the countered referenced_cids to
+        // a DISTINCT set; `c.cid IN (...)` is a membership test, so a claim countered by
+        // N peers contributes its cid ONCE → it counts ONCE (presence-once, C-4 /
+        // BR-CC-1, no JOIN-fanout). The outer `COUNT(DISTINCT c.cid)` is belt-and-braces.
+        // Own-only by the outer `claims` table (a countered PEER claim is not in
+        // `claims`, so it never contributes — WD-CC-7 own-only by query shape).
+        // Parameter-free (the only WHERE value is the literal `'counters'`) →
+        // injection-safe. Invariant to store size (both ref columns indexed, ADR-048).
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT c.cid) FROM claims c WHERE c.cid IN (\
+                     SELECT referenced_cid FROM claim_references      WHERE ref_type = 'counters' \
+                     UNION \
+                     SELECT referenced_cid FROM peer_claim_references WHERE ref_type = 'counters')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("count_countered_own_claims read failed: {err}"),
+            })?;
+        Ok(total as usize)
+    }
+
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,

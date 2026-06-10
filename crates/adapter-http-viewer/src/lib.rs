@@ -434,6 +434,12 @@ fn landing_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
         // INDUCES the `Err` the `.ok()` already handles.
         peer_claims: peer_claims_count_with_fault_seam(store.count_peer_claims()).ok(),
         active_peers: store.count_active_peer_subscriptions().ok(),
+        // slice-18 (ADR-055 D4): the FOURTH independent `.ok()` resolution — a failed
+        // countered-count read maps to `None` → the missing marker, the other three
+        // counts + the nav hub intact, always 200. (The per-count fault seam mirroring
+        // the peer-claims seam is materialized in step 02-01; the production `.ok()`
+        // degrade path is in place here.)
+        countered_own_claims: store.count_countered_own_claims().ok(),
     };
     html_ok(render_landing(&summary))
 }
@@ -1601,15 +1607,19 @@ mod tests {
         own_claims: Result<usize, StoreReadError>,
         peer_claims: Result<usize, StoreReadError>,
         active_peers: Result<usize, StoreReadError>,
+        countered_own_claims: Result<usize, StoreReadError>,
     }
 
     impl FakeLandingStore {
-        /// A fake whose three counts all succeed with the given numbers.
+        /// A fake whose three slice-17 counts all succeed with the given numbers; the
+        /// slice-18 countered count defaults to a successful `Ok(0)` (additive — the
+        /// slice-17 tests do not assert on it).
         fn with_counts(own: usize, peer: usize, active: usize) -> Self {
             Self {
                 own_claims: Ok(own),
                 peer_claims: Ok(peer),
                 active_peers: Ok(active),
+                countered_own_claims: Ok(0),
             }
         }
     }
@@ -1632,6 +1642,9 @@ mod tests {
         }
         fn count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError> {
             cloned_count(&self.active_peers)
+        }
+        fn count_countered_own_claims(&self) -> Result<usize, StoreReadError> {
+            cloned_count(&self.countered_own_claims)
         }
 
         // Not on the `GET /` landing path — unreachable for these tests.

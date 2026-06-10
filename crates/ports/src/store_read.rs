@@ -332,6 +332,27 @@ pub trait StoreReadPort: Send + Sync {
     /// zero, DISTINCT from a failed read).
     fn count_active_peer_subscriptions(&self) -> Result<usize, StoreReadError>;
 
+    /// Total number of the operator's OWN claims that have been COUNTERED — the
+    /// count-only sibling of [`StoreReadPort::count_claims`] /
+    /// [`StoreReadPort::count_peer_claims`] /
+    /// [`StoreReadPort::count_active_peer_subscriptions`] for the landing dashboard's
+    /// at-a-glance summary AND the `/claims` list header (`GET /` + `GET /claims`,
+    /// slice-18 / US-CC-000/001/002 / ADR-055 D1). Read-only aggregate — NO mutation
+    /// method is added to this trait (ADR-030 / C-1): a `Box<dyn StoreReadPort>` stays
+    /// structurally incapable of mutating.
+    ///
+    /// A PRESENCE count by construction (C-4 / BR-CC-1): `COUNT(DISTINCT own cid)`
+    /// where the own CID appears as a COUNTERED `referenced_cid` across the two indexed
+    /// ref tables (`claim_references` ∪ `peer_claim_references`, `ref_type='counters'`)
+    /// via a de-duped `UNION` IN-set membership test — so a claim countered by N peers
+    /// counts ONCE (no JOIN-fanout, NEVER a "disputed by N" total). Own-only by query
+    /// shape (the outer table is `claims` — a countered PEER claim is excluded, not
+    /// filtered). Invariant to store size (both ref columns indexed, ADR-048).
+    /// Returns `Ok(0)` for a store where nothing of the operator's is countered (a
+    /// SUCCESSFUL read of zero, DISTINCT from a FAILED read — `0 ≠ missing`, the shell
+    /// maps the `Result` to `Option` via `.ok()`).
+    fn count_countered_own_claims(&self) -> Result<usize, StoreReadError>;
+
     /// Read the LOCAL attributed-claim feed for ONE contributor (`/score`,
     /// slice-09 / ADR-039/040/041 / I-CS-5): every claim authored by `contributor`
     /// across all subjects, from the operator's OWN `claims` table UNION ALL the

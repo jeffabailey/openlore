@@ -579,6 +579,14 @@ pub struct LandingSummary {
     /// The ACTIVE peer-subscription count (`count_active_peer_subscriptions`,
     /// `removed_at IS NULL`). `None` = the read failed.
     pub active_peers: Option<usize>,
+    /// The COUNTERED-own-claims count (`count_countered_own_claims`, slice-18 /
+    /// ADR-055 D2 — additive, parallel to the three above, IDENTICAL degrade
+    /// semantics). `Some(n)` = a SUCCESSFUL read of `n` (incl. a genuine `Some(0)` —
+    /// an honest "nothing of mine has drawn a counter"); `None` = the read FAILED →
+    /// the missing marker, NEVER a fabricated 0 (`0 ≠ missing`, C-5 / WD-CC-6). The
+    /// countered count is disputed-claim AWARENESS rendered BESIDE the own-claims line
+    /// — it never re-weights the own-claims number (additive, C-4).
+    pub countered_own_claims: Option<usize>,
 }
 
 /// The 8 shipped top-level entry-point surfaces the landing nav hub links, as
@@ -610,6 +618,19 @@ fn render_count(count: Option<usize>) -> String {
     }
 }
 
+/// Render the COUNTERED-own-claims parenthetical for BOTH the landing summary and the
+/// `/claims` list header from the SAME `Option<usize>` (slice-18 / ADR-055 D3 — single
+/// source). `Some(n)` → "(n countered)" (incl. a genuine `Some(0)` → "(0 countered)", a
+/// SUCCESSFUL read of an honest zero), `None` → "(— countered)" (the
+/// [`MISSING_COUNT_MARKER`] inside the parenthetical — a FAILED read, NEVER a fabricated
+/// 0; reuses the [`render_count`] inner-number mapping so `0 ≠ missing` is one rule). The
+/// copy is NEUTRAL disputed-claim awareness — never "refuted"/"false"/"disputed by N"/a
+/// score/a deduction/a verdict (C-6 / WD-CC-10). Held in ONE place so the exact copy +
+/// the missing-marker behaviour is a single mutation-killable site. PURE total function.
+pub fn render_countered(countered: Option<usize>) -> String {
+    format!("({} countered)", render_count(countered))
+}
+
 /// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
 /// PURE: a TOTAL function of the [`LandingSummary`] — no I/O, no panic on ANY of the
 /// 2³ `Option` combinations. States the view is read-only (the operator is told, up
@@ -634,7 +655,15 @@ pub fn render_landing(summary: &LandingSummary) -> String {
                 // failed read renders the missing-number marker "—", DISTINCT from a
                 // genuine 0 (ADR-054 D2 / WD-LD-8).
                 section {
-                    p { (render_count(summary.own_claims)) " own claims" }
+                    // slice-18 (ADR-055 D3): the countered count renders BESIDE the
+                    // UNCHANGED own-claims line ("12 own claims (3 countered)") — the
+                    // own-claims `render_count` is UNTOUCHED (additive awareness, never a
+                    // re-weight, C-4). The countered count flows through the SAME shared
+                    // `render_countered` helper the `/claims` header uses (single source).
+                    p {
+                        (render_count(summary.own_claims)) " own claims "
+                        (render_countered(summary.countered_own_claims))
+                    }
                     p { (render_count(summary.peer_claims)) " peer claims" }
                     p { (render_count(summary.active_peers)) " active peers" }
                 }
@@ -3735,6 +3764,7 @@ mod tests {
             own_claims: Some(12),
             peer_claims: Some(7),
             active_peers: Some(2),
+            countered_own_claims: Some(3),
         }
     }
 
@@ -3827,7 +3857,15 @@ mod tests {
             peer in proptest::option::of(0usize..10_000),
             active in proptest::option::of(0usize..10_000),
         ) {
-            let summary = LandingSummary { own_claims: own, peer_claims: peer, active_peers: active };
+            let summary = LandingSummary {
+                own_claims: own,
+                peer_claims: peer,
+                active_peers: active,
+                // slice-18: the 4th field is additive — this slice-17 property pins the
+                // THREE counts; a fixed Some(0) here keeps it a valid total-function input
+                // (the countered render is gated by the slice-18 property below).
+                countered_own_claims: Some(0),
+            };
             let html = render_landing(&summary);
 
             // Always a complete full page (ADR-054 D5 full-page-only) with the
@@ -3855,6 +3893,102 @@ mod tests {
                     ),
                 }
             }
+        }
+    }
+
+    // ====================================================================
+    // slice-18 (US-CC-001 / ADR-055 D3): the shared `render_countered` helper
+    // + the 4th `LandingSummary` field rendered BESIDE the unchanged own-claims
+    // line. These carry the in-crate mutation gate for the countered-count
+    // render core.
+    // ====================================================================
+
+    /// Behavior (ADR-055 D3 — the three render branches + neutral copy): the shared
+    /// `render_countered` helper maps `Some(n) → "(n countered)"`, `Some(0) → "(0
+    /// countered)"` (an HONEST zero, a SUCCESSFUL read), and `None → "(— countered)"`
+    /// (the [`MISSING_COUNT_MARKER`] inside the parenthetical — a FAILED read, NEVER a
+    /// fabricated 0). The copy is NEUTRAL disputed-claim awareness — never a
+    /// verdict/penalty/"disputed by N" total (C-6 / WD-CC-10). These four pinned cases
+    /// are the mutation targets: a mutant that renders `Some(0)` as the marker, blanks
+    /// the number, drops the "countered" word, or emits verdict copy is killed.
+    #[test]
+    fn render_countered_renders_number_zero_and_missing_marker_with_neutral_copy() {
+        assert_eq!(
+            render_countered(Some(3)),
+            "(3 countered)",
+            "Some(n) must render \"(n countered)\" (ADR-055 D3)"
+        );
+        assert_eq!(
+            render_countered(Some(0)),
+            "(0 countered)",
+            "Some(0) is an HONEST zero — a SUCCESSFUL read, DISTINCT from the missing \
+             marker (C-5 / WD-CC-6)"
+        );
+        assert_eq!(
+            render_countered(None),
+            format!("({MISSING_COUNT_MARKER} countered)"),
+            "None renders the missing marker inside the parenthetical — a FAILED read, \
+             NEVER a fabricated 0 (ADR-055 D3 / C-5)"
+        );
+        // The copy is NEUTRAL — a countered claim is contested, not wrong; the count is
+        // awareness, never a verdict/penalty/"by N" total (C-6 / WD-CC-10).
+        for countered in [Some(3usize), Some(0), None] {
+            let rendered = render_countered(countered).to_ascii_lowercase();
+            for banned in [
+                "disputed by", "refuted", "false", "penalty", "deduction", "deducted",
+                "invalid", "wrong", "discredited",
+            ] {
+                assert!(
+                    !rendered.contains(banned),
+                    "render_countered must be NEUTRAL — found {banned:?} in {rendered:?} \
+                     (C-6 / WD-CC-10)"
+                );
+            }
+        }
+    }
+
+    // PROPERTY (slice-18 / US-CC-001 Theme 1+2 / ADR-055 D2+D3): with the FOURTH
+    // additive `countered_own_claims` field, `render_landing` stays a TOTAL function of
+    // the now-2⁴ `Option` combinations — it never panics, ALWAYS produces a full HTML
+    // page, renders the countered count via `render_countered` BESIDE the UNCHANGED
+    // own-claims line ("12 own claims (3 countered)"), and the own-claims number is
+    // NEVER re-weighted/deducted by the countered count (additive — C-4). This carries
+    // the in-crate mutation gate for the additive render beside the own-claims line.
+    proptest! {
+        #[test]
+        fn render_landing_renders_the_countered_count_beside_the_unchanged_own_claims(
+            own in proptest::option::of(0usize..10_000),
+            peer in proptest::option::of(0usize..10_000),
+            active in proptest::option::of(0usize..10_000),
+            countered in proptest::option::of(0usize..10_000),
+        ) {
+            let summary = LandingSummary {
+                own_claims: own,
+                peer_claims: peer,
+                active_peers: active,
+                countered_own_claims: countered,
+            };
+            let html = render_landing(&summary);
+
+            // Total function: still a complete full page over EVERY 2⁴ combination.
+            prop_assert!(html.contains("<!DOCTYPE html>"), "must be a full page; got:\n{html}");
+
+            // The own-claims line renders UNCHANGED (additive — the countered count
+            // never re-weights it, C-4): the EXACT "{own} own claims" still appears.
+            if let Some(n) = own {
+                prop_assert!(
+                    html.contains(&format!("{n} own claims")),
+                    "the own-claims count must render UNCHANGED (additive, C-4); got:\n{html}"
+                );
+            }
+
+            // The countered count renders via the SAME helper output, BESIDE the
+            // own-claims line — Some(n) → "(n countered)", None → the missing marker.
+            prop_assert!(
+                html.contains(&render_countered(countered)),
+                "the countered count {countered:?} must render via render_countered \
+                 beside the own-claims line (ADR-055 D3); got:\n{html}"
+            );
         }
     }
 
