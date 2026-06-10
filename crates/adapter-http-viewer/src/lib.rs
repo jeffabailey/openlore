@@ -1504,8 +1504,9 @@ mod tests {
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
     use super::{
-        bare_did, landing_page, peer_claims_count_with_fault_seam, to_indexed_claim, SharedStore,
-        ViewerServer, HTMX_ASSET, HTMX_ASSET_SHA256,
+        bare_did, claims_page, countered_count_with_fault_seam, landing_page,
+        peer_claims_count_with_fault_seam, to_indexed_claim, Shape, SharedStore, ViewerServer,
+        HTMX_ASSET, HTMX_ASSET_SHA256,
     };
     use http_body_util::BodyExt;
     use hyper::StatusCode;
@@ -1707,10 +1708,29 @@ mod tests {
             cloned_count(&self.countered_own_claims)
         }
 
-        // Not on the `GET /` landing path — unreachable for these tests.
+        // slice-18 (`/claims` header coverage): the My Claims list read + the
+        // per-page counter-presence lookup are exercised by the claims_page header
+        // test. An EMPTY successful page (total 0) is the simplest stable input —
+        // it drives the FullPage render WITHOUT requiring row fixtures, so the
+        // header's countered-count marker is the thing under assertion. The
+        // slice-17 landing tests never reach this method (the `GET /` path reads
+        // ONLY the four counts), so returning an empty page here is inert for them.
         fn list_claims(&self, _r: PageRequest) -> Result<Page<ClaimRow>, StoreReadError> {
-            unimplemented!("not read by the landing dashboard")
+            Ok(Page {
+                rows: Vec::new(),
+                total: 0,
+            })
         }
+        // slice-18: the empty-page counter-presence lookup — no CIDs in, the empty
+        // set out. Inert for the slice-17 landing tests (they never list claims).
+        fn counter_presence_for(
+            &self,
+            _c: &[String],
+        ) -> Result<HashSet<String>, StoreReadError> {
+            Ok(HashSet::new())
+        }
+
+        // Not on the `GET /` landing path — unreachable for these tests.
         fn get_claim(&self, _cid: &str) -> Result<Option<ClaimDetail>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
@@ -1733,12 +1753,6 @@ mod tests {
             &self,
             _t: &str,
         ) -> Result<Vec<CounterClaimRow>, StoreReadError> {
-            unimplemented!("not read by the landing dashboard")
-        }
-        fn counter_presence_for(
-            &self,
-            _c: &[String],
-        ) -> Result<HashSet<String>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
         fn list_active_peer_subscriptions(
@@ -1927,6 +1941,133 @@ mod tests {
             injected.is_err(),
             "with the fault env-var set, the seam must inject a genuine Err so the \
              production .ok() -> None -> missing-marker degrade runs (ADR-054 D2)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-18 (US-CC-000/001/002 / ADR-055) — the counter-aware counts. The
+    // package-scoped `cargo mutants -p adapter-http-viewer --in-diff` harness runs
+    // ONLY these in-crate unit tests (NOT the cli-package acceptance suite that
+    // also covers this code), so these fast (<1ms) port-to-port tests pin the
+    // slice-18 surfaces directly: the `countered_count_with_fault_seam` identity
+    // pass-through (kills :518 -> Ok(0)/Ok(1)) + the debug-only `Err` injection,
+    // and the `claims_page` FullPage header rendering the countered count (kills
+    // :562 claims_page -> empty Response). The :532 release-identity sibling is a
+    // cfg-dead branch under the debug test profile (NOT compiled here) — it is
+    // guarded by the xtask seam guard + the release-build seam-free check, not a
+    // debug test, mirroring slice-16/17's lone cfg-dead survivor.
+    // -------------------------------------------------------------------------
+
+    /// The slice-18 fault-injection env-var the countered-count seam reads (the
+    /// production seam under test; ADR-055 D4). Pinned here so the env-var name has
+    /// one in-crate source of truth, mirroring the slice-17 [`FAULT_ENV`].
+    const COUNTERED_FAULT_ENV: &str = "OPENLORE_VIEWER_FAIL_COUNTERED_COUNT";
+
+    /// Build a fake landing store whose four counts all succeed, with an EXPLICIT
+    /// countered count (the slice-17 [`FakeLandingStore::with_counts`] defaults it to
+    /// `Ok(0)`; the `/claims` header test needs a distinctive non-zero value).
+    fn fake_store_with_countered(own: usize, peer: usize, active: usize, countered: usize) -> FakeLandingStore {
+        FakeLandingStore {
+            own_claims: Ok(own),
+            peer_claims: Ok(peer),
+            active_peers: Ok(active),
+            countered_own_claims: Ok(countered),
+        }
+    }
+
+    /// Behavior (lib.rs:518, the `#[cfg(debug_assertions)]` seam): the countered-count
+    /// fault seam is the IDENTITY on the real read when the fault env-var is unset — the
+    /// genuine `Ok(7)` flows through verbatim. Kills BOTH the `:518 -> Ok(0)` and
+    /// `-> Ok(1)` mutants: they would return `0` / `1`, not the `7` the real read
+    /// carried. (`StoreReadError` is not `PartialEq`, so we match the `Ok` arm directly
+    /// rather than `assert_eq!` the whole `Result`.) Mirrors the slice-17
+    /// [`peer_claims_count_seam_passes_the_real_read_through_when_unset`]. Serialized on
+    /// the SAME [`FAULT_ENV_LOCK`] as the inject test so a sibling `set_var` cannot leak
+    /// into this pass-through read window (poison-recovering).
+    #[test]
+    fn countered_count_seam_passes_the_real_read_through_when_unset() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Guard: the fault env-var must be unset for the identity behavior.
+        assert!(
+            std::env::var_os(COUNTERED_FAULT_ENV).is_none(),
+            "the countered-count fault seam env-var must be unset for the pass-through assertion"
+        );
+        let passed = countered_count_with_fault_seam(Ok(7));
+        match passed {
+            Ok(n) => assert_eq!(
+                n, 7,
+                "the seam must pass the real read through verbatim (kills :518 Ok(0)/Ok(1))"
+            ),
+            Err(e) => panic!("the seam must not inject an error when unset: {e}"),
+        }
+    }
+
+    /// Behavior (lib.rs:518, `#[cfg(debug_assertions)]` only): with the countered-count
+    /// fault env-var SET, the seam substitutes a genuine `Err` for the real read —
+    /// exercising the SAME `.ok() -> None -> render_countered(None) -> "(— countered)"`
+    /// per-count degrade the production path runs (ADR-055 D4 / C-2 CARDINAL). Pins the
+    /// fault injection so the `:518 -> Ok(0)/Ok(1)` mutants (which would IGNORE the
+    /// env-var and return a fabricated success) are killed from the inject side too.
+    /// Set + removed within this single test under the shared [`FAULT_ENV_LOCK`] so the
+    /// sibling pass-through test never observes the pin (poison-recovering), mirroring
+    /// the slice-17 inject test + commit 2629e56's serialized env-var discipline.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn countered_count_seam_injects_err_when_the_fault_env_var_is_set() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Isolation: set, exercise, then ALWAYS remove before releasing the lock.
+        std::env::set_var(COUNTERED_FAULT_ENV, "1");
+        let injected = countered_count_with_fault_seam(Ok(7));
+        std::env::remove_var(COUNTERED_FAULT_ENV);
+
+        assert!(
+            injected.is_err(),
+            "with the countered-count fault env-var set, the seam must inject a genuine \
+             Err so the production .ok() -> None -> \"(— countered)\" degrade runs (ADR-055 D4)"
+        );
+    }
+
+    /// Behavior (lib.rs:562 / ADR-055 D3): `claims_page` renders the My Claims FULL PAGE
+    /// — the `<h1>My Claims (N countered)</h1>` header carries the countered count read
+    /// over the store through the SAME `render_countered` helper the landing uses. With a
+    /// fake store reporting `count_countered_own_claims() == Ok(3)`, the FullPage body
+    /// contains both "My Claims" and "(3 countered)". Kills the `:562 claims_page ->
+    /// empty Response` mutant: an empty body carries neither marker. The list read returns
+    /// an empty page (total 0) so the header — not row fixtures — is the thing under test.
+    /// Asserts the env-var is unset (serialized on [`FAULT_ENV_LOCK`]) so the seam is the
+    /// identity and the real `Ok(3)` reaches the header.
+    #[tokio::test]
+    async fn claims_page_full_page_renders_the_countered_count_header() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            std::env::var_os(COUNTERED_FAULT_ENV).is_none(),
+            "the countered-count fault seam env-var must be unset so the real Ok(3) reaches the header"
+        );
+        let store = fake_store_with_countered(12, 7, 2, 3);
+
+        let response = claims_page(&store, None, Shape::FullPage);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("claims-page body collects")
+            .to_bytes();
+        let body = String::from_utf8(bytes.to_vec()).expect("claims-page body is UTF-8 HTML");
+
+        assert!(
+            body.contains("My Claims"),
+            "the claims-page full page must render the My Claims header: {body}"
+        );
+        assert!(
+            body.contains("(3 countered)"),
+            "the claims-page header must render the countered count via render_countered: {body}"
         );
     }
 }
