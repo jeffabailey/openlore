@@ -71,6 +71,18 @@ Carpaccio gate, run BEFORE journey-visualization investment (Phase 1.5):
 - **WD-CC-7** — own-claims-only (recommended) vs also adding peer-claims-countered. Recommend
   own-claims-only as the core; peer optional/deferred. Surfaced for user confirmation.
 
+## DESIGN resolutions (2026-06-09 — Morgan, nw-solution-architect · ADR-055)
+
+| # | Resolution | Decision |
+|---|---|---|
+| WD-CC-5 (RESOLVED) | **Count-only aggregate `count_countered_own_claims()`** chosen over `counter_presence_for(own_cids).len()`. SQL (parameter-free, injection-safe): `SELECT COUNT(DISTINCT c.cid) FROM claims c WHERE c.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')`. Rationale: SYMMETRY with the three count-only landing reads + CHEAPNESS (avoids materializing the own-cid list + presence set), mirroring slice-17 ADR-054 D3. Presence count by construction (de-duped `UNION` IN-set + `COUNT(DISTINCT)` — a claim countered N times counts once, no JOIN-fanout). Own-only by query shape (outer table `claims`). A read-only method on `StoreReadPort`; `adapter-duckdb` gains ONE aggregate impl; workspace stays 21. | ADR-055 D1 |
+| WD-CC-7 (RESOLVED) | **Own-claims-only** confirmed. Peer-claims-countered DEFERRED (a recommended additive sibling — a second count-only aggregate over `peer_claims` + a second `Option` field + a second parenthetical — if dogfood shows demand). The count-only query shape makes the deferred sibling clean to add later. | ADR-055 D3 (Alternatives) |
+| WD-CC-6 (DESIGN form) | **Additive 4th `Option<usize>` field** `countered_own_claims` on the slice-17 `LandingSummary` (NOT a separate view-model); the `/claims` header takes the bare `Option<usize>` as a `render_claims_page` param. `0 ≠ missing` type-level; per-count independent `.ok()` degrade. | ADR-055 D2/D4 |
+| WD-CC-8 (DESIGN form) | **Shared pure `render_countered(Option<usize>) -> String` helper** drives "(N countered)" on BOTH surfaces — single source for the COPY; both routes resolve the count independently per render (read method + render helper are the single source, not a cached value). | ADR-055 D3 |
+| xtask SQL rule | **`no_cross_table_join_elides_author` is GREEN by construction** — the new SQL names `claim_references` + `peer_claim_references` (no `peer_claims` WHOLE WORD — the `_references` suffix fails the word boundary), so `is_cross_store` is false and the classifier returns `None` (the exact reason slice-12's `counter_presence_for` is GREEN). The index-store `mentions_aggregation` variant scans `adapter-index-store` only, not `adapter-duckdb`. xtask boundary UNCHANGED. | component-boundaries §5 |
+
+> NO new crate / route / KPI / persisted type introduced (WD-CC-11 honored). Workspace stays 21.
+
 ## Risks logged
 
 ### R-CC-1 (RISK) — No DIVERGE wave for slice-18

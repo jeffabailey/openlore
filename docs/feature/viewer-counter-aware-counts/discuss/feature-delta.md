@@ -277,8 +277,51 @@ deferred scope decision).
 
 ---
 
+---
+
+## Wave: DESIGN (2026-06-09 · Morgan, nw-solution-architect · ADR-055)
+
+DESIGN resolved the two inherited open questions and produced the lean architecture set
+(`design/architecture-design.md`, `component-boundaries.md`, `technology-stack.md`,
+`data-models.md`) + **ADR-055**.
+
+- **WD-CC-5 RESOLVED → count-only aggregate.** New read-only `StoreReadPort` method
+  `count_countered_own_claims() -> Result<usize, StoreReadError>`; `adapter-duckdb` impl:
+  `SELECT COUNT(DISTINCT c.cid) FROM claims c WHERE c.cid IN (SELECT referenced_cid FROM
+  claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM
+  peer_claim_references WHERE ref_type='counters')` — parameter-free, injection-safe, ONE
+  aggregate, invariant to store size. Presence count by construction (de-duped `UNION` IN-set +
+  `COUNT(DISTINCT)` — a claim countered N times counts once, no JOIN-fanout). Chosen over
+  `counter_presence_for(own_cids).len()` for SYMMETRY (the 3 count-only landing reads) +
+  CHEAPNESS (avoids materializing the own-cid list + presence set), mirroring slice-17 ADR-054 D3.
+- **WD-CC-7 RESOLVED → own-claims-only.** Own-only by query shape (outer table `claims`);
+  peer-claims-countered DEFERRED as a recommended additive sibling.
+- **`LandingSummary` extension.** A FOURTH `Option<usize>` field `countered_own_claims` (additive;
+  `0 ≠ missing` type-level; per-count `.ok()` independent degrade — ADR-054 D2 extended). The
+  `/claims` header takes the bare `Option<usize>` as a `render_claims_page` param.
+- **Single source (WD-CC-8).** A shared pure `render_countered(Option<usize>) -> String` helper
+  renders "(N countered)" / "(— countered)" on BOTH the landing (`render_landing`, beside the
+  unchanged own-claims line) and the `/claims` header — single source for the copy; a gold test
+  pins landing == header.
+- **xtask anti-merging SQL rule GREEN by construction.** The new SQL does NOT trip
+  `no_cross_table_join_elides_author`: `peer_claim_references` is not the `peer_claims` WHOLE WORD
+  (the `_references` suffix fails the word boundary), so `is_cross_store` is false and the
+  classifier returns `None` — the EXACT reason slice-12's `counter_presence_for` is GREEN. The
+  index-store `mentions_aggregation` variant scans `adapter-index-store` only. xtask UNCHANGED.
+- **No new crate / route / KPI / persisted type** (WD-CC-11 honored). Workspace stays 21. The new
+  read is read-only on the existing port; the slice touches `viewer-domain` (pure) +
+  `adapter-http-viewer` (effect) + `ports` + `adapter-duckdb`. No external integration → no
+  contract-test annotation.
+
+---
+
 ## Changelog
 
+- 2026-06-09 — slice-18 (`viewer-counter-aware-counts`) DESIGN (Morgan / ADR-055). Resolved
+  WD-CC-5 (count-only `count_countered_own_claims` aggregate) + WD-CC-7 (own-claims-only). Added a
+  4th additive `Option<usize>` field on `LandingSummary` + a shared `render_countered` helper for
+  single-source landing+header. xtask anti-merging SQL rule GREEN by construction. No new
+  crate/route/KPI/persisted type; workspace stays 21.
 - 2026-06-09 — slice-18 (`viewer-counter-aware-counts`) DISCUSS. Traces to J-003b (the
   ORIENTATION / at-a-glance-count facet of counter-claim awareness). 3 stories (1 infra + 2
   user-visible). EXTENDS the slice-17 `GET /` landing summary + the slice-06 `GET /claims`
