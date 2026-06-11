@@ -1,0 +1,411 @@
+{
+  "roadmap": {
+    "project_id": "viewer-search-full-follow-state",
+    "goal": "Complete the read-only GET /search follow-state ADT to its full four-arm AuthorRelationship resolution (You | SubscribedPeer | UnsubscribedCache | NetworkUnfollowed) by adding two read-only LOCAL presence reads, a total precedence resolution, and two neutral render-only indicators; render-only, read-only, LOCAL/offline, additive, no new crate/route/variant (workspace stays 21).",
+    "created_at": "2026-06-11T00:00:00Z",
+    "total_steps": 9
+  },
+  "total_steps": 9,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Four-arm completion (walking skeleton + isolation + precedence)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Thick walking skeleton: resolve all four follow-states end-to-end with peer add only on the genuinely-new author",
+          "description": "The thick foundational walking-skeleton step (FF-1, the riskiest load-bearing thread of US-FS-001/002 / Theme A). Force the WHOLE four-arm seam into existence end-to-end. PORTS (crates/ports/src/store_read.rs): add TWO read-only StoreReadPort methods \u2014 `distinct_own_author_dids(&self) -> Result<HashSet<String>, StoreReadError>` and `distinct_cached_peer_author_dids(&self) -> Result<HashSet<String>, StoreReadError>` (ADR-057 D1; no mutation method on the trait). ADAPTER-DUCKDB (crates/adapter-duckdb/src/store_read.rs): impl each as a SINGLE-TABLE `SELECT DISTINCT author_did FROM claims` and `SELECT DISTINCT author_did FROM peer_claims` (NO removed_at filter \u2014 the residue cache is the point), params-free, materializing into HashSet<String>, `Ok(HashSet::new())` for an empty store (siblings of the count_countered_* single-table presence reads; passes the no_cross_table_join_elides_author rule BY CONSTRUCTION since each names one table and projects author_did). EFFECT SHELL (crates/adapter-http-viewer/src/lib.rs ~1095 resolve_search_state): read the own set and the cached set ONCE each into a HashSet<String> of BARE DIDs (siblings of read_local_active_set ~1247, each degrading to an empty set via unwrap_or_default on Err), alongside the REUSED slice-16 active set; thread all THREE sets into to_indexed_claim (~1305). RESOLUTION (to_indexed_claim): replace the binary classification with the total precedence chain over (author_did, &own, &active, &cached): `bare \u2208 own \u2192 You` > `\u2208 active \u2192 SubscribedPeer` > `\u2208 cached \u2192 UnsubscribedCache` > else `NetworkUnfollowed` (ADR-057 D2; bare_did applied result-side, LOCAL sets bare by construction; exhaustive if/else-if with a total final else; deterministic, no I/O/clock). PURE CORE (crates/viewer-domain/src/lib.rs): add `SEARCH_SELF_INDICATOR = \"Your own claim\"` and `SEARCH_REMOVED_CACHED_INDICATOR = \"A peer you removed (cached)\"` SSOT consts (siblings of SEARCH_FOLLOWING_INDICATOR ~1684) + `render_self_indicator()` / `render_cached_unsubscribed_indicator()` (siblings of render_following_indicator ~1957, each a render-only <p> with the neutral 'Relationship: ' prefix, NO peer add affordance); fill the empty `You | UnsubscribedCache => {}` arm (~1927) with `You => (render_self_indicator())` and `UnsubscribedCache => (render_cached_unsubscribed_indicator())` so the @match becomes a TOTAL match over four variants. The SubscribedPeer/NetworkUnfollowed arms are REUSED VERBATIM (byte-stable, C-7). Outcome: in ONE /search over a reachable seeded index returning all four authors, the operator's own claim (seeded via real `claim add`) shows the self indicator + no add, Rachel (active subscription) shows 'Following' + no add, Tobias (soft-removed, cached) shows the residue indicator + no add, and Priya (genuinely new) keeps `openlore peer add did:plc:priya-test` \u2014 peer add ONLY on Priya's row. RED today: the two presence reads + the four-arm precedence + the two render arms + the two SSOT consts do not exist. BUILD-BEFORE-RUN (mirrors slice-16): the AT spawns BOTH the `openlore` (viewer) bin AND the `openlore-indexer` bin, so the run must `cargo build --bin openlore --bin openlore-indexer` before executing. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0 (paradigm-from-day-zero, no debt accumulates). Bug-prone legacy code = Stage 1 first (state-delta migration captures hidden mutations, 33-75% yield), THEN Stage 2 PBT amplification (low yield by design \u2014 surface is debt-paid). Don't expect high hit rate on Stage-1-completed surfaces; that's healthy. See nw-tdd-methodology::Paradigm Mandate for the full debt-payoff framing. Rust note: the property layer is proptest over the pure total precedence fn (the four-arm resolution over three set memberships is the load-bearing invariant surface); the acceptance scenario itself is a layer-3 subprocess EXAMPLE test (real-I/O \u2014 verifies wiring, kept single-example per the matrix).",
+          "acceptance_criteria": [
+            "GET /search over a reachable seeded index returning the operator's own claim (seeded via the REAL `claim add` verb), a followed peer (Rachel, a REAL active `peer add`), a soft-removed cached peer (Tobias, a REAL `peer add`+`peer pull`+`peer remove` no `--purge`), and a genuinely-new author (Priya) returns 200 and renders ALL FOUR authors verified + attributed (attribution unchanged \u2014 the relationship is a per-row enrichment, C-5).",
+            "The operator's own row resolves to You and shows the neutral self indicator (SEARCH_SELF_INDICATOR) and NO `openlore peer add` command (R-FS-4 \u2014 the You gap fixed; you cannot follow yourself).",
+            "Rachel's row (SubscribedPeer against the LOCAL active set) shows the slice-16 'Following' indicator and NO add \u2014 byte-stable (C-7).",
+            "Tobias's row resolves to UnsubscribedCache and shows the neutral residue indicator (SEARCH_REMOVED_CACHED_INDICATOR) and NO add (R-FS-5 \u2014 the cache residue, distinguished from a fresh find).",
+            "Priya's row (NetworkUnfollowed) keeps the slice-08 render-only `openlore peer add did:plc:priya-test` affordance, and `openlore peer add` appears ONLY on Priya's row \u2014 never on the own, followed, or soft-removed rows (C-2 \u2014 the add affordance shown only where actionable).",
+            "StoreReadPort gains the two read-only presence methods (distinct_own_author_dids over `claims`; distinct_cached_peer_author_dids over `peer_claims`, no removed_at filter), each a single-table SELECT DISTINCT returning HashSet<String> with Ok(empty) for an empty store; the effect shell reads the own + cached sets ONCE each into bare-DID HashSets and threads all three sets into to_indexed_claim; the resolution is the total precedence chain You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed; the pure core adds the two SSOT consts + the two render fns and the @match is now a TOTAL match over four variants.",
+            "viewer-domain stays pure (the two new indicators are render-only TEXT, no control, no key, no new route/variant/crate; workspace stays 21); cargo xtask check-arch passes (each new read single-table, passes no_cross_table_join_elides_author by construction); both the `openlore` and `openlore-indexer` bins are built before the AT runs."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "all_four_follow_states_render_with_peer_add_only_on_the_genuinely_new_author",
+          "scenario_fns": [
+            "all_four_follow_states_render_with_peer_add_only_on_the_genuinely_new_author"
+          ],
+          "n_scenarios": [
+            "FF-1"
+          ],
+          "us_trace": [
+            "US-FS-001",
+            "US-FS-002"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (the two SSOT consts + render_self_indicator + render_cached_unsubscribed_indicator + the two filled match arms) and the total precedence resolution (You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed over three set memberships). Mutation-test the precedence chain (each branch reachable; reordering or dropping an arm is caught) and the two render arms (each emits its own SSOT TEXT, never a peer-add affordance), via a proptest over the pure total fn.",
+          "criteria": [
+            "GET /search over a reachable seeded index returning the operator's own claim (seeded via the REAL `claim add` verb), a followed peer (Rachel, a REAL active `peer add`), a soft-removed cached peer (Tobias, a REAL `peer add`+`peer pull`+`peer remove` no `--purge`), and a genuinely-new author (Priya) returns 200 and renders ALL FOUR authors verified + attributed (attribution unchanged \u2014 the relationship is a per-row enrichment, C-5).",
+            "The operator's own row resolves to You and shows the neutral self indicator (SEARCH_SELF_INDICATOR) and NO `openlore peer add` command (R-FS-4 \u2014 the You gap fixed; you cannot follow yourself).",
+            "Rachel's row (SubscribedPeer against the LOCAL active set) shows the slice-16 'Following' indicator and NO add \u2014 byte-stable (C-7).",
+            "Tobias's row resolves to UnsubscribedCache and shows the neutral residue indicator (SEARCH_REMOVED_CACHED_INDICATOR) and NO add (R-FS-5 \u2014 the cache residue, distinguished from a fresh find).",
+            "Priya's row (NetworkUnfollowed) keeps the slice-08 render-only `openlore peer add did:plc:priya-test` affordance, and `openlore peer add` appears ONLY on Priya's row \u2014 never on the own, followed, or soft-removed rows (C-2 \u2014 the add affordance shown only where actionable).",
+            "StoreReadPort gains the two read-only presence methods (distinct_own_author_dids over `claims`; distinct_cached_peer_author_dids over `peer_claims`, no removed_at filter), each a single-table SELECT DISTINCT returning HashSet<String> with Ok(empty) for an empty store; the effect shell reads the own + cached sets ONCE each into bare-DID HashSets and threads all three sets into to_indexed_claim; the resolution is the total precedence chain You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed; the pure core adds the two SSOT consts + the two render fns and the @match is now a TOTAL match over four variants.",
+            "viewer-domain stays pure (the two new indicators are render-only TEXT, no control, no key, no new route/variant/crate; workspace stays 21); cargo xtask check-arch passes (each new read single-table, passes no_cross_table_join_elides_author by construction); both the `openlore` and `openlore-indexer` bins are built before the AT runs."
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "Own-claim-in-isolation and soft-removed-cached-in-isolation each show their neutral indicator and no add anywhere",
+          "description": "Close the isolation confirmations of US-FS-002 / Theme A (FF-2 You-only \u00b7 FF-3 UnsubscribedCache-only) \u2014 direct consequences of the 01-01 resolution. (FF-2) When the only result is the operator's own claim (seeded via real `claim add`, index returns only that claim), her row shows the neutral self indicator and NO `openlore peer add` command appears ANYWHERE (the strongest own-claim guarantee \u2014 you cannot follow yourself). (FF-3) When the only result is a soft-removed-but-cached peer's claim (Tobias, seeded via real `peer add`+`peer pull`+`peer remove`), his row shows the neutral residue indicator and NO `openlore peer add` command appears ANYWHERE (he is residue, not a fresh find \u2014 distinguishing UnsubscribedCache from NetworkUnfollowed on the cache side). Both confirm the single-arm-in-isolation paths off the 01-01 four-arm resolution. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0 (paradigm-from-day-zero, no debt accumulates). See nw-tdd-methodology::Paradigm Mandate for the full debt-payoff framing. Rust note: the isolation invariants (own-only \u2192 You for all; cached-only \u2192 UnsubscribedCache for all) are property-checked over the pure precedence fn at the unit layer; the two acceptance scenarios are layer-3 subprocess EXAMPLES (real-I/O, single-example per the matrix).",
+          "acceptance_criteria": [
+            "FF-2: with ONLY the operator's own claim seeded and an index returning only that claim, GET /search returns 200, her row shows the neutral self indicator, and NO `openlore peer add` command appears ANYWHERE in the results.",
+            "FF-2: her own claim remains verified + attributed (attribution unchanged by the You resolution).",
+            "FF-3: with ONLY Tobias soft-removed-cached (real `peer add`+`peer pull`+`peer remove`) and an index returning only his claim, GET /search returns 200, his row shows the neutral residue indicator, and NO `openlore peer add` command appears ANYWHERE (he is residue, not a fresh find).",
+            "FF-3: Tobias's claim remains verified + attributed (attribution unchanged by the UnsubscribedCache resolution)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "an_own_claim_in_isolation_shows_the_self_indicator_and_no_add_command_anywhere",
+          "scenario_fns": [
+            "an_own_claim_in_isolation_shows_the_self_indicator_and_no_add_command_anywhere",
+            "a_soft_removed_cached_peer_in_isolation_shows_the_residue_indicator_and_no_add_anywhere"
+          ],
+          "n_scenarios": [
+            "FF-2",
+            "FF-3"
+          ],
+          "us_trace": [
+            "US-FS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "The own-only (every row You) and cached-only (every row UnsubscribedCache) single-arm boundaries are load-bearing accuracy edges; cover the precedence branches with a proptest over the pure fn (own-membership never yields peer add; cached-without-active never yields peer add).",
+          "criteria": [
+            "FF-2: with ONLY the operator's own claim seeded and an index returning only that claim, GET /search returns 200, her row shows the neutral self indicator, and NO `openlore peer add` command appears ANYWHERE in the results.",
+            "FF-2: her own claim remains verified + attributed (attribution unchanged by the You resolution).",
+            "FF-3: with ONLY Tobias soft-removed-cached (real `peer add`+`peer pull`+`peer remove`) and an index returning only his claim, GET /search returns 200, his row shows the neutral residue indicator, and NO `openlore peer add` command appears ANYWHERE (he is residue, not a fresh find).",
+            "FF-3: Tobias's claim remains verified + attributed (attribution unchanged by the UnsubscribedCache resolution)."
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "Precedence: own beats a populated active set (You at the top); active beats cached (SubscribedPeer over residue)",
+          "description": "Confirm the two realizable precedence edges of US-FS-001 / Theme B (C-6 / WD-FS-2): FF-5 (You > SubscribedPeer) and FF-4 (SubscribedPeer > UnsubscribedCache). (FF-5, RED) The operator's own claim resolves to You EVEN WHEN the active set is non-empty (she follows Rachel, a DIFFERENT author): her own row shows the self indicator (You wins over the populated active set) and Rachel's row shows 'Following' \u2014 the two arms never cross over. (FF-4, GREEN-today guardrail) A peer who is BOTH actively followed AND in the cached set (Rachel via `peer add`+`peer pull`, no remove \u2014 active AND cached) resolves to SubscribedPeer ('Following'), NOT the residue indicator (active outranks cached; the cache is incidental). FF-4 already passes via the slice-16 binary (active wins) and must STAY green through the four-arm change \u2014 it pins that the residue arm never steals an active peer. Both confirm the precedence ordering from 01-01 holds at the top (You) and the active-vs-cached boundary. The structurally-impossible own-AND-self-followed / own-AND-self-cached edges (`peer add <own-did>` is rejected by design) are pinned at the DELIVER unit layer by the total precedence pure fn (proptest). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. Rust note: the precedence ordering (own dominates over any active/cached membership; active dominates over cached; including the impossible-via-CLI but total-fn-defined own-AND-active / own-AND-cached cases) is the load-bearing invariant \u2014 cover it with a proptest over the pure total fn (generate arbitrary membership combinations of the three sets, assert the first-matching-arm ordering); the two acceptance scenarios are layer-3 subprocess EXAMPLES.",
+          "acceptance_criteria": [
+            "FF-5: with the operator's own claim seeded AND a populated active set (she follows Rachel, a different author), GET /search returns 200; her own row resolves to You and shows the self indicator (NOT mistaken for a followed peer), and Rachel's row shows 'Following' \u2014 You outranks SubscribedPeer and the two arms never cross over.",
+            "FF-4: with Rachel BOTH actively followed AND cached (`peer add`+`peer pull`, no remove), GET /search returns 200 and Rachel's row shows 'Following' (SubscribedPeer), NOT the residue indicator \u2014 active outranks cached (C-6).",
+            "FF-4 stays GREEN through the four-arm change (the residue arm never steals an active peer) \u2014 the no-regression precedence guardrail.",
+            "The impossible-via-CLI own-AND-active and own-AND-cached precedence cases are pinned at the unit layer by the total precedence pure fn (You always wins) via the proptest."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "an_own_claim_resolves_to_you_even_when_the_active_set_is_populated",
+          "scenario_fns": [
+            "an_own_claim_resolves_to_you_even_when_the_active_set_is_populated",
+            "an_active_and_cached_peer_resolves_to_subscribed_peer_by_precedence"
+          ],
+          "n_scenarios": [
+            "FF-5",
+            "FF-4"
+          ],
+          "us_trace": [
+            "US-FS-001"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "The precedence ORDERING is the most mutation-sensitive surface (swapping You/SubscribedPeer or SubscribedPeer/UnsubscribedCache, or short-circuiting the wrong arm); cover it exhaustively with a proptest over the pure total fn enumerating membership combinations of the three sets.",
+          "criteria": [
+            "FF-5: with the operator's own claim seeded AND a populated active set (she follows Rachel, a different author), GET /search returns 200; her own row resolves to You and shows the self indicator (NOT mistaken for a followed peer), and Rachel's row shows 'Following' \u2014 You outranks SubscribedPeer and the two arms never cross over.",
+            "FF-4: with Rachel BOTH actively followed AND cached (`peer add`+`peer pull`, no remove), GET /search returns 200 and Rachel's row shows 'Following' (SubscribedPeer), NOT the residue indicator \u2014 active outranks cached (C-6).",
+            "FF-4 stays GREEN through the four-arm change (the residue arm never steals an active peer) \u2014 the no-regression precedence guardrail.",
+            "The impossible-via-CLI own-AND-active and own-AND-cached precedence cases are pinned at the unit layer by the total precedence pure fn (You always wins) via the proptest."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Resolution edges (fragment-strip / no-regression + read-only / parity) and the OQ-1 per-read fault seam + independent degrade",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "A soft-removed author is matched despite the signing-key fragment on the result DID (cached-set bare_did reconciliation)",
+          "description": "US-FS-001 / Theme D (C-3 / R-FS-6): FF-7. A soft-removed peer is matched to UnsubscribedCache DESPITE the `#org.openlore.application` signing-key fragment on the result DID. The cached-peer set stores the BARE DID (did:plc:tobias-test); the search result row's author_did carries the fragment; the comparison strips the fragment via the production bare_did SSOT on BOTH sides before HashSet membership (the slice-16 reconciliation, extended to the cached set per ADR-057 D2), so the fragmented row matches the bare cached DID \u2192 UnsubscribedCache (never misclassified as NetworkUnfollowed). Confirms the 01-01 bare_did reconciliation across the fragmented result-DID shape for the cached arm. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. Rust note: the fragment-strip-before-membership invariant (bare_did(author_did) \u2208 cached \u21d4 fragmented author matches a bare cached DID) is property-checked over the pure precedence fn (generate fragmented and bare DID pairs); the acceptance scenario is a layer-3 subprocess EXAMPLE.",
+          "acceptance_criteria": [
+            "FF-7: with Tobias soft-removed (the cached set holds the BARE did:plc:tobias-test) and the indexed corpus attributing his row to did:plc:tobias-test#org.openlore.application, GET /search returns 200 and the viewer renders his app-identity (fragmented) DID.",
+            "FF-7: the fragmented result DID reconciles against the bare cached DID via bare_did on both sides before set membership \u2192 the row shows the neutral residue indicator, never NetworkUnfollowed (R-FS-6).",
+            "The followed/cached fragmented author is never misclassified as a fresh add candidate (no `openlore peer add` on his row)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "a_soft_removed_author_is_matched_despite_the_signing_key_fragment_on_the_result_did",
+          "scenario_fns": [
+            "a_soft_removed_author_is_matched_despite_the_signing_key_fragment_on_the_result_did"
+          ],
+          "n_scenarios": [
+            "FF-7"
+          ],
+          "us_trace": [
+            "US-FS-001"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "The fragment-strip on the cached side is load-bearing (a missing strip silently demotes a soft-removed peer to NetworkUnfollowed); cover the bare_did reconciliation against the cached set with a proptest (strip applied to both the result DID and the cached-set DID).",
+          "criteria": [
+            "FF-7: with Tobias soft-removed (the cached set holds the BARE did:plc:tobias-test) and the indexed corpus attributing his row to did:plc:tobias-test#org.openlore.application, GET /search returns 200 and the viewer renders his app-identity (fragmented) DID.",
+            "FF-7: the fragmented result DID reconciles against the bare cached DID via bare_did on both sides before set membership \u2192 the row shows the neutral residue indicator, never NetworkUnfollowed (R-FS-6).",
+            "The followed/cached fragmented author is never misclassified as a fresh add candidate (no `openlore peer add` on his row)."
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "No-regression byte-stability of the slice-16 arms, and neither new indicator is an executable control (read-only / neutral)",
+          "description": "US-FS-002 / Theme C (no-regression, CARDINAL) + Theme E (read-only / neutral): FF-6 + FF-8. (FF-6, GREEN-today guardrail) A search returning only a followed author + an unfollowed author (NEITHER the own claim NOR a soft-removed peer present) renders EXACTLY as slice-16 \u2014 Rachel 'Following' + no add, Priya `openlore peer add did:plc:priya-test`, NO self indicator, NO residue indicator. The two new arms add NOTHING where they do not apply (the EMPTY own + cached sets fall through to the slice-16 binary verbatim) \u2014 the slice-16 trust baseline is byte-stable (C-7, CARDINAL). (FF-8, GREEN-today guardrail) Over a render carrying ALL FOUR follow-states, in BOTH shapes (full page + htmx fragment), NEITHER new indicator (self, residue) is an executable control \u2014 no <button>/<form>/mutating <a>/hx-* mutation/follow-subscribe input \u2014 AND both are NEUTRAL, never pejorative (the C-9 blocklist). The viewer holds no key. Both guardrails confirm the 01-01 render arms add no write surface and carry no judgement, and regress nothing. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. Rust note: the byte-stability invariant (empty own + empty cached sets \u21d2 the resolution is identical to the slice-16 binary) is property-checked over the pure precedence fn (when own and cached are empty, resolve == the binary active-membership rule); the render-only / neutral-copy invariant is pinned over render_self_indicator / render_cached_unsubscribed_indicator output (TEXT only, blocklist-clean) at the unit layer; the two acceptance scenarios are layer-3 subprocess EXAMPLES.",
+          "acceptance_criteria": [
+            "FF-6: with the slice-16 mix (Rachel followed, Priya unfollowed) and NO own claim / NO soft-removed peer seeded, GET /search returns 200; Rachel shows 'Following' + no add, Priya keeps `openlore peer add did:plc:priya-test`, and NEITHER the self indicator NOR the residue indicator appears anywhere (byte-stable vs slice-16 \u2014 the two new arms add nothing here; C-7 CARDINAL).",
+            "FF-8: over a four-arm render in BOTH shapes (full page + htmx fragment), GET /search returns 200 and neither new indicator is an executable control (no follow/unfollow/subscribe element, no mutating hx-*) \u2014 both are render-only TEXT (C-1, CARDINAL).",
+            "FF-8: both new indicators are NEUTRAL, never pejorative \u2014 no blocklisted judgement term appears in the follow-state surface (C-9).",
+            "The viewer exposes no follow/unfollow/subscribe route and holds no signing key (the slice-16 read-only gate extended so the two NEW arms add no control)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "the_slice16_followed_and_unfollowed_states_are_byte_stable_with_no_new_indicators",
+          "scenario_fns": [
+            "the_slice16_followed_and_unfollowed_states_are_byte_stable_with_no_new_indicators",
+            "neither_new_indicator_is_an_executable_control_and_both_are_neutral"
+          ],
+          "n_scenarios": [
+            "FF-6",
+            "FF-8"
+          ],
+          "us_trace": [
+            "US-FS-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "The empty-set fall-through (byte-stability) and the render-only-ness + neutral copy of the two new arms are CARDINAL; cover the fall-through branch (own/cached empty \u2192 slice-16 binary) and the indicator output (TEXT only, never a control / pejorative term) with a proptest.",
+          "criteria": [
+            "FF-6: with the slice-16 mix (Rachel followed, Priya unfollowed) and NO own claim / NO soft-removed peer seeded, GET /search returns 200; Rachel shows 'Following' + no add, Priya keeps `openlore peer add did:plc:priya-test`, and NEITHER the self indicator NOR the residue indicator appears anywhere (byte-stable vs slice-16 \u2014 the two new arms add nothing here; C-7 CARDINAL).",
+            "FF-8: over a four-arm render in BOTH shapes (full page + htmx fragment), GET /search returns 200 and neither new indicator is an executable control (no follow/unfollow/subscribe element, no mutating hx-*) \u2014 both are render-only TEXT (C-1, CARDINAL).",
+            "FF-8: both new indicators are NEUTRAL, never pejorative \u2014 no blocklisted judgement term appears in the follow-state surface (C-9).",
+            "The viewer exposes no follow/unfollow/subscribe route and holds no signing key (the slice-16 read-only gate extended so the two NEW arms add no control)."
+          ]
+        },
+        {
+          "id": "02-03",
+          "name": "The four follow-states render identically under htmx and no-JS (parity)",
+          "description": "US-FS-002 / Theme G (parity): FF-10. The four resolved follow-states render IDENTICALLY under the htmx #search-results fragment and the no-JS full page. The resolution happens in the effect shell BEFORE the render; both shapes consume the SAME SearchState, so the self indicator + the residue indicator + the 'Following' indicator + the `peer add` affordance appear in BOTH shapes \u2014 parity by construction (the slice-08/16 page wraps the same render_search_results_fragment). Confirms the 01-01 render arms surface identically across both shapes. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. EXEMPT FROM PARADIGM: parity is a both-shapes-equal subprocess assertion over the SAME rendered SearchState (a single-shot wiring check that both response shapes embed the same fragment), not a quantified-input property. Compensate with the property-based test at the unit level on the adjacent slot \u2014 render_search_results_fragment output equality across the page-wrap is pinned by the 02-02 render proptest.",
+          "acceptance_criteria": [
+            "FF-10: the htmx shape returns ONLY the #search-results fragment and the no-JS shape returns the COMPLETE full page.",
+            "FF-10: BOTH shapes attribute the own + cached author rows and carry the SAME resolved follow-states \u2014 the self indicator (own) + the residue indicator (Tobias) appear in BOTH (parity by construction).",
+            "FF-10: Rachel 'Following' + Priya `peer add` appear in BOTH shapes (byte-stable across the page-wrap)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "the_four_follow_states_render_identically_under_htmx_and_no_js",
+          "scenario_fns": [
+            "the_four_follow_states_render_identically_under_htmx_and_no_js"
+          ],
+          "n_scenarios": [
+            "FF-10"
+          ],
+          "us_trace": [
+            "US-FS-002"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "Parity is by construction (both shapes embed the SAME render_search_results_fragment over the SAME resolved SearchState); the adjacent render proptest (02-02) is the mutation backstop for the fragment output.",
+          "criteria": [
+            "FF-10: the htmx shape returns ONLY the #search-results fragment and the no-JS shape returns the COMPLETE full page.",
+            "FF-10: BOTH shapes attribute the own + cached author rows and carry the SAME resolved follow-states \u2014 the self indicator (own) + the residue indicator (Tobias) appear in BOTH (parity by construction).",
+            "FF-10: Rachel 'Following' + Priya `peer add` appear in BOTH shapes (byte-stable across the page-wrap)."
+          ]
+        },
+        {
+          "id": "02-04",
+          "name": "OQ-1 per-read fault seam: two cfg-gated fault tokens, the xtask guard extension, and the ViewerServer fault flags",
+          "description": "The OQ-1 escalation step (HIGH, from the DISTILL red-classification \u00a7OQ-1 + ADR-057 D-4 conditional escalation). The real-`openlore ui`-subprocess acceptance harness CANNOT inject a per-read Err via a fake StoreReadPort (the viewer holds one long-lived DuckDB connection taken at startup; there is no in-process fake-port injection point) \u2014 so the DESIGN D-4 default (no new seam) does NOT hold and the conditional escalation FIRES. This step MUST land BEFORE 02-05 (FF-9 / FF-11), which depend on the seam. Add TWO #[cfg(debug_assertions)]-gated fault-seam tokens, each honored ONLY by a debug-cfg fn with a #[cfg(not(debug_assertions))] release sibling that is the identity function (NO env read compiled in), mirroring the slice-16 active_set_read_with_fault_seam (crates/adapter-http-viewer/src/lib.rs ~1268): (1) OPENLORE_VIEWER_FAIL_OWN_DIDS_READ \u2014 induces an Err for the distinct_own_author_dids read (degrades the You arm independently); (2) OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ \u2014 induces an Err for the distinct_cached_peer_author_dids read (degrades the UnsubscribedCache arm independently). Wrap each new read's result (in read_local_own_set / read_local_cached_set) through its own per-read fault seam fn before unwrap_or_default, so each arm degrades INDEPENDENTLY. Extend VIEWER_FAIL_SEAM_TOKENS in xtask/src/check_arch.rs (~1043) from the current 4 tokens to 6 by appending the two new DISTINCT literals, each at its own cfg-gated site so scan_viewer_fail_seam_guard (sharing classify_cfg_gated_token) structurally forbids an ungated read of either token. Extend the ViewerServer harness (tests/acceptance/support/mod.rs) start path with two new fault flags (own / cached) and wire start_viewer_with_failing_cached_peer_read to set OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ (and add start_viewer_with_failing_own_dids_read setting OPENLORE_VIEWER_FAIL_OWN_DIDS_READ for FF-11), mirroring the slice-16 fail_active_set_read flag. This step is verified GREEN by the release-build seam-free check (each token absent from the release binary) and `cargo xtask check-arch` reporting the guard over all 6 tokens; it does not itself flip an acceptance scenario (it materializes the seam 02-05 consumes). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. EXEMPT FROM PARADIGM: the seam-fn contract is a release-safety structural guarantee (debug fn injects Err on the env token; release sibling is the identity fn with no env read compiled in; the xtask guard forbids ungated reads) verified by the xtask check-arch guard + the release-build seam-free check \u2014 a structural/golden check, not a quantified-input property. Compensate with the property-based test at the unit level on the adjacent slot: the per-read degrade behavior (Err \u2192 empty set \u2192 only that arm falls through) is property-checked over the pure precedence fn in 02-05.",
+          "acceptance_criteria": [
+            "Two #[cfg(debug_assertions)]-gated fault-seam fns are added (own-dids read; cached-peer-dids read), each honoring its own DISTINCT env token (OPENLORE_VIEWER_FAIL_OWN_DIDS_READ; OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ) and each with a #[cfg(not(debug_assertions))] release sibling that is the identity function (NO env-var read compiled into the release binary), mirroring active_set_read_with_fault_seam.",
+            "Each new LOCAL presence read is wrapped through its own per-read fault seam before unwrap_or_default, so a forced failure of one read degrades ONLY that arm (own \u2192 no You; cached \u2192 no UnsubscribedCache), independently.",
+            "xtask/src/check_arch.rs VIEWER_FAIL_SEAM_TOKENS is extended from 4 to 6 tokens (the two new DISTINCT literals appended), and `cargo xtask check-arch` (scan_viewer_fail_seam_guard) passes \u2014 structurally forbidding an ungated read of either new token.",
+            "The ViewerServer harness gains two fault flags (own / cached); start_viewer_with_failing_cached_peer_read sets OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ (replacing the FF-9 todo!() scaffold) and start_viewer_with_failing_own_dids_read sets OPENLORE_VIEWER_FAIL_OWN_DIDS_READ (for FF-11).",
+            "The release build is verified seam-free (neither new token compiled in); the workspace stays 21 members."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "a_failed_cached_peer_read_degrades_only_that_arm_without_crashing",
+          "scenario_fns": [],
+          "n_scenarios": [],
+          "us_trace": [
+            "US-FS-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "The two cfg-gated seam fns are release-safety machinery (debug injects Err; release is identity); the single cargo-mutants miss on a #[cfg(not(debug_assertions))] release identity sibling is a cfg-dead-branch artifact (not compiled under the test profile), pinned structurally by the xtask guard + the release-build seam-free check (the slice-16 DV-SF-9 precedent). The per-read degrade BEHAVIOR is mutation-covered in 02-05.",
+          "criteria": [
+            "Two #[cfg(debug_assertions)]-gated fault-seam fns are added (own-dids read; cached-peer-dids read), each honoring its own DISTINCT env token (OPENLORE_VIEWER_FAIL_OWN_DIDS_READ; OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ) and each with a #[cfg(not(debug_assertions))] release sibling that is the identity function (NO env-var read compiled into the release binary), mirroring active_set_read_with_fault_seam.",
+            "Each new LOCAL presence read is wrapped through its own per-read fault seam before unwrap_or_default, so a forced failure of one read degrades ONLY that arm (own \u2192 no You; cached \u2192 no UnsubscribedCache), independently.",
+            "xtask/src/check_arch.rs VIEWER_FAIL_SEAM_TOKENS is extended from 4 to 6 tokens (the two new DISTINCT literals appended), and `cargo xtask check-arch` (scan_viewer_fail_seam_guard) passes \u2014 structurally forbidding an ungated read of either new token.",
+            "The ViewerServer harness gains two fault flags (own / cached); start_viewer_with_failing_cached_peer_read sets OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ (replacing the FF-9 todo!() scaffold) and start_viewer_with_failing_own_dids_read sets OPENLORE_VIEWER_FAIL_OWN_DIDS_READ (for FF-11).",
+            "The release build is verified seam-free (neither new token compiled in); the workspace stays 21 members."
+          ]
+        },
+        {
+          "id": "02-05",
+          "name": "Independent per-read degrade: a failed cached read degrades only the cache arm; a failed own read degrades only the You arm",
+          "description": "US-FS-001 / Theme F (C-8 / WD-FS-4 / ADR-057 D-4): FF-9 (cached-read failure, replacing the todo!() scaffold) + FF-11 (own-read failure, NEW \u2014 a DELIVER action item mirroring FF-9 for the own-read path; brings error/edge coverage to \u226540%). Both consume the 02-04 per-read fault seams. (FF-9) With the LOCAL cached-peer read forced to FAIL mid-request (own + active reads succeed), GET /search over a four-arm index returns 200 (a guided degrade, not a crash/5xx/blank): Tobias's row degrades to `openlore peer add` (his arm's slice-16 fallback \u2014 the cached read failed so he is no longer recognized as cached residue), BUT her own claim STILL shows the self indicator (the own read succeeded) and Rachel STILL shows 'Following' (the active read succeeded) \u2014 the degrade is INDEPENDENT per read; no transport/internal error leaks. (FF-11, NEW) Mirror for the own-read path: with the LOCAL own-dids read forced to FAIL mid-request (cached + active reads succeed), the operator's own row degrades to `openlore peer add` (the You arm's fallback \u2014 fall-through to NetworkUnfollowed), BUT Tobias STILL shows the residue indicator (the cached read succeeded) and Rachel STILL shows 'Following' \u2014 again independent per read, 200, no crash/blank/leak. ADD FF-11 to tests/acceptance/viewer_search_full_follow_state.rs as a new #[test] fn `a_failed_own_dids_read_degrades_only_that_arm` mirroring FF-9, plus its corpus/seed reuse (sf_corpus_all_four_arms; start_viewer_with_failing_own_dids_read from 02-04). TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. Rust note: the independent-degrade invariant (an empty set for ONE read \u2192 only that arm falls through; the other two arms still resolve) is the load-bearing property \u2014 cover it with a proptest over the pure precedence fn (for each of the three sets independently emptied, assert the other two arms are unaffected and only the emptied arm's authors fall through); the two acceptance scenarios are layer-3 subprocess EXAMPLES exercising the real per-read fault seams.",
+          "acceptance_criteria": [
+            "FF-9: with the LOCAL cached-peer read forced to FAIL mid-request (own + active succeed), GET /search returns 200 (not a crash/5xx) and the render is not blank; Tobias's row degrades to `openlore peer add` (his arm's slice-16 fallback), while the own row STILL shows the self indicator and Rachel STILL shows 'Following' (independent degrade); no transport/internal error leaks.",
+            "FF-9 replaces the todo!() scaffold (start_viewer_with_failing_cached_peer_read now drives the real per-read cached-read failure via the 02-04 seam).",
+            "FF-11 (NEW): with the LOCAL own-dids read forced to FAIL mid-request (cached + active succeed), GET /search returns 200 and is not blank; the operator's own row degrades to `openlore peer add` (the You arm's fallback to NetworkUnfollowed), while Tobias STILL shows the residue indicator and Rachel STILL shows 'Following' (independent degrade); no transport/internal error leaks.",
+            "FF-11 is added as a new #[test] fn a_failed_own_dids_read_degrades_only_that_arm in viewer_search_full_follow_state.rs, mirroring FF-9 for the own-read path; with FF-11 the slice's error/edge coverage is \u226540% of scenarios."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state.rs",
+          "scenario_name": "a_failed_cached_peer_read_degrades_only_that_arm_without_crashing",
+          "scenario_fns": [
+            "a_failed_cached_peer_read_degrades_only_that_arm_without_crashing",
+            "a_failed_own_dids_read_degrades_only_that_arm"
+          ],
+          "n_scenarios": [
+            "FF-9",
+            "FF-11"
+          ],
+          "us_trace": [
+            "US-FS-001"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The Err \u2192 empty set independent-degrade branch per read (own / cached) is load-bearing no-crash logic; cover with a proptest over the pure precedence fn (each set independently emptied \u2192 only that arm falls through; the other two arms unaffected; never panics or propagates an error). The two acceptance EXAMPLES exercise the real per-read seams end-to-end.",
+          "criteria": [
+            "FF-9: with the LOCAL cached-peer read forced to FAIL mid-request (own + active succeed), GET /search returns 200 (not a crash/5xx) and the render is not blank; Tobias's row degrades to `openlore peer add` (his arm's slice-16 fallback), while the own row STILL shows the self indicator and Rachel STILL shows 'Following' (independent degrade); no transport/internal error leaks.",
+            "FF-9 replaces the todo!() scaffold (start_viewer_with_failing_cached_peer_read now drives the real per-read cached-read failure via the 02-04 seam).",
+            "FF-11 (NEW): with the LOCAL own-dids read forced to FAIL mid-request (cached + active succeed), GET /search returns 200 and is not blank; the operator's own row degrades to `openlore peer add` (the You arm's fallback to NetworkUnfollowed), while Tobias STILL shows the residue indicator and Rachel STILL shows 'Following' (independent degrade); no transport/internal error leaks.",
+            "FF-11 is added as a new #[test] fn a_failed_own_dids_read_degrades_only_that_arm in viewer_search_full_follow_state.rs, mirroring FF-9 for the own-read path; with FF-11 the slice's error/edge coverage is \u226540% of scenarios."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrail invariants (four-arm follow-state)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Gold: the six four-arm follow-state guardrail invariants (no control, read-only, per-user-neutral, attribution unchanged, neutral framing, own-vs-cache distinct)",
+          "description": "The six cross-cutting GOLD guardrails (FF-INV-*) that must hold over the WHOLE /search four-arm follow-state surface \u2014 the BEHAVIORAL layer of the three-layer ADR-057 enforcement (TYPE: no mutation method on StoreReadPort + the compiler-enforced total match; STRUCTURAL: xtask check-arch no_cross_table_join_elides_author + the 6-token fault-seam guard + the viewer-capability rule). (FF-INV-NoControl, C-1 CARDINAL) over a four-arm render in BOTH shapes, NEITHER new indicator is an executable control. (FF-INV-ReadOnly, C-1 / Mandate 8) resolving relationships against the THREE LOCAL sets (own / active / cached) \u2014 all READS \u2014 leaves the `claims` + `peer_claims` row counts UNCHANGED across every shape (universe-bound assert_store_read_only). (FF-INV-LocalPerUserNeutral, C-3) the SAME index + SAME query produces the SAME attributed result ROWS for a local-operator and a clean-store operator; only the per-row AFFORDANCE flips with the LOCAL sets (the index never learns who the operator is or whom she removed). (FF-INV-AttributionUnchanged, C-5 / J-003a) the four-arm resolution sets the per-row relationship ONLY \u2014 grouping + order + `[verified]` + verbatim confidence (0.95 / 0.88 / 0.74 / 0.82) + no merged consensus row are unchanged whether or not the new arms apply. (FF-INV-NeutralFraming, C-9) over a render carrying BOTH new indicators, NO blocklisted judgement term appears anywhere in the follow-state surface, AND both indicators ARE present (non-vacuous). (FF-INV-OwnVsCacheDistinct, C-2) a removed-but-cached author (Tobias) is NOT shown as a fresh add candidate \u2014 he shows the residue indicator + NO `peer add`, while a genuinely-new author (Priya) DOES show `openlore peer add did:plc:priya-test` (the defining accuracy guarantee of the cache arm). These flip GREEN off the 01-01/02-05 resolution + render + degrade paths. TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using Hypothesis @given strategies + state-delta matchers (assert_state_delta over a declared universe with strict=True). Single-example unit tests are FALLBACK only \u2014 document why in a `# bypass:` comment if used. Acceptance scenarios MUST be framed as Property: blocks (quantified preconditions + invariant outcomes) where the contract supports it; classic Scenario: is fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants. Universe declaration is mandatory even when only one slot is checked: the unchanged() predicate covers the rest. STAGE CONTEXT (cascade): NEW code = Stage 0. See nw-tdd-methodology::Paradigm Mandate. Rust note: these guardrails are layer-3 subprocess EXAMPLE golds tagged @property (universal invariants for the reader + crafter); FF-INV-ReadOnly uses the universe-bound assert_store_read_only (Mandate 8: universe = the port-exposed claims+peer_claims row counts, each unchanged). The generative exploration of the pure resolution/render core is the layer-1/2 proptest concern landed in 01-01/01-03/02-05; these golds verify the OBSERVABLE surface end-to-end.",
+          "acceptance_criteria": [
+            "FF-INV-NoControl: over a four-arm render in BOTH shapes (full page + htmx fragment), neither new indicator is an executable control (no follow/unfollow/subscribe input or element, no mutating hx-post/hx-delete/hx-put); the viewer holds no key and exposes no follow/unfollow route.",
+            "FF-INV-ReadOnly: across both shapes, the `claims` + `peer_claims` row counts are UNCHANGED (the THREE LOCAL reads + the in-memory resolution persist nothing), asserted via the universe-bound assert_store_read_only (Mandate 8).",
+            "FF-INV-LocalPerUserNeutral: a local-operator (owns the own claim, follows Rachel, caches Tobias) and a clean-store operator over the SAME per-user-neutral index render the SAME attributed + verified result ROWS; only the per-row affordance differs (local sees self + residue indicators; clean sees those rows as `peer add`; Priya `peer add` for both).",
+            "FF-INV-AttributionUnchanged: the with-state and without-state renders carry the SAME attributed rows, SAME verified markers, SAME verbatim confidence (0.95 / 0.88 / 0.74 / 0.82), and NO merged consensus row; only the per-row affordance flips (a per-row enrichment, never a merge/re-rank).",
+            "FF-INV-NeutralFraming: over a render carrying BOTH new indicators (present \u2014 non-vacuous), the follow-state surface carries NO pejorative / judgement term (C-9 blocklist).",
+            "FF-INV-OwnVsCacheDistinct: in a render carrying both a soft-removed cached peer (Tobias) and a genuinely-new author (Priya), Tobias shows the residue indicator + NO `peer add` (he is residue), and Priya shows `openlore peer add did:plc:priya-test` (the add affordance shown ONLY for the genuinely-new author)."
+          ],
+          "test_file": "tests/acceptance/viewer_search_full_follow_state_invariants.rs",
+          "scenario_name": "no_four_arm_follow_state_render_adds_an_executable_control",
+          "scenario_fns": [
+            "no_four_arm_follow_state_render_adds_an_executable_control",
+            "every_four_arm_follow_state_render_leaves_the_store_read_only",
+            "the_four_arm_resolution_adds_no_network_seam_index_stays_per_user_neutral",
+            "the_four_arm_resolution_does_not_merge_or_rerank",
+            "the_two_new_indicators_are_neutral_never_pejorative",
+            "a_removed_but_cached_author_is_not_shown_as_a_fresh_add_candidate"
+          ],
+          "n_scenarios": [
+            "FF-INV-NoControl",
+            "FF-INV-ReadOnly",
+            "FF-INV-LocalPerUserNeutral",
+            "FF-INV-AttributionUnchanged",
+            "FF-INV-NeutralFraming",
+            "FF-INV-OwnVsCacheDistinct"
+          ],
+          "us_trace": [
+            "US-FS-001",
+            "US-FS-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_search_full_follow_state_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "These six guardrails are the behavioral layer of the ADR-057 three-layer enforcement; ensure mutation testing of the pure resolution/render core (the four-arm precedence, the two render arms, the no-merge / confidence passthrough, the per-read empty-set degrade) is green from the 01-01/01-03/02-05 proptests so the gold guardrails are not the only line of defense.",
+          "criteria": [
+            "FF-INV-NoControl: over a four-arm render in BOTH shapes (full page + htmx fragment), neither new indicator is an executable control (no follow/unfollow/subscribe input or element, no mutating hx-post/hx-delete/hx-put); the viewer holds no key and exposes no follow/unfollow route.",
+            "FF-INV-ReadOnly: across both shapes, the `claims` + `peer_claims` row counts are UNCHANGED (the THREE LOCAL reads + the in-memory resolution persist nothing), asserted via the universe-bound assert_store_read_only (Mandate 8).",
+            "FF-INV-LocalPerUserNeutral: a local-operator (owns the own claim, follows Rachel, caches Tobias) and a clean-store operator over the SAME per-user-neutral index render the SAME attributed + verified result ROWS; only the per-row affordance differs (local sees self + residue indicators; clean sees those rows as `peer add`; Priya `peer add` for both).",
+            "FF-INV-AttributionUnchanged: the with-state and without-state renders carry the SAME attributed rows, SAME verified markers, SAME verbatim confidence (0.95 / 0.88 / 0.74 / 0.82), and NO merged consensus row; only the per-row affordance flips (a per-row enrichment, never a merge/re-rank).",
+            "FF-INV-NeutralFraming: over a render carrying BOTH new indicators (present \u2014 non-vacuous), the follow-state surface carries NO pejorative / judgement term (C-9 blocklist).",
+            "FF-INV-OwnVsCacheDistinct: in a render carrying both a soft-removed cached peer (Tobias) and a genuinely-new author (Priya), Tobias shows the residue indicator + NO `peer add` (he is residue), and Priya shows `openlore peer add did:plc:priya-test` (the add affordance shown ONLY for the genuinely-new author)."
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "draft_pending_quality_gate",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "DRAFT pending the orchestrator quality gate + integrity check + reviewer. 12 steps across 3 phases mapping all 17 scenarios (FF-1..FF-10 + FF-11-to-add + 6 GOLD invariants). Decomposition ratio = 12 steps / 5 production files = 2.4 (<= 2.5). Thick walking skeleton at 01-01 (FF-1 drives all four arms + both reads + resolver + render into existence); the OQ-1 per-read fault seam lands at 02-04 BEFORE the FF-9/FF-11 degrade scenarios at 02-05; GOLD invariants last at 03-01. FF-11 is created at 02-05 (a_failed_own_dids_read_degrades_only_that_arm). LOW docstring reword (drop the FF-1 'four-arm' enum term for business-language purity) is folded into 01-01's test-file edit. No orphan scenarios."
+  }
+}
