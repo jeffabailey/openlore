@@ -1036,13 +1036,15 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
 
 /// The release-forbidden viewer fault-injection env-var tokens — EACH must sit
 /// behind a `#[cfg(debug_assertions)]` gate. The active-set-read token is slice-16;
-/// the peer-claims-count token is slice-17 (ADR-054 D2); the countered-count token is
-/// slice-18 (ADR-055 D4). New per-count/per-read fault seams append their token here so
-/// the ONE guard covers them all.
+/// the peer-claims-count token is slice-17 (ADR-054 D2); the countered-own-count token is
+/// slice-18 (ADR-055 D4); the countered-PEER-count token is slice-19 (ADR-056 D4 — a 4th
+/// DISTINCT token so the PEER count fails INDEPENDENTLY of the slice-18 own count). New
+/// per-count/per-read fault seams append their token here so the ONE guard covers them all.
 const VIEWER_FAIL_SEAM_TOKENS: &[&str] = &[
     "OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ",
     "OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT",
     "OPENLORE_VIEWER_FAIL_COUNTERED_COUNT",
+    "OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT",
 ];
 
 /// The viewer source file the fault-seam guard scans.

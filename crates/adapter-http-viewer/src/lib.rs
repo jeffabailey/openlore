@@ -450,11 +450,19 @@ fn landing_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
         // countered-PEER-count read maps to `None` → the missing marker, the other four
         // counts (incl. the slice-18 own-countered count) + the nav hub intact, always
         // 200. The per-count degrade is independent: this read failing degrades ONLY the
-        // peer countered count, never the siblings (ADR-056 D2/D4). The TEST-ONLY
-        // per-count fault seam (`OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT`, a 4th DISTINCT
-        // token so the PEER count fails independently of the slice-18 own count) is
-        // materialized in step 02-01; the production `.ok()` degrade path is in place here.
-        countered_peer_claims: store.count_countered_peer_claims().ok(),
+        // peer countered count, never the siblings (ADR-056 D2/D4). The read flows through
+        // the TEST-ONLY fault seam ([`countered_peer_count_with_fault_seam`],
+        // `#[cfg(debug_assertions)]`-gated, a 4th DISTINCT token so the PEER count fails
+        // INDEPENDENTLY of the slice-18 own count): in a release build it is the identity,
+        // so the real read result flows verbatim; in a debug/test build with
+        // `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` set it substitutes a genuine `Err`,
+        // exercising the SAME `.ok() → None → render_countered(None) → "(— countered)"`
+        // per-count degrade the production path already runs. The degrade is NOT weakened —
+        // the seam only INDUCES the `Err` the `.ok()` already handles.
+        countered_peer_claims: countered_peer_count_with_fault_seam(
+            store.count_countered_peer_claims(),
+        )
+        .ok(),
     };
     html_ok(render_landing(&summary))
 }
@@ -536,6 +544,52 @@ fn countered_count_with_fault_seam(
 #[cfg(not(debug_assertions))]
 #[inline]
 fn countered_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    read
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, mirroring the slice-16 `active_set_read_with_fault_seam` +
+/// the slice-17 [`peer_claims_count_with_fault_seam`] + the slice-18
+/// [`countered_count_with_fault_seam`] + the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam
+/// discipline, enforced by `xtask check-arch`'s viewer-fail-seam guard token set).
+///
+/// slice-19 (US-PC-000/001/002 / Theme 4 / C-2 / C-5 CARDINAL / WD-PC-2/6 / ADR-056 D4):
+/// the substrate "lie" BOTH counter-aware surfaces (`GET /` landing + `GET /peer-claims`
+/// header) must survive is a MID-REQUEST per-count read FAILURE — the countered-PEER-claims
+/// count. When `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` is set (acceptance fault-injection
+/// only), this substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
+/// `count_countered_peer_claims` result so the SAME production `.ok() → None →
+/// render_countered(None) → "(— countered)"` per-count degrade branch runs — the peer-claims
+/// "4" + the slice-18 own line "12 own claims (3 countered)" + the sibling landing counts + the
+/// nav hub + the `/peer-claims` list rows + slice-13 per-row flags STILL resolve, the page
+/// stays 200 (never a 5xx, never a fabricated "(0 countered)", never a raw stack trace). This
+/// is a 4th DISTINCT token (NOT a reuse of the slice-18 `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT`)
+/// so the PEER count fails INDEPENDENTLY of the own count — the missing≠zero AT asserts the
+/// slice-18 own line stays untouched while only the peer count degrades (WD-PC-7 / ADR-056 D4).
+/// The PRODUCTION per-count degrade path is the thing under test; the seam only INDUCES the
+/// `Err` the path already handles. Wired around the countered-peer-count read in BOTH
+/// [`landing_page`] and [`peer_claims_page`] so a single failure exercises both surfaces.
+///
+/// In a release build (`debug_assertions` off) this is the identity function: the
+/// real read result flows through verbatim, with NO env-var read compiled in.
+#[cfg(debug_assertions)]
+fn countered_peer_count_with_fault_seam(
+    read: Result<usize, StoreReadError>,
+) -> Result<usize, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT").is_some() {
+        return Err(StoreReadError::Unreadable {
+            detail: "countered-peer-claims count read fault injected (test-only seam)".to_string(),
+        });
+    }
+    read
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn countered_peer_count_with_fault_seam(
     read: Result<usize, StoreReadError>,
 ) -> Result<usize, StoreReadError> {
     read
@@ -933,9 +987,12 @@ fn peer_claims_page(
         // failed read degrades to `None` → "(— countered)", never blanks the list, never a
         // 5xx (the list read above is INDEPENDENT of the countered-count read, ADR-056 D4).
         // Both surfaces render through the SAME `render_countered` helper (single source).
+        // The read flows through the SAME TEST-ONLY `countered_peer_count_with_fault_seam`
+        // the landing uses (`#[cfg(debug_assertions)]`-gated, release-identity), so one
+        // `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` fault exercises BOTH surfaces' degrade.
         Shape::FullPage => html_ok(render_peer_claims_page(
             &page_view,
-            store.count_countered_peer_claims().ok(),
+            countered_peer_count_with_fault_seam(store.count_countered_peer_claims()).ok(),
         )),
     }
 }

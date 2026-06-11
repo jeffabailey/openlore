@@ -99,6 +99,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-11T04:54:17Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T04:54:33Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T04:56:29Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T04:57:05Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: production per-count Err->None degrade pinned by 01-01; the new work is the test fault seam + its xtask release-gate guard token (covered by xtask/tests/viewer_fail_seam.rs)",
+      "t": "2026-06-11T04:57:06Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T05:01:46Z"
     }
   ],
   "project_id": "viewer-peer-counter-aware-counts"
