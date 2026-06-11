@@ -1579,9 +1579,10 @@ mod tests {
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
     use super::{
-        bare_did, claims_page, countered_count_with_fault_seam, landing_page,
-        peer_claims_count_with_fault_seam, to_indexed_claim, Shape, SharedStore, ViewerServer,
-        HTMX_ASSET, HTMX_ASSET_SHA256,
+        bare_did, claims_page, countered_count_with_fault_seam,
+        countered_peer_count_with_fault_seam, landing_page, peer_claims_count_with_fault_seam,
+        peer_claims_page, to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET,
+        HTMX_ASSET_SHA256,
     };
     use http_body_util::BodyExt;
     use hyper::StatusCode;
@@ -1814,8 +1815,18 @@ mod tests {
         fn get_claim(&self, _cid: &str) -> Result<Option<ClaimDetail>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
+        // slice-19 (`/peer-claims` header coverage): the Peer Claims list read + the
+        // per-page counter-presence lookup are exercised by the peer_claims_page header
+        // test. An EMPTY successful page (total 0) is the simplest stable input — it
+        // drives the FullPage render WITHOUT requiring row fixtures, so the header's
+        // countered-PEER-count marker is the thing under assertion. The slice-17 landing
+        // tests never reach this method (the `GET /` path reads ONLY the four counts),
+        // so returning an empty page here is inert for them. Mirrors `list_claims`.
         fn list_peer_claims(&self, _r: PageRequest) -> Result<Page<PeerClaimRow>, StoreReadError> {
-            unimplemented!("not read by the landing dashboard")
+            Ok(Page {
+                rows: Vec::new(),
+                total: 0,
+            })
         }
         fn query_contributor_scoring_feed(
             &self,
@@ -2149,6 +2160,143 @@ mod tests {
         assert!(
             body.contains("(3 countered)"),
             "the claims-page header must render the countered count via render_countered: {body}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-19 (US-PC-000/001/002 / ADR-056) — the counter-aware PEER counts. The
+    // package-scoped `cargo mutants -p adapter-http-viewer --in-diff` harness runs
+    // ONLY these in-crate unit tests (NOT the cli-package acceptance suite that
+    // also covers this code), so these fast (<1ms) port-to-port tests pin the
+    // slice-19 surfaces directly, mirroring slice-18 EXACTLY: the
+    // `countered_peer_count_with_fault_seam` identity pass-through (kills :581 ->
+    // Ok(0)/Ok(1)) + the debug-only `Err` injection, and the `peer_claims_page`
+    // FullPage header rendering the countered-PEER count (kills :944 peer_claims_page
+    // -> empty Response). The :595 release-identity sibling is a cfg-dead branch under
+    // the debug test profile (NOT compiled here) — it is guarded by the xtask seam
+    // guard + the release-build seam-free check, not a debug test, mirroring
+    // slice-16/17/18's lone cfg-dead survivor (unkillable by any debug test).
+    // -------------------------------------------------------------------------
+
+    /// The slice-19 fault-injection env-var the countered-PEER-count seam reads (the
+    /// production seam under test; ADR-056 D4). A 4th DISTINCT token (NOT the slice-18
+    /// [`COUNTERED_FAULT_ENV`]) so the PEER count fails INDEPENDENTLY of the own count.
+    /// Pinned here so the env-var name has one in-crate source of truth.
+    const PEER_COUNTERED_FAULT_ENV: &str = "OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT";
+
+    /// Build a fake landing store whose four-plus-peer counts all succeed, with an
+    /// EXPLICIT countered-PEER count (the slice-17 [`FakeLandingStore::with_counts`] and
+    /// slice-18 [`fake_store_with_countered`] both default the countered-peer count to
+    /// `Ok(0)`; the `/peer-claims` header test needs a distinctive non-zero value).
+    fn fake_store_with_countered_peer(
+        own: usize,
+        peer: usize,
+        active: usize,
+        countered_peer: usize,
+    ) -> FakeLandingStore {
+        FakeLandingStore {
+            own_claims: Ok(own),
+            peer_claims: Ok(peer),
+            active_peers: Ok(active),
+            countered_own_claims: Ok(0),
+            countered_peer_claims: Ok(countered_peer),
+        }
+    }
+
+    /// Behavior (lib.rs:581, the `#[cfg(debug_assertions)]` seam): the countered-PEER-count
+    /// fault seam is the IDENTITY on the real read when the fault env-var is unset — the
+    /// genuine `Ok(7)` flows through verbatim. Kills BOTH the `:581 -> Ok(0)` and
+    /// `-> Ok(1)` mutants: they would return `0` / `1`, not the `7` the real read carried.
+    /// (`StoreReadError` is not `PartialEq`, so we match the `Ok` arm directly rather than
+    /// `assert_eq!` the whole `Result`.) Mirrors the slice-18
+    /// [`countered_count_seam_passes_the_real_read_through_when_unset`]. Serialized on the
+    /// SAME [`FAULT_ENV_LOCK`] as the inject test so a sibling `set_var` cannot leak into
+    /// this pass-through read window (poison-recovering).
+    #[test]
+    fn countered_peer_count_seam_passes_the_real_read_through_when_unset() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Guard: the fault env-var must be unset for the identity behavior.
+        assert!(
+            std::env::var_os(PEER_COUNTERED_FAULT_ENV).is_none(),
+            "the countered-PEER-count fault seam env-var must be unset for the pass-through assertion"
+        );
+        let passed = countered_peer_count_with_fault_seam(Ok(7));
+        match passed {
+            Ok(n) => assert_eq!(
+                n, 7,
+                "the seam must pass the real read through verbatim (kills :581 Ok(0)/Ok(1))"
+            ),
+            Err(e) => panic!("the seam must not inject an error when unset: {e}"),
+        }
+    }
+
+    /// Behavior (lib.rs:581, `#[cfg(debug_assertions)]` only): with the countered-PEER-count
+    /// fault env-var SET, the seam substitutes a genuine `Err` for the real read —
+    /// exercising the SAME `.ok() -> None -> render_countered(None) -> "(— countered)"`
+    /// per-count degrade the production path runs (ADR-056 D4 / C-2 CARDINAL). Pins the
+    /// fault injection so the `:581 -> Ok(0)/Ok(1)` mutants (which would IGNORE the env-var
+    /// and return a fabricated success) are killed from the inject side too. Set + removed
+    /// within this single test under the shared [`FAULT_ENV_LOCK`] so the sibling
+    /// pass-through test never observes the pin (poison-recovering), mirroring the slice-18
+    /// inject test + commit 2629e56's serialized env-var discipline.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn countered_peer_count_seam_injects_err_when_the_fault_env_var_is_set() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Isolation: set, exercise, then ALWAYS remove before releasing the lock.
+        std::env::set_var(PEER_COUNTERED_FAULT_ENV, "1");
+        let injected = countered_peer_count_with_fault_seam(Ok(7));
+        std::env::remove_var(PEER_COUNTERED_FAULT_ENV);
+
+        assert!(
+            injected.is_err(),
+            "with the countered-PEER-count fault env-var set, the seam must inject a genuine \
+             Err so the production .ok() -> None -> \"(— countered)\" degrade runs (ADR-056 D4)"
+        );
+    }
+
+    /// Behavior (lib.rs:944 / ADR-056 D3): `peer_claims_page` renders the Peer Claims FULL
+    /// PAGE — the header carries the countered-PEER count read over the store through the
+    /// SAME `render_countered` helper the landing uses. With a fake store reporting
+    /// `count_countered_peer_claims() == Ok(3)`, the FullPage body contains both
+    /// "Peer Claims" and "(3 countered)". Kills the `:944 peer_claims_page -> empty
+    /// Response` mutant: an empty body carries neither marker. The list read returns an
+    /// empty page (total 0) so the header — not row fixtures — is the thing under test.
+    /// Asserts the env-var is unset (serialized on [`FAULT_ENV_LOCK`]) so the seam is the
+    /// identity and the real `Ok(3)` reaches the header. Mirrors the slice-18
+    /// [`claims_page_full_page_renders_the_countered_count_header`].
+    #[tokio::test]
+    async fn peer_claims_page_full_page_renders_the_countered_count_header() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            std::env::var_os(PEER_COUNTERED_FAULT_ENV).is_none(),
+            "the countered-PEER-count fault seam env-var must be unset so the real Ok(3) reaches the header"
+        );
+        let store = fake_store_with_countered_peer(12, 7, 2, 3);
+
+        let response = peer_claims_page(&store, None, Shape::FullPage);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("peer-claims-page body collects")
+            .to_bytes();
+        let body = String::from_utf8(bytes.to_vec()).expect("peer-claims-page body is UTF-8 HTML");
+
+        assert!(
+            body.contains("Peer Claims"),
+            "the peer-claims-page full page must render the Peer Claims header: {body}"
+        );
+        assert!(
+            body.contains("(3 countered)"),
+            "the peer-claims-page header must render the countered count via render_countered: {body}"
         );
     }
 }
