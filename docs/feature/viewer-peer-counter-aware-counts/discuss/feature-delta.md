@@ -294,8 +294,64 @@ GREEN — single-table SELECT, no merging JOIN/GROUP BY).
 
 ---
 
+---
+
+## Wave: DESIGN (lean) — 2026-06-10 · Owner: Morgan (nw-solution-architect) · ADR-056
+
+The deferred peer sibling of slice-18, designed as the EXACT mirror of ADR-055 onto peer claims.
+Artifacts: `design/architecture-design.md` (C4 L1+L2), `design/component-boundaries.md` (the crate
+touch map + the R-PC-9 xtask verification + the fault-seam decision), `design/technology-stack.md`
+(unchanged), `design/data-models.md` (the 5th `LandingSummary` field + the reused render), and
+`docs/adrs/ADR-056-*.md`.
+
+### Resolutions
+
+- **WD-PC-5 RESOLVED → count-only aggregate.** `count_countered_peer_claims() -> Result<usize,
+  StoreReadError>` — the 5th count-only sibling on `StoreReadPort`. `adapter-duckdb` impl = the
+  EXACT slice-18 SQL with outer `claims c → peer_claims p`:
+  `SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (SELECT referenced_cid FROM
+  claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references
+  WHERE ref_type='counters')`. Inner IN-set byte-identical to slice-18; presence-once
+  (de-duped UNION + `COUNT(DISTINCT)`); peer-only by the `peer_claims` outer table; parameter-free
+  → injection-safe; invariant to store size.
+- **R-PC-9 RESOLVED → GREEN by construction, VERIFIED.** Against `classify_sql_literal`:
+  `mentions_peer_claims` TRUE (outer `FROM peer_claims p`), `mentions_own_claims` FALSE (no
+  standalone `claims` whole-word — `peer_claims` is preceded by `_`; `claim_references` has no
+  `claims` substring), so `is_cross_store = TRUE && FALSE = FALSE` → `None`, no violation.
+
+### Decisions (the slice-18 pattern, mirrored)
+
+- D2 — a 5th additive `Option<usize>` `countered_peer_claims` on `LandingSummary` (pure render now
+  a total fn over 2⁵ combinations; independent `.ok()` degrade).
+- D3 — REUSE the slice-18 `render_countered` helper (NO new helper): rendered on the landing PEER
+  line ("4 peer claims (1 countered)") + the `/peer-claims` header ("Peer Claims (1 countered)"),
+  single source (WD-PC-8). The slice-18 OWN surfaces UNTOUCHED (WD-PC-7).
+- D4 — a 4th DISTINCT fault-seam token `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` (cfg-gated,
+  appended to the xtask `VIEWER_FAIL_SEAM_TOKENS` guard) so the peer count fails INDEPENDENTLY of
+  the own count.
+- Boundary: NO new crate (workspace stays 21), NO new route, NO new render helper, NO mutation
+  method, NO network seam, nothing persisted; read-only on the existing `StoreReadPort`.
+
+### Quality gates (DESIGN)
+
+Requirements traced to components · component boundaries with clear responsibilities · ADR-056 with
+2+ alternatives per decision + rejection rationale · ISO 25010 attributes addressed (reliability /
+correctness / performance / security / maintainability / portability) · dependency-inversion
+(ports/adapters, deps inward) preserved · C4 L1+L2 in Mermaid · no new external integration (no
+contract-test annotation) · OSS-only (MIT/Apache-2.0) · architectural enforcement recommended +
+in-place (the three xtask layers + the fault-seam guard) · AC behavioral. No contract-test
+annotation applies (the only dependency is the LOCAL read-only store).
+
+---
+
 ## Changelog
 
+- 2026-06-10 — slice-19 (`viewer-peer-counter-aware-counts`) DESIGN (Morgan). ADR-056. Resolved
+  WD-PC-5 (count-only `count_countered_peer_claims` aggregate — the slice-18 SQL with outer
+  `peer_claims`) + R-PC-9 (xtask anti-merging GREEN by construction, verified against
+  `classify_sql_literal`). 5th additive `Option<usize>` `LandingSummary` field; REUSED
+  `render_countered` (no new helper); 4th distinct fault-seam token. No new crate/route; workspace
+  stays 21.
 - 2026-06-10 — slice-19 (`viewer-peer-counter-aware-counts`) DISCUSS. Traces to J-003b (the
   ORIENTATION / at-a-glance-count facet of counter-claim awareness — the SAME job slice-18
   realized for own claims). 3 stories (1 infra + 2 user-visible). The deferred peer sibling of

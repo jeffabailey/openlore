@@ -182,6 +182,34 @@ J-003b counter-claim-awareness facet, the shipped counter-flag family (slices 11
 slice-17 landing summary, and the shipped slice-18 own mirror (the explicit source of this deferred
 sibling, WD-CC-7).
 
+## DESIGN resolution (2026-06-10 — Morgan, nw-solution-architect; ADR-056)
+
+The two inherited open items are RESOLVED. Full rationale in
+`docs/feature/viewer-peer-counter-aware-counts/design/` + `docs/adrs/ADR-056-*.md`.
+
+| Item | Status | Resolution |
+|---|---|---|
+| **WD-PC-5** (countered-peer-count read shape) | RESOLVED → **count-only aggregate** | `count_countered_peer_claims() -> Result<usize, StoreReadError>`, a 5th count-only sibling on `StoreReadPort`. `adapter-duckdb` impl = the EXACT slice-18 `count_countered_own_claims` SQL with the OUTER table swapped `claims c → peer_claims p`: `SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')`. The inner `UNION` IN-set is byte-IDENTICAL to slice-18's; presence-once via the de-duped IN-set + `COUNT(DISTINCT)`; peer-only by the `peer_claims` outer table; parameter-free (literal `'counters'` only) → injection-safe; invariant to store size (both ref columns indexed). Chosen over `counter_presence_for(peer_cids).len()` for symmetry + cheapness (ADR-056 D1). |
+| **R-PC-9** (xtask anti-merging rule with `peer_claims` in the outer FROM) | RESOLVED → **GREEN by construction, VERIFIED** | Verified against `xtask/src/check_arch.rs::classify_sql_literal` (~319) + `contains_word` (~289) + `is_word_byte` (~308). `mentions_peer_claims = contains_word(literal, "peer_claims")` → **TRUE** (the outer `FROM peer_claims p` is a whole-word match — the ONE new wrinkle vs slice-18, whose outer `claims` made this FALSE). `mentions_own_claims = contains_word(literal, "claims")` → **FALSE** (the only `claims` substring is inside `peer_claims`, preceded by the word byte `_` → boundary fails; `claim_references`/`peer_claim_references` are `claim_…` with no `claims` substring; NO standalone `claims` table is named). `is_cross_store = TRUE && FALSE = FALSE` → classifier returns `None`. **No violation, GREEN.** The rule fires only when a literal names BOTH the standalone `claims` table AND `peer_claims` (a merging JOIN); this query names `peer_claims` but NOT standalone `claims`, so it is not cross-store. slice-18 was GREEN with `(peer=F, own=F)`; slice-19 is GREEN with `(peer=T, own=F)` — both reach `None` because the rule is the AND of the two flags. |
+
+### DESIGN decisions added (the slice-18 pattern, mirrored)
+
+- **D2 — a FIFTH additive `Option<usize>` field** `countered_peer_claims` on `LandingSummary`
+  (parallel to the slice-17/18 four; identical degrade; pure render now a total fn over 2⁵ `Option`
+  combinations).
+- **D3 — REUSE the slice-18 `render_countered` helper** (NO new helper, WD-PC-10): `render_landing`
+  renders it BESIDE the unchanged peer-claims line ("4 peer claims (1 countered)");
+  `render_peer_claims_page` gains a `countered_peer_claims: Option<usize>` param and renders it in
+  the header ("Peer Claims (1 countered)"). Single source (WD-PC-8). The slice-18 OWN surfaces are
+  UNTOUCHED (WD-PC-7).
+- **D4 — a 4th DISTINCT fault-seam token** `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` (seam fn
+  `countered_peer_count_with_fault_seam`, `#[cfg(debug_assertions)]`-gated), appended to the xtask
+  `VIEWER_FAIL_SEAM_TOKENS` guard — NOT a reuse of the slice-18 token, so the PEER count can fail
+  INDEPENDENTLY of the own count (the missing≠zero AT asserts per-count degrade). Wired around the
+  countered-peer read in BOTH `landing_page` and `peer_claims_page`.
+- **Boundary confirmed**: NO new crate (workspace stays 21), NO new route, NO new render helper, NO
+  mutation method, NO network seam, nothing persisted.
+
 ## SSOT updates to apply (at finalize — not written mid-wave)
 
 - `docs/product/jobs.yaml` — append a changelog entry (2026-06-10) noting slice-19 traces to
