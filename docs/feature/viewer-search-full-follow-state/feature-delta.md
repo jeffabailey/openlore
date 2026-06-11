@@ -577,7 +577,206 @@ C4Container
 | D-FS-6 | Keyless `You` — resolved from own-claim DID-set membership, NOT a held identity surface (A3 rejected; the precedent slice's deferral blocker stays OUT). | C-1 (CARDINAL) |
 | D-FS-7 | ZERO new crate/route/variant/port-trait; +2 read-only methods + 4 intra-crate sibling fns + 2 SSOT consts. Workspace stays 21. | C-11 |
 
+## Wave: DISTILL / [REF] Scenario list with tags
+
+> Wave: **DISTILL** (lean mode, Tier-1 density) · Owner: Quinn (nw-acceptance-designer) ·
+> 2026-06-11 · Rust subprocess-HTTP acceptance shape (NO cucumber — the project's
+> `tests/acceptance/*.rs` `[[test]]` convention, FOLLOWED exactly; mirrors slice-16).
+> Wave-Decision Reconciliation HARD GATE: **passed — 0 contradictions** across
+> DISCUSS / DESIGN (DEVOPS wave absent for this thin DELTA — default infra inherited).
+
+Executable SSOT: `tests/acceptance/viewer_search_full_follow_state.rs` (Tier A, FF-1..FF-10)
++ `tests/acceptance/viewer_search_full_follow_state_invariants.rs` (GOLD guardrails).
+Registered as two `[[test]]` targets in `crates/cli/Cargo.toml`.
+
+| Scenario (fn) | Tags | RED class |
+|---|---|---|
+| FF-1 `all_four_follow_states_render_with_peer_add_only_on_the_genuinely_new_author` | `@us-fs-001 @us-fs-002 @walking_skeleton @driving_port @driving_adapter @real-io @c-2 @happy` | RED ✅ |
+| FF-2 `an_own_claim_in_isolation_shows_the_self_indicator_and_no_add_command_anywhere` | `@us-fs-002 @driving_port @real-io @c-2 @happy` | RED ✅ |
+| FF-3 `a_soft_removed_cached_peer_in_isolation_shows_the_residue_indicator_and_no_add_anywhere` | `@us-fs-002 @driving_port @real-io @c-2 @happy` | RED ✅ |
+| FF-4 `an_active_and_cached_peer_resolves_to_subscribed_peer_by_precedence` | `@us-fs-001 @driving_port @real-io @precedence @c-6 @edge` | GREEN-today (precedence guardrail) ✅ |
+| FF-5 `an_own_claim_resolves_to_you_even_when_the_active_set_is_populated` | `@us-fs-001 @driving_port @real-io @precedence @c-6 @edge` | RED ✅ |
+| FF-6 `the_slice16_followed_and_unfollowed_states_are_byte_stable_with_no_new_indicators` | `@us-fs-002 @driving_port @real-io @no-regression @c-7 @boundary` | GREEN-today (no-regression guardrail) ✅ |
+| FF-7 `a_soft_removed_author_is_matched_despite_the_signing_key_fragment_on_the_result_did` | `@us-fs-001 @driving_port @real-io @fragment-strip @r-fs-6 @edge` | RED ✅ |
+| FF-8 `neither_new_indicator_is_an_executable_control_and_both_are_neutral` | `@us-fs-002 @driving_port @real-io @read-only @neutral-framing @c-1 @c-9 @happy` | GREEN-today (cardinal guardrail) ✅ |
+| FF-9 `a_failed_cached_peer_read_degrades_only_that_arm_without_crashing` | `@us-fs-001 @driving_port @real-io @graceful-degrade @error @c-8 @wd-fs-4` | RED (todo!, OQ-1) ✅ |
+| FF-10 `the_four_follow_states_render_identically_under_htmx_and_no_js` | `@us-fs-002 @driving_port @real-io @parity @c-10 @happy` | RED ✅ |
+| FF-INV-NoControl `no_four_arm_follow_state_render_adds_an_executable_control` | `@us-fs-002 @property @driving_port @real-io @read-only @c-1 @gold` | GREEN-today ✅ |
+| FF-INV-ReadOnly `every_four_arm_follow_state_render_leaves_the_store_read_only` | `@us-fs-001 @property @driving_port @real-io @read-only @c-1 @gold` | GREEN-today ✅ |
+| FF-INV-LocalPerUserNeutral `the_four_arm_resolution_adds_no_network_seam_index_stays_per_user_neutral` | `@us-fs-001 @property @driving_port @real-io @local-resolution @offline @c-3 @gold` | RED ✅ |
+| FF-INV-AttributionUnchanged `the_four_arm_resolution_does_not_merge_or_rerank` | `@us-fs-002 @property @driving_port @real-io @anti-merging @attribution @c-5 @gold` | RED ✅ |
+| FF-INV-NeutralFraming `the_two_new_indicators_are_neutral_never_pejorative` | `@us-fs-002 @property @driving_port @real-io @neutral-framing @c-9 @gold` | RED ✅ |
+| FF-INV-OwnVsCacheDistinct `a_removed_but_cached_author_is_not_shown_as_a_fresh_add_candidate` | `@us-fs-001 @us-fs-002 @property @driving_port @real-io @c-2 @gold` | RED ✅ |
+
+**16 slice-20 scenarios** (10 Tier-A FF-* + 6 GOLD). RED = 9 (8 assertion + 1 `todo!()`
+OQ-1 scaffold); GREEN-today guardrails = 5; **0 BROKEN**. Error/degrade + edge/boundary
+scenarios = FF-3/4/5/7/9 + FF-INV-OwnVsCacheDistinct ≈ 6/16 (≥ 40% non-happy coverage:
+2 precedence edges, 1 fragment edge, 1 no-regression boundary, 1 graceful-degrade error,
+the own-vs-cache distinctness gold). Full per-scenario classification + the run
+transcript: `distill/red-classification.md`.
+
+## Wave: DISTILL / [REF] WS strategy (Architecture of Reference)
+
+Brownfield DELTA — NO walking-skeleton Feature 0 (consistent with DISCUSS). Per the
+**Architecture of Reference** (project-level, `docs/architecture/atdd-infrastructure-policy.md`,
+inherited — `--policy=inherit`): the `GET /search` **driving port** = REAL adapter (the
+`openlore ui` subprocess via `ViewerServer`, HTTP, HX-Request fork); the `StoreReadPort`
+**driven-internal** port = REAL DuckDB seeded via the real CLI write verbs; the
+`IndexQueryPort` **driven-external** boundary = a REAL `openlore-indexer serve` (the ONLY
+mocked boundary — slice-05 reuse). The thick four-arm scenario **FF-1** is the slice's
+load-bearing thread (`@walking_skeleton @driving_adapter`): one `/search` rendering ALL
+FOUR follow-states side by side, asserting the indicator TEXT per row + that `peer add`
+appears ONLY on the genuinely-new author's row. No new port class to negotiate; the
+policy `StoreReadPort` row was extended with the two new presence reads (mechanism
+UNCHANGED — real DuckDB seeded via real verbs).
+
+## Wave: DISTILL / [REF] Adapter coverage table (Mandate 6)
+
+Every NEW driven read mapped to ≥1 `@real-io` scenario exercising REAL DuckDB I/O via
+the real seeding verbs:
+
+| Driven read (adapter-duckdb) | `@real-io` scenario | Covered by |
+|---|---|---|
+| `StoreReadPort::distinct_own_author_dids` (NEW; `SELECT DISTINCT author_did FROM claims`) | YES | FF-1, FF-2, FF-5 (own claim seeded via real `claim add` → row resolves `You`); FF-INV-LocalPerUserNeutral / -AttributionUnchanged / -NeutralFraming |
+| `StoreReadPort::distinct_cached_peer_author_dids` (NEW; `SELECT DISTINCT author_did FROM peer_claims`, no `removed_at` filter) | YES | FF-1, FF-3, FF-7 (cached peer seeded via real `peer add`+`peer pull`+`peer remove` → row resolves `UnsubscribedCache`); FF-INV-OwnVsCacheDistinct |
+| `StoreReadPort::list_active_peer_subscriptions` (slice-15, REUSED) | YES | FF-1, FF-4, FF-5, FF-6 (active subscription seeded via real `peer add`) |
+| `IndexQueryPort::search` (slice-05/08, REUSED, the only mocked boundary) | YES | every FF-* (REAL `openlore-indexer serve` over the seeded corpus) |
+
+No NEW external integration → no contract-test annotation this slice (the only external
+boundary, the indexer, is UNCHANGED). Zero "NO — MISSING" rows.
+
+## Wave: DISTILL / [REF] Scaffolds (Mandate 7)
+
+The ATs spawn the REAL `openlore` + `openlore-indexer` bins over HTTP and import only the
+existing `support` harness — so they COMPILE today (no unbuilt Rust dependency → NOT
+BROKEN). The production RED is the unimplemented four-arm render + the two missing
+presence reads; the ATs fail at the HTTP-body assertion. Harness scaffolds created (all
+`SCAFFOLD: true`, in `tests/acceptance/support/mod.rs`):
+
+- Corpus builders: `sf_corpus_all_four_arms`, `sf_corpus_own_claim_only`,
+  `sf_corpus_cached_removed_peer_only`, `sf_corpus_own_and_followed`,
+  `sf_corpus_all_arms_many_new`, `sf_corpus_cached_and_new`.
+- Seed helpers (REUSE real CLI verbs): `seed_own_claim_for_search` (real `claim add`),
+  `seed_cached_unsubscribed_peer_for` (real `peer add`+`peer pull`+`peer remove`
+  no-`--purge`), `seed_active_and_cached_peer_for` (real `peer add`+`peer pull`).
+- Assertion helpers (scan the OBSERVABLE rendered surface): `assert_search_row_shows_self_indicator`,
+  `assert_search_row_shows_residue_indicator`, `assert_search_follow_state_framing_is_neutral`
+  (+ the `SF_NEUTRAL_FRAMING_BLOCKLIST` / accepted-phrasing consts + `SF_OWN_BARE_DID`).
+- Degrade seam (RED `todo!()` scaffold, OQ-1): `start_viewer_with_failing_cached_peer_read`.
+
+The PRODUCTION scaffolds (the two `StoreReadPort` methods, the precedence pure fn, the
+two render fns + 2 SSOT consts) are deliberately NOT added in DISTILL: adding the trait
+methods now would force impls workspace-wide (a compile break = BROKEN). Per the slice-16
+proven idiom, the binary compiles AS-IS (the two empty `You | UnsubscribedCache => {}`
+arms + binary resolution) and the RED is the missing behavior. DELIVER materializes the
+production scaffolds in its RED phase (ADR-025).
+
+## Wave: DISTILL / [REF] Test placement
+
+`tests/acceptance/viewer_search_full_follow_state.rs` + `..._invariants.rs`, registered as
+`[[test]]` targets in `crates/cli/Cargo.toml`. Precedent justification: EXACTLY the
+slice-16 placement (`viewer_search_follow_state.rs` + `..._invariants.rs`) — the same
+`ViewerServer` subprocess + `openlore-indexer serve` harness, the same `support` module,
+the same `[[test]]` registration block. The naming mirrors the feature id
+(`viewer-search-full-follow-state` → `viewer_search_full_follow_state`). No new test
+framework introduced (the project does NOT use cucumber for these subprocess ATs).
+
+## Wave: DISTILL / [REF] Driving Adapter coverage
+
+The ONLY driving surface is `GET /search` on the `openlore ui` viewer (UNCHANGED route,
+form, query params — slice-08/16). Coverage: FF-1 (`@driving_adapter @walking_skeleton`)
+exercises it via the REAL subprocess over HTTP — verifying the HTTP status (200), the
+rendered output format (the four per-row affordances in the `#search-results` fragment +
+full page), and argument handling (`?object=…` parsed into the search dimension). Every
+FF-* + GOLD scenario enters through this subprocess HTTP path; NONE calls the resolution
+fn / `to_indexed_claim` / the `viewer-domain` render fns directly. Both shapes covered
+(full page without `HX-Request`; `#search-results` fragment with it) — FF-8/10 +
+FF-INV-NoControl assert parity across both.
+
+## Wave: DISTILL / [REF] Pre-requisites
+
+- DESIGN driving port: `GET /search` (ADR-057; UNCHANGED route). DESIGN driven ports: the
+  two NEW read-only `StoreReadPort` reads + the REUSED active-set + index reads.
+- Build-before-run: `cargo build --bin openlore --bin openlore-indexer` (the spawned bins
+  are not auto-rebuilt by `cargo test`).
+- DEVOPS environment matrix: none authored for this thin DELTA → default infra inherited
+  from the Project Infrastructure Policy (real DuckDB under `OPENLORE_HOME`; loopback-only
+  `openlore ui --port 0`; ephemeral indexer serve). No environment contradiction.
+- OQ-1 (resolved in DISTILL, ADR-057 D-4 conditional escalation FIRES): DELIVER MUST add
+  two `#[cfg(debug_assertions)]` per-read fault tokens (`OPENLORE_VIEWER_FAIL_OWN_DIDS_READ`,
+  `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ`) + extend the xtask `VIEWER_FAIL_SEAM_TOKENS`
+  guard — the real-binary subprocess harness cannot inject a per-read `Err` via a fake
+  `StoreReadPort`. Full finding: `distill/red-classification.md` §OQ-1.
+
+## Wave: DISTILL / [REF] Outcomes registry
+
+slice-20 introduces TWO new typed contract surfaces on `StoreReadPort` (read-only
+`operation`s). Per the outcomes-registry grain (per-typed-contract), these are candidate
+OUT-N rows: `distinct_own_author_dids` (input: `()`; output: `HashSet<String>` of own
+author DIDs) and `distinct_cached_peer_author_dids` (input: `()`; output: `HashSet<String>`
+of cached-peer author DIDs incl. soft-removed). The four-arm precedence resolution is a
+`specification` (a total pure fn `(author_did, &own, &active, &cached) → AuthorRelationship`).
+**Registration deferred to DELIVER** (the methods do not yet exist as typed signatures;
+DISTILL records the candidates here so DELIVER registers them when the trait methods land,
+avoiding a registry row pointing at an unbuilt contract). NO new `AuthorRelationship`
+variant (the enum is already four-variant — an EXTEND of an existing outcome surface, not
+a new ADT).
+
+## Wave: DISTILL / [REF] Self-review checklist (Dimension 9 + Mandate 7)
+
+- [x] WS strategy declared (Architecture of Reference; `@walking_skeleton @driving_adapter`
+  on FF-1; real driving port + real driven-internal + the indexer as the only fake).
+- [x] WS scenarios tagged `@real-io` (every FF-* + GOLD).
+- [x] Every NEW driven read has ≥1 `@real-io` scenario (adapter coverage table; zero MISSING).
+- [x] InMemory doubles: N/A — no in-memory doubles (real DuckDB; real subprocess; only the
+  indexer is a real-but-separate serve).
+- [x] Mandate 7: the ATs COMPILE (RED, not BROKEN) — verified via `cargo test --no-run`.
+- [x] Mandate 7: harness scaffolds marked `SCAFFOLD: true`; the degrade seam is a `todo!()`
+  (RED), production scaffolds deferred to DELIVER (adding trait methods now = compile break).
+- [x] Mandate 7: RED-not-BROKEN confirmed by a full run — 9 RED (8 assertion + 1 `todo!()`),
+  5 GREEN-today guardrails, 0 BROKEN (`distill/red-classification.md`).
+- [x] Driving Adapter: `GET /search` exercised via subprocess HTTP (status + output + args),
+  not just the service fn.
+- [x] Pillar 1 (domain language): scenario fn names + the doc Given/When/Then use domain
+  terms (own claim / followed peer / soft-removed cached peer / new author / self indicator
+  / residue indicator); no HTTP/SQL/struct jargon in the scenario narrative.
+- [x] Pillar 2 (chained narrative): the seed helpers compose (FF-1's four-arm seed = own +
+  cached + active reused across FF-8/9/10; FF-2/FF-3 isolate one arm of FF-1).
+- [x] Pillar 3 (production composition): the REAL `openlore ui` composition root via
+  `ViewerServer`; only the indexer (external) is a separate real serve; no hand-wired SUT.
+- [x] Mandate 8 (Universe-bound, layers 1-3): FF-INV-ReadOnly uses `assert_store_read_only`
+  (universe = the port-exposed `claims`+`peer_claims` row counts, each `unchanged`). Other
+  layer-3 assertions scan the port-exposed rendered HTML surface (never a `viewer-domain`
+  struct field).
+- [x] Mandate 9 (PBT mode by layer): all scenarios are layer-3/5 subprocess + real-I/O →
+  EXAMPLE-only; NO `proptest`/PBT machinery imported (correct for layer 3+).
+- [x] Mandate 10 (two-tier): Tier B (state-machine PBT) NOT warranted — per-row precedence
+  over three set memberships, a config-shaped affordance choice, not a ≥3-scenario chained
+  domain-rich journey. Tier A example coverage is exact. Documented in both file headers.
+- [x] Mandate 11 (sad paths example-based): the degrade (FF-9) + the precedence/fragment
+  edges are named example tests; no PBT generation at layer 3+.
+
 ## Changelog
+
+- 2026-06-11 — Quinn (nw-acceptance-designer) — slice-20 DISTILL. Authored the executable
+  acceptance corpus mirroring the slice-16 proven shape: `viewer_search_full_follow_state.rs`
+  (Tier A, FF-1..FF-10 — the thick four-arm walking skeleton at FF-1) +
+  `viewer_search_full_follow_state_invariants.rs` (6 GOLD guardrails). Driving port = the
+  REAL `openlore ui` subprocess over HTTP (`ViewerServer`); the LOCAL store seeded via the
+  real `claim add` (own → `You`) / `peer add` (active → `SubscribedPeer`) /
+  `peer add`+`peer pull`+`peer remove` no-`--purge` (cached → `UnsubscribedCache`) verbs;
+  the indexer the ONLY mocked boundary. Reconciliation HARD GATE passed (0 contradictions).
+  RED classification: 9 RED (8 assertion + 1 `todo!()` OQ-1 scaffold), 5 GREEN-today
+  guardrails, 0 BROKEN (`distill/red-classification.md`). **OQ-1 RESOLVED: the ADR-057 D-4
+  conditional escalation FIRES** — the real-binary subprocess harness cannot inject a
+  per-read `Err` via a fake `StoreReadPort`, so DELIVER must add two
+  `#[cfg(debug_assertions)]` per-read fault tokens + extend the xtask `VIEWER_FAIL_SEAM_TOKENS`
+  guard (mirroring the slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam). Two seeding-seam
+  bugs found by the fail-for-the-right-reason gate were fixed (multi-peer pull collision;
+  active-and-cached reseed). Infra policy `StoreReadPort` row extended with the two new
+  presence reads (mechanism unchanged). NO new test framework (the project's `[[test]]`
+  subprocess convention followed exactly). Two `[[test]]` targets registered in
+  `crates/cli/Cargo.toml`.
 
 - 2026-06-11 — Morgan (nw-solution-architect) — slice-20 DESIGN. Formalized the three
   DISCUSS-flagged questions into **ADR-057** (two single-table read-only presence reads +

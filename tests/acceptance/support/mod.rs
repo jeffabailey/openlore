@@ -14982,6 +14982,518 @@ pub fn start_viewer_with_failing_active_set_read(
 }
 
 // =============================================================================
+// Slice-20 (viewer-search-full-follow-state; DISTILL) — the `/search` FULL
+// FOUR-ARM follow-state seeds + asserts. This slice COMPLETES the slice-16
+// binary resolution (`SubscribedPeer` vs `NetworkUnfollowed`) to the full
+// `AuthorRelationship` ADT by resolving the two DEFERRED arms:
+//
+//   • `You` — the result author IS the operator (own DID). Resolved against a
+//     NEW LOCAL presence read (`distinct_own_author_dids` over `claims`).
+//     Renders a NEUTRAL self indicator (DESIGN default `"Your own claim"`,
+//     `SEARCH_SELF_INDICATOR`), NO `peer add` command.
+//   • `UnsubscribedCache` — the result author is a peer the operator
+//     soft-removed (cached in `peer_claims`, NOT in the active set). Resolved
+//     against a NEW LOCAL presence read (`distinct_cached_peer_author_dids`
+//     over `peer_claims`, NO `removed_at` filter), gated by ∉ active. Renders a
+//     NEUTRAL residue indicator (DESIGN default `"A peer you removed (cached)"`,
+//     `SEARCH_REMOVED_CACHED_INDICATOR`), NO `peer add` command.
+//
+// Precedence (C-6 / WD-FS-2 / ADR-057 D2): `You` > `SubscribedPeer` >
+// `UnsubscribedCache` > `NetworkUnfollowed`. The slice-16 `SubscribedPeer` /
+// `NetworkUnfollowed` arms are byte-stable (C-7).
+//
+// SEEDING ALIGNMENT (the load-bearing trick, extended from slice-16):
+//   • `You` — the operator's OWN DID under the viewer is `did:plc:test-jeff`
+//     (the `OPENLORE_DID` the `ViewerServer` runs under = `env.identity`). A
+//     `You` row appears when the index corpus carries a row authored by
+//     `did:plc:test-jeff` AND the operator has published that claim LOCALLY (via
+//     the real `claim add` verb → a `claims` row keyed on `did:plc:test-jeff`).
+//     The NEW `distinct_own_author_dids` read returns `{did:plc:test-jeff}`; the
+//     index row's `author_did` (fragmented) is reconciled via `bare_did`.
+//   • `UnsubscribedCache` — Tobias (`did:plc:tobias-test`) is `peer add`-ed +
+//     `peer pull`-ed (his cached claims land in `peer_claims`) THEN soft-removed
+//     via the real `peer remove` verb (NO `--purge`): his subscription row's
+//     `removed_at` is set but the cached `peer_claims` rows survive. So he is ∈
+//     the cached-peer set but ∉ the active set → `UnsubscribedCache`.
+//
+// The store is REAL (the SAME DuckDB the viewer opens); own claims via the real
+// `claim add` verb; cached-then-soft-removed peers via the real
+// `peer add`/`peer pull`/`peer remove` verbs; active subscriptions via the real
+// `peer add` verb. The index is the ONLY mocked boundary (a REAL slice-05
+// `openlore-indexer serve` over the seeded corpus). NO scenario calls the
+// resolution fn / `to_indexed_claim` / the `viewer-domain` render fns directly
+// (those are layer-1/2 DELIVER concerns); every assertion is on the `GET /search`
+// HTTP response (Mandate 1, driving-port discipline).
+//
+// Layer placement (Mandate 9/11): every scenario is a layer-3/layer-5
+// subprocess + real-I/O test — EXAMPLE-only. The sad paths (degrade on a failed
+// new read) are enumerated explicitly, never PBT-generated at this layer. Tier B
+// (state-machine PBT) is NOT warranted (Mandate 10 skip criteria): the
+// resolution is a per-row precedence lookup over THREE set memberships (own /
+// active / cached), a config-shaped "which render-only affordance" choice, not a
+// chained ≥3-scenario journey over a domain-rich state machine — Tier A example
+// coverage is exact (the four-arm side-by-side WS + the precedence + the two
+// confirmatory + the no-regression + the golds enumerate the observable space).
+//
+// SCAFFOLD: true (slice-20) — the seeds REUSE the slice-06 `claim add`, the
+// slice-16 `seed_active_subscription_for`, and the slice-09/10/15 `peer add` +
+// `peer pull` + `peer remove` verbs (all real). The asserts carry concrete
+// bodies (they scan the OBSERVABLE rendered surface). The follow-state RED is
+// the PRODUCTION arm: today the render `@match` arm `You | UnsubscribedCache =>
+// {}` is EMPTY (renders nothing) AND `to_indexed_claim` resolves only the binary
+// (no own/cached presence reads exist), so an own claim AND a soft-removed peer's
+// cached claim BOTH still resolve `NetworkUnfollowed` → render `peer add`. So
+// `assert_search_row_shows_self_indicator` / `assert_search_row_shows_residue_
+// indicator` FAIL for the RIGHT reason (MISSING_FUNCTIONALITY — the two presence
+// reads + the four-arm precedence + the two render arms + the two SSOT consts do
+// not exist yet), NOT a setup/import error.
+// =============================================================================
+
+/// DESIGN default neutral self-attribution indicator copy (ADR-057 D3 /
+/// `SEARCH_SELF_INDICATOR`) a `You` row carries — the result is the operator's
+/// OWN claim, so neither "Following" nor "add" applies. The exact copy is a
+/// DELIVER open question (OQ-2) WITHIN the neutral, non-pejorative gate; the AT
+/// asserts the NEUTRAL self-attribution BEHAVIOR (a self indicator + no `peer
+/// add`), tolerant of copy tuning via a small set of accepted phrasings.
+pub const SF_SELF_INDICATOR_DEFAULT: &str = "Your own claim";
+
+/// DESIGN default neutral residue indicator copy (ADR-057 D3 /
+/// `SEARCH_REMOVED_CACHED_INDICATOR`) an `UnsubscribedCache` row carries — the
+/// result is a peer the operator soft-removed (cached). Neutral, non-pejorative.
+/// Same OQ-2 copy-tuning tolerance as the self indicator.
+pub const SF_REMOVED_CACHED_INDICATOR_DEFAULT: &str = "A peer you removed (cached)";
+
+/// Accepted NEUTRAL self-indicator phrasings (the DEFAULT + close synonyms within
+/// the OQ-2 neutral gate). A `You` row's affordance must contain ONE of these AND
+/// no `peer add` command. None is pejorative.
+const SF_SELF_INDICATOR_ACCEPTED: &[&str] =
+    &["Your own claim", "your own claim", "Your claim", "(you)", "Yourself"];
+
+/// Accepted NEUTRAL residue-indicator phrasings (the DEFAULT + close synonyms
+/// within the OQ-2 neutral gate). An `UnsubscribedCache` row's affordance must
+/// contain ONE of these AND no `peer add` command. None is pejorative.
+const SF_REMOVED_CACHED_INDICATOR_ACCEPTED: &[&str] = &[
+    "A peer you removed (cached)",
+    "a peer you removed (cached)",
+    "peer you removed",
+    "removed (cached)",
+    "cached)",
+];
+
+/// The neutral-framing BLOCKLIST (C-9 / WD-FS-8): the two NEW indicators must NEVER
+/// carry pejorative / judgement language. Scanned over the WHOLE rendered body so a
+/// pejorative term anywhere in the follow-state surface fails the gold.
+pub const SF_NEUTRAL_FRAMING_BLOCKLIST: &[&str] = &[
+    "ex-peer",
+    "abandoned",
+    "stale",
+    "disputed",
+    "refuted",
+    "blocked",
+    "banned",
+    "untrustworthy",
+    "propaganda",
+    "rejected peer",
+];
+
+/// The operator's OWN DID under the `ViewerServer` (the `OPENLORE_DID` the viewer
+/// runs under = `env.identity.author_did()`). A `/search` row authored by this DID
+/// resolves to `You`. The bare form is `did:plc:test-jeff`; the indexed
+/// `author_did` carries the `#org.openlore.application` app fragment (reconciled
+/// via the production `bare_did` SSOT on the result side).
+pub const SF_OWN_BARE_DID: &str = "did:plc:test-jeff";
+
+/// Slice-20 corpus: the FOUR-ARM side-by-side fixture (the walking-skeleton
+/// corpus). ONE row per arm, all asserting the headline reproducible-builds
+/// object so a single `?object=…` search returns all four:
+///   • the operator's OWN claim (`did:plc:test-jeff`) → `You`
+///   • a FOLLOWED peer (Rachel) → `SubscribedPeer`
+///   • a SOFT-REMOVED-but-cached peer (Tobias) → `UnsubscribedCache`
+///   • a genuinely-NEW author (Priya) → `NetworkUnfollowed`
+/// The scenario seeds the local store to MATCH (own claim via `claim add`; Rachel
+/// active; Tobias cached-then-soft-removed; Priya untouched). Distinct subjects so
+/// the canonical CIDs do not alias.
+pub fn sf_corpus_all_four_arms() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, PRIYA_DID, RACHEL_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![
+        // The operator's OWN claim → `You`.
+        RawRecordSpec::valid(SF_OWN_BARE_DID, "github:openlore/self", object, 0.95),
+        // Rachel — the FOLLOWED peer → `SubscribedPeer` ("Following").
+        RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
+        // Tobias — the SOFT-REMOVED-but-cached peer → `UnsubscribedCache` (residue).
+        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+        // Priya — the genuinely-NEW author → `NetworkUnfollowed` (`peer add`).
+        RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82),
+    ]
+}
+
+/// Slice-20 corpus: an OWN-claim-only fixture (the `You`-in-isolation confirmatory
+/// scenario). ONE row authored by the operator's OWN DID asserting the headline
+/// object — so a single search returns exactly the operator's own claim, which
+/// must resolve to `You`.
+pub fn sf_corpus_own_claim_only() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::RawRecordSpec;
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![RawRecordSpec::valid(
+        SF_OWN_BARE_DID,
+        "github:openlore/self",
+        object,
+        0.95,
+    )]
+}
+
+/// Slice-20 corpus: a cached-but-removed-peer-only fixture (the
+/// `UnsubscribedCache`-in-isolation confirmatory scenario). ONE row authored by
+/// Tobias asserting the headline object — the scenario seeds him cached-then-
+/// soft-removed, so his row must resolve to `UnsubscribedCache` (residue), NOT
+/// `NetworkUnfollowed` (he is in the cache) and NOT `SubscribedPeer` (he is not
+/// active).
+pub fn sf_corpus_cached_removed_peer_only() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::RawRecordSpec;
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![RawRecordSpec::valid(
+        TRAVERSAL_AUTHOR_TOBIAS,
+        "github:rust-lang/cargo",
+        object,
+        0.74,
+    )]
+}
+
+/// Slice-20 corpus: a LARGE multi-result mix for the no-N+1 behavioral proxy —
+/// ONE own claim + ONE followed peer + ONE soft-removed cached peer + MANY (6)
+/// genuinely-new authors, all on the headline object. The three LOCAL presence
+/// sets (own / active / cached) must each be read AT MOST ONCE to resolve all 9
+/// rows in memory, invariant to the result count.
+pub fn sf_corpus_all_arms_many_new() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, RACHEL_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    let mut specs = vec![
+        RawRecordSpec::valid(SF_OWN_BARE_DID, "github:openlore/self", object, 0.95),
+        RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
+        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+    ];
+    for (i, subject) in [
+        "github:bazelbuild/bazel",
+        "github:rust-lang/rust",
+        "github:torvalds/linux",
+        "github:denoland/deno",
+        "github:guix/guix",
+        "github:void/voidlinux",
+    ]
+    .iter()
+    .enumerate()
+    {
+        specs.push(RawRecordSpec::valid(
+            &format!("did:plc:ff-author{}-test", i + 1),
+            subject,
+            object,
+            0.60 + (i as f64) * 0.01,
+        ));
+    }
+    specs
+}
+
+/// Slice-20 corpus: the operator's OWN claim + a FOLLOWED peer (Rachel), both on
+/// the headline object — the `You`-outranks-a-populated-active-set precedence
+/// fixture. The own row must resolve `You` (the strongest fact) even though the
+/// active set is non-empty; Rachel's row resolves `SubscribedPeer`.
+pub fn sf_corpus_own_and_followed() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, RACHEL_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![
+        RawRecordSpec::valid(SF_OWN_BARE_DID, "github:openlore/self", object, 0.95),
+        RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
+    ]
+}
+
+/// Slice-20 corpus: a soft-removed-cached peer (Tobias) + a genuinely-new author
+/// (Priya), both on the headline object — the own-vs-cache distinctness gold
+/// fixture. The scenario seeds Tobias cached-then-soft-removed; Priya untouched. So
+/// Tobias must resolve `UnsubscribedCache` (residue indicator, NO add) and Priya
+/// `NetworkUnfollowed` (the `peer add` affordance) — proving the cache author is NOT
+/// shown as a fresh add candidate while the genuinely-new author is.
+pub fn sf_corpus_cached_and_new() -> Vec<openlore_test_support::RawRecordSpec> {
+    use openlore_test_support::{RawRecordSpec, PRIYA_DID};
+    let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
+    vec![
+        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+        RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82),
+    ]
+}
+
+/// Seed ONE of the operator's OWN claims (asserting `object` on the headline
+/// reproducible-builds search) via the REAL `claim add` verb, so the LOCAL
+/// `claims` table holds a row keyed on the operator's OWN DID
+/// (`SF_OWN_BARE_DID` = `did:plc:test-jeff`, the `OPENLORE_DID`). This is the
+/// `You`-arm precondition: the NEW `distinct_own_author_dids` read the viewer
+/// performs returns `{did:plc:test-jeff}`, so the index row by that DID resolves
+/// to `You`. The subject is fixed so the seeded own claim does not collide with
+/// the index corpus's own row subject (`github:openlore/self`) — the resolution
+/// matches on AUTHOR DID, not subject, so any own claim suffices to populate the
+/// own-author-DID set.
+///
+/// SCAFFOLD: true (slice-20) — drives the EXISTING slice-06 `claim add` verb via
+/// `seed_own_claim_with_evidence` (REUSED, not net-new).
+pub fn seed_own_claim_for_search(env: &TestEnv) {
+    let _cid = seed_own_claim_with_evidence(
+        env,
+        "github:openlore/self",
+        "embodiesPhilosophy",
+        SF_OBJECT_REPRODUCIBLE_BUILDS,
+        0.95,
+        &["https://example.test/own-search"],
+    );
+}
+
+/// Seed a CACHED-BUT-SOFT-REMOVED peer (`peer_did`): `peer add` + `peer pull`
+/// (his cached claims land in `peer_claims`), THEN the real `peer remove` verb
+/// WITHOUT `--purge` — his subscription row's `removed_at` is set but the cached
+/// `peer_claims` rows survive (the slice-15 PS-4 residue). This is the
+/// `UnsubscribedCache`-arm precondition: he is ∈ the cached-peer set
+/// (`distinct_cached_peer_author_dids` over `peer_claims`, NO `removed_at` filter)
+/// AND ∉ the active set (`removed_at IS NOT NULL`). Pins the GENUINE residue state
+/// (`assert_subscription_soft_removed_for` + retained `peer_claims` rows) so the
+/// fixture is the real cached-residue state, not merely "the verbs exited 0".
+///
+/// `seed` is the fixture keypair seed used to build the verifiable wire records so
+/// the real `peer add` + `peer pull` can resolve + verify the peer. The seeded
+/// peer asserts the headline reproducible-builds object on a fixed subject so the
+/// cached claim is genuinely present (and on the SAME object the search returns —
+/// so the residue cache is non-trivial).
+///
+/// SCAFFOLD: true (slice-20) — drives the EXISTING slice-09/10/15 `peer add` +
+/// `peer pull` + slice-03 `peer remove` verbs (REUSED, not net-new), mirroring the
+/// `FederatedGraphFixture::TobiasThenSoftRemoved` seam.
+pub fn seed_cached_unsubscribed_peer_for(env: &TestEnv, peer_did: &str, seed: [u8; 32]) {
+    let graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did,
+            seed,
+            triples: &[(
+                "github:rust-lang/cargo",
+                SF_OBJECT_REPRODUCIBLE_BUILDS,
+                0.74,
+            )],
+        }],
+    );
+
+    // Soft-remove via the real `peer remove` verb (no `--purge`): sets
+    // `removed_at`, RETAINS the cached `peer_claims` rows (WD-25 / slice-15 PS-4).
+    let removed = run_openlore(env, &["peer", "remove", peer_did]);
+    assert_eq!(
+        removed.status, 0,
+        "seed_cached_unsubscribed_peer_for: `peer remove {peer_did}` (soft, no --purge) \
+         must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        removed.stdout, removed.stderr
+    );
+    // Pin the GENUINE residue state (the precondition for the UnsubscribedCache
+    // arm): the subscription is soft-removed AND the cached claim is retained.
+    assert_subscription_soft_removed_for(env, peer_did);
+    assert_peer_claims_row_count_for(env, peer_did, graph.seeded.len());
+}
+
+/// Seed a peer that is BOTH ACTIVE and CACHED (`peer add` + `peer pull`, NO
+/// `peer remove`): his subscription row is ACTIVE (`removed_at IS NULL`) AND his
+/// cached claims land in `peer_claims`. This is the active-and-cached precedence
+/// fixture: he is ∈ active (so `SubscribedPeer`) AND ∈ cached (the retained
+/// `peer_claims`) — precedence (C-6) must resolve him `SubscribedPeer` (active
+/// outranks cached), never `UnsubscribedCache`. Pins the GENUINE state (ONE active
+/// subscription + the cached rows). The peer asserts the headline object on a fixed
+/// subject so the cached claim is genuinely present.
+///
+/// SCAFFOLD: true (slice-20) — drives the EXISTING slice-09/10/15 `peer add` +
+/// `peer pull` verbs (REUSED). Unlike `seed_cached_unsubscribed_peer_for`, it does
+/// NOT soft-remove — so the subscription stays ACTIVE.
+pub fn seed_active_and_cached_peer_for(env: &TestEnv, peer_did: &str, seed: [u8; 32]) {
+    let graph = seed_peer_authored_graph(
+        env,
+        &[SeedPeer {
+            peer_did,
+            seed,
+            triples: &[(
+                "github:NixOS/nixpkgs",
+                SF_OBJECT_REPRODUCIBLE_BUILDS,
+                0.88,
+            )],
+        }],
+    );
+    // Pin the GENUINE active-and-cached state: ONE active subscription row
+    // (removed_at IS NULL) AND the cached `peer_claims` rows retained.
+    assert_one_active_subscription_for(env, peer_did);
+    assert_peer_claims_row_count_for(env, peer_did, graph.seeded.len());
+}
+
+/// Assert a `/search` rendered body shows the row for `own_bare_did` (the
+/// operator's OWN claim, resolved `You`) with a NEUTRAL self-attribution indicator
+/// AND NO `openlore peer add` command (you cannot follow yourself — US-FS-002 AC).
+/// Universe (port-exposed rendered surface): the body attributes the row to the
+/// own DID, carries ONE accepted neutral self-indicator phrasing, and carries NO
+/// `openlore peer add <bare-did>` command for the own author.
+///
+/// SCAFFOLD: true (slice-20) — RED today: the render `@match` arm `You |
+/// UnsubscribedCache => {}` is EMPTY and `to_indexed_claim` resolves only the
+/// binary, so an own claim still resolves `NetworkUnfollowed` → renders `peer add`
+/// and shows NO self indicator. The "self indicator present" + "no add command"
+/// assertions FAIL for the RIGHT reason (the `distinct_own_author_dids` read +
+/// the `You` precedence + the `render_self_indicator` arm + `SEARCH_SELF_INDICATOR`
+/// are MISSING).
+pub fn assert_search_row_shows_self_indicator(body: &str, own_bare_did: &str) {
+    // The own claim is still attributed VERBATIM (the relationship is a per-row
+    // enrichment; attribution unchanged — C-5).
+    assert!(
+        body.contains(own_bare_did),
+        "C-2 (slice-20): the /search render must attribute a row to the operator's own \
+         author {own_bare_did:?} (the relationship label is a per-row enrichment, \
+         attribution unchanged); body was:\n{body}"
+    );
+    // A NEUTRAL self-attribution indicator is present (the `You` arm, ADR-057 D3).
+    let has_self_indicator = SF_SELF_INDICATOR_ACCEPTED
+        .iter()
+        .any(|phrase| body.contains(phrase));
+    assert!(
+        has_self_indicator,
+        "C-2 (slice-20): the operator's own claim row must show a NEUTRAL self-attribution \
+         indicator (the `You` arm, e.g. {SF_SELF_INDICATOR_DEFAULT:?}); none of \
+         {SF_SELF_INDICATOR_ACCEPTED:?} found in body:\n{body}"
+    );
+    // …and NO `openlore peer add <own-bare-did>` command — you cannot follow
+    // yourself (US-FS-002 AC; the `You` arm suppresses the affordance like
+    // `SubscribedPeer`).
+    let follow_command = format!("{SF_FOLLOW_COMMAND_VERB} {own_bare_did}");
+    assert!(
+        !body.contains(&follow_command),
+        "C-2 (slice-20): the operator's own claim row must NOT re-offer a follow — \
+         expected NO {follow_command:?} command for the own author {own_bare_did:?} \
+         (you cannot follow yourself); body was:\n{body}"
+    );
+}
+
+/// Assert a `/search` rendered body shows the row for `cached_bare_did` (a
+/// SOFT-REMOVED peer's cached claim, resolved `UnsubscribedCache`) with a NEUTRAL
+/// residue indicator AND NO `openlore peer add` command (he is not a fresh network
+/// find — US-FS-002 AC). Universe: the body attributes the row to the cached DID,
+/// carries ONE accepted neutral residue-indicator phrasing, and carries NO
+/// `openlore peer add <bare-did>` command for the cached author.
+///
+/// SCAFFOLD: true (slice-20) — RED today: same empty render arm + binary
+/// resolution as the self indicator; a soft-removed peer's cached claim resolves
+/// `NetworkUnfollowed` → renders `peer add` and shows NO residue indicator. The
+/// "residue indicator present" + "no add command" assertions FAIL for the RIGHT
+/// reason (the `distinct_cached_peer_author_dids` read + the `UnsubscribedCache`
+/// precedence + the `render_cached_unsubscribed_indicator` arm +
+/// `SEARCH_REMOVED_CACHED_INDICATOR` are MISSING).
+pub fn assert_search_row_shows_residue_indicator(body: &str, cached_bare_did: &str) {
+    // The cached claim is still attributed VERBATIM.
+    assert!(
+        body.contains(cached_bare_did),
+        "C-2 (slice-20): the /search render must attribute a row to the soft-removed \
+         peer's cached author {cached_bare_did:?}; body was:\n{body}"
+    );
+    // A NEUTRAL residue indicator is present (the `UnsubscribedCache` arm, ADR-057 D3).
+    let has_residue_indicator = SF_REMOVED_CACHED_INDICATOR_ACCEPTED
+        .iter()
+        .any(|phrase| body.contains(phrase));
+    assert!(
+        has_residue_indicator,
+        "C-2 (slice-20): a soft-removed peer's cached claim row must show a NEUTRAL \
+         residue indicator (the `UnsubscribedCache` arm, e.g. \
+         {SF_REMOVED_CACHED_INDICATOR_DEFAULT:?}); none of \
+         {SF_REMOVED_CACHED_INDICATOR_ACCEPTED:?} found in body:\n{body}"
+    );
+    // …and NO `openlore peer add <cached-bare-did>` command — a removed-and-cached
+    // peer is NOT a fresh network find (US-FS-002 AC; the affordance is suppressed).
+    let follow_command = format!("{SF_FOLLOW_COMMAND_VERB} {cached_bare_did}");
+    assert!(
+        !body.contains(&follow_command),
+        "C-2 (slice-20): a soft-removed peer's cached claim row must NOT re-offer a \
+         follow — expected NO {follow_command:?} command for the cached author \
+         {cached_bare_did:?} (he is residue, not a fresh find); body was:\n{body}"
+    );
+}
+
+/// Assert the two NEW follow-state indicators are NEUTRAL, never pejorative
+/// (C-9 / WD-FS-8 — the neutral-framing gold): no blocklisted judgement term
+/// appears ANYWHERE in the rendered follow-state surface. Scans the whole body
+/// (case-insensitive) for `SF_NEUTRAL_FRAMING_BLOCKLIST`. The operator must read
+/// the self + residue indicators as descriptive facts, never as a verdict.
+///
+/// SCAFFOLD: true (slice-20) — this gold PASSES today for a body that renders
+/// nothing for the two arms (no pejorative term is present when nothing renders);
+/// it pins the NEUTRAL-framing guarantee that DELIVER's chosen copy must satisfy.
+/// Paired with `assert_search_row_shows_self_indicator` /
+/// `assert_search_row_shows_residue_indicator` in the neutral-framing gold so the
+/// indicators are BOTH present (RED) AND neutral.
+pub fn assert_search_follow_state_framing_is_neutral(body: &str) {
+    let lowered = body.to_ascii_lowercase();
+    for banned in SF_NEUTRAL_FRAMING_BLOCKLIST {
+        assert!(
+            !lowered.contains(&banned.to_ascii_lowercase()),
+            "C-9 (slice-20, neutral framing): the /search follow-state indicators must be \
+             NEUTRAL descriptive TEXT, never pejorative — found judgement term {banned:?} \
+             in body:\n{body}"
+        );
+    }
+}
+
+/// Slice-20 graceful-degrade — the RED-scaffolded TRUE cached-peer-read-failure
+/// seam. Start the viewer wired to a reachable index BUT with the LOCAL
+/// cached-peer (`distinct_cached_peer_author_dids`) read forced to FAIL
+/// mid-request, while the own + active reads SUCCEED — so the `UnsubscribedCache`
+/// arm degrades INDEPENDENTLY (a soft-removed peer falls through to
+/// `NetworkUnfollowed`), the `You` + `SubscribedPeer` arms STILL resolve, and the
+/// results STILL render with no crash, blank, 5xx, or leaked error
+/// (C-8 / WD-FS-4 / ADR-057 D4).
+///
+/// OQ-1 FINDING (the DISTILL escalation — full detail in `distill/red-classification.md`
+/// and the feature-delta DISTILL section): DESIGN's D-4 default bet was "NO new
+/// fault seam token — a per-read `Err` is injectable via a fake `StoreReadPort`."
+/// This harness CANNOT honor that bet: the `ViewerServer` drives the REAL `openlore
+/// ui` SUBPROCESS over HTTP against the REAL DuckDB (Pillar 3) — there is NO
+/// in-process fake-port injection point, exactly as the slice-16 SF-8
+/// seeding-seam note records (the viewer holds ONE long-lived DuckDB connection
+/// taken at startup). So the CONDITIONAL ESCALATION in ADR-057 D-4 FIRES: DELIVER
+/// MUST add a distinct `#[cfg(debug_assertions)]`-gated fault token PER new read
+/// (`OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` for the own-DID read,
+/// `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ` for the cached-peer read) and
+/// extend the xtask `VIEWER_FAIL_SEAM_TOKENS` guard (`xtask/src/check_arch.rs`),
+/// keeping each token a distinct literal at its cfg-gated site — mirroring the
+/// slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam discipline VERBATIM.
+///
+/// Until DELIVER materializes the per-read seam, this scaffolds the TRUE
+/// read-failure path with `todo!()` → RED for the RIGHT reason
+/// (MISSING_FUNCTIONALITY: the degrade-on-cached-read-failure path + its seam do
+/// not exist yet), mirroring how slice-16 scaffolded SF-8. The OBSERVABLE
+/// degrade-TARGET (a cached-but-removed peer falling through to
+/// `NetworkUnfollowed` → `peer add`, exactly the slice-16 status quo for that arm)
+/// is ALSO independently exercisable today (a soft-removed peer with the cached
+/// read absent IS a `NetworkUnfollowed` row) — the confirmatory residue scenario
+/// pins the success path; THIS seam pins the read-FAILURE degrade.
+pub fn start_viewer_with_failing_cached_peer_read(
+    _env: &TestEnv,
+    _indexer: IndexerHandle,
+) -> ViewerServer {
+    // RED scaffold (Mandate 7): the per-read cached-peer fault seam does not exist
+    // in the harness or the effect shell yet. DELIVER materializes it (the new
+    // `start_inner` fault flag + the cfg-gated `OPENLORE_VIEWER_FAIL_CACHED_PEER_
+    // DIDS_READ` token + the xtask `VIEWER_FAIL_SEAM_TOKENS` extension), then this
+    // body becomes:
+    //   ViewerServer::start_inner(_env, None, Some(url), Some(_indexer),
+    //       false /*active*/, false, false, false, /*new:*/ false /*own*/,
+    //       true /*cached*/);
+    // Until then this panics → RED (the degrade-on-cached-read-failure path is
+    // MISSING — never a setup/import error).
+    todo!(
+        "slice-20 OQ-1 escalation: DELIVER must add a per-read cached-peer fault seam \
+         (OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ, #[cfg(debug_assertions)]-gated, \
+         xtask VIEWER_FAIL_SEAM_TOKENS) so this scenario exercises the TRUE \
+         independent-degrade-on-cached-read-failure path; the real-binary subprocess \
+         harness cannot inject a per-read Err via a fake StoreReadPort"
+    )
+}
+
+// =============================================================================
 // Slice-17 (viewer-landing-dashboard; DISTILL) — the `GET /` LANDING DASHBOARD
 // seeds + asserts. The slice turns the storeless front door into a navigation
 // hub + at-a-glance LOCAL store summary: it threads the read-only store into

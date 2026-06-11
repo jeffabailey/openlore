@@ -1000,3 +1000,29 @@ harness = true
 name = "viewer_peer_counter_aware_counts_invariants"
 path = "../../tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs"
 harness = true
+
+# Slice-20 subprocess acceptance (viewer-search-full-follow-state — US-FS-001/002;
+# ADR-057). Drives the REAL `openlore ui` viewer over HTTP (`ViewerServer`) + a REAL
+# `openlore-indexer serve` (the ONLY mocked boundary); the LOCAL store is seeded via
+# the REAL `claim add` (own) / `peer add` (active) / `peer add`+`peer pull`+`peer
+# remove` (cached-then-soft-removed) verbs. Completes the slice-16 binary `/search`
+# follow-state to the FULL four-arm `AuthorRelationship` (You / SubscribedPeer /
+# UnsubscribedCache / NetworkUnfollowed). DISTILL registers + RED gate; FF-1 is the
+# thick four-arm walking skeleton; FF-2..FF-10 + the golds stay RED (the two empty
+# render arms + the two missing presence reads = MISSING_FUNCTIONALITY; FF-9
+# graceful-degrade panics at the `start_viewer_with_failing_cached_peer_read`
+# `todo!()` per-read fault seam — OQ-1 escalation, also MISSING_FUNCTIONALITY).
+[[test]]
+name = "viewer_search_full_follow_state"
+path = "../../tests/acceptance/viewer_search_full_follow_state.rs"
+harness = true
+
+# Slice-20 GOLD / guardrail invariants (the cross-cutting C-1/-3/-5/-8/-9 + the
+# own-vs-cache-distinctness guardrails over the WHOLE four-arm `/search` surface).
+# DISTILL registers + RED gate; the four-arm-specific assertions (self + residue
+# indicators present where seeded; the residue author NOT a fresh add candidate)
+# stay RED until DELIVER.
+[[test]]
+name = "viewer_search_full_follow_state_invariants"
+path = "../../tests/acceptance/viewer_search_full_follow_state_invariants.rs"
+harness = true
