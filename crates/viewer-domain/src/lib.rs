@@ -1683,6 +1683,63 @@ pub const SEARCH_FOLLOW_GUIDANCE_PREFIX: &str = "Follow this author from the CLI
 /// source of truth + a single mutation site; emitted by [`render_following_indicator`].
 pub const SEARCH_FOLLOWING_INDICATOR: &str = "Following";
 
+/// The neutral render-only SELF indicator a `You` network-author row carries
+/// (slice-20 / US-FS-002 / ADR-057 D3) — the result is the OPERATOR's OWN claim, so
+/// neither "Following" nor an `openlore peer add` follow applies (you cannot follow
+/// yourself). A NEUTRAL self-attribution LABEL: no command, no verb-phrase, no DID,
+/// no judgement. It is render-only TEXT (C-1, CARDINAL): NO executable
+/// follow/unfollow/subscribe control, NO `hx-*` mutation; the read-only viewer holds
+/// no key. Held in ONE place (mirrors [`SEARCH_FOLLOWING_INDICATOR`]) so the self
+/// copy is a single source of truth; emitted by [`render_self_indicator`].
+pub const SEARCH_SELF_INDICATOR: &str = "Your own claim";
+
+/// The neutral render-only RESIDUE indicator an `UnsubscribedCache` network-author
+/// row carries (slice-20 / US-FS-002 / ADR-057 D3) — the result is a peer the
+/// operator SOFT-REMOVED (his cached claims retained, subscription inactive). He is
+/// residue, NOT a fresh network find, so the `openlore peer add` affordance is
+/// suppressed (like `SubscribedPeer`). A NEUTRAL descriptive LABEL: no command, no
+/// DID, never pejorative (no "ex-peer"/"stale"/"abandoned"). It is render-only TEXT
+/// (C-1, CARDINAL): NO executable control, NO `hx-*` mutation. Held in ONE place
+/// (mirrors [`SEARCH_FOLLOWING_INDICATOR`]); emitted by
+/// [`render_cached_unsubscribed_indicator`].
+pub const SEARCH_REMOVED_CACHED_INDICATOR: &str = "A peer you removed (cached)";
+
+/// Resolve the four-arm [`AuthorRelationship`] for ONE search-result author against
+/// the operator's THREE LOCAL presence sets (slice-20 / US-FS-001/002 / ADR-057 D2).
+/// PURE total deterministic function — the SSOT for the `/search` follow-state
+/// precedence, mirroring the LOCAL-graph precedence the federated-read resolver uses.
+///
+/// PRECEDENCE (C-6 / WD-FS-2 / ADR-057 D2), strongest fact first:
+/// `You` > `SubscribedPeer` > `UnsubscribedCache` > `NetworkUnfollowed`.
+///   • the author IS the operator (∈ `own`) → [`AuthorRelationship::You`];
+///   • else actively followed (∈ `active`) → [`AuthorRelationship::SubscribedPeer`];
+///   • else soft-removed-but-cached (∈ `cached`) → [`AuthorRelationship::UnsubscribedCache`];
+///   • else a genuinely-new network author → [`AuthorRelationship::NetworkUnfollowed`].
+///
+/// The three sets store BARE DIDs (the own/active/cached LOCAL reads project the bare
+/// `author_did`/`peer_did`); the result `author_did` may carry the
+/// `#org.openlore.application` signing fragment — so the membership test strips the
+/// fragment via the [`bare_did`] SSOT on the RESULT side before `HashSet::contains`
+/// (R-FS-6). A total if/else-if chain with a total `else` — every author lands in
+/// exactly one arm; an empty set simply never matches (the slice-16 fall-through).
+pub fn resolve_author_relationship(
+    author_did: &str,
+    own: &std::collections::HashSet<String>,
+    active: &std::collections::HashSet<String>,
+    cached: &std::collections::HashSet<String>,
+) -> AuthorRelationship {
+    let bare = bare_did(author_did);
+    if own.contains(bare) {
+        AuthorRelationship::You
+    } else if active.contains(bare) {
+        AuthorRelationship::SubscribedPeer
+    } else if cached.contains(bare) {
+        AuthorRelationship::UnsubscribedCache
+    } else {
+        AuthorRelationship::NetworkUnfollowed
+    }
+}
+
 /// The state the network-search results region renders (the pure render input). An
 /// ADT over the four outcomes of a `/search` interaction so the renderer matches
 /// totally (nw-fp-domain-modeling §1): the empty GET form, a populated per-author
@@ -1919,12 +1976,24 @@ fn render_search_result_row(row: &appview_domain::NetworkResultRow) -> Markup {
             //     I-NS-1), UNCHANGED.
             // Both arms are render-only TEXT (C-1, CARDINAL): no executable control, no
             // `hx-*` mutation; following stays a deliberate CLI action and the read-only
-            // viewer holds no key. `You` / `UnsubscribedCache` never arise on `/search`
-            // (ADR-053 D2) — neither renders an affordance.
+            // viewer holds no key.
+            //
+            // slice-20 (US-FS-001/002 / ADR-057 D3) COMPLETES the four-arm resolution
+            // the effect shell now performs against the operator's THREE LOCAL presence
+            // sets (own / active / cached, via `resolve_author_relationship`):
+            //   • You → the NEUTRAL render-only SELF indicator (the operator's OWN claim
+            //     — neither "Following" nor `peer add`; you cannot follow yourself) — NO
+            //     `peer add` command.
+            //   • UnsubscribedCache → the NEUTRAL render-only RESIDUE indicator (a peer
+            //     she SOFT-REMOVED; cached residue, NOT a fresh find) — NO `peer add`
+            //     command (the affordance is suppressed, like SubscribedPeer).
+            // The slice-16 SubscribedPeer + NetworkUnfollowed arms are BYTE-STABLE (C-7,
+            // CARDINAL) — the two new arms only ADD.
             @match row.relationship {
+                AuthorRelationship::You => (render_self_indicator()),
                 AuthorRelationship::SubscribedPeer => (render_following_indicator()),
+                AuthorRelationship::UnsubscribedCache => (render_cached_unsubscribed_indicator()),
                 AuthorRelationship::NetworkUnfollowed => (render_follow_guidance(&row.author_did.0)),
-                AuthorRelationship::You | AuthorRelationship::UnsubscribedCache => {}
             }
         }
     }
@@ -1958,6 +2027,38 @@ fn render_following_indicator() -> Markup {
     html! {
         " "
         p { "Relationship: " (SEARCH_FOLLOWING_INDICATOR) }
+    }
+}
+
+/// Render the neutral render-only SELF indicator for the operator's OWN claim
+/// (slice-20 / US-FS-002 / ADR-057 D3) as plain TEXT inside a `<p>` — the SIBLING of
+/// [`render_following_indicator`]. It surfaces the [`SEARCH_SELF_INDICATOR`] copy as a
+/// NEUTRAL LABEL (no command, no verb-phrase, no DID): the operator's own claim is
+/// shown as such, never re-offered a follow (you cannot follow yourself). It is
+/// render-only TEXT (C-1, CARDINAL): NO `<button>`/`<form>`/mutating `<a>`/`hx-*`
+/// control — the read-only viewer holds no key. Prefixed with the neutral
+/// "Relationship:" label (mirrors `render_following_indicator`) so it reads as
+/// descriptive TEXT, never a control. PURE total function.
+fn render_self_indicator() -> Markup {
+    html! {
+        " "
+        p { "Relationship: " (SEARCH_SELF_INDICATOR) }
+    }
+}
+
+/// Render the neutral render-only RESIDUE indicator for a SOFT-REMOVED-but-cached
+/// peer (slice-20 / US-FS-002 / ADR-057 D3) as plain TEXT inside a `<p>` — the SIBLING
+/// of [`render_following_indicator`]. It surfaces the [`SEARCH_REMOVED_CACHED_INDICATOR`]
+/// copy as a NEUTRAL, non-pejorative LABEL (no command, no DID): a peer the operator
+/// removed is shown as cached residue, NOT re-offered a follow (he is not a fresh
+/// network find). It is render-only TEXT (C-1, CARDINAL): NO `<button>`/`<form>`/
+/// mutating `<a>`/`hx-*` control — the read-only viewer holds no key. Prefixed with the
+/// neutral "Relationship:" label so it reads as descriptive TEXT, never a control.
+/// PURE total function.
+fn render_cached_unsubscribed_indicator() -> Markup {
+    html! {
+        " "
+        p { "Relationship: " (SEARCH_REMOVED_CACHED_INDICATOR) }
     }
 }
 
@@ -5949,6 +6050,95 @@ mod tests {
                 !lowered.contains(banned),
                 "C-1 (CARDINAL): the follow-state affordances must be render-only TEXT — \
                  found executable-control marker {banned:?} in:\n{html}"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Four-arm follow-state precedence resolver (slice-20; US-FS-001/002 /
+    // ADR-057 D2) — the PURE `resolve_author_relationship` SSOT. Property-based:
+    // the precedence chain `You > SubscribedPeer > UnsubscribedCache >
+    // NetworkUnfollowed` must hold over EVERY combination of the three LOCAL set
+    // memberships, and the `#org.openlore.application` signing fragment must be
+    // stripped before membership (R-FS-6). Port-to-port at the pure-fn scope: the
+    // resolver's public signature IS the driving port; the returned arm is the
+    // observable. ONE property covers the whole 2³ membership lattice × fragment
+    // presence — the model is a precedence lookup, NOT a state machine, so a single
+    // exhaustive property is exact (Hebert ch.3 "Modeling": a reference oracle that
+    // applies the precedence in order).
+    // -------------------------------------------------------------------------
+
+    /// The reference oracle for the four-arm precedence — independently re-states the
+    /// spec (`You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed`) over BARE
+    /// membership so the property compares the SUT against an obviously-correct model
+    /// (Hebert ch.3 "Modeling"), never against itself.
+    fn expected_relationship(
+        bare: &str,
+        is_own: bool,
+        is_active: bool,
+        is_cached: bool,
+    ) -> AuthorRelationship {
+        let _ = bare;
+        if is_own {
+            AuthorRelationship::You
+        } else if is_active {
+            AuthorRelationship::SubscribedPeer
+        } else if is_cached {
+            AuthorRelationship::UnsubscribedCache
+        } else {
+            AuthorRelationship::NetworkUnfollowed
+        }
+    }
+
+    proptest! {
+        /// Property (US-FS-001/002 / C-6 / ADR-057 D2): for an arbitrary bare author DID,
+        /// any chosen membership in each of the three LOCAL presence sets, and the author
+        /// DID rendered with OR without the `#org.openlore.application` signing fragment,
+        /// `resolve_author_relationship` returns the precedence-correct arm — `You` when in
+        /// `own` (regardless of the other two), else `SubscribedPeer` when in `active`, else
+        /// `UnsubscribedCache` when in `cached`, else `NetworkUnfollowed`. The membership
+        /// always tests the BARE DID, so the fragmented and bare forms resolve IDENTICALLY
+        /// (R-FS-6 fragment-strip). This single property exhausts the 2³ membership lattice ×
+        /// {bare, fragmented} for arbitrary DIDs — the whole resolver contract.
+        #[test]
+        fn resolve_author_relationship_obeys_precedence_and_strips_the_fragment(
+            stem in "[a-z0-9]{1,12}",
+            is_own in any::<bool>(),
+            is_active in any::<bool>(),
+            is_cached in any::<bool>(),
+            fragmented in any::<bool>(),
+        ) {
+            use std::collections::HashSet;
+            let bare = format!("did:plc:{stem}-test");
+            // The sets store the BARE DID (the LOCAL reads project bare author_did/peer_did).
+            let set_with = |member: bool| -> HashSet<String> {
+                let mut s = HashSet::new();
+                if member {
+                    s.insert(bare.clone());
+                }
+                s
+            };
+            let own = set_with(is_own);
+            let active = set_with(is_active);
+            let cached = set_with(is_cached);
+            // The RESULT author_did may carry the signing fragment — the membership test
+            // must strip it before lookup (R-FS-6).
+            let author_did = if fragmented {
+                format!("{bare}#org.openlore.application")
+            } else {
+                bare.clone()
+            };
+
+            let resolved = resolve_author_relationship(&author_did, &own, &active, &cached);
+
+            let expected = expected_relationship(&bare, is_own, is_active, is_cached);
+            prop_assert_eq!(
+                resolved,
+                expected,
+                "resolve_author_relationship must obey You > SubscribedPeer > \
+                 UnsubscribedCache > NetworkUnfollowed with the fragment stripped before \
+                 membership: author_did={:?} own={} active={} cached={}",
+                author_did, is_own, is_active, is_cached
             );
         }
     }

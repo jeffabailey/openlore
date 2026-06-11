@@ -580,6 +580,71 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         Ok(total as usize)
     }
 
+    fn distinct_own_author_dids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreReadError> {
+        let conn = self.lock_conn()?;
+        // ADR-057 D1 / D-FS-1: the `You`-arm presence read. ONE single-table SELECT
+        // over the SAME shared connection — `SELECT DISTINCT author_did FROM claims`.
+        // SINGLE-TABLE by construction: it names `claims` ONLY, NO JOIN to
+        // `peer_claims` — so the `xtask check-arch::no_cross_table_join_elides_author`
+        // anti-merging precondition is structurally unreachable (the rule's trigger is
+        // a JOIN across the two stores; this query has none). Parameter-free →
+        // injection-safe. Own claims store the `#org.openlore.application` signing
+        // fragment on `author_did`; the effect shell bares BOTH sides via `bare_did`
+        // before membership (R-FS-6), so the DIDs are projected VERBATIM here.
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT author_did FROM claims")
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_own_author_dids prepare: {err}"),
+            })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_own_author_dids query_map: {err}"),
+            })?;
+        let mut dids = std::collections::HashSet::new();
+        for row in rows {
+            dids.insert(row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_own_author_dids row decode: {err}"),
+            })?);
+        }
+        Ok(dids)
+    }
+
+    fn distinct_cached_peer_author_dids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreReadError> {
+        let conn = self.lock_conn()?;
+        // ADR-057 D1 / D-FS-1: the `UnsubscribedCache`-arm presence read. ONE
+        // single-table SELECT over the SAME shared connection — `SELECT DISTINCT
+        // author_did FROM peer_claims`, NO `removed_at` filter (the cached residue of
+        // a soft-removed peer is RETAINED in `peer_claims`; the soft-remove only flips
+        // `peer_subscriptions.removed_at`, never deletes the cached claims — slice-15
+        // PS-4 residue). SINGLE-TABLE by construction: it names `peer_claims` ONLY, NO
+        // JOIN to `claims`/`peer_subscriptions` — so the `xtask check-arch::
+        // no_cross_table_join_elides_author` anti-merging precondition is structurally
+        // unreachable. Parameter-free → injection-safe. The effect shell bares the
+        // signing fragment via `bare_did` before membership (R-FS-6).
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT author_did FROM peer_claims")
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_cached_peer_author_dids prepare: {err}"),
+            })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_cached_peer_author_dids query_map: {err}"),
+            })?;
+        let mut dids = std::collections::HashSet::new();
+        for row in rows {
+            dids.insert(row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("distinct_cached_peer_author_dids row decode: {err}"),
+            })?);
+        }
+        Ok(dids)
+    }
+
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,

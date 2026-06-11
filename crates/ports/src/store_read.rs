@@ -376,6 +376,52 @@ pub trait StoreReadPort: Send + Sync {
     /// maps the `Result` to `Option` via `.ok()`).
     fn count_countered_peer_claims(&self) -> Result<usize, StoreReadError>;
 
+    /// The DISTINCT set of the operator's OWN author DIDs — the `You`-arm presence
+    /// read for the `/search` follow-state resolution (slice-20 / US-FS-001/002 /
+    /// ADR-057 D1). Read-only `SELECT DISTINCT author_did FROM claims` — a
+    /// single-table projection over the operator's OWN `claims` table, NO mutation
+    /// method is added to this trait (ADR-030 / I-VIEW-1): a `Box<dyn StoreReadPort>`
+    /// stays structurally incapable of mutating.
+    ///
+    /// SINGLE-TABLE by construction (D-FS-1): it projects `author_did` from `claims`
+    /// ONLY — NO JOIN to `peer_claims`, so the `xtask check-arch::
+    /// no_cross_table_join_elides_author` anti-merging precondition is structurally
+    /// unreachable. The effect shell strips the `#org.openlore.application` signing
+    /// fragment via the `bare_did` SSOT before membership (R-FS-6), so this returns
+    /// the DIDs VERBATIM (own claims store the fragmented form; the shell bares them
+    /// on BOTH sides). Returns `Ok(HashSet::new())` for a store with no own claims (a
+    /// SUCCESSFUL read of empty, DISTINCT from a FAILED read — the shell maps the
+    /// `Result` to the empty set via `unwrap_or_default()`, degrading the `You` arm
+    /// INDEPENDENTLY).
+    fn distinct_own_author_dids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreReadError>;
+
+    /// The DISTINCT set of CACHED peer author DIDs — the `UnsubscribedCache`-arm
+    /// presence read for the `/search` follow-state resolution (slice-20 /
+    /// US-FS-001/002 / ADR-057 D1). Read-only `SELECT DISTINCT author_did FROM
+    /// peer_claims` — a single-table projection over the LOCAL `peer_claims` table
+    /// with NO `removed_at` filter (the cached residue of a soft-removed peer is
+    /// RETAINED in `peer_claims`; the soft-remove only flips `peer_subscriptions.
+    /// removed_at`, never deletes the cached claims — the slice-15 PS-4 residue). NO
+    /// mutation method is added to this trait (ADR-030 / I-VIEW-1).
+    ///
+    /// SINGLE-TABLE by construction (D-FS-1): it projects `author_did` from
+    /// `peer_claims` ONLY — NO JOIN to `claims` or `peer_subscriptions`, so the
+    /// `xtask check-arch::no_cross_table_join_elides_author` anti-merging precondition
+    /// is structurally unreachable. The cached set is intentionally BROADER than the
+    /// active set (`list_active_peer_subscriptions` filters `removed_at IS NULL`); the
+    /// four-arm precedence resolves active-AND-cached to `SubscribedPeer` in the pure
+    /// core, so cached membership only matters when the peer is NOT active (the
+    /// `UnsubscribedCache` residue). The effect shell strips the signing fragment via
+    /// `bare_did` before membership (R-FS-6). Returns `Ok(HashSet::new())` for a store
+    /// with no cached peer claims (a SUCCESSFUL read of empty, DISTINCT from a FAILED
+    /// read — the shell degrades the `UnsubscribedCache` arm INDEPENDENTLY via
+    /// `unwrap_or_default()`).
+    fn distinct_cached_peer_author_dids(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, StoreReadError>;
+
     /// Read the LOCAL attributed-claim feed for ONE contributor (`/score`,
     /// slice-09 / ADR-039/040/041 / I-CS-5): every claim authored by `contributor`
     /// across all subjects, from the operator's OWN `claims` table UNION ALL the

@@ -33,7 +33,7 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    AuthorRelationship, GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim,
+    GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim,
     NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
 };
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
@@ -47,6 +47,7 @@ use viewer_domain::{
     render_philosophy_page, render_project_fragment, render_project_page,
     render_score_page, render_score_results_fragment, render_scrape_page,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
+    resolve_author_relationship,
     CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
     PeersView, ScoreState,
     ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHY_URL, PROJECT_URL,
@@ -1114,6 +1115,16 @@ async fn resolve_search_state(
     // (the slice-08 status quo; C-7 / WD-SF-6 — the enrichment's failure never breaks
     // discovery, never a 5xx). The set is transient (never persisted, WD-SF-9).
     let active: std::collections::HashSet<String> = read_local_active_set(store);
+    // slice-20 (US-FS-001/002 / ADR-057 D1): read the operator's OWN author-DID set
+    // (the `You` arm) AND her CACHED peer author-DID set (the `UnsubscribedCache`
+    // residue arm) ONCE per render — alongside the slice-16 active set — so the
+    // four-arm precedence resolves every result row IN MEMORY (batch-once, NO N+1,
+    // invariant to result count). Each read degrades INDEPENDENTLY to the EMPTY set
+    // (`unwrap_or_default` inside the read fns): a failed own read drops only the
+    // `You` arm, a failed cached read drops only the `UnsubscribedCache` arm, and the
+    // row falls through to the slice-16 binary outcome (C-8 / WD-FS-4) — never a 5xx.
+    let own: std::collections::HashSet<String> = read_local_own_set(store);
+    let cached: std::collections::HashSet<String> = read_local_cached_set(store);
     match index_query.search(dimension, &query_value, None).await {
         Ok(raw) if raw.results.is_empty() => SearchState::NoResults {
             // Name the DISPLAY value the operator typed (the handle for the
@@ -1132,7 +1143,7 @@ async fn resolve_search_state(
             let claims = raw
                 .results
                 .into_iter()
-                .map(|row| to_indexed_claim(row, &active))
+                .map(|row| to_indexed_claim(row, &own, &active, &cached))
                 .collect();
             let result: NetworkSearchResult = compose_results(claims, dimension);
             SearchState::Results { result, dimension }
@@ -1250,6 +1261,41 @@ fn read_local_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet
         .unwrap_or_default()
 }
 
+/// Read the operator's OWN author-DID set ONCE for the `/search` four-arm follow-state
+/// resolution (slice-20 / US-FS-001/002 / ADR-057 D1) — the `You`-arm presence read.
+/// Materializes the DISTINCT own `author_did`s (`StoreReadPort::distinct_own_author_dids`,
+/// `SELECT DISTINCT author_did FROM claims` — single-table, NO N+1) into a `HashSet` for
+/// O(1) in-memory membership during per-row resolution. A read FAILURE degrades to the
+/// EMPTY set (`unwrap_or_default`) → no row resolves `You` (the slice-16 status quo for the
+/// own arm; C-8 / WD-FS-4) — never a 5xx, never a leaked transport internal, INDEPENDENT of
+/// the active + cached reads. The own claims carry the `#org.openlore.application` signing
+/// fragment; the result-side fragment strip happens in the pure `resolve_author_relationship`
+/// (R-FS-6), so the set is collected VERBATIM (bared on both sides at membership time).
+fn read_local_own_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
+    store
+        .distinct_own_author_dids()
+        .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
+        .unwrap_or_default()
+}
+
+/// Read the operator's CACHED peer author-DID set ONCE for the `/search` four-arm
+/// follow-state resolution (slice-20 / US-FS-001/002 / ADR-057 D1) — the
+/// `UnsubscribedCache`-arm presence read. Materializes the DISTINCT cached peer
+/// `author_did`s (`StoreReadPort::distinct_cached_peer_author_dids`, `SELECT DISTINCT
+/// author_did FROM peer_claims`, NO `removed_at` filter — single-table, NO N+1) into a
+/// `HashSet` for O(1) in-memory membership. A read FAILURE degrades to the EMPTY set
+/// (`unwrap_or_default`) → no row resolves `UnsubscribedCache`, a soft-removed peer falls
+/// through to the slice-16 `NetworkUnfollowed` outcome (his arm's fallback; C-8 / WD-FS-4)
+/// — never a 5xx, INDEPENDENT of the own + active reads. The cached set's DIDs are bared on
+/// both sides at membership time via the pure `resolve_author_relationship` (R-FS-6), so the
+/// set is bared here for symmetry with the own set.
+fn read_local_cached_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
+    store
+        .distinct_cached_peer_author_dids()
+        .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
 /// in a release binary, mirroring the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam
 /// discipline and enforced by `xtask check-arch`'s active-set-fail-seam guard).
@@ -1304,13 +1350,20 @@ fn active_set_read_with_fault_seam<T>(
 /// `NetworkUnfollowed` — exactly the slice-08 status quo (C-7).
 fn to_indexed_claim(
     row: NetworkResultRowRaw,
+    own: &std::collections::HashSet<String>,
     active: &std::collections::HashSet<String>,
+    cached: &std::collections::HashSet<String>,
 ) -> IndexedClaim {
-    let relationship = if active.contains(bare_did(&row.author_did.0)) {
-        AuthorRelationship::SubscribedPeer
-    } else {
-        AuthorRelationship::NetworkUnfollowed
-    };
+    // slice-20 (US-FS-001/002 / ADR-057 D2): the FOUR-ARM precedence resolution is the
+    // PURE `viewer_domain::resolve_author_relationship` SSOT — `You > SubscribedPeer >
+    // UnsubscribedCache > NetworkUnfollowed`, stripping the `#org.openlore.application`
+    // signing fragment on the result side via the shared `bare_did` SSOT before each
+    // set membership (R-FS-6). The shell only WIRES the three LOCAL sets read once per
+    // render; the precedence logic + fragment strip live in the pure core (the viewer
+    // holds NO second resolution path). An empty `own`/`cached` (no own claims / no
+    // cached peers, OR a per-read failure that degraded to the empty set) collapses the
+    // resolution to the slice-16 binary outcome (C-7 byte-stable) — additive only.
+    let relationship = resolve_author_relationship(&row.author_did.0, own, active, cached);
     IndexedClaim {
         author_did: Did(row.author_did.0),
         cid: Cid(row.cid.0),
@@ -1660,8 +1713,16 @@ mod tests {
     #[test]
     fn fragmented_author_did_matches_a_bare_active_set_entry_as_subscribed_peer() {
         let active: HashSet<String> = ["did:plc:rachel-test".to_string()].into_iter().collect();
+        // slice-20: with empty own + cached sets, the four-arm resolution collapses to
+        // the slice-16 binary outcome — the active set alone drives SubscribedPeer.
+        let empty: HashSet<String> = HashSet::new();
 
-        let claim = to_indexed_claim(fragmented_row("did:plc:rachel-test"), &active);
+        let claim = to_indexed_claim(
+            fragmented_row("did:plc:rachel-test"),
+            &empty,
+            &active,
+            &empty,
+        );
 
         assert_eq!(
             claim.relationship,
@@ -1684,10 +1745,13 @@ mod tests {
     fn the_same_row_resolves_by_local_active_set_membership_only() {
         let row = fragmented_row("did:plc:rachel-test");
 
-        // Empty active set (no subscriptions OR a read that degraded) → status quo.
+        // slice-20: own + cached empty throughout, so the four-arm resolution collapses
+        // to the slice-16 binary outcome — the active set alone drives the relationship.
         let empty: HashSet<String> = HashSet::new();
+
+        // Empty active set (no subscriptions OR a read that degraded) → status quo.
         assert_eq!(
-            to_indexed_claim(row.clone(), &empty).relationship,
+            to_indexed_claim(row.clone(), &empty, &empty, &empty).relationship,
             AuthorRelationship::NetworkUnfollowed,
             "an empty LOCAL active set must yield the slice-08 NetworkUnfollowed status quo (C-7)"
         );
@@ -1695,7 +1759,7 @@ mod tests {
         // A non-member active set (a DIFFERENT author followed) → NetworkUnfollowed.
         let other: HashSet<String> = ["did:plc:priya-test".to_string()].into_iter().collect();
         assert_eq!(
-            to_indexed_claim(row.clone(), &other).relationship,
+            to_indexed_claim(row.clone(), &empty, &other, &empty).relationship,
             AuthorRelationship::NetworkUnfollowed,
             "a row whose bare DID is absent from the LOCAL set stays NetworkUnfollowed"
         );
@@ -1703,7 +1767,7 @@ mod tests {
         // The SAME row, once the LOCAL set contains its bare DID → SubscribedPeer.
         let following: HashSet<String> = ["did:plc:rachel-test".to_string()].into_iter().collect();
         assert_eq!(
-            to_indexed_claim(row, &following).relationship,
+            to_indexed_claim(row, &empty, &following, &empty).relationship,
             AuthorRelationship::SubscribedPeer,
             "the relationship flips with the LOCAL active set only (SF-5) → SubscribedPeer"
         );
@@ -1849,6 +1913,20 @@ mod tests {
         fn list_active_peer_subscriptions(
             &self,
         ) -> Result<Vec<PeerSubscriptionSummary>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        // slice-20 (`/search` four-arm follow-state): the own + cached presence reads
+        // are NOT on the `GET /` landing path — unreachable for these tests. The
+        // `/search` follow-state resolution is exercised end-to-end by the FF-* ATs
+        // over the REAL DuckDB adapter (Pillar 3), not this fake.
+        fn distinct_own_author_dids(
+            &self,
+        ) -> Result<HashSet<String>, StoreReadError> {
+            unimplemented!("not read by the landing dashboard")
+        }
+        fn distinct_cached_peer_author_dids(
+            &self,
+        ) -> Result<HashSet<String>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
     }
