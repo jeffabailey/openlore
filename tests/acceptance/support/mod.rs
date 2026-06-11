@@ -16701,14 +16701,45 @@ pub fn seed_extra_plain_peer_claims(env: &TestEnv, count: usize) {
          --- stdout ---\n{}\n--- stderr ---\n{}",
         added.stdout, added.stderr
     );
+
+    // `peer pull` re-resolves EVERY currently-subscribed peer in one invocation (ADR-016
+    // sequential per-peer loop), not just the freshly-added bulk peer. The no-N+1 scenario
+    // calls this seed AFTER `seed_landing_store_with_countered_peer_claims`, which subscribed
+    // the deterministic headline peer Rachel (`did:plc:rachel-test`, seed `[7u8; 32]`, the 4
+    // headline triples) and then DROPPED her in-process PDS. So this re-pull must re-bind a
+    // LIVE Rachel seam alongside the bulk seam — otherwise Rachel resolves to HTTP 404, the
+    // per-peer fault-isolation loop records her as a skip, and the invocation exits non-zero.
+    // Rachel is fully deterministic, so we rebuild her PDS here (held alive across the pull)
+    // and wire BOTH seams; the bulk peer's 120 plain claims land, Rachel's 4 are already
+    // cached (re-pull is a no-op for her rows), and the countered-peer COUNT(DISTINCT) stays
+    // invariant to the inflated store size.
+    let (rachel_records, rachel_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        [7u8; 32],
+        &[
+            ("github:peer/rachel-axum", "org.openlore.philosophy.ergonomics", 0.40),
+            ("github:peer/rachel-tokio", "org.openlore.philosophy.async-runtime", 0.70),
+            ("github:peer/rachel-serde", "org.openlore.philosophy.zero-copy", 0.70),
+            ("github:peer/rachel-hyper", "org.openlore.philosophy.composability", 0.70),
+        ],
+    );
+    let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, rachel_records);
+
     let pulled = run_openlore_pull_multi(
         env,
         &["peer", "pull"],
-        &[PeerSeam {
-            peer_did: bulk_peer,
-            peer_endpoint: pds.endpoint_url(),
-            peer_pubkey_hex: &pubkey_hex,
-        }],
+        &[
+            PeerSeam {
+                peer_did: COUNTER_TARGET_AUTHOR_RACHEL,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: bulk_peer,
+                peer_endpoint: pds.endpoint_url(),
+                peer_pubkey_hex: &pubkey_hex,
+            },
+        ],
     );
     assert_eq!(
         pulled.status, 0,
@@ -16716,10 +16747,10 @@ pub fn seed_extra_plain_peer_claims(env: &TestEnv, count: usize) {
          --- stdout ---\n{}\n--- stderr ---\n{}",
         pulled.stdout, pulled.stderr
     );
-    // Keep the bulk PDS alive for the rest of the test via a process-lifetime leak — the
-    // viewer reads the LOCAL store, not the PDS, after the pull, so the endpoint need not
-    // stay bound; dropping `pds` here is safe (the rows are persisted locally).
+    // Keep both PDSes alive across the pull above; the viewer reads the LOCAL store, not the
+    // PDS, after the pull, so dropping them now is safe (the rows are persisted locally).
     drop(pds);
+    drop(rachel_pds);
 }
 
 /// The surveyed peer DID the combined peer+own fixture uses to host the 4 cached peer claims
