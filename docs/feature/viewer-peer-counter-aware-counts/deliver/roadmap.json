@@ -1,0 +1,395 @@
+{
+  "roadmap": {
+    "project_id": "viewer-peer-counter-aware-counts",
+    "created_at": "2026-06-10T00:00:00Z",
+    "total_steps": 7
+  },
+  "total_steps": 7,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Countered-peer-claims count surfaced on the landing peer line + /peer-claims header (thick walking skeleton + close confirmations)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Wire count_countered_peer_claims + the 5th LandingSummary field countered_peer_claims + the REUSED render_countered + render_landing peer-line render + store-threading and show \"4 peer claims (1 countered)\" on GET / (THICK walking skeleton)",
+          "description": "The thick foundational walking-skeleton step (PC-WS, US-PC-001 Theme 1 \u2014 the riskiest-assumption thread, the deferred PEER sibling of slice-18). It forces the WHOLE countered-PEER-count thread into existence end-to-end: viewer \u2192 the LOCAL countered-peer-count aggregate \u2192 the extended LandingSummary (5th field) \u2192 the SHARED (REUSED) pure render \u2192 the front-door summary showing the disputed-peer-claim awareness count. (ports) Add `count_countered_peer_claims(&self) -> Result<usize, StoreReadError>` to StoreReadPort \u2014 a read-only sibling of the slice-18 `count_countered_own_claims` / the slice-17 `count_peer_claims` / `count_claims` (ADR-056 D1); NO mutation method added to the port (ADR-030 / C-1). (adapter-duckdb) Impl it as ONE aggregate over the SAME shared connection \u2014 the EXACT slice-18 SQL with the OUTER table swapped `claims c \u2192 peer_claims p`: `SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')` \u2014 a PRESENCE count (the de-duped UNION IN-set + COUNT(DISTINCT) collapses a peer claim countered by N counterers to ONE membership, no JOIN-fanout, ADR-056 D1), peer-only by query shape (outer table is `peer_claims`), parameter-free / injection-safe (literal `'counters'` only), invariant to store size (both ref columns indexed); the inner UNION IN-set is BYTE-IDENTICAL to slice-18's \u2014 only the outer table differs. A cached peer claim is countered by the OPERATOR (her counter in `claim_references`) OR by ANOTHER peer (their counter in `peer_claim_references`, slice-11) \u2014 both arms contribute. Names `peer_claims`/`claim_references`/`peer_claim_references` so the xtask `no_cross_table_join_elides_author` rule stays GREEN by construction (R-PC-9: `(peer=T, own=F)` \u2192 `None`, ADR-056 Enforcement). (viewer-domain) Add a FIFTH `pub countered_peer_claims: Option<usize>` field to `LandingSummary` (ADR-056 D2 \u2014 additive, parallel to the slice-17 three + the slice-18 fourth, identical degrade semantics) and REUSE the SHARED slice-18 `render_countered(Option<usize>) -> String` helper (ADR-056 D3 / WD-PC-10 \u2014 NO new helper): `Some(n) \u2192 \"(n countered)\"`, `Some(0) \u2192 \"(0 countered)\"` (honest zero), `None \u2192 \"(\u2014 countered)\"` (missing marker), the copy NEUTRAL disputed-claim awareness (never a verdict/penalty/\"disputed by N\", C-6). Extend `render_landing(&LandingSummary)` to render `render_countered(summary.countered_peer_claims)` BESIDE the UNCHANGED peer-claims line (the peer-claims `render_count` \"4\" untouched \u2014 additive, never a re-weight, C-4) \u2192 \"4 peer claims (1 countered)\", and the slice-18 own line untouched beside it (WD-PC-7). The pure render stays a TOTAL function of LandingSummary (now 2\u2075 Option combinations; every one renders, no panic, no I/O). (adapter-http-viewer) Thread `store.count_countered_peer_claims().ok()` (Result \u2192 Option, the per-count independent degrade) into `landing_page`'s LandingSummary build (the 5th `.ok()` resolution), call `render_landing(&summary)`, always 200. (xtask) UNCHANGED at this step \u2014 a read-only count method changes no crate-dependency edge, `check_viewer_capability_boundary` + `no_cross_table_join_elides_author` stay GREEN. Outcome: a seeded store (4 peer claims, 1 countered by a distinct peer OR the operator) + GET / returns a 200 page showing \"4 peer claims (1 countered)\" \u2014 the peer-claims \"4\" unchanged beside the genuine seeded presence count, the slice-18 own line untouched. BUILD-BEFORE-RUN (mirrors slice-06..18): the AT spawns the openlore (viewer) bin via ViewerServer::start, so the run MUST cargo build the bin before executing these ATs. NO second binary (the count is a LOCAL DuckDB COUNT(DISTINCT) aggregate). The seed (seed_landing_store_with_countered_peer_claims, with the direct ADR-056 read_countered_peer_claims_count oracle) + asserts (assert_landing_peer_countered_count, assert_landing_shows_count) already compile in support/mod.rs (they drive the EXISTING peer add/peer pull/claim counter verbs + scan strings).",
+          "criteria": [
+            "GET / over a REAL local store seeded (production `peer add` + `peer pull` + counter paths, Pillar 3) with 4 cached peer claims, 1 of them countered (by a distinct peer OR the operator) returns a 200 page showing the peer-claims count \"4\" UNCHANGED and the countered count \"(1 countered)\" beside it (assert_landing_peer_countered_count).",
+            "StoreReadPort gains a single read-only method `count_countered_peer_claims(&self) -> Result<usize, StoreReadError>`; NO mutation method is added to the port (ADR-030 / C-1).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate `SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')` over the shared connection \u2014 the EXACT slice-18 SQL with the outer table swapped `claims c \u2192 peer_claims p`, a presence count (de-duped IN-set + DISTINCT, no JOIN-fanout), peer-only by query shape, parameter-free; the xtask `no_cross_table_join_elides_author` rule stays GREEN by construction (R-PC-9, ADR-056 Enforcement).",
+            "viewer-domain adds the FIFTH `countered_peer_claims: Option<usize>` field to LandingSummary (additive, parallel degrade, ADR-056 D2) and REUSES the SHARED slice-18 `render_countered(Option<usize>) -> String` helper (NO new helper, WD-PC-10); render_landing renders it BESIDE the UNCHANGED peer-claims line (additive, never a re-weight, C-4) with the slice-18 own line untouched (WD-PC-7), as a TOTAL function of the summary.",
+            "adapter-http-viewer threads `store.count_countered_peer_claims().ok()` (the 5th independent `.ok()` resolution) into landing_page's LandingSummary, calls render_landing(&summary), and always returns 200; xtask check-arch stays GREEN (the read-only count method changes no crate-dependency edge)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a REAL local store seeded (production `peer add` + `peer pull` + counter paths, Pillar 3) with 4 cached peer claims, 1 of them countered (by a distinct peer OR the operator) returns a 200 page showing the peer-claims count \"4\" UNCHANGED and the countered count \"(1 countered)\" beside it (assert_landing_peer_countered_count).",
+            "StoreReadPort gains a single read-only method `count_countered_peer_claims(&self) -> Result<usize, StoreReadError>`; NO mutation method is added to the port (ADR-030 / C-1).",
+            "DuckDbStoreReadAdapter impls it as ONE aggregate `SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT referenced_cid FROM peer_claim_references WHERE ref_type='counters')` over the shared connection \u2014 the EXACT slice-18 SQL with the outer table swapped `claims c \u2192 peer_claims p`, a presence count (de-duped IN-set + DISTINCT, no JOIN-fanout), peer-only by query shape, parameter-free; the xtask `no_cross_table_join_elides_author` rule stays GREEN by construction (R-PC-9, ADR-056 Enforcement).",
+            "viewer-domain adds the FIFTH `countered_peer_claims: Option<usize>` field to LandingSummary (additive, parallel degrade, ADR-056 D2) and REUSES the SHARED slice-18 `render_countered(Option<usize>) -> String` helper (NO new helper, WD-PC-10); render_landing renders it BESIDE the UNCHANGED peer-claims line (additive, never a re-weight, C-4) with the slice-18 own line untouched (WD-PC-7), as a TOTAL function of the summary.",
+            "adapter-http-viewer threads `store.count_countered_peer_claims().ok()` (the 5th independent `.ok()` resolution) into landing_page's LandingSummary, calls render_landing(&summary), and always returns 200; xtask check-arch stays GREEN (the read-only count method changes no crate-dependency edge)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "the_front_door_shows_how_many_cached_peer_claims_are_countered",
+          "scenario_fns": [
+            "the_front_door_shows_how_many_cached_peer_claims_are_countered"
+          ],
+          "n_scenarios": [
+            "PC-WS"
+          ],
+          "us_trace": [
+            "US-PC-000",
+            "US-PC-001"
+          ],
+          "estimate_hours": 12,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/ports/src/store_read.rs",
+            "crates/adapter-duckdb/src/store_read.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (the 5th LandingSummary field countered_peer_claims + the REUSED render_countered render in render_landing beside the unchanged peer-claims line, the slice-18 own line untouched) and the count-only read seam (count_countered_peer_claims). Extend nightly mutation testing to the COUNT(DISTINCT) presence aggregate (the de-duped UNION IN-set so a peer claim countered by N counterers counts once; the outer table is `peer_claims` not `claims`), the render_countered branch over the 5th field (Some(n) renders the number, None renders the marker), and the additive render (the peer-claims \"4\" is never re-weighted by the countered count; the slice-18 own line is byte-untouched)."
+        },
+        {
+          "id": "01-02",
+          "name": "The /peer-claims header shows the SAME countered count via render_countered (single source), a peer claim countered by two counterers counts once (presence), and either ref table contributes exactly once",
+          "description": "Close the single-source + presence-once + either-arm contracts (PC-HEADER, US-PC-002 Theme 1 Ex 2 / WD-PC-8 + PC-PRESENCE, US-PC-000/001 Theme 2 / C-4 / BR-PC-1 CARDINAL + PC-EITHER-TABLE, US-PC-000/001 Theme 2 Ex 2 / C-4). (PC-HEADER) Extend the `/peer-claims` list header to render the SAME countered count: `render_peer_claims_page` gains a `countered_peer_claims: Option<usize>` parameter (the SAME Option the landing uses, ADR-056 D3), and renders `render_countered(countered_peer_claims)` near the \"Peer Claims\" h1 / read-only notice; `peer_claims_page` (adapter-http-viewer) resolves `store.count_countered_peer_claims().ok()` and passes it in. Both surfaces resolve from the SAME read method + render through the SAME helper (single source \u2014 not a cached value), so the landing \"(N countered)\" and the `/peer-claims` header \"(N countered)\" cannot diverge; pinned EQUAL by assert_landing_and_peer_claims_countered_consistent. The `render_peer_claims_page` signature change ripples to its callers/tests (accepted, ADR-056 consequence). (PC-PRESENCE) Over a store where ONE cached peer claim is countered by TWO distinct counterers (one in each ref table \u2014 the operator + another peer) and it is the only countered peer claim, GET / shows \"(1 countered)\", NEVER \"(2 countered)\" \u2014 the COUNT(DISTINCT) over the de-duped UNION IN-set collapses the two distinct-table counters of the SAME peer CID to ONE membership (C-4 / BR-PC-1), and assert_countered_copy_is_neutral confirms no \"disputed by N\" sum. (PC-EITHER-TABLE) Over a store with one peer claim countered via the `claim_references` arm (operator's own counter) and a SECOND peer claim countered via the `peer_claim_references` arm (another peer's counter), GET / shows \"(2 countered)\" \u2014 each countered peer claim contributes EXACTLY ONCE regardless of which ref table holds its counter (the de-duped UNION across both arms). Confirmatory of the 01-01 aggregate + REUSED helper once they exist; pins the single-source consistency + the presence-once de-dup + the both-arms-contribute-once semantics end-to-end.",
+          "criteria": [
+            "GET /peer-claims over the SAME store (4 peer, 1 countered) renders \"(1 countered)\" in the list header via render_countered \u2014 render_peer_claims_page gains a `countered_peer_claims: Option<usize>` param, peer_claims_page resolves `count_countered_peer_claims().ok()` and passes it in (ADR-056 D3).",
+            "The landing \"(N countered)\" == the /peer-claims header \"(N countered)\" for the same store (single source \u2014 the read method + render helper, not a cached value; assert_landing_and_peer_claims_countered_consistent, WD-PC-8).",
+            "Over a store where one cached peer claim is countered by TWO distinct counterers (one in each ref table, the only countered peer claim), GET / shows \"(1 countered)\", NEVER \"(2 countered)\" \u2014 the de-duped UNION IN-set + COUNT(DISTINCT) presence count (C-4 / BR-PC-1 CARDINAL); the copy is neutral (no \"disputed by N\" sum, assert_countered_copy_is_neutral).",
+            "Over a store with one peer claim countered via the `claim_references` arm and a second via the `peer_claim_references` arm (no other countered), GET / shows \"(2 countered)\" \u2014 each countered peer claim contributes EXACTLY ONCE regardless of which ref table holds its counter (the de-duped UNION across both arms, C-4)."
+          ],
+          "acceptance_criteria": [
+            "GET /peer-claims over the SAME store (4 peer, 1 countered) renders \"(1 countered)\" in the list header via render_countered \u2014 render_peer_claims_page gains a `countered_peer_claims: Option<usize>` param, peer_claims_page resolves `count_countered_peer_claims().ok()` and passes it in (ADR-056 D3).",
+            "The landing \"(N countered)\" == the /peer-claims header \"(N countered)\" for the same store (single source \u2014 the read method + render helper, not a cached value; assert_landing_and_peer_claims_countered_consistent, WD-PC-8).",
+            "Over a store where one cached peer claim is countered by TWO distinct counterers (one in each ref table, the only countered peer claim), GET / shows \"(1 countered)\", NEVER \"(2 countered)\" \u2014 the de-duped UNION IN-set + COUNT(DISTINCT) presence count (C-4 / BR-PC-1 CARDINAL); the copy is neutral (no \"disputed by N\" sum, assert_countered_copy_is_neutral).",
+            "Over a store with one peer claim countered via the `claim_references` arm and a second via the `peer_claim_references` arm (no other countered), GET / shows \"(2 countered)\" \u2014 each countered peer claim contributes EXACTLY ONCE regardless of which ref table holds its counter (the de-duped UNION across both arms, C-4)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "the_peer_claims_header_shows_the_same_countered_count_as_the_landing",
+          "scenario_fns": [
+            "the_peer_claims_header_shows_the_same_countered_count_as_the_landing",
+            "a_peer_claim_countered_by_two_counterers_counts_once",
+            "a_peer_claim_countered_from_either_ref_table_contributes_once"
+          ],
+          "n_scenarios": [
+            "PC-HEADER",
+            "PC-PRESENCE",
+            "PC-EITHER-TABLE"
+          ],
+          "us_trace": [
+            "US-PC-000",
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The single-source render (BOTH surfaces through render_countered, the /peer-claims header param threaded the SAME `.ok()` value), the presence-once de-dup (a peer claim countered by 2 counterers counts ONCE), and the both-arms-contribute-once UNION (each ref table contributes exactly once) are load-bearing; mutation-test the render_peer_claims_page header render + the COUNT(DISTINCT)/UNION so a mutant that diverges the two surfaces' copy, drops the DISTINCT (rendering \"(2 countered)\"), drops one UNION arm (mis-counting either-table), or swaps UNION for UNION ALL in a counting context is killed."
+        },
+        {
+          "id": "01-03",
+          "name": "An honest zero \"(0 countered)\" on the landing AND in the /peer-claims header (Some(0), distinct from the missing marker; list renders as slice-06/07)",
+          "description": "The honest-zero edge on both surfaces (PC-ZERO-LANDING, US-PC-001 Theme 3 / C-5 + PC-ZERO-HEADER, US-PC-002 Theme 3 / C-5 \u2014 the success side of `0 \u2260 missing`). Over a store with 4 cached peer claims, NONE countered (seed_landing_store_no_peer_claim_countered \u2192 the count read returns Ok(0) \u2192 Some(0)): (PC-ZERO-LANDING) GET / shows \"4 peer claims (0 countered)\" \u2014 Some(0) renders \"(0 countered)\", a SUCCESSFUL read of zero, DISTINCT from the missing-number marker \"(\u2014 countered)\" and not an omitted count. (PC-ZERO-HEADER) GET /peer-claims shows \"(0 countered)\" in the header AND renders its rows with NO per-row Countered flag, exactly as slice-06/07 (nothing is countered \u2192 the slice-13 presence read is empty). Confirmatory once 01-01/01-02 exist: the Some(0) \u2192 \"(0 countered)\" render branch is exercised on both surfaces, and the assertion that \"(\u2014 countered)\" is ABSENT pins the success side of the type-level `0 \u2260 missing` distinction (WD-PC-6; the failure side is pinned by 02-01 / 03-01).",
+          "criteria": [
+            "GET / over a store with 4 cached peer claims and NONE countered (seed_landing_store_no_peer_claim_countered \u2192 the count read returns Some(0)) shows \"4 peer claims (0 countered)\" \u2014 Some(0) renders \"(0 countered)\", a SUCCESSFUL read of zero (assert_landing_peer_countered_count(body, 0)).",
+            "The missing marker \"(\u2014 countered)\" is ABSENT on the landing \u2014 an honest empty-counter peer store is a successful read of 0, NOT a failed read (the success side of `0 \u2260 missing`, C-5 / WD-PC-6).",
+            "GET /peer-claims over the same none-countered store shows \"(0 countered)\" in the header (assert_peer_claims_header_countered_count(body, 0)).",
+            "The /peer-claims list renders its rows with NO per-row Countered flag, exactly as slice-06/07 (the slice-13 presence read is empty when nothing is countered) \u2014 the header \"(0 countered)\" is the only countered text."
+          ],
+          "acceptance_criteria": [
+            "GET / over a store with 4 cached peer claims and NONE countered (seed_landing_store_no_peer_claim_countered \u2192 the count read returns Some(0)) shows \"4 peer claims (0 countered)\" \u2014 Some(0) renders \"(0 countered)\", a SUCCESSFUL read of zero (assert_landing_peer_countered_count(body, 0)).",
+            "The missing marker \"(\u2014 countered)\" is ABSENT on the landing \u2014 an honest empty-counter peer store is a successful read of 0, NOT a failed read (the success side of `0 \u2260 missing`, C-5 / WD-PC-6).",
+            "GET /peer-claims over the same none-countered store shows \"(0 countered)\" in the header (assert_peer_claims_header_countered_count(body, 0)).",
+            "The /peer-claims list renders its rows with NO per-row Countered flag, exactly as slice-06/07 (the slice-13 presence read is empty when nothing is countered) \u2014 the header \"(0 countered)\" is the only countered text."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "an_honest_zero_countered_on_the_landing_when_no_peer_claim_is_disputed",
+          "scenario_fns": [
+            "an_honest_zero_countered_on_the_landing_when_no_peer_claim_is_disputed",
+            "an_honest_zero_countered_in_the_peer_claims_header_list_as_slice_06_07"
+          ],
+          "n_scenarios": [
+            "PC-ZERO-LANDING",
+            "PC-ZERO-HEADER"
+          ],
+          "us_trace": [
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The Some(0) \u2192 \"(0 countered)\" (not the missing marker) render branch on both surfaces is the success side of `0 \u2260 missing`; mutation-test render_countered so a mutant that renders Some(0) as \"(\u2014 countered)\" (or blanks the zero), or one that leaks a per-row Countered flag when the slice-13 presence set is empty, is killed."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "The edges \u2014 missing\u2260zero degrade (new cfg-gated 4th-distinct fault seam + xtask guard token), additive no-regression, own-untouched, read-only, offline, no-N+1, anti-misread",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "A failed countered-peer-count read degrades to \"(\u2014 countered)\" on BOTH surfaces without a 5xx (the genuinely-new cfg-gated 4th-DISTINCT fault seam OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT + xtask release-gate guard token)",
+          "description": "The one step carrying genuinely-NEW fault-injection work (PC-DEGRADE-LANDING + PC-DEGRADE-HEADER, US-PC-000/001/002 Theme 4 / C-2 / C-5 CARDINAL \u2014 the per-count independent missing\u2260zero degrade). Maria's countered-peer-count read fails mid-request while the peer-claims count + the slice-18 own counts + the list read still succeed. (PC-DEGRADE-LANDING) GET / returns a NORMAL 200, the peer-claims count + the slice-18 own line (\"12 own claims (3 countered)\") + the nav hub still render, and the countered-peer count renders the missing marker \"(\u2014 countered)\" (NOT a fabricated \"(0 countered)\"), no raw stack trace. (PC-DEGRADE-HEADER) GET /peer-claims returns a NORMAL 200, the header renders \"(\u2014 countered)\", and the list rows + their slice-13 per-row flags still render (the countered row CID present) \u2014 the countered-peer-count read is INDEPENDENT of the list read (ADR-056 D4). The per-count independent degrade: each count is resolved by its OWN `.ok()` (Result \u2192 Option), so a failed `count_countered_peer_claims` maps to None \u2192 render_countered(None) \u2192 marker while the siblings (incl. the slice-18 own count) stay Some(_) \u2192 number (ADR-056 D2/D4). DELIVER materializes the test-only effect-shell fault seam `start_viewer_with_failing_countered_peer_count` \u2192 the `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` env var \u2014 the 4th DISTINCT token so the PEER count fails INDEPENDENTLY of the slice-18 own count, MIRRORING slice-18's `OPENLORE_VIEWER_FAIL_COUNTERED_COUNT`: a `#[cfg(debug_assertions)]`-gated branch substituting `Err(StoreReadError)` for the real `count_countered_peer_claims()` on BOTH the `/` and `/peer-claims` handlers so the SAME production `.ok()` degrade branch runs, plus the `#[cfg(not(debug_assertions))]` release identity (NO env-var read compiled in). The DISTILL harness already references `start_viewer_with_failing_countered_peer_count` + the `start_inner` extra param (a todo!() RED scaffold until DELIVER materializes it). (xtask) Add the NEW release-gate guard token: append the 4th token `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` to the VIEWER_FAIL_SEAM_TOKENS seam-guard scan (check_arch.rs, mirroring the slice-16/17/18 tokens) so an UNGATED read in a release build fails check-arch \u2014 the slice-16/17/18 tokens stay, the slice-19 one is added. This pins Earned Trust on the store-read dependency: the design exercises the substrate LYING (a transient StoreReadError) and proves BOTH orientation surfaces survive it without 5xx and without fabricating 0, INDEPENDENTLY of the slice-18 own count.",
+          "criteria": [
+            "GET / against a viewer whose countered-peer-count read is forced to FAIL mid-request (start_viewer_with_failing_countered_peer_count \u2192 OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT; peer + slice-18 own + other reads still succeed) returns a NORMAL 200 \u2014 never a 5xx (C-2 CARDINAL / NFR-VIEW-6); the peer-claims count + the slice-18 own line (\"12 own claims (3 countered)\", assert_landing_own_line_untouched) + the nav hub still render, and the countered-peer count renders \"(\u2014 countered)\" (assert_landing_peer_countered_missing, NOT a fabricated \"(0 countered)\"); no raw stack trace leaks.",
+            "GET /peer-claims against the same failing viewer returns a NORMAL 200, the header renders \"(\u2014 countered)\" (assert_peer_claims_header_countered_missing), and the list rows + their slice-13 per-row flags still render (the seeded countered row CID present) \u2014 the countered-peer-count read is INDEPENDENT of the list read (ADR-056 D4).",
+            "DELIVER materializes the test-only `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` seam behind `#[cfg(debug_assertions)]` on BOTH the `/` and `/peer-claims` handlers (release identity is a no-op, mirroring slice-18's OPENLORE_VIEWER_FAIL_COUNTERED_COUNT, a 4th DISTINCT token failing independently of the own count), threaded via the `start_inner` extra param; the per-count `.ok()` degrade (None \u2192 render_countered(None) \u2192 marker) is the production path under test.",
+            "The xtask release-gate seam-guard scan (VIEWER_FAIL_SEAM_TOKENS) is extended to ALSO cover the `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` token (an UNGATED read fails check-arch); the slice-16/17/18 tokens stay and the slice-19 4th token is appended."
+          ],
+          "acceptance_criteria": [
+            "GET / against a viewer whose countered-peer-count read is forced to FAIL mid-request (start_viewer_with_failing_countered_peer_count \u2192 OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT; peer + slice-18 own + other reads still succeed) returns a NORMAL 200 \u2014 never a 5xx (C-2 CARDINAL / NFR-VIEW-6); the peer-claims count + the slice-18 own line (\"12 own claims (3 countered)\", assert_landing_own_line_untouched) + the nav hub still render, and the countered-peer count renders \"(\u2014 countered)\" (assert_landing_peer_countered_missing, NOT a fabricated \"(0 countered)\"); no raw stack trace leaks.",
+            "GET /peer-claims against the same failing viewer returns a NORMAL 200, the header renders \"(\u2014 countered)\" (assert_peer_claims_header_countered_missing), and the list rows + their slice-13 per-row flags still render (the seeded countered row CID present) \u2014 the countered-peer-count read is INDEPENDENT of the list read (ADR-056 D4).",
+            "DELIVER materializes the test-only `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` seam behind `#[cfg(debug_assertions)]` on BOTH the `/` and `/peer-claims` handlers (release identity is a no-op, mirroring slice-18's OPENLORE_VIEWER_FAIL_COUNTERED_COUNT, a 4th DISTINCT token failing independently of the own count), threaded via the `start_inner` extra param; the per-count `.ok()` degrade (None \u2192 render_countered(None) \u2192 marker) is the production path under test.",
+            "The xtask release-gate seam-guard scan (VIEWER_FAIL_SEAM_TOKENS) is extended to ALSO cover the `OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` token (an UNGATED read fails check-arch); the slice-16/17/18 tokens stay and the slice-19 4th token is appended."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "a_failed_countered_peer_count_read_degrades_gracefully_on_the_front_door",
+          "scenario_fns": [
+            "a_failed_countered_peer_count_read_degrades_gracefully_on_the_front_door",
+            "a_failed_header_count_degrades_without_blanking_the_peer_claims_list"
+          ],
+          "n_scenarios": [
+            "PC-DEGRADE-LANDING",
+            "PC-DEGRADE-HEADER"
+          ],
+          "us_trace": [
+            "US-PC-000",
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 7,
+          "depends_on": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "The per-count `.ok()` degrade (failed countered-peer read \u2192 None \u2192 render_countered(None) \u2192 \"(\u2014 countered)\" on BOTH surfaces while the siblings \u2014 incl. the slice-18 own count \u2014 stay Some(_) \u2192 number, never a 5xx, never a fabricated 0, and the /peer-claims list rows + slice-13 flags still render) is load-bearing no-crash logic; mutation-test it so a mutant that fabricates 0 on failure, blanks the sibling counts / the slice-18 own line / the list rows, couples the peer fault to the own count, or propagates a 5xx is killed. The `#[cfg(debug_assertions)]`-gated 4th-distinct seam + the appended xtask VIEWER_FAIL_SEAM_TOKENS guard token are the release-safety enforcement (the seam never ships)."
+        },
+        {
+          "id": "02-02",
+          "name": "The countered count never re-weights the peer-claims count (additive, own line untouched) and never re-orders / filters / re-weights the /peer-claims list (byte-identical baseline)",
+          "description": "The additive / no-regression edges (PC-NO-REWEIGHT, US-PC-001 Theme 5 / C-4 / WD-PC-7 + PC-NO-REORDER, US-PC-002 Theme 5 / C-4 / WD-PC-9). (PC-NO-REWEIGHT) Over a store with 4 peer claims (1 countered) AND the slice-18 own 12+3 countered, GET / renders the peer-claims count EXACTLY (the countered count is additive awareness, never a deduction \u2014 the number is NOT total-minus-countered), the slice-18 own line \"12 own claims (3 countered)\" is BYTE-UNTOUCHED (assert_landing_own_line_untouched, WD-PC-7), and the copy carries no penalty/score/\"refuted\"/\"false\" language (assert_countered_copy_is_neutral). (PC-NO-REORDER) Over the slice-13 mixed-pages fixture (a mix of countered + un-countered peer claims spanning the page, with a known countered subset \u2265 1 pinned by the read_countered_peer_claims_count oracle so the header count is falsifiable / no vacuous pass), GET /peer-claims renders the additive header count AND the list order (`composed_at DESC, cid`), page boundaries, total count, every row's verbatim confidence + peer origin + the slice-13 per-row flags are BYTE-IDENTICAL to the no-header-count baseline (the countered rows are not pulled to the top or grouped). REUSES the slice-13 byte-identity assert (assert_peer_claims_order_byte_identical, which elides the additive flag anchors; the header \"(N countered)\" lives OUTSIDE the row body). Confirmatory once 01-01/01-02 exist; pins that the additive header text re-ordered / filtered / re-weighted NOTHING (C-4 / WD-PC-9) and the slice-18 own surfaces are untouched (WD-PC-7).",
+          "criteria": [
+            "GET / over a store with 4 peer claims (1 countered) AND the slice-18 own 12+3, renders the peer-claims count EXACTLY (additive, never a deduction \u2014 the body never shows \"total-1 peer claims\"); the front door carries no penalty/score/\"refuted\"/\"false\" language (assert_countered_copy_is_neutral).",
+            "The slice-18 own line \"12 own claims (3 countered)\" is BYTE-UNTOUCHED on the landing (assert_landing_own_line_untouched, WD-PC-7) \u2014 this slice adds JUST the peer count, no re-touch of the own count.",
+            "GET /peer-claims over the slice-13 mixed-pages fixture (known countered subset \u2265 1, pinned by the read_countered_peer_claims_count oracle so the header count is falsifiable) RENDERS the additive header count (assert_peer_claims_header_countered_count(expected)) \u2014 the feature is present, killing a vacuous pass.",
+            "The /peer-claims list order (`composed_at DESC, cid`), page boundaries, total count, every row's verbatim confidence + peer origin + the slice-13 per-row flags are BYTE-IDENTICAL to the no-header-count slice-06/07 baseline (assert_peer_claims_order_byte_identical) \u2014 the countered rows are not pulled to the top or grouped (C-4 / WD-PC-9)."
+          ],
+          "acceptance_criteria": [
+            "GET / over a store with 4 peer claims (1 countered) AND the slice-18 own 12+3, renders the peer-claims count EXACTLY (additive, never a deduction \u2014 the body never shows \"total-1 peer claims\"); the front door carries no penalty/score/\"refuted\"/\"false\" language (assert_countered_copy_is_neutral).",
+            "The slice-18 own line \"12 own claims (3 countered)\" is BYTE-UNTOUCHED on the landing (assert_landing_own_line_untouched, WD-PC-7) \u2014 this slice adds JUST the peer count, no re-touch of the own count.",
+            "GET /peer-claims over the slice-13 mixed-pages fixture (known countered subset \u2265 1, pinned by the read_countered_peer_claims_count oracle so the header count is falsifiable) RENDERS the additive header count (assert_peer_claims_header_countered_count(expected)) \u2014 the feature is present, killing a vacuous pass.",
+            "The /peer-claims list order (`composed_at DESC, cid`), page boundaries, total count, every row's verbatim confidence + peer origin + the slice-13 per-row flags are BYTE-IDENTICAL to the no-header-count slice-06/07 baseline (assert_peer_claims_order_byte_identical) \u2014 the countered rows are not pulled to the top or grouped (C-4 / WD-PC-9)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "the_countered_count_never_re_weights_the_peer_claims_count_and_own_line_untouched",
+          "scenario_fns": [
+            "the_countered_count_never_re_weights_the_peer_claims_count_and_own_line_untouched",
+            "the_peer_claims_header_count_does_not_re_order_filter_or_re_weight_the_list"
+          ],
+          "n_scenarios": [
+            "PC-NO-REWEIGHT",
+            "PC-NO-REORDER"
+          ],
+          "us_trace": [
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "The additive-no-regression property (the peer-claims count is never deducted by the countered count; the slice-18 own line is byte-untouched; the /peer-claims list order/paging/total/confidence/origin + the slice-13 per-row flags are byte-identical to the no-header-count baseline) is load-bearing; mutation-test render_landing + render_peer_claims_page so a mutant that deducts the countered count from the peer-claims number, re-touches the slice-18 own line, or re-orders / filters / groups the list by countered presence, is killed."
+        },
+        {
+          "id": "02-03",
+          "name": "Read-only, offline, no-N+1, anti-misread on both surfaces \u2014 the peer count is render-only LOCAL text, neutral, invariant to store size",
+          "description": "The remaining cross-cutting story edges that flip green for free once 01-01..02-02 exist (PC-READONLY-LANDING/HEADER, Theme 6 / C-1 CARDINAL; PC-OFFLINE-LANDING/HEADER, Theme 7 / C-2 CARDINAL; PC-NO-N-PLUS-1, Theme 8 / C-3 CARDINAL; PC-ANTI-MISREAD, Theme 9 / C-6 / WD-PC-10). (PC-READONLY-*) GET / and GET /peer-claims over a seeded counter-aware peer store render the countered count AND carry NO `<form>`/`<button>`/compose/sign/subscribe/follow control \u2014 the countered count is render-only text, never a sort/filter/mutating control (assert_landing_read_only_no_control; C-1 CARDINAL, the slice-06 no-key guarantee inherited). (PC-OFFLINE-*) Both surfaces render the countered count fully network-down (the count is a LOCAL COUNT(DISTINCT) aggregate with NO outbound edge \u2014 offline-STRONGER than /search/scrape: no PDS fetch, no DID re-resolution, no peer pull) and reference ONLY the vendored local /static/htmx.min.js (references_external_cdn() false; C-2 / KPI-HX-G2). (PC-NO-N-PLUS-1) A LARGE store (the seeded 1-countered peer store + 120 more PLAIN cached peer claims via seed_extra_plain_peer_claims, the countered count pinned STILL 1 by the read_countered_peer_claims_count oracle) renders the right count (1) in ONE request \u2014 the aggregate read returns the right total invariant to store size, no per-claim counter-presence loop (the strict 1-query bound is a DELIVER adapter-duckdb unit test). (PC-ANTI-MISREAD) Over the one-peer-claim-countered-twice fixture (confidence 0.40), GET / shows the neutral presence count \"(1 countered)\" (never \"(2 countered)\"), and the copy is never \"refuted\"/\"false\"/\"disputed by 2\"/a score/a deduction (assert_countered_copy_is_neutral). Confirmatory once the render + aggregate + REUSED helper exist; pins read-only / offline / no-N+1 / neutral-copy on the OBSERVABLE surfaces.",
+          "criteria": [
+            "GET / and GET /peer-claims over a seeded counter-aware peer store render the countered count AND carry NO `<form>`/`<button>`/compose/sign/subscribe/follow control \u2014 the count is render-only text, never a sort/filter/mutating control (assert_landing_read_only_no_control; C-1 CARDINAL).",
+            "Both surfaces render the countered count fully network-down (a LOCAL COUNT(DISTINCT) aggregate, NO outbound edge) and reference ONLY the vendored local /static/htmx.min.js \u2014 references_external_cdn() is false (C-2 / KPI-HX-G2).",
+            "A LARGE store (1 countered peer claim + 120 more plain cached peer claims; the countered count pinned STILL 1 by the read_countered_peer_claims_count oracle) renders \"(1 countered)\" in ONE request \u2014 the aggregate read is invariant to store size, no per-claim loop (C-3 CARDINAL).",
+            "Over the one-peer-claim-countered-twice fixture (confidence 0.40), GET / shows the neutral presence count \"(1 countered)\" (never \"(2 countered)\"), and the copy is never \"refuted\"/\"false\"/\"disputed by 2\"/a score/a deduction (assert_countered_copy_is_neutral; C-6 / WD-PC-10)."
+          ],
+          "acceptance_criteria": [
+            "GET / and GET /peer-claims over a seeded counter-aware peer store render the countered count AND carry NO `<form>`/`<button>`/compose/sign/subscribe/follow control \u2014 the count is render-only text, never a sort/filter/mutating control (assert_landing_read_only_no_control; C-1 CARDINAL).",
+            "Both surfaces render the countered count fully network-down (a LOCAL COUNT(DISTINCT) aggregate, NO outbound edge) and reference ONLY the vendored local /static/htmx.min.js \u2014 references_external_cdn() is false (C-2 / KPI-HX-G2).",
+            "A LARGE store (1 countered peer claim + 120 more plain cached peer claims; the countered count pinned STILL 1 by the read_countered_peer_claims_count oracle) renders \"(1 countered)\" in ONE request \u2014 the aggregate read is invariant to store size, no per-claim loop (C-3 CARDINAL).",
+            "Over the one-peer-claim-countered-twice fixture (confidence 0.40), GET / shows the neutral presence count \"(1 countered)\" (never \"(2 countered)\"), and the copy is never \"refuted\"/\"false\"/\"disputed by 2\"/a score/a deduction (assert_countered_copy_is_neutral; C-6 / WD-PC-10)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+          "scenario_name": "the_counter_aware_front_door_exposes_no_write_control",
+          "scenario_fns": [
+            "the_counter_aware_front_door_exposes_no_write_control",
+            "the_counter_aware_peer_claims_header_adds_no_write_control",
+            "the_front_door_peer_countered_count_renders_fully_with_the_network_down",
+            "the_peer_claims_header_countered_count_renders_offline",
+            "the_countered_peer_count_is_a_fixed_aggregate_read_invariant_to_store_size",
+            "the_countered_peer_count_is_neutral_awareness_never_a_verdict_or_penalty"
+          ],
+          "n_scenarios": [
+            "PC-READONLY-LANDING",
+            "PC-READONLY-HEADER",
+            "PC-OFFLINE-LANDING",
+            "PC-OFFLINE-HEADER",
+            "PC-NO-N-PLUS-1",
+            "PC-ANTI-MISREAD"
+          ],
+          "us_trace": [
+            "US-PC-000",
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/viewer-domain/src/lib.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The render-only-ness (no mutating control), offline (no outbound edge / vendored-only htmx), no-N+1 (one aggregate read invariant to store size), and neutral anti-misread copy are load-bearing on both surfaces; mutation-test render_landing/render_peer_claims_page/render_countered so a mutant that wraps the count in a control, adds a CDN reference, introduces a per-claim loop, or emits verdict/penalty/\"disputed by N\" copy is killed."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrail invariants (countered-peer count \u2014 read-only, no-write, offline-chrome, offline, no-N+1, missing\u2260zero, presence-once, single-source, no-regression, own-untouched)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Gold: the ten countered-peer-count guardrail invariants (read-only, no-write, offline-chrome, offline, no-N+1, missing\u2260zero, presence-once, single-source, no-regression, slice-18-own-untouched)",
+          "description": "The ten cross-cutting GOLD guardrails (PC-INV-*) that must hold over the WHOLE countered-peer-count surface on `GET /` + `GET /peer-claims` \u2014 the BEHAVIORAL layer of the three-layer ADR-056 enforcement (type [StoreReadPort declares no mutation method; count_countered_peer_claims returns Result<usize, _>] + xtask [check_viewer_capability_boundary + no_cross_table_join_elides_author, GREEN by construction \u2014 R-PC-9, `(peer=T, own=F)` \u2192 None] are the other two). They drive the REAL openlore ui subprocess + HTTP over a REAL seeded LOCAL DuckDB, no mocked boundary (the count is a LOCAL COUNT(DISTINCT) read + PURE render). (PC-INV-ReadOnly, C-1 / WD-PC-1) exercising GET / + GET /peer-claims over a seeded store leaves the claims + peer_claims row counts UNCHANGED (universe-bound assert_store_read_only over capture_store_row_count_universe; the countered count is computed per request and persists nothing). (PC-INV-NoWrite, C-1 CARDINAL) neither GET / nor GET /peer-claims renders a write/compose/sign/subscribe/follow control \u2014 the count is render-only text (assert_landing_read_only_no_control on both). (PC-INV-OfflineChrome, C-2 / KPI-HX-G2) both pages reference ONLY the local /static/htmx.min.js, NO CDN (references_external_cdn() false). (PC-INV-Offline, C-2 / KPI-5) both surfaces render the countered-peer count fully network-down (a LOCAL read with NO outbound edge). (PC-INV-NoNPlus1, C-3 CARDINAL) a LARGE store (200 extra plain cached peer claims; the countered count pinned STILL 1 by the oracle) renders the right count in ONE request \u2014 the read count is invariant to store size. (PC-INV-MissingNotZero, C-2 / C-5 / WD-PC-6 CARDINAL) BOTH sides: a none-countered store renders \"(0 countered)\" (NOT the marker) while a failed countered-peer read (via the 02-01 fault seam) renders \"(\u2014 countered)\" (NOT a fabricated 0) \u2014 a fabricated 0 on failure is unrepresentable (the shell maps a failed read to None, never Some(0)). (PC-INV-PresenceOnce, C-4 / BR-PC-1 CARDINAL) a peer claim countered by TWO distinct counterers contributes ONCE \u2014 BOTH the landing and the /peer-claims header render \"(1 countered)\", never \"(2 countered)\". (PC-INV-SingleSource, WD-PC-8) the landing \"(N countered)\" == the /peer-claims header \"(N countered)\" for the same store. (PC-INV-NoRegression, C-4 / WD-PC-9) the /peer-claims list order/paging/count/confidence/origin + the slice-13 per-row flags are byte-identical to the no-header-count baseline. (PC-INV-OwnUntouched, BR-PC-4 / WD-PC-7) the slice-18 own-claims countered count (landing own line \"12 own claims (3 countered)\" + the /claims header \"(3 countered)\") still renders UNCHANGED beside the new peer count \u2014 this slice adds JUST the peer count, no third dimension, the slice-18 own surfaces byte-untouched (guards R-PC-8 scope-creep). These INHERIT the slice-06/07/17/18 viewer golds (viewer_is_read_only / store_views_work_offline / web_process_holds_no_signing_key / the slice-17 landing golds / the slice-18 own-count golds) and add the COUNTERED-PEER-COUNT specifics. Flip green for free once 01-01..02-03 exist (the MissingNotZero failure side reuses the 02-01 fault seam; the OwnUntouched gold reuses the slice-18 own surfaces shipped + untouched). LAST roadmap step.",
+          "criteria": [
+            "PC-INV-ReadOnly + PC-INV-NoWrite: exercising GET / + GET /peer-claims over a seeded store leaves the claims + peer_claims row counts UNCHANGED (assert_store_read_only over capture_store_row_count_universe), and neither response renders a write/compose/sign/subscribe/follow control (assert_landing_read_only_no_control on both) \u2014 the count is render-only text, the viewer holds no key (C-1 CARDINAL / WD-PC-1).",
+            "PC-INV-OfflineChrome + PC-INV-Offline: both pages reference ONLY the vendored local /static/htmx.min.js (references_external_cdn() false), AND both surfaces render the countered-peer count fully network-down with NO outbound edge (a LOCAL COUNT(DISTINCT) read; C-2 / KPI-HX-G2 / KPI-5).",
+            "PC-INV-NoNPlus1 + PC-INV-MissingNotZero + PC-INV-PresenceOnce: a LARGE store (200 extra plain cached peer claims, countered count pinned STILL 1) renders the right count in ONE request invariant to store size; the none-countered store renders \"(0 countered)\" (NOT the marker) while the failed-read path (02-01 seam) renders \"(\u2014 countered)\" (NOT a fabricated 0) \u2014 both sides of `0 \u2260 missing`; and a peer claim countered by TWO counterers renders \"(1 countered)\" on BOTH surfaces, never \"(2 countered)\".",
+            "PC-INV-SingleSource + PC-INV-NoRegression + PC-INV-OwnUntouched: the landing \"(N countered)\" == the /peer-claims header \"(N countered)\" for the same store (assert_landing_and_peer_claims_countered_consistent, WD-PC-8); the /peer-claims list order/paging/count/confidence/origin + the slice-13 per-row flags are byte-identical to the no-header-count baseline (assert_peer_claims_order_byte_identical, C-4 / WD-PC-9); and the slice-18 own line \"12 own claims (3 countered)\" + the /claims header \"(3 countered)\" render UNTOUCHED beside the new peer count (assert_landing_own_line_untouched + assert_claims_header_countered_count, BR-PC-4 / WD-PC-7)."
+          ],
+          "acceptance_criteria": [
+            "PC-INV-ReadOnly + PC-INV-NoWrite: exercising GET / + GET /peer-claims over a seeded store leaves the claims + peer_claims row counts UNCHANGED (assert_store_read_only over capture_store_row_count_universe), and neither response renders a write/compose/sign/subscribe/follow control (assert_landing_read_only_no_control on both) \u2014 the count is render-only text, the viewer holds no key (C-1 CARDINAL / WD-PC-1).",
+            "PC-INV-OfflineChrome + PC-INV-Offline: both pages reference ONLY the vendored local /static/htmx.min.js (references_external_cdn() false), AND both surfaces render the countered-peer count fully network-down with NO outbound edge (a LOCAL COUNT(DISTINCT) read; C-2 / KPI-HX-G2 / KPI-5).",
+            "PC-INV-NoNPlus1 + PC-INV-MissingNotZero + PC-INV-PresenceOnce: a LARGE store (200 extra plain cached peer claims, countered count pinned STILL 1) renders the right count in ONE request invariant to store size; the none-countered store renders \"(0 countered)\" (NOT the marker) while the failed-read path (02-01 seam) renders \"(\u2014 countered)\" (NOT a fabricated 0) \u2014 both sides of `0 \u2260 missing`; and a peer claim countered by TWO counterers renders \"(1 countered)\" on BOTH surfaces, never \"(2 countered)\".",
+            "PC-INV-SingleSource + PC-INV-NoRegression + PC-INV-OwnUntouched: the landing \"(N countered)\" == the /peer-claims header \"(N countered)\" for the same store (assert_landing_and_peer_claims_countered_consistent, WD-PC-8); the /peer-claims list order/paging/count/confidence/origin + the slice-13 per-row flags are byte-identical to the no-header-count baseline (assert_peer_claims_order_byte_identical, C-4 / WD-PC-9); and the slice-18 own line \"12 own claims (3 countered)\" + the /claims header \"(3 countered)\" render UNTOUCHED beside the new peer count (assert_landing_own_line_untouched + assert_claims_header_countered_count, BR-PC-4 / WD-PC-7)."
+          ],
+          "test_file": "tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs",
+          "scenario_name": "every_peer_counter_aware_render_leaves_the_store_read_only",
+          "scenario_fns": [
+            "every_peer_counter_aware_render_leaves_the_store_read_only",
+            "no_peer_counter_aware_render_adds_a_write_or_mutating_control",
+            "the_peer_counter_aware_chrome_stays_offline_no_cdn",
+            "the_peer_counter_aware_surfaces_render_fully_offline",
+            "the_countered_peer_count_is_a_fixed_aggregate_read_invariant_to_store_size",
+            "missing_is_distinct_from_zero_for_the_countered_peer_count",
+            "a_peer_claim_countered_by_two_counterers_counts_once",
+            "the_landing_and_peer_claims_header_counts_are_consistent",
+            "the_peer_claims_list_is_byte_identical_to_the_no_header_count_baseline",
+            "the_slice_18_own_countered_surfaces_are_untouched"
+          ],
+          "n_scenarios": [
+            "PC-INV-ReadOnly",
+            "PC-INV-NoWrite",
+            "PC-INV-OfflineChrome",
+            "PC-INV-Offline",
+            "PC-INV-NoNPlus1",
+            "PC-INV-MissingNotZero",
+            "PC-INV-PresenceOnce",
+            "PC-INV-SingleSource",
+            "PC-INV-NoRegression",
+            "PC-INV-OwnUntouched"
+          ],
+          "us_trace": [
+            "US-PC-000",
+            "US-PC-001",
+            "US-PC-002"
+          ],
+          "estimate_hours": 6,
+          "depends_on": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "implementation_scope": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/lib.rs"
+          ],
+          "mutation_note": "These ten guardrails are the behavioral layer of the ADR-056 three-layer enforcement; ensure mutation testing of the pure render core (render_countered Some(n)\u2192\"(n countered)\" / Some(0)\u2192\"(0 countered)\" / None\u2192\"(\u2014 countered)\", the additive peer-claims render, the slice-18 own-line untouched, no-control, no-CDN, neutral copy) + the COUNT(DISTINCT) presence aggregate over peer_claims + the per-count `.ok()` degrade is green so the gold guardrails are not the only line of defense. The presence-once (count(distinct)), single-source (landing==header), no-regression (byte-identical list), missing\u2260zero (both sides), no-N+1 (invariant to store size), and slice-18-own-untouched are the countered-peer-count-specific additions over the inherited slice-06/07/17/18 golds."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-http-viewer/src/",
+      "crates/viewer-domain/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.lock"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "APPROVED \u2014 all 7 dimensions PASS; 7 steps/26 scenarios"
+  }
+}
