@@ -756,7 +756,140 @@ a new ADT).
 - [x] Mandate 11 (sad paths example-based): the degrade (FF-9) + the precedence/fragment
   edges are named example tests; no PBT generation at layer 3+.
 
+## Wave: DELIVER / [REF] Implementation summary
+
+slice-20 SHIPPED — 9 roadmap steps across 3 phases, all green (PASS, or APPROVED_SKIP with
+recorded rationale, in `deliver/execution-log.json`). The slice **COMPLETES slice-16** by
+filling the two empty `You | UnsubscribedCache => {}` render-match arms, turning the slice-16
+binary `/search` follow-state resolution into the TOTAL four-arm `AuthorRelationship`
+resolution. Near-all-EXTEND: 0 new crate/route/variant; workspace stays 21. ADR-057.
+
+- **Effect shell (`adapter-http-viewer`)**: `resolve_search_state` reads THREE LOCAL sets ONCE
+  each into bare-DID `HashSet`s — the slice-16 active set (REUSED via `read_local_active_set`)
+  + two NEW `read_local_*` sibling helpers over `distinct_own_author_dids` /
+  `distinct_cached_peer_author_dids`. `to_indexed_claim` becomes a pure TOTAL four-arm
+  precedence resolver `You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed` over the
+  three sets (batch-once, no N+1; bare-DID strip on the result side against all three sets via
+  the slice-16 `bare_did` SSOT). Each read degrades INDEPENDENTLY via `unwrap_or_default()`.
+- **Two new read-only `StoreReadPort` reads (`ports` + `adapter-duckdb`)**:
+  `distinct_own_author_dids` (`SELECT DISTINCT author_did FROM claims` → `You`) +
+  `distinct_cached_peer_author_dids` (`SELECT DISTINCT author_did FROM peer_claims`, **NO
+  `removed_at` filter** so soft-removed peers' cached claims classify → `UnsubscribedCache`).
+  Each single-table → `no_cross_table_join_elides_author` green BY CONSTRUCTION. No mutation
+  method added (I-VIEW-1 preserved).
+- **Pure render (`viewer-domain`)**: the two empty arms filled — `You` →
+  `SEARCH_SELF_INDICATOR = "Your own claim"`, `UnsubscribedCache` →
+  `SEARCH_REMOVED_CACHED_INDICATOR = "A peer you removed (cached)"` — via render-only sibling
+  fns `render_self_indicator` / `render_cached_unsubscribed_indicator` (siblings of slice-16's
+  `render_following_indicator`); NEITHER emits a `peer add` affordance. The render is now a
+  TOTAL `match`. The slice-16 `SubscribedPeer` / `NetworkUnfollowed` arms are byte-stable.
+- **Two per-read fault seams (OQ-1 escalation FIRED, `adapter-http-viewer` + `xtask`)**: the
+  real-binary subprocess harness cannot inject a per-read `Err` via a fake `StoreReadPort`, so
+  two distinct `#[cfg(debug_assertions)]` tokens landed — `OPENLORE_VIEWER_FAIL_OWN_DIDS_READ`
+  + `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ` (release siblings = identity, no env read
+  compiled in) — and `xtask VIEWER_FAIL_SEAM_TOKENS` extended **4 → 6**, mirroring the slice-16
+  `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam.
+
+## Wave: DELIVER / [REF] Files modified
+
+- `crates/ports` — +2 read-only `StoreReadPort` methods (`distinct_own_author_dids`,
+  `distinct_cached_peer_author_dids`).
+- `crates/adapter-duckdb` — +2 single-table `SELECT DISTINCT author_did` impls over the shared
+  connection.
+- `crates/adapter-http-viewer` — the two `read_local_*` reads + the four-arm `to_indexed_claim`
+  precedence resolution + the two `#[cfg(debug_assertions)]` per-read fault seams + the in-crate
+  resolution/seam unit tests (mutation-gate close).
+- `crates/viewer-domain` — the two filled `You` / `UnsubscribedCache` arms +
+  `SEARCH_SELF_INDICATOR` / `SEARCH_REMOVED_CACHED_INDICATOR` consts +
+  `render_self_indicator` / `render_cached_unsubscribed_indicator` fns + unit/property tests.
+- `crates/xtask` — `VIEWER_FAIL_SEAM_TOKENS` 4→6 (the two new per-read fault tokens).
+- `crates/cli/Cargo.toml` — two `[[test]]` targets registered.
+- `tests/acceptance/viewer_search_full_follow_state.rs` (FF-1..FF-11),
+  `tests/acceptance/viewer_search_full_follow_state_invariants.rs` (the 6 GOLD invariants).
+- `docs/adrs/ADR-057-*.md` (Accepted/shipped).
+
+## Wave: DELIVER / [REF] Scenarios green
+
+- **13 acceptance scenarios** GREEN: `viewer_search_full_follow_state` FF-1..FF-11 (the thick
+  four-arm walking skeleton at FF-1; the own-read independent-degrade at FF-11).
+- **6 GOLD invariants** GREEN: `viewer_search_full_follow_state_invariants` FF-INV-* (read-only /
+  no-write, LOCAL / offline, four-arm completeness, attribution / ranking unchanged, additive /
+  no-regression, per-read graceful-degrade).
+- **slices 08/15/16 corpora GREEN — zero regression** (the slice-16 arms byte-stable).
+- Driving port = the REAL `openlore ui` subprocess over HTTP (`ViewerServer`); the indexer the
+  ONLY mocked boundary (a REAL slice-08 `openlore-indexer serve`); the LOCAL store seeded via the
+  REAL `claim add` (own → `You`) / `peer add` (active → `SubscribedPeer`) /
+  `peer add`+`peer pull`+`peer remove` no-`--purge` (cached → `UnsubscribedCache`) verbs.
+
+## Wave: DELIVER / [REF] Definition of Done
+
+- [x] All 9 roadmap steps DONE (`deliver/execution-log.json` — PASS or APPROVED_SKIP w/ rationale).
+- [x] 13 acceptance scenarios (FF-1..FF-11) GREEN.
+- [x] 6 GOLD invariants (FF-INV-*) GREEN.
+- [x] slices 08/15/16 corpora GREEN — zero regression (the slice-16 arms byte-stable).
+- [x] `cargo xtask check-arch` OK (21 workspace members; `VIEWER_FAIL_SEAM_TOKENS` 4→6 guard green).
+- [x] Mutation 100% of viable in-diff (2 "missed" = cfg-dead release-identity-sibling artifact).
+- [x] DES integrity 9/9.
+- [x] Adversarial review APPROVED (0 defects, 0 Testing Theater).
+- [x] Release build verified seam-free (all 6 viewer fault tokens absent from the release rlib).
+- [x] ADR-057 Accepted/shipped.
+
+## Wave: DELIVER / [REF] Demo evidence
+
+The **FF-1 thick four-arm walking skeleton is the executable demo** — it drives the REAL
+`openlore ui` over HTTP and asserts the read-only `GET /search` view resolves all four arms on
+one render: an own claim → "Your own claim" (no `peer add`), an active peer → "Following" (no
+`peer add`, slice-16), a soft-removed cached peer → "A peer you removed (cached)" (no `peer
+add`), and a genuinely-new author → the `openlore peer add <did>` guidance (slice-16). The
+LOCAL store is seeded through the real `claim add` / `peer add` / `peer pull` / `peer remove`
+(no `--purge`) verbs; the indexer is a real `openlore-indexer serve`. FF-10 confirms the same
+four-arm render across full page and the htmx results fragment (no-JS parity); FF-9/FF-11
+confirm the per-read independent degrade end-to-end via the two new `#[cfg(debug_assertions)]`
+fault seams.
+
+## Wave: DELIVER / [REF] Quality gates
+
+- **Acceptance / integration**: FF-1..FF-11 + the 6 GOLD invariants GREEN; slices 08/15/16 GREEN
+  (zero regression). Real subprocess driving port; the indexer the only mock.
+- **`cargo xtask check-arch`**: **OK (21 workspace members)** — no new crate/route/variant; viewer
+  capability rule unchanged (read-only; no signing/identity/PDS, no store-write); anti-merging
+  `no_cross_table_join_elides_author` green BY CONSTRUCTION (each new read single-table);
+  `VIEWER_FAIL_SEAM_TOKENS` 4→6 (the seam guard fails if any of the 6 tokens is read outside a cfg
+  gate).
+- **Refactor (L1-L4)**: **Phase-3 none-needed** (the two render fns already
+  `render_following_indicator` siblings; the two reads single-table; the two fault tokens must each
+  stay a distinct literal at its cfg-gated site — unification declined, slice-18/19 precedent).
+  `viewer-domain` purity intact.
+- **Release-build seam check**: `#[cfg(not(debug_assertions))]` release build verified **seam-free**
+  — all 6 viewer fault tokens absent from the release rlib (each release sibling the identity fn).
+- **Adversarial review**: **APPROVED**, **0 defects, 0 Testing Theater** (the four-arm precedence +
+  the two per-read fault seams' release-safety + the per-read independent degrade verified).
+- **Mutation**: 100% of the genuinely-viable in-diff (the two render arms + the two distinct-DID
+  reads + the four-arm resolver caught; the 2 "missed" = the cfg-dead release-identity-sibling
+  artifact of the two new fault seams, pinned structurally by the xtask guard + the release-build
+  check). ≥80%-of-viable gate MET.
+- **DES integrity**: **9/9** steps with complete DES traces.
+
 ## Changelog
+
+- 2026-06-11 — Crafter (nw-functional-software-crafter) + orchestration — slice-20 DELIVER.
+  SHIPPED — 9 roadmap steps across 3 phases. Filled the slice-16 empty `You | UnsubscribedCache`
+  arms → the TOTAL four-arm `AuthorRelationship` resolution on the read-only `GET /search` view.
+  Two new single-table read-only `StoreReadPort` reads (`distinct_own_author_dids` over `claims`;
+  `distinct_cached_peer_author_dids` over `peer_claims`, NO `removed_at` filter), a pure total
+  precedence resolver `You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed`, two neutral
+  render consts (`SEARCH_SELF_INDICATOR` / `SEARCH_REMOVED_CACHED_INDICATOR`) + two render-only
+  sibling fns. **OQ-1 escalation FIRED** — two `#[cfg(debug_assertions)]` per-read fault seams
+  (`OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` / `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ`) + xtask
+  `VIEWER_FAIL_SEAM_TOKENS` 4→6. 13 acceptance FF-1..FF-11 (thick four-arm WS at FF-1; FF-11
+  own-read degrade) + 6 GOLD invariants GREEN; slices 08/15/16 GREEN (zero regression). Gates:
+  Phase-3 refactor none-needed, review APPROVED (0 defects, 0 testing theater), mutation 100%
+  viable (2 "missed" = cfg-dead release-identity-sibling artifact), integrity 9/9, check-arch OK
+  (21), release build seam-free (all 6 fault tokens absent). Near-all-EXTEND: 0 new
+  crate/route/variant; workspace stays 21. Evolution archive:
+  `docs/evolution/viewer-search-full-follow-state-evolution.md`. Commit trail: 01-01 1b3eff7 (FF-1
+  WS) → 01-02 8362cc2 → 01-03 511413d → 02-01 5fb893f → 02-02 08494bf → 02-03 7fc7d34 → 02-04
+  531b635 (fault seams) → 02-05 09b111d (FF-11) → 03-01 1b16ef8 (gold) → mutation-gate c59d7d9.
 
 - 2026-06-11 — Quinn (nw-acceptance-designer) — slice-20 DISTILL. Authored the executable
   acceptance corpus mirroring the slice-16 proven shape: `viewer_search_full_follow_state.rs`

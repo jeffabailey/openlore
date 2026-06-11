@@ -64,16 +64,20 @@ reports 21).**
 > detail lives in `docs/feature/{feature-id}/` and migrates to `docs/evolution/` at
 > finalize. The hexagonal/modular-monolith STYLE (above) is unchanged by these.
 
-- **slice-20 (viewer-search-full-follow-state): DESIGN 2026-06-11 — IN-PLACE
+Shipped slice extensions:
+
+- **slice-20 (viewer-search-full-follow-state): SHIPPED 2026-06-11 — IN-PLACE
   EXTENSION, ZERO new crates (workspace stays 21).** COMPLETES the slice-16 `/search`
   follow-state ADT (ADR-053) to its full FOUR arms by filling the already-present-but-
-  empty `You | UnsubscribedCache` render-match arms. Render-only, read-only,
-  LOCAL/offline, additive; NO new route, NO new `AuthorRelationship` variant, NO new
-  crate.
+  empty `You | UnsubscribedCache` render-match arms — the render is now a TOTAL `match`.
+  Render-only, read-only, LOCAL/offline, additive; NO new route, NO new
+  `AuthorRelationship` variant, NO new crate. slice-16 + slice-20 together COMPLETE the
+  four-arm search follow-state.
   - **`crates/ports` (`StoreReadPort`)**: +2 read-only presence reads —
     `distinct_own_author_dids` (over `claims` → `You`) and
-    `distinct_cached_peer_author_dids` (over `peer_claims`, NO `removed_at` filter →
-    `UnsubscribedCache`). No mutation method added (I-VIEW-1 preserved).
+    `distinct_cached_peer_author_dids` (over `peer_claims`, NO `removed_at` filter so
+    soft-removed peers' cached claims classify → `UnsubscribedCache`). No mutation
+    method added (I-VIEW-1 preserved).
   - **`crates/adapter-duckdb`**: +2 single-table `SELECT DISTINCT author_did` impls
     over the SAME shared connection. Each is single-table → passes
     `no_cross_table_join_elides_author` BY CONSTRUCTION (the rule's cross-store
@@ -83,23 +87,29 @@ reports 21).**
     `to_indexed_claim` becomes a TOTAL four-arm precedence resolution
     (`You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed`) — a pure fn over
     the 3 sets. +2 `read_local_*` sibling helpers (degrade via `unwrap_or_default`,
-    independent per read). NO new `#[cfg(debug_assertions)]` fault-seam token (the
-    slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam proves the reused degrade
-    branch shape; per-read fault injected via a fake `StoreReadPort`).
+    independent per read). **TWO new `#[cfg(debug_assertions)]` per-read fault-seam
+    tokens** (`OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` /
+    `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ`) — the ADR-057 D-4 conditional
+    escalation FIRED at DELIVER (the real-binary subprocess harness cannot inject a
+    per-read `Err` via a fake `StoreReadPort`); each release sibling = identity (no env
+    read compiled in), mirroring the slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ`
+    seam.
   - **`crates/viewer-domain` (PURE)**: fill the empty `You | UnsubscribedCache => {}`
-    arm with two neutral render-only indicators (`SEARCH_SELF_INDICATOR` /
-    `SEARCH_REMOVED_CACHED_INDICATOR` SSOT consts + `render_self_indicator` /
-    `render_cached_unsubscribed_indicator`, siblings of `render_following_indicator`) —
-    the render becomes a TOTAL `match`. NEITHER renders a `peer add` affordance. The
-    slice-16 `SubscribedPeer`/`NetworkUnfollowed` arms are byte-stable (no regression).
-  - **`xtask`**: UNCHANGED — single-table reads pass by construction; no new seam token
-    (`VIEWER_FAIL_SEAM_TOKENS` unchanged); workspace stays 21.
+    arm with two neutral render-only indicators (`SEARCH_SELF_INDICATOR = "Your own
+    claim"` / `SEARCH_REMOVED_CACHED_INDICATOR = "A peer you removed (cached)"` SSOT
+    consts + `render_self_indicator` / `render_cached_unsubscribed_indicator`, siblings
+    of `render_following_indicator`) — the render becomes a TOTAL `match`. NEITHER
+    renders a `peer add` affordance. The slice-16 `SubscribedPeer`/`NetworkUnfollowed`
+    arms are byte-stable (no regression).
+  - **`xtask`**: `VIEWER_FAIL_SEAM_TOKENS` extended **4 → 6** (the two new per-read
+    fault tokens); single-table reads pass anti-merging by construction; workspace
+    stays 21. Release build verified seam-free (all 6 fault tokens absent from the
+    release rlib).
   - **ADR-057** (the two LOCAL presence reads + the four-arm precedence resolution +
     the two neutral indicators; alternatives: combined-read rejected, held-identity-
     surface-for-`You` rejected as keyless-viewer-breaking, N+1 rejected).
-  - See ADR-057, `docs/feature/viewer-search-full-follow-state/feature-delta.md`.
-
-Shipped slice extensions:
+  - See ADR-057, `docs/feature/viewer-search-full-follow-state/feature-delta.md`,
+    `docs/evolution/viewer-search-full-follow-state-evolution.md`.
 
 - **slice-08 (viewer-network-search): SHIPPED 2026-06-04 — IN-PLACE EXTENSION, ZERO
   new crates (workspace stays at 21 members).** Adds a **`GET /search`
