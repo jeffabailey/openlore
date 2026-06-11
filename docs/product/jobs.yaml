@@ -730,3 +730,43 @@ changelog:
       /claims LIST-row "countered by" annotation is DEFERRED to a recommended slice-12.
       J-003b boundary: J-003a (anti-merging) reinforced; J-003c (revocable subscription)
       untouched; the AUTHORING half of J-003b stays the slice-03 CLI.
+  - date: "2026-06-11"
+    feature: viewer-search-full-follow-state
+    change: >
+      slice-20 (viewer-search-full-follow-state) DISCUSS traces to J-005c (no new
+      job, no new sub-job). It COMPLETES the slice-16 (viewer-search-follow-state)
+      `/search` follow-state ADT to its FULL four-arm resolution. slice-16 resolved
+      ONLY the binary SubscribedPeer (author in the LOCAL active set → "Following")
+      vs NetworkUnfollowed (otherwise → `openlore peer add` guidance), EXPLICITLY
+      DEFERRING two arms of the existing four-variant AuthorRelationship enum. slice-20
+      resolves them on the read-only GET /search view: You (the result is the
+      operator's OWN claim — own DID → a neutral self-attribution indicator, no
+      add command, you cannot follow yourself) and UnsubscribedCache (the result is
+      a cached claim from a peer the operator SOFT-REMOVED — present in the LOCAL
+      peer_claims cache but absent from the active set, the slice-15 PS-4 residue →
+      a neutral residue indicator, no add command, distinct from a never-subscribed
+      NetworkUnfollowed). Resolution precedence: You > SubscribedPeer >
+      UnsubscribedCache > NetworkUnfollowed, mirroring the established LOCAL-graph
+      resolver (adapter-duckdb graph_query::attributed_claim_from) adapted to the
+      network corpus (no source_table → presence resolved by DID-set membership).
+      Persona is P-001 (the viewer operator, "Maria", network-discovery hat; no new
+      hat). Stories US-FS-002 realizes the four-arm completeness on the browser;
+      US-FS-001 is @infrastructure (two NEW read-only StoreReadPort presence reads —
+      the operator's distinct own-claim author DIDs and the distinct cached-peer
+      author DIDs incl. soft-removed — plus the precedence resolution threaded into
+      to_indexed_claim). Cardinal invariants carried in unchanged: read-only /
+      no-key (KPI-VIEW-2 — both new indicators render-only TEXT), additive /
+      no-regression (the slice-16 SubscribedPeer/NetworkUnfollowed rendering
+      byte-stable; the original search ranking/attribution unchanged), LOCAL /
+      offline (the two new presence reads are LOCAL; the index stays
+      per-user-neutral), independent per-read graceful degrade (a failed own/cached
+      read drops only that arm, worst case = the slice-08 status quo), anti-merging
+      (KPI-AV-2 / KPI-FED-1/2 — each arm a per-row enrichment), neutral framing
+      (the self + residue indicators never pejorative). NO new crates (extend
+      viewer-domain + adapter-http-viewer + ports + adapter-duckdb; workspace stays
+      21), NO new route (extends GET /search), NO new AuthorRelationship variant
+      (the enum is already four-variant), NO new KPI ID (realizes inherited KPIs on
+      the four-arm /search facet + strengthens KPI-AV-4 funnel accuracy). J-005c
+      boundary: the follow itself stays the slice-03 CLI `openlore peer add`; the
+      LOCAL graph already resolves all four arms on /project, /philosophy, etc.;
+      slice-20 brings the network-search surface to parity.
