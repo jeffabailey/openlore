@@ -605,6 +605,81 @@ fn a_failed_cached_peer_read_degrades_only_that_arm_without_crashing() {
     assert_search_html_leaks_no_transport_internals(&response.body);
 }
 
+/// FF-11 (US-FS-001 / Theme F; C-8 / WD-FS-4 / ADR-057 D4 — the OWN-read sibling of
+/// FF-9, completing the per-read independent-degrade pair): a failed LOCAL own-author
+/// (`distinct_own_author_dids`) read during a search render degrades ONLY the `You`
+/// arm — the operator's OWN row falls through to `NetworkUnfollowed` (the lost `You`
+/// classification means the row resolves to its non-`You` outcome; with the own DID
+/// absent from the active + cached sets, that is `NetworkUnfollowed` → the `peer add`
+/// affordance reappears for the own row) — while the `SubscribedPeer` + the
+/// `UnsubscribedCache` arms STILL resolve from their (successful) active + cached
+/// reads, and the results STILL render with no crash, blank, leaked error, or 5xx.
+/// The arm-failure is INDEPENDENT per read: the own read failing must never disturb
+/// the active or cached arms (the symmetric mirror of FF-9, which proves the cached
+/// read can fail without disturbing the own or active arms). Together FF-9 + FF-11
+/// prove each of the three LOCAL presence reads degrades INDEPENDENTLY (ADR-057 D-4).
+///
+/// The per-read OWN-DID fault seam is materialized (02-04, OQ-1 escalation): the
+/// effect-shell `own_dids_read_with_fault_seam` (`#[cfg(debug_assertions)]`-gated,
+/// release-forbidden, xtask-guarded) substitutes a genuine read `Err` when
+/// `OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` is set, forcing the PRODUCTION
+/// `unwrap_or_default() → empty own set` per-read degrade. ONLY the own read fails;
+/// the active + cached reads SUCCEED.
+///
+/// Given the operator's own claim + a followed peer + a soft-removed-cached peer all
+///   seeded, AND a reachable index where all three appear, BUT the LOCAL own-author
+///   read is forced to FAIL mid-request (her active + cached reads succeed);
+/// When she opens GET /search;
+/// Then her OWN row degrades to `openlore peer add` (the lost `You` classification
+///   falls through to `NetworkUnfollowed`); her followed peer STILL shows "Following"
+///   and her soft-removed peer STILL shows the neutral residue indicator (the other
+///   two arms UNAFFECTED — independent degrade); and the results still render with no
+///   crash, blank, leaked error, or 5xx.
+///
+/// @us-fs-001 @driving_port @real-io @graceful-degrade @error @c-8 @wd-fs-4
+#[test]
+fn a_failed_own_dids_read_degrades_only_that_arm() {
+    // GIVEN the operator's own claim + a followed peer + a soft-removed-cached peer
+    // all seeded, AND a reachable index where all three appear, BUT the LOCAL own-DID
+    // read is forced to FAIL mid-request (the active + cached reads succeed).
+    let env = TestEnv::initialized();
+    seed_own_claim_for_search(&env);
+    seed_cached_unsubscribed_peer_for(&env, TRAVERSAL_AUTHOR_TOBIAS, TOBIAS_CACHED_SEED);
+    let _rachel_sub = seed_active_subscription_for(&env, RACHEL_DID, RACHEL_ACTIVE_SUB_SEED);
+    let indexer = seed_network_index_from_specs(&env, sf_corpus_all_four_arms());
+    // The per-read own-DID fault seam: only `fail_own_dids_read` is set — the active +
+    // cached reads SUCCEED, so the `SubscribedPeer` + `UnsubscribedCache` arms STILL
+    // resolve and ONLY the `You` arm degrades.
+    let viewer = start_viewer_with_failing_own_dids_read(&env, indexer);
+
+    let response = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
+
+    // THEN the search results STILL render (200, not a crash/5xx).
+    assert_eq!(
+        response.status, 200,
+        "FF-11 (C-8): a failed own-DID read must degrade ONLY that arm to a guided \
+         200, NOT a crash/5xx; body:\n{}",
+        response.body
+    );
+    assert!(
+        !response.body.trim().is_empty(),
+        "FF-11 (C-8): the degraded render must NOT be a blank region; body:\n{}",
+        response.body
+    );
+    // …the operator's OWN row degrades to `openlore peer add` (the own read failed so
+    // the `You` classification was lost — the row falls through to `NetworkUnfollowed`,
+    // its non-`You` outcome, which re-offers the follow affordance for the own row).
+    assert_search_row_offers_follow(&response.body, SF_OWN_BARE_DID);
+    // …BUT her followed peer STILL shows "Following" (the active read succeeded) and
+    // her soft-removed peer STILL shows the neutral residue indicator (the cached read
+    // succeeded) — the degrade is INDEPENDENT per read (only the `You` arm fell
+    // through; the other two arms are UNAFFECTED).
+    assert_search_row_following(&response.body, RACHEL_DID);
+    assert_search_row_shows_residue_indicator(&response.body, TRAVERSAL_AUTHOR_TOBIAS);
+    // …and the degraded render leaks NO transport/internal error.
+    assert_search_html_leaks_no_transport_internals(&response.body);
+}
+
 // =============================================================================
 // US-FS-002 — Theme G: htmx vs no-JS PARITY (C-10). The four arms render
 // identically under fragment + full page. (FF-10)
