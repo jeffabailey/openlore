@@ -57,6 +57,48 @@ read-only localhost htmx viewer), bringing the production count to 19 + 1
 test-support + 1 xtask binary (21 workspace members total; `cargo xtask check-arch`
 reports 21).**
 
+## Application Architecture (per-feature design decisions, in-place extensions)
+
+> Application-layer (component) decisions live here as in-place extensions of the
+> read-only `openlore ui` viewer. Each entry names its ADR(s); full per-feature
+> detail lives in `docs/feature/{feature-id}/` and migrates to `docs/evolution/` at
+> finalize. The hexagonal/modular-monolith STYLE (above) is unchanged by these.
+
+- **slice-20 (viewer-search-full-follow-state): DESIGN 2026-06-11 — IN-PLACE
+  EXTENSION, ZERO new crates (workspace stays 21).** COMPLETES the slice-16 `/search`
+  follow-state ADT (ADR-053) to its full FOUR arms by filling the already-present-but-
+  empty `You | UnsubscribedCache` render-match arms. Render-only, read-only,
+  LOCAL/offline, additive; NO new route, NO new `AuthorRelationship` variant, NO new
+  crate.
+  - **`crates/ports` (`StoreReadPort`)**: +2 read-only presence reads —
+    `distinct_own_author_dids` (over `claims` → `You`) and
+    `distinct_cached_peer_author_dids` (over `peer_claims`, NO `removed_at` filter →
+    `UnsubscribedCache`). No mutation method added (I-VIEW-1 preserved).
+  - **`crates/adapter-duckdb`**: +2 single-table `SELECT DISTINCT author_did` impls
+    over the SAME shared connection. Each is single-table → passes
+    `no_cross_table_join_elides_author` BY CONSTRUCTION (the rule's cross-store
+    precondition is structurally unreachable for a single-table literal).
+  - **`crates/adapter-http-viewer` (EFFECT)**: `resolve_search_state` reads the 3 LOCAL
+    sets (active REUSED + own/cached NEW) ONCE each into bare-DID `HashSet`s; the binary
+    `to_indexed_claim` becomes a TOTAL four-arm precedence resolution
+    (`You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed`) — a pure fn over
+    the 3 sets. +2 `read_local_*` sibling helpers (degrade via `unwrap_or_default`,
+    independent per read). NO new `#[cfg(debug_assertions)]` fault-seam token (the
+    slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam proves the reused degrade
+    branch shape; per-read fault injected via a fake `StoreReadPort`).
+  - **`crates/viewer-domain` (PURE)**: fill the empty `You | UnsubscribedCache => {}`
+    arm with two neutral render-only indicators (`SEARCH_SELF_INDICATOR` /
+    `SEARCH_REMOVED_CACHED_INDICATOR` SSOT consts + `render_self_indicator` /
+    `render_cached_unsubscribed_indicator`, siblings of `render_following_indicator`) —
+    the render becomes a TOTAL `match`. NEITHER renders a `peer add` affordance. The
+    slice-16 `SubscribedPeer`/`NetworkUnfollowed` arms are byte-stable (no regression).
+  - **`xtask`**: UNCHANGED — single-table reads pass by construction; no new seam token
+    (`VIEWER_FAIL_SEAM_TOKENS` unchanged); workspace stays 21.
+  - **ADR-057** (the two LOCAL presence reads + the four-arm precedence resolution +
+    the two neutral indicators; alternatives: combined-read rejected, held-identity-
+    surface-for-`You` rejected as keyless-viewer-breaking, N+1 rejected).
+  - See ADR-057, `docs/feature/viewer-search-full-follow-state/feature-delta.md`.
+
 Shipped slice extensions:
 
 - **slice-08 (viewer-network-search): SHIPPED 2026-06-04 — IN-PLACE EXTENSION, ZERO

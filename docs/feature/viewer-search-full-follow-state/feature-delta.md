@@ -378,7 +378,214 @@ list in `discuss/user-stories.md` §"Out of scope".
 
 ---
 
+## Wave: DESIGN / [REF] Design decisions (D-numbered, with verdicts)
+
+> Wave: **DESIGN** (lean mode, Tier-1 density) · Owner: Morgan (nw-solution-architect) ·
+> 2026-06-11 · interaction_mode: propose · design_scope: application/components.
+> Formalizes the three DISCUSS-flagged questions; one ADR (**ADR-057**). NO new
+> system/domain surface; NO new crate (workspace stays 21); additive, render-only,
+> read-only, LOCAL/offline.
+
+| ID | Decision | Verdict |
+|---|---|---|
+| **D-1** (the two new reads — Q1) | Add **two SEPARATE single-table read-only `StoreReadPort` reads**: `distinct_own_author_dids` (`SELECT DISTINCT author_did FROM claims` → `You`) and `distinct_cached_peer_author_dids` (`SELECT DISTINCT author_did FROM peer_claims`, **NO `removed_at` filter** — the residue cache is the point → `UnsubscribedCache`, gated by ∉ active in resolution). Each returns the full distinct-DID `HashSet<String>` read **ONCE per render**; `Ok(HashSet::new())` for an empty store (0 ≠ failed). NO bound params (whole-table distinct; no caller input → injection N/A); `bare_did` normalization is in-memory at the comparison site, never in SQL. | **TWO reads, not one** (independent degrade + simplest anti-merging proof). Combined read REJECTED (A1). |
+| **D-2** (four-arm precedence — Q2) | A **total pure fn** `(author_did, &own, &active, &cached) → AuthorRelationship`: `bare ∈ own → You` > `∈ active → SubscribedPeer` > `∈ cached → UnsubscribedCache` > else `NetworkUnfollowed`. Threaded into `to_indexed_claim` (which stops resolving only the binary). Exhaustive (`if/else if` chain, final `else` total) + deterministic (pure fn of three set memberships; no I/O/clock). Mirrors `attributed_claim_from`, adapted to the index corpus (no `source_table` → DID-set membership). | **LOCKED**. `bare_did` applied result-side; LOCAL sets bare by construction (one SSOT, slice-16 extended). |
+| **D-3** (render shape — Q3) | Fill the empty `You \| UnsubscribedCache => {}` arm (`viewer-domain` ~line 1924) with `You → render_self_indicator()` + `UnsubscribedCache → render_cached_unsubscribed_indicator()` — render-only `<p>` siblings of `render_following_indicator`, each behind its own SSOT constant: **`SEARCH_SELF_INDICATOR = "Your own claim"`**, **`SEARCH_REMOVED_CACHED_INDICATOR = "A peer you removed (cached)"`** (neutral, non-pejorative, blocklist-safe — DESIGN names; copy may be tuned at DELIVER within the neutral gate). Both carry the slice-16 `"Relationship: "` prefix; NEITHER renders a `peer add` affordance (suppressed like `SubscribedPeer`). The render becomes a **TOTAL `match`** over four variants. | **LOCKED**. `SubscribedPeer`/`NetworkUnfollowed` arms REUSED VERBATIM — **byte-stable** (C-7). |
+| **D-4** (graceful degrade + fault seam) | Each of the three reads degrades **independently** via `unwrap_or_default()` → empty set for the failed read only (slice-17 per-count `.ok()` independence). Failed own → no `You`; failed cached → no `UnsubscribedCache`; failed active → slice-16 all-`NetworkUnfollowed`. Worst case (all three fail) = slice-08 status quo. **NO new `#[cfg(debug_assertions)]` fault seam token** — the slice-16 `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` already proves the degrade BRANCH SHAPE the two new reads reuse identically; a per-read fault is injectable via a fake `StoreReadPort` (no compiled-in env seam). `xtask` `VIEWER_FAIL_SEAM_TOKENS` stays UNCHANGED. | **NO new seam (default).** Conditional escalation: IF the harness cannot inject a per-read fault via a fake port, DISTILL/DELIVER MAY add a distinct cfg-gated token per read + extend `VIEWER_FAIL_SEAM_TOKENS`. |
+
+### Anti-merging check-arch proof (Q1, BY CONSTRUCTION)
+
+The `no_cross_table_join_elides_author` rule (`xtask::check_arch::classify_sql_literal`) fires
+ONLY when a SINGLE SQL literal mentions BOTH the standalone `claims` table AND `peer_claims`
+(word-boundary; `peer_claims` does NOT count as a `claims` mention) WITHOUT projecting
+`author_did`. The two new reads are each **single-table** — one over `claims`, one over
+`peer_claims` — so neither is a cross-store literal; the rule's `is_cross_store` precondition is
+FALSE for both, so neither can trip it. Each ALSO projects `author_did` (it is the SELECTed
+column). The reads name the specific tables explicitly (never a bare cross-table join eliding
+the author). **Verdict: passes `check-arch` by construction** (the strongest possible proof —
+the rule's precondition is structurally unreachable for these literals). Confirmed against the
+live rule body and the established single-table presence reads (`count_countered_own_claims`
+over `claims`, `count_countered_peer_claims` over `peer_claims`, both GREEN).
+
+## Wave: DESIGN / [REF] Component decomposition
+
+| Component | Path | Change type |
+|---|---|---|
+| `StoreReadPort` (+ 2 read-only methods) | `crates/ports/src/store_read.rs` | **EXTEND** |
+| `adapter-duckdb` store-read impl (+ 2 single-table `SELECT DISTINCT` reads) | `crates/adapter-duckdb/src/store_read.rs` | **EXTEND** |
+| `resolve_search_state` (read 2 new sets once; thread into resolution) | `crates/adapter-http-viewer/src/lib.rs` (~1095) | **EXTEND** |
+| `to_indexed_claim` (binary → four-arm precedence over 3 sets) | `crates/adapter-http-viewer/src/lib.rs` (~1305) | **EXTEND** |
+| 2 new `read_local_*` helpers (own / cached → `HashSet`, `unwrap_or_default` degrade) | `crates/adapter-http-viewer/src/lib.rs` | **CREATE NEW** (siblings of `read_local_active_set`) |
+| render `@match` (fill the 2 empty arms → total match) | `crates/viewer-domain/src/lib.rs` (~1924) | **EXTEND** |
+| `render_self_indicator` / `render_cached_unsubscribed_indicator` (+ 2 SSOT consts) | `crates/viewer-domain/src/lib.rs` (~1957) | **CREATE NEW** (siblings of `render_following_indicator`) |
+| `xtask check-arch` (NO change — single-table reads pass by construction; no new seam token) | `crates/xtask/src/check_arch.rs` | **UNCHANGED** |
+
+> The two `CREATE NEW` shell helpers and the two `CREATE NEW` pure render fns are **intra-crate
+> siblings of existing patterns** (not new crates, not new ports, not new routes) — the
+> smallest additive unit. Everything else is EXTEND.
+
+## Wave: DESIGN / [REF] Driving ports
+
+| Driving port | Route | Change |
+|---|---|---|
+| `GET /search` (the slice-08/16 route, the only `/search` driving surface) | `adapter-http-viewer` | UNCHANGED route; the handler now reads 2 more LOCAL sets + resolves 4 arms. NO new route, NO new query param, NO new method. |
+
+The driving boundary is byte-stable: same route, same form, same query params. The acceptance
+driving port stays the REAL `openlore ui` subprocess over HTTP (`ViewerServer`); the indexer is
+the only mocked boundary (REAL `openlore-indexer serve`); the own/cached/active sets are seeded
+through the REAL CLI verbs (`claim add` for own; `peer add`/`peer pull`/`peer remove` for
+cached + active).
+
+## Wave: DESIGN / [REF] Driven ports + adapters
+
+| Driven port (method) | Adapter | SQL (single-table, read-only) | Degrade |
+|---|---|---|---|
+| `StoreReadPort::distinct_own_author_dids` (NEW) | `adapter-duckdb` | `SELECT DISTINCT author_did FROM claims` | failed read → empty own set → no `You` arm (fall-through) |
+| `StoreReadPort::distinct_cached_peer_author_dids` (NEW) | `adapter-duckdb` | `SELECT DISTINCT author_did FROM peer_claims` (NO `removed_at` filter; that column lives in `peer_subscriptions`, not `peer_claims`) | failed read → empty cached set → no `UnsubscribedCache` arm (fall-through) |
+| `StoreReadPort::list_active_peer_subscriptions` (slice-15, REUSED) | `adapter-duckdb` | unchanged (`peer_subscriptions LEFT JOIN peer_claims … WHERE removed_at IS NULL`) | slice-16 degrade (empty → all-`NetworkUnfollowed`) |
+| `IndexQueryPort::search` (slice-05/08, REUSED) | `adapter-index-query` | unchanged network query — per-user-neutral | slice-08 `Unavailable` |
+
+All driven reads are LOCAL DuckDB over the SAME shared connection (no new table, no new store,
+no second handle). The index query is UNCHANGED and per-user-neutral (the index never learns
+who you are or whom you removed). **No external integration is added** → no contract-test
+annotation for this slice (the only external boundary, the indexer, is unchanged).
+
+## Wave: DESIGN / [REF] Technology choices (pinned)
+
+| Choice | Pin | Rationale | License |
+|---|---|---|---|
+| DuckDB (LOCAL store) | existing (ADR-001) | the two new reads ride the existing shared connection; no store swap | MIT |
+| `maud` (pure render) | existing (ADR-029) | the two new indicators are `maud` `<p>` siblings | MIT |
+| `std::collections::HashSet<String>` | std | the established membership shape (slice-12/16) | — |
+| `duckdb::params_from_iter` | N/A for these reads | whole-table distinct, no bound input | — |
+
+NO new crate, NO new production dependency, NO new transport. OSS-first preserved (all
+existing, all permissive-licensed).
+
+## Wave: DESIGN / [REF] Reuse Analysis (MANDATORY hard gate)
+
+Every component overlapping this slice, classified EXTEND vs CREATE NEW (default EXTEND):
+
+| Component | Overlaps | Verdict | Justification |
+|---|---|---|---|
+| `AuthorRelationship` enum | the four arms | **EXTEND (reuse, zero change)** | already four-variant; the two target arms exist — no new variant |
+| render `@match` empty arms | `You \| UnsubscribedCache => {}` | **EXTEND** | the two empty arms already wired — fill them |
+| `render_following_indicator` pattern | the neutral indicator shape | **EXTEND (as template)** → 2 siblings | `render_self_indicator` / `render_cached_unsubscribed_indicator` are siblings |
+| `SEARCH_FOLLOWING_INDICATOR` SSOT-const pattern | one-place copy | **EXTEND (as template)** → 2 consts | `SEARCH_SELF_INDICATOR` / `SEARCH_REMOVED_CACHED_INDICATOR` |
+| `read_local_active_set` helper | the read-once → `HashSet` + degrade shape | **EXTEND (as template)** → 2 siblings | `read_local_own_set` / `read_local_cached_set` |
+| `to_indexed_claim` | binary resolution | **EXTEND** | binary → four-arm precedence (one more `else if` ×2) |
+| `bare_did` SSOT (shell + pure) | fragment strip | **EXTEND (reuse, zero change)** | applied to the own + cached sets too |
+| `StoreReadPort` | the read trait | **EXTEND** | +2 read-only methods (no mutation method) |
+| `counter_presence_for` / `count_countered_*` single-table SQL pattern | the read-only DuckDB read shape | **EXTEND (as template)** → 2 reads | the SQL idiom (DISTINCT/IN-set, error mapping) is the proven template |
+| slice-16 fault seam + `VIEWER_FAIL_SEAM_TOKENS` | the degrade test seam | **REUSE (zero change)** | the branch shape is identical; per-read fault via fake port (D-4) |
+| `GET /search` route + form + `Shape` fork | the driving surface | **REUSE (zero change)** | no new route/param/shape |
+| `compose_results` (anti-merging) | grouping/ranking | **REUSE (zero change)** | per-row enrichment only — no re-group/re-rank |
+
+**Reuse verdict: 0 CREATE NEW crates/ports/routes; ALL surface-level work is EXTEND or REUSE.**
+The only genuinely-new code units are **4 intra-crate sibling fns** (2 shell read helpers + 2
+pure render fns) + **2 read-only trait methods** + **2 adapter impls** + **2 SSOT consts** —
+each a sibling of an existing, proven pattern. This is a near-all-EXTEND additive slice exactly
+as scoped.
+
+## Wave: DESIGN / [REF] C4 — System Context (Level 1)
+
+```mermaid
+C4Context
+  title System Context — slice-20 viewer-search-full-follow-state (the /search four-arm follow-state)
+  Person(maria, "Maria (P-001)", "Node operator, network-discovery hat")
+  System(viewer, "openlore ui viewer", "Read-only localhost HTTP viewer; holds NO signing key")
+  System_Ext(indexer, "openlore-indexer", "Per-user-neutral network index (slice-05); UNCHANGED")
+  System_Ext(cli, "openlore CLI", "The keyed follow path: peer add / peer remove (slice-03); UNCHANGED")
+  Rel(maria, viewer, "Scans /search results in the browser via")
+  Rel(viewer, indexer, "Queries verified network claims from (per-user-neutral, unchanged)")
+  Rel(maria, cli, "Follows a genuinely-new author via (peer add, render-only guidance points here)")
+  UpdateRelStyle(maria, viewer, $offsetY="-10")
+```
+
+## Wave: DESIGN / [REF] C4 — Container (Level 2)
+
+```mermaid
+C4Container
+  title Container Diagram — /search four-arm follow-state resolution (slice-20)
+  Person(maria, "Maria (P-001)")
+  System_Ext(indexer, "openlore-indexer", "Network index (unchanged)")
+  Container_Boundary(viewer, "openlore ui viewer (read-only, keyless)") {
+    Container(http, "adapter-http-viewer (EFFECT)", "Rust/hyper", "GET /search handler; reads 3 LOCAL sets ONCE; resolves 4 arms in to_indexed_claim")
+    Container(domain, "viewer-domain (PURE)", "Rust/maud", "render_search_results_fragment — total match over 4 AuthorRelationship arms")
+    Container(ports, "ports (PURE traits)", "Rust", "StoreReadPort (+2 read-only reads); AuthorRelationship enum")
+  }
+  ContainerDb(store, "openlore.duckdb (LOCAL)", "DuckDB", "claims / peer_claims / peer_subscriptions — shared read-only connection")
+  Rel(maria, http, "GET /search via")
+  Rel(http, indexer, "Queries results from (unchanged, per-user-neutral)")
+  Rel(http, store, "Reads distinct own author DIDs from (claims)")
+  Rel(http, store, "Reads distinct cached-peer author DIDs from (peer_claims, no removed_at filter)")
+  Rel(http, store, "Reads active subscription set from (peer_subscriptions, slice-15 reused)")
+  Rel(http, domain, "Resolves 4-arm relationship then renders via")
+  Rel(domain, ports, "Matches over AuthorRelationship from")
+```
+
+> Three driven reads to ONE `ContainerDb` are drawn as three labeled arrows to name the
+> specific tables (anti-merging discipline: never a bare cross-table read eliding the author).
+> No L3 component diagram — the slice is 4 sibling fns + 2 reads; the container view is the
+> right granularity (L3 would not add clarity for a thin additive delta).
+
+## Wave: DESIGN / [REF] Decisions table (summary)
+
+| # | Decision | ADR |
+|---|---|---|
+| 1 | Two separate single-table read-only presence reads (own/`claims`, cached/`peer_claims`) | ADR-057 D1 |
+| 2 | Total precedence resolution `You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed` as a pure fn over 3 sets | ADR-057 D2 |
+| 3 | Two neutral render-only indicators + SSOT consts; total `match`; `peer add` suppressed for both | ADR-057 D3 |
+| 4 | Independent per-read degrade; NO new fault seam token (slice-16 seam proves the branch shape) | ADR-057 D4 |
+| — | Anti-merging passes by construction (single-table literals) | ADR-057 D1 / Enforcement |
+
+## Wave: DESIGN / [REF] Quality validation
+
+- **ISO 25010 — Functional suitability**: four-arm resolution total + deterministic (D-2);
+  `peer add` shown only where actionable (accuracy fix).
+- **Reliability (fault tolerance)**: independent per-read degrade; worst case = slice-08 status
+  quo; no crash/5xx/leak (D-4).
+- **Security / Confidentiality**: read-only / no key (CARDINAL) preserved — no mutation method
+  added; `You` needs no identity surface (A3 rejected); index stays per-user-neutral (no LOCAL
+  fact leaks to the index).
+- **Maintainability / Testability**: pure resolution fn (no I/O) unit-testable; per-read fault
+  injectable via fake `StoreReadPort`; render a total `match` (compiler exhaustiveness).
+- **Performance**: +2 batch-once `SELECT DISTINCT` per render (indexed columns), invariant to
+  result count (no N+1); negligible vs the network round-trip.
+- **Dependency-inversion**: pure core (`viewer-domain`, `ports`) depends on nothing I/O; the
+  effect shell wires the reads; dependencies point inward (ADR-007 paradigm honored).
+- **C4 completeness**: L1 + L2 present (Mermaid), every arrow verb-labeled; L3 justifiably
+  omitted.
+
+## Wave: DESIGN / [REF] Open questions deferred to DISTILL/DELIVER
+
+| # | Question | Owner |
+|---|---|---|
+| OQ-1 | Per-read fault injection: confirm the acceptance harness can inject a per-read `Err` via a fake `StoreReadPort` (the NO-new-seam default, D-4). IF NOT → add a distinct cfg-gated token per read + extend `VIEWER_FAIL_SEAM_TOKENS` (the conditional escalation). | DISTILL (Quinn) / DELIVER |
+| OQ-2 | Exact neutral copy for the two indicators within the blocklist gate (DESIGN names `"Your own claim"` / `"A peer you removed (cached)"`; DELIVER may tune within the neutral, non-pejorative constraint). | DELIVER |
+| OQ-3 | Whether `to_indexed_claim` takes 3 `&HashSet` params or a small resolution-context struct (field-level shaping; the PRODUCT/DESIGN contract is the total fn over the 3 sets, D-2). | DELIVER (crafter) |
+
+## Wave: DESIGN / [REF] Wave-decisions summary (D-FS-*)
+
+| ID | Decision | Cardinal? |
+|---|---|---|
+| D-FS-1 | TWO separate single-table read-only reads (own/`claims`, cached/`peer_claims`); combined read rejected (independent degrade + simplest anti-merging proof). | — |
+| D-FS-2 | Total precedence pure fn `You > SubscribedPeer > UnsubscribedCache > NetworkUnfollowed` over 3 sets; exhaustive + deterministic. | C-6 |
+| D-FS-3 | Two neutral render-only indicators (`SEARCH_SELF_INDICATOR` / `SEARCH_REMOVED_CACHED_INDICATOR`); total `match`; `peer add` suppressed for both; slice-16 arms byte-stable. | C-1 / C-7 / C-9 |
+| D-FS-4 | Independent per-read degrade via `unwrap_or_default()`; NO new fault seam token (slice-16 seam proves the branch shape; per-read fault via fake port). | C-8 |
+| D-FS-5 | Anti-merging passes BY CONSTRUCTION — each read is single-table (rule precondition structurally unreachable). | C-3 |
+| D-FS-6 | Keyless `You` — resolved from own-claim DID-set membership, NOT a held identity surface (A3 rejected; the precedent slice's deferral blocker stays OUT). | C-1 (CARDINAL) |
+| D-FS-7 | ZERO new crate/route/variant/port-trait; +2 read-only methods + 4 intra-crate sibling fns + 2 SSOT consts. Workspace stays 21. | C-11 |
+
 ## Changelog
+
+- 2026-06-11 — Morgan (nw-solution-architect) — slice-20 DESIGN. Formalized the three
+  DISCUSS-flagged questions into **ADR-057** (two single-table read-only presence reads +
+  total four-arm precedence resolution + two neutral render-only indicators; no new fault seam
+  token). Reuse verdict: near-all-EXTEND (0 new crate/route/variant; +2 read-only
+  `StoreReadPort` methods, 4 intra-crate sibling fns, 2 SSOT consts, 2 adapter impls). SQL
+  passes `no_cross_table_join_elides_author` BY CONSTRUCTION (each read single-table). C4 L1+L2
+  produced (Mermaid). Brief.md `## Application Architecture` extended. Workspace stays 21.
 
 - 2026-06-11 — Luna — slice-20 (`viewer-search-full-follow-state`) DISCUSS. Traces to J-005c (turn a
   discovery into a follow). COMPLETES the slice-16 `/search` follow-state ADT to its full four-arm
