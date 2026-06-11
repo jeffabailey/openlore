@@ -5978,6 +5978,73 @@ mod tests {
         );
     }
 
+    /// Behavior (slice-20 / US-FS-002 / ADR-057 D3 — the NEW `You` arm): a row resolved
+    /// to `You` renders the neutral render-only SELF indicator
+    /// ([`SEARCH_SELF_INDICATOR`]) and NO `openlore peer add` command — the operator's
+    /// OWN claim is never re-offered a follow (you cannot follow yourself). Pins the
+    /// `You` arm of `render_search_result_row` / `render_self_indicator` at the in-crate
+    /// unit level (mutation gate: the arm must emit the self indicator, never an empty
+    /// `Markup::default()` and never a peer-add affordance).
+    #[test]
+    fn search_you_row_shows_self_indicator_and_no_peer_add() {
+        let html = render_search_results_fragment(&search_state_one_row(
+            "did:plc:me-test#org.openlore.application",
+            AuthorRelationship::You,
+        ))
+        .into_string();
+
+        assert!(
+            html.contains(SEARCH_SELF_INDICATOR),
+            "a `You` row must show the neutral {SEARCH_SELF_INDICATOR:?} self indicator \
+             (the NEW arm); got:\n{html}"
+        );
+        assert!(
+            !html.contains("openlore peer add"),
+            "a `You` row must NOT re-offer a follow — NO `openlore peer add` command \
+             (you cannot follow yourself); got:\n{html}"
+        );
+        assert!(
+            !html.contains(SEARCH_FOLLOWING_INDICATOR),
+            "a `You` row must NOT show the {SEARCH_FOLLOWING_INDICATOR:?} indicator \
+             (the `You` arm is distinct from SubscribedPeer); got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-20 / US-FS-002 / ADR-057 D3 — the NEW `UnsubscribedCache` arm): a
+    /// row resolved to `UnsubscribedCache` renders the neutral render-only RESIDUE
+    /// indicator ([`SEARCH_REMOVED_CACHED_INDICATOR`]) and NO `openlore peer add` command
+    /// — a soft-removed-but-cached peer is residue, NOT a fresh network find, so the
+    /// follow affordance is suppressed (like SubscribedPeer). Pins the
+    /// `UnsubscribedCache` arm of `render_search_result_row` /
+    /// `render_cached_unsubscribed_indicator` at the in-crate unit level (mutation gate:
+    /// the arm must emit the residue indicator, never an empty `Markup::default()` and
+    /// never a peer-add affordance).
+    #[test]
+    fn search_unsubscribed_cache_row_shows_residue_indicator_and_no_peer_add() {
+        let html = render_search_results_fragment(&search_state_one_row(
+            "did:plc:tobias-test#org.openlore.application",
+            AuthorRelationship::UnsubscribedCache,
+        ))
+        .into_string();
+
+        assert!(
+            html.contains(SEARCH_REMOVED_CACHED_INDICATOR),
+            "an `UnsubscribedCache` row must show the neutral \
+             {SEARCH_REMOVED_CACHED_INDICATOR:?} residue indicator (the NEW arm); \
+             got:\n{html}"
+        );
+        assert!(
+            !html.contains("openlore peer add"),
+            "an `UnsubscribedCache` row must NOT re-offer a follow — a soft-removed \
+             cached peer is residue, NO `openlore peer add` command; got:\n{html}"
+        );
+        assert!(
+            !html.contains(SEARCH_FOLLOWING_INDICATOR),
+            "an `UnsubscribedCache` row must NOT show the {SEARCH_FOLLOWING_INDICATOR:?} \
+             indicator (the residue arm is distinct from SubscribedPeer); got:\n{html}"
+        );
+    }
+
     /// Behavior (US-SF-002 / Theme B / C-1, CARDINAL — render-only): NEITHER follow-state
     /// affordance is an executable control. Over a render carrying BOTH a SubscribedPeer
     /// row ("Following") AND a NetworkUnfollowed row (`peer add`), the markup contains no

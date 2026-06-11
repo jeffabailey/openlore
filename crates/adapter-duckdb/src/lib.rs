@@ -750,7 +750,7 @@ impl<T> OptionalExtension<T> for Result<T, duckdb::Error> {
 mod tests {
     use super::*;
     use claim_domain::{Confidence, Did, SignatureBlock, UnsignedClaim};
-    use ports::{AuthorRelationship, PeerStoragePort, SourceTable};
+    use ports::{AuthorRelationship, PeerStoragePort, SourceTable, StoreReadPort};
     use tempfile::tempdir;
     use url::Url;
 
@@ -1005,5 +1005,125 @@ mod tests {
             .query_federated_by_subject("github:does/not-exist")
             .expect("query_federated_by_subject");
         assert!(rows.is_empty(), "expected no rows; got {}", rows.len());
+    }
+
+    /// Behavior (slice-20 / US-FS-001/002 / ADR-057 D1 — the `You`-arm + the
+    /// `UnsubscribedCache`-arm presence reads): over a fresh store seeded with TWO own
+    /// claims (one author DID, two CIDs) and ONE soft-removed peer's TWO cached claims,
+    /// `distinct_own_author_dids` returns EXACTLY the own author DID and
+    /// `distinct_cached_peer_author_dids` returns EXACTLY the cached peer author DID
+    /// (each a `SELECT DISTINCT author_did` over its single table) — VERBATIM, with the
+    /// `#org.openlore.application` signing fragment retained (the effect shell bares both
+    /// sides at membership time, R-FS-6). This pins the two new reads against the REAL
+    /// DuckDB adapter so a mutant collapsing either to the empty set, to `{""}`, or to a
+    /// wrong constant is caught. Each read projects `author_did` from its OWN single
+    /// source table (no cross-source merge), so the own-author set and the cached-author
+    /// set are DISJOINT and neither read leaks the other source's authors.
+    #[test]
+    fn distinct_own_and_cached_author_dids_project_each_single_table_verbatim() {
+        let local_did = "did:plc:me-test";
+        let peer_did = "did:plc:tobias-test";
+        let subject = "github:rust-lang/cargo";
+
+        let (_dir, storage) = open_tmp();
+        let peer = storage.peer_adapter(&Did(local_did.to_string()));
+
+        // TWO own claims (same author, two CIDs) → DISTINCT collapses to ONE own DID.
+        for (object, cid) in [
+            (
+                "org.openlore.philosophy.local-first",
+                "bafyowncid001000000000000000000000000000000",
+            ),
+            (
+                "org.openlore.philosophy.dependency-pinning",
+                "bafyowncid002000000000000000000000000000000",
+            ),
+        ] {
+            let own = signed_claim(local_did, subject, object, cid);
+            storage.write_signed_claim(&own).expect("write own claim");
+        }
+
+        // A SOFT-REMOVED peer (subscription removed) whose TWO cached claims are RETAINED
+        // in `peer_claims` (the residue the `UnsubscribedCache` arm reads — slice-15 PS-4).
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+        peer.add_subscription(ports::PeerSubscription {
+            peer_did: Did(peer_did.to_string()),
+            peer_handle: "tobias.test".to_string(),
+            peer_pds_endpoint: endpoint.clone(),
+            subscribed_at: Utc::now(),
+            removed_at: Some(Utc::now()),
+        })
+        .expect("add (soft-removed) subscription");
+        for (object, cid) in [
+            (
+                "org.openlore.philosophy.reproducible-builds",
+                "bafypeercid001000000000000000000000000000000",
+            ),
+            (
+                "org.openlore.philosophy.local-first",
+                "bafypeercid002000000000000000000000000000000",
+            ),
+        ] {
+            let peer_claim = signed_claim(peer_did, subject, object, cid);
+            peer.write_peer_claim(&Did(peer_did.to_string()), &peer_claim, &endpoint, Utc::now())
+                .expect("write cached peer claim");
+        }
+
+        let read = storage.read_adapter();
+
+        // `distinct_own_author_dids` → EXACTLY the own author DID (with the signing
+        // fragment, projected verbatim), DISTINCT-collapsed from the two own claims.
+        let own_authors = read
+            .distinct_own_author_dids()
+            .expect("distinct_own_author_dids read succeeds");
+        let expected_own: std::collections::HashSet<String> =
+            [format!("{local_did}#org.openlore.application")].into_iter().collect();
+        assert_eq!(
+            own_authors, expected_own,
+            "distinct_own_author_dids must return EXACTLY the own author DID from `claims` \
+             (single-table, DISTINCT-collapsed), never empty and never the cached peer"
+        );
+
+        // `distinct_cached_peer_author_dids` → EXACTLY the cached peer author DID (NO
+        // `removed_at` filter — the soft-removed peer's residue is retained), DISTINCT.
+        // NOTE: the `peer_claims` write path stores the BARE peer author DID (the pull
+        // path normalizes the `#org.openlore.application` fragment off), whereas `claims`
+        // retains the fragment — so the cached read returns the bare DID here. Either way
+        // the effect shell bares BOTH sides via `bare_did` before membership (R-FS-6).
+        let cached_authors = read
+            .distinct_cached_peer_author_dids()
+            .expect("distinct_cached_peer_author_dids read succeeds");
+        let expected_cached: std::collections::HashSet<String> =
+            [peer_did.to_string()].into_iter().collect();
+        assert_eq!(
+            cached_authors, expected_cached,
+            "distinct_cached_peer_author_dids must return EXACTLY the cached peer author DID \
+             from `peer_claims` (single-table, NO removed_at filter — residue retained), \
+             never empty and never the own author"
+        );
+    }
+
+    /// Behavior (slice-20 / ADR-057 D1 — the empty-store guards): on a fresh, unseeded
+    /// store BOTH presence reads return `Ok(HashSet::new())` — an empty store yields no
+    /// own author and no cached peer author (the `Ok(HashSet::new())` empty-store branch
+    /// the effect shell's `unwrap_or_default` degrade also lands on). Distinguishes the
+    /// honest-empty read from a wrong-constant mutant (`{""}` / `{"xyzzy"}`).
+    #[test]
+    fn distinct_own_and_cached_author_dids_are_empty_on_a_fresh_store() {
+        let (_dir, storage) = open_tmp();
+        let read = storage.read_adapter();
+
+        assert!(
+            read.distinct_own_author_dids()
+                .expect("own read succeeds on empty store")
+                .is_empty(),
+            "an empty `claims` table must yield the EMPTY own author set"
+        );
+        assert!(
+            read.distinct_cached_peer_author_dids()
+                .expect("cached read succeeds on empty store")
+                .is_empty(),
+            "an empty `peer_claims` table must yield the EMPTY cached author set"
+        );
     }
 }
