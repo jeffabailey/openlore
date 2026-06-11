@@ -915,3 +915,88 @@ harness = true
 name = "viewer_counter_aware_counts_invariants"
 path = "../../tests/acceptance/viewer_counter_aware_counts_invariants.rs"
 harness = true
+
+# Slice-19 (viewer-peer-counter-aware-counts; DISTILL) — the COUNTERED-PEER-CLAIMS count
+# rendered beside the peer-claims count on the `GET /` landing PEER line AND in the
+# `GET /peer-claims` list header: "4 peer claims (1 countered)" (US-PC-000/001/002; ADR-056).
+# The deferred PEER sibling of slice-18. EXTENDS the slice-17/18 `LandingSummary` with a
+# FIFTH additive `Option<usize>` field `countered_peer_claims` (`.ok()`-degraded), threaded
+# into `render_landing` (beside the unchanged PEER line) + a NEW `render_peer_claims_page`
+# `countered_peer_claims: Option<usize>` param via the REUSED slice-18
+# `render_countered(Option<usize>)` helper (NO new helper — WD-PC-10 / ADR-056 D3). The count
+# is `count_countered_peer_claims()` = the EXACT slice-18 SQL with the OUTER table swapped
+# `claims c → peer_claims p`: `COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN
+# (SELECT referenced_cid FROM claim_references WHERE ref_type='counters' UNION SELECT
+# referenced_cid FROM peer_claim_references WHERE ref_type='counters')` — a presence count
+# (a peer claim countered by N counterers counts ONCE), peer-only by outer table, invariant
+# to store size (ADR-056 D1; the inner UNION IN-set is byte-IDENTICAL to slice-18's). A cached
+# peer claim is countered by the OPERATOR (`claim counter` → claim_references) OR another PEER
+# (`peer pull` → peer_claim_references); both arms contribute. Themes: read-only/no-key (C-1 /
+# WD-PC-1); LOCAL/offline (C-2 — local /static/htmx.min.js); missing≠zero (C-5 / WD-PC-6 — a
+# failed read → "(— countered)", an honest empty → "(0 countered)"); no-N+1 (C-3 — one
+# aggregate read invariant to store size; landing budget +1 = 5th count); presence-once (C-4 /
+# BR-PC-1 — a peer claim countered by 2 counterers counts ONCE) + either-ref-table-once;
+# additive (C-4 / WD-PC-9 — the peer-claims "4" + the slice-06/07 list order/paging + the
+# slice-13 per-row flags byte-identical); single source (WD-PC-8 — landing "(N countered)" ==
+# /peer-claims header); anti-misread (C-6 / WD-PC-10 — neutral copy); own-untouched (BR-PC-4 /
+# WD-PC-7 — the slice-18 own surfaces stay byte-identical). Drives the REAL `openlore ui` verb
+# via `ViewerServer::start` + in-test HTTP GET over a REAL seeded LOCAL DuckDB (peer claims via
+# `peer add`+`peer pull`, counters via a distinct peer's counters-referencing record AND the
+# operator's `claim counter` — seed_landing_store_with_countered_peer_claims /
+# seed_landing_store_no_peer_claim_countered / seed_landing_store_one_peer_claim_countered_twice
+# / seed_landing_store_peer_claims_countered_each_arm / seed_landing_store_with_countered_peer_
+# and_own); NO mocked boundary (the count is LOCAL + OFFLINE). The seeds PIN the genuine count
+# with a DIRECT ADR-056 COUNT(DISTINCT) oracle (read_countered_peer_claims_count). Per Mandate
+# 9/11 example-based, never PBT-generated at this layer; Tier B NOT warranted (single-shot
+# additive render, no chained ≥3-scenario journey, no domain-rich input space — Tier A example
+# coverage is exact). Build-before-run: `cargo build` the `openlore` bin (the viewer); the
+# count needs NO second binary (LOCAL read). DISTILL registers + RED gate; PC-* stay RED — the
+# `/` + `/peer-claims` routes do NOT render the peer countered count yet and
+# count_countered_peer_claims/the 5th LandingSummary field/the render_peer_claims_page param do
+# NOT exist, so "(1 countered)" on the PEER line/header is ABSENT (MISSING_FUNCTIONALITY). The
+# ATs drive the routes via subprocess HTTP (never the Rust render_landing/render_peer_claims_
+# page signatures), so the production signature changes are DELIVER's job and do not affect AT
+# compilation. The missing≠zero failed-read scenario drives the test-only 4th DISTINCT
+# OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT effect-shell fault seam (slice-18 precedent — so the
+# PEER count fails INDEPENDENTLY of the own count), panicking at the `start_inner` `todo!()`
+# body until DELIVER materializes it — also MISSING_FUNCTIONALITY.
+[[test]]
+name = "viewer_peer_counter_aware_counts"
+path = "../../tests/acceptance/viewer_peer_counter_aware_counts.rs"
+harness = true
+
+# Slice-19 (viewer-peer-counter-aware-counts; DISTILL) GOLD / guardrail invariants over the
+# whole countered-PEER-claims count surface on `GET /` + `GET /peer-claims` (cross-cutting
+# C-1/-2/-3/-4/-5/-6 + WD-PC-6/7/8/9): every_peer_counter_aware_render_leaves_the_store_read_
+# only (C-1 / Mandate 8 — the count computed per request persists nothing; claims + peer_claims
+# counts UNCHANGED via assert_store_read_only), no_peer_counter_aware_render_adds_a_write_or_
+# mutating_control (C-1 CARDINAL — no form/button/sort/filter/sign/compose/subscribe/follow
+# control on either surface; the count is render-only text; viewer holds no key), the_peer_
+# counter_aware_chrome_stays_offline_no_cdn (C-2 — local /static/htmx.min.js, no CDN on both
+# pages), the_peer_counter_aware_surfaces_render_fully_offline (C-2 — a LOCAL read with no
+# outbound edge; renders network-down on both surfaces), the_countered_peer_count_is_a_fixed_
+# aggregate_read_invariant_to_store_size (C-3 CARDINAL — a LARGE store renders the right count
+# in one request; landing budget +1 = 5th count; the strict 1-query bound is a DELIVER
+# adapter-duckdb unit/property test), missing_is_distinct_from_zero_for_the_countered_peer_count
+# (C-2 / C-5 / WD-PC-6 CARDINAL — both sides: a none-countered store shows "(0 countered)", a
+# failed read shows "(— countered)"; a fabricated 0 on failure is unrepresentable), a_peer_claim
+# _countered_by_two_counterers_counts_once (C-4 / BR-PC-1 CARDINAL — presence-once: "(1
+# countered)" never "(2 countered)" on both surfaces), the_landing_and_peer_claims_header_counts
+# _are_consistent (WD-PC-8 — single source: landing "(N countered)" == /peer-claims header for
+# the same store), the_peer_claims_list_is_byte_identical_to_the_no_header_count_baseline (C-4 /
+# WD-PC-9 — the /peer-claims list order/paging/count/confidence/origin + the slice-13 per-row
+# flags byte-identical to the no-header-count baseline), and the_slice_18_own_countered_surfaces
+# _are_untouched (BR-PC-4 / WD-PC-7 — the slice-18 own line "12 own claims (3 countered)" + the
+# /claims header still render unchanged; peer-only, no third dimension). INHERITS the slice-06/
+# 07/17/18 viewer GOLD invariants (read-only / offline / no-key / the own-count golds); the
+# slice-19 golds add the COUNTERED-PEER specifics (presence-once, single-source landing==header,
+# the no-regression /peer-claims byte-identity + own-surface-untouched, the missing≠zero peer
+# marker, the no-N+1 peer-read proxy). Drives the REAL `openlore ui` via `ViewerServer` over a
+# REAL seeded local store; NO mocked boundary. Per Mandate 9/11 example-based, never
+# PBT-generated. DISTILL registers + RED gate; PC-INV-* stay RED (the routes don't render the
+# peer count + the 4th distinct missing seam; the missing≠zero gold panics at the `start_inner`
+# `todo!()` fault seam — both MISSING_FUNCTIONALITY).
+[[test]]
+name = "viewer_peer_counter_aware_counts_invariants"
+path = "../../tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs"
+harness = true

@@ -344,8 +344,98 @@ annotation applies (the only dependency is the LOCAL read-only store).
 
 ---
 
+## Wave: DISTILL (lean) — 2026-06-10 · Owner: Quinn (nw-acceptance-designer)
+
+The deferred PEER sibling of slice-18, authored as scaffolded RED (ADR-025) mirroring slice-18's
+DISTILL structure EXACTLY onto the PEER count. Artifacts: `distill/walking-skeleton.md`,
+`distill/test-scenarios.md`, the two executable `.feature`-equivalent Rust AT suites + the extended
+`tests/acceptance/support/mod.rs`.
+
+### Wave: DISTILL / [REF] Reconciliation
+
+**Reconciliation passed — 0 contradictions** across DISCUSS / DESIGN (DESIGN is embedded in
+`discuss/wave-decisions.md` + ADR-056; no separate `design/wave-decisions.md`). No `devops/` dir
+(consistent with all prior slices — default env matrix, WARN). Every WD-PC-1..10 cardinal is
+HONORED by ADR-056 D2/D3/D4; WD-PC-5 RESOLVED → count-only aggregate; WD-PC-10 → REUSE
+`render_countered` (no new helper); D4 → 4th DISTINCT fault-seam token.
+
+### Wave: DISTILL / [REF] Scenario list with tags
+
+16 story scenarios (`tests/acceptance/viewer_peer_counter_aware_counts.rs`) + 10 GOLD invariants
+(`tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs`). Full table + tags:
+`distill/test-scenarios.md`. WS: `the_front_door_shows_how_many_cached_peer_claims_are_countered`
+(`@walking_skeleton @driving_port @driving_adapter @real-io`). Error/edge ratio ≈ 69% (≥40% met).
+
+### Wave: DISTILL / [REF] WS strategy + adapter coverage
+
+Brownfield DELTA — no Feature 0. Architecture-of-Reference treatments applied (not re-negotiated):
+driving `GET /` + `GET /peer-claims` via REAL `openlore ui` subprocess (`ViewerServer::start`);
+driven-internal `StoreReadPort` → REAL DuckDB seeded through production `peer add` + `peer pull` +
+`claim counter` (Pillar 3); NO driven-external/non-deterministic port (the count is a LOCAL
+`COUNT(DISTINCT)` with no outbound edge). The ONE new driven-internal read
+(`count_countered_peer_claims`, ADR-056) is exercised with REAL I/O in every scenario + pinned by a
+direct ADR-056 `COUNT(DISTINCT)` oracle. Full table: `distill/walking-skeleton.md`.
+
+### Wave: DISTILL / [REF] Scaffolds (RED-ready)
+
+Mandate-7 RED scaffolds (`__SCAFFOLD__`/`SCAFFOLD: true` markers throughout):
+`tests/acceptance/viewer_peer_counter_aware_counts.rs`,
+`tests/acceptance/viewer_peer_counter_aware_counts_invariants.rs`, extended
+`tests/acceptance/support/mod.rs` (new seeds + asserts + the 7th `start_inner` boolean threading
+`OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT`), registered in `crates/cli/Cargo.toml`. All COMPILE +
+FAIL for the right reason (MISSING_FUNCTIONALITY): the `/` + `/peer-claims` routes do NOT render the
+peer countered count yet, and `count_countered_peer_claims` / the 5th `LandingSummary` field / the
+`render_peer_claims_page` `Option<usize>` param do NOT exist. The production signature changes are
+DELIVER's job (the ATs drive via subprocess HTTP, never the Rust render signatures) — so they
+compile + fail at the HTTP assertion. check-arch OK (21); the slice-18 + slice-13 suites still
+compile.
+
+### Wave: DISTILL / [REF] New seeds + asserts (support/mod.rs)
+
+Seeds: `seed_landing_store_with_countered_peer_claims` (4 peer, 1 countered by the operator —
+`claim_references` arm, clean total 4), `seed_landing_store_no_peer_claim_countered` (4 peer, 0
+countered — honest Some(0)), `seed_landing_store_one_peer_claim_countered_twice` (1 peer claim
+countered by BOTH the operator AND a peer → presence-once), `seed_landing_store_peer_claims_countered_each_arm`
+(2 peer claims, one via each ref-table arm → 2), `seed_landing_store_with_countered_peer_and_own`
+(unified single-pull: own 12+3 + peer 1, own untouched), `seed_extra_plain_peer_claims` (no-N+1
+store inflation), `start_viewer_with_failing_countered_peer_count` (4th DISTINCT fault seam).
+Oracle: `read_countered_peer_claims_count` (the slice-18 SQL with outer `peer_claims`).
+Asserts: `assert_landing_peer_countered_count` / `assert_landing_peer_countered_missing` /
+`assert_peer_claims_header_countered_count` / `assert_peer_claims_header_countered_missing` /
+`assert_landing_and_peer_claims_countered_consistent` / `assert_landing_own_line_untouched` +
+the position-aware `assert_countered_count_beside_label` (disambiguates peer vs slice-18 own
+parenthetical — No Fixture Theater) + `landing_peer_total`. REUSED from slice-18:
+`assert_countered_copy_is_neutral`, `assert_claims_header_countered_count`, `COUNTERED_OWN_CLAIMS`,
+`LANDING_OWN_CLAIMS`. REUSED from slice-13: `seed_peer_claims_one_countered`,
+`seed_peer_claims_none_countered`, `assert_peer_claims_order_byte_identical`, `SeededPeerClaimsList`.
+
+### Wave: DISTILL / [REF] RED classification + missing≠zero seeding
+
+All 16 story scenarios + 5 of 10 golds = RED MISSING_FUNCTIONALITY (verified by running the
+suites — every failure is "the … must show (N countered)" / the missing marker, never a
+setup/import/fixture error; the seeds run to completion). The 5 GREEN golds (read-only, no-write,
+offline-chrome, no-regression byte-identity, slice-18-own-untouched) are PROTECTIVE guardrails that
+hold by construction pre-implementation and STAY green after DELIVER — the slice-18 invariants
+posture exactly. The missing≠zero failed-read SAD path is seeded via the 4th DISTINCT cfg-gated
+`OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT` effect-shell fault seam (so the PEER count fails
+INDEPENDENTLY of the slice-18 own count — WD-PC-7 / ADR-056 D4); the SUCCESSFUL-zero side is fully
+exercised today via `seed_landing_store_no_peer_claim_countered`. DELIVER materializes the seam +
+appends the token to the xtask `VIEWER_FAIL_SEAM_TOKENS` guard.
+
+---
+
 ## Changelog
 
+- 2026-06-10 — slice-19 (`viewer-peer-counter-aware-counts`) DISTILL (Quinn). Authored ALL
+  acceptance tests as scaffolded RED (ADR-025), mirroring slice-18's DISTILL structure onto the
+  PEER count: 16 story scenarios + 10 GOLD invariants over `GET /` + `GET /peer-claims`. New
+  seeds/asserts/oracle + the 7th `start_inner` fault-seam boolean
+  (`OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT`, 4th distinct token) in `support/mod.rs`; two test
+  binaries registered in `crates/cli/Cargo.toml`. RED = MISSING_FUNCTIONALITY (the routes don't
+  render the peer count + count_countered_peer_claims/5th-field/peer-claims-param absent). Position-
+  aware landing assert disambiguates the peer vs slice-18 own "(N countered)" parenthetical (No
+  Fixture Theater). Reconciliation 0 contradictions; check-arch OK (21); slice-18 + slice-13 suites
+  still compile. Error/edge ratio ≈ 69%.
 - 2026-06-10 — slice-19 (`viewer-peer-counter-aware-counts`) DESIGN (Morgan). ADR-056. Resolved
   WD-PC-5 (count-only `count_countered_peer_claims` aggregate — the slice-18 SQL with outer
   `peer_claims`) + R-PC-9 (xtask anti-merging GREEN by construction, verified against
