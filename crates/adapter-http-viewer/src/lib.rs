@@ -1272,8 +1272,7 @@ fn read_local_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet
 /// fragment; the result-side fragment strip happens in the pure `resolve_author_relationship`
 /// (R-FS-6), so the set is collected VERBATIM (bared on both sides at membership time).
 fn read_local_own_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
-    store
-        .distinct_own_author_dids()
+    own_dids_read_with_fault_seam(store.distinct_own_author_dids())
         .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
         .unwrap_or_default()
 }
@@ -1290,8 +1289,7 @@ fn read_local_own_set(store: &dyn StoreReadPort) -> std::collections::HashSet<St
 /// both sides at membership time via the pure `resolve_author_relationship` (R-FS-6), so the
 /// set is bared here for symmetry with the own set.
 fn read_local_cached_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
-    store
-        .distinct_cached_peer_author_dids()
+    cached_peer_dids_read_with_fault_seam(store.distinct_cached_peer_author_dids())
         .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
         .unwrap_or_default()
 }
@@ -1327,6 +1325,89 @@ fn active_set_read_with_fault_seam<T>(
 #[cfg(not(debug_assertions))]
 #[inline]
 fn active_set_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    read
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, mirroring the slice-16 [`active_set_read_with_fault_seam`] +
+/// the slice-17/18/19 count seams + the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_` seam
+/// discipline, enforced by `xtask check-arch`'s viewer-fail-seam guard token set).
+///
+/// slice-20 (US-FS-001/002 / Theme F / C-8 / WD-FS-4 / ADR-057 D4 — the OQ-1
+/// escalation): the real-`openlore ui`-subprocess acceptance harness CANNOT inject a
+/// per-read `Err` via a fake `StoreReadPort` (the viewer holds ONE long-lived DuckDB
+/// connection taken at startup), so D-4's NO-new-seam default does not hold and the
+/// conditional escalation FIRES. The substrate "lie" this slice's `You` arm must
+/// survive is a MID-REQUEST own-DID read FAILURE. When
+/// `OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` is set (acceptance fault-injection only), this
+/// substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
+/// `distinct_own_author_dids` result so the SAME production `unwrap_or_default()`
+/// per-read degrade branch in [`read_local_own_set`] runs — collapsing to the EMPTY own
+/// set → no row resolves `You`, INDEPENDENT of the active + cached reads (a 5th DISTINCT
+/// token so the own arm degrades on its own). The PRODUCTION per-read degrade path is the
+/// thing under test; the seam only INDUCES the `Err` the path already handles.
+///
+/// In a release build (`debug_assertions` off) this is the identity function: the
+/// real read result flows through verbatim, with NO env-var read compiled in.
+#[cfg(debug_assertions)]
+fn own_dids_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_OWN_DIDS_READ").is_some() {
+        return Err(StoreReadError::Unreadable {
+            detail: "own-DIDs read fault injected (test-only seam)".to_string(),
+        });
+    }
+    read
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn own_dids_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    read
+}
+
+/// Fault-injection seam (TEST-ONLY, `#[cfg(debug_assertions)]`-gated — NEVER ships
+/// in a release binary, mirroring the slice-16 [`active_set_read_with_fault_seam`] +
+/// the slice-20 [`own_dids_read_with_fault_seam`] + the ADR-026 `OPENLORE_PEER_PUBKEY_HEX_`
+/// seam discipline, enforced by `xtask check-arch`'s viewer-fail-seam guard token set).
+///
+/// slice-20 (US-FS-001/002 / Theme F / C-8 / WD-FS-4 / ADR-057 D4 — the OQ-1
+/// escalation): the substrate "lie" this slice's `UnsubscribedCache` arm must survive is
+/// a MID-REQUEST cached-peer-DID read FAILURE. When
+/// `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ` is set (acceptance fault-injection only),
+/// this substitutes a genuine `Err(StoreReadError::Unreadable)` for the real
+/// `distinct_cached_peer_author_dids` result so the SAME production `unwrap_or_default()`
+/// per-read degrade branch in [`read_local_cached_set`] runs — collapsing to the EMPTY
+/// cached set → no row resolves `UnsubscribedCache` (a soft-removed peer falls through to
+/// the slice-16 `NetworkUnfollowed` fallback), INDEPENDENT of the own + active reads (a
+/// 6th DISTINCT token so the cached arm degrades on its own). The PRODUCTION per-read
+/// degrade path is the thing under test; the seam only INDUCES the `Err` the path already
+/// handles.
+///
+/// In a release build (`debug_assertions` off) this is the identity function: the
+/// real read result flows through verbatim, with NO env-var read compiled in.
+#[cfg(debug_assertions)]
+fn cached_peer_dids_read_with_fault_seam<T>(
+    read: Result<T, StoreReadError>,
+) -> Result<T, StoreReadError> {
+    if std::env::var_os("OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ").is_some() {
+        return Err(StoreReadError::Unreadable {
+            detail: "cached-peer-DIDs read fault injected (test-only seam)".to_string(),
+        });
+    }
+    read
+}
+
+/// Release identity: NO seam, NO env-var read compiled into the binary.
+#[cfg(not(debug_assertions))]
+#[inline]
+fn cached_peer_dids_read_with_fault_seam<T>(
     read: Result<T, StoreReadError>,
 ) -> Result<T, StoreReadError> {
     read
@@ -1632,10 +1713,10 @@ mod tests {
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
     use super::{
-        bare_did, claims_page, countered_count_with_fault_seam,
-        countered_peer_count_with_fault_seam, landing_page, peer_claims_count_with_fault_seam,
-        peer_claims_page, to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET,
-        HTMX_ASSET_SHA256,
+        bare_did, cached_peer_dids_read_with_fault_seam, claims_page,
+        countered_count_with_fault_seam, countered_peer_count_with_fault_seam, landing_page,
+        own_dids_read_with_fault_seam, peer_claims_count_with_fault_seam, peer_claims_page,
+        to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET, HTMX_ASSET_SHA256,
     };
     use http_body_util::BodyExt;
     use hyper::StatusCode;
@@ -2375,6 +2456,126 @@ mod tests {
         assert!(
             body.contains("(3 countered)"),
             "the peer-claims-page header must render the countered count via render_countered: {body}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-20 (US-FS-001/002 / ADR-057 D4 — the OQ-1 escalation) — the two NEW
+    // per-read presence-read fault seams (`own_dids_read_with_fault_seam`,
+    // `cached_peer_dids_read_with_fault_seam`). Mirrors slice-16's active-set seam
+    // EXACTLY: the identity pass-through when the token is unset (the seam must not
+    // fabricate a read result), and the `#[cfg(debug_assertions)]`-only `Err`
+    // injection when the token is set (forcing the production `unwrap_or_default() →
+    // empty set` per-read degrade so ONLY that arm falls through). The release-identity
+    // siblings are cfg-dead under the debug test profile (NOT compiled here) — guarded
+    // by the xtask seam guard + the release-build seam-free check, mirroring slice-16/
+    // 17/18/19's lone cfg-dead survivors. The PROPERTY the per-read degrade satisfies
+    // (Err → empty set → ONLY that arm falls through, the precedence stays intact) is
+    // property-checked over the pure `resolve_author_relationship` SSOT in step 02-05;
+    // these in-crate tests pin the seam contract (the release-safety structural
+    // guarantee) per the roadmap's EXEMPT-FROM-PARADIGM note.
+    // -------------------------------------------------------------------------
+
+    /// The slice-20 own-DID-read fault-injection env-var (a 5th DISTINCT token so the
+    /// `You` arm degrades INDEPENDENTLY of the active + cached reads; ADR-057 D4).
+    const OWN_DIDS_FAULT_ENV: &str = "OPENLORE_VIEWER_FAIL_OWN_DIDS_READ";
+
+    /// The slice-20 cached-peer-DID-read fault-injection env-var (a 6th DISTINCT token
+    /// so the `UnsubscribedCache` arm degrades INDEPENDENTLY; ADR-057 D4).
+    const CACHED_PEER_DIDS_FAULT_ENV: &str = "OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ";
+
+    /// Behavior (the `#[cfg(debug_assertions)]` `own_dids_read_with_fault_seam`): the
+    /// seam is the IDENTITY on the real read when the fault env-var is unset — a genuine
+    /// `Ok(vec!["did:plc:me"])` flows through verbatim. (`StoreReadError` is not
+    /// `PartialEq`, so we match the `Ok` arm directly.) Serialized on the SAME
+    /// [`FAULT_ENV_LOCK`] so a sibling `set_var` cannot leak into this read window.
+    #[test]
+    fn own_dids_read_seam_passes_the_real_read_through_when_unset() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            std::env::var_os(OWN_DIDS_FAULT_ENV).is_none(),
+            "the own-DIDs-read fault seam env-var must be unset for the pass-through assertion"
+        );
+        let passed = own_dids_read_with_fault_seam(Ok(vec!["did:plc:me".to_string()]));
+        match passed {
+            Ok(dids) => assert_eq!(
+                dids,
+                vec!["did:plc:me".to_string()],
+                "the seam must pass the real own-DID read through verbatim when unset"
+            ),
+            Err(e) => panic!("the seam must not inject an error when unset: {e}"),
+        }
+    }
+
+    /// Behavior (`#[cfg(debug_assertions)]` only): with the own-DIDs fault env-var SET,
+    /// the seam substitutes a genuine `Err` for the real read — exercising the SAME
+    /// production `unwrap_or_default() → empty own set → no `You` arm` per-read degrade
+    /// (ADR-057 D4). Set + removed within this single test under the shared
+    /// [`FAULT_ENV_LOCK`] so the sibling pass-through test never observes the pin.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn own_dids_read_seam_injects_err_when_the_fault_env_var_is_set() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(OWN_DIDS_FAULT_ENV, "1");
+        let injected = own_dids_read_with_fault_seam(Ok(vec!["did:plc:me".to_string()]));
+        std::env::remove_var(OWN_DIDS_FAULT_ENV);
+
+        assert!(
+            injected.is_err(),
+            "with the own-DIDs fault env-var set, the seam must inject a genuine Err so the \
+             production unwrap_or_default() → empty own set → no `You` arm degrade runs (ADR-057 D4)"
+        );
+    }
+
+    /// Behavior (the `#[cfg(debug_assertions)]` `cached_peer_dids_read_with_fault_seam`):
+    /// the seam is the IDENTITY on the real read when the fault env-var is unset — a
+    /// genuine `Ok(vec!["did:plc:tobias"])` flows through verbatim. Serialized on the
+    /// SAME [`FAULT_ENV_LOCK`].
+    #[test]
+    fn cached_peer_dids_read_seam_passes_the_real_read_through_when_unset() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            std::env::var_os(CACHED_PEER_DIDS_FAULT_ENV).is_none(),
+            "the cached-peer-DIDs-read fault seam env-var must be unset for the pass-through assertion"
+        );
+        let passed = cached_peer_dids_read_with_fault_seam(Ok(vec!["did:plc:tobias".to_string()]));
+        match passed {
+            Ok(dids) => assert_eq!(
+                dids,
+                vec!["did:plc:tobias".to_string()],
+                "the seam must pass the real cached-peer-DID read through verbatim when unset"
+            ),
+            Err(e) => panic!("the seam must not inject an error when unset: {e}"),
+        }
+    }
+
+    /// Behavior (`#[cfg(debug_assertions)]` only): with the cached-peer-DIDs fault
+    /// env-var SET, the seam substitutes a genuine `Err` for the real read — exercising
+    /// the SAME production `unwrap_or_default() → empty cached set → no `UnsubscribedCache`
+    /// arm` per-read degrade (a soft-removed peer falls through to `NetworkUnfollowed`;
+    /// ADR-057 D4). Set + removed within this single test under the shared
+    /// [`FAULT_ENV_LOCK`].
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cached_peer_dids_read_seam_injects_err_when_the_fault_env_var_is_set() {
+        let _env = FAULT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(CACHED_PEER_DIDS_FAULT_ENV, "1");
+        let injected =
+            cached_peer_dids_read_with_fault_seam(Ok(vec!["did:plc:tobias".to_string()]));
+        std::env::remove_var(CACHED_PEER_DIDS_FAULT_ENV);
+
+        assert!(
+            injected.is_err(),
+            "with the cached-peer-DIDs fault env-var set, the seam must inject a genuine Err so the \
+             production unwrap_or_default() → empty cached set → NetworkUnfollowed fallback runs (ADR-057 D4)"
         );
     }
 }

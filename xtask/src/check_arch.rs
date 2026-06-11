@@ -1028,6 +1028,12 @@ pub fn scan_pubkey_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<Strin
 //     countered-own-claims count read failure → `.ok() → None → render_countered(None)
 //     → "(— countered)"` (ADR-055 D4; the own-claims count + the `/claims` list rows
 //     still render, the page stays 200, never a 5xx / fabricated "(0 countered)").
+//   - slice-20 `OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` + `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ`:
+//     a `/search` own-DID / cached-peer-DID presence read failure → `unwrap_or_default()
+//     → empty set` → that arm (`You` / `UnsubscribedCache`) degrades INDEPENDENTLY to
+//     `NetworkUnfollowed` while the other arms still resolve (ADR-057 D4 — the OQ-1
+//     escalation: the real-binary subprocess harness cannot inject a per-read `Err` via a
+//     fake `StoreReadPort`, so each read gets its own DISTINCT cfg-gated fault token).
 // Exactly like the ADR-026 pubkey seam, EACH fault injector is RELEASE-FORBIDDEN:
 // every read of EACH token MUST sit behind a `#[cfg(debug_assertions)]` gate so it
 // compiles ONLY in debug/test builds and can NEVER force a degrade in a release
@@ -1045,6 +1051,8 @@ const VIEWER_FAIL_SEAM_TOKENS: &[&str] = &[
     "OPENLORE_VIEWER_FAIL_PEER_CLAIMS_COUNT",
     "OPENLORE_VIEWER_FAIL_COUNTERED_COUNT",
     "OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT",
+    "OPENLORE_VIEWER_FAIL_OWN_DIDS_READ",
+    "OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ",
 ];
 
 /// The viewer source file the fault-seam guard scans.

@@ -7242,7 +7242,7 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None, None, None, false, false, false, false)
+        Self::start_inner(env, None, None, None, false, false, false, false, false, false)
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7253,7 +7253,18 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start_with_github(env: &TestEnv, github: GithubServer) -> Self {
-        Self::start_inner(env, Some(github), None, None, false, false, false, false)
+        Self::start_inner(
+            env,
+            Some(github),
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -7278,7 +7289,18 @@ impl ViewerServer {
     /// the `OPENLORE_INDEXER_URL` env-var thread.
     pub fn start_with_indexer(env: &TestEnv, indexer: IndexerHandle) -> Self {
         let url = indexer.indexer_url();
-        Self::start_inner(env, None, Some(url), Some(indexer), false, false, false, false)
+        Self::start_inner(
+            env,
+            None,
+            Some(url),
+            Some(indexer),
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
     }
 
     /// Start a `openlore ui --port 0` viewer whose `/search` route is wired to an
@@ -7297,6 +7319,8 @@ impl ViewerServer {
             None,
             Some(closed.indexer_url().to_string()),
             None,
+            false,
+            false,
             false,
             false,
             false,
@@ -7323,6 +7347,8 @@ impl ViewerServer {
         fail_peer_claims_count: bool,
         fail_countered_count: bool,
         fail_countered_peer_count: bool,
+        fail_own_dids_read: bool,
+        fail_cached_peer_dids_read: bool,
     ) -> Self {
         use std::io::{BufRead, BufReader};
 
@@ -7424,6 +7450,28 @@ impl ViewerServer {
         // per-count fault seam with the SAME observable target.
         if fail_countered_peer_count {
             cmd.env("OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT", "1");
+        }
+        // slice-20 (US-FS-001/002 / Theme F / C-8 / WD-FS-4 / ADR-057 D4 — the OQ-1
+        // escalation): the TEST-ONLY per-read presence-read fault-injection seams. The
+        // real-`openlore ui`-subprocess harness CANNOT inject a per-read `Err` via a fake
+        // `StoreReadPort` (the viewer holds ONE long-lived DuckDB connection taken at
+        // startup), so D-4's NO-new-seam default does not hold and the conditional
+        // escalation FIRES: each new `/search` LOCAL presence read gets its OWN DISTINCT
+        // `#[cfg(debug_assertions)]`-gated, release-forbidden, xtask-guarded env seam so
+        // the arm degrades INDEPENDENTLY. When `fail_own_dids_read` is set, the viewer's
+        // `own_dids_read_with_fault_seam` substitutes a genuine `Err`, forcing the
+        // PRODUCTION `unwrap_or_default() → empty own set → no `You` arm` degrade (the
+        // active + cached reads STILL succeed). When `fail_cached_peer_dids_read` is set,
+        // `cached_peer_dids_read_with_fault_seam` does the same for the cached-peer read →
+        // empty cached set → a soft-removed peer falls through to `NetworkUnfollowed` (his
+        // arm's slice-16 fallback) while the own + active arms STILL resolve — never a
+        // crash / blank / 5xx / leaked error. Mirrors the slice-16
+        // `OPENLORE_VIEWER_FAIL_ACTIVE_SET_READ` seam discipline VERBATIM.
+        if fail_own_dids_read {
+            cmd.env("OPENLORE_VIEWER_FAIL_OWN_DIDS_READ", "1");
+        }
+        if fail_cached_peer_dids_read {
+            cmd.env("OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ", "1");
         }
 
         let mut child = cmd
@@ -14978,7 +15026,18 @@ pub fn start_viewer_with_failing_active_set_read(
     indexer: IndexerHandle,
 ) -> ViewerServer {
     let url = indexer.indexer_url();
-    ViewerServer::start_inner(env, None, Some(url), Some(indexer), true, false, false, false)
+    ViewerServer::start_inner(
+        env,
+        None,
+        Some(url),
+        Some(indexer),
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
 }
 
 // =============================================================================
@@ -15471,25 +15530,67 @@ pub fn assert_search_follow_state_framing_is_neutral(body: &str) {
 /// read absent IS a `NetworkUnfollowed` row) — the confirmatory residue scenario
 /// pins the success path; THIS seam pins the read-FAILURE degrade.
 pub fn start_viewer_with_failing_cached_peer_read(
-    _env: &TestEnv,
-    _indexer: IndexerHandle,
+    env: &TestEnv,
+    indexer: IndexerHandle,
 ) -> ViewerServer {
-    // RED scaffold (Mandate 7): the per-read cached-peer fault seam does not exist
-    // in the harness or the effect shell yet. DELIVER materializes it (the new
-    // `start_inner` fault flag + the cfg-gated `OPENLORE_VIEWER_FAIL_CACHED_PEER_
-    // DIDS_READ` token + the xtask `VIEWER_FAIL_SEAM_TOKENS` extension), then this
-    // body becomes:
-    //   ViewerServer::start_inner(_env, None, Some(url), Some(_indexer),
-    //       false /*active*/, false, false, false, /*new:*/ false /*own*/,
-    //       true /*cached*/);
-    // Until then this panics → RED (the degrade-on-cached-read-failure path is
-    // MISSING — never a setup/import error).
-    todo!(
-        "slice-20 OQ-1 escalation: DELIVER must add a per-read cached-peer fault seam \
-         (OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ, #[cfg(debug_assertions)]-gated, \
-         xtask VIEWER_FAIL_SEAM_TOKENS) so this scenario exercises the TRUE \
-         independent-degrade-on-cached-read-failure path; the real-binary subprocess \
-         harness cannot inject a per-read Err via a fake StoreReadPort"
+    // DELIVER (02-04, OQ-1 escalation): the per-read cached-peer fault seam is now
+    // MATERIALIZED — the effect-shell `cached_peer_dids_read_with_fault_seam`
+    // (`#[cfg(debug_assertions)]`-gated, release-forbidden, xtask-guarded) substitutes
+    // a genuine read `Err` when `OPENLORE_VIEWER_FAIL_CACHED_PEER_DIDS_READ` is set,
+    // forcing the PRODUCTION `unwrap_or_default() → empty cached set` per-read degrade in
+    // `read_local_cached_set`. Only the `fail_cached_peer_dids_read` flag is set: the own
+    // + active reads SUCCEED, so the `You` + `SubscribedPeer` arms STILL resolve and ONLY
+    // the `UnsubscribedCache` arm degrades (a soft-removed peer falls through to
+    // `NetworkUnfollowed`, his arm's slice-16 fallback) — never a crash / blank / 5xx /
+    // leaked error (C-8 / WD-FS-4 / ADR-057 D4).
+    let url = indexer.indexer_url();
+    ViewerServer::start_inner(
+        env,
+        None,
+        Some(url),
+        Some(indexer),
+        false, // active-set read succeeds
+        false, // peer-claims count (unused on /search)
+        false, // countered-own count (unused on /search)
+        false, // countered-peer count (unused on /search)
+        false, // own-DIDs read SUCCEEDS (the `You` arm still resolves)
+        true,  // cached-peer-DIDs read FAILS (only the `UnsubscribedCache` arm degrades)
+    )
+}
+
+/// Slice-20 graceful-degrade — the per-read OWN-DID-read-failure seam (the FF-11
+/// sibling of [`start_viewer_with_failing_cached_peer_read`]). Start the viewer wired
+/// to a reachable index BUT with the LOCAL own-author-DID
+/// (`distinct_own_author_dids`) read forced to FAIL mid-request, while the cached +
+/// active reads SUCCEED — so the `You` arm degrades INDEPENDENTLY (the operator's own
+/// claim falls through to its non-`You` resolution: a self-followed self resolves to
+/// `SubscribedPeer`/`NetworkUnfollowed` per its active/cached presence), the
+/// `SubscribedPeer` + `UnsubscribedCache` arms STILL resolve, and the results STILL
+/// render with no crash, blank, 5xx, or leaked error (C-8 / WD-FS-4 / ADR-057 D4).
+///
+/// OQ-1 escalation (full detail in `distill/red-classification.md` §OQ-1): the
+/// real-binary subprocess harness cannot inject a per-read `Err` via a fake
+/// `StoreReadPort`, so DELIVER (02-04) materialized a DISTINCT
+/// `#[cfg(debug_assertions)]`-gated `OPENLORE_VIEWER_FAIL_OWN_DIDS_READ` token honored
+/// ONLY by the effect-shell `own_dids_read_with_fault_seam` (release sibling = identity,
+/// NO env read compiled in), enforced by the xtask `VIEWER_FAIL_SEAM_TOKENS` guard.
+/// Consumed by the FF-11 scenario (step 02-05).
+pub fn start_viewer_with_failing_own_dids_read(
+    env: &TestEnv,
+    indexer: IndexerHandle,
+) -> ViewerServer {
+    let url = indexer.indexer_url();
+    ViewerServer::start_inner(
+        env,
+        None,
+        Some(url),
+        Some(indexer),
+        false, // active-set read succeeds
+        false, // peer-claims count (unused on /search)
+        false, // countered-own count (unused on /search)
+        false, // countered-peer count (unused on /search)
+        true,  // own-DIDs read FAILS (only the `You` arm degrades)
+        false, // cached-peer-DIDs read SUCCEEDS (the `UnsubscribedCache` arm still resolves)
     )
 }
 
@@ -15721,7 +15822,9 @@ pub fn seed_empty_store_for_landing(_env: &TestEnv) {
 ///
 /// SCAFFOLD: true (slice-17).
 pub fn start_viewer_with_failing_peer_claims_count(env: &TestEnv) -> ViewerServer {
-    ViewerServer::start_inner(env, None, None, None, false, true, false, false)
+    ViewerServer::start_inner(
+        env, None, None, None, false, true, false, false, false, false,
+    )
 }
 
 /// Assert the landing render shows the count `n` for the surface labelled `label`
@@ -16312,7 +16415,9 @@ pub fn seed_landing_store_one_own_claim_countered_twice(env: &TestEnv) -> HeldSu
 ///
 /// SCAFFOLD: true (slice-18).
 pub fn start_viewer_with_failing_countered_count(env: &TestEnv) -> ViewerServer {
-    ViewerServer::start_inner(env, None, None, None, false, false, true, false)
+    ViewerServer::start_inner(
+        env, None, None, None, false, false, true, false, false, false,
+    )
 }
 
 /// Assert the LANDING render shows the countered count "(`n` countered)" beside the
@@ -17308,7 +17413,9 @@ pub const PEER_COUNT_BULK_DID: &str = "did:plc:bulk-test";
 ///
 /// SCAFFOLD: true (slice-19).
 pub fn start_viewer_with_failing_countered_peer_count(env: &TestEnv) -> ViewerServer {
-    ViewerServer::start_inner(env, None, None, None, false, false, false, true)
+    ViewerServer::start_inner(
+        env, None, None, None, false, false, false, true, false, false,
+    )
 }
 
 /// Assert the LANDING render shows the countered-PEER count "(`n` countered)" beside the
