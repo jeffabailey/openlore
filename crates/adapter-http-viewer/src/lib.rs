@@ -927,7 +927,16 @@ fn peer_claims_page(
         Shape::Fragment => {
             html_ok(render_peer_claims_view_panel_fragment(&page_view).into_string())
         }
-        Shape::FullPage => html_ok(render_peer_claims_page(&page_view)),
+        // slice-19 (ADR-056 D3): the full page header renders the countered-PEER count
+        // from the SAME `count_countered_peer_claims` read the landing uses, resolved
+        // INDEPENDENTLY via `.ok()` (`Result<usize, StoreReadError>` → `Option<usize>`) — a
+        // failed read degrades to `None` → "(— countered)", never blanks the list, never a
+        // 5xx (the list read above is INDEPENDENT of the countered-count read, ADR-056 D4).
+        // Both surfaces render through the SAME `render_countered` helper (single source).
+        Shape::FullPage => html_ok(render_peer_claims_page(
+            &page_view,
+            store.count_countered_peer_claims().ok(),
+        )),
     }
 }
 

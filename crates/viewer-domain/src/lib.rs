@@ -1181,13 +1181,24 @@ impl PeerClaimRowView {
 /// per-row origin column make "mine vs federated" unambiguous. An empty page
 /// renders the guided "No federated claims yet" empty state (FR-VIEW-7) instead
 /// of a blank table.
-pub fn render_peer_claims_page(page: &PageView<PeerClaimRowView>) -> String {
+pub fn render_peer_claims_page(
+    page: &PageView<PeerClaimRowView>,
+    countered_peer_claims: Option<usize>,
+) -> String {
     let markup = html! {
         (DOCTYPE)
         html {
             (page_head("OpenLore — Peer Claims"))
             body {
-                h1 { "Peer Claims" }
+                // slice-19 (ADR-056 D3): the countered-PEER count renders in the list
+                // HEADER, beside the "Peer Claims" heading, through the SAME shared
+                // `render_countered` helper the landing summary uses (single source — the
+                // two surfaces resolve from the SAME `count_countered_peer_claims` read +
+                // render through the SAME helper, so they cannot diverge, WD-PC-8). Additive
+                // header text ONLY — the slice-06/07 list order/paging/count + the slice-13
+                // per-row flags are UNTOUCHED (C-4 / WD-PC-9). The slice-18 OWN surfaces are
+                // not on this route (peer-only, BR-PC-4 / WD-PC-7).
+                h1 { "Peer Claims " (render_countered(countered_peer_claims)) }
                 p {
                     "This is a read-only view of claims federated from your peers \
                      — these are NOT your own claims."
@@ -4274,7 +4285,7 @@ mod tests {
             0.70,
             known_origin("did:plc:peer-axum"),
         )]);
-        let html = render_peer_claims_page(&page);
+        let html = render_peer_claims_page(&page, None);
         for needle in [
             "github:peer/axum",
             "embodiesPhilosophy",
@@ -4306,7 +4317,7 @@ mod tests {
             0.70,
             known_origin("did:plc:peer-axum"),
         )]);
-        let html = render_peer_claims_page(&page);
+        let html = render_peer_claims_page(&page, None);
         assert!(
             html.contains("Peer Claims"),
             "the peer view must carry the Peer Claims heading; got:\n{html}"
@@ -4315,6 +4326,53 @@ mod tests {
             html.contains("NOT your own"),
             "the peer view must state these are not the operator's own claims \
              (BR-VIEW-5); got:\n{html}"
+        );
+    }
+
+    /// Behavior (slice-19 / US-PC-002 / ADR-056 D3 — single source, prime mutation
+    /// target): `render_peer_claims_page` renders the countered-PEER count in the list
+    /// HEADER through the SAME `render_countered` helper the landing uses, so the two
+    /// surfaces cannot diverge. `Some(n)` → "(n countered)" beside "Peer Claims",
+    /// `Some(0)` → "(0 countered)" (honest zero), `None` → "(— countered)" (missing
+    /// marker, NEVER a fabricated 0). Pins that the header render is exactly the
+    /// `render_countered` output — a mutant that drops the header count, fabricates 0
+    /// for a missing read, or diverges the copy from the helper is killed.
+    #[test]
+    fn render_peer_claims_page_header_shows_the_countered_count_via_render_countered() {
+        let one_peer_claim = || {
+            PageView::new(vec![peer_row(
+                "bafypeer",
+                "github:peer/axum",
+                "embodiesPhilosophy",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+                known_origin("did:plc:peer-axum"),
+            )])
+        };
+        // Some(n) → the header carries EXACTLY the render_countered(Some(n)) output,
+        // beside the "Peer Claims" heading (single source — the helper, not a literal).
+        let html_some = render_peer_claims_page(&one_peer_claim(), Some(1));
+        assert!(
+            html_some.contains(&render_countered(Some(1))),
+            "the /peer-claims header must render the countered count via render_countered \
+             (Some(1) → \"(1 countered)\", single source — ADR-056 D3); got:\n{html_some}"
+        );
+        // Some(0) → the honest zero "(0 countered)" (a successful read of zero),
+        // DISTINCT from the missing marker.
+        let html_zero = render_peer_claims_page(&one_peer_claim(), Some(0));
+        assert!(
+            html_zero.contains("(0 countered)") && !html_zero.contains("(— countered)"),
+            "Some(0) must render the honest zero \"(0 countered)\", NOT the missing \
+             marker (0 ≠ missing, C-5); got:\n{html_zero}"
+        );
+        // None → the missing marker "(— countered)", NEVER a fabricated "(0 countered)"
+        // (a failed read degrades to None → the marker, ADR-056 D4 / C-5).
+        let html_missing = render_peer_claims_page(&one_peer_claim(), None);
+        assert!(
+            html_missing.contains(&render_countered(None))
+                && !html_missing.contains("(0 countered)"),
+            "None must render the missing marker \"(— countered)\" via render_countered, \
+             NEVER a fabricated \"(0 countered)\" (C-5); got:\n{html_missing}"
         );
     }
 
@@ -4521,7 +4579,7 @@ mod tests {
             0.70,
             PeerOrigin::Unknown,
         )]);
-        let html = render_peer_claims_page(&page);
+        let html = render_peer_claims_page(&page, None);
         // The row is NOT dropped: a table renders (not the empty-state) and the
         // row's OTHER fields all appear (AC-003.3 #1, #3).
         assert!(
@@ -4560,7 +4618,7 @@ mod tests {
     #[test]
     fn empty_peer_claims_page_renders_the_guided_no_peers_state() {
         let page: PageView<PeerClaimRowView> = PageView::new(vec![]);
-        let html = render_peer_claims_page(&page);
+        let html = render_peer_claims_page(&page, None);
         assert!(
             html.contains("No federated claims yet"),
             "the empty peer view must guide the operator (FR-VIEW-7); got:\n{html}"
@@ -4595,7 +4653,7 @@ mod tests {
                 })
                 .collect();
             let page = PageView::new(rows.clone());
-            let html = render_peer_claims_page(&page);
+            let html = render_peer_claims_page(&page, None);
             for r in &rows {
                 prop_assert!(html.contains(&r.cid), "page must contain cid {:?}", r.cid);
                 prop_assert!(
