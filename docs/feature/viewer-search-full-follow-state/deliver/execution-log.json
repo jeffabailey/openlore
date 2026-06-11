@@ -212,6 +212,118 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-06-11T15:50:46Z"
+    },
+    {
+      "sid": "02-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T15:51:06Z"
+    },
+    {
+      "sid": "02-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T15:53:40Z"
+    },
+    {
+      "sid": "02-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T15:56:44Z"
+    },
+    {
+      "sid": "02-04",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:01:36Z"
+    },
+    {
+      "sid": "02-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:21:35Z"
+    },
+    {
+      "sid": "02-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:22:14Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:24:14Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:26:08Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: the own-DID independent-degrade is already covered by the 02-04 in-crate unit tests own_dids_read_seam_passes_the_real_read_through_when_unset + own_dids_read_seam_injects_err_when_the_fault_env_var_is_set (adapter-http-viewer/src/lib.rs:2492-2532), which exercise the unwrap_or_default->empty own set->no You arm degrade. FF-11 is a test-only AT addition consuming the already-tested seam; a new unit test would be Test Duplication.",
+      "t": "2026-06-11T16:26:27Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:27:26Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:28:08Z"
+    },
+    {
+      "sid": "02-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:28:31Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:31:32Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "APPROVED_SKIP: gold guardrails greened by the four-arm seam shipped 01-01..02-05; confirmatory",
+      "t": "2026-06-11T16:31:33Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: behavioral gold layer; type+structural layers covered by total match + xtask guards",
+      "t": "2026-06-11T16:31:33Z"
+    },
+    {
+      "sid": "03-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-06-11T16:31:33Z"
     }
   ]
 }
