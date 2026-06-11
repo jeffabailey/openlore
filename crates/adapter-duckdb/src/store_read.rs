@@ -544,6 +544,42 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         Ok(total as usize)
     }
 
+    fn count_countered_peer_claims(&self) -> Result<usize, StoreReadError> {
+        let conn = self.lock_conn()?;
+        // ADR-056 D1: the EXACT slice-18 `count_countered_own_claims` aggregate with the
+        // OUTER table swapped `claims c → peer_claims p`. ONE aggregate over the SAME
+        // shared connection. COUNT(DISTINCT peer cid) where the PEER CID appears as a
+        // COUNTERED `referenced_cid` across the two INDEXED ref tables (`claim_references`
+        // ∪ `peer_claim_references`, `ref_type = 'counters'`). The inner `UNION` (set
+        // union — de-duped, not `UNION ALL`) collapses the countered referenced_cids to
+        // a DISTINCT set; `p.cid IN (...)` is a membership test, so a peer claim countered
+        // by N counterers contributes its cid ONCE → it counts ONCE (presence-once, C-4 /
+        // BR-PC-1, no JOIN-fanout). The outer `COUNT(DISTINCT p.cid)` is belt-and-braces.
+        // The inner UNION IN-set is BYTE-IDENTICAL to slice-18's — only the outer table
+        // differs. Peer-only by the outer `peer_claims` table (a countered OWN claim is
+        // not in `peer_claims`, so it never contributes — R-PC-9 peer-only by query
+        // shape; the xtask `no_cross_table_join_elides_author` rule stays GREEN by
+        // construction since `peer_claims` is named whole-word and standalone `claims` is
+        // NOT). A cached peer claim is countered by the OPERATOR (her counter in
+        // `claim_references`) OR by ANOTHER peer (their counter in `peer_claim_references`,
+        // slice-11) — both arms of the UNION contribute. Parameter-free (the only WHERE
+        // value is the literal `'counters'`) → injection-safe. Invariant to store size
+        // (both ref columns indexed, ADR-048).
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT p.cid) FROM peer_claims p WHERE p.cid IN (\
+                     SELECT referenced_cid FROM claim_references      WHERE ref_type = 'counters' \
+                     UNION \
+                     SELECT referenced_cid FROM peer_claim_references WHERE ref_type = 'counters')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("count_countered_peer_claims read failed: {err}"),
+            })?;
+        Ok(total as usize)
+    }
+
     fn query_contributor_scoring_feed(
         &self,
         contributor: &Did,

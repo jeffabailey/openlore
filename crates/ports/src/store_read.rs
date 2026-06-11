@@ -353,6 +353,29 @@ pub trait StoreReadPort: Send + Sync {
     /// maps the `Result` to `Option` via `.ok()`).
     fn count_countered_own_claims(&self) -> Result<usize, StoreReadError>;
 
+    /// Total number of the operator's cached PEER claims that have been COUNTERED — the
+    /// PEER sibling of [`StoreReadPort::count_countered_own_claims`] (slice-19 /
+    /// US-PC-000/001/002 / ADR-056 D1) for the landing dashboard's at-a-glance summary
+    /// AND the `/peer-claims` list header (`GET /` + `GET /peer-claims`). Read-only
+    /// aggregate — NO mutation method is added to this trait (ADR-030 / C-1): a
+    /// `Box<dyn StoreReadPort>` stays structurally incapable of mutating.
+    ///
+    /// A PRESENCE count by construction (C-4 / BR-PC-1): `COUNT(DISTINCT peer cid)`
+    /// where the PEER CID appears as a COUNTERED `referenced_cid` across the two indexed
+    /// ref tables (`claim_references` ∪ `peer_claim_references`, `ref_type='counters'`)
+    /// via a de-duped `UNION` IN-set membership test — so a peer claim countered by N
+    /// counterers counts ONCE (no JOIN-fanout, NEVER a "disputed by N" total). The inner
+    /// `UNION` IN-set is BYTE-IDENTICAL to [`StoreReadPort::count_countered_own_claims`];
+    /// ONLY the outer table differs (`peer_claims` not `claims`). Peer-only by query
+    /// shape (the outer table is `peer_claims` — a countered OWN claim is excluded, not
+    /// filtered): a cached peer claim is countered by the OPERATOR (her counter in
+    /// `claim_references`) OR by ANOTHER peer (their counter in `peer_claim_references`,
+    /// slice-11) — both arms contribute. Invariant to store size (both ref columns
+    /// indexed, ADR-048). Returns `Ok(0)` for a store where nothing peer is countered (a
+    /// SUCCESSFUL read of zero, DISTINCT from a FAILED read — `0 ≠ missing`, the shell
+    /// maps the `Result` to `Option` via `.ok()`).
+    fn count_countered_peer_claims(&self) -> Result<usize, StoreReadError>;
+
     /// Read the LOCAL attributed-claim feed for ONE contributor (`/score`,
     /// slice-09 / ADR-039/040/041 / I-CS-5): every claim authored by `contributor`
     /// across all subjects, from the operator's OWN `claims` table UNION ALL the

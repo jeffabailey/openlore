@@ -597,6 +597,16 @@ pub struct LandingSummary {
     /// countered count is disputed-claim AWARENESS rendered BESIDE the own-claims line
     /// — it never re-weights the own-claims number (additive, C-4).
     pub countered_own_claims: Option<usize>,
+    /// The COUNTERED-peer-claims count (`count_countered_peer_claims`, slice-19 /
+    /// ADR-056 D2 — additive, parallel to the four above, IDENTICAL degrade semantics;
+    /// the deferred PEER sibling of [`LandingSummary::countered_own_claims`]). `Some(n)`
+    /// = a SUCCESSFUL read of `n` (incl. a genuine `Some(0)` — an honest "nothing of my
+    /// cached peer material has drawn a counter"); `None` = the read FAILED → the missing
+    /// marker, NEVER a fabricated 0 (`0 ≠ missing`, C-5 / WD-PC-6). The countered-peer
+    /// count is disputed-claim AWARENESS rendered BESIDE the peer-claims line — it never
+    /// re-weights the peer-claims number (additive, C-4). It fails INDEPENDENTLY of the
+    /// slice-18 own count (ADR-056 D4).
+    pub countered_peer_claims: Option<usize>,
 }
 
 /// The 8 shipped top-level entry-point surfaces the landing nav hub links, as
@@ -674,7 +684,17 @@ pub fn render_landing(summary: &LandingSummary) -> String {
                         (render_count(summary.own_claims)) " own claims "
                         (render_countered(summary.countered_own_claims))
                     }
-                    p { (render_count(summary.peer_claims)) " peer claims" }
+                    // slice-19 (ADR-056 D3): the countered-PEER count renders BESIDE the
+                    // UNCHANGED peer-claims line ("4 peer claims (1 countered)") — the
+                    // peer-claims `render_count` is UNTOUCHED (additive awareness, never a
+                    // re-weight, C-4); the slice-18 own line above is byte-untouched
+                    // (WD-PC-7). The countered-peer count flows through the SAME REUSED
+                    // `render_countered` helper the `/peer-claims` header uses (single
+                    // source — NO new helper, WD-PC-10).
+                    p {
+                        (render_count(summary.peer_claims)) " peer claims "
+                        (render_countered(summary.countered_peer_claims))
+                    }
                     p { (render_count(summary.active_peers)) " active peers" }
                 }
                 // The navigation hub — every shipped surface as a plain <a href>
@@ -3821,6 +3841,7 @@ mod tests {
             peer_claims: Some(7),
             active_peers: Some(2),
             countered_own_claims: Some(3),
+            countered_peer_claims: Some(1),
         }
     }
 
@@ -3917,10 +3938,12 @@ mod tests {
                 own_claims: own,
                 peer_claims: peer,
                 active_peers: active,
-                // slice-18: the 4th field is additive — this slice-17 property pins the
-                // THREE counts; a fixed Some(0) here keeps it a valid total-function input
-                // (the countered render is gated by the slice-18 property below).
+                // slice-18/19: the 4th + 5th fields are additive — this slice-17 property
+                // pins the THREE counts; a fixed Some(0) here keeps it a valid
+                // total-function input (the countered renders are gated by the slice-18 +
+                // slice-19 properties below).
                 countered_own_claims: Some(0),
+                countered_peer_claims: Some(0),
             };
             let html = render_landing(&summary);
 
@@ -4023,6 +4046,11 @@ mod tests {
                 peer_claims: peer,
                 active_peers: active,
                 countered_own_claims: countered,
+                // slice-19: the 5th field is additive — this slice-18 property pins the
+                // OWN countered render; a fixed Some(0) here keeps it a valid
+                // total-function input (the peer countered render is gated by the slice-19
+                // property below).
+                countered_peer_claims: Some(0),
             };
             let html = render_landing(&summary);
 
@@ -4044,6 +4072,81 @@ mod tests {
                 html.contains(&render_countered(countered)),
                 "the countered count {countered:?} must render via render_countered \
                  beside the own-claims line (ADR-055 D3); got:\n{html}"
+            );
+        }
+    }
+
+    // ====================================================================
+    // slice-19 (US-PC-001 / ADR-056 D2+D3): the FIFTH additive `countered_peer_claims`
+    // field rendered via the REUSED `render_countered` helper BESIDE the UNCHANGED
+    // peer-claims line ("4 peer claims (1 countered)"). The PEER sibling of the slice-18
+    // own-line property; carries the in-crate mutation gate for the additive peer-line
+    // render (the slice-18 own line byte-untouched).
+    // ====================================================================
+
+    // PROPERTY (slice-19 / US-PC-001 Theme 1+2 / ADR-056 D2+D3): with the FIFTH additive
+    // `countered_peer_claims` field, `render_landing` stays a TOTAL function of the
+    // now-2⁵ `Option` combinations — it never panics, ALWAYS produces a full HTML page,
+    // renders the countered-PEER count via the REUSED `render_countered` BESIDE the
+    // UNCHANGED peer-claims line ("4 peer claims (1 countered)"), the peer-claims number
+    // is NEVER re-weighted/deducted by the countered count (additive — C-4), AND the
+    // slice-18 own line renders UNCHANGED beside it (the own-countered parenthetical still
+    // appears — WD-PC-7, the peer count touches only the peer line).
+    proptest! {
+        #[test]
+        fn render_landing_renders_the_peer_countered_count_beside_the_unchanged_peer_claims(
+            own in proptest::option::of(0usize..10_000),
+            peer in proptest::option::of(0usize..10_000),
+            active in proptest::option::of(0usize..10_000),
+            countered_own in proptest::option::of(0usize..10_000),
+            countered_peer in proptest::option::of(0usize..10_000),
+        ) {
+            let summary = LandingSummary {
+                own_claims: own,
+                peer_claims: peer,
+                active_peers: active,
+                countered_own_claims: countered_own,
+                countered_peer_claims: countered_peer,
+            };
+            let html = render_landing(&summary);
+
+            // Total function: still a complete full page over EVERY 2⁵ combination.
+            prop_assert!(html.contains("<!DOCTYPE html>"), "must be a full page; got:\n{html}");
+
+            // The peer-claims line renders UNCHANGED (additive — the countered-peer count
+            // never re-weights it, C-4): the EXACT "{peer} peer claims" still appears.
+            if let Some(n) = peer {
+                prop_assert!(
+                    html.contains(&format!("{n} peer claims")),
+                    "the peer-claims count must render UNCHANGED (additive, C-4); got:\n{html}"
+                );
+            }
+
+            // The countered-PEER count renders via the REUSED helper output, BESIDE the
+            // peer-claims line — Some(n) → "(n countered)", None → the missing marker.
+            // We pin the "peer claims (… countered)" adjacency so a mutant that drops the
+            // peer parenthetical (or renders it on the wrong line) is killed.
+            prop_assert!(
+                html.contains(&format!(
+                    "{} peer claims {}",
+                    render_count(peer),
+                    render_countered(countered_peer)
+                )),
+                "the countered-peer count {countered_peer:?} must render via render_countered \
+                 BESIDE the peer-claims line (ADR-056 D3); got:\n{html}"
+            );
+
+            // The slice-18 OWN line renders UNCHANGED beside it (WD-PC-7): the
+            // own-countered parenthetical still appears via the SAME helper — the peer
+            // count touches ONLY the peer line.
+            prop_assert!(
+                html.contains(&format!(
+                    "{} own claims {}",
+                    render_count(own),
+                    render_countered(countered_own)
+                )),
+                "the slice-18 own line must render UNTOUCHED beside the peer line \
+                 (WD-PC-7); got:\n{html}"
             );
         }
     }

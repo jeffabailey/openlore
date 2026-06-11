@@ -446,6 +446,15 @@ fn landing_page(store: &dyn StoreReadPort) -> Response<Full<Bytes>> {
         // the seam only INDUCES the `Err` the `.ok()` already handles.
         countered_own_claims: countered_count_with_fault_seam(store.count_countered_own_claims())
             .ok(),
+        // slice-19 (ADR-056 D4): the FIFTH independent `.ok()` resolution — a failed
+        // countered-PEER-count read maps to `None` → the missing marker, the other four
+        // counts (incl. the slice-18 own-countered count) + the nav hub intact, always
+        // 200. The per-count degrade is independent: this read failing degrades ONLY the
+        // peer countered count, never the siblings (ADR-056 D2/D4). The TEST-ONLY
+        // per-count fault seam (`OPENLORE_VIEWER_FAIL_COUNTERED_PEER_COUNT`, a 4th DISTINCT
+        // token so the PEER count fails independently of the slice-18 own count) is
+        // materialized in step 02-01; the production `.ok()` degrade path is in place here.
+        countered_peer_claims: store.count_countered_peer_claims().ok(),
     };
     html_ok(render_landing(&summary))
 }
@@ -1669,18 +1678,20 @@ mod tests {
         peer_claims: Result<usize, StoreReadError>,
         active_peers: Result<usize, StoreReadError>,
         countered_own_claims: Result<usize, StoreReadError>,
+        countered_peer_claims: Result<usize, StoreReadError>,
     }
 
     impl FakeLandingStore {
         /// A fake whose three slice-17 counts all succeed with the given numbers; the
-        /// slice-18 countered count defaults to a successful `Ok(0)` (additive — the
-        /// slice-17 tests do not assert on it).
+        /// slice-18 countered-own + slice-19 countered-peer counts default to a successful
+        /// `Ok(0)` (additive — the slice-17 tests do not assert on them).
         fn with_counts(own: usize, peer: usize, active: usize) -> Self {
             Self {
                 own_claims: Ok(own),
                 peer_claims: Ok(peer),
                 active_peers: Ok(active),
                 countered_own_claims: Ok(0),
+                countered_peer_claims: Ok(0),
             }
         }
     }
@@ -1706,6 +1717,9 @@ mod tests {
         }
         fn count_countered_own_claims(&self) -> Result<usize, StoreReadError> {
             cloned_count(&self.countered_own_claims)
+        }
+        fn count_countered_peer_claims(&self) -> Result<usize, StoreReadError> {
+            cloned_count(&self.countered_peer_claims)
         }
 
         // slice-18 (`/claims` header coverage): the My Claims list read + the
@@ -1972,6 +1986,7 @@ mod tests {
             peer_claims: Ok(peer),
             active_peers: Ok(active),
             countered_own_claims: Ok(countered),
+            countered_peer_claims: Ok(0),
         }
     }
 

@@ -15834,19 +15834,38 @@ pub fn assert_landing_countered_count(body: &str, n: usize) {
 ///
 /// SCAFFOLD: true (slice-18).
 pub fn assert_landing_countered_missing(body: &str) {
-    let needle = format!("({COUNTERED_MISSING_MARKER} countered)");
-    assert!(
-        body.contains(&needle),
-        "a FAILED countered-count read must render the missing-marker at the count position \
-         {needle:?} — DISTINCT from a fabricated \"(0 countered)\" AND from the chrome title's \
-         em-dash (ADR-055 D4 / C-5); body was:\n{body}"
-    );
-    // The failed read must NOT fabricate a "(0 countered)" (that would mislead "nothing of
-    // mine is disputed" — C-5 / R-CC-1). `Option` makes 0 ≠ missing representable.
-    assert!(
-        !body.contains("(0 countered)"),
-        "a FAILED countered-count read must NOT fabricate \"(0 countered)\" — `None` renders \
-         the missing marker, never a fabricated zero (C-5); body was:\n{body}"
+    // slice-19: the landing now renders TWO countered parentheticals (slice-18 OWN +
+    // slice-19 PEER). The slice-18 missing-marker contract is about the OWN count, so we
+    // scan at the OWN-LINE POSITION (mirroring the slice-19
+    // `assert_landing_peer_countered_missing` position-aware scan) — a bare body-wide
+    // `(0 countered)` scan would now collide with the PEER line's legitimate honest zero
+    // when ONLY the own count failed. The own-line parenthetical (the FIRST "(… countered)"
+    // after the "own claims" label) must be the missing marker.
+    let label = "own claims";
+    let label_pos = body.find(label).unwrap_or_else(|| {
+        panic!(
+            "the landing summary must still label the {label:?} count even when its read \
+             FAILED (the surface is present, only the number is missing); body was:\n{body}"
+        )
+    });
+    let window = &body[label_pos..];
+    let found = extract_countered_parenthetical(window).unwrap_or_else(|| {
+        panic!(
+            "a FAILED countered-OWN-count read must render the missing-marker beside the \
+             {label:?} count; no \"(… countered)\" parenthetical followed {label:?}; body \
+             was:\n{body}"
+        )
+    });
+    // The failed OWN read renders the missing marker, NOT a fabricated "(0 countered)" (that
+    // would mislead "nothing of mine is disputed" — C-5 / R-CC-1). `Option` makes 0 ≠ missing
+    // representable. Position-aware so the PEER line's honest "(0 countered)" cannot mask a
+    // regression on the OWN line, nor be mistaken for one.
+    assert_eq!(
+        found, COUNTERED_MISSING_MARKER,
+        "a FAILED countered-OWN-count read must render the missing-marker \
+         \"({COUNTERED_MISSING_MARKER} countered)\" at the {label:?} position — DISTINCT from a \
+         fabricated \"(0 countered)\" (ADR-055 D4 / C-5); found \"({found} countered)\" instead; \
+         body was:\n{body}"
     );
 }
 
