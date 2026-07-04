@@ -1160,4 +1160,72 @@ mod tests {
              assertion to be meaningful"
         );
     }
+
+    /// ADR-057 D1 vs ADR-052 — the four-arm follow-state's load-bearing asymmetry:
+    /// a SOFT-REMOVED peer is EXCLUDED from `list_active_peer_subscriptions`
+    /// (`removed_at IS NULL`, ADR-052) yet its cached `peer_claims` rows are RETAINED,
+    /// so its author DID STILL appears in `distinct_cached_peer_author_dids` (which
+    /// carries NO `removed_at` filter, ADR-057 D1). That asymmetry is exactly what lets
+    /// the pure four-arm resolver classify a soft-removed peer as `UnsubscribedCache`
+    /// rather than dropping him. Real DuckDB, entered through the port surface — this
+    /// contract was previously pinned only indirectly through the viewer's HTML.
+    #[test]
+    fn distinct_cached_peer_dids_retains_soft_removed_peer_while_active_subs_drops_it() {
+        use std::collections::HashSet;
+
+        use ports::{PeerSubscription, StoreReadPort};
+
+        let local_did = "did:plc:test-jeff";
+        let active_peer = "did:plc:rachel-test";
+        let removed_peer = "did:plc:tobias-test";
+        let (_dir, storage, peer) = open_peer_adapter(local_did);
+        let endpoint = Url::parse("https://pds.example.test").expect("valid url");
+
+        // Subscribe + cache one claim for BOTH peers.
+        for did in [active_peer, removed_peer] {
+            peer.add_subscription(PeerSubscription {
+                peer_did: Did(did.to_string()),
+                peer_handle: format!("{did}.handle"),
+                peer_pds_endpoint: endpoint.clone(),
+                subscribed_at: Utc::now(),
+                removed_at: None,
+            })
+            .expect("add subscription");
+            let cid = format!("bafycache{}", did.replace(':', ""));
+            let signed = signed_claim_authored_by(did, &cid);
+            peer.write_peer_claim(&Did(did.to_string()), &signed, &endpoint, Utc::now())
+                .expect("cache a peer claim");
+        }
+
+        // Soft-remove ONE peer — flips its `removed_at`, PRESERVES its cached claims.
+        peer.soft_remove(&Did(removed_peer.to_string()))
+            .expect("soft-remove the peer");
+
+        let read = storage.read_adapter();
+
+        // ADR-052: the active-subscriptions read EXCLUDES the soft-removed peer.
+        let active: HashSet<String> = read
+            .list_active_peer_subscriptions()
+            .expect("list_active_peer_subscriptions")
+            .into_iter()
+            .map(|s| s.peer_did)
+            .collect();
+        assert_eq!(
+            active,
+            [active_peer.to_string()].into_iter().collect::<HashSet<_>>(),
+            "the soft-removed peer is EXCLUDED from active subscriptions (removed_at IS NULL, \
+             ADR-052)"
+        );
+
+        // ADR-057 D1: the cached-DID read RETAINS the soft-removed peer (no removed_at
+        // filter) — that surviving residue IS the UnsubscribedCache arm.
+        let cached = read
+            .distinct_cached_peer_author_dids()
+            .expect("distinct_cached_peer_author_dids");
+        assert!(
+            cached.contains(active_peer) && cached.contains(removed_peer),
+            "BOTH peers' cached claims are retained — the soft-removed peer still \
+             classifies (ADR-057 D1: no removed_at filter); got {cached:?}"
+        );
+    }
 }

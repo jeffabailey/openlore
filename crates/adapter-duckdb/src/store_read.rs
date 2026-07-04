@@ -1247,3 +1247,98 @@ mod counter_presence_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod read_contract_tests {
+    //! Direct adapter-scope contract tests for the OWN-claim read methods whose
+    //! SQL semantics are subtle and, until now, were pinned only INDIRECTLY through
+    //! the viewer acceptance suite (which asserts on rendered HTML). Real DuckDB +
+    //! real filesystem, entering through the `StoreReadPort` trait surface
+    //! (nw-tdd-methodology Mandate 6 — "adapter integration tests are real I/O").
+
+    use std::collections::HashSet;
+
+    use claim_domain::{Cid, Did, SignatureBlock, SignedClaim, UnsignedClaim};
+    use ports::{PeerOrigin, StoragePort, StoreReadPort};
+    use tempfile::TempDir;
+
+    use crate::DuckDbStorageAdapter;
+
+    fn confidence(value: f64) -> claim_domain::Confidence {
+        serde_json::from_value(serde_json::json!(value)).expect("confidence round-trips")
+    }
+
+    fn fresh_adapter() -> (DuckDbStorageAdapter, TempDir) {
+        let tmp = TempDir::new().expect("create tempdir");
+        let db_path = tmp.path().join("openlore.duckdb");
+        let adapter = DuckDbStorageAdapter::open(&db_path).expect("open adapter on tempdir");
+        (adapter, tmp)
+    }
+
+    /// An OWN signed claim with a caller-chosen author DID, subject, and object,
+    /// so a test can seed two distinct authors on one edge (anti-merging) or two
+    /// authors overall (distinct-DID projection). The signing `#fragment` is
+    /// appended verbatim — own claims store the fragmented `author_did` form.
+    fn own_claim(cid: &str, author_did: &str, subject: &str, object: &str) -> SignedClaim {
+        SignedClaim {
+            unsigned: UnsignedClaim {
+                subject: subject.to_string(),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: object.to_string(),
+                evidence: vec![],
+                confidence: confidence(0.90),
+                author_did: Did(format!("{author_did}#org.openlore.application")),
+                composed_at: "2026-05-25T12:00:00Z".to_string(),
+                references: vec![],
+                reason: None,
+            },
+            signature: SignatureBlock {
+                signed_cid: Cid(cid.to_string()),
+                signature_bytes: vec![0xAA, 0xBB],
+                verification_method: format!("{author_did}#org.openlore.application"),
+            },
+        }
+    }
+
+    /// ADR-042 (anti-merging): two DIFFERENT authors making the SAME (subject, object)
+    /// claim project to TWO attributed `SurveyRow`s — never merged into one consensus
+    /// edge. `query_project_survey` selects `author_did` + `cid` EXPLICITLY (UNION ALL,
+    /// never a `GROUP BY`/`AVG`), so per-author attribution survives.
+    #[test]
+    fn query_project_survey_keeps_two_authors_on_one_edge_unmerged() {
+        let (adapter, _tmp) = fresh_adapter();
+        let subject = "github:rust-lang/cargo";
+        let object = "org.openlore.philosophy.dependency-pinning";
+        // Same edge (subject, object), two distinct authors — anti-merging under test.
+        for c in [
+            &own_claim("bafyEdgeMaria", "did:plc:maria", subject, object),
+            &own_claim("bafyEdgeAlex", "did:plc:alex", subject, object),
+        ] {
+            adapter.write_signed_claim(c).expect("write own claim");
+        }
+
+        let survey = adapter
+            .read_adapter()
+            .query_project_survey(subject)
+            .expect("query_project_survey read succeeds");
+
+        assert_eq!(
+            survey.len(),
+            2,
+            "two authors on one edge stay TWO attributed rows — never merged (ADR-042)"
+        );
+        let authors: HashSet<String> = survey.iter().map(|r| r.author_did.clone()).collect();
+        assert_eq!(
+            authors.len(),
+            2,
+            "each survey row carries its own author_did (no consensus collapse)"
+        );
+        // Every row is an OWN row → PeerOrigin::Known with an empty fetched_from_pds.
+        assert!(
+            survey
+                .iter()
+                .all(|r| matches!(&r.origin, PeerOrigin::Known { fetched_from_pds, .. } if fetched_from_pds.is_empty())),
+            "own rows project to PeerOrigin::Known with an empty PDS endpoint"
+        );
+    }
+}
