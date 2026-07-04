@@ -342,6 +342,49 @@ mod tests {
     }
 
     #[test]
+    fn rejects_reference_with_unknown_type() {
+        // Gate 3 (ADR-008): a `references[].type` outside the four-value enum
+        // (`retracts` / `corrects` / `counters` / `supersedes`) must reject. The
+        // ACCEPT arm (`counters`) is covered by the acceptance layer
+        // (`lexicon_counter_claim.rs`); this pins the enum-guard REJECT arm
+        // (`claim.rs:220`, `InvalidReferenceType`) no accept-path test exercises.
+        let mut value = well_formed_claim_value();
+        value.as_object_mut().expect("object").insert(
+            "references".to_string(),
+            json!([{ "type": "bogus", "cid": "bafyreibogus" }]),
+        );
+        let err = validate_claim_json(&value).expect_err("an unknown reference type must reject");
+        assert_eq!(
+            err,
+            LexiconError::InvalidReferenceType {
+                value: "bogus".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_non_array_references() {
+        // Gate 3 (ADR-008): a present-but-non-array `references` field must reject
+        // with a named-field type error BEFORE the per-entry enum walk. Every
+        // accept-path test uses `[]` or a valid array, so this pins the
+        // array-shape guard arm (`claim.rs:197`, `InvalidType`/`references`).
+        let mut value = well_formed_claim_value();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("references".to_string(), json!({}));
+        let err =
+            validate_claim_json(&value).expect_err("a non-array references field must reject");
+        assert_eq!(
+            err,
+            LexiconError::InvalidType {
+                field: "references".to_string(),
+                expected: "array".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn validates_claim_with_no_signature() {
         // signature is OPTIONAL per the Lexicon JSON (not in `required`).
         let mut value = well_formed_claim_value();
