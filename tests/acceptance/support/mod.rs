@@ -7548,9 +7548,8 @@ impl ViewerServer {
     /// SCAFFOLD: true (slice-06).
     pub fn get(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = reqwest::blocking::Client::new()
+        let response = shared_http_client()
             .get(&url)
-            .timeout(std::time::Duration::from_secs(10))
             .send()
             .unwrap_or_else(|e| panic!("GET {url}: {e}"));
         let status = response.status().as_u16();
@@ -7573,9 +7572,8 @@ impl ViewerServer {
     /// SCAFFOLD: true (slice-06).
     pub fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = reqwest::blocking::Client::new()
+        let response = shared_http_client()
             .post(&url)
-            .timeout(std::time::Duration::from_secs(10))
             .form(fields)
             .send()
             .unwrap_or_else(|e| panic!("POST {url}: {e}"));
@@ -7604,10 +7602,9 @@ impl ViewerServer {
     /// is byte-unaffected (I-HX-4).
     pub fn get_htmx(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = reqwest::blocking::Client::new()
+        let response = shared_http_client()
             .get(&url)
             .header("HX-Request", "true")
-            .timeout(std::time::Duration::from_secs(10))
             .send()
             .unwrap_or_else(|e| panic!("GET (htmx) {url}: {e}"));
         let status = response.status().as_u16();
@@ -7632,10 +7629,9 @@ impl ViewerServer {
     /// stays the no-JS full-page driver.
     pub fn post_form_htmx(&self, path: &str, fields: &[(&str, &str)]) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = reqwest::blocking::Client::new()
+        let response = shared_http_client()
             .post(&url)
             .header("HX-Request", "true")
-            .timeout(std::time::Duration::from_secs(10))
             .form(fields)
             .send()
             .unwrap_or_else(|e| panic!("POST (htmx) {url}: {e}"));
@@ -7650,6 +7646,43 @@ impl ViewerServer {
             content_type,
         }
     }
+}
+
+/// A process-wide shared blocking HTTP client for the viewer acceptance tests.
+///
+/// Flake fix (CONTEXT.md "312-claim pagination AT can time out under parallel
+/// load" + "cross-binary ephemeral-port flake in viewer_graph_traversal"): the
+/// four `ViewerServer` request helpers previously called
+/// `reqwest::blocking::Client::new()` on EVERY request. Each construction spins
+/// up its OWN single-threaded Tokio runtime + connection pool + TLS backend —
+/// pure per-request overhead that, on a CI box saturated by many acceptance
+/// binaries running in parallel, pushed a plain localhost GET past the old 10s
+/// safety-net timeout (both flakes are green in isolation, so the cause is
+/// contention, not logic). One shared client reuses a warm connection pool
+/// across every request in the process — the reqwest-documented recommended
+/// usage. The 30s timeout is a genuine-hang guard (a wedged server still fails
+/// deterministically), NOT a latency assertion, so a slow-under-load response
+/// now passes instead of flaking. `reqwest::blocking::Client` is `Send + Sync +
+/// Clone`, so sharing it across cargo's parallel test threads is safe.
+fn shared_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            // Disable idle-connection reuse. Sharing ONE client removes the
+            // expensive per-request cost (a fresh Tokio runtime per
+            // `Client::new()`), but a warm keep-alive pool would reintroduce the
+            // "ephemeral-port" hazard: `ViewerServer` A binds port P, is dropped
+            // (child killed, P freed), then `ViewerServer` B is later assigned the
+            // SAME P — a pooled idle socket to A's dead process could be handed to a
+            // request meant for B, surfacing as a connection reset. `0` idle sockets
+            // per host means every request opens a fresh TCP connection (cheap; the
+            // runtime is already warm), matching the OLD per-request behavior while
+            // shedding only the construction overhead.
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("build the shared acceptance-test HTTP client")
+    })
 }
 
 /// Read the `Content-Type` header off a blocking reqwest response, lowercased
