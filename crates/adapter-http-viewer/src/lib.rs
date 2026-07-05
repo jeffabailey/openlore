@@ -149,7 +149,7 @@ impl Shape {
         // mounted). The existing tab #view-panel + paging #claims-table `hx-get`s send
         // `HX-Request` ONLY, so they still fork to `Fragment` — UNCHANGED. A direct /
         // no-JS load (neither header) is `FullPage` as before.
-        if req.headers().contains_key("HX-Boosted") {
+        if request_is_boosted(req) {
             Shape::FullPage
         } else if req.headers().contains_key("HX-Request") {
             Shape::Fragment
@@ -157,6 +157,17 @@ impl Shape {
             Shape::FullPage
         }
     }
+}
+
+/// Whether the request is an `hx-boost` navigation — the PRESENCE of the
+/// `HX-Boosted` header (slice-21 / ADR-058 D3/D5). The SINGLE site that knows the
+/// boosted-signal header name: both [`Shape::from_request`] (which forks a boosted
+/// nav click to [`Shape::FullPage`] so the client can `hx-select="#viewer-main"`)
+/// and [`route`] (which then appends the out-of-band nav-items copy) read it through
+/// THIS predicate, so the header name cannot drift between the two decisions. PURE
+/// total function over the header map.
+fn request_is_boosted(req: &Request<Incoming>) -> bool {
+    req.headers().contains_key("HX-Boosted")
 }
 
 /// Why the viewer server failed to bind / serve.
@@ -340,7 +351,7 @@ async fn route(
     // the persistent nav's active marker updates in place while the `<nav>` container
     // persists. Direct / no-JS / tab+paging (`HX-Request`-only) responses are NOT
     // boosted, so they emit NEITHER the OOB copy NOR any `hx-swap-oob` (I-HX-1).
-    let boosted = req.headers().contains_key("HX-Boosted");
+    let boosted = request_is_boosted(&req);
 
     // `POST /scrape` — the LIVE propose step (US-VIEW-005). The ONLY non-GET
     // route + the ONLY route that reaches the network. Reads the form body, runs
