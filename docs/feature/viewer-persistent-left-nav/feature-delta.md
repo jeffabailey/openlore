@@ -238,3 +238,84 @@ never update its active marker after a boosted navigation.
   htmx and adds no new asset. AC-002.3/002.4 are unchanged.
 
 DISCOVER documents are unmodified (none exist for this feature).
+
+---
+
+## Wave: DISTILL / [REF] Acceptance scenario summary
+
+Density: **lean** (Tier-1 [REF] only). The executable `.feature`-equivalent SSOT is
+the Rust acceptance suite: `tests/acceptance/viewer_persistent_left_nav.rs` (9
+scenarios) + `tests/acceptance/viewer_persistent_left_nav_invariants.rs` (6 gold
+invariants). Scenarios enter through the REAL `openlore ui` subprocess (`ViewerServer`)
++ in-test HTTP; RED classification is pinned in `distill/red-classification.md`.
+
+| Scenario | AC | Tag(s) | RED / GREEN |
+|---|---|---|---|
+| NAV-1 `every_viewer_surface_renders_the_persistent_left_nav_marking_the_current_surface` (WS) | AC-001.1/001.2 | `@walking_skeleton @driving_port @driving_adapter @real-io` | RED |
+| NAV-2 `the_left_nav_is_present_on_every_one_of_the_eight_routes` | AC-001.1 | `@driving_port @real-io @kpi` | RED |
+| NAV-3 `exactly_one_nav_item_is_marked_active_on_the_page_and_updates_on_a_boosted_swap` | AC-001.2 / AC-002.3 | `@driving_port @real-io @boosted` | RED |
+| NAV-4 `the_nav_item_set_is_sourced_solely_from_the_landing_hub_surfaces_ssot` | AC-001.3 | `@driving_port @real-io @single-source` | RED |
+| NAV-5 `the_nav_renders_with_working_full_page_links_when_javascript_is_disabled` | AC-001.4 | `@driving_port @real-io @no-js @kpi` | RED |
+| NAV-6 `a_boosted_nav_click_returns_a_full_page_with_viewer_main_and_oob_nav_items` | AC-002.1 | `@driving_port @driving_adapter @real-io @boosted @kpi` | RED |
+| NAV-7 `the_nav_carries_hx_boost_attributes_that_drive_the_address_bar_and_history` | AC-002.2 | `@driving_port @real-io @history` | RED |
+| NAV-8 `the_boosted_content_region_is_byte_identical_to_the_full_page_viewer_main` | AC-002.4 | `@driving_port @real-io @parity @kpi` | RED |
+| NAV-9 `the_no_js_full_page_content_is_unaffected_except_for_the_added_nav_region` | AC-002.5 | `@driving_port @real-io @no-regression @kpi` | RED |
+| NAV-INV-NoControl `the_persistent_nav_adds_no_executable_control` | AC-001.5 | `@property @driving_port @real-io @no-control @gold` | RED |
+| NAV-INV-Offline `the_persistent_nav_stays_offline_with_the_vendored_asset` | AC-001.5 (I-HX-2) | `@property @driving_port @real-io @offline @gold` | GREEN-today |
+| NAV-INV-NoJs `the_nav_renders_with_plain_links_on_every_route_with_js_off` | AC-001.4 | `@property @driving_port @real-io @no-js @gold` | RED |
+| NAV-INV-SingleSource `the_nav_item_set_never_drifts_from_the_surface_ssot` | AC-001.3 | `@property @driving_port @real-io @single-source @gold` | RED |
+| NAV-INV-LandingNoRegression `the_landing_still_links_all_eight_surfaces` | Migration (ADR-058) | `@property @driving_port @real-io @no-regression @gold` | GREEN-today |
+| NAV-INV-LandingViaNav `the_landing_now_sources_its_surface_links_from_the_persistent_nav` | Migration (ADR-058) | `@property @driving_port @real-io @single-source @gold` | RED |
+
+Tally: 15 slice-21 scenarios — **13 RED** (assertion, MISSING_FUNCTIONALITY) + **2
+GREEN-today** guardrails; **0 BROKEN**. Error/edge ratio: 5/15 (33%) carry
+`@no-regression` / `@no-js` / `@no-control` / `@parity` degradation-or-guardrail intent;
+the read-only viewer surface has no error routes beyond the offline/no-JS/no-control
+guardrails, all covered. KPI coverage: KPI-NAV-1 (NAV-2), KPI-NAV-2 (NAV-6), KPI-NAV-3
+(NAV-5 + NAV-INV-NoJs), KPI-NAV-4 (NAV-8 + NAV-9 + NAV-INV-LandingNoRegression),
+KPI-NAV-5 (NAV-INV-NoControl + NAV-INV-Offline).
+
+## Wave: DISTILL / [REF] Walking-skeleton designation
+
+**WS = NAV-1** `every_viewer_surface_renders_the_persistent_left_nav_marking_the_current_surface`,
+tagged `@walking_skeleton @driving_port @driving_adapter @real-io`. It is the thinnest
+complete demo thread: the operator loads EVERY one of the 8 viewer surfaces and, on
+each, sees the SAME persistent left nav listing all 8 surfaces wrapped around a
+`#viewer-main` region, with the current surface marked active. A non-technical
+stakeholder confirms "yes — I can reach every surface from every surface and always know
+where I am." WS strategy = **B (extend existing chrome)** per DISCUSS; no NEW walking
+skeleton crate/route (brownfield: slice-06 viewer + slice-07 htmx swaps + slice-17 hub
+are SHIPPED). Driving adapter is verified via the REAL `openlore ui` HTTP GET (the
+user's actual invocation path) — full page, htmx fragment, and the NEW boosted shape.
+
+## Wave: DISTILL / [REF] Port-to-port note
+
+Tests drive the OBSERVABLE HTTP surface, never internals (Mandate 1 + hexagonal
+boundary): each scenario spawns the REAL `openlore ui` viewer (`ViewerServer::start` —
+production composition root, Pillar 3) and issues in-test HTTP GET against the driving
+port (the 8 viewer routes) via `viewer.get(path)` (no-JS full page), `viewer.get_htmx(path)`
+(htmx fragment), and the NEW `viewer.get_boosted(path)` (the `hx-boost` shape —
+`HX-Request` + `HX-Boosted` headers). Every assertion scans the rendered HTML body
+(`id="viewer-nav"`, `id="viewer-nav-items"`, `id="viewer-main"`, `aria-current="page"`,
+`hx-boost`, `hx-swap-oob`) — the port-exposed observable surface — NEVER a `viewer-domain`
+render fn, the adapter `Shape::from_request`, or a struct field. The LOCAL DuckDB store
+is REAL (own claims seeded via the production `claim add` verb); no mocked boundary (the
+nav is a LOCAL render-only chrome affordance; unconfigured `/search` renders its own 200
+Unavailable full page). The single harness addition — `ViewerServer::get_boosted` — is a
+real HTTP method (not a `todo!()` scaffold), so every RED is a genuine assertion RED, not
+a fixture/import/setup failure.
+
+## Wave: DISTILL / [REF] Scaffolds + test placement
+
+- No Mandate-7 production scaffold stubs required: the ATs import nothing unbuilt at the
+  Rust level (they spawn the `openlore` bin + drive HTTP), so they COMPILE now and fail
+  at the HTTP body assertion. The nav/`#viewer-main`/`HX-Boosted`-fork/OOB affordances
+  are DELIVER's production edit (viewer-domain pure render + one adapter fork line).
+- Harness addition (committed this wave): `ViewerServer::get_boosted(&self, path)` in
+  `tests/acceptance/support/mod.rs` (sends `HX-Request: true` + `HX-Boosted: true` +
+  `HX-Target: viewer-main`, mirroring `get_htmx`).
+- Test targets registered in `crates/cli/Cargo.toml`: `viewer_persistent_left_nav` +
+  `viewer_persistent_left_nav_invariants` (path `../../tests/acceptance/{name}.rs`).
+- Layer placement: layer-3/layer-5 subprocess + real-I/O, EXAMPLE-only (Mandate 9/11);
+  Tier B (state-machine PBT) NOT warranted (Mandate 10 — a fixed 8-surface render, not a
+  ≥3-scenario chained journey over a domain-rich state machine).

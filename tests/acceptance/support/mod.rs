@@ -7619,6 +7619,39 @@ impl ViewerServer {
         }
     }
 
+    /// Issue an HTTP `GET <base_url><path>` WITH the htmx `hx-boost` request headers
+    /// — the slice-21 persistent-left-nav (BOOSTED FULL-PAGE) shape driver (ADR-058
+    /// D3). A mirror of [`get_htmx`](Self::get_htmx); the delta is that a boosted nav
+    /// click carries BOTH `HX-Request: true` AND `HX-Boosted: true` (plus the
+    /// `HX-Target: viewer-main` the boosted `<nav>` sets), so `Shape::from_request`
+    /// (ADR-058 D3) takes the NEW prior arm — `HX-Boosted` present -> `FullPage` — and
+    /// returns the COMPLETE page (so the client can `hx-select="#viewer-main"` the
+    /// content region), NOT the bare fragment the tab/paging `hx-get`s (which send
+    /// `HX-Request` only) receive. On a boosted response the effect shell ALSO appends
+    /// the out-of-band `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` copy that
+    /// updates the active marker in place (ADR-058 D5). The value `"true"` matches
+    /// real htmx for fidelity; `Shape::from_request` keys on the header's PRESENCE.
+    pub fn get_boosted(&self, path: &str) -> ViewerResponse {
+        let url = format!("{}{}", self.base_url, path);
+        let response = shared_http_client()
+            .get(&url)
+            .header("HX-Request", "true")
+            .header("HX-Boosted", "true")
+            .header("HX-Target", "viewer-main")
+            .send()
+            .unwrap_or_else(|e| panic!("GET (boosted) {url}: {e}"));
+        let status = response.status().as_u16();
+        let content_type = content_type_of(&response);
+        let body = response
+            .text()
+            .unwrap_or_else(|e| panic!("read body of GET (boosted) {url}: {e}"));
+        ViewerResponse {
+            status,
+            body,
+            content_type,
+        }
+    }
+
     /// Issue an HTTP `POST <base_url><path>` form-urlencoded WITH the
     /// `HX-Request: true` header — the slice-07 htmx scrape-results (FRAGMENT) shape
     /// driver (ADR-035, US-HX-003). A mirror of [`post_form`](Self::post_form); the

@@ -1026,3 +1026,32 @@ harness = true
 name = "viewer_search_full_follow_state_invariants"
 path = "../../tests/acceptance/viewer_search_full_follow_state_invariants.rs"
 harness = true
+
+# Slice-21 subprocess acceptance (viewer-persistent-left-nav — US-NAV-001/002;
+# ADR-058). Drives the REAL `openlore ui` viewer over HTTP (`ViewerServer`) — full
+# page (`get`), htmx fragment (`get_htmx`), and the NEW boosted shape (`get_boosted`,
+# sending BOTH `HX-Request` + `HX-Boosted`) — over a REAL DuckDB seeded via the REAL
+# `claim add` verb; NO mocked boundary (the nav is a LOCAL render-only chrome
+# affordance; unconfigured `/search` renders its 200 Unavailable full page). Renders a
+# persistent left `<nav id="viewer-nav">` (from the slice-17 `LANDING_HUB_SURFACES`
+# SSOT) OUTSIDE an outer `<main id="viewer-main">` on EVERY route, boosts its links
+# (`hx-boost` + `hx-select="#viewer-main"`), forks `Shape::from_request` on `HX-Boosted`
+# -> FullPage, and updates the active marker via an out-of-band
+# `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">`. DISTILL registers + RED gate;
+# NAV-1 is the thick walking skeleton (nav on all 8 routes, current marked active);
+# NAV-2..NAV-9 stay RED (the nav / `#viewer-main` / `aria-current` / `hx-boost` /
+# `HX-Boosted` fork / OOB nav-items do not exist yet = MISSING_FUNCTIONALITY).
+[[test]]
+name = "viewer_persistent_left_nav"
+path = "../../tests/acceptance/viewer_persistent_left_nav.rs"
+harness = true
+
+# Slice-21 GOLD / guardrail invariants (the cross-cutting I-VIEW-1/3/4 + I-HX-1/2/4/5
+# guardrails over the WHOLE persistent-nav surface). DISTILL registers + RED gate; the
+# nav-present guardrails (no-control, no-JS-on-every-route, single-source, landing-via-
+# nav) stay RED until DELIVER; the offline (no-CDN + vendored asset) + landing-links-
+# all-8 no-regression golds are intentional GREEN-today guardrails that must not regress.
+[[test]]
+name = "viewer_persistent_left_nav_invariants"
+path = "../../tests/acceptance/viewer_persistent_left_nav_invariants.rs"
+harness = true
