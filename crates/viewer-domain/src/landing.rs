@@ -40,31 +40,32 @@ pub struct LandingSummary {
     pub countered_peer_claims: Option<usize>,
 }
 
-/// The landing nav-hub surface table now lives at ONE SSOT in `common.rs`
-/// ([`crate::common::LANDING_HUB_SURFACES`]) so the slice-21 persistent
-/// [`render_viewer_nav`] reads it IN-MODULE with no `common -> landing` back-edge
-/// (ADR-058 D2). This landing render keeps its inline hub THIS step (removed at
-/// 01-02 once the persistent nav supersedes it), sourced from that SAME table — so
-/// the surface set stays single-source (AC-001.3).
-use crate::common::LANDING_HUB_SURFACES;
+/// The 8-surface nav-hub table lives at ONE SSOT in `common.rs`
+/// ([`crate::common::LANDING_HUB_SURFACES`]) and is now read by exactly ONE renderer —
+/// the persistent [`render_viewer_nav`] (in `common.rs`), which `page_shell` mounts on
+/// EVERY route including `/` (ADR-058 D2 / Migration). slice-21 step 01-02 REMOVED the
+/// slice-17 inline landing hub that used to read the SAME table: the surface set is now
+/// genuinely single-source (AC-001.3), with no landing-only second list to drift.
 
 /// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
 /// PURE: a TOTAL function of the [`LandingSummary`] — no I/O, no panic on ANY of the
 /// 2³ `Option` combinations. States the view is read-only (the operator is told, up
 /// front, that nothing here can change her store — NFR-VIEW-1, the [`READ_ONLY_NOTICE`]
-/// shared verbatim with the launch banner), renders the THREE at-a-glance LOCAL
+/// shared verbatim with the launch banner) and renders the THREE at-a-glance LOCAL
 /// counts (each `Some(n)` → the number, `None` → [`MISSING_COUNT_MARKER`] "—", ADR-054
-/// D2), and a navigation hub of plain `<a href>` links to ALL 8 shipped top-level
-/// surfaces ([`LANDING_HUB_SURFACES`], via their URL consts — no drifting literal,
-/// R-LD-4). Full-page-only (ADR-054 D5): returns a complete document, NO `Shape`
-/// fork. Every navigation affordance is a plain link — NO form/button/mutating
-/// control (the front door is read-only, C-1 CARDINAL).
+/// D2). The 8-surface navigation hub is NO LONGER an inline part of this content region
+/// (slice-21 step 01-02 / ADR-058 Migration): it renders once through `page_shell` via
+/// the persistent [`crate::common::render_viewer_nav`], on `/` AND every other surface,
+/// from the single [`crate::common::LANDING_HUB_SURFACES`] SSOT — so no link is lost and
+/// the surface set cannot drift. Full-page-only (ADR-054 D5): returns a complete
+/// document, NO `Shape` fork. Every navigation affordance is a plain link — NO
+/// form/button/mutating control (the front door is read-only, C-1 CARDINAL).
 pub fn render_landing(summary: &LandingSummary) -> String {
     // slice-21 (ADR-058 D6): the landing body is composed through `page_shell`, which
     // renders the persistent left nav OUTSIDE `<main id="viewer-main">` and wraps this
     // content inside it. `active = ""` — the landing `/` is NOT a nav item, so no item
-    // is marked active (the landing content region keeps only its summary + the inline
-    // hub, superseded at 01-02).
+    // is marked active. The landing content region now keeps ONLY its store summary; the
+    // 8-surface hub is supplied by the persistent nav (inline hub removed at 01-02).
     let body = html! {
                 h1 { "OpenLore Viewer" }
                 p { (READ_ONLY_NOTICE) }
@@ -95,18 +96,12 @@ pub fn render_landing(summary: &LandingSummary) -> String {
                     }
                     p { (render_count(summary.active_peers)) " active peers" }
                 }
-                // The navigation hub — every shipped surface as a plain <a href>
-                // (no-JS navigable), via its URL const (no drift, R-LD-4). The ONLY
-                // affordances on the front door (read-only — no write control, C-1).
-                nav {
-                    ul {
-                        @for (label, url) in LANDING_HUB_SURFACES {
-                            li {
-                                a href=(url) { (label) }
-                            }
-                        }
-                    }
-                }
+                // The 8-surface navigation hub is NOT rendered here (slice-21 step 01-02
+                // / ADR-058 Migration): `page_shell` mounts the persistent
+                // `render_viewer_nav` OUTSIDE this content region — on `/` and every
+                // surface — from the single `LANDING_HUB_SURFACES` SSOT. The front door's
+                // content region keeps ONLY its store summary; every navigation affordance
+                // remains a plain link (read-only — no write control, C-1).
     };
     page_shell("OpenLore — Viewer", "", body)
 }
