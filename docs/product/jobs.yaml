@@ -185,6 +185,32 @@ jobs:
           nav is plain links that also work with JavaScript off. Realized by
           slice-21.
 
+      # Sub-job surfaced during philosophy-vocabulary-registry DISCUSS. A
+      # load-bearing substrate for J-002 (and J-001 authoring, J-004 contributor
+      # lens), NOT a new primary job.
+      - id: J-002e
+        name: Classify against a shared, discoverable philosophy vocabulary
+        story: >
+          When I classify a project's (or a contributor's) philosophy, I want to
+          pick from and discover a SHARED vocabulary of well-defined philosophies —
+          and extend it when mine is missing — so my classification triangulates
+          with everyone else's instead of stranding on an object string only I use.
+        load_bearing: true
+        rationale: >
+          The philosophy is the `object` of a claim (J-001); triangulation (J-002)
+          and the contributor lens (J-004) only aggregate when authors use the SAME
+          objects. Today the `org.openlore.philosophy` record is a RED scaffold
+          (`validate_philosophy_json` panics; no seeds; no `openlore philosophy`
+          verb), so classification works mechanically but does NOT federate.
+          Resolution is SEEDED-BUT-OPEN: ship curated well-known seed philosophy
+          records for discovery + triangulation, but anyone may mint a new signed
+          philosophy record (federated, no gatekeeper); claim compose SUGGESTS known
+          philosophies but NEVER rejects an unknown object (advisory, preserving
+          "claims, not truth"). Aliases power read-time triangulation
+          (`mem-safety` ~ `memory-safety`) without rewriting the immutable signed
+          objects. Realized by the philosophy-vocabulary-registry feature
+          (slices 22-28; slice-22 = seed + list).
+
 
   - id: J-003
     name: Read another developer's federated claims with weighting
