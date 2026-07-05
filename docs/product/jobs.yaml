@@ -164,6 +164,27 @@ jobs:
           score unauditable). A score is an AGGREGATE VIEW, never a merge that
           loses per-author attribution.
 
+      # Sub-job surfaced during slice-21 (viewer-persistent-left-nav) DISCUSS.
+      # A UX-affordance aspect of J-002 (moving fluidly between exploration
+      # surfaces), NOT a new primary job.
+      - id: J-002d
+        name: Navigate fluidly between viewer surfaces without losing place
+        story: >
+          When I'm moving between the read-only viewer's exploration/reading
+          surfaces to inform a decision, I want the left navigation to stay open
+          and mark where I am, so I can jump between surfaces in one click without
+          re-orienting or hunting for the way back.
+        load_bearing: false
+        rationale: >
+          A navigation affordance, not new graph capability: it lowers the
+          friction of the existing J-002 exploration (and the J-003/J-004/J-005
+          reading surfaces the viewer hosts) by making the viewer behave as one
+          app rather than a set of separate full-reload pages. Preserves the
+          read-only / offline / loopback viewer invariants (I-VIEW-1/3/4) and the
+          progressive-enhancement / no-JS-fallback discipline (I-HX-1/4/5): the
+          nav is plain links that also work with JavaScript off. Realized by
+          slice-21.
+
 
   - id: J-003
     name: Read another developer's federated claims with weighting
