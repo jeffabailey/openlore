@@ -1,0 +1,274 @@
+{
+  "roadmap": {
+    "project_id": "viewer-persistent-left-nav",
+    "goal": "Render a persistent left navigation on EVERY read-only viewer surface that stays mounted across navigation (content-only swap into an outer #viewer-main), marks the current surface active, and degrades to plain full-page links with JS off. Chrome-only, render-only, read-only, offline/loopback preserved, additive: no new crate/route/read-method (workspace stays 21). Mechanism per ADR-058 (D1-D6): outer <main id=\"viewer-main\"> (VIEWER_MAIN_ID), persistent <nav id=\"viewer-nav\"> with <ul id=\"viewer-nav-items\"> sourced from LANDING_HUB_SURFACES, a page_shell(title, active, content) chrome helper every render_*_page routes through, hx-boost + hx-select=\"#viewer-main\" nav links, a Shape::from_request HX-Boosted -> FullPage fork, and an out-of-band render_viewer_nav_oob(active) appended to boosted responses to update the active marker in place.",
+    "created_at": "2026-07-05T00:00:00Z",
+    "total_steps": 5
+  },
+  "total_steps": 5,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton (nav on every surface) + single-source landing migration",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Thick walking skeleton: page_shell + render_viewer_nav + #viewer-main on every full page, current surface marked active, HX-Boosted -> FullPage fork",
+          "description": "The thick foundational walking-skeleton step (NAV-1, the load-bearing demo thread of US-NAV-001/002). Force the WHOLE nav-chrome seam into existence end-to-end so the operator can reach every surface from every surface and always know where she is. PURE CORE (crates/viewer-domain/src/common.rs): mint VIEWER_MAIN_ID = \"viewer-main\" (SSOT for the outer swap target, sibling of VIEW_PANEL_ID / CLAIMS_TABLE_ID); mint render_viewer_nav(active: &str) -> Markup that iterates LANDING_HUB_SURFACES emitting one plain <a href=url> per surface inside <nav id=\"viewer-nav\"><ul id=\"viewer-nav-items\">...</ul></nav>, the <nav> carrying hx-boost=\"true\" + hx-target=\"#viewer-main\" + hx-select=\"#viewer-main\" + hx-swap=\"innerHTML\" (cascades to the <a> children; ADR-058 D2), the row whose URL equals active marked aria-current=\"page\" and no other; mint page_shell(title, active, content: Markup) -> String = page_head(title) + <body> { render_viewer_nav(active) OUTSIDE + <main id=\"viewer-main\">(content)</main> } (ADR-058 D1/D6). SSOT co-location (architect's call, ADR-058 D2 / feature-delta [D4]): move LANDING_HUB_SURFACES from landing.rs to common.rs so render_viewer_nav consumes it in-module (avoids a common->landing back-edge); landing.rs references common::LANDING_HUB_SURFACES for its (still-present-this-step) inline hub. SURFACE RENDERERS (crates/viewer-domain/src/{claims,peer_claims,detail,scrape,search,score,traversal,peers}.rs + landing.rs): each render_*_page KEEPS its signature and return type; internally it stops spelling out DOCTYPE/head/body and instead builds its surface body as Markup and returns page_shell(title, active, body) where active is the surface's compile-time URL const at the call site (MY_CLAIMS_URL, SEARCH_URL, ...; base-path const for query-bearing routes; ADR-058 D6). The render_*_fragment fns are UNCHANGED (they ride Shape::Fragment for the existing tab #view-panel + paging #claims-table swaps). render_landing routes through page_shell too (so the nav renders on / for NAV-INV-LandingViaNav) but its inline LANDING_HUB_SURFACES hub is LEFT IN PLACE this step (removed at 01-02). EFFECT SHELL (crates/adapter-http-viewer/src/lib.rs): extend Shape::from_request with ONE prior condition -- HX-Boosted present -> FullPage (boosted nav returns the full page so the client hx-selects #viewer-main), else HX-Request present -> Fragment (existing tab/paging swaps UNCHANGED), else -> FullPage (direct / no-JS); route render_error (the 404 full page) through page_shell (active = \"\") so the nav is present for navigational recovery (ADR-058 D6). Outcome: the operator loads EVERY one of the 8 viewer routes (/ + the 7 inner surfaces) and, on each, sees the SAME persistent left nav listing all surfaces from LANDING_HUB_SURFACES as plain <a href> links wrapped around a #viewer-main content region, with the current surface marked aria-current=\"page\" (the / landing carries no active marker). RED today: no <nav id=\"viewer-nav\">, no <main id=\"viewer-main\">, no aria-current=\"page\", and no HX-Boosted arm exist. BUILD-BEFORE-RUN: the AT spawns the real openlore ui bin over HTTP; the run must cargo build --bin openlore before executing so ViewerServer::start spawns the CURRENT viewer. PARADIGM (functional Rust, ADR-007): the pure-core render fns are total functions of (title, active, content) / (active) with zero I/O; the header-unaware shape decision lives in the effect shell. Unit-layer coverage is a proptest over render_viewer_nav across the 8-surface x active-key space (exactly-one aria-current for a valid active key; every surface a plain <a href>; the item set == LANDING_HUB_SURFACES); the acceptance scenarios are layer-3 subprocess + real-I/O EXAMPLES (Mandate 9/11; Tier B state-machine PBT NOT warranted -- a fixed 8-surface render, not a chained journey, Mandate 10).",
+          "acceptance_criteria": [
+            "NAV-1 (AC-001.1/001.2, WS): with the real openlore ui viewer over a store seeded with the operator's own claims (via the real claim add verb), a GET of EVERY one of the 8 routes (/ /claims /peer-claims /search /score /project /philosophy /peers) returns 200 and a COMPLETE full page carrying the persistent left nav (id=\"viewer-nav\") wrapped around the outer content region (id=\"viewer-main\"), listing all surfaces from LANDING_HUB_SURFACES as plain <a href> links, and -- on every route that IS a nav item -- marking exactly that surface aria-current=\"page\" (the / landing carries no active marker).",
+            "NAV-2 (AC-001.1 / KPI-NAV-1): every one of the 8 routes exposes the persistent nav container (id=\"viewer-nav\") wrapping the inner item list (id=\"viewer-nav-items\"), each listing all surfaces from the LANDING_HUB_SURFACES SSOT -- 100% nav reach.",
+            "NAV-5 (AC-001.4 / KPI-NAV-3): with JS off (a plain GET, no HX-Request), an inner surface (/peer-claims) still renders the nav on a COMPLETE full page with every surface a working plain <a href> full-page link (not an hx-get-only affordance).",
+            "The pure core (viewer-domain) mints VIEWER_MAIN_ID + render_viewer_nav(active) + page_shell(title, active, content); every render_*_page (and render_error) routes its body through page_shell with active = the surface's compile-time URL const; the render_*_fragment fns are byte-unchanged (tab #view-panel + paging #claims-table swaps intact); LANDING_HUB_SURFACES is co-located in common.rs as the single item source.",
+            "The effect shell (adapter-http-viewer) extends Shape::from_request with the prior arm HX-Boosted -> FullPage (boosted nav returns the full page for hx-select=\"#viewer-main\"); the existing tab/paging hx-gets (HX-Request only) are UNCHANGED; render_error (404) routes through page_shell.",
+            "viewer-domain stays pure (the nav is plain <a href> links only -- no form/button/mutating control, no key, no new route/variant/crate); cargo xtask check-arch passes (workspace stays 21 members; pure-render + one adapter fork line); the openlore bin is built before the AT runs."
+          ],
+          "test_file": "tests/acceptance/viewer_persistent_left_nav.rs",
+          "scenario_name": "every_viewer_surface_renders_the_persistent_left_nav_marking_the_current_surface",
+          "scenario_fns": [
+            "every_viewer_surface_renders_the_persistent_left_nav_marking_the_current_surface",
+            "the_left_nav_is_present_on_every_one_of_the_eight_routes",
+            "the_nav_renders_with_working_full_page_links_when_javascript_is_disabled"
+          ],
+          "n_scenarios": [
+            "NAV-1",
+            "NAV-2",
+            "NAV-5"
+          ],
+          "us_trace": [
+            "US-NAV-001",
+            "US-NAV-002"
+          ],
+          "estimate_hours": 10,
+          "depends_on": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_persistent_left_nav.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/viewer-domain/src/common.rs",
+            "crates/viewer-domain/src/landing.rs",
+            "crates/viewer-domain/src/claims.rs",
+            "crates/viewer-domain/src/peer_claims.rs",
+            "crates/viewer-domain/src/detail.rs",
+            "crates/viewer-domain/src/scrape.rs",
+            "crates/viewer-domain/src/search.rs",
+            "crates/viewer-domain/src/score.rs",
+            "crates/viewer-domain/src/traversal.rs",
+            "crates/viewer-domain/src/peers.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "Adds the load-bearing pure-core surface (VIEWER_MAIN_ID + render_viewer_nav + page_shell) and the Shape::from_request HX-Boosted -> FullPage fork. Mutation-test render_viewer_nav via a proptest over the pure fn (exactly-one aria-current for a valid active key; a NON-member active key yields zero markers; every surface emitted as a plain <a href>; the item set is exactly LANDING_HUB_SURFACES -- dropping/duplicating a row is caught) and the Shape fork (HX-Boosted -> FullPage without disturbing the HX-Request -> Fragment arm; swapping/eliding either arm is caught).",
+          "criteria": [
+            "NAV-1 (AC-001.1/001.2, WS): with the real openlore ui viewer over a store seeded with the operator's own claims (via the real claim add verb), a GET of EVERY one of the 8 routes (/ /claims /peer-claims /search /score /project /philosophy /peers) returns 200 and a COMPLETE full page carrying the persistent left nav (id=\"viewer-nav\") wrapped around the outer content region (id=\"viewer-main\"), listing all surfaces from LANDING_HUB_SURFACES as plain <a href> links, and -- on every route that IS a nav item -- marking exactly that surface aria-current=\"page\" (the / landing carries no active marker).",
+            "NAV-2 (AC-001.1 / KPI-NAV-1): every one of the 8 routes exposes the persistent nav container (id=\"viewer-nav\") wrapping the inner item list (id=\"viewer-nav-items\"), each listing all surfaces from the LANDING_HUB_SURFACES SSOT -- 100% nav reach.",
+            "NAV-5 (AC-001.4 / KPI-NAV-3): with JS off (a plain GET, no HX-Request), an inner surface (/peer-claims) still renders the nav on a COMPLETE full page with every surface a working plain <a href> full-page link (not an hx-get-only affordance).",
+            "The pure core (viewer-domain) mints VIEWER_MAIN_ID + render_viewer_nav(active) + page_shell(title, active, content); every render_*_page (and render_error) routes its body through page_shell with active = the surface's compile-time URL const; the render_*_fragment fns are byte-unchanged (tab #view-panel + paging #claims-table swaps intact); LANDING_HUB_SURFACES is co-located in common.rs as the single item source.",
+            "The effect shell (adapter-http-viewer) extends Shape::from_request with the prior arm HX-Boosted -> FullPage (boosted nav returns the full page for hx-select=\"#viewer-main\"); the existing tab/paging hx-gets (HX-Request only) are UNCHANGED; render_error (404) routes through page_shell.",
+            "viewer-domain stays pure (the nav is plain <a href> links only -- no form/button/mutating control, no key, no new route/variant/crate); cargo xtask check-arch passes (workspace stays 21 members; pure-render + one adapter fork line); the openlore bin is built before the AT runs."
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "Landing-hub migration + single source: LANDING_HUB_SURFACES is the sole nav item source, the inline hub is removed, slice-17 assertions re-baselined",
+          "description": "Complete the single-source guarantee of US-NAV-001 / AC-001.3 (NAV-4) and the ADR-058 Migration -- a direct consequence of the 01-01 shell. At 01-01 the persistent nav renders the surfaces on ALL routes via page_shell, but render_landing STILL carries the slice-17 inline LANDING_HUB_SURFACES hub, so the landing page briefly holds TWO surface lists. This step removes the inline hub from render_landing's body (the landing content region keeps only its store summary; ADR-058 D2/Migration), so LANDING_HUB_SURFACES is the GENUINELY single source read by exactly one renderer (render_viewer_nav) -- no second, driftable literal list. Re-baseline the slice-17 landing acceptance assertions (e.g. landing_hub_links_all_eight_surfaces_via_url_consts): the 'all 8 surfaces linked via URL consts' guarantee becomes an assertion against the persistent nav and now holds on ALL 8 routes, not just / (a STRENGTHENING -- broader coverage, guarded by the single-source test; ADR-058 Migration). No slice-17 behavior is lost: every link the landing hub offered is still offered (now from everywhere); the landing read-only + offline golds still hold (the nav is plain links). NAV-4 pins that an INNER surface (/score) sources the nav from the SAME LANDING_HUB_SURFACES set -- all 8 surfaces, and NO deep/parameterized route (/claims/{cid}, ?contributor=, ?subject=, ?object=) as a top-level nav item. RED cause today: /score renders no id=\"viewer-nav\" (single back-link nav only). PARADIGM (functional Rust): the single-source invariant (the rendered nav item set is byte-derived from LANDING_HUB_SURFACES with no second literal) is a structural property pinned by the 01-01 render proptest (item set == LANDING_HUB_SURFACES); NAV-4 is a layer-3 subprocess EXAMPLE over /score. Migration edits are a mechanical hub removal + a test re-baseline (the full-page unit tests pin the landing result).",
+          "acceptance_criteria": [
+            "NAV-4 (AC-001.3): with the operator on an inner surface (/score), GET /score returns 200 and renders the persistent nav (id=\"viewer-nav\") listing ALL 8 surfaces from LANDING_HUB_SURFACES, and NO deep/parameterized route appears as a top-level nav item (the single source is the top-level SSOT, never a hand-rolled list that could add drill routes).",
+            "The inline LANDING_HUB_SURFACES hub is removed from render_landing's body (the landing content region keeps only its store summary); LANDING_HUB_SURFACES is now read by exactly one renderer (render_viewer_nav) -- a single, non-driftable source (AC-001.3).",
+            "The slice-17 landing-hub acceptance assertions are re-baselined to the persistent nav (a strengthening -- the 'all 8 surfaces via URL consts' guarantee now holds on all 8 routes, not just /); no slice-17 link is lost.",
+            "cargo xtask check-arch still passes (workspace stays 21 members; no new route/crate)."
+          ],
+          "test_file": "tests/acceptance/viewer_persistent_left_nav.rs",
+          "scenario_name": "the_nav_item_set_is_sourced_solely_from_the_landing_hub_surfaces_ssot",
+          "scenario_fns": [
+            "the_nav_item_set_is_sourced_solely_from_the_landing_hub_surfaces_ssot"
+          ],
+          "n_scenarios": [
+            "NAV-4"
+          ],
+          "us_trace": [
+            "US-NAV-001"
+          ],
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_persistent_left_nav.rs",
+            "crates/viewer-domain/src/landing.rs"
+          ],
+          "mutation_note": "The single-source derivation (the nav item set is byte-derived from LANDING_HUB_SURFACES, no second literal) is pinned by the 01-01 render proptest (item set == LANDING_HUB_SURFACES; a dropped or added row is caught). NAV-4 is the layer-3 example backstop that an inner surface (/score) renders the full SSOT set and no deep route as a top-level item.",
+          "criteria": [
+            "NAV-4 (AC-001.3): with the operator on an inner surface (/score), GET /score returns 200 and renders the persistent nav (id=\"viewer-nav\") listing ALL 8 surfaces from LANDING_HUB_SURFACES, and NO deep/parameterized route appears as a top-level nav item (the single source is the top-level SSOT, never a hand-rolled list that could add drill routes).",
+            "The inline LANDING_HUB_SURFACES hub is removed from render_landing's body (the landing content region keeps only its store summary); LANDING_HUB_SURFACES is now read by exactly one renderer (render_viewer_nav) -- a single, non-driftable source (AC-001.3).",
+            "The slice-17 landing-hub acceptance assertions are re-baselined to the persistent nav (a strengthening -- the 'all 8 surfaces via URL consts' guarantee now holds on all 8 routes, not just /); no slice-17 link is lost.",
+            "cargo xtask check-arch still passes (workspace stays 21 members; no new route/crate)."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "The nav stays open across navigation (OOB active-marker swap, hx-boost history, byte-parity, no-regression)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Out-of-band active-marker update on a boosted swap + hx-boost history attributes: the nav container persists while the marker updates in place",
+          "description": "Resolve the US-NAV-002 persistence outcome (AC-002.1 refined + 002.3 + 002.2; NAV-6 + NAV-3 + NAV-7) via the ADR-058 D5 out-of-band mechanism. At 01-01 a boosted GET already returns the full page (the Shape fork) so the client can hx-select=\"#viewer-main\", but the nav (OUTSIDE #viewer-main) would be left with a STALE active marker after a content-only swap. This step adds the OOB active-marker update WITHOUT re-flashing/reloading the nav. PURE CORE (crates/viewer-domain/src/common.rs): mint render_viewer_nav_oob(active: &str) -> Markup = JUST the bare <ul id=\"viewer-nav-items\" hx-swap-oob=\"innerHTML\">...active-updated links...</ul> sibling (the same links as the in-shell list, active row marked aria-current=\"page\"). EFFECT SHELL (crates/adapter-http-viewer/src/lib.rs): on a BOOSTED response only (HX-Boosted present), append render_viewer_nav_oob(active) to the full-page string at body-end (after </main>); direct / no-JS loads emit NEITHER the OOB copy NOR any hx-swap-oob. htmx processes the OOB content independently of hx-select, replacing ONLY the inner <ul id=\"viewer-nav-items\">'s children -- so the <nav id=\"viewer-nav\"> CONTAINER persists (never torn down, no scroll-reset, no flash) while the active marker updates in place (AC-002.1 refined + AC-002.3). NAV-7 confirms the in-shell nav already carries hx-boost=\"true\" + hx-target=\"#viewer-main\" (minted at 01-01) -- the mechanism htmx uses to push the surface URL into the address bar and make Back/forward work (AC-002.2). RED cause today: no HX-Boosted -> FullPage fork produced the full page (fixed 01-01), and no OOB hx-swap-oob nav-items are appended (fixed here); a boosted GET currently returns the bare fragment. PARADIGM (functional Rust): render_viewer_nav_oob is a pure total fn of active; its output (bare <ul> with hx-swap-oob, active row marked) is pinned by a unit proptest over the 8-surface active-key space; the effect-shell choice 'append OOB iff boosted' is verified by the layer-3 boosted vs full-page EXAMPLE scenarios (NAV-6/NAV-3 assert the OOB present on boosted and NAV-9's full/no-JS path asserts no OOB leaks -- confirmed at 02-02).",
+          "acceptance_criteria": [
+            "NAV-6 (AC-002.1 refined / KPI-NAV-2): a boosted GET /score (HX-Request + HX-Boosted) returns 200 and a COMPLETE full page carrying the outer content region (id=\"viewer-main\") for hx-select AND the appended out-of-band nav-items list (id=\"viewer-nav-items\" with hx-swap-oob=\"innerHTML\") -- so htmx swaps ONLY #viewer-main while the <nav id=\"viewer-nav\"> container persists (not re-fetched or torn down).",
+            "NAV-3 (AC-001.2 + AC-002.3): on the full page for /claims exactly ONE nav item is marked aria-current=\"page\"; after a boosted navigation to /peer-claims the response's OOB nav-items list carries the aria-current marker for the newly-active surface (the marker updates in place, previously-active no longer marked).",
+            "NAV-7 (AC-002.2): the persistent nav carries hx-boost=\"true\" targeting/selecting #viewer-main (hx-target=\"#viewer-main\") -- the htmx mechanism that pushes the navigated surface URL into the address bar and makes browser Back/forward return to the prior surface's content.",
+            "render_viewer_nav_oob(active) is minted in the pure core (the bare OOB <ul>); the effect shell appends it to the full-page string for boosted responses ONLY; direct / no-JS loads emit neither the OOB copy nor any hx-swap-oob (progressive enhancement unaffected).",
+            "The two existing swaps (#view-panel tab, #claims-table paging) are byte-unchanged (they never set HX-Boosted, so never hit the OOB path); cargo xtask check-arch still passes (21 members)."
+          ],
+          "test_file": "tests/acceptance/viewer_persistent_left_nav.rs",
+          "scenario_name": "a_boosted_nav_click_returns_a_full_page_with_viewer_main_and_oob_nav_items",
+          "scenario_fns": [
+            "a_boosted_nav_click_returns_a_full_page_with_viewer_main_and_oob_nav_items",
+            "exactly_one_nav_item_is_marked_active_on_the_page_and_updates_on_a_boosted_swap",
+            "the_nav_carries_hx_boost_attributes_that_drive_the_address_bar_and_history"
+          ],
+          "n_scenarios": [
+            "NAV-6",
+            "NAV-3",
+            "NAV-7"
+          ],
+          "us_trace": [
+            "US-NAV-002",
+            "US-NAV-001"
+          ],
+          "estimate_hours": 5,
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_persistent_left_nav.rs",
+            "crates/viewer-domain/src/common.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "mutation_note": "The OOB copy is the load-bearing persistence machinery. Mutation-test render_viewer_nav_oob via a proptest (emits exactly the <ul id=\"viewer-nav-items\" hx-swap-oob=\"innerHTML\"> with the active row marked aria-current for a valid key; dropping the hx-swap-oob attr or the marker is caught) and the effect-shell append condition (OOB appended iff HX-Boosted -- appending it on a non-boosted response, or omitting it on a boosted one, is caught by NAV-6/NAV-3 vs the 02-02 no-regression path).",
+          "criteria": [
+            "NAV-6 (AC-002.1 refined / KPI-NAV-2): a boosted GET /score (HX-Request + HX-Boosted) returns 200 and a COMPLETE full page carrying the outer content region (id=\"viewer-main\") for hx-select AND the appended out-of-band nav-items list (id=\"viewer-nav-items\" with hx-swap-oob=\"innerHTML\") -- so htmx swaps ONLY #viewer-main while the <nav id=\"viewer-nav\"> container persists (not re-fetched or torn down).",
+            "NAV-3 (AC-001.2 + AC-002.3): on the full page for /claims exactly ONE nav item is marked aria-current=\"page\"; after a boosted navigation to /peer-claims the response's OOB nav-items list carries the aria-current marker for the newly-active surface (the marker updates in place, previously-active no longer marked).",
+            "NAV-7 (AC-002.2): the persistent nav carries hx-boost=\"true\" targeting/selecting #viewer-main (hx-target=\"#viewer-main\") -- the htmx mechanism that pushes the navigated surface URL into the address bar and makes browser Back/forward return to the prior surface's content.",
+            "render_viewer_nav_oob(active) is minted in the pure core (the bare OOB <ul>); the effect shell appends it to the full-page string for boosted responses ONLY; direct / no-JS loads emit neither the OOB copy nor any hx-swap-oob (progressive enhancement unaffected).",
+            "The two existing swaps (#view-panel tab, #claims-table paging) are byte-unchanged (they never set HX-Boosted, so never hit the OOB path); cargo xtask check-arch still passes (21 members)."
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "Byte-parity and no-regression confirmation: the boosted #viewer-main equals the full-page region, and prior surface content is unaffected except the added nav",
+          "description": "Confirm the two structural guarantees of US-NAV-002 (AC-002.4 parity + AC-002.5 no-regression; NAV-8 + NAV-9) that the 01-01 (page_shell + Shape fork) and 02-01 (OOB) work make TRUE by construction. (NAV-8, parity / KPI-NAV-4 / I-HX-5) Because a boosted response IS the full page and hx-select=\"#viewer-main\" extracts exactly the full page's content region, the boosted #viewer-main inner region is byte-identical to the plain full-page #viewer-main region -- ONE render path per surface, parity that cannot diverge by luck. The behavioral proxy: fetch /claims boosted and plain, both carry #viewer-main, and the boosted #viewer-main region equals the full-page region byte-for-byte. Note the OOB <ul> is appended AFTER </main>, so it is OUTSIDE the extracted #viewer-main region and cannot perturb parity. (NAV-9, no-regression / KPI-NAV-4) The no-JS full-page render of a surface is byte-unaffected by this feature EXCEPT for the added nav region: /claims's pre-existing content (its read-only notice + OpenLore chrome) still renders intact, AND the persistent nav + #viewer-main are now additionally present -- the feature only ADDS the nav region, it does not rewrite the surface. This step is largely CONFIRMATORY (the parity + no-regression machinery lands at 01-01/02-01); it pins the invariants as their own guardrails and requires no new production change beyond what those steps deliver. PARADIGM (functional Rust): parity is a both-shapes-equal subprocess assertion over the SAME rendered surface (a wiring check, not a quantified-input property) -- EXEMPT FROM PBT at this layer; the compensating unit property is the render-path identity pinned by the 01-01 render proptest (one page_shell path per surface). NAV-8/NAV-9 are layer-3 subprocess + real-I/O EXAMPLES.",
+          "acceptance_criteria": [
+            "NAV-8 (AC-002.4 / KPI-NAV-4 / I-HX-5): for /claims, both the boosted and the plain full-page responses return 200 and carry #viewer-main, and the boosted #viewer-main inner region is BYTE-IDENTICAL to the full-page #viewer-main region (parity by construction -- the boosted response IS the full page; hx-select cannot diverge from it; the appended OOB <ul> is outside the region).",
+            "NAV-9 (AC-002.5): the no-JS full page for /claims returns 200 as a COMPLETE full page; its pre-existing content survives intact (the read-only notice + the OpenLore chrome are byte-present as before) AND the persistent nav (id=\"viewer-nav\") wrapping #viewer-main is now additionally present -- the ONLY change is the ADDED nav region.",
+            "No new production change is required beyond 01-01/02-01 (this step confirms the parity + no-regression invariants); cargo xtask check-arch still passes (21 members)."
+          ],
+          "test_file": "tests/acceptance/viewer_persistent_left_nav.rs",
+          "scenario_name": "the_boosted_content_region_is_byte_identical_to_the_full_page_viewer_main",
+          "scenario_fns": [
+            "the_boosted_content_region_is_byte_identical_to_the_full_page_viewer_main",
+            "the_no_js_full_page_content_is_unaffected_except_for_the_added_nav_region"
+          ],
+          "n_scenarios": [
+            "NAV-8",
+            "NAV-9"
+          ],
+          "us_trace": [
+            "US-NAV-002"
+          ],
+          "estimate_hours": 2,
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_persistent_left_nav.rs"
+          ],
+          "mutation_note": "Parity is by construction (the boosted response IS the full page; hx-select extracts the same #viewer-main; the OOB <ul> is appended outside the region). The mutation backstop is the 01-01 render proptest (one page_shell render path per surface) -- any second boosted-content code path that could drift would break the byte-identical region assertion. NAV-9's no-regression anchor (pre-existing content survives + only the nav is added) is pinned by the same single render path.",
+          "criteria": [
+            "NAV-8 (AC-002.4 / KPI-NAV-4 / I-HX-5): for /claims, both the boosted and the plain full-page responses return 200 and carry #viewer-main, and the boosted #viewer-main inner region is BYTE-IDENTICAL to the full-page #viewer-main region (parity by construction -- the boosted response IS the full page; hx-select cannot diverge from it; the appended OOB <ul> is outside the region).",
+            "NAV-9 (AC-002.5): the no-JS full page for /claims returns 200 as a COMPLETE full page; its pre-existing content survives intact (the read-only notice + the OpenLore chrome are byte-present as before) AND the persistent nav (id=\"viewer-nav\") wrapping #viewer-main is now additionally present -- the ONLY change is the ADDED nav region.",
+            "No new production change is required beyond 01-01/02-01 (this step confirms the parity + no-regression invariants); cargo xtask check-arch still passes (21 members)."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Gold guardrail invariants (persistent left nav)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Gold: the six persistent-nav guardrail invariants (no control, offline/vendored asset, no-JS every route, single-source, landing no-regression, landing-via-nav)",
+          "description": "The six cross-cutting GOLD guardrails (NAV-INV-*) that must hold over the WHOLE persistent-nav surface -- the BEHAVIORAL layer of the ADR-058 D4 enforcement (the pure-core render proptests are the unit layer; xtask check-arch's 21-member / no-new-crate/route check is the structural layer). They flip GREEN off the 01-01 shell + 01-02 migration + 02-01 OOB work. (NAV-INV-NoControl, I-VIEW-1/3 / AC-001.5, CARDINAL) over /claims in BOTH shapes (full page + boosted), the NAV REGION (scoped id=\"viewer-nav\"..</nav>, so /search and /scrape content-region forms do not false-positive) carries ONLY plain <a href> links -- NO <form>, <button>, or mutating hx-post/hx-put/hx-delete; the viewer holds no key and hx-boost issues GETs only. (NAV-INV-Offline, I-HX-2 / AC-001.5, GREEN-today) the surface references NO external CDN host and the hx-boost/hx-select capability rides the ALREADY-vendored /static/htmx.min.js (served locally, JS content-type) -- no new asset; must STAY green after the migration. (NAV-INV-NoJs, I-HX-1/4 / AC-001.4 / KPI-NAV-3) on EVERY one of the 8 routes the no-JS full page renders the nav with all 8 surfaces as working plain <a href> links. (NAV-INV-SingleSource, AC-001.3) the nav on an inner surface (/peer-claims) lists EXACTLY the LANDING_HUB_SURFACES set and no deep/parameterized route -- no second, driftable list. (NAV-INV-LandingNoRegression, ADR-058 Migration / KPI-NAV-4, GREEN-today) GET / STILL links all 8 surfaces (the slice-17 hub behavior is not lost -- DELIVER moved the links into the nav without dropping any); must STAY green. (NAV-INV-LandingViaNav, ADR-058 Migration) GET / now carries id=\"viewer-nav\" -- the landing's 8 surface links come FROM the persistent nav (served through the shared page_shell + render_viewer_nav path, on / AND every other route). RED cause today: the nav chrome is absent (no id=\"viewer-nav\"/#viewer-main) for the four RED golds; the Offline + LandingNoRegression golds are GREEN-today guardrails that must not regress. PARADIGM (functional Rust): these guardrails are layer-3 subprocess EXAMPLE golds tagged @property (universal invariants for the reader + crafter); the generative exploration of the pure render_viewer_nav / render_viewer_nav_oob / page_shell core over the 8-surface x active-key space is the layer-1/2 proptest concern landed in 01-01/02-01; these golds verify the OBSERVABLE surface end-to-end in both shapes.",
+          "acceptance_criteria": [
+            "NAV-INV-NoControl (I-VIEW-1/3 / AC-001.5, CARDINAL): over /claims in BOTH shapes (full page + boosted), the nav region (scoped id=\"viewer-nav\"..</nav>) carries NO executable/mutating control -- no <form>, <button>, hx-post, hx-put, or hx-delete -- only plain <a href> links; the viewer holds no key and hx-boost issues GETs only.",
+            "NAV-INV-Offline (I-HX-2 / AC-001.5, GREEN-today): the surface references NO external CDN host and the vendored /static/htmx.min.js serves locally (200, JS content-type) -- the offline foundation hx-boost/hx-select ride; stays green after the migration.",
+            "NAV-INV-NoJs (I-HX-1/4 / AC-001.4 / KPI-NAV-3): on EVERY one of the 8 routes, the no-JS full page renders the nav (id=\"viewer-nav\") with all 8 surfaces as working plain <a href> links.",
+            "NAV-INV-SingleSource (AC-001.3): the nav on an inner surface (/peer-claims) lists EXACTLY the LANDING_HUB_SURFACES set and no deep/parameterized route as a top-level item -- one source, no second list.",
+            "NAV-INV-LandingNoRegression (ADR-058 Migration / KPI-NAV-4, GREEN-today): GET / STILL links all 8 surfaces (no link lost when the hub moved into the persistent nav).",
+            "NAV-INV-LandingViaNav (ADR-058 Migration): GET / carries id=\"viewer-nav\" -- the landing's 8 surface links come FROM the persistent nav, served through the shared page_shell + render_viewer_nav path (the migration actually happened)."
+          ],
+          "test_file": "tests/acceptance/viewer_persistent_left_nav_invariants.rs",
+          "scenario_name": "the_persistent_nav_adds_no_executable_control",
+          "scenario_fns": [
+            "the_persistent_nav_adds_no_executable_control",
+            "the_persistent_nav_stays_offline_with_the_vendored_asset",
+            "the_nav_renders_with_plain_links_on_every_route_with_js_off",
+            "the_nav_item_set_never_drifts_from_the_surface_ssot",
+            "the_landing_still_links_all_eight_surfaces",
+            "the_landing_now_sources_its_surface_links_from_the_persistent_nav"
+          ],
+          "n_scenarios": [
+            "NAV-INV-NoControl",
+            "NAV-INV-Offline",
+            "NAV-INV-NoJs",
+            "NAV-INV-SingleSource",
+            "NAV-INV-LandingNoRegression",
+            "NAV-INV-LandingViaNav"
+          ],
+          "us_trace": [
+            "US-NAV-001",
+            "US-NAV-002"
+          ],
+          "estimate_hours": 4,
+          "depends_on": [
+            "01-02",
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/viewer_persistent_left_nav_invariants.rs",
+            "tests/acceptance/support/mod.rs"
+          ],
+          "mutation_note": "These six guardrails are the behavioral layer of the ADR-058 D4 enforcement; ensure mutation testing of the pure render core (render_viewer_nav: exactly-one aria-current + item set == LANDING_HUB_SURFACES + plain <a href> only; render_viewer_nav_oob: the OOB <ul> + marker; page_shell: one render path) is green from the 01-01/02-01 proptests so the gold guardrails are not the only line of defense. The Offline + LandingNoRegression golds are GREEN-today no-regression pins (they must not flip red when the migration lands).",
+          "criteria": [
+            "NAV-INV-NoControl (I-VIEW-1/3 / AC-001.5, CARDINAL): over /claims in BOTH shapes (full page + boosted), the nav region (scoped id=\"viewer-nav\"..</nav>) carries NO executable/mutating control -- no <form>, <button>, hx-post, hx-put, or hx-delete -- only plain <a href> links; the viewer holds no key and hx-boost issues GETs only.",
+            "NAV-INV-Offline (I-HX-2 / AC-001.5, GREEN-today): the surface references NO external CDN host and the vendored /static/htmx.min.js serves locally (200, JS content-type) -- the offline foundation hx-boost/hx-select ride; stays green after the migration.",
+            "NAV-INV-NoJs (I-HX-1/4 / AC-001.4 / KPI-NAV-3): on EVERY one of the 8 routes, the no-JS full page renders the nav (id=\"viewer-nav\") with all 8 surfaces as working plain <a href> links.",
+            "NAV-INV-SingleSource (AC-001.3): the nav on an inner surface (/peer-claims) lists EXACTLY the LANDING_HUB_SURFACES set and no deep/parameterized route as a top-level item -- one source, no second list.",
+            "NAV-INV-LandingNoRegression (ADR-058 Migration / KPI-NAV-4, GREEN-today): GET / STILL links all 8 surfaces (no link lost when the hub moved into the persistent nav).",
+            "NAV-INV-LandingViaNav (ADR-058 Migration): GET / carries id=\"viewer-nav\" -- the landing's 8 surface links come FROM the persistent nav, served through the shared page_shell + render_viewer_nav path (the migration actually happened)."
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/viewer-domain/src/",
+      "crates/adapter-http-viewer/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-functional-software-crafter-reviewer",
+    "note": "DRAFT pending the orchestrator quality gate + integrity check + reviewer. 5 steps across 3 phases mapping all 15 slice-21 scenarios (9 main in viewer_persistent_left_nav.rs: NAV-1..NAV-9 + 6 gold in viewer_persistent_left_nav_invariants.rs: NAV-INV-*), each RED scenario mapped to exactly one step, no orphans. Decomposition ratio = 5 steps / 11 distinct production files (common.rs, landing.rs, 8 surface renderers, adapter lib.rs) = 0.45 (<= 2.5). Functional Rust (ADR-007): pure viewer-domain render core (render_viewer_nav / render_viewer_nav_oob / page_shell over LANDING_HUB_SURFACES) + effect shell at the HTTP edge (Shape::from_request fork + boosted OOB append); no new crate/route/read-method (workspace stays 21, check-arch unchanged). Phase greening: 01-01 (thick WS: page_shell + render_viewer_nav + VIEWER_MAIN_ID + route all 8 render_*_page + render_error through page_shell + Shape HX-Boosted->FullPage) greens NAV-1/NAV-2/NAV-5 and mints the machinery most other scenarios ride; 01-02 (remove the inline landing hub, single-source LANDING_HUB_SURFACES, re-baseline slice-17) greens NAV-4; 02-01 (render_viewer_nav_oob + boosted OOB append; hx-boost history attrs from 01-01) greens NAV-3/NAV-6/NAV-7; 02-02 (confirmatory, no new production) pins NAV-8 byte-parity + NAV-9 no-regression; 03-01 (last) greens the 6 gold invariants (4 RED: NoControl/NoJs/SingleSource/LandingViaNav; 2 GREEN-today guardrails: Offline/LandingNoRegression that must not regress through the migration). depends_on: 01-02 and 02-01 depend on 01-01; 02-02 depends on 02-01; 03-01 depends on 01-02 + 02-02 (golds need both the migration and the complete boosted surface). Note (honest confirmatory placement): the 01-01 walking skeleton renders the nav chrome on all routes, so several later-owned scenarios (NAV-4 single-source, NAV-7 hx-boost attrs, NAV-8 parity, NAV-9 no-regression, and the SingleSource/LandingViaNav golds) have their machinery in place after 01-01; they are OWNED by the step that delivers their defining guarantee (01-02 migration for single-source; 02-01 OOB for the full boosted persistence surface; 03-01 for the cross-cutting golds) and pinned there as guardrails.",
+    "review_verdict": "APPROVED (nw-software-crafter-reviewer, 0 blockers / 0 should-fix / 3 nits) + automated quality gate PASS (ratio 0.36, no orphans, valid DAG)"
+  }
+}
