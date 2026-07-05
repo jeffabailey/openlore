@@ -216,3 +216,25 @@ No release-bucket split: one slice, ships end-to-end in ≤1 day. Slice brief:
 ### Upstream Changes
 - None. No DISCOVER artifacts existed; no prior assumptions changed. SSOT `docs/product/jobs.yaml`
   J-002 gains a navigation-affordance aspect (recorded here; no job re-scoring).
+
+## Wave: DISCUSS / [REF] Changed Assumptions (DESIGN back-propagation, 2026-07-05)
+
+The DESIGN review (ADR-058) found that AC-002.1 as originally written conflicts
+with AC-002.3: a strictly-untouched nav (outside the swapped `#viewer-main`) can
+never update its active marker after a boosted navigation.
+
+- **Original AC-002.1 (this artifact):** "only the main content region is replaced;
+  the left-nav element is NOT re-requested or torn down (it persists across the swap)."
+- **Refined AC-002.1 (DESIGN, ADR-058 D5):** on a boosted navigation the nav
+  CONTAINER (`<nav id="viewer-nav">`) persists and stays visually stable — no page
+  reload, no flash, no scroll-reset — and its active marker updates IN PLACE via an
+  out-of-band swap of the nav's inner link list (`<ul id="viewer-nav-items"
+  hx-swap-oob="innerHTML">`). The nav is NOT re-fetched as a page and the container
+  element is not destroyed; only its links (carrying the new active marker) are
+  replaced.
+- **Rationale:** honors the user intent ("keep the nav open / stable while moving")
+  AND the active-marker requirement (AC-002.3) together, which the original
+  over-strict wording made mutually exclusive. The out-of-band mechanism is standard
+  htmx and adds no new asset. AC-002.3/002.4 are unchanged.
+
+DISCOVER documents are unmodified (none exist for this feature).
