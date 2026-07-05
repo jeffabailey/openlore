@@ -107,6 +107,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-07-05T21:30:12Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-07-05T21:33:19Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "APPROVED_SKIP: scenarios greened by 01-01/02-01 (page_shell + Shape fork + OOB); confirmatory",
+      "t": "2026-07-05T21:34:29Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: parity is a both-shapes-equal wiring assertion, not a quantified property; the render-path-identity property is already pinned by the 01-01 render proptest",
+      "t": "2026-07-05T21:34:29Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-07-05T21:35:33Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-07-05T21:35:59Z"
     }
   ]
 }
