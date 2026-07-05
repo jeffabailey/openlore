@@ -1069,6 +1069,106 @@ proptest! {
     }
 }
 
+// PROPERTY (slice-21 / US-NAV-002 / ADR-058 D5): `render_viewer_nav_oob(active)` is a
+// TOTAL function over the `active` key that emits JUST the bare out-of-band
+// `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` sibling (NO `<nav id="viewer-nav">`
+// container — that persists on the client; the OOB copy replaces ONLY the inner list's
+// children). It shares the SAME link-rendering helper as `render_viewer_nav`, so across
+// the 8-surface × active-key space it holds the SAME marker invariants: (1) a MEMBER
+// `active` key marks EXACTLY ONE item `aria-current="page"`; (2) a NON-member key marks
+// NONE; (3) it ALWAYS carries the `viewer-nav-items` id + the `hx-swap-oob="innerHTML"`
+// directive (dropping either is caught); (4) it lists ALL 8 surfaces as plain `<a href>`
+// links and carries NO `<nav>` container. One property replaces the 8 member + N
+// non-member example variations.
+proptest! {
+    /// (1)+(3)+(4): for ANY member surface as the `active` key, the OOB list marks
+    /// EXACTLY that item active, carries the `viewer-nav-items` id + `hx-swap-oob`
+    /// directive, lists ALL 8 surfaces as plain `<a href>`, and emits NO `<nav>`
+    /// container.
+    #[test]
+    fn render_viewer_nav_oob_marks_exactly_the_active_member_as_a_bare_oob_list(
+        idx in 0usize..crate::common::LANDING_HUB_SURFACES.len(),
+    ) {
+        let (_, active_url) = crate::common::LANDING_HUB_SURFACES[idx];
+        let html = render_viewer_nav_oob(active_url).into_string();
+
+        // The bare OOB `<ul>` carries the items-list id + the swap-oob directive
+        // (dropping either — the two load-bearing D5 tokens — is caught here).
+        prop_assert!(
+            html.contains(r#"id="viewer-nav-items""#),
+            "the OOB list must carry the viewer-nav-items id; got:\n{html}"
+        );
+        prop_assert!(
+            html.contains(r#"hx-swap-oob="innerHTML""#),
+            "the OOB list must carry hx-swap-oob=\"innerHTML\"; got:\n{html}"
+        );
+        // It is JUST the bare `<ul>` sibling — NO `<nav id="viewer-nav">` container
+        // (the container persists on the client; the OOB replaces only its children).
+        prop_assert!(
+            !html.contains(r#"id="viewer-nav""#) && !html.contains("<nav"),
+            "the OOB copy must be the bare <ul>, NOT the <nav> container; got:\n{html}"
+        );
+        // Exactly ONE active marker (the newly-active surface, AC-002.3), no other.
+        prop_assert_eq!(
+            html.matches(r#"aria-current="page""#).count(),
+            1,
+            "a member active key must mark EXACTLY ONE item active; got:\n{}",
+            html
+        );
+        // Every surface a plain <a href="url"> (same SSOT link list as the in-shell nav).
+        for (label, url) in crate::common::LANDING_HUB_SURFACES {
+            prop_assert!(
+                html.contains(&format!(r#"href="{url}""#)),
+                "the OOB list must link {url:?} as a plain <a href>; got:\n{html}"
+            );
+            prop_assert!(
+                html.contains(label),
+                "the OOB list must render the {label:?} label; got:\n{html}"
+            );
+        }
+        // The item set is EXACTLY the SSOT — no second list.
+        prop_assert_eq!(
+            html.matches("<a ").count(),
+            crate::common::LANDING_HUB_SURFACES.len(),
+            "the OOB item set must be EXACTLY LANDING_HUB_SURFACES; got:\n{}",
+            html
+        );
+    }
+
+    /// (2): for ANY NON-member `active` key (including the landing / 404 `""`), the OOB
+    /// list marks NOTHING active — yet still carries the id + swap-oob directive and
+    /// lists all 8 surfaces.
+    #[test]
+    fn render_viewer_nav_oob_marks_nothing_for_a_non_member_active_key(
+        active in "[a-z/?=-]{0,14}",
+    ) {
+        prop_assume!(
+            !crate::common::LANDING_HUB_SURFACES
+                .iter()
+                .any(|(_, url)| *url == active)
+        );
+        let html = render_viewer_nav_oob(&active).into_string();
+        prop_assert!(
+            html.contains(r#"id="viewer-nav-items""#)
+                && html.contains(r#"hx-swap-oob="innerHTML""#),
+            "the OOB list must carry the id + swap-oob directive; got:\n{html}"
+        );
+        prop_assert_eq!(
+            html.matches(r#"aria-current="page""#).count(),
+            0,
+            "a non-member active key must mark NOTHING active; active={:?} got:\n{}",
+            active,
+            html
+        );
+        for (_, url) in crate::common::LANDING_HUB_SURFACES {
+            prop_assert!(
+                html.contains(&format!(r#"href="{url}""#)),
+                "the OOB list must still link {url:?}; got:\n{html}"
+            );
+        }
+    }
+}
+
 // PROPERTY (slice-17 / US-LD-001 Theme 1+4 / ADR-054 D1+D2): `render_landing`
 // is a TOTAL function of the `LandingSummary` over ALL 2³ `Option` combinations
 // — it never panics, ALWAYS produces a full HTML page (DOCTYPE + chrome), keeps

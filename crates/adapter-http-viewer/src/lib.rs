@@ -45,7 +45,7 @@ use viewer_domain::{
     LandingSummary,
     peers_view, render_peers_fragment, render_peers_page, render_philosophy_fragment,
     render_philosophy_page, render_project_fragment, render_project_page,
-    render_score_page, render_score_results_fragment, render_scrape_page,
+    render_score_page, render_score_results_fragment, render_scrape_page, render_viewer_nav_oob,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
     resolve_author_relationship,
     CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
@@ -334,11 +334,19 @@ async fn route(
     // absent -> FullPage. The sole shape selector; the pure core stays
     // header-unaware. NO new data route keys on it — only the render fork.
     let shape = Shape::from_request(&req);
+    // slice-21 (ADR-058 D5): read the `HX-Boosted` presence ONCE here. A boosted
+    // left-nav click carries it (and forks to `Shape::FullPage`, D3); the effect shell
+    // then ALSO appends the out-of-band `<ul id="viewer-nav-items" hx-swap-oob>` copy so
+    // the persistent nav's active marker updates in place while the `<nav>` container
+    // persists. Direct / no-JS / tab+paging (`HX-Request`-only) responses are NOT
+    // boosted, so they emit NEITHER the OOB copy NOR any `hx-swap-oob` (I-HX-1).
+    let boosted = req.headers().contains_key("HX-Boosted");
 
     // `POST /scrape` — the LIVE propose step (US-VIEW-005). The ONLY non-GET
     // route + the ONLY route that reaches the network. Reads the form body, runs
     // resolve+harvest+derive via the reused `GithubPort`, and renders the
-    // proposals. Persists NOTHING (BR-VIEW-2 / I-VIEW-1).
+    // proposals. Persists NOTHING (BR-VIEW-2 / I-VIEW-1). A form POST is never
+    // boosted, so it takes no OOB append.
     if method == Method::POST && path == "/scrape" {
         return Ok(scrape_post(req, github.as_deref(), shape).await);
     }
@@ -350,30 +358,32 @@ async fn route(
     // Async (it `.await`s the index query), so it forks here before the synchronous
     // store-read match. Reuses the SAME `Shape` fork (fragment vs full page) every
     // other enhanced route uses (ADR-033). Reads ONLY public signed claims; persists
-    // NOTHING (WD-NS-7); holds NO signing key (I-NS-1).
+    // NOTHING (WD-NS-7); holds NO signing key (I-NS-1). `/search` IS a nav surface, so
+    // a boosted response takes the OOB active-marker append (D5).
     if path == SEARCH_URL {
-        return Ok(search_page(
+        let response = search_page(
             index_query.as_deref(),
             store.as_ref(),
             query.as_deref(),
             shape,
         )
-        .await);
+        .await;
+        return Ok(append_oob_nav_items_if_boosted(response, boosted, &path).await);
     }
-    match path.as_str() {
-        "/" => Ok(landing_page(store.as_ref())),
+    let response = match path.as_str() {
+        "/" => landing_page(store.as_ref()),
         // `GET /static/htmx.min.js` — serve the vendored htmx asset locally (no
         // CDN; I-HX-2 offline-first). GET-only, loopback, no write surface. The
         // route path is the SAME `HTMX_ASSET_URL` const the pure chrome references
         // in its `<script src>` (one source of truth — served route == chrome ref).
-        HTMX_ASSET_URL => Ok(htmx_asset()),
-        "/claims" => Ok(claims_page(store.as_ref(), query.as_deref(), shape)),
+        HTMX_ASSET_URL => htmx_asset(),
+        "/claims" => claims_page(store.as_ref(), query.as_deref(), shape),
         // `GET /score` — the contributor-score view (slice-09; ADR-039/040/041).
         // Reads the contributor's LOCAL attributed feed over the read-only store the
         // viewer ALREADY holds (NO new field, NO network — I-CS-5), runs the REUSED
         // pure `scoring::score` in the shell, and renders the ranked `WeightedView`.
         // Forks by `Shape` (ADR-033). Holds NO signing key (a read + pure compute).
-        SCORE_URL => Ok(score_page(store.as_ref(), query.as_deref(), shape)),
+        SCORE_URL => score_page(store.as_ref(), query.as_deref(), shape),
         // `GET /project?subject=<uri>` — the project graph-traversal survey (slice-10;
         // ADR-042/043/044/045). Reads the project's LOCAL attributed survey over the
         // read-only store the viewer ALREADY holds (`query_project_survey` — claims ∪
@@ -381,7 +391,7 @@ async fn route(
         // `viewer-domain::group_project` core (anti-merging, never SQL — I-GT-3), and
         // renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds
         // NO signing key (a read + pure compute); renders NO write/sign/follow control.
-        PROJECT_URL => Ok(project_page(store.as_ref(), query.as_deref(), shape)),
+        PROJECT_URL => project_page(store.as_ref(), query.as_deref(), shape),
         // `GET /philosophy?object=<uri>` — the SYMMETRIC philosophy graph-traversal survey
         // (slice-10; ADR-042/043/044/045 / US-GT-003). Mirrors the `/project` route, swapping
         // subject↔object: reads the philosophy's LOCAL attributed survey over the read-only
@@ -390,7 +400,7 @@ async fn route(
         // `viewer-domain::group_philosophy` core BY subject (anti-merging, never SQL — I-GT-3),
         // and renders the `#traversal-results` region. Forks by `Shape` (ADR-033). Holds NO
         // signing key (a read + pure compute); renders NO write/sign/follow control.
-        PHILOSOPHY_URL => Ok(philosophy_page(store.as_ref(), query.as_deref(), shape)),
+        PHILOSOPHY_URL => philosophy_page(store.as_ref(), query.as_deref(), shape),
         // `GET /peers` — the Peer Subscriptions view (slice-15; ADR-052 / US-PS-002/003).
         // Reads the operator's ACTIVE subscriptions over the read-only store the viewer
         // ALREADY holds (`list_active_peer_subscriptions` — ONE aggregate query, peer_
@@ -400,23 +410,64 @@ async fn route(
         // SYNCHRONOUS (no `.await`). Forks by `Shape` (ADR-033). Holds NO signing key (a
         // read + pure compute); renders NO write/subscribe/unsubscribe control — the only
         // revocation affordance is the render-only `openlore peer remove <did>` command TEXT.
-        PEERS_URL => Ok(peers_page(store.as_ref(), shape)),
+        PEERS_URL => peers_page(store.as_ref(), shape),
         // `GET /peer-claims` — the Peer Claims view (US-VIEW-003). A SEPARATE
         // route from `/claims` so "mine vs federated" is never ambiguous
         // (BR-VIEW-5). slice-07: honours `?page=N` + forks the render by Shape.
-        "/peer-claims" => Ok(peer_claims_page(store.as_ref(), query.as_deref(), shape)),
+        "/peer-claims" => peer_claims_page(store.as_ref(), query.as_deref(), shape),
         // `GET /scrape` — the empty target form (AC-005.1 GET). Pure render; no
         // network, no store read. 200 even when no `GithubPort` is wired (the
         // form is harmless; only a POST runs the live harvest).
-        "/scrape" => Ok(html_ok(render_scrape_page(&ScrapeState::Form))),
+        "/scrape" => html_ok(render_scrape_page(&ScrapeState::Form)),
         _ => match path.strip_prefix("/claims/") {
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
             // else is 404.
-            Some(cid) if !cid.is_empty() => Ok(claim_detail_page(store.as_ref(), cid, shape)),
-            _ => Ok(not_found()),
+            Some(cid) if !cid.is_empty() => claim_detail_page(store.as_ref(), cid, shape),
+            _ => not_found(),
         },
+    };
+    Ok(append_oob_nav_items_if_boosted(response, boosted, &path).await)
+}
+
+/// slice-21 (ADR-058 D5): on a BOOSTED response, append the out-of-band
+/// `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` copy to the full-page body so
+/// htmx replaces the persistent nav's inner link list IN PLACE (updating the active
+/// marker) while `hx-select="#viewer-main"` swaps only the content region — the
+/// `<nav id="viewer-nav">` CONTAINER (outside `#viewer-main`) never re-fetched or torn
+/// down (AC-002.1 refined + 002.3). The OOB `<ul>` is inserted at body-end, BEFORE the
+/// final `</body>` — i.e. after the `</main>` that immediately precedes it — matching
+/// ADR-058 D5's concrete boosted-response shape. `active` is the request PATH (the nav
+/// surface's own URL const equals its route path), so the OOB marker matches the
+/// in-shell nav's marker for that surface by construction.
+///
+/// A NON-boosted response (direct / no-JS load, or a tab/paging `HX-Request`-only
+/// fragment) is returned UNCHANGED: it emits NEITHER the OOB copy NOR any `hx-swap-oob`
+/// (I-HX-1). The `#viewer-main` content region is untouched (the OOB sits after
+/// `</main>`), so the boosted content stays byte-identical to the full-page region
+/// (AC-002.4).
+async fn append_oob_nav_items_if_boosted(
+    response: Response<Full<Bytes>>,
+    boosted: bool,
+    active: &str,
+) -> Response<Full<Bytes>> {
+    if !boosted {
+        return response;
     }
+    use http_body_util::BodyExt;
+    let (parts, body) = response.into_parts();
+    let bytes = body
+        .collect()
+        .await
+        .expect("Full<Bytes> body is infallible")
+        .to_bytes();
+    let html = String::from_utf8_lossy(&bytes);
+    let oob = render_viewer_nav_oob(active).into_string();
+    let patched = match html.rfind("</body>") {
+        Some(idx) => format!("{}{}{}", &html[..idx], oob, &html[idx..]),
+        None => format!("{html}{oob}"),
+    };
+    Response::from_parts(parts, Full::new(Bytes::from(patched)))
 }
 
 /// Render the read-only landing dashboard (`GET /`, slice-17 / US-LD-000/001 /

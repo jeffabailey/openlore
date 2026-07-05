@@ -189,14 +189,53 @@ pub fn render_viewer_nav(active: &str) -> Markup {
             hx-select=(format!("#{VIEWER_MAIN_ID}"))
             hx-swap="innerHTML" {
             ul id=(VIEWER_NAV_ITEMS_ID) {
-                @for (label, url) in LANDING_HUB_SURFACES {
-                    li {
-                        a href=(url) aria-current=[(*url == active).then_some("page")] {
-                            (label)
-                        }
-                    }
+                (render_viewer_nav_links(active))
+            }
+        }
+    }
+}
+
+/// Render the SHARED per-surface `<li><a href>` link items the persistent nav and its
+/// out-of-band update copy BOTH wrap (slice-21 / ADR-058 D2/D5). PURE total function
+/// over the `active` key: ONE `<li>` per [`LANDING_HUB_SURFACES`] surface, each a plain
+/// `<a href=url>` (no-JS navigable — never an `hx-get`-only affordance) carrying its
+/// label; the item whose `url` equals `active` gets the neutral, semantic
+/// `aria-current="page"` marker (AC-001.2 / 002.3), NO other item does, and a non-member
+/// `active` key marks NOTHING. This is the SINGLE link-rendering site (AC-001.3 — no
+/// duplicated link literal): [`render_viewer_nav`] wraps it in the `<nav id="viewer-nav">`
+/// + `<ul id="viewer-nav-items">` chrome; [`render_viewer_nav_oob`] wraps it in the bare
+/// `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` OOB sibling. `pub(crate)` — an
+/// internal helper, not part of the crate's public render API.
+pub(crate) fn render_viewer_nav_links(active: &str) -> Markup {
+    html! {
+        @for (label, url) in LANDING_HUB_SURFACES {
+            li {
+                a href=(url) aria-current=[(*url == active).then_some("page")] {
+                    (label)
                 }
             }
+        }
+    }
+}
+
+/// Render the OUT-OF-BAND active-marker update copy — JUST the bare
+/// `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` sibling wrapping the SAME
+/// [`render_viewer_nav_links`] list as the in-shell [`render_viewer_nav`] (slice-21 /
+/// ADR-058 D5). PURE total function over the `active` key, header-unaware. On a BOOSTED
+/// response the effect shell appends this at body-end (after `</main>`): htmx processes
+/// `hx-swap-oob="innerHTML"` INDEPENDENTLY of `hx-select`, replacing ONLY the inner
+/// `<ul id="viewer-nav-items">`'s children — so the `<nav id="viewer-nav">` CONTAINER
+/// persists (never torn down, no flash / scroll-reset) while the active marker updates
+/// in place (AC-002.1 refined + AC-002.3). Emits NO `<nav>` container and NO
+/// `hx-boost`/`hx-target` (those live on the persisting container, not the OOB copy).
+/// The item marked `aria-current="page"` is the surface whose `url` equals `active`; a
+/// non-member key (the landing / 404 `""`) marks NOTHING. Direct / no-JS loads never
+/// append this copy (the effect shell emits it for boosted responses only, and htmx
+/// ignores `hx-swap-oob` on an initial full-page load anyway — I-HX-1 preserved).
+pub fn render_viewer_nav_oob(active: &str) -> Markup {
+    html! {
+        ul id=(VIEWER_NAV_ITEMS_ID) hx-swap-oob="innerHTML" {
+            (render_viewer_nav_links(active))
         }
     }
 }
