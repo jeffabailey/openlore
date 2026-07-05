@@ -1783,10 +1783,11 @@ mod tests {
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).
 
     use super::{
-        bare_did, cached_peer_dids_read_with_fault_seam, claims_page,
-        countered_count_with_fault_seam, countered_peer_count_with_fault_seam, landing_page,
-        own_dids_read_with_fault_seam, peer_claims_count_with_fault_seam, peer_claims_page,
-        to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET, HTMX_ASSET_SHA256,
+        append_oob_nav_items_if_boosted, bare_did, cached_peer_dids_read_with_fault_seam,
+        claims_page, countered_count_with_fault_seam, countered_peer_count_with_fault_seam,
+        html_ok, landing_page, own_dids_read_with_fault_seam, peer_claims_count_with_fault_seam,
+        peer_claims_page, to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET,
+        HTMX_ASSET_SHA256,
     };
     use http_body_util::BodyExt;
     use hyper::StatusCode;
@@ -2646,6 +2647,74 @@ mod tests {
             injected.is_err(),
             "with the cached-peer-DIDs fault env-var set, the seam must inject a genuine Err so the \
              production unwrap_or_default() → empty cached set → NetworkUnfollowed fallback runs (ADR-057 D4)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // slice-21 (US-VIEW / ADR-058 D5) — the BOOSTED out-of-band nav-items append.
+    // `append_oob_nav_items_if_boosted` takes a plain `boosted: bool` + a fully
+    // constructed `Response<Full<Bytes>>`, so unlike the `Request<Incoming>`-typed
+    // `request_is_boosted` / `Shape::from_request` (only reachable through the
+    // workspace acceptance harness that spins a live server) it is directly
+    // port-to-port testable in-crate — a fast (<1ms) deterministic kill for the
+    // `if !boosted` guard (lib.rs:465) that the acceptance layer otherwise only
+    // covers via a fragile TIMEOUT. Both arms are pinned: a boosted response gains
+    // the `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` OOB copy inserted
+    // BEFORE `</body>` (I-HX-1 / AC-002.3); a non-boosted response is byte-identical
+    // (NEITHER the OOB copy NOR any `hx-swap-oob` — I-HX-1).
+    // -------------------------------------------------------------------------
+
+    /// Behavior (lib.rs:465, the `if !boosted` guard): a BOOSTED response gains the
+    /// out-of-band `<ul id="viewer-nav-items" hx-swap-oob="innerHTML">` active-marker
+    /// copy, inserted at body-end (before `</body>`), while a NON-boosted response is
+    /// returned byte-identical with NO `hx-swap-oob` at all. Kills the `delete !`
+    /// mutant that inverts the guard (it would append the OOB copy to non-boosted
+    /// responses and DROP it from boosted ones — both assertions below would fail).
+    #[tokio::test]
+    async fn append_oob_nav_items_appends_the_swap_oob_copy_only_when_boosted() {
+        let original =
+            "<html><body><main id=\"viewer-main\">content</main></body></html>".to_string();
+
+        // BOOSTED → the OOB nav-items copy is appended before `</body>`.
+        let boosted_body = html_ok(original.clone());
+        let patched = append_oob_nav_items_if_boosted(boosted_body, true, "/claims").await;
+        let bytes = patched
+            .into_body()
+            .collect()
+            .await
+            .expect("boosted body collects")
+            .to_bytes();
+        let boosted_html = String::from_utf8(bytes.to_vec()).expect("boosted body is UTF-8 HTML");
+        assert!(
+            boosted_html.contains("hx-swap-oob=\"innerHTML\"")
+                && boosted_html.contains("viewer-nav-items"),
+            "a boosted response must gain the out-of-band nav-items swap copy (ADR-058 D5): {boosted_html}"
+        );
+        assert!(
+            boosted_html
+                .find("hx-swap-oob")
+                .zip(boosted_html.find("</body>"))
+                .is_some_and(|(oob, body_end)| oob < body_end),
+            "the OOB copy must be inserted BEFORE the final </body> (I-HX-1 body-end append): {boosted_html}"
+        );
+
+        // NON-boosted → returned byte-identical, with NO `hx-swap-oob` marker (I-HX-1).
+        let plain_body = html_ok(original.clone());
+        let untouched = append_oob_nav_items_if_boosted(plain_body, false, "/claims").await;
+        let bytes = untouched
+            .into_body()
+            .collect()
+            .await
+            .expect("non-boosted body collects")
+            .to_bytes();
+        let plain_html = String::from_utf8(bytes.to_vec()).expect("non-boosted body is UTF-8 HTML");
+        assert_eq!(
+            plain_html, original,
+            "a non-boosted response must be returned byte-identical — NEITHER the OOB copy NOR any hx-swap-oob (I-HX-1)"
+        );
+        assert!(
+            !plain_html.contains("hx-swap-oob"),
+            "a non-boosted response must emit NO hx-swap-oob marker (I-HX-1): {plain_html}"
         );
     }
 }
