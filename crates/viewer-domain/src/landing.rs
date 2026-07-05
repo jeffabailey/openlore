@@ -40,22 +40,13 @@ pub struct LandingSummary {
     pub countered_peer_claims: Option<usize>,
 }
 
-/// The 8 shipped top-level entry-point surfaces the landing nav hub links, as
-/// `(label, url)` pairs. The `url` is the route's URL CONST (NOT a hardcoded
-/// literal that could drift, R-LD-4) — 7 existing consts + the slice-17
-/// [`SCRAPE_URL`]. The discoverability contract (WD-LD-7 / Theme 2 / C-3): the hub
-/// links ALL 8, each a plain `<a href>` (no-JS navigable). Held in ONE place so a
-/// dropped surface is a single, mutation-killable site.
-const LANDING_HUB_SURFACES: &[(&str, &str)] = &[
-    ("My Claims", MY_CLAIMS_URL),
-    ("Peer Claims", PEER_CLAIMS_URL),
-    ("Project Survey", PROJECT_URL),
-    ("Philosophy Survey", PHILOSOPHY_URL),
-    ("Contributor Score", SCORE_URL),
-    ("Network Search", SEARCH_URL),
-    ("Live Scrape", SCRAPE_URL),
-    ("Peer Subscriptions", PEERS_URL),
-];
+/// The landing nav-hub surface table now lives at ONE SSOT in `common.rs`
+/// ([`crate::common::LANDING_HUB_SURFACES`]) so the slice-21 persistent
+/// [`render_viewer_nav`] reads it IN-MODULE with no `common -> landing` back-edge
+/// (ADR-058 D2). This landing render keeps its inline hub THIS step (removed at
+/// 01-02 once the persistent nav supersedes it), sourced from that SAME table — so
+/// the surface set stays single-source (AC-001.3).
+use crate::common::LANDING_HUB_SURFACES;
 
 /// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
 /// PURE: a TOTAL function of the [`LandingSummary`] — no I/O, no panic on ANY of the
@@ -69,11 +60,12 @@ const LANDING_HUB_SURFACES: &[(&str, &str)] = &[
 /// fork. Every navigation affordance is a plain link — NO form/button/mutating
 /// control (the front door is read-only, C-1 CARDINAL).
 pub fn render_landing(summary: &LandingSummary) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Viewer"))
-            body {
+    // slice-21 (ADR-058 D6): the landing body is composed through `page_shell`, which
+    // renders the persistent left nav OUTSIDE `<main id="viewer-main">` and wraps this
+    // content inside it. `active = ""` — the landing `/` is NOT a nav item, so no item
+    // is marked active (the landing content region keeps only its summary + the inline
+    // hub, superseded at 01-02).
+    let body = html! {
                 h1 { "OpenLore Viewer" }
                 p { (READ_ONLY_NOTICE) }
                 // The at-a-glance LOCAL store summary — three INDEPENDENT counts, each
@@ -115,8 +107,6 @@ pub fn render_landing(summary: &LandingSummary) -> String {
                         }
                     }
                 }
-            }
-        }
     };
-    markup.into_string()
+    page_shell("OpenLore — Viewer", "", body)
 }

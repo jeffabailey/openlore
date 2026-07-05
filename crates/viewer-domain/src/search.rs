@@ -234,22 +234,20 @@ pub fn render_search_results_fragment(state: &SearchState) -> Markup {
 /// SAME chrome line every other enhanced page carries, so the form's `hx-get` swap
 /// works in-browser instead of falling back to a full GET.
 pub fn render_search_page(state: &SearchState) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Network Search"))
-            body {
-                h1 { "Network Search" }
-                p { (SEARCH_PUBLIC_DATA_NOTICE) }
-                nav {
-                    a href=(MY_CLAIMS_URL) { "My Claims" }
-                }
-                (render_search_form())
-                (render_search_results_fragment(state))
-            }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = SEARCH_URL` marks the Network Search nav
+    // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
+    // for the #search-results swap).
+    let body = html! {
+        h1 { "Network Search" }
+        p { (SEARCH_PUBLIC_DATA_NOTICE) }
+        nav {
+            a href=(MY_CLAIMS_URL) { "My Claims" }
         }
+        (render_search_form())
+        (render_search_results_fragment(state))
     };
-    markup.into_string()
+    page_shell("OpenLore — Network Search", SEARCH_URL, body)
 }
 
 /// Render the labeled dimension form (`GET /search` and the top of every results

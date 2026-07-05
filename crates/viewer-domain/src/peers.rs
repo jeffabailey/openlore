@@ -107,20 +107,18 @@ pub fn render_peers_fragment(view: &PeersView) -> Markup {
 /// `<head>` emits exactly ONE local `<script src="/static/htmx.min.js">`
 /// (offline-first, never a CDN).
 pub fn render_peers_page(view: &PeersView) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Peer Subscriptions"))
-            body {
-                h1 { "Peer Subscriptions" }
-                nav {
-                    a href=(MY_CLAIMS_URL) { "My Claims" }
-                }
-                (render_peers_fragment(view))
-            }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = PEERS_URL` marks the Peer Subscriptions nav
+    // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
+    // for the #peers swap).
+    let body = html! {
+        h1 { "Peer Subscriptions" }
+        nav {
+            a href=(MY_CLAIMS_URL) { "My Claims" }
         }
+        (render_peers_fragment(view))
     };
-    markup.into_string()
+    page_shell("OpenLore — Peer Subscriptions", PEERS_URL, body)
 }
 
 /// Render the inner `#peers` region for the given [`PeersView`]. PURE total match

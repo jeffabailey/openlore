@@ -986,6 +986,89 @@ fn landing_renders_no_write_control() {
     }
 }
 
+// PROPERTY (slice-21 / US-NAV-001 / ADR-058 D2): `render_viewer_nav(active)` is a
+// TOTAL function over the `active` key. Across the whole 8-surface × active-key space
+// it holds four invariants: (1) a MEMBER `active` key marks EXACTLY ONE item
+// `aria-current="page"` and (2) a NON-member key marks NONE; (3) every surface renders
+// as a plain `<a href>` (no-JS navigable — never an `hx-get`-only affordance); and (4)
+// the item set is EXACTLY `LANDING_HUB_SURFACES` (single source, AC-001.3 — no second
+// list). Also pins the `<nav id="viewer-nav">` container + inner `<ul
+// id="viewer-nav-items">` ids the persistent-nav swaps key on (ADR-058 D2/D5). One
+// property replaces the 8 member + N non-member example variations.
+proptest! {
+    /// (1)+(3)+(4): for ANY member surface as the `active` key, the nav marks
+    /// EXACTLY that item active (exactly one `aria-current="page"`), lists ALL 8
+    /// `LANDING_HUB_SURFACES` surfaces as plain `<a href>` links, and carries the
+    /// container + items ids.
+    #[test]
+    fn render_viewer_nav_marks_exactly_the_active_member_and_lists_all_surfaces(
+        idx in 0usize..crate::common::LANDING_HUB_SURFACES.len(),
+    ) {
+        let (_, active_url) = crate::common::LANDING_HUB_SURFACES[idx];
+        let html = render_viewer_nav(active_url).into_string();
+
+        // Exactly ONE active marker (the current surface, AC-001.2), no other.
+        prop_assert_eq!(
+            html.matches(r#"aria-current="page""#).count(),
+            1,
+            "a member active key must mark EXACTLY ONE item active; got:\n{}",
+            html
+        );
+        // Every surface a plain <a href="url"> (no-JS navigable, AC-001.4) with its label.
+        for (label, url) in crate::common::LANDING_HUB_SURFACES {
+            prop_assert!(
+                html.contains(&format!(r#"href="{url}""#)),
+                "the nav must link {url:?} as a plain <a href>; got:\n{html}"
+            );
+            prop_assert!(
+                html.contains(label),
+                "the nav must render the {label:?} label; got:\n{html}"
+            );
+        }
+        // The container + inner item-list ids (ADR-058 D2/D5).
+        prop_assert!(html.contains(r#"id="viewer-nav""#), "nav container id; got:\n{html}");
+        prop_assert!(
+            html.contains(r#"id="viewer-nav-items""#),
+            "inner items-list id; got:\n{html}"
+        );
+        // The item set is EXACTLY the SSOT — no extra <a href> beyond the 8 surfaces
+        // (single source, AC-001.3): the count of anchor opens equals the surface count.
+        prop_assert_eq!(
+            html.matches("<a ").count(),
+            crate::common::LANDING_HUB_SURFACES.len(),
+            "the nav item set must be EXACTLY LANDING_HUB_SURFACES (no second list); got:\n{}",
+            html
+        );
+    }
+
+    /// (2): for ANY NON-member `active` key (including the landing / 404 `""`), the nav
+    /// marks NOTHING active — yet still lists all 8 surfaces as plain links.
+    #[test]
+    fn render_viewer_nav_marks_nothing_for_a_non_member_active_key(
+        active in "[a-z/?=-]{0,14}",
+    ) {
+        prop_assume!(
+            !crate::common::LANDING_HUB_SURFACES
+                .iter()
+                .any(|(_, url)| *url == active)
+        );
+        let html = render_viewer_nav(&active).into_string();
+        prop_assert_eq!(
+            html.matches(r#"aria-current="page""#).count(),
+            0,
+            "a non-member active key must mark NOTHING active; active={:?} got:\n{}",
+            active,
+            html
+        );
+        for (_, url) in crate::common::LANDING_HUB_SURFACES {
+            prop_assert!(
+                html.contains(&format!(r#"href="{url}""#)),
+                "the nav must still link {url:?}; got:\n{html}"
+            );
+        }
+    }
+}
+
 // PROPERTY (slice-17 / US-LD-001 Theme 1+4 / ADR-054 D1+D2): `render_landing`
 // is a TOTAL function of the `LandingSummary` over ALL 2³ `Option` combinations
 // — it never panics, ALWAYS produces a full HTML page (DOCTYPE + chrome), keeps

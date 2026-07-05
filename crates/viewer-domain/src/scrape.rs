@@ -169,19 +169,17 @@ pub fn render_scrape_results_fragment(state: &ScrapeState) -> Markup {
 /// the SAME chrome line every other enhanced page carries, so the form's
 /// `hx-post` swap (H-3a) works in-browser instead of falling back to a full POST.
 pub fn render_scrape_page(state: &ScrapeState) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Live Scrape"))
-            body {
-                h1 { "Live Scrape" }
-                p { (READ_ONLY_NOTICE) }
-                (render_scrape_form())
-                (render_scrape_results_fragment(state))
-            }
-        }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = SCRAPE_URL` marks the Live Scrape nav item
+    // current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment` for
+    // the #scrape-results swap).
+    let body = html! {
+        h1 { "Live Scrape" }
+        p { (READ_ONLY_NOTICE) }
+        (render_scrape_form())
+        (render_scrape_results_fragment(state))
     };
-    markup.into_string()
+    page_shell("OpenLore — Live Scrape", SCRAPE_URL, body)
 }
 
 /// Render the labeled target form (`GET /scrape` and the top of every POST

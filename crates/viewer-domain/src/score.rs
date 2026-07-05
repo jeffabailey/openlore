@@ -137,21 +137,19 @@ pub fn render_score_page(
     state: &ScoreState,
     presence: &std::collections::HashSet<String>,
 ) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Contributor Score"))
-            body {
-                h1 { "Contributor Score" }
-                nav {
-                    a href=(MY_CLAIMS_URL) { "My Claims" }
-                }
-                (render_score_form())
-                (render_score_results_fragment(state, presence))
-            }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = SCORE_URL` marks the Contributor Score nav
+    // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
+    // for the #score-results swap).
+    let body = html! {
+        h1 { "Contributor Score" }
+        nav {
+            a href=(MY_CLAIMS_URL) { "My Claims" }
         }
+        (render_score_form())
+        (render_score_results_fragment(state, presence))
     };
-    markup.into_string()
+    page_shell("OpenLore — Contributor Score", SCORE_URL, body)
 }
 
 /// Render the labeled contributor form (`GET /score` and the top of every score

@@ -114,26 +114,24 @@ pub fn render_claims_page(
     page: &PageView<ClaimRowView>,
     countered_own_claims: Option<usize>,
 ) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — My Claims"))
-            body {
-                // slice-18 (ADR-055 D3): the countered count renders in the list HEADER,
-                // beside the "My Claims" heading, through the SAME shared `render_countered`
-                // helper the landing summary uses (single source — the two surfaces resolve
-                // from the SAME `count_countered_own_claims` read + render through the SAME
-                // helper, so they cannot diverge, WD-CC-8). Additive header text ONLY — the
-                // slice-06 list order/paging/count + the slice-12 per-row flags are
-                // UNTOUCHED (C-4 / WD-CC-9).
-                h1 { "My Claims " (render_countered(countered_own_claims)) }
-                p { "This is a read-only view of the claims you have signed." }
-                (render_tab_nav())
-                (render_claims_view_panel_fragment(page))
-            }
-        }
+    // slice-21 (ADR-058 D6): the surface body is composed through `page_shell`
+    // (persistent left nav + `<main id="viewer-main">`); `active = MY_CLAIMS_URL` marks
+    // the My Claims nav item current. The `render_*_fragment` fns are UNCHANGED (they
+    // ride `Shape::Fragment` for the tab #view-panel + paging #claims-table swaps).
+    let body = html! {
+        // slice-18 (ADR-055 D3): the countered count renders in the list HEADER,
+        // beside the "My Claims" heading, through the SAME shared `render_countered`
+        // helper the landing summary uses (single source — the two surfaces resolve
+        // from the SAME `count_countered_own_claims` read + render through the SAME
+        // helper, so they cannot diverge, WD-CC-8). Additive header text ONLY — the
+        // slice-06 list order/paging/count + the slice-12 per-row flags are
+        // UNTOUCHED (C-4 / WD-CC-9).
+        h1 { "My Claims " (render_countered(countered_own_claims)) }
+        p { "This is a read-only view of the claims you have signed." }
+        (render_tab_nav())
+        (render_claims_view_panel_fragment(page))
     };
-    markup.into_string()
+    page_shell("OpenLore — My Claims", MY_CLAIMS_URL, body)
 }
 
 /// Render the claims table (one `<tr>` per claim). Small, named, composable —

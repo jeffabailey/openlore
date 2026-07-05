@@ -124,6 +124,110 @@ impl<T> PageView<T> {
 /// construction).
 pub const CLAIMS_TABLE_ID: &str = "claims-table";
 
+/// The HTML `id` of the OUTER content region every full page wraps its surface
+/// body in — `<main id="viewer-main">` (slice-21 / ADR-058 D1). The THIRD reserved
+/// swap target, sibling of [`VIEW_PANEL_ID`] / [`CLAIMS_TABLE_ID`]: a boosted
+/// left-nav click returns the FULL page and the client `hx-select`s this region, so
+/// the swapped content is byte-equivalent to the full-page content region by
+/// construction (I-HX-5). The persistent left nav renders OUTSIDE this region so it
+/// stays mounted across a content-only swap. Held in ONE place so the shell, the
+/// nav's `hx-target`/`hx-select`, and any future reference cannot drift apart.
+pub const VIEWER_MAIN_ID: &str = "viewer-main";
+
+/// The HTML `id` of the persistent left-nav CONTAINER — `<nav id="viewer-nav">`
+/// (slice-21 / ADR-058 D2). Rendered OUTSIDE [`VIEWER_MAIN_ID`] on every full page,
+/// it persists across a boosted content-only swap (never torn down, no flash /
+/// scroll-reset). Held in ONE place so a mutation to the container id has exactly
+/// one site to attack (pinned by the unit property test).
+pub const VIEWER_NAV_ID: &str = "viewer-nav";
+
+/// The HTML `id` of the inner link-list an out-of-band active-marker swap targets —
+/// `<ul id="viewer-nav-items">` (slice-21 / ADR-058 D2/D5). Nested inside
+/// [`VIEWER_NAV_ID`] so the container persists while (a later step's) OOB
+/// `hx-swap-oob="innerHTML"` copy replaces ONLY this list's children to update the
+/// active marker in place. Held in ONE place (one mutation site).
+pub const VIEWER_NAV_ITEMS_ID: &str = "viewer-nav-items";
+
+/// The 8 shipped top-level entry-point surfaces the persistent left nav (and the
+/// slice-17 landing hub) link, as `(label, url)` pairs. The `url` is the route's
+/// URL CONST (NOT a hardcoded literal that could drift, R-LD-4). The SINGLE source
+/// of truth for the surface set (AC-001.3): [`render_viewer_nav`] reads it in-module
+/// (slice-21 / ADR-058 D2 co-locates it here so the nav needs no `common -> landing`
+/// back-edge), and `landing.rs`'s inline hub reads the SAME table. Held in ONE place
+/// so a dropped surface is a single, mutation-killable site.
+pub(crate) const LANDING_HUB_SURFACES: &[(&str, &str)] = &[
+    ("My Claims", MY_CLAIMS_URL),
+    ("Peer Claims", PEER_CLAIMS_URL),
+    ("Project Survey", PROJECT_URL),
+    ("Philosophy Survey", PHILOSOPHY_URL),
+    ("Contributor Score", SCORE_URL),
+    ("Network Search", SEARCH_URL),
+    ("Live Scrape", SCRAPE_URL),
+    ("Peer Subscriptions", PEERS_URL),
+];
+
+/// Render the PERSISTENT LEFT NAV — `<nav id="viewer-nav">` wrapping a
+/// `<ul id="viewer-nav-items">` of one plain `<a href=url>` per
+/// [`LANDING_HUB_SURFACES`] surface (slice-21 / ADR-058 D2). PURE total function
+/// over the `active` key — emits ordinary markup, header-unaware. The `<nav>`
+/// carries `hx-boost="true"` + `hx-target="#viewer-main"` + `hx-select="#viewer-main"`
+/// + `hx-swap="innerHTML"` (cascades to its `<a>` children): a boosted nav click
+/// fetches the FULL page and the client `hx-select`s the [`VIEWER_MAIN_ID`] content
+/// region, so the nav (outside it) stays mounted and the URL is pushed into history
+/// (AC-002.2). Every item is a plain `<a href>` — with JS off the links do full-page
+/// navigation (no-JS navigable, AC-001.4 / I-HX-1), NO form / button / mutating
+/// control (read-only, C-1). The item whose `url` equals `active` gets a neutral,
+/// semantic `aria-current="page"` marker (AC-001.2); NO other item does, and a
+/// non-member `active` key (e.g. the landing `""`) marks NOTHING. Single-source: the
+/// item set is derived SOLELY from [`LANDING_HUB_SURFACES`] (AC-001.3) — no second,
+/// driftable literal list.
+pub fn render_viewer_nav(active: &str) -> Markup {
+    html! {
+        nav id=(VIEWER_NAV_ID)
+            hx-boost="true"
+            hx-target=(format!("#{VIEWER_MAIN_ID}"))
+            hx-select=(format!("#{VIEWER_MAIN_ID}"))
+            hx-swap="innerHTML" {
+            ul id=(VIEWER_NAV_ITEMS_ID) {
+                @for (label, url) in LANDING_HUB_SURFACES {
+                    li {
+                        a href=(url) aria-current=[(*url == active).then_some("page")] {
+                            (label)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compose a complete full-page document AROUND a surface's content region
+/// (slice-21 / ADR-058 D1/D6) — the ONE chrome helper every `render_*_page` (and the
+/// 404 [`render_error`]) routes its body through. PURE total function: `(DOCTYPE)` +
+/// `<html>` { [`page_head`]`(title)` + `<body>` { [`render_viewer_nav`]`(active)`
+/// OUTSIDE `<main id="viewer-main">` `(content)` } }. Because the persistent nav
+/// renders OUTSIDE [`VIEWER_MAIN_ID`], a boosted `hx-select="#viewer-main"` swap
+/// replaces ONLY the surface content while the nav stays mounted (AC-002.1); and
+/// because `#viewer-main`'s inner HTML IS the surface `content`, the boosted content
+/// is byte-equivalent to the full-page content region by construction (AC-002.4 /
+/// I-HX-5). `active` is the surface's own compile-time URL const at the call site
+/// (NOT request-read); the landing / 404 pass `""` so no item is marked.
+pub fn page_shell(title: &str, active: &str, content: Markup) -> String {
+    let markup = html! {
+        (DOCTYPE)
+        html {
+            (page_head(title))
+            body {
+                (render_viewer_nav(active))
+                main id=(VIEWER_MAIN_ID) {
+                    (content)
+                }
+            }
+        }
+    };
+    markup.into_string()
+}
+
 /// The HTML `id` of the active VIEW-PANEL swap-target element (slice-07 H-6a;
 /// ADR-034 / DESIGN §6) — the OUTER container the My Claims ↔ Peer Claims tab
 /// switch lands on (`hx-target="#view-panel"`). It WRAPS the inner
@@ -367,23 +471,19 @@ pub const CLAIM_NOT_FOUND_NOTICE: &str = "No claim with that identifier in your 
 /// list so the operator's next step is obvious — never a blank page, never a
 /// stack trace (NFR-VIEW-6). The effect shell maps this body to a `404` status.
 pub fn render_error() -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            head {
-                meta charset="utf-8";
-                title { "OpenLore — Claim Not Found" }
-            }
-            body {
-                h1 { "Claim Not Found" }
-                p { (CLAIM_NOT_FOUND_NOTICE) }
-                p {
-                    a href="/claims" { "Back to My Claims" }
-                }
-            }
+    // slice-21 (ADR-058 D6): the 404 full page ALSO routes through `page_shell` so the
+    // persistent left nav is present for navigational recovery — consistent with every
+    // other full page. `active = ""` (the 404 is not a nav surface), so NO nav item is
+    // marked. Full-page-only (no `Shape` fork on the 404); the fragment 404 uses the
+    // chrome-less [`render_claim_not_found_fragment`].
+    let body = html! {
+        h1 { "Claim Not Found" }
+        p { (CLAIM_NOT_FOUND_NOTICE) }
+        p {
+            a href="/claims" { "Back to My Claims" }
         }
     };
-    markup.into_string()
+    page_shell("OpenLore — Claim Not Found", "", body)
 }
 
 /// Render the guided not-found swap-target FRAGMENT for an unknown CID (slice-07

@@ -240,20 +240,19 @@ pub fn render_project_fragment(view: &TraversalView) -> Markup {
 /// `<head>` emits exactly ONE local `<script src="/static/htmx.min.js">`
 /// (offline-first, never a CDN).
 pub fn render_project_page(view: &TraversalView) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Project Survey"))
-            body {
-                h1 { "Project Survey" }
-                nav {
-                    a href=(MY_CLAIMS_URL) { "My Claims" }
-                }
-                (render_project_fragment(view))
-            }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = PROJECT_URL` (the base-path const for the
+    // query-bearing `/project?subject=…` route) marks the Project Survey nav item
+    // current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment` for
+    // the #traversal-results swap).
+    let body = html! {
+        h1 { "Project Survey" }
+        nav {
+            a href=(MY_CLAIMS_URL) { "My Claims" }
         }
+        (render_project_fragment(view))
     };
-    markup.into_string()
+    page_shell("OpenLore — Project Survey", PROJECT_URL, body)
 }
 
 /// Render the philosophy-survey swap-target FRAGMENT (slice-10; ADR-043) — the
@@ -288,20 +287,19 @@ pub fn render_philosophy_fragment(view: &TraversalView) -> Markup {
 /// parity is structural, not asserted by duplicating render logic (I-GT-6). The `<head>`
 /// emits exactly ONE local `<script src="/static/htmx.min.js">` (offline-first).
 pub fn render_philosophy_page(view: &TraversalView) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Philosophy Survey"))
-            body {
-                h1 { "Philosophy Survey" }
-                nav {
-                    a href=(MY_CLAIMS_URL) { "My Claims" }
-                }
-                (render_philosophy_fragment(view))
-            }
+    // slice-21 (ADR-058 D6): composed through `page_shell` (persistent left nav +
+    // `<main id="viewer-main">`); `active = PHILOSOPHY_URL` (the base-path const for the
+    // query-bearing `/philosophy?object=…` route) marks the Philosophy Survey nav item
+    // current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment` for
+    // the #traversal-results swap).
+    let body = html! {
+        h1 { "Philosophy Survey" }
+        nav {
+            a href=(MY_CLAIMS_URL) { "My Claims" }
         }
+        (render_philosophy_fragment(view))
     };
-    markup.into_string()
+    page_shell("OpenLore — Philosophy Survey", PHILOSOPHY_URL, body)
 }
 
 /// Which dimension a survey's GROUP KEY belongs to — drives the per-group traversal

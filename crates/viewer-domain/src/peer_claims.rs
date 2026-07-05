@@ -106,30 +106,28 @@ pub fn render_peer_claims_page(
     page: &PageView<PeerClaimRowView>,
     countered_peer_claims: Option<usize>,
 ) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Peer Claims"))
-            body {
-                // slice-19 (ADR-056 D3): the countered-PEER count renders in the list
-                // HEADER, beside the "Peer Claims" heading, through the SAME shared
-                // `render_countered` helper the landing summary uses (single source — the
-                // two surfaces resolve from the SAME `count_countered_peer_claims` read +
-                // render through the SAME helper, so they cannot diverge, WD-PC-8). Additive
-                // header text ONLY — the slice-06/07 list order/paging/count + the slice-13
-                // per-row flags are UNTOUCHED (C-4 / WD-PC-9). The slice-18 OWN surfaces are
-                // not on this route (peer-only, BR-PC-4 / WD-PC-7).
-                h1 { "Peer Claims " (render_countered(countered_peer_claims)) }
-                p {
-                    "This is a read-only view of claims federated from your peers \
-                     — these are NOT your own claims."
-                }
-                (render_tab_nav())
-                (render_peer_claims_view_panel_fragment(page))
-            }
+    // slice-21 (ADR-058 D6): the surface body is composed through `page_shell`
+    // (persistent left nav + `<main id="viewer-main">`); `active = PEER_CLAIMS_URL`
+    // marks the Peer Claims nav item current. The `render_*_fragment` fns are UNCHANGED
+    // (they ride `Shape::Fragment` for the tab #view-panel + paging #claims-table swaps).
+    let body = html! {
+        // slice-19 (ADR-056 D3): the countered-PEER count renders in the list
+        // HEADER, beside the "Peer Claims" heading, through the SAME shared
+        // `render_countered` helper the landing summary uses (single source — the
+        // two surfaces resolve from the SAME `count_countered_peer_claims` read +
+        // render through the SAME helper, so they cannot diverge, WD-PC-8). Additive
+        // header text ONLY — the slice-06/07 list order/paging/count + the slice-13
+        // per-row flags are UNTOUCHED (C-4 / WD-PC-9). The slice-18 OWN surfaces are
+        // not on this route (peer-only, BR-PC-4 / WD-PC-7).
+        h1 { "Peer Claims " (render_countered(countered_peer_claims)) }
+        p {
+            "This is a read-only view of claims federated from your peers \
+             — these are NOT your own claims."
         }
+        (render_tab_nav())
+        (render_peer_claims_view_panel_fragment(page))
     };
-    markup.into_string()
+    page_shell("OpenLore — Peer Claims", PEER_CLAIMS_URL, body)
 }
 
 /// Render the Peer Claims swap-target FRAGMENT (slice-07; ADR-032/033 / H-2a): the

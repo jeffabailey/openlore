@@ -143,7 +143,15 @@ impl Shape {
     /// absence [`Shape::FullPage`]. The header is read ONCE here so the pure core
     /// never sees it. PURE total function over the header map.
     fn from_request(req: &Request<Incoming>) -> Self {
-        if req.headers().contains_key("HX-Request") {
+        // slice-21 (ADR-058 D3): a PRIOR arm — an `hx-boost` nav click carries BOTH
+        // `HX-Request` and `HX-Boosted`, and must receive the FULL page so the client
+        // can `hx-select="#viewer-main"` the content region (the nav, outside it, stays
+        // mounted). The existing tab #view-panel + paging #claims-table `hx-get`s send
+        // `HX-Request` ONLY, so they still fork to `Fragment` — UNCHANGED. A direct /
+        // no-JS load (neither header) is `FullPage` as before.
+        if req.headers().contains_key("HX-Boosted") {
+            Shape::FullPage
+        } else if req.headers().contains_key("HX-Request") {
             Shape::Fragment
         } else {
             Shape::FullPage

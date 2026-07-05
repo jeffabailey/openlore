@@ -253,21 +253,20 @@ fn render_counter_entry(entry: &CounterEntry) -> Markup {
 /// Because the detail region is the SAME fn in both shapes, fragment/full-page
 /// parity is structural, not asserted by duplicating render logic (I-HX-5).
 pub fn render_claim_detail(claim: &ClaimDetailView, thread: &CounterThread) -> String {
-    let markup = html! {
-        (DOCTYPE)
-        html {
-            (page_head("OpenLore — Claim Detail"))
-            body {
-                h1 { "Claim Detail" }
-                p { (READ_ONLY_NOTICE) }
-                (render_claim_detail_fragment(claim, thread))
-                p {
-                    a href="/claims" { "Back to My Claims" }
-                }
-            }
+    // slice-21 (ADR-058 D6): the detail body is composed through `page_shell`
+    // (persistent left nav + `<main id="viewer-main">`). The detail route is the deep
+    // `/claims/{cid}` drill from the My Claims list, so `active = MY_CLAIMS_URL` (the
+    // base-path const) marks the My Claims nav item current. The `render_*_fragment`
+    // fn is UNCHANGED (it rides `Shape::Fragment` for the #claim-detail swap).
+    let body = html! {
+        h1 { "Claim Detail" }
+        p { (READ_ONLY_NOTICE) }
+        (render_claim_detail_fragment(claim, thread))
+        p {
+            a href="/claims" { "Back to My Claims" }
         }
     };
-    markup.into_string()
+    page_shell("OpenLore — Claim Detail", MY_CLAIMS_URL, body)
 }
 
 /// Render the claim's scalar fields as a definition list. Each field is labeled
