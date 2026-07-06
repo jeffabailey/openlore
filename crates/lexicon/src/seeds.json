@@ -1,0 +1,74 @@
+[
+  {
+    "name": "memory-safety",
+    "description": "Programs cannot corrupt memory: no use-after-free, no dangling pointers, no buffer overruns, and no data races on shared state. Safety is enforced statically by the language or its type system so that whole classes of undefined behavior are unrepresentable rather than merely discouraged.",
+    "aliases": ["mem-safety", "memory-safe"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Memory_safety"]
+  },
+  {
+    "name": "type-safety",
+    "description": "The type system rejects programs that would perform meaningless or unsafe operations, catching whole categories of error at compile time. Well-typed programs cannot go wrong: illegal states are made unrepresentable so that invariants hold by construction rather than by runtime checks.",
+    "aliases": ["strong-typing", "type-safe"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Type_safety"]
+  },
+  {
+    "name": "test-driven",
+    "description": "Behavior is specified by a failing test before the implementation that satisfies it is written. The red-green-refactor loop drives design from the outside in, keeps the code continuously covered, and turns the test suite into an executable specification of intended behavior.",
+    "aliases": ["test-driven-development", "tdd"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Test-driven_development"]
+  },
+  {
+    "name": "documentation-first",
+    "description": "The public contract, API, or specification is written and agreed before the implementation begins. Documentation is treated as a first-class deliverable that shapes design and communicates intent, rather than an afterthought reconstructed from finished code.",
+    "aliases": ["docs-first", "spec-first"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Documentation"]
+  },
+  {
+    "name": "dependency-pinning",
+    "description": "Every dependency is locked to an exact, verifiable version (and often a content hash) so that builds resolve to identical inputs over time. Pinning eliminates surprise upgrades, makes supply-chain provenance auditable, and is a precondition for reproducible builds.",
+    "aliases": ["version-pinning", "lockfile"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Dependency_hell"]
+  },
+  {
+    "name": "semantic-versioning",
+    "description": "Version numbers encode compatibility as MAJOR.MINOR.PATCH: incompatible API changes bump MAJOR, backward-compatible features bump MINOR, and backward-compatible fixes bump PATCH. The scheme lets consumers reason about the risk of an upgrade directly from the version string.",
+    "aliases": ["semver"],
+    "seeAlso": ["https://semver.org"]
+  },
+  {
+    "name": "reproducible-builds",
+    "description": "Building the same source with the same declared inputs always produces bit-for-bit identical artifacts, independent of when, where, or by whom the build runs. Reproducibility makes binaries verifiable against their source and is a cornerstone of supply-chain trust.",
+    "aliases": ["deterministic-builds", "bit-for-bit"],
+    "seeAlso": ["https://reproducible-builds.org"]
+  },
+  {
+    "name": "local-first",
+    "description": "Applications keep the authoritative copy of data on the user's own device, working fully offline and syncing opportunistically rather than depending on a central server. Users retain ownership, control, and longevity of their data while still collaborating across devices and peers.",
+    "aliases": ["offline-first"],
+    "seeAlso": ["https://www.inkandswitch.com/local-first/"]
+  },
+  {
+    "name": "backward-compatibility",
+    "description": "Newer versions of a system continue to accept the inputs and honor the contracts of older versions, so existing clients and data keep working without modification. Preserving compatibility protects downstream consumers from forced, coordinated upgrades.",
+    "aliases": ["backwards-compatible", "back-compat"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Backward_compatibility"]
+  },
+  {
+    "name": "immutability",
+    "description": "Values are never mutated in place; a change produces a new value and the original is preserved. Immutable data eliminates shared-mutable-state hazards, makes reasoning and concurrency tractable, and enables cheap structural sharing and reliable equality.",
+    "aliases": ["immutable-data", "persistent-data-structures"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Immutable_object"]
+  },
+  {
+    "name": "federation-first",
+    "description": "The system is designed as many independently operated, interoperating servers speaking a shared protocol, rather than a single central authority. Federation distributes control and resilience across peers while preserving a coherent, cross-instance user experience.",
+    "aliases": ["federated", "decentralized"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Federation_(information_technology)"]
+  },
+  {
+    "name": "minimalism",
+    "description": "A design deliberately keeps its surface area small, preferring the fewest concepts, dependencies, and moving parts that solve the problem. Minimal systems are easier to understand, audit, and maintain, and they resist the accretion of accidental complexity.",
+    "aliases": ["minimal", "simplicity"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Minimalism_(computing)"]
+  }
+]

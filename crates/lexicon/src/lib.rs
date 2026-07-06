@@ -15,8 +15,6 @@
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
-use serde::{Deserialize, Serialize};
-
 // =============================================================================
 // Embedded Lexicon JSON resources (step 01-02)
 // =============================================================================
@@ -76,30 +74,21 @@ pub use appview_query::{
 };
 
 // =============================================================================
-// org.openlore.philosophy — RED scaffold (later step turns this GREEN)
+// org.openlore.philosophy — real implementation in `philosophy.rs` (slice-01)
 // =============================================================================
+//
+// ADR-059: the pure vocabulary core. `Philosophy` mirrors the shipped
+// Lexicon (`required: [name, description]`, optional `aliases`/`seeAlso`);
+// `validate_philosophy_json` mirrors `validate_claim_json` (per-field gates
+// before serde, reusing `LexiconError`); `object_id`/`normalize` derive the
+// deterministic claim<->vocabulary join key; `seeds()` returns the embedded
+// slice-01 seed vocabulary (compile-time `include_str!`).
 
-pub mod philosophy {
-    use super::*;
+pub mod philosophy;
 
-    pub const NSID: &str = "org.openlore.philosophy";
-
-    /// Serde-modeled mirror of the `org.openlore.philosophy` Lexicon record.
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-    pub struct Philosophy {
-        pub id: String,
-        pub label: String,
-        pub description: String,
-    }
-}
-
-/// Validate a JSON value against `org.openlore.philosophy`.
-/// RED scaffold — a later step in slice-01 turns this GREEN.
-pub fn validate_philosophy_json(
-    _value: &serde_json::Value,
-) -> Result<philosophy::Philosophy, LexiconError> {
-    panic!("Not yet implemented -- RED scaffold");
-}
+/// Re-export of the philosophy validator + derivation helpers for ergonomic
+/// call sites (`lexicon::validate_philosophy_json`, `lexicon::Philosophy`).
+pub use philosophy::{normalize, object_id, seeds, validate_philosophy_json, Philosophy};
 
 // =============================================================================
 // In-crate unit tests — `validate_philosophy_json` accept + reject arms
@@ -166,6 +155,158 @@ mod philosophy_validator_tests {
                 field: "description".to_string()
             },
             "the reject arm must name the missing `description` field (not an opaque serde string)"
+        );
+    }
+}
+
+// =============================================================================
+// In-crate unit tests — embedded seeds + `normalize`/`object_id` invariants
+// =============================================================================
+//
+// Layer 2 (pure core, no I/O) per nw-tdd-methodology Layered Test Discipline.
+//
+// `normalize`/`object_id` are pure + total; the natural test shape is a
+// property (idempotence, output-charset, NSID-prefix). This crate is PURE by
+// contract (serde + thiserror only — see Cargo.toml) and step 01-01's
+// files_to_modify does NOT include Cargo.toml, so a proptest dev-dependency
+// cannot be added here. Per the ADR-059 directive ("prefer proptest where
+// PRACTICAL; example-based is a documented FALLBACK"), these use hand-rolled
+// property loops over a curated input corpus — the fallback that stays within
+// the pure-crate dependency envelope while still asserting the invariant over
+// many inputs rather than a single pinned example.
+
+#[cfg(test)]
+mod seeds_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// The six names ADR-059 hard-pins into the slice-01 seed vocabulary.
+    const HARD_PINNED_NAMES: &[&str] = &[
+        "memory-safety",
+        "type-safety",
+        "test-driven",
+        "documentation-first",
+        "dependency-pinning",
+        "semantic-versioning",
+    ];
+
+    #[test]
+    fn every_seed_validates_through_the_validator() {
+        // Each embedded seed record must pass the SAME per-field-gated
+        // validator that guards inbound federation JSON.
+        let value: serde_json::Value = serde_json::from_str(philosophy::PHILOSOPHY_SEEDS_JSON)
+            .expect("seeds.json must be valid JSON");
+        let records = value.as_array().expect("seeds.json must be a JSON array");
+        for record in records {
+            validate_philosophy_json(record)
+                .expect("every embedded philosophy seed must validate");
+        }
+    }
+
+    #[test]
+    fn ships_at_least_ten_seeds() {
+        assert!(
+            seeds().len() >= 10,
+            "slice-01 must ship >=10 philosophy seeds, found {}",
+            seeds().len()
+        );
+    }
+
+    #[test]
+    fn seed_names_have_distinct_object_ids() {
+        // No two seed names may collide under `normalize` — each seed must
+        // occupy a distinct object-id slot in the vocabulary namespace.
+        let mut ids = HashSet::new();
+        for seed in seeds() {
+            let id = object_id(&seed.name);
+            assert!(
+                ids.insert(id.clone()),
+                "seed object id collision under normalize: {id} (name {})",
+                seed.name
+            );
+        }
+    }
+
+    #[test]
+    fn hard_pinned_names_are_all_present() {
+        // ADR-059 freezes these six names into the slice-01 vocabulary.
+        let names: HashSet<String> = seeds().into_iter().map(|s| s.name).collect();
+        for pinned in HARD_PINNED_NAMES {
+            assert!(
+                names.contains(*pinned),
+                "hard-pinned seed name `{pinned}` missing from the vocabulary"
+            );
+        }
+    }
+
+    /// A corpus spanning the transformations `normalize` must handle:
+    /// already-kebab, spaces, underscores, mixed case, punctuation, and
+    /// leading/trailing/duplicate separators.
+    fn normalize_corpus() -> Vec<&'static str> {
+        vec![
+            "memory-safety",
+            "Memory Safety",
+            "memory_safety",
+            "  Memory   Safety  ",
+            "Type-Safety!",
+            "test.driven",
+            "SEMANTIC__VERSIONING",
+            "--leading-and-trailing--",
+            "reproducible builds",
+            "local-first",
+            "C++ style",
+            "already-kebab-case",
+        ]
+    }
+
+    #[test]
+    fn normalize_is_idempotent_over_corpus() {
+        // Property: normalize(normalize(x)) == normalize(x).
+        for input in normalize_corpus() {
+            let once = normalize(input);
+            let twice = normalize(&once);
+            assert_eq!(twice, once, "normalize must be idempotent for {input:?}");
+        }
+    }
+
+    #[test]
+    fn normalize_output_charset_is_kebab_only() {
+        // Property: output uses only [a-z0-9-], with no leading/trailing '-'
+        // and no doubled '-'.
+        for input in normalize_corpus() {
+            let out = normalize(input);
+            assert!(
+                out.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "normalize({input:?}) = {out:?} escaped the [a-z0-9-] charset"
+            );
+            assert!(
+                !out.starts_with('-') && !out.ends_with('-'),
+                "normalize({input:?}) = {out:?} has a boundary dash"
+            );
+            assert!(
+                !out.contains("--"),
+                "normalize({input:?}) = {out:?} has a doubled dash"
+            );
+        }
+    }
+
+    #[test]
+    fn object_id_always_carries_the_nsid_prefix() {
+        // Property: every derived id is `org.openlore.philosophy.<segment>`,
+        // and the join key matches the slice-01 claim `object` literal for
+        // the hard-pinned `memory-safety` seed exactly.
+        for input in normalize_corpus() {
+            let id = object_id(input);
+            assert!(
+                id.starts_with("org.openlore.philosophy."),
+                "object_id({input:?}) = {id:?} lost the NSID prefix"
+            );
+        }
+        assert_eq!(
+            object_id("memory-safety"),
+            "org.openlore.philosophy.memory-safety",
+            "object_id must be byte-identical to the slice-01 claim `object` literal"
         );
     }
 }
