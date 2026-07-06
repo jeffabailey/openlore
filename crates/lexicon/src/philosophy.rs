@@ -26,9 +26,6 @@ use serde::{Deserialize, Serialize};
 
 pub const NSID: &str = "org.openlore.philosophy";
 
-/// The NSID prefix every derived philosophy `object_id` carries.
-const OBJECT_ID_PREFIX: &str = "org.openlore.philosophy";
-
 // =============================================================================
 // Lexicon-shaped record type (serde mirror of the JSON schema)
 // =============================================================================
@@ -146,11 +143,11 @@ pub fn normalize(name: &str) -> String {
 
 /// Derive the deterministic object id for a philosophy `name` (ADR-059 D1).
 ///
-/// `object_id(name) == "org.openlore.philosophy.{normalize(name)}"`. This is
-/// the join key a claim's `object` string must equal; it is DERIVED, never
-/// stored on the `Philosophy` record.
+/// `object_id(name) == "org.openlore.philosophy.{normalize(name)}"` — i.e. the
+/// `NSID`-prefixed, normalized segment. This is the join key a claim's `object`
+/// string must equal; it is DERIVED, never stored on the `Philosophy` record.
 pub fn object_id(name: &str) -> String {
-    format!("{OBJECT_ID_PREFIX}.{}", normalize(name))
+    format!("{NSID}.{}", normalize(name))
 }
 
 // =============================================================================

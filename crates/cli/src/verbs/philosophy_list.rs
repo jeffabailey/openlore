@@ -21,9 +21,9 @@ use crate::render::render_philosophy_list;
 /// Argument struct for the `philosophy list` verb (mirrors the clap subcommand).
 #[derive(Debug, Clone)]
 pub struct PhilosophyListArgs {
-    /// `--json`: opt-in machine-readable emission. Text is the DEFAULT view
-    /// (AC-001.3 / P-001). The JSON-array rendering lands in a sibling step
-    /// (02-02); at this step the flag parses and still yields the text view.
+    /// `--json`: opt-in machine-readable emission — emits the embedded seeds as
+    /// a JSON array. Text is the DEFAULT view (AC-001.3 / P-001); `--json` is
+    /// strictly opt-in.
     pub json: bool,
 }
 
