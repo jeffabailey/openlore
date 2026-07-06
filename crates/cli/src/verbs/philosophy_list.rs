@@ -28,14 +28,24 @@ pub struct PhilosophyListArgs {
 }
 
 /// Run the `philosophy list` verb. Returns `(exit_code, stdout)`; the dispatcher
-/// prints the captured text. Offline: reads the embedded seeds only, renders the
-/// human-readable text view via the pure `render_philosophy_list`.
+/// prints the captured text. Offline: reads the embedded seeds only.
+///
+/// Two views over the SAME embedded seed data (ADR-059 D7 / P-001): text is the
+/// DEFAULT (human-readable, via the pure `render_philosophy_list`); `--json` is
+/// strictly OPT-IN and emits a JSON array — the serde `Serialize` shape of each
+/// `lexicon::philosophy::Philosophy` (`{name, description, aliases, seeAlso}`) —
+/// so a script can consume the shared vocabulary. No new data source, no I/O
+/// beyond the returned stdout.
 pub fn run(args: &PhilosophyListArgs) -> (i32, String) {
-    // The JSON-array emission is a sibling step (02-02); until then `--json`
-    // parses but the text view is the only rendering. Text is the default per
-    // AC-001.3, so falling back to text here keeps `--json` a harmless no-op
-    // rather than a parse error.
-    let _ = args.json;
-    let stdout = render_philosophy_list(&seeds());
+    let seeds = seeds();
+    if args.json {
+        // Pure serialization of the same embedded seeds; the `Philosophy` serde
+        // model already renames `see_also` -> `seeAlso`. Static data baked into
+        // the binary always serializes, so a failure here is an authored bug.
+        let stdout = serde_json::to_string_pretty(&seeds)
+            .expect("embedded philosophy seeds must serialize to JSON");
+        return (0, stdout);
+    }
+    let stdout = render_philosophy_list(&seeds);
     (0, stdout)
 }
