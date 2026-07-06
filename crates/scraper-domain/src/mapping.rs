@@ -125,9 +125,8 @@ struct EntryDto {
 ///
 /// PURE: no filesystem read (the YAML is embedded via `include_str!` by the
 /// caller — typically [`EMBEDDED_MAPPING_YAML`]); this is a pure parse +
-/// validation step. Each entry's free-text `signal` description is resolved to
-/// a typed [`SignalKind`]; an unrecognized description is a
-/// [`MappingError::MalformedEntry`].
+/// validation pipeline: deserialize the wire DTO, then resolve and validate each
+/// entry via [`parse_entry`].
 pub fn load_mapping(embedded_yaml: &str) -> Result<SignalPredicateMapping, MappingError> {
     let dto: MappingDto = serde_yaml_ng::from_str(embedded_yaml)
         .map_err(|e| MappingError::MalformedEntry(format!("yaml parse failed: {e}")))?;
@@ -135,25 +134,33 @@ pub fn load_mapping(embedded_yaml: &str) -> Result<SignalPredicateMapping, Mappi
     let entries = dto
         .signal_predicate_mapping
         .into_iter()
-        .map(|e| {
-            let signal_kind = signal_kind_for_description(&e.signal)
-                .ok_or_else(|| MappingError::MalformedEntry(e.signal.clone()))?;
-            // Every proposed object must be a SEEDED philosophy (AC-007.1/007.2,
-            // KPI-PV-6): resolve it against the real seed vocabulary. An object
-            // that does not `philosophy show`-resolve is a drift string and is
-            // rejected by NAME — no orphan philosophy string can enter a mapping.
-            if lexicon::philosophy::find(&e.predicate).is_none() {
-                return Err(MappingError::UnknownPhilosophy { object: e.predicate });
-            }
-            Ok(MappingEntry {
-                signal_kind,
-                object: e.predicate,
-                default_confidence: e.default_confidence,
-            })
-        })
+        .map(parse_entry)
         .collect::<Result<Vec<_>, MappingError>>()?;
 
     Ok(SignalPredicateMapping { entries })
+}
+
+/// Resolve and validate one wire-shape [`EntryDto`] into a domain [`MappingEntry`].
+///
+/// Two validations, both errors-as-values (railway-oriented):
+/// - the free-text `signal` description must resolve to a typed [`SignalKind`],
+///   else [`MappingError::MalformedEntry`];
+/// - the `object` (named `predicate` in the SSOT; see the module docs) must be a
+///   SEEDED philosophy (AC-007.1/007.2, KPI-PV-6) — resolved against the real
+///   seed vocabulary. An object that does not `philosophy show`-resolve is a
+///   drift string and is rejected by NAME with [`MappingError::UnknownPhilosophy`]
+///   — no orphan philosophy string can enter a mapping.
+fn parse_entry(entry: EntryDto) -> Result<MappingEntry, MappingError> {
+    let signal_kind = signal_kind_for_description(&entry.signal)
+        .ok_or_else(|| MappingError::MalformedEntry(entry.signal.clone()))?;
+    if lexicon::philosophy::find(&entry.predicate).is_none() {
+        return Err(MappingError::UnknownPhilosophy { object: entry.predicate });
+    }
+    Ok(MappingEntry {
+        signal_kind,
+        object: entry.predicate,
+        default_confidence: entry.default_confidence,
+    })
 }
 
 /// Resolve a free-text SSOT `signal` description to a typed [`SignalKind`].
