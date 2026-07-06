@@ -100,3 +100,72 @@ pub fn validate_philosophy_json(
 ) -> Result<philosophy::Philosophy, LexiconError> {
     panic!("Not yet implemented -- RED scaffold");
 }
+
+// =============================================================================
+// In-crate unit tests — `validate_philosophy_json` accept + reject arms
+// =============================================================================
+//
+// Slice-22 (US-PV-001 / AC-003.4 / DoD item 2): completes the
+// `validate_philosophy_json` RED scaffold's TEST surface, mirroring the
+// `claim.rs` per-field-gated validator tests. Layer 2 (pure core, no I/O) per
+// nw-tdd-methodology Layered Test Discipline — example-pinned (the accept
+// example + the named-field reject arm; the full-shape PBT lattice belongs in
+// DELIVER's unit layer, not here).
+//
+// RED TODAY: `validate_philosophy_json` panics ("Not yet implemented -- RED
+// scaffold"), so both tests fail via that panic BEFORE reaching their
+// assertions — MISSING_FUNCTIONALITY, never a compile/import error. They pin
+// the behavior ADR-059 D2 mandates (mirror `validate_claim_json`: required-field
+// presence → `LexiconError::MissingField` naming the offending key). Both
+// assertions reference only the EXISTING scaffold signature (`Result<Philosophy,
+// LexiconError>`) and the `description` field the Lexicon schema freezes, so
+// they compile against the current struct AND the ADR-059-reconciled struct.
+
+#[cfg(test)]
+mod philosophy_validator_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A well-formed `org.openlore.philosophy` record per the shipped Lexicon
+    /// schema (`required: [name, description]`, optional `aliases`, `seeAlso`).
+    fn well_formed_philosophy_value() -> serde_json::Value {
+        json!({
+            "name": "memory-safety",
+            "description": "Programs cannot corrupt memory: no use-after-free, no buffer overrun.",
+            "aliases": ["mem-safety", "memory-safe"],
+            "seeAlso": ["https://en.wikipedia.org/wiki/Memory_safety"]
+        })
+    }
+
+    #[test]
+    fn validates_well_formed_philosophy_record() {
+        // ACCEPT arm: a record carrying name + description (+ optional aliases /
+        // seeAlso) validates and round-trips its description verbatim.
+        let value = well_formed_philosophy_value();
+        let philosophy =
+            validate_philosophy_json(&value).expect("a well-formed philosophy must validate");
+        assert_eq!(
+            philosophy.description,
+            "Programs cannot corrupt memory: no use-after-free, no buffer overrun.",
+            "the validated record must round-trip its description verbatim"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_description_with_named_field_error() {
+        // REJECT arm (AC-003.4): a record MISSING the required `description`
+        // rejects with a NAMED-field error (no panic — completes the scaffold),
+        // reusing `LexiconError::MissingField` per ADR-059 D2 (no parallel error
+        // type).
+        let value = json!({ "name": "memory-safety" });
+        let err = validate_philosophy_json(&value)
+            .expect_err("a philosophy record missing `description` must reject");
+        assert_eq!(
+            err,
+            LexiconError::MissingField {
+                field: "description".to_string()
+            },
+            "the reject arm must name the missing `description` field (not an opaque serde string)"
+        );
+    }
+}

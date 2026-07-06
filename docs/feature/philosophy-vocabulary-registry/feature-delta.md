@@ -248,3 +248,97 @@ Prioritization: **slice-22 first** (highest learning leverage — does a seeded 
 
 ### Upstream Changes
 - None contradicting DISCOVER (none exists). jobs.yaml J-002 gains a "shared-vocabulary" sub-aspect (recorded via a J-002 sub-job on SSOT update); no re-scoring.
+
+---
+
+## Wave: DISTILL
+
+> Scope: **slice-22 only** (the seed + list discovery walking skeleton — US-PV-001,
+> AC-001.1..4, + the `validate_philosophy_json` accept/reject arms that complete the RED
+> scaffold). Slices 23–28 (show / mint / compose-advisory / alias / viewer / scraper) are
+> DISTILLed later. Density: **lean** (Tier-1 [REF] only). `[lang-mode] rust` ·
+> `[policy-mode] inherit` · `[port-mode] inherit`.
+
+### [REF] Inherited commitments
+
+| Origin | Commitment | DDD | Impact |
+|--------|------------|-----|--------|
+| DISCUSS#D1 | Philosophy is a first-class record; complete the `validate_philosophy_json` RED scaffold with accept + reject arms | ADR-059 D1/D2 | Layer-2 in-crate tests pin the accept arm + the named-field reject arm (missing `description` → `LexiconError::MissingField`), reusing the existing error enum — no parallel type |
+| DISCUSS#D2 | Seeded but open: ship ≥10 curated well-known seed records for discovery | ADR-059 D3 | PV-2/PV-4 assert ≥10 distinct seed object ids, each a valid record (name + description present); embedded constants (no signer, no store) |
+| DISCUSS#US-PV-001 | `openlore philosophy list` prints each seed's object id + name + one-line description, greppable, LOCAL/offline | ADR-059 D7 | PV-1 (WS) + PV-3/PV-5/PV-6 exercise the real CLI driving adapter via subprocess; offline listing asserted with the network disabled |
+| DESIGN(ADR-059)#D1 | Object id is DERIVED `org.openlore.philosophy.<normalize(name)>`, backward-compatible with slice-01 claim `object` bytes | ADR-059 D1 | PV-3 pins the exact dotted-lowercase id form + guards against a `:`-separated / CamelCase drift that would strand the claim-graph join |
+
+### [REF] Reconciliation result
+
+Wave-Decision Reconciliation HARD GATE: **PASS — 0 contradictions.** DISCUSS (D1–D6:
+signed record `{name, description, aliases, seeAlso}`, ≥10 embedded seeds, offline `list`)
+is consistent with DESIGN/ADR-059 (D1 reconciles the struct to that shape, D3 embedded
+seeds, D7 offline list verb). The current stale scaffold struct (`{id, label, description}`)
+is exactly the RED scaffold ADR-059 D1 mandates completing — an expected RED cause, not a
+cross-wave contradiction. No per-feature `discuss|design|devops/wave-decisions.md` files
+exist; reconciliation used feature-delta DISCUSS vs ADR-059 DESIGN.
+
+### [REF] Scenario list with tags
+
+Tier A only (Gojko-style, production composition root via the real `openlore` bin). Tier B
+(state-machine PBT) is correctly SKIPPED per Mandate 10: slice-22 is a config/CLI-shaped
+single-shot read-only list verb (1 journey, no ≥3-scenario chained state mutation).
+
+| # | Scenario (test fn) | AC | Tags |
+|---|---|---|---|
+| PV-1 | `philosophy_list_prints_each_seed_object_id_name_and_description` | AC-001.1 | `@us-pv-001 @driving_port @real-io @walking_skeleton @j-002 @kpi-pv-2 @happy` |
+| PV-2 | `the_seed_set_contains_at_least_ten_well_known_philosophies` | AC-001.2 | `@us-pv-001 @driving_port @real-io @j-002 @kpi-pv-1 @happy` |
+| PV-3 | `each_seed_object_id_matches_the_slice_one_claim_object_bytes` | AC-001.1 / ADR-059 D1 | `@us-pv-001 @driving_port @real-io @j-002 @backward-compat @edge` |
+| PV-4 | `philosophy_list_json_emits_each_record_with_name_and_description` | AC-001.3 | `@us-pv-001 @driving_port @real-io @j-002 @json @happy` |
+| PV-5 | `philosophy_list_defaults_to_human_text_not_json` | AC-001.3 | `@us-pv-001 @driving_port @real-io @j-002 @text-default @edge` |
+| PV-6 | `philosophy_list_succeeds_with_the_network_disabled` | AC-001.4 | `@us-pv-001 @driving_port @real-io @j-002 @local-first @i-9 @edge` |
+| LX-accept | `validates_well_formed_philosophy_record` (lexicon in-crate) | AC-001.2 / DoD-2 | layer-2 accept arm |
+| LX-reject | `rejects_missing_description_with_named_field_error` (lexicon in-crate) | AC-003.4 / DoD-2 | layer-2 named-field reject arm |
+
+### [REF] Walking-skeleton designation
+
+**PV-1** is the slice-22 walking skeleton (`@walking_skeleton @driving_port @real-io`): the
+thin end-to-end discovery path — embedded seed constants → CLI driving adapter (`openlore
+philosophy list`) → user-visible greppable stdout (object id + name + description). Litmus:
+a non-technical stakeholder confirms "yes — the user needs to SEE the shared vocabulary so
+they can copy an exact object into a claim." No store write, no network.
+
+### [REF] Adapter coverage
+
+| Adapter | @real-io scenario | Covered by |
+|---------|-------------------|------------|
+| CLI driving adapter (`openlore philosophy list`) | YES | PV-1..PV-6 (real `openlore` bin via `run_openlore` / `run_openlore_network_disabled` subprocess) |
+| `lexicon` embedded seed set (`include_str!`, ADR-059 D3) | YES | PV-1/PV-2/PV-3/PV-6 (real embedded constants; no signer, no store, no network — offline by construction) |
+
+No DRIVEN external / non-deterministic adapter is exercised by slice-22 (read-only, offline;
+the fake PDS is asserted UNUSED in PV-6 via `assert_no_pds_call_was_made`). Signing/DuckDB
+persistence (minted records) belong to slice-24 — OUT of scope.
+
+### [REF] Test placement + scaffolds
+
+- `tests/acceptance/philosophy_vocabulary.rs` — Tier A subprocess acceptance (layer 3),
+  registered as `[[test]] name = "philosophy_vocabulary"` in `crates/cli/Cargo.toml`
+  (precedent: every sibling acceptance target, e.g. `graph_query_explore`, is a `cli`
+  `[[test]]` over `../../tests/acceptance/*.rs`).
+- `crates/lexicon/src/lib.rs` — `#[cfg(test)] mod philosophy_validator_tests` (layer-2 pure
+  accept/reject arms; precedent: `claim.rs mod tests`).
+- **No new production scaffold created** — `lexicon::validate_philosophy_json` +
+  `philosophy::Philosophy` already exist as the RED scaffold (`SCAFFOLD: true` in lib.rs)
+  left by slice-01; DISTILL only adds RED tests against them (Mandate 7 satisfied by the
+  existing scaffold — imports resolve, methods panic = RED not BROKEN).
+
+### [REF] RED gate
+
+Pre-DELIVER fail-for-the-right-reason gate: **PASS.** 8 tests, all RED for the right reason
+(6 acceptance assertion-RED on `unrecognized subcommand 'philosophy'` exit 2; 2 validator
+scaffold-panic RED). Zero BROKEN, zero GREEN-today. Full classification:
+`docs/feature/philosophy-vocabulary-registry/distill/red-classification.md`.
+
+### [REF] Pre-requisites
+
+- DESIGN driving port: `openlore philosophy list` CLI verb (ADR-059 D7) — the entry point
+  PV-1..6 enter through. RED today (verb absent).
+- Embedded seed set (ADR-059 D3) + reconciled `Philosophy` struct (ADR-059 D1) + real
+  `validate_philosophy_json` (ADR-059 D2) — the DELIVER work that turns all 8 tests GREEN.
+- Support harness: `run_openlore`, `run_openlore_network_disabled`, `TestEnv::initialized`,
+  `assert_no_pds_call_was_made` (all present in `tests/acceptance/support/mod.rs`).
