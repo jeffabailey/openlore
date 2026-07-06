@@ -1,0 +1,102 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "created_at": "2026-07-06T00:31:58Z",
+    "total_steps": 3
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pure lexicon vocabulary core",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Reconcile Philosophy record, implement validate_philosophy_json, embed seeds",
+          "description": "Reconcile the stale lexicon::philosophy::Philosophy record to the ADR-059 schema, implement the per-field-gated pure validator mirroring validate_claim_json, add the pure object_id/normalize functions, and embed >=10 well-known seed records via include_str! with a public accessor plus a seed-validity/no-collision unit test. This is the pure core: no signer, no store, no network.",
+          "criteria": [
+            "AC-001.2",
+            "AC-003.4",
+            "DoD-2",
+            "scenario: validates_well_formed_philosophy_record (LX-accept)",
+            "scenario: rejects_missing_description_with_named_field_error (LX-reject)"
+          ],
+          "test_file": "crates/lexicon/src/lib.rs",
+          "scenario_name": "validates_well_formed_philosophy_record; rejects_missing_description_with_named_field_error",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs",
+            "crates/lexicon/src/lib.rs",
+            "crates/lexicon/src/seeds.json"
+          ],
+          "implementation_notes": "Reconcile Philosophy from {id, label, description} to {name: String, description: String, aliases: Vec<String> (serde default), see_also: Vec<String> (serde rename \"seeAlso\", default)} — drop id/label. Implement validate_philosophy_json as a per-field-gated pure fn mirroring crates/lexicon/src/claim.rs::validate_claim_json: required name/description missing -> LexiconError::MissingField{field}; aliases/seeAlso not array-of-string -> LexiconError::InvalidType; serde catch-all -> LexiconError::SchemaMismatch. REUSE the existing LexiconError enum — do NOT create a parallel error type. object_id(name) = \"org.openlore.philosophy.\" + normalize(name); normalize: lowercase -> trim -> collapse whitespace/underscore runs to '-' -> keep [a-z0-9-] only. Object id is DERIVED, never stored on the record. Ship >=10 seeds via include_str!(\"seeds.json\") (mirror PHILOSOPHY_LEXICON_JSON pattern) as unsigned constants: the six hard-pinned names (memory-safety, type-safety, test-driven, documentation-first, dependency-pinning, semantic-versioning) plus >=4 more (e.g. reproducible-builds, local-first, backward-compatibility, minimalism, immutability, federation-first), each with a real one-paragraph description and optional aliases. Expose a public seeds() accessor. Add a unit test that validates every seed through validate_philosophy_json AND asserts no two seed names collide under normalize. LX-reject asserts LexiconError::MissingField{field:\"description\"}. TEST PARADIGM (mandatory): Unit tests for this step's pure seams (validate_philosophy_json, normalize, object_id) MUST be property-based (proptest) with example-based as documented FALLBACK. Acceptance scenarios are the pre-authored subprocess tests (example-based, real-io) — do NOT rewrite them."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "philosophy list CLI verb (discovery surface)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "philosophy list verb — human text discovery surface (offline)",
+          "description": "Add Command::Philosophy(PhilosophyCommand::List{json}) to the clap enum, create verbs/philosophy_list.rs (registered in verbs/mod.rs), and wire dispatch. The text default view reads the embedded seeds and prints, per seed, the derived object id + name + one-line description. Offline by construction: no store, no network handle. This is the walking skeleton plus the reinforcing count/backward-compat/default/offline scenarios, all satisfied by the single text-output implementation.",
+          "criteria": [
+            "AC-001.1 / AC-001.2 / AC-001.4 / I-9 / KPI-PV-1 / ADR-059 D1 (dotted-lowercase NSID backward-compat)",
+            "PV-1 philosophy_list_prints_each_seed_object_id_name_and_description (WALKING SKELETON)",
+            "PV-2 the_seed_set_contains_at_least_ten_well_known_philosophies + PV-3 each_seed_object_id_matches_the_slice_one_claim_object_bytes",
+            "PV-5 philosophy_list_defaults_to_human_text_not_json",
+            "PV-6 philosophy_list_succeeds_with_the_network_disabled"
+          ],
+          "test_file": "tests/acceptance/philosophy_vocabulary.rs",
+          "scenario_name": "philosophy_list_prints_each_seed_object_id_name_and_description",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/philosophy_list.rs",
+            "crates/cli/src/verbs/mod.rs"
+          ],
+          "implementation_notes": "Add Command::Philosophy(PhilosophyCommand::List{json: bool}) to the clap enum in crates/cli/src/lib.rs. Create verbs/philosophy_list.rs mirroring the existing verb structure — return (exit_code: i32, stdout: String); do NOT write stdout directly, the dispatcher prints. Register the verb in verbs/mod.rs and wire it into crates/cli/src/lib.rs::dispatch. The text default view iterates lexicon::philosophy::seeds(), and for each prints the DERIVED object_id(name) + name + one-line description. PV-3 requires the derived object id to match the slice-1 claim object bytes exactly (dotted lowercase NSID, ADR-059 D1). PV-2/KPI-PV-1 require >=10 distinct seeds visible in output. PV-6/I-9 require success with the network disabled — offline by construction, no store or network dependency. Keep xtask check-arch at 20 workspace members (+xtask = 21): NO new crate. TEST PARADIGM (mandatory): Unit tests for this step's pure seams (validate_philosophy_json, normalize, object_id) MUST be property-based (proptest) with example-based as documented FALLBACK. Acceptance scenarios are the pre-authored subprocess tests (example-based, real-io) — do NOT rewrite them."
+        },
+        {
+          "id": "02-02",
+          "name": "philosophy list --json opt-in array emission",
+          "description": "Add the --json opt-in branch to the philosophy list verb: when json is true, emit a JSON array of the full records (each with name and description). Text remains the default; --json is strictly opt-in.",
+          "criteria": [
+            "AC-001.3",
+            "scenario: philosophy_list_json_emits_each_record_with_name_and_description (PV-4)"
+          ],
+          "test_file": "tests/acceptance/philosophy_vocabulary.rs",
+          "scenario_name": "philosophy_list_json_emits_each_record_with_name_and_description",
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/philosophy_list.rs"
+          ],
+          "implementation_notes": "Extend verbs/philosophy_list.rs so that when the --json flag is set, the verb serializes the seed records as a JSON array — each element carrying name and description (and serde-shaped aliases/seeAlso where present). Text output from 02-01 stays the DEFAULT path; --json only changes the emission, not the data source. Still offline by construction. PV-4 asserts each record appears in the JSON array with name and description. TEST PARADIGM (mandatory): Unit tests for this step's pure seams (validate_philosophy_json, normalize, object_id) MUST be property-based (proptest) with example-based as documented FALLBACK. Acceptance scenarios are the pre-authored subprocess tests (example-based, real-io) — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/cli/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/lexicon/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-07-05",
+    "review_verdict": "APPROVED (nw-software-crafter-reviewer, 0 blockers / 0 should-fix / 0 nits) + automated quality gate PASS (decomposition ratio 0.5 steps/production-files, no orphans, all 8 RED tests owned once, valid linear DAG 01-01 -> 02-01 -> 02-02, step IDs valid, no private-method AC coupling)."
+  }
+}
