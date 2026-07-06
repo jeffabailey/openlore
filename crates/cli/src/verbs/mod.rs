@@ -29,6 +29,10 @@ pub mod init;
 pub mod peer_add;
 pub mod peer_pull;
 pub mod peer_remove;
+// Slice-22 (philosophy vocabulary registry; ADR-059): the `openlore philosophy
+// list` discovery verb. OFFLINE by construction — reads the embedded
+// `lexicon::philosophy::seeds()` constants (no store, no signer, no network).
+pub mod philosophy_list;
 pub mod scrape_github;
 // Slice-05 (appview search; step 01-04): the `openlore search` NETWORK verb
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario

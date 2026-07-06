@@ -103,6 +103,26 @@ pub enum Command {
         #[arg(long, default_value_t = 8788)]
         port: u16,
     },
+    /// Discover the shared philosophy vocabulary — slice-22 (ADR-059).
+    /// `openlore philosophy list` prints the embedded well-known philosophy
+    /// seeds (a stable object id + name + one-line description each) so the user
+    /// can copy an EXACT shared object into a claim `--object` instead of
+    /// inventing a private string (J-002). OFFLINE by construction — reads the
+    /// compile-time seed constants; no store, no signer, no network (AC-001.4).
+    #[command(subcommand)]
+    Philosophy(PhilosophyCommand),
+}
+
+/// Philosophy vocabulary verbs (slice-22; US-PV-001; ADR-059).
+#[derive(Debug, Subcommand)]
+pub enum PhilosophyCommand {
+    /// List the embedded well-known philosophy seeds (offline discovery).
+    List {
+        /// Opt-in machine-readable JSON emission. Text is the DEFAULT view
+        /// (AC-001.3 / P-001); `--json` is strictly opt-in.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -277,6 +297,20 @@ pub fn dispatch(cli: Cli) -> i32 {
     // binding a serve loop). Routed here, before the read-write wiring is built.
     if let Command::Ui { port } = cli.command {
         return verbs::ui::run(&paths, &verbs::ui::UiArgs { port });
+    }
+
+    // Step 1.6: the `philosophy list` discovery verb is OFFLINE by construction
+    // (ADR-059 D3) — it reads the compile-time embedded seed constants, needs NO
+    // store handle, NO signer, NO network, and must run even before `init` and
+    // with the network disabled (AC-001.4 / I-9). Like `ui` above it is routed
+    // here, BEFORE the read-write `Wiring::production` (and its probe gauntlet /
+    // bootstrap-state check), so no store is opened and no outbound call can be
+    // attempted. The verb returns `(exit_code, stdout)`; the dispatcher prints.
+    if let Command::Philosophy(PhilosophyCommand::List { json }) = cli.command {
+        let (exit_code, stdout) =
+            verbs::philosophy_list::run(&verbs::philosophy_list::PhilosophyListArgs { json });
+        print!("{stdout}");
+        return exit_code;
     }
 
     // Step 2: wiring.
@@ -517,6 +551,14 @@ pub fn dispatch(cli: Cli) -> i32 {
         Command::Ui { .. } => unreachable!(
             "the `ui` verb is dispatched as its own read-only composition root \
              before the read-write wiring (see Step 1.5 in `dispatch`)"
+        ),
+        // Slice-22 (ADR-059): the offline `philosophy list` discovery verb is
+        // handled EARLY (Step 1.6 above) as its own store-independent entry
+        // point — it never reaches this read-write-wiring dispatch. This arm is
+        // unreachable but kept exhaustive for the match.
+        Command::Philosophy(..) => unreachable!(
+            "the `philosophy list` verb is dispatched offline before the \
+             read-write wiring (see Step 1.6 in `dispatch`)"
         ),
     }
 }
