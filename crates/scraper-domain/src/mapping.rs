@@ -157,3 +157,92 @@ fn signal_kind_for_description(description: &str) -> Option<SignalKind> {
         _ => None,
     }
 }
+
+// =============================================================================
+// In-crate unit tests — seeded-vocabulary validation (slice-28 / US-PV-007)
+// =============================================================================
+//
+// Layer 2 (pure core, no I/O) per nw-tdd-methodology Layered Test Discipline.
+//
+// US-PV-007 ("Scraper proposes seeded philosophies", job J-004) closes the
+// vocabulary loop: every object the mapping proposes MUST be a KNOWN (seeded)
+// philosophy, so a scraped candidate always `philosophy show`-resolves and no
+// drift string (`org.openlore.philosophy.mystery`) can ever be minted.
+//
+//   - AC-007.1: the mapping references seeded philosophy records (single source);
+//     every proposed object is a known philosophy.
+//   - AC-007.2: a signal with no seeded philosophy is EXPLICIT — no drift string.
+//   - KPI-PV-6: scrape → every proposed object `philosophy show`-resolves
+//     (0 orphan philosophy strings).
+//
+// RED TODAY (the primary test below): `load_mapping` validates each entry's
+// free-text `signal` description against `SignalKind`, but does NOT yet validate
+// that the entry's `object` (the `org.openlore.philosophy.*` string) is a SEEDED
+// philosophy. A mapping with a VALID signal but a DRIFT object therefore parses
+// `Ok` today — the missing vocabulary validation is the RED cause. The test
+// references only the EXISTING `load_mapping` signature (asserts `.is_err()`, no
+// not-yet-existing symbol), so it COMPILES now and FAILS at runtime →
+// MISSING_FUNCTIONALITY, never BROKEN.
+//
+// The guardrail pins KPI-PV-6 for the SHIPPED SSOT (all 5 mapping objects are
+// seeded today) via `lexicon` — a pure crate (no I/O), added as a dev-dependency
+// so the guardrail resolves each object against the real seed vocabulary. DELIVER
+// promotes `lexicon` to a normal dependency for the production validation.
+
+#[cfg(test)]
+mod philosophy_vocabulary_tests {
+    use super::*;
+
+    /// A VALID signal description reused verbatim from the SSOT — so this entry
+    /// resolves cleanly to `SignalKind::MemorySafetyLanguage` and is NOT rejected
+    /// for a malformed signal. The rejection under test must come from the DRIFT
+    /// OBJECT, not the signal.
+    const VALID_SSOT_SIGNAL: &str =
+        "Primary language is Rust OR memory-safety language + no unsafe blocks";
+
+    // -------------------------------------------------------------------------
+    // PRIMARY RED (MISSING_FUNCTIONALITY) — AC-007.2 / KPI-PV-6.
+    //
+    // A mapping whose object is NOT a seeded philosophy must be REJECTED. Today
+    // `load_mapping` has no vocabulary check, so it returns `Ok` for the drift
+    // object `org.openlore.philosophy.mystery` → this assertion FAILS (RED). The
+    // signal is valid, so the failure is unambiguously the missing seeded-object
+    // validation — not a malformed-signal side effect.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn load_mapping_rejects_object_not_in_seeded_vocabulary() {
+        let drift_yaml = format!(
+            "signal_predicate_mapping:\n  - signal: \"{VALID_SSOT_SIGNAL}\"\n    \
+             predicate: org.openlore.philosophy.mystery\n    default_confidence: 0.25\n"
+        );
+        let result = load_mapping(&drift_yaml);
+        assert!(
+            result.is_err(),
+            "a mapping whose object is not a SEEDED philosophy must be rejected \
+             (AC-007.2 / KPI-PV-6: no drift string like \
+             `org.openlore.philosophy.mystery`); got {result:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // GUARDRAIL (GREEN-today, no-regression) — AC-007.1 / KPI-PV-6.
+    //
+    // The SHIPPED SSOT mapping parses, AND every object it proposes resolves in
+    // the seeded philosophy vocabulary (`lexicon::philosophy::find`). Passes
+    // today because all 5 SSOT objects are seeded; guards against a future SSOT
+    // edit introducing an orphan philosophy string.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn every_ssot_mapping_object_resolves_in_seeded_vocabulary() {
+        let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
+            .expect("the shipped SSOT mapping must parse (all signals + objects known)");
+        for entry in &mapping.entries {
+            assert!(
+                lexicon::philosophy::find(&entry.object).is_some(),
+                "SSOT mapping object {} does not resolve to a seeded philosophy \
+                 (KPI-PV-6: 0 orphan philosophy strings)",
+                entry.object
+            );
+        }
+    }
+}

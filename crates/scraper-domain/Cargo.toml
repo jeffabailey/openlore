@@ -34,3 +34,9 @@ serde_yaml_ng = "0.10"
 
 [dev-dependencies]
 proptest = { workspace = true }
+# slice-28 (US-PV-007) guardrail: resolve each SSOT mapping object against the
+# real seeded philosophy vocabulary (`lexicon::philosophy::find`). `lexicon` is
+# a PURE crate (no I/O) so this is a safe test-only edge; DELIVER promotes it to
+# a normal `[dependencies]` entry for the production seeded-object validation in
+# `load_mapping`. No dependency cycle — `lexicon` does not depend on scraper-domain.
+lexicon = { path = "../lexicon" }
