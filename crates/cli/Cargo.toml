@@ -1072,3 +1072,20 @@ harness = true
 name = "philosophy_vocabulary"
 path = "../../tests/acceptance/philosophy_vocabulary.rs"
 harness = true
+
+# real-I/O acceptance: `openlore philosophy show <name-or-object>` — INSPECT one
+# philosophy (US-PV-002 / AC-002.1..2; ADR-059 §5 slice-23). Drives the REAL
+# `openlore` bin via the `run_openlore` / `run_openlore_network_disabled` support
+# harness over the embedded seed constant set (ADR-059 D3 — no signer, no store,
+# no network). PS-1 is the walking skeleton (show by name → name + full
+# description + aliases + seeAlso); PS-2 shows by object id (name-or-object), PS-3
+# is the unknown-name sad path (non-zero + plain guidance, never a panic), PS-4 is
+# offline. Per Mandate 11 the sad/edge paths are example-based, never
+# PBT-generated at this layer. Build-before-run: `cargo build --bin openlore`.
+# DISTILL registers + RED gate; ALL PS-* classify RED (`philosophy` verb exists
+# from slice-22 but has no `show` subcommand → clap exit 2 = MISSING_FUNCTIONALITY)
+# until DELIVER.
+[[test]]
+name = "philosophy_show"
+path = "../../tests/acceptance/philosophy_show.rs"
+harness = true
