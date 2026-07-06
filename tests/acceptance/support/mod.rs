@@ -9689,6 +9689,29 @@ pub fn assert_traversal_href_percent_encoded(body: &str) {
 /// The sibling of slice-09's `assert_score_html_renders_no_claims`.
 ///
 /// SCAFFOLD: true (slice-10).
+/// Strip the slice-21 persistent left-nav chrome (`<nav id="viewer-nav">…</nav>`,
+/// ADR-058) from a rendered full page so a CONTENT-region assertion is not tripped by
+/// the fixed site-navigation links (`/project`, `/philosophy`, `/score`, …) the nav
+/// carries on every page. Returns the body unchanged when no such nav is present (e.g.
+/// an HX-Request fragment, which carries no chrome). Purely a test-side view — the
+/// production markup is unchanged. The nav has no nested `<nav>`, so the first `</nav>`
+/// after the open tag is its close.
+fn strip_persistent_nav(body: &str) -> String {
+    const NAV_OPEN: &str = "<nav id=\"viewer-nav\"";
+    const NAV_CLOSE: &str = "</nav>";
+    let Some(start) = body.find(NAV_OPEN) else {
+        return body.to_string();
+    };
+    let Some(rel_end) = body[start..].find(NAV_CLOSE) else {
+        return body.to_string();
+    };
+    let end = start + rel_end + NAV_CLOSE.len();
+    let mut out = String::with_capacity(body.len());
+    out.push_str(&body[..start]);
+    out.push_str(&body[end..]);
+    out
+}
+
 pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str) {
     let lowered = body.to_ascii_lowercase();
     // The guided plain-language notice: emptiness is recognized as emptiness, naming
@@ -9712,12 +9735,19 @@ pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str)
          scrape) so emptiness points somewhere actionable; body was:\n{body}"
     );
     // No FABRICATED traversal edge: emptiness invents no edge row — no traversal
-    // `<a href>` to the OTHER dimension and no cid surfaces (I-GT-4).
+    // `<a href>` to the OTHER dimension and no cid surfaces (I-GT-4). Scope this to the
+    // CONTENT region: since slice-21 (ADR-058) the persistent left `<nav id="viewer-nav">`
+    // chrome carries the FIXED landing-hub surface links (`/project`, `/philosophy`,
+    // `/score`, …) on every full page — that is site navigation, NOT an edge fabricated
+    // from the empty survey data. Strip that nav so the invariant tests what it means:
+    // the empty CONTENT invents no drill link. The HX-Request fragment carries no chrome,
+    // so `strip_persistent_nav` returns it unchanged and the check still covers it fully.
+    let content = strip_persistent_nav(body).to_ascii_lowercase();
     for banned in ["href=\"/project", "href=\"/philosophy", "href=\"/score", "cid"] {
         assert!(
-            !lowered.contains(banned),
-            "I-GT-4: the guided NoClaims state must fabricate NO traversal edge \
-             (found {banned:?}); body was:\n{body}"
+            !content.contains(banned),
+            "I-GT-4: the guided NoClaims state must fabricate NO traversal edge in the \
+             content region (found {banned:?}); body was:\n{body}"
         );
     }
     // No leaked stack trace / raw error internals — a calm guided state, never a panic
