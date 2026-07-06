@@ -31,12 +31,25 @@ pub struct PhilosophyShowArgs {
 /// prints the captured text. Offline: resolves the key against the embedded
 /// seeds via the pure `find` resolver.
 ///
-/// On a hit: render the full record (exit 0). On a miss: a minimal non-zero
-/// return for now — the full unknown-name guidance lands in the sibling step
-/// (01-02). No panic / unwrap / expect on the miss path.
+/// On a hit: render the full record (exit 0). On a miss (`find` returns `None`,
+/// a total function's expected outcome — never an exception): a NON-ZERO exit
+/// with plain, actionable guidance that names the miss and hints the recovery
+/// verbs (AC-002.2). No panic / unwrap / expect on the miss path.
 pub fn run(args: &PhilosophyShowArgs) -> (i32, String) {
     match find(&args.key) {
         Some(record) => (0, render_record(&record)),
-        None => (1, String::new()),
+        None => (1, unknown_philosophy_guidance(&args.key)),
     }
+}
+
+/// Shape the plain unknown-name guidance for a missed key. Names the miss
+/// verbatim, says "no such philosophy", and hints the two recovery verbs —
+/// `philosophy list` (discover the vocabulary) and `philosophy add` (mint the
+/// missing philosophy). A pure `String` transform; the caller prints it.
+fn unknown_philosophy_guidance(key: &str) -> String {
+    format!(
+        "no such philosophy: {key}\n\
+         try `openlore philosophy list` to see the known philosophies, \
+         or `openlore philosophy add` to mint a new one.\n"
+    )
 }
