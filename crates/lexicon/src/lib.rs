@@ -292,6 +292,32 @@ mod seeds_tests {
     }
 
     #[test]
+    fn normalize_maps_separators_and_punctuation_to_exact_kebab() {
+        // Modeling property (reference mapping): the STRUCTURAL invariants
+        // (charset / idempotence / prefix) pin the *shape* of normalize's
+        // output but not its *value*, so a mutant that mis-classifies which
+        // characters are separators (e.g. dropping '_' / whitespace instead of
+        // mapping them to '-', or treating punctuation as a separator instead
+        // of dropping it) still yields kebab-shaped output and survives. This
+        // pins the exact value mapping: whitespace and '_' collapse to a single
+        // '-'; any other punctuation is dropped WITHOUT emitting a separator.
+        let cases: &[(&str, &str)] = &[
+            ("Memory Safety", "memory-safety"),   // whitespace -> '-'
+            ("memory_safety", "memory-safety"),   // underscore -> '-'
+            ("  Memory   Safety  ", "memory-safety"), // runs collapse + trim
+            ("test.driven", "testdriven"),        // punctuation dropped, no '-'
+            ("C++ style", "c-style"),             // '+' dropped, space -> '-'
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize(input),
+                *expected,
+                "normalize({input:?}) must map to the exact kebab value {expected:?}"
+            );
+        }
+    }
+
+    #[test]
     fn object_id_always_carries_the_nsid_prefix() {
         // Property: every derived id is `org.openlore.philosophy.<segment>`,
         // and the join key matches the slice-01 claim `object` literal for
