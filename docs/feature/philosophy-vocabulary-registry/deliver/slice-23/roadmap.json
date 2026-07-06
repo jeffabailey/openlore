@@ -1,0 +1,75 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-23",
+    "created_at": "2026-07-06T12:05:18Z",
+    "total_steps": 2
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "philosophy show CLI verb (inspect one record)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "philosophy show <name-or-object> — render one record (name/description/aliases/seeAlso), offline",
+          "description": "Add Command::Philosophy(PhilosophyCommand::Show{ key: String }) to the clap enum and a verbs/philosophy_show.rs verb that resolves the key (a bare name OR the full org.openlore.philosophy.<name> object id) to one embedded seed and renders its name, full description, aliases, and seeAlso. Add a pure lexicon lookup seam (philosophy::find) as the natural unit/PBT boundary. Offline by construction (embedded seeds; no store/network — dispatched before Wiring::production like list).",
+          "criteria": [
+            "AC-002.1 (prints name/description/aliases/seeAlso verbatim from the record; accepts name OR object id; offline)",
+            "PS-1 philosophy_show_by_name_prints_name_description_aliases_and_see_also (WALKING SKELETON)",
+            "PS-2 philosophy_show_by_object_id_renders_the_same_record",
+            "PS-4 philosophy_show_succeeds_with_the_network_disabled"
+          ],
+          "test_file": "tests/acceptance/philosophy_show.rs",
+          "scenario_name": "philosophy_show_by_name_prints_name_description_aliases_and_see_also",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/philosophy_show.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/render/philosophy.rs"
+          ],
+          "implementation_notes": "Add a pure total fn lexicon::philosophy::find(key: &str) -> Option<Philosophy> that returns the seed whose object_id(name) == key OR whose normalize(name) == normalize(key) — so both memory-safety and org.openlore.philosophy.memory-safety resolve to the same record. Add PhilosophyCommand::Show { key: String } (a positional key arg) to crates/cli/src/lib.rs and dispatch it early (before Wiring::production, mirroring List) to keep it offline. Create verbs/philosophy_show.rs returning (i32, String): on Some(record) render name + full description + aliases: [..] + seeAlso: [..] (reuse/extend the render/philosophy.rs helper from slice-22 — a single-record renderer, verbatim description) and exit 0; the None (unknown) branch is step 01-02. Register the module in verbs/mod.rs. PS-1 asserts stable description fragments use-after-free + buffer overruns, aliases mem-safety/memory-safe, seeAlso wikipedia URL. PS-2 passes the full object id and expects the SAME record. PS-4 runs network-disabled and asserts no PDS call. Keep xtask check-arch at 21 members (no new crate). TEST PARADIGM (mandatory): Unit tests for the pure find seam MUST be property-based (proptest) with example-based as documented FALLBACK (e.g. property: for every seed, find(seed.name) and find(object_id(seed.name)) both return that seed; find of an unknown key returns None). Acceptance scenarios are the pre-authored subprocess tests — do NOT rewrite them."
+        },
+        {
+          "id": "01-02",
+          "name": "unknown-key guidance — non-zero exit, plain hint, no panic",
+          "description": "Handle the None branch of the philosophy show lookup: an unknown key exits NON-ZERO and prints plain guidance that names the missed input and hints the recovery verbs philosophy list and philosophy add, with NO panic / stack trace. A handled miss, never a crash.",
+          "criteria": [
+            "AC-002.2 (unknown name -> non-zero exit + plain 'no such philosophy' guidance hinting list/add; never a stack trace)",
+            "PS-3 philosophy_show_unknown_name_exits_non_zero_with_plain_guidance"
+          ],
+          "test_file": "tests/acceptance/philosophy_show.rs",
+          "scenario_name": "philosophy_show_unknown_name_exits_non_zero_with_plain_guidance",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/philosophy_show.rs",
+            "crates/cli/src/lib.rs"
+          ],
+          "implementation_notes": "When find(key) returns None, the verb returns a NON-ZERO exit code and guidance text (on stdout or stderr) that: (a) contains the missed input string verbatim (PS-3 asserts combined.contains(missing)), (b) contains the exact phrase 'no such philosophy' (the test lowercases before matching, so emit it naturally), (c) hints 'philosophy list' and 'philosophy add' (both exact substrings). Do NOT panic / unwrap / expect on the miss — it is a handled, expected outcome (PANIC_MARKERS panicked/RUST_BACKTRACE/stack backtrace/'note: run with' must be absent). Mirror how other verbs surface a non-zero exit with a user message (return (nonzero, guidance) and let the dispatcher print, or print to stderr per the codebase's error convention — check verbs/mod.rs + an existing error-returning verb). TEST PARADIGM (mandatory): a small example unit test for the None/guidance shaping is acceptable FALLBACK; the pure find returning None is already property-covered in 01-01. Acceptance scenario PS-3 is pre-authored — do NOT rewrite it."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/cli/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design) + automated quality gate",
+    "approved_at": "2026-07-06",
+    "review_verdict": "APPROVED — automated quality gate PASS (decomposition ratio 0.4 steps/production-files, 4 RED scenarios PS-1..4 each owned once, valid DAG 01-01 -> 01-02, step IDs valid, criteria <=5, no empty files). Thin read-verb slice fully specified by ADR-059 §5 slice-23 row + US-PV-002 AC-002.1/002.2; the Phase-4 adversarial implementation review remains the substantive quality gate."
+  }
+}

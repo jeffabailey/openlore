@@ -44,6 +44,25 @@ fn render_seed_block(seed: &Philosophy) -> String {
     format!("{id}\n  {} — {}", seed.name, seed.description)
 }
 
+/// Render ONE philosophy record in full for `philosophy show` (slice-23;
+/// US-PV-002 / AC-002.1). Pure + total.
+///
+/// Emits the derived object id, the human name, the FULL description verbatim,
+/// then the `aliases:` and `seeAlso:` lines (each value printed plainly so the
+/// user can copy the exact alias strings that triangulate onto the record and
+/// its see-also links). Format-tolerant: values render verbatim; layout is not
+/// a contract.
+pub fn render_record(record: &Philosophy) -> String {
+    let id = object_id(&record.name);
+    let aliases = record.aliases.join(", ");
+    let see_also = record.see_also.join(", ");
+    format!(
+        "{id}\n  {name}\n\n  {description}\n\n  aliases: {aliases}\n  seeAlso: {see_also}",
+        name = record.name,
+        description = record.description,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Port-to-port unit test at the pure-renderer scope: the driving port is

@@ -123,6 +123,19 @@ pub enum PhilosophyCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect ONE philosophy in full — slice-23 (US-PV-002; ADR-059 §5).
+    /// `openlore philosophy show <name-or-object>` accepts EITHER a bare
+    /// name (`memory-safety`) OR the full derived object id
+    /// (`org.openlore.philosophy.memory-safety`) and prints the record's
+    /// name, full description, aliases, and seeAlso link. OFFLINE by
+    /// construction — resolves against the embedded seeds; no store, no
+    /// signer, no network (AC-002.1).
+    Show {
+        /// The philosophy to inspect: a bare name or its full derived object
+        /// id (both resolve to the same record).
+        #[arg(value_name = "NAME_OR_OBJECT")]
+        key: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -309,6 +322,18 @@ pub fn dispatch(cli: Cli) -> i32 {
     if let Command::Philosophy(PhilosophyCommand::List { json }) = cli.command {
         let (exit_code, stdout) =
             verbs::philosophy_list::run(&verbs::philosophy_list::PhilosophyListArgs { json });
+        print!("{stdout}");
+        return exit_code;
+    }
+
+    // Step 1.7: the `philosophy show` inspection verb is OFFLINE by construction
+    // too (ADR-059 §5 slice-23) — it resolves the name-OR-object key against the
+    // compile-time embedded seeds via `lexicon::philosophy::find`, needs NO store
+    // handle, NO signer, NO network. Routed here, BEFORE the read-write
+    // `Wiring::production`, on the same offline path as `list` (AC-002.1 / I-9).
+    if let Command::Philosophy(PhilosophyCommand::Show { key }) = cli.command {
+        let (exit_code, stdout) =
+            verbs::philosophy_show::run(&verbs::philosophy_show::PhilosophyShowArgs { key });
         print!("{stdout}");
         return exit_code;
     }

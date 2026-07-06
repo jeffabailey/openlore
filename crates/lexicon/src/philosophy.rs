@@ -84,10 +84,12 @@ pub fn validate_philosophy_json(value: &serde_json::Value) -> Result<Philosophy,
     // present — gated before serde so the error names the field.
     for field in OPTIONAL_STRING_ARRAY_FIELDS {
         if let Some(present) = object.get(*field) {
-            let array = present.as_array().ok_or_else(|| LexiconError::InvalidType {
-                field: (*field).to_string(),
-                expected: "array of string".to_string(),
-            })?;
+            let array = present
+                .as_array()
+                .ok_or_else(|| LexiconError::InvalidType {
+                    field: (*field).to_string(),
+                    expected: "array of string".to_string(),
+                })?;
             if array.iter().any(|item| !item.is_string()) {
                 return Err(LexiconError::InvalidType {
                     field: (*field).to_string(),
@@ -164,8 +166,8 @@ pub const PHILOSOPHY_SEEDS_JSON: &str = include_str!("seeds.json");
 /// embedded seed is a compile-time-authored bug and panics loudly (this is
 /// static data baked into the binary, not runtime input).
 pub fn seeds() -> Vec<Philosophy> {
-    let value: serde_json::Value =
-        serde_json::from_str(PHILOSOPHY_SEEDS_JSON).expect("embedded seeds.json must be valid JSON");
+    let value: serde_json::Value = serde_json::from_str(PHILOSOPHY_SEEDS_JSON)
+        .expect("embedded seeds.json must be valid JSON");
     value
         .as_array()
         .expect("embedded seeds.json must be a JSON array")
@@ -174,4 +176,73 @@ pub fn seeds() -> Vec<Philosophy> {
             validate_philosophy_json(record).expect("every embedded philosophy seed must validate")
         })
         .collect()
+}
+
+// =============================================================================
+// Vocabulary resolution (slice-23; ADR-059 §5) — pure + total
+// =============================================================================
+
+/// Resolve a philosophy seed by EITHER its bare name OR its derived object id
+/// (ADR-059 §5 slice-23 — `philosophy show` accepts name-OR-object).
+///
+/// Pure + total: returns the seed whose derived `object_id(&name) == key`, OR
+/// (falling back) whose `normalize(&name) == normalize(key)` — so both
+/// `memory-safety` and `org.openlore.philosophy.memory-safety` resolve to the
+/// SAME record, and resolution is case/separator-insensitive (both sides pass
+/// through `normalize`). An unknown key resolves to `None` (never a panic).
+pub fn find(key: &str) -> Option<Philosophy> {
+    let normalized_key = normalize(key);
+    seeds()
+        .into_iter()
+        .find(|seed| object_id(&seed.name) == key || normalize(&seed.name) == normalized_key)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Port-to-port unit tests at the pure-resolver scope: the driving port is
+    //! `find`'s signature; the observable outcome is the returned `Option`.
+    //! Property-based (Hebert ch.3 Generalizing + Invariant/Oracle) over the
+    //! WHOLE embedded seed set, not a hand-built fixture.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Generalizing / round-trip (PS-1/PS-2 name-OR-object contract): every
+        /// seed resolves back to ITSELF from both its bare name AND its derived
+        /// object id, and the match is case-insensitive (both sides normalize).
+        #[test]
+        fn find_resolves_every_seed_by_name_and_object_id(
+            seed in prop::sample::select(seeds())
+        ) {
+            let by_name = find(&seed.name);
+            prop_assert_eq!(by_name.as_ref(), Some(&seed));
+            let by_id = find(&object_id(&seed.name));
+            prop_assert_eq!(by_id.as_ref(), Some(&seed));
+            let by_upper = find(&seed.name.to_uppercase());
+            prop_assert_eq!(by_upper.as_ref(), Some(&seed));
+        }
+    }
+
+    proptest! {
+        /// Totality + soundness/completeness (Oracle): `find` never panics on
+        /// arbitrary input; any `Some(record)` genuinely matches the key by
+        /// object id OR normalized name; and a `None` means NO seed matched
+        /// (a linear-scan reference confirms the miss).
+        #[test]
+        fn find_is_total_and_sound_over_arbitrary_input(key in ".*") {
+            match find(&key) {
+                Some(record) => prop_assert!(
+                    object_id(&record.name) == key
+                        || normalize(&record.name) == normalize(&key)
+                ),
+                None => {
+                    for seed in seeds() {
+                        prop_assert_ne!(object_id(&seed.name), key.clone());
+                        prop_assert_ne!(normalize(&seed.name), normalize(&key));
+                    }
+                }
+            }
+        }
+    }
 }
