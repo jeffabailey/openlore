@@ -31,12 +31,12 @@ path = "src/lib.rs"
 ports = { path = "../ports" }
 serde = { workspace = true }
 serde_yaml_ng = "0.10"
+# slice-28 (US-PV-007): resolve each mapping object against the real seeded
+# philosophy vocabulary (`lexicon::philosophy::find`) so `load_mapping` rejects
+# any object that is not a SEEDED philosophy (AC-007.2 / KPI-PV-6). `lexicon` is
+# a PURE crate (no I/O — serde/serde_json only) so it is a safe pure-core edge;
+# no dependency cycle — `lexicon` does not depend on scraper-domain.
+lexicon = { path = "../lexicon" }
 
 [dev-dependencies]
 proptest = { workspace = true }
-# slice-28 (US-PV-007) guardrail: resolve each SSOT mapping object against the
-# real seeded philosophy vocabulary (`lexicon::philosophy::find`). `lexicon` is
-# a PURE crate (no I/O) so this is a safe test-only edge; DELIVER promotes it to
-# a normal `[dependencies]` entry for the production seeded-object validation in
-# `load_mapping`. No dependency cycle — `lexicon` does not depend on scraper-domain.
-lexicon = { path = "../lexicon" }

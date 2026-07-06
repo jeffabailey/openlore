@@ -1,0 +1,52 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-28",
+    "created_at": "2026-07-06T23:10:31Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Scraper mapping validated against the seeded vocabulary (single source)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "load_mapping rejects any object not in the seeded philosophy vocabulary",
+          "description": "Enforce that every scraper signal->predicate mapping object is a seeded philosophy (AC-007.1/007.2, KPI-PV-6). Promote lexicon from a dev-dependency to a real dependency of scraper-domain and extend load_mapping to validate each entry's object via lexicon::philosophy::find — an object that does not resolve to a seed is rejected with an Err naming the drift object. The shipped SSOT mapping (5 already-seeded objects) stays unchanged and keeps loading Ok; drift becomes impossible.",
+          "criteria": [
+            "AC-007.1 (mapping objects are seeded philosophies, single source, each philosophy show-resolves)",
+            "AC-007.2 / KPI-PV-6 (a non-seeded object is rejected; no drift string like org.openlore.philosophy.mystery)",
+            "RED load_mapping_rejects_object_not_in_seeded_vocabulary (drift object -> Err)",
+            "GUARDRAIL every_ssot_mapping_object_resolves_in_seeded_vocabulary stays green"
+          ],
+          "test_file": "crates/scraper-domain/src/mapping.rs",
+          "scenario_name": "load_mapping_rejects_object_not_in_seeded_vocabulary",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/Cargo.toml",
+            "crates/scraper-domain/src/mapping.rs"
+          ],
+          "implementation_notes": "Promote lexicon from [dev-dependencies] to [dependencies] in crates/scraper-domain/Cargo.toml (it is added as a dev-dep by the DISTILL scaffold for the guardrail test). In crates/scraper-domain/src/mapping.rs, extend load_mapping so that AFTER resolving each entry's signal->SignalKind, it also validates the entry's object (the org.openlore.philosophy.* string) against the seeded vocabulary via lexicon::philosophy::find(object) (find resolves both a bare name and a full object id, so pass the object id). An object that does not resolve is rejected with an Err — reuse MappingError::MalformedEntry naming the drift object, OR add a dedicated variant like MappingError::UnknownPhilosophy{ object } (prefer the dedicated variant if it reads cleaner; keep the Display naming the offending object so the RED test's optional message check passes). This turns load_mapping_rejects_object_not_in_seeded_vocabulary GREEN while the guardrail every_ssot_mapping_object_resolves_in_seeded_vocabulary and all 9 pre-existing slice-02 mapping/derivation tests stay green (the 5 SSOT objects are all seeded). Do NOT change signal_predicate_mapping.yaml or jobs.yaml (no drift exists; this slice adds the ENFORCEMENT, not a data fix). Run cargo run -p xtask -- check-arch — scraper-domain -> lexicon is a pure->pure dependency (lexicon transitively pulls only serde/serde_json/thiserror, none of the banned tokio/reqwest/duckdb/keyring/atrium-* I/O crates), so it must stay green at 21 members. If check-arch flags the new dependency, update the appropriate rule/allowlist in xtask/src/check_arch.rs (add xtask/src/check_arch.rs to the touched files) — adding a legitimate pure-core dependency is a real architecture evolution, but verify first that it is genuinely needed. TEST PARADIGM (mandatory): the validation is a total pure predicate over the mapping; the drift-rejection RED + the SSOT guardrail are the pinned contract. A small proptest (any object not in seeds() -> load_mapping Err; any all-seeded mapping -> Ok) is the preferred unit amplification (example-based fallback documented). Acceptance/guardrail scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/"
+    ],
+    "test_directories": [
+      "crates/scraper-domain/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design) + automated quality gate",
+    "approved_at": "2026-07-06",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step slice, 1 genuine RED owned + 1 GREEN-today guardrail, ratio 1 step / 2 production files = 0.5, step ID valid, criteria <=5). Thin enforcement slice fully specified by ADR-059 §5 slice-28 row + US-PV-007 AC-007.1/007.2 + KPI-PV-6; the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}

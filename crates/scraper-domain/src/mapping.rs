@@ -46,6 +46,14 @@ pub enum MappingError {
     /// does not resolve to a known [`SignalKind`]. Carries a human-readable
     /// detail.
     MalformedEntry(String),
+    /// An entry's `object` (the `org.openlore.philosophy.*` string) does not
+    /// resolve to a SEEDED philosophy (AC-007.2 / KPI-PV-6). No drift string
+    /// may enter the mapping — every proposed object must `philosophy
+    /// show`-resolve in the seed vocabulary. Names the offending object.
+    UnknownPhilosophy {
+        /// The unseeded object string that failed vocabulary resolution.
+        object: String,
+    },
 }
 
 impl std::fmt::Display for MappingError {
@@ -53,6 +61,13 @@ impl std::fmt::Display for MappingError {
         match self {
             MappingError::MalformedEntry(detail) => {
                 write!(f, "malformed signal->predicate mapping entry: {detail}")
+            }
+            MappingError::UnknownPhilosophy { object } => {
+                write!(
+                    f,
+                    "mapping object {object} is not a seeded philosophy \
+                     (KPI-PV-6: no orphan philosophy strings)"
+                )
             }
         }
     }
@@ -123,6 +138,13 @@ pub fn load_mapping(embedded_yaml: &str) -> Result<SignalPredicateMapping, Mappi
         .map(|e| {
             let signal_kind = signal_kind_for_description(&e.signal)
                 .ok_or_else(|| MappingError::MalformedEntry(e.signal.clone()))?;
+            // Every proposed object must be a SEEDED philosophy (AC-007.1/007.2,
+            // KPI-PV-6): resolve it against the real seed vocabulary. An object
+            // that does not `philosophy show`-resolve is a drift string and is
+            // rejected by NAME — no orphan philosophy string can enter a mapping.
+            if lexicon::philosophy::find(&e.predicate).is_none() {
+                return Err(MappingError::UnknownPhilosophy { object: e.predicate });
+            }
             Ok(MappingEntry {
                 signal_kind,
                 object: e.predicate,
