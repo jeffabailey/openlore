@@ -254,6 +254,29 @@ mod philosophy_vocabulary_tests {
     }
 
     // -------------------------------------------------------------------------
+    // ERROR-VALUE CONTRACT — AC-007.2 / KPI-PV-6.
+    //
+    // Rejection is a value that must NAME the offending object: an operator
+    // reading the error has to see WHICH drift string failed vocabulary
+    // resolution. Pins the `Display` arm added in slice-28 so it can never
+    // silently degrade to an empty/opaque message.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn unknown_philosophy_display_names_the_offending_object() {
+        let drift = "org.openlore.philosophy.mystery";
+        let rendered = MappingError::UnknownPhilosophy {
+            object: drift.to_string(),
+        }
+        .to_string();
+        assert!(
+            rendered.contains(drift),
+            "the UnknownPhilosophy rejection must name the offending object \
+             {drift} (KPI-PV-6: an orphan philosophy string is identified, not \
+             opaque); got {rendered:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // GUARDRAIL (GREEN-today, no-regression) — AC-007.1 / KPI-PV-6.
     //
     // The SHIPPED SSOT mapping parses, AND every object it proposes resolves in
