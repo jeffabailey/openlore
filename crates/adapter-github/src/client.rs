@@ -462,6 +462,28 @@ mod tests {
             "signals": [],
         });
         assert_eq!(parse_repo_facts(&absent_language).language, None);
+
+        // `html_url` ABSENT: the `source_url` is reconstructed from the
+        // `target.full_name` so a detected signal always names a public
+        // evidence URL (the `repo_url_from_target` fallback arm).
+        let no_html_url = serde_json::json!({
+            "target": { "kind": "repo", "full_name": "rust-lang/cargo" },
+            "language": "Rust",
+        });
+        assert_eq!(
+            parse_repo_facts(&no_html_url).source_url,
+            "https://github.com/rust-lang/cargo",
+            "an absent html_url must be reconstructed from target.full_name"
+        );
+
+        // Neither `html_url` NOR a `target.full_name`: fall back to the bare
+        // GitHub host rather than an empty / bogus URL.
+        let no_url_at_all = serde_json::json!({ "language": "Go" });
+        assert_eq!(
+            parse_repo_facts(&no_url_at_all).source_url,
+            "https://github.com",
+            "with no html_url and no target the URL degrades to the bare host"
+        );
     }
 
     /// `signal_kind_from_wire` round-trips each recognized variant name and
