@@ -201,6 +201,25 @@ struct State {
     /// `SemverAndChangelog` signal is the CONJUNCTION of a semver `tags` entry
     /// AND a present CHANGELOG — neither half alone fires it.
     has_changelog: bool,
+    /// The README byte size `GET /repos/{o}/{r}/readme` reports (RGSD-4).
+    /// `Some(size)` only for a posture that declares a README: the HTTP handler
+    /// then serves `/readme` → **200** `{"name":"README.md","size":<size>,
+    /// "html_url":".../blob/master/README.md"}` (the real GitHub `readme` shape,
+    /// which carries the file `size` in bytes). `None` (the default for EVERY
+    /// posture that does not set it) → **404** = no README. The
+    /// `DocsPresentAndSubstantial` signal fires when the README is SUBSTANTIAL
+    /// (`size >= README_SUBSTANTIAL_BYTES`, a DELIVER threshold ~3000) OR a
+    /// `docs/` dir is present — a DISJUNCTION (design §5).
+    readme_bytes: Option<u64>,
+    /// Whether this repo has a `docs/` directory (RGSD-4). `true` serves
+    /// `GET /repos/{o}/{r}/contents/docs` → **200** with a realistic dir-listing
+    /// body (a JSON ARRAY of entries — the real GitHub `contents` shape for a
+    /// directory) carrying an `html_url`; `false` (the default for EVERY posture
+    /// that does not set it) → **404** = absent, via the same default-404
+    /// `contents/*` rule as `Cargo.lock` / `CHANGELOG.md`. The `docs/` dir is
+    /// the SECOND disjunct of `DocsPresentAndSubstantial` — a `docs/` dir alone
+    /// fires the signal even when the README is tiny/absent.
+    has_docs_dir: bool,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -328,6 +347,8 @@ impl FakeGithub {
                 has_cargo_lock: false,
                 tags: Vec::new(),
                 has_changelog: false,
+                readme_bytes: None,
+                has_docs_dir: false,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -430,6 +451,8 @@ impl FakeGithub {
                 has_cargo_lock: false,
                 tags: Vec::new(),
                 has_changelog: false,
+                readme_bytes: None,
+                has_docs_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -468,6 +491,8 @@ impl FakeGithub {
                 has_cargo_lock: true,
                 tags: Vec::new(),
                 has_changelog: false,
+                readme_bytes: None,
+                has_docs_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -511,6 +536,8 @@ impl FakeGithub {
                 has_cargo_lock: false,
                 tags: tags.into_iter().map(str::to_string).collect(),
                 has_changelog,
+                readme_bytes: None,
+                has_docs_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -533,6 +560,73 @@ impl FakeGithub {
         )
     }
 
+    /// A public repo whose documentation evidence is declared directly (RGSD-4):
+    /// an optional README byte size (`readme_bytes`) served by `GET
+    /// /repos/{o}/{r}/readme`, and whether a `docs/` directory is present
+    /// (`has_docs_dir`) served by `GET /repos/{o}/{r}/contents/docs`. This is the
+    /// general builder the `DocsPresentAndSubstantial` detection is exercised
+    /// against — the signal is the DISJUNCTION of (a) a SUBSTANTIAL README
+    /// (`size >= README_SUBSTANTIAL_BYTES`, a DELIVER threshold ~3000) OR (b) a
+    /// present `docs/` dir (design §5). Either disjunct alone fires it.
+    ///
+    /// The HTTP handler serves:
+    /// - `GET /repos/{o}/{r}/readme` → **200** `{"name":"README.md","size":
+    ///   <readme_bytes>,"html_url":".../blob/master/README.md"}` when
+    ///   `readme_bytes` is `Some` (the real GitHub `readme` shape, carrying the
+    ///   file `size` in bytes), else **404** (no README);
+    /// - `GET /repos/{o}/{r}/contents/docs` → **200** with a realistic dir-listing
+    ///   JSON array carrying an `html_url` when `has_docs_dir`, else **404**
+    ///   (absent) via the same default-404 `contents/*` rule.
+    ///
+    /// The repo carries NO `language`, NO `Cargo.lock`, NO `tags`, NO CHANGELOG
+    /// (so ONLY documentation-first can fire, isolating it from RGSD-1/2/3) and
+    /// NO synthetic `signals[]`.
+    ///
+    /// Additive: every existing posture keeps `readme_bytes == None` (so
+    /// `/readme` → **404**) and `has_docs_dir == false` (so `contents/docs` →
+    /// **404**), so no `DocsPresentAndSubstantial` signal can fire on any existing
+    /// posture — the legacy scrape suite is untouched.
+    pub fn for_public_repo_with_docs_evidence(
+        target: &str,
+        readme_bytes: Option<u64>,
+        has_docs_dir: bool,
+    ) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: None,
+                has_cargo_lock: false,
+                tags: Vec::new(),
+                has_changelog: false,
+                readme_bytes,
+                has_docs_dir,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// A public repo with a SUBSTANTIAL README (`size_bytes` large, e.g. 20000)
+    /// and NO `docs/` dir (RGSD-4 happy A) — the README-half disjunct of
+    /// `DocsPresentAndSubstantial`. SPIKE-verified against real GitHub (ripgrep:
+    /// `/readme` `size` 21615 + `html_url`, `contents/docs` → 404). Fires the
+    /// `documentation-first` candidate via a substantial README ALONE.
+    pub fn for_public_repo_with_readme(target: &str, size_bytes: u64) -> Self {
+        Self::for_public_repo_with_docs_evidence(target, Some(size_bytes), false)
+    }
+
+    /// A public repo with a `docs/` directory present but a tiny/absent README
+    /// (RGSD-4 happy B) — the docs-dir disjunct of `DocsPresentAndSubstantial`.
+    /// Pins the OR: a `docs/` dir ALONE fires the `documentation-first` candidate
+    /// even when the README is absent (`/readme` → 404).
+    pub fn for_public_repo_with_docs_dir(target: &str) -> Self {
+        Self::for_public_repo_with_docs_evidence(target, None, true)
+    }
+
     /// Mark this fixture authenticated with the supplied remaining/limit
     /// rate budget (US-SCR-004 Ex 1). The token the production code sends is
     /// captured in the `seen_token` observation slot but NEVER echoed.
@@ -549,6 +643,8 @@ impl FakeGithub {
                 has_cargo_lock: prev.has_cargo_lock,
                 tags: prev.tags.clone(),
                 has_changelog: prev.has_changelog,
+                readme_bytes: prev.readme_bytes,
+                has_docs_dir: prev.has_docs_dir,
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -804,6 +900,16 @@ async fn github_http_route(
                 // []` → `[]` (no tags), so `SemverAndChangelog` can never fire on
                 // them (no regression).
                 Ok(tags_response(&fake))
+            } else if path.ends_with("/readme") {
+                // RGSD-4: `GET /repos/{o}/{r}/readme` is a SEPARATE endpoint from
+                // the repo resolve/harvest body — route it explicitly so a
+                // `fetch_readme` probe reads the posture's README size. **200**
+                // with the file `size` when the posture declares a README
+                // (`readme_bytes` is `Some`), else **404** (no README). Every
+                // unconfigured posture keeps `readme_bytes == None` → 404, so no
+                // `DocsPresentAndSubstantial` signal can fire on them (no
+                // regression).
+                Ok(readme_response(&fake, kind))
             } else {
                 Ok(resolve_or_harvest_response(&fake, kind, &path))
             }
@@ -829,10 +935,13 @@ fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> Ht
         .map(|(_, rest)| rest)
         .unwrap_or("");
 
-    // A file is present iff it is a configured-present file for this posture.
+    // A file/dir is present iff it is a configured-present path for this posture.
     let present = match file_path {
         "Cargo.lock" => fake.state.has_cargo_lock,
         "CHANGELOG.md" => fake.state.has_changelog,
+        // RGSD-4: `docs` is a DIRECTORY (not a file) — present iff the posture
+        // declares a `docs/` dir. GitHub returns a JSON ARRAY for a directory.
+        "docs" => fake.state.has_docs_dir,
         _ => false,
     };
     if present {
@@ -842,6 +951,26 @@ fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> Ht
             // but stay total and mirror the login as owner/repo.
             FakeTargetKind::User { user } => (user.clone(), user.clone()),
         };
+        // RGSD-4: a DIRECTORY (`docs`) resolves to a JSON ARRAY of entries — the
+        // real GitHub `contents` shape for a directory. `content_exists` treats
+        // any 200 as "present"; the entries carry an `html_url` the adapter can
+        // capture as the `docs_url` evidence. A FILE resolves to a single object.
+        if file_path == "docs" {
+            let dir_url = format!("https://github.com/{owner}/{repo}/tree/master/docs");
+            let entry_url = format!("https://github.com/{owner}/{repo}/blob/master/docs/index.md");
+            return json_response(
+                200,
+                serde_json::json!([
+                    {
+                        "name": "index.md",
+                        "path": "docs/index.md",
+                        "type": "file",
+                        "html_url": entry_url,
+                        "_dir_html_url": dir_url,
+                    }
+                ]),
+            );
+        }
         let html_url = format!("https://github.com/{owner}/{repo}/blob/master/{file_path}");
         return json_response(
             200,
@@ -874,6 +1003,39 @@ fn tags_response(fake: &FakeGithub) -> HttpResponse {
         .map(|name| serde_json::json!({ "name": name }))
         .collect();
     json_response(200, serde_json::Value::Array(tags))
+}
+
+/// Serve the `GET /repos/{owner}/{repo}/readme` probe (RGSD-4).
+///
+/// **200** with `{"name":"README.md","size":<readme_bytes>,"html_url":
+/// ".../blob/master/README.md"}` — the real GitHub `readme` API shape, which
+/// carries the README `size` in bytes — when the posture declares a README
+/// (`readme_bytes` is `Some`). **404** (no README) for every posture that does
+/// not set it (the default). The `DocsPresentAndSubstantial` detection reads
+/// the `size` to decide whether the README is SUBSTANTIAL (design §5).
+fn readme_response(fake: &FakeGithub, kind: &FakeTargetKind) -> HttpResponse {
+    match fake.state.readme_bytes {
+        Some(size) => {
+            let (owner, repo) = match kind {
+                FakeTargetKind::Repo { owner, repo } => (owner.clone(), repo.clone()),
+                FakeTargetKind::User { user } => (user.clone(), user.clone()),
+            };
+            let html_url = format!("https://github.com/{owner}/{repo}/blob/master/README.md");
+            json_response(
+                200,
+                serde_json::json!({
+                    "name": "README.md",
+                    "path": "README.md",
+                    "type": "file",
+                    "size": size,
+                    "html_url": html_url,
+                }),
+            )
+        }
+        // No README declared → 404, exactly as the real GitHub `readme` endpoint
+        // returns for a repo with no README at all.
+        None => json_response(404, serde_json::json!({ "message": "Not Found" })),
+    }
 }
 
 /// Serve the resolution + harvest happy-path response for a resolvable
@@ -1518,6 +1680,107 @@ mod tests {
             body.as_array().expect("tags array").is_empty(),
             "an unconfigured posture must list NO tags (empty array — no regression)"
         );
+    }
+
+    /// RGSD-4: `for_public_repo_with_readme` serves `GET /repos/{o}/{r}/readme`
+    /// → **200** with the README `size` in bytes + the file `html_url` — the
+    /// real GitHub `readme` shape. This is the load-bearing shape the
+    /// substantial-README half of `DocsPresentAndSubstantial` reads.
+    #[tokio::test]
+    async fn readme_posture_serves_200_with_size_on_readme() {
+        let fake = FakeGithub::for_public_repo_with_readme("BurntSushi/ripgrep", 20000);
+        let handle = fake.serve_http().await;
+
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/readme",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(status, 200, "a repo with a README must resolve /readme at 200");
+        assert_eq!(body["name"], "README.md");
+        assert_eq!(body["size"], 20000, "the readme body must carry the size in bytes");
+        assert_eq!(
+            body["html_url"],
+            "https://github.com/BurntSushi/ripgrep/blob/master/README.md",
+            "the readme body must carry the file html_url (the signal source_url)"
+        );
+    }
+
+    /// RGSD-4: a `readme` posture that declares NO docs dir 404s
+    /// `contents/docs` — the README-only disjunct (docs/ absent). Proves the two
+    /// disjuncts are served INDEPENDENTLY so the production OR can be exercised.
+    #[tokio::test]
+    async fn readme_posture_404s_contents_docs() {
+        let fake = FakeGithub::for_public_repo_with_readme("BurntSushi/ripgrep", 20000);
+        let handle = fake.serve_http().await;
+
+        let (status, _) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/docs",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(status, 404, "a README-only posture must 404 the contents/docs probe (absent)");
+    }
+
+    /// RGSD-4: `for_public_repo_with_docs_dir` serves `contents/docs` → **200**
+    /// with a JSON ARRAY (the real GitHub `contents` shape for a directory) and
+    /// 404s `/readme` (a tiny/absent README) — the docs-dir disjunct alone.
+    #[tokio::test]
+    async fn docs_dir_posture_serves_200_array_on_contents_docs_and_404s_readme() {
+        let fake = FakeGithub::for_public_repo_with_docs_dir("some-org/documented");
+        let handle = fake.serve_http().await;
+
+        let (docs_status, docs_body) = get_json(&format!(
+            "{}/repos/some-org/documented/contents/docs",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(docs_status, 200, "a present docs/ dir must resolve at 200");
+        assert!(
+            docs_body.is_array(),
+            "a directory resolves to a JSON array (the real GitHub contents shape)"
+        );
+        assert!(
+            !docs_body.as_array().expect("array").is_empty(),
+            "the docs/ dir listing carries at least one entry"
+        );
+
+        let (readme_status, _) = get_json(&format!(
+            "{}/repos/some-org/documented/readme",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            readme_status, 404,
+            "the docs-dir-only posture has no README (docs/ alone must fire the signal)"
+        );
+    }
+
+    /// RGSD-4 no-regression: every UNCONFIGURED posture 404s BOTH `/readme` and
+    /// `contents/docs` — the default `readme_bytes == None` + `has_docs_dir ==
+    /// false` guarantee. This is what keeps every existing posture reading as "no
+    /// substantial README AND no docs dir" for the new probes, so no
+    /// `DocsPresentAndSubstantial` signal can ever fire on them.
+    #[tokio::test]
+    async fn unconfigured_posture_404s_both_readme_and_contents_docs() {
+        let fake = FakeGithub::for_public_repo(
+            "rust-lang/cargo",
+            vec![FakeSignal::new("X", "y", "https://x.test/z")],
+        );
+        let handle = fake.serve_http().await;
+
+        let (readme_status, _) =
+            get_json(&format!("{}/repos/rust-lang/cargo/readme", handle.base_url())).await;
+        assert_eq!(readme_status, 404, "an unconfigured posture has no README (404 — no regression)");
+
+        let (docs_status, _) = get_json(&format!(
+            "{}/repos/rust-lang/cargo/contents/docs",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(docs_status, 404, "an unconfigured posture has no docs/ dir (404 — no regression)");
     }
 
     /// The offline posture drops the connection — a client GET errors out
