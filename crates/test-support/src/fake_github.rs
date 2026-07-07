@@ -176,6 +176,15 @@ struct State {
     /// `None` for every legacy `signals[]`-driven posture (so those bodies
     /// serialize `"language": null` and stay untouched).
     language: Option<String>,
+    /// Whether this repo has a committed `Cargo.lock` (RGSD-2). `true` only
+    /// for the `for_public_repo_with_cargo_lock` posture: the HTTP handler
+    /// then serves `GET /repos/{o}/{r}/contents/Cargo.lock` → **200** with a
+    /// realistic file body carrying the file `html_url` (200 = present, the
+    /// real GitHub `contents` API shape). `false` for every OTHER posture (so
+    /// the same probe → **404** = absent). Combined with the default-404 rule
+    /// for ALL unconfigured `contents/*` paths, this makes every existing
+    /// posture read as "no Cargo.lock" for the new probe (no regression).
+    has_cargo_lock: bool,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -300,6 +309,7 @@ impl FakeGithub {
                 signals,
                 auth,
                 language: None,
+                has_cargo_lock: false,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -399,6 +409,43 @@ impl FakeGithub {
                 resolution: Ok(Self::resolve_kind(target)),
                 signals: Vec::new(),
                 language: Some(language.to_string()),
+                has_cargo_lock: false,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// A public repo that has a committed `Cargo.lock` at its root (RGSD-2):
+    /// the HTTP handler serves `GET /repos/{owner}/{repo}/contents/Cargo.lock`
+    /// → **200** with a realistic `contents` file body carrying the file
+    /// `html_url` (`https://github.com/{owner}/{repo}/blob/master/Cargo.lock`),
+    /// exactly the shape the LIVE GitHub `contents` API returns for a present
+    /// file (SPIKE-verified: ripgrep → 200; torvalds/linux → 404).
+    ///
+    /// This is the posture the `DependencyManifestPinned` detection is
+    /// exercised against: RGSD-2's `harvest_repo` will issue a SECOND request
+    /// (`content_exists(owner, repo, "Cargo.lock")`), reading **200 = present**
+    /// / **404 = absent**, and fire the `DependencyManifestPinned` signal when
+    /// the file is present → deriving the
+    /// `org.openlore.philosophy.dependency-pinning` candidate. The repo carries
+    /// NO `language` (so ONLY dependency-pinning fires, isolating the signal
+    /// from the RGSD-1 memory-safety detection) and NO synthetic `signals[]`.
+    ///
+    /// Additive: every existing posture keeps `has_cargo_lock == false`, so its
+    /// `contents/Cargo.lock` probe → **404** (absent) and the legacy scrape
+    /// suite is untouched. Any UNCONFIGURED `contents/*` path also → **404** by
+    /// construction (see [`contents_response`]).
+    pub fn for_public_repo_with_cargo_lock(target: &str) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: None,
+                has_cargo_lock: true,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -420,6 +467,7 @@ impl FakeGithub {
                 resolution: prev.resolution.clone(),
                 signals: prev.signals.clone(),
                 language: prev.language.clone(),
+                has_cargo_lock: prev.has_cargo_lock,
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -655,9 +703,64 @@ async fn github_http_route(
     }
 
     match &fake.state.resolution {
-        Ok(kind) => Ok(resolve_or_harvest_response(&fake, kind, &path)),
+        Ok(kind) => {
+            // RGSD-2: the `contents/{path}` probe is a SEPARATE endpoint from
+            // the repo resolve/harvest body — route it explicitly. Without this
+            // fork every path on a resolvable target falls through to the 200
+            // repo body, so a `content_exists` probe would read EVERY repo as
+            // "file present". Instead: 200 iff the file is configured-present
+            // (only Cargo.lock, only for the cargo-lock posture); 404 (absent)
+            // for every other `contents/*` path AND for Cargo.lock when the
+            // posture has none. That default-404 is what keeps all existing
+            // postures reading as "no Cargo.lock" (no regression).
+            if path.contains("/contents/") {
+                Ok(contents_response(&fake, kind, &path))
+            } else {
+                Ok(resolve_or_harvest_response(&fake, kind, &path))
+            }
+        }
         Err(posture) => Ok(error_response(posture)),
     }
+}
+
+/// Serve the `GET /repos/{owner}/{repo}/contents/{file_path}` probe (RGSD-2).
+///
+/// **200** with a realistic `contents` file body (carrying the file `html_url`)
+/// iff the probed file is a CONFIGURED present file — currently ONLY
+/// `Cargo.lock`, and ONLY when the posture declared a committed Cargo.lock
+/// (`for_public_repo_with_cargo_lock`). Every OTHER `contents/*` path, and
+/// `Cargo.lock` on a posture without one, → **404** (absent), the real GitHub
+/// `contents` "no such file" shape. This default-404 is structural: an
+/// unconfigured content path can never accidentally read as present.
+fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> HttpResponse {
+    // Extract the file path after `/contents/` (e.g. `Cargo.lock`).
+    let file_path = path
+        .split_once("/contents/")
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+
+    let is_present_cargo_lock = file_path == "Cargo.lock" && fake.state.has_cargo_lock;
+    if is_present_cargo_lock {
+        let (owner, repo) = match kind {
+            FakeTargetKind::Repo { owner, repo } => (owner.clone(), repo.clone()),
+            // `contents` is a repo endpoint; a user target has no such path,
+            // but stay total and mirror the login as owner/repo.
+            FakeTargetKind::User { user } => (user.clone(), user.clone()),
+        };
+        let html_url = format!("https://github.com/{owner}/{repo}/blob/master/Cargo.lock");
+        return json_response(
+            200,
+            serde_json::json!({
+                "name": "Cargo.lock",
+                "path": "Cargo.lock",
+                "type": "file",
+                "html_url": html_url,
+            }),
+        );
+    }
+
+    // Unconfigured content path (or Cargo.lock absent) → 404 = absent.
+    json_response(404, serde_json::json!({ "message": "Not Found" }))
 }
 
 /// Serve the resolution + harvest happy-path response for a resolvable
@@ -948,6 +1051,86 @@ mod tests {
             "legacy signal-driven bodies keep `language` null (additive change)"
         );
         assert_eq!(body["signals"].as_array().expect("signals array").len(), 1);
+    }
+
+    /// RGSD-2: `for_public_repo_with_cargo_lock` serves the `contents/Cargo.lock`
+    /// probe at **200** with a realistic file body carrying the file `html_url`
+    /// (200 = present, the real GitHub `contents` shape). This is the
+    /// load-bearing shape the `DependencyManifestPinned` detection reads.
+    #[tokio::test]
+    async fn for_public_repo_with_cargo_lock_serves_200_on_contents_cargo_lock() {
+        let fake = FakeGithub::for_public_repo_with_cargo_lock("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/Cargo.lock",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(status, 200, "a committed Cargo.lock must resolve at 200 (present)");
+        assert_eq!(body["type"], "file");
+        assert_eq!(body["path"], "Cargo.lock");
+        assert_eq!(
+            body["html_url"], "https://github.com/BurntSushi/ripgrep/blob/master/Cargo.lock",
+            "the contents body must carry the file html_url (the signal source_url)"
+        );
+    }
+
+    /// RGSD-2 no-regression: a posture WITHOUT a Cargo.lock serves the same
+    /// probe at **404** (absent). Every existing posture keeps
+    /// `has_cargo_lock == false`, so the new `content_exists` probe reads them
+    /// all as "no Cargo.lock" — the additive-change / no-regression guarantee.
+    #[tokio::test]
+    async fn posture_without_cargo_lock_serves_404_on_contents_cargo_lock() {
+        let fake = FakeGithub::for_public_repo_with_language("some-org/cpp-project", "C++");
+        let handle = fake.serve_http().await;
+
+        let (status, _body) = get_json(&format!(
+            "{}/repos/some-org/cpp-project/contents/Cargo.lock",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(
+            status, 404,
+            "a repo with no committed Cargo.lock must 404 the contents probe (absent)"
+        );
+    }
+
+    /// RGSD-2 default-404 guarantee: even the cargo-lock posture serves **404**
+    /// for any UNCONFIGURED `contents/*` path (only Cargo.lock is present). An
+    /// unconfigured content path can never accidentally read as present.
+    #[tokio::test]
+    async fn unconfigured_contents_path_serves_404_even_with_cargo_lock() {
+        let fake = FakeGithub::for_public_repo_with_cargo_lock("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (status, _body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/some-other-file.toml",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(
+            status, 404,
+            "an unconfigured contents path must 404 (only Cargo.lock is configured present)"
+        );
+    }
+
+    /// RGSD-2: the repo resolve/harvest body is UNCHANGED by the contents fork
+    /// — `GET /repos/{o}/{r}` (no `/contents/`) still serves the 200 repo body.
+    #[tokio::test]
+    async fn cargo_lock_posture_still_serves_the_repo_resolve_body_at_200() {
+        let fake = FakeGithub::for_public_repo_with_cargo_lock("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (status, body) =
+            get_json(&format!("{}/repos/BurntSushi/ripgrep", handle.base_url())).await;
+
+        assert_eq!(status, 200, "the repo resolve path is untouched by the contents fork");
+        assert_eq!(body["target"]["kind"], "repo");
+        assert_eq!(body["target"]["full_name"], "BurntSushi/ripgrep");
     }
 
     /// `for_public_user` resolves to a User (not a repo) — drives SG-3 /
