@@ -229,7 +229,38 @@ pub fn parse_repo_facts(body: &serde_json::Value) -> scraper_domain::RepoFacts {
         // fills it from `content_exists(owner, repo, "Cargo.lock")` before
         // `detect_signals` runs (design §2/§4).
         cargo_lock_url: None,
+        // The `/tags` list (RGSD-3) and the `contents/CHANGELOG.md` probe are
+        // likewise SEPARATE endpoints — `parse_repo_facts` reads ONLY the
+        // `/repos` body, so both default to `None`. `harvest_repo` fills them
+        // from `list_tags` (→ `pick_semver_tag`) and `content_exists(owner, repo,
+        // "CHANGELOG.md")` before `detect_signals` runs (design §2/§4).
+        semver_tag: None,
+        changelog_url: None,
     }
+}
+
+/// Parse a `GET /repos/{owner}/{repo}/tags` 200 body — a JSON array of
+/// `{"name": <tag>}` objects — into the list of tag names (RGSD-3). PURE — a
+/// value-in / value-out reshape of the already-fetched JSON (the network I/O
+/// lives in `lib.rs`), mirroring [`parse_signals`] / [`parse_repo_facts`].
+///
+/// Reads each array entry's `name` string; entries without a string `name` are
+/// dropped (a malformed entry simply yields no tag). A body that is not an
+/// array (an untagged repo the API serves as `[]`, or any other shape) yields
+/// an empty list — the repo publishes no tags, never an error.
+pub fn parse_tag_names(body: &serde_json::Value) -> Vec<String> {
+    let Some(entries) = body.as_array() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 /// Reconstruct a public repo URL from the response body's `target` object when

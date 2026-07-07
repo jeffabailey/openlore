@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "real-github-signal-detection",
+    "slice": "rgsd-3",
+    "created_at": "2026-07-07T05:03:37Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Detect SemverAndChangelog from semver tags AND a CHANGELOG",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "list_tags + is_semver_tag + RepoFacts semver/changelog + conjunction arm",
+          "description": "Add a list_tags effect (GET /repos/{o}/{r}/tags -> tag names) in adapter-github; a pure is_semver_tag predicate + RepoFacts.{semver_tag, changelog_url} + a SemverAndChangelog detect arm that fires on the CONJUNCTION (a semver tag AND a CHANGELOG present) in scraper-domain; harvest_repo lists tags, picks a semver-style tag, probes CHANGELOG.md via the RGSD-2 content_exists, and assembles the fuller RepoFacts — so a repo with semver tags and a committed CHANGELOG now yields the org.openlore.philosophy.semantic-versioning candidate.",
+          "criteria": [
+            "RGSD-3 happy: semver tags + CHANGELOG -> semantic-versioning candidate (scrape_repo_with_semver_tags_and_a_changelog_derives_the_semantic_versioning_candidate)",
+            "RGSD-3 guardrail A: semver tags but NO changelog -> no candidate (conjunction; stays green)",
+            "RGSD-3 guardrail B: changelog but only non-semver tags -> no candidate (conjunction; stays green)",
+            "RGSD-1/RGSD-2 + existing scrape suite stay green (default 200-[] tags, default-404 contents, union bridge); confidence stays 0.25"
+          ],
+          "test_file": "tests/acceptance/scrape_semver_changelog.rs",
+          "scenario_name": "scrape_repo_with_semver_tags_and_a_changelog_derives_the_semantic_versioning_candidate",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/src/detect.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs"
+          ],
+          "implementation_notes": "PURE (scraper-domain/detect.rs): (1) extend RepoFacts with `pub semver_tag: Option<String>` (a representative semver-style tag name when the repo has one; None otherwise) and `pub changelog_url: Option<String>` (the CHANGELOG file url when present; None). Default both to None in parse_repo_facts; harvest fills them. (2) a pure total `fn is_semver_tag(name: &str) -> bool` — LOOSE match: the name contains a `MAJOR.MINOR.PATCH` numeric core (each component all-ASCII-digits), tolerating an optional leading `v`, an optional `<pkgname>-` prefix (e.g. wincolor-0.1.6), and an optional `-prerelease`/`+build` suffix. Hand-rolled (NO new regex dep): e.g. strip a leading `v`, split candidate on non-version separators, or scan for the first `d+.d+.d+` run. Pin it with proptests (clearly-semver names true: `1.2.3`, `v1.2.3`, `wincolor-0.1.6`, `14.1.1`, `v2.0.0-rc1`; clearly-non-semver false: `nightly`, `latest`, `release`, `v1`, `1.2`, empty). Also a pure helper `fn pick_semver_tag(names: &[String]) -> Option<String>` returning the first is_semver_tag name. (3) add the SemverAndChangelog arm to detect_signals ALONGSIDE the existing arms: fires ONLY when BOTH facts.semver_tag.is_some() AND facts.changelog_url.is_some() (the conjunction — guardrails A/B pin under/over-firing); emit Signal{ kind: SignalKind::SemverAndChangelog, value: \"semver tags + CHANGELOG present\".to_string(), source_url: facts.changelog_url (or the semver tag/repo url) }. EFFECT (adapter-github/lib.rs): (4) add `async fn list_tags(&self, owner, repo) -> Result<Vec<String>, GithubError>`: GET {api_base}/repos/{owner}/{repo}/tags; on 2xx parse the JSON array of `{name}` into Vec<String>; propagate errors via the shared classify_refusal (403->RateLimited, 401->TokenRejected, network->Network). Reuse send_get. (5) in harvest_repo, after the RGSD-2 Cargo.lock probe: call list_tags(owner,repo)? -> pick_semver_tag -> semver_tag; call content_exists(owner,repo,\"CHANGELOG.md\")? -> changelog_url; set both on RepoFacts before detect_signals. Keep the union with parse_signals. Keep harvest_user unchanged. client.rs: add a pure helper to parse tag names from the tags-array body if you parse it there; parse_repo_facts defaults the two new fields to None. Run cargo run -p xtask -- check-arch (stays 21). TEST PARADIGM (mandatory): DELIVER RED_UNIT — proptests for is_semver_tag (true/false corpora above) and detect_signals (fires SemverAndChangelog iff BOTH semver_tag.is_some() AND changelog_url.is_some(); independent of the other arms; a repo with all three facts fires all three arms). list_tags's HTTP parse is an adapter concern — cover via the ATs or a small adapter unit test. Example-based is documented FALLBACK. Acceptance scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from the committed DESIGN doc + SPIKE) + automated quality gate",
+    "approved_at": "2026-07-07",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step slice, 1 genuine RED owned + 2 conjunction guardrails, ratio 1 step / 3 production files = 0.33, step ID valid, criteria <=5). Specified by the RGSD design §1/§5 + the SPIKE (ripgrep semver tags + CHANGELOG.md 200; linux semver tags + CHANGELOG 404 = the conjunction negative); the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}

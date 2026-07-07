@@ -41,6 +41,20 @@ pub struct RepoFacts {
     /// [`SignalKind::DependencyManifestPinned`] signal's `source_url` so the
     /// derived candidate names the Cargo.lock as its evidence (design §2/§3).
     pub cargo_lock_url: Option<String>,
+    /// A semver-shaped tag name the repo publishes (RGSD-3). `Some(tag)` when
+    /// the effect shell's `list_tags(owner, repo)` probe found at least one tag
+    /// matching [`is_semver_tag`] (via [`pick_semver_tag`]) — the repo follows
+    /// semantic versioning in its release tags; `None` when it has no
+    /// semver-shaped tag. One HALF of the [`SignalKind::SemverAndChangelog`]
+    /// CONJUNCTION (design §2).
+    pub semver_tag: Option<String>,
+    /// The committed `CHANGELOG.md`'s public file URL (RGSD-3). `Some(url)` when
+    /// the effect shell's `content_exists(owner, repo, "CHANGELOG.md")` probe
+    /// returned 200 (a committed CHANGELOG); `None` when it returned 404
+    /// (absent). The OTHER half of the [`SignalKind::SemverAndChangelog`]
+    /// CONJUNCTION, and the emitted signal's `source_url` so the derived
+    /// candidate names the CHANGELOG as its evidence (design §2/§3).
+    pub changelog_url: Option<String>,
 }
 
 /// The curated set of memory-safety languages (design §2) — languages with
@@ -86,10 +100,82 @@ pub fn detect_signals(facts: &RepoFacts) -> Vec<Signal> {
     [
         detect_memory_safety_language(facts),
         detect_dependency_manifest_pinned(facts),
+        detect_semver_and_changelog(facts),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// Whether a tag name follows semantic versioning (RGSD-3). PURE + total. A
+/// LOOSE match: the name is semver iff it carries a `MAJOR.MINOR.PATCH` numeric
+/// core (each component ≥ 1 ASCII digit) somewhere within it, tolerating an
+/// optional leading `v` (`v1.2.3`), an optional `<pkgname>-` prefix
+/// (`wincolor-0.1.6`), and an optional `-prerelease` / `+build` suffix
+/// (`v2.0.0-rc1`). Hand-rolled — NO regex dependency (the pure core stays
+/// dependency-light). A name with fewer than three dot-separated numeric
+/// components (`v1`, `1.2`) or none at all (`nightly`, `latest`) is NOT semver.
+fn is_semver_tag(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (0..bytes.len()).any(|start| {
+        // A core may only START at a component boundary — a digit not preceded
+        // by another digit — so `1.2.3` is found once, not at every digit.
+        let starts_component = bytes[start].is_ascii_digit()
+            && (start == 0 || !bytes[start - 1].is_ascii_digit());
+        starts_component && matches_semver_core_at(bytes, start)
+    })
+}
+
+/// Whether `bytes[start..]` opens with three dot-separated ASCII-digit groups
+/// (`D+.D+.D+`) — the `MAJOR.MINOR.PATCH` core. Any suffix after the third
+/// group (a `-rc1` prerelease, a `+build`, or nothing) is tolerated. PURE.
+fn matches_semver_core_at(bytes: &[u8], start: usize) -> bool {
+    let mut i = start;
+    for group in 0..3 {
+        let group_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == group_start {
+            return false; // each component needs at least one digit
+        }
+        if group < 2 {
+            // the first two components must be followed by a `.` separator
+            if i >= bytes.len() || bytes[i] != b'.' {
+                return false;
+            }
+            i += 1;
+        }
+    }
+    true
+}
+
+/// The FIRST semver-shaped tag name in `names` (per [`is_semver_tag`]), or
+/// `None` when none follow semver (RGSD-3). PURE. Called by the effect shell
+/// after `list_tags` to fill [`RepoFacts::semver_tag`].
+pub fn pick_semver_tag(names: &[String]) -> Option<String> {
+    names.iter().find(|name| is_semver_tag(name)).cloned()
+}
+
+/// The `SemverAndChangelog` detector arm (RGSD-3): fires when the repo BOTH
+/// publishes a semver-shaped tag (`semver_tag` is `Some`) AND commits a
+/// CHANGELOG (`changelog_url` is `Some`) — the CONJUNCTION (design §2). Returns
+/// `Some(signal)` sourced at the committed CHANGELOG's public URL, or `None`
+/// when EITHER half is absent (semver tags alone, or a CHANGELOG alone, never
+/// fires it). PURE — a total predicate over the facts; the effect-shell probes
+/// that fill `semver_tag` / `changelog_url` live in `adapter-github`.
+fn detect_semver_and_changelog(facts: &RepoFacts) -> Option<Signal> {
+    let _semver_tag = facts.semver_tag.as_deref()?;
+    let changelog_url = facts.changelog_url.as_deref()?;
+    Some(Signal {
+        kind: SignalKind::SemverAndChangelog,
+        // Honest semantics (design §3): the repo follows semver in its tags AND
+        // commits a CHANGELOG — that is exactly what the two probes measured.
+        value: "semver tags + CHANGELOG present".to_string(),
+        // Source the signal at the committed CHANGELOG so the derived candidate
+        // names it as evidence the user can audit (design §3, KPI-SCR-3).
+        source_url: changelog_url.to_string(),
+    })
 }
 
 /// The `DependencyManifestPinned` detector arm (RGSD-2): fires when the repo
@@ -175,6 +261,8 @@ mod tests {
                 language: Some(language.clone()),
                 source_url: source_url.clone(),
                 cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(signals.len(), 1, "a memory-safety language fires exactly one signal");
@@ -206,6 +294,8 @@ mod tests {
                 language: Some(language.to_string()),
                 source_url,
                 cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -217,7 +307,13 @@ mod tests {
         /// yields NO signal.
         #[test]
         fn an_absent_language_yields_no_signal(source_url in arb_source_url()) {
-            let facts = RepoFacts { language: None, source_url, cargo_lock_url: None };
+            let facts = RepoFacts {
+                language: None,
+                source_url,
+                cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
+            };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
                 "an absent language must fire no signal"
@@ -240,6 +336,8 @@ mod tests {
                 language: Some(language.to_string()),
                 source_url,
                 cargo_lock_url: Some(cargo_lock_url.clone()),
+                semver_tag: None,
+                changelog_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(
@@ -268,6 +366,8 @@ mod tests {
                 language: Some(language.to_string()),
                 source_url,
                 cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
             };
             prop_assert!(
                 detect_signals(&facts)
@@ -290,6 +390,8 @@ mod tests {
                 language: Some(language),
                 source_url,
                 cargo_lock_url: Some(cargo_lock_url),
+                semver_tag: None,
+                changelog_url: None,
             };
             let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
             prop_assert!(
@@ -300,6 +402,119 @@ mod tests {
                 kinds.contains(&SignalKind::DependencyManifestPinned),
                 "the dependency-pinning arm must fire alongside the memory-safety arm (independent arms)"
             );
+        }
+
+        /// Property (RGSD-3): every tag in the SEMVER corpus — bare, `v`-prefixed,
+        /// package-prefixed (`wincolor-0.1.6`), or prerelease-suffixed
+        /// (`v2.0.0-rc1`) — is recognized by `is_semver_tag`; every tag in the
+        /// NON-semver corpus (release-channel names, too-few components, empty) is
+        /// rejected. The LOOSE `MAJOR.MINOR.PATCH` match, hand-rolled (no regex).
+        #[test]
+        fn is_semver_tag_accepts_the_semver_corpus_and_rejects_the_rest(
+            semver in prop::sample::select(vec![
+                "1.2.3", "v1.2.3", "wincolor-0.1.6", "14.1.1", "v2.0.0-rc1",
+            ]),
+            non_semver in prop::sample::select(vec![
+                "nightly", "latest", "release", "v1", "1.2", "",
+            ]),
+        ) {
+            prop_assert!(
+                is_semver_tag(semver),
+                "{semver:?} follows MAJOR.MINOR.PATCH and must be recognized as semver"
+            );
+            prop_assert!(
+                !is_semver_tag(non_semver),
+                "{non_semver:?} is not MAJOR.MINOR.PATCH and must NOT be recognized as semver"
+            );
+        }
+
+        /// Property (RGSD-3): `pick_semver_tag` returns the FIRST semver-shaped
+        /// tag in the list, or `None` when the list has none — regardless of how
+        /// many non-semver channel names precede it.
+        #[test]
+        fn pick_semver_tag_finds_the_first_semver_name_or_none(
+            channels in prop::collection::vec(
+                prop::sample::select(vec!["nightly", "latest", "release"]),
+                0..4,
+            ),
+            semver in prop::sample::select(vec!["1.2.3", "v9.9.9", "wincolor-0.1.6"]),
+        ) {
+            // A list of only non-semver channel names yields None.
+            let channels_only: Vec<String> = channels.iter().map(|s| s.to_string()).collect();
+            prop_assert_eq!(pick_semver_tag(&channels_only), None);
+
+            // With a semver tag appended after the channel names, pick finds it
+            // (it is the first — and only — semver-shaped name in the list).
+            let mut with_semver = channels_only.clone();
+            with_semver.push(semver.to_string());
+            prop_assert_eq!(pick_semver_tag(&with_semver), Some(semver.to_string()));
+        }
+
+        /// Property (RGSD-3, design §2): the `SemverAndChangelog` arm fires IFF
+        /// BOTH `semver_tag` AND `changelog_url` are `Some` — the CONJUNCTION.
+        /// Neither half alone fires it; when it fires there is EXACTLY ONE such
+        /// signal, sourced at the committed CHANGELOG's URL (design §3). The
+        /// `language`/`cargo_lock_url` are absent so this arm is isolated.
+        #[test]
+        fn semver_and_changelog_fires_only_on_the_conjunction(
+            semver_present in any::<bool>(),
+            changelog_present in any::<bool>(),
+            tag in arb_source_url(),
+            changelog in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: None,
+                source_url,
+                cargo_lock_url: None,
+                semver_tag: semver_present.then(|| tag.clone()),
+                changelog_url: changelog_present.then(|| changelog.clone()),
+            };
+            let signals = detect_signals(&facts);
+            let semver_signals: Vec<&Signal> = signals
+                .iter()
+                .filter(|s| s.kind == SignalKind::SemverAndChangelog)
+                .collect();
+            prop_assert_eq!(
+                !semver_signals.is_empty(),
+                semver_present && changelog_present,
+                "SemverAndChangelog must fire IFF BOTH halves present (semver={}, changelog={})",
+                semver_present, changelog_present
+            );
+            if semver_present && changelog_present {
+                prop_assert_eq!(
+                    semver_signals.len(), 1,
+                    "the conjunction fires exactly one SemverAndChangelog signal"
+                );
+                prop_assert_eq!(
+                    &semver_signals[0].source_url, &changelog,
+                    "the signal must be sourced at the committed CHANGELOG's URL (design §3)"
+                );
+            }
+        }
+
+        /// Property (RGSD-3 independence, design §2): a repo that is memory-safe
+        /// AND commits a Cargo.lock AND follows semver with a CHANGELOG fires ALL
+        /// THREE arms — the detectors are independent, none suppresses another.
+        #[test]
+        fn all_three_facts_fire_all_three_arms(
+            language in arb_memory_safe_language(),
+            cargo_lock_url in arb_source_url(),
+            semver_tag in arb_source_url(),
+            changelog_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: Some(language),
+                source_url,
+                cargo_lock_url: Some(cargo_lock_url),
+                semver_tag: Some(semver_tag),
+                changelog_url: Some(changelog_url),
+            };
+            let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
+            prop_assert!(kinds.contains(&SignalKind::MemorySafetyLanguage));
+            prop_assert!(kinds.contains(&SignalKind::DependencyManifestPinned));
+            prop_assert!(kinds.contains(&SignalKind::SemverAndChangelog));
         }
     }
 }

@@ -29,7 +29,7 @@ mod mapping;
 mod proptest_strategies;
 
 pub use derive::derive_candidates;
-pub use detect::{detect_signals, RepoFacts, MEMORY_SAFE_LANGUAGES};
+pub use detect::{detect_signals, pick_semver_tag, RepoFacts, MEMORY_SAFE_LANGUAGES};
 pub use mapping::{
     load_mapping, MappingEntry, MappingError, SignalPredicateMapping, EMBEDDED_MAPPING_YAML,
     EMBODIES_PHILOSOPHY,

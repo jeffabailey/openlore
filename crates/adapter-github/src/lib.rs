@@ -272,6 +272,18 @@ impl GithubPort for GithubAdapter {
         // never silently read as "absent".
         let mut facts = client::parse_repo_facts(&body);
         facts.cargo_lock_url = self.content_exists(owner, repo, "Cargo.lock").await?;
+        // RGSD-3: list `/tags` (a THIRD public endpoint) and probe
+        // `contents/CHANGELOG.md`, then set the two halves of the
+        // `SemverAndChangelog` CONJUNCTION before detection. `list_tags` →
+        // `pick_semver_tag` finds a semver-shaped tag name (`Some` only when the
+        // repo follows semver); the CHANGELOG probe reads 200 => Some(file
+        // html_url) / 404 => None exactly as the Cargo.lock probe does. The pure
+        // `detect_signals` then fires the `SemverAndChangelog` arm iff BOTH are
+        // `Some` (design §2/§4). A rate-limit / auth failure on either probe
+        // propagates via `?`, never silently read as "absent".
+        let tags = self.list_tags(owner, repo).await?;
+        facts.semver_tag = scraper_domain::pick_semver_tag(&tags);
+        facts.changelog_url = self.content_exists(owner, repo, "CHANGELOG.md").await?;
         let detected = scraper_domain::detect_signals(&facts);
         Ok(union_signals_by_kind(
             detected,
@@ -430,6 +442,40 @@ impl GithubAdapter {
         if status.as_u16() == 404 {
             return Ok(None);
         }
+        let target = format!("{owner}/{repo}");
+        Err(classify_refusal(response, &target).await)
+    }
+
+    /// List a public repo's tag names (RGSD-3). Issues
+    /// `GET {api_base}/repos/{owner}/{repo}/tags` and reads the SPIKE-verified
+    /// tags contract:
+    ///
+    /// - **2xx** => `Ok(tag_names)` — the JSON array of `{"name": <tag>}`
+    ///   objects reshaped into the tag-name list via
+    ///   [`client::parse_tag_names`]. An untagged repo the API serves as `[]`
+    ///   yields an empty list (no tags), never an error;
+    /// - any non-2xx => the SAME [`GithubError`] classification `get_public`
+    ///   uses (403 => `RateLimited`, 401 => `TokenRejected`, transport =>
+    ///   `Network`) so a rate-limit / auth failure mid-harvest is surfaced,
+    ///   never silently read as "no tags".
+    ///
+    /// The path is on the public allowlist (`/repos/...`); no private surface is
+    /// reached (WD-51 / I-SCR-2). The token is NEVER logged (US-SCR-004). The
+    /// pure `pick_semver_tag` then decides whether any listed tag is
+    /// semver-shaped (design §2/§4).
+    async fn list_tags(&self, owner: &str, repo: &str) -> Result<Vec<String>, GithubError> {
+        let url = format!("{}/repos/{owner}/{repo}/tags", self.api_base);
+        let response = self.send_get(&url).await?;
+
+        let status = response.status();
+        if status.is_success() {
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| GithubError::ApiShape(format!("tags body was not JSON: {e}")))?;
+            return Ok(client::parse_tag_names(&body));
+        }
+
         let target = format!("{owner}/{repo}");
         Err(classify_refusal(response, &target).await)
     }
