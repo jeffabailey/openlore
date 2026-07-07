@@ -517,4 +517,30 @@ mod tests {
             prop_assert!(kinds.contains(&SignalKind::SemverAndChangelog));
         }
     }
+
+    /// Boundary behavior of the hand-rolled `is_semver_tag` scan (RGSD-3): a core
+    /// is found starting at ANY component boundary (a digit not preceded by a
+    /// digit), so a `MAJOR.MINOR.PATCH` run that immediately follows non-digit
+    /// characters (`abc234.5.6` — the digits open a fresh run after `c`) IS
+    /// recognized. This pins the `starts_component` boundary predicate: because
+    /// `matches_semver_core_at` depends only on the digit-run's END and the char
+    /// after it — never on how far into the run the scan started — a match at any
+    /// mid-run offset always coincides with a match at that run's boundary, so
+    /// the boundary scan loses no real semver tag (and the boundary check is not
+    /// an equivalent no-op: it stops `is_semver_tag` from re-scanning every digit
+    /// of a run). Example-based (Mandate 11): these are the exact boundary points.
+    #[test]
+    fn is_semver_tag_matches_at_a_component_boundary_after_non_digits() {
+        // A digit run that opens a valid core right after letters matches at that
+        // run's boundary (the digits are a fresh component, not mid-run).
+        assert!(is_semver_tag("abc234.5.6"));
+        assert!(is_semver_tag("12.34.56"));
+        assert!(is_semver_tag("release-1.2.3"));
+        // Fewer than three numeric components is never semver, whatever the
+        // surrounding characters.
+        assert!(!is_semver_tag("1.2"));
+        assert!(!is_semver_tag("v1"));
+        assert!(!is_semver_tag("abc.def.ghi"));
+        assert!(!is_semver_tag(""));
+    }
 }
