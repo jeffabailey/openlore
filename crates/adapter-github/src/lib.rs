@@ -284,6 +284,21 @@ impl GithubPort for GithubAdapter {
         let tags = self.list_tags(owner, repo).await?;
         facts.semver_tag = scraper_domain::pick_semver_tag(&tags);
         facts.changelog_url = self.content_exists(owner, repo, "CHANGELOG.md").await?;
+        // RGSD-4: fetch `/readme` (a FOURTH public endpoint) and probe
+        // `contents/docs` (reusing the RGSD-2 `contents/*` probe), then set the
+        // two disjuncts of the `DocsPresentAndSubstantial` DISJUNCTION before
+        // detection. `fetch_readme` → Some((size, url)) when a README exists (200)
+        // / None when absent (404); `content_exists(.., "docs")` → Some(url) when
+        // a `docs/` directory 200s / None when absent (404). The pure
+        // `detect_signals` then fires the `DocsPresentAndSubstantial` arm iff the
+        // README is SUBSTANTIAL OR a docs dir is present (design section 2/5). A
+        // rate-limit / auth failure on either probe propagates via `?`, never
+        // silently read as "absent".
+        if let Some((readme_bytes, readme_url)) = self.fetch_readme(owner, repo).await? {
+            facts.readme_bytes = Some(readme_bytes);
+            facts.readme_url = Some(readme_url);
+        }
+        facts.docs_url = self.content_exists(owner, repo, "docs").await?;
         let detected = scraper_domain::detect_signals(&facts);
         Ok(union_signals_by_kind(
             detected,
@@ -476,6 +491,56 @@ impl GithubAdapter {
             return Ok(client::parse_tag_names(&body));
         }
 
+        let target = format!("{owner}/{repo}");
+        Err(classify_refusal(response, &target).await)
+    }
+
+    /// Fetch a public repo's README size + URL (RGSD-4). Issues
+    /// `GET {api_base}/repos/{owner}/{repo}/readme` and reads the SPIKE-verified
+    /// README contract:
+    ///
+    /// - **2xx** => `Ok(Some((size, html_url)))` — the README's `size` in bytes
+    ///   (the real GitHub `readme` API carries it) + its public `html_url` (or a
+    ///   reconstructed blob URL when absent). The pure `detect_signals` then
+    ///   decides whether the `size` is SUBSTANTIAL (design section 5);
+    /// - **404** => `Ok(None)` — the repo has NO README. Absent is NOT an error:
+    ///   a repo without a README is a perfectly valid public repo, so the fetch
+    ///   is a TOTAL, railway-oriented result (the negative guardrail relies on
+    ///   this);
+    /// - any OTHER status => the SAME [`GithubError`] classification `get_public`
+    ///   uses (403 => `RateLimited`, 401 => `TokenRejected`, transport =>
+    ///   `Network`) so a rate-limit / auth failure mid-harvest is surfaced, never
+    ///   silently read as "no README".
+    ///
+    /// The path is on the public allowlist (`/repos/...`); no private surface is
+    /// reached (WD-51 / I-SCR-2). The token is NEVER logged (US-SCR-004).
+    async fn fetch_readme(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Option<(u64, String)>, GithubError> {
+        let url = format!("{}/repos/{owner}/{repo}/readme", self.api_base);
+        let response = self.send_get(&url).await?;
+
+        let status = response.status();
+        if status.is_success() {
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| GithubError::ApiShape(format!("readme body was not JSON: {e}")))?;
+            let size = body
+                .get("size")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            return Ok(Some((size, client::readme_html_url(&body, owner, repo))));
+        }
+
+        // 404 = no README (a total result, NOT an error). Every other non-2xx is
+        // a real failure classified exactly as get_public does (rate-limit / auth
+        // / shape), never read as "no README".
+        if status.as_u16() == 404 {
+            return Ok(None);
+        }
         let target = format!("{owner}/{repo}");
         Err(classify_refusal(response, &target).await)
     }

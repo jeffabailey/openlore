@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "real-github-signal-detection",
+    "slice": "rgsd-4",
+    "created_at": "2026-07-07T14:50:31Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Detect DocsPresentAndSubstantial from a substantial README or a docs dir",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "fetch_readme + RepoFacts readme/docs + README_SUBSTANTIAL_BYTES + disjunction arm",
+          "description": "Add a fetch_readme effect (GET /repos/{o}/{r}/readme -> size + html_url) in adapter-github; extend RepoFacts with readme_bytes/readme_url/docs_url + a README_SUBSTANTIAL_BYTES threshold + a DocsPresentAndSubstantial detect arm that fires on the DISJUNCTION (a substantial README OR a docs/ dir) in scraper-domain; harvest_repo fetches /readme and probes contents/docs via the RGSD-2 content_exists, and assembles the fuller RepoFacts — so a repo with a substantial README or a docs/ directory now yields the org.openlore.philosophy.documentation-first candidate.",
+          "criteria": [
+            "RGSD-4 happy A: substantial README -> documentation-first candidate (scrape_repo_with_a_substantial_readme_derives_the_documentation_first_candidate)",
+            "RGSD-4 happy B: docs/ dir -> documentation-first candidate (scrape_repo_with_a_docs_directory_derives_the_documentation_first_candidate)",
+            "RGSD-4 guardrail: tiny README + no docs -> no candidate (disjunction; stays green)",
+            "RGSD-1/2/3 + existing scrape suite stay green (default-404 readme/contents); confidence stays 0.25"
+          ],
+          "test_file": "tests/acceptance/scrape_docs_substantial.rs",
+          "scenario_name": "scrape_repo_with_a_substantial_readme_derives_the_documentation_first_candidate",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/src/detect.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs"
+          ],
+          "implementation_notes": "PURE (scraper-domain/detect.rs): (1) extend RepoFacts with `pub readme_bytes: Option<u64>` (the README size in bytes when present), `pub readme_url: Option<String>` (the README file html_url), and `pub docs_url: Option<String>` (the docs/ dir url when present). Default all to None where parse_repo_facts builds body-facts; harvest fills them. (2) add `pub const README_SUBSTANTIAL_BYTES: u64 = 3000;` — the honest 'substantial README' floor (a stub README is far smaller; ripgrep's is ~21600). (3) add the DocsPresentAndSubstantial arm to detect_signals ALONGSIDE the existing arms: fire when `facts.readme_bytes.is_some_and(|b| b >= README_SUBSTANTIAL_BYTES) OR facts.docs_url.is_some()` (the DISJUNCTION — guardrail pins that neither a tiny README nor absence fires). Emit Signal{ kind: SignalKind::DocsPresentAndSubstantial, value: <honest — e.g. format!(\"substantial README ({b} bytes)\") when the README disjunct fired, else \"docs/ directory present\".to_string() >, source_url: <readme_url when the README fired, else docs_url> }. Independent of the other arms. (4) `pub fn is_substantial_readme(bytes: Option<u64>) -> bool` helper if it reads cleaner. EFFECT (adapter-github/lib.rs): (5) `async fn fetch_readme(&self, owner, repo) -> Result<Option<(u64, String)>, GithubError>`: GET {api_base}/repos/{owner}/{repo}/readme; on 2xx parse `size` (u64) + `html_url` (fall back to a constructed blob URL) -> Ok(Some((size, url))); on 404 -> Ok(None) (no README is NOT an error); on other statuses map via the shared classify_refusal. Reuse send_get. (6) in harvest_repo, after the RGSD-3 tags/CHANGELOG probes: call fetch_readme(owner,repo)? -> set readme_bytes/readme_url; call content_exists(owner,repo,\"docs\")? -> docs_url (content_exists treats any 200 as present, so a docs/ DIRECTORY 200 -> Some(url)); set all on RepoFacts before detect_signals. Keep the union with parse_signals. Keep harvest_user unchanged. client.rs: a pure helper to parse the readme size+url from the body if you parse it there; parse_repo_facts defaults the three new fields to None. Run cargo run -p xtask -- check-arch (stays 21). TEST PARADIGM (mandatory): DELIVER RED_UNIT — proptests for the DocsPresentAndSubstantial arm: fires iff (readme_bytes >= threshold) OR docs_url.is_some(); a tiny README (below threshold) and no docs yields none; a README exactly at/above the threshold boundary fires; independent of the other arms. fetch_readme's HTTP parse is an adapter concern — cover via the ATs or a small adapter unit test. Example-based is documented FALLBACK. Acceptance scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from the committed DESIGN doc + SPIKE) + automated quality gate",
+    "approved_at": "2026-07-07",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step slice, 2 happy RED owned + 1 disjunction guardrail, ratio 1 step / 3 production files = 0.33, step ID valid, criteria <=5). Specified by the RGSD design §1/§5 + the SPIKE (ripgrep README 21615 bytes / no docs dir -> fires via README; Hello-World README 13 bytes / no docs -> negative); the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}

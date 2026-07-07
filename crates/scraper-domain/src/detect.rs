@@ -55,7 +55,35 @@ pub struct RepoFacts {
     /// CONJUNCTION, and the emitted signal's `source_url` so the derived
     /// candidate names the CHANGELOG as its evidence (design §2/§3).
     pub changelog_url: Option<String>,
+    /// The repo's README size in bytes (RGSD-4). `Some(bytes)` when the effect
+    /// shell's `fetch_readme(owner, repo)` probe found a README (`GET
+    /// /repos/{o}/{r}/readme` -> 200 carries the file `size`); `None` when the
+    /// repo has no README (404). One disjunct of the
+    /// [`SignalKind::DocsPresentAndSubstantial`] DISJUNCTION: a README fires the
+    /// signal only when it is SUBSTANTIAL (`bytes >= README_SUBSTANTIAL_BYTES`).
+    pub readme_bytes: Option<u64>,
+    /// The README's public file URL (RGSD-4). `Some(url)` alongside
+    /// `readme_bytes` when a README was found; flows into the
+    /// [`SignalKind::DocsPresentAndSubstantial`] signal's `source_url` when the
+    /// README disjunct fires, so the derived candidate names the README as its
+    /// evidence (design section 3).
+    pub readme_url: Option<String>,
+    /// The `docs/` directory's public URL (RGSD-4). `Some(url)` when the effect
+    /// shell's `content_exists(owner, repo, "docs")` probe returned 200 (a
+    /// `docs/` directory is present); `None` when it returned 404 (absent). The
+    /// OTHER disjunct of the [`SignalKind::DocsPresentAndSubstantial`]
+    /// DISJUNCTION -- a `docs/` dir alone fires the signal even without a
+    /// substantial README (design section 2/5).
+    pub docs_url: Option<String>,
 }
+
+/// The README byte-size floor at or above which a README counts as SUBSTANTIAL
+/// (RGSD-4, design section 5). An honest heuristic: a README of at least this
+/// many bytes is thorough enough to evidence the documentation-first
+/// philosophy. SPIKE-verified -- real substantial READMEs (ripgrep's `size`
+/// 21615) clear it comfortably, while a stub README (octocat/Hello-World's
+/// `size` 13) does not.
+pub const README_SUBSTANTIAL_BYTES: u64 = 3000;
 
 /// The curated set of memory-safety languages (design §2) — languages with
 /// memory-safety guarantees (ownership-based like Rust, or runtime/GC-managed
@@ -101,10 +129,55 @@ pub fn detect_signals(facts: &RepoFacts) -> Vec<Signal> {
         detect_memory_safety_language(facts),
         detect_dependency_manifest_pinned(facts),
         detect_semver_and_changelog(facts),
+        detect_docs_present_and_substantial(facts),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// Whether a README of the given byte size counts as SUBSTANTIAL (RGSD-4): its
+/// `size` is present AND at or above [`README_SUBSTANTIAL_BYTES`]. PURE + total.
+/// A `None` (no README) or a below-threshold size is NOT substantial — the
+/// under-firing guard the RGSD-4 negative scenario pins.
+fn is_substantial_readme(readme_bytes: Option<u64>) -> bool {
+    readme_bytes.is_some_and(|bytes| bytes >= README_SUBSTANTIAL_BYTES)
+}
+
+/// The `DocsPresentAndSubstantial` detector arm (RGSD-4): fires when EITHER the
+/// repo has a SUBSTANTIAL README (`readme_bytes >= README_SUBSTANTIAL_BYTES`) OR
+/// a `docs/` directory is present (`docs_url` is `Some`) — the DISJUNCTION
+/// (design section 2/5). Either disjunct alone fires it. Returns `None` when
+/// NEITHER holds (a tiny README with no docs dir never fires). PURE — a total
+/// predicate over the facts; the effect-shell probes that fill `readme_bytes` /
+/// `readme_url` / `docs_url` live in `adapter-github`.
+///
+/// The emitted signal is HONEST about which evidence was measured (design
+/// section 3): when the README disjunct fires it names the actual README byte
+/// count and is sourced at the README's URL; otherwise it names the `docs/`
+/// directory and is sourced there. The deferred "doc-comment density" refinement
+/// is NEVER claimed.
+fn detect_docs_present_and_substantial(facts: &RepoFacts) -> Option<Signal> {
+    if is_substantial_readme(facts.readme_bytes) {
+        let bytes = facts.readme_bytes.unwrap_or_default();
+        return Some(Signal {
+            kind: SignalKind::DocsPresentAndSubstantial,
+            value: format!("substantial README ({bytes} bytes)"),
+            // Source at the README the harvest read so the derived candidate
+            // names its evidence (design section 3, KPI-SCR-3); fall back to the
+            // repo URL if the README URL is somehow absent.
+            source_url: facts
+                .readme_url
+                .clone()
+                .unwrap_or_else(|| facts.source_url.clone()),
+        });
+    }
+    let docs_url = facts.docs_url.as_deref()?;
+    Some(Signal {
+        kind: SignalKind::DocsPresentAndSubstantial,
+        value: "docs/ directory present".to_string(),
+        source_url: docs_url.to_string(),
+    })
 }
 
 /// Whether a tag name follows semantic versioning (RGSD-3). PURE + total. A
@@ -120,8 +193,8 @@ fn is_semver_tag(name: &str) -> bool {
     (0..bytes.len()).any(|start| {
         // A core may only START at a component boundary — a digit not preceded
         // by another digit — so `1.2.3` is found once, not at every digit.
-        let starts_component = bytes[start].is_ascii_digit()
-            && (start == 0 || !bytes[start - 1].is_ascii_digit());
+        let starts_component =
+            bytes[start].is_ascii_digit() && (start == 0 || !bytes[start - 1].is_ascii_digit());
         starts_component && matches_semver_core_at(bytes, start)
     })
 }
@@ -263,6 +336,9 @@ mod tests {
                 cargo_lock_url: None,
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(signals.len(), 1, "a memory-safety language fires exactly one signal");
@@ -296,6 +372,9 @@ mod tests {
                 cargo_lock_url: None,
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -313,6 +392,9 @@ mod tests {
                 cargo_lock_url: None,
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -338,6 +420,9 @@ mod tests {
                 cargo_lock_url: Some(cargo_lock_url.clone()),
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(
@@ -368,6 +453,9 @@ mod tests {
                 cargo_lock_url: None,
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             prop_assert!(
                 detect_signals(&facts)
@@ -392,6 +480,9 @@ mod tests {
                 cargo_lock_url: Some(cargo_lock_url),
                 semver_tag: None,
                 changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
             prop_assert!(
@@ -469,6 +560,9 @@ mod tests {
                 cargo_lock_url: None,
                 semver_tag: semver_present.then(|| tag.clone()),
                 changelog_url: changelog_present.then(|| changelog.clone()),
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
             };
             let signals = detect_signals(&facts);
             let semver_signals: Vec<&Signal> = signals
@@ -493,15 +587,19 @@ mod tests {
             }
         }
 
-        /// Property (RGSD-3 independence, design §2): a repo that is memory-safe
-        /// AND commits a Cargo.lock AND follows semver with a CHANGELOG fires ALL
-        /// THREE arms — the detectors are independent, none suppresses another.
+        /// Property (RGSD-3 + RGSD-4 independence, design section 2): a repo that
+        /// is memory-safe AND commits a Cargo.lock AND follows semver with a
+        /// CHANGELOG AND has a substantial README + docs dir fires ALL FOUR arms
+        /// — the detectors are independent, none suppresses another.
         #[test]
-        fn all_three_facts_fire_all_three_arms(
+        fn all_four_facts_fire_all_four_arms(
             language in arb_memory_safe_language(),
             cargo_lock_url in arb_source_url(),
             semver_tag in arb_source_url(),
             changelog_url in arb_source_url(),
+            readme_url in arb_source_url(),
+            docs_url in arb_source_url(),
+            readme_bytes in README_SUBSTANTIAL_BYTES..1_000_000,
             source_url in arb_source_url(),
         ) {
             let facts = RepoFacts {
@@ -510,11 +608,115 @@ mod tests {
                 cargo_lock_url: Some(cargo_lock_url),
                 semver_tag: Some(semver_tag),
                 changelog_url: Some(changelog_url),
+                readme_bytes: Some(readme_bytes),
+                readme_url: Some(readme_url),
+                docs_url: Some(docs_url),
             };
             let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
             prop_assert!(kinds.contains(&SignalKind::MemorySafetyLanguage));
             prop_assert!(kinds.contains(&SignalKind::DependencyManifestPinned));
             prop_assert!(kinds.contains(&SignalKind::SemverAndChangelog));
+            prop_assert!(kinds.contains(&SignalKind::DocsPresentAndSubstantial));
+        }
+
+        /// Property (RGSD-4, design section 2/5): the `DocsPresentAndSubstantial`
+        /// arm fires IFF EITHER the README is SUBSTANTIAL
+        /// (`readme_bytes >= README_SUBSTANTIAL_BYTES`) OR a `docs/` dir is
+        /// present (`docs_url` is `Some`) — the DISJUNCTION. When it fires there
+        /// is EXACTLY ONE such signal; when the README disjunct is the one that
+        /// fires the signal is HONEST — it names the README and is sourced at the
+        /// README URL (design section 3); otherwise it names the docs dir and is
+        /// sourced there. `language`/`cargo_lock`/semver are absent so this arm
+        /// is isolated. `readme_bytes` spans both sides of the threshold.
+        #[test]
+        fn docs_present_fires_only_on_the_readme_or_docs_disjunction(
+            readme_bytes in prop::option::of(0u64..2 * README_SUBSTANTIAL_BYTES),
+            docs_present in any::<bool>(),
+            readme_url in arb_source_url(),
+            docs_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: None,
+                source_url,
+                cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
+                readme_bytes,
+                readme_url: readme_bytes.map(|_| readme_url.clone()),
+                docs_url: docs_present.then(|| docs_url.clone()),
+            };
+            let signals = detect_signals(&facts);
+            let docs_signals: Vec<&Signal> = signals
+                .iter()
+                .filter(|s| s.kind == SignalKind::DocsPresentAndSubstantial)
+                .collect();
+            let substantial = readme_bytes.is_some_and(|b| b >= README_SUBSTANTIAL_BYTES);
+            let should_fire = substantial || docs_present;
+            prop_assert_eq!(
+                !docs_signals.is_empty(),
+                should_fire,
+                "DocsPresentAndSubstantial must fire IFF a substantial README OR a docs dir \
+                 (readme_bytes={:?}, docs_present={})",
+                readme_bytes, docs_present
+            );
+            if should_fire {
+                prop_assert_eq!(
+                    docs_signals.len(), 1,
+                    "the disjunction fires exactly one DocsPresentAndSubstantial signal"
+                );
+                if substantial {
+                    prop_assert!(
+                        docs_signals[0].value.contains("README"),
+                        "a substantial README must name the README in its value (design section 3); got {:?}",
+                        docs_signals[0].value
+                    );
+                    prop_assert_eq!(
+                        &docs_signals[0].source_url, &readme_url,
+                        "the README disjunct must source the signal at the README URL (design section 3)"
+                    );
+                } else {
+                    prop_assert_eq!(
+                        &docs_signals[0].source_url, &docs_url,
+                        "the docs-dir disjunct must source the signal at the docs/ dir URL (design section 3)"
+                    );
+                }
+            }
+        }
+
+        /// Property (RGSD-4 boundary + under-firing guard, design section 5): a
+        /// README EXACTLY at [`README_SUBSTANTIAL_BYTES`] with NO docs dir fires
+        /// the signal (>= is inclusive), while a README ONE byte below the
+        /// threshold with NO docs dir does NOT — a tiny README alone never
+        /// counts (the guardrail the RGSD-4 negative scenario pins).
+        #[test]
+        fn readme_at_threshold_fires_but_one_below_does_not(
+            readme_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let fires = |bytes: u64| {
+                let facts = RepoFacts {
+                    language: None,
+                    source_url: source_url.clone(),
+                    cargo_lock_url: None,
+                    semver_tag: None,
+                    changelog_url: None,
+                    readme_bytes: Some(bytes),
+                    readme_url: Some(readme_url.clone()),
+                    docs_url: None,
+                };
+                detect_signals(&facts)
+                    .iter()
+                    .any(|s| s.kind == SignalKind::DocsPresentAndSubstantial)
+            };
+            prop_assert!(
+                fires(README_SUBSTANTIAL_BYTES),
+                "a README exactly at the threshold must fire (>= is inclusive)"
+            );
+            prop_assert!(
+                !fires(README_SUBSTANTIAL_BYTES - 1),
+                "a README one byte below the threshold with no docs dir must NOT fire"
+            );
         }
     }
 

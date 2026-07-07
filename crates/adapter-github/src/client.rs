@@ -236,7 +236,31 @@ pub fn parse_repo_facts(body: &serde_json::Value) -> scraper_domain::RepoFacts {
         // "CHANGELOG.md")` before `detect_signals` runs (design §2/§4).
         semver_tag: None,
         changelog_url: None,
+        // The `/readme` fetch and the `contents/docs` probe (RGSD-4) are likewise
+        // SEPARATE endpoints — `parse_repo_facts` reads ONLY the `/repos` body, so
+        // all three default to `None`. `harvest_repo` fills them from
+        // `fetch_readme` (size + URL) and `content_exists(owner, repo, "docs")`
+        // before `detect_signals` runs (design section 2/5).
+        readme_bytes: None,
+        readme_url: None,
+        docs_url: None,
     }
+}
+
+/// Read the README's public `html_url` out of a `GET /repos/{owner}/{repo}/readme`
+/// 200 body (RGSD-4). PURE — a value-in / value-out reshape of the
+/// already-fetched JSON (the network I/O lives in `lib.rs`).
+///
+/// The real GitHub `readme` API returns the file's `html_url`
+/// (`https://github.com/{owner}/{repo}/blob/{ref}/README.md`); when it is absent
+/// the URL is reconstructed from `owner`/`repo` so a detected
+/// `DocsPresentAndSubstantial` signal always names a public evidence URL the user
+/// can audit (design section 3, KPI-SCR-3).
+pub fn readme_html_url(body: &serde_json::Value, owner: &str, repo: &str) -> String {
+    body.get("html_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://github.com/{owner}/{repo}/blob/HEAD/README.md"))
 }
 
 /// Parse a `GET /repos/{owner}/{repo}/tags` 200 body — a JSON array of
