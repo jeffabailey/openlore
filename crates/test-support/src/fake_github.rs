@@ -169,6 +169,13 @@ struct State {
     /// The signals `harvest_repo` / `harvest_user` returns on the happy
     /// path. Empty for the no-matching-signals posture (US-SCR-002 Ex 2).
     signals: Vec<FakeSignal>,
+    /// The REAL `/repos/{owner}/{repo}` `language` field (RGSD-1). `Some`
+    /// only for the realistic-body posture `for_public_repo_with_language`,
+    /// which serves a live-shaped repo body (a `language` string, NO
+    /// synthetic `signals[]`) mirroring what the real GitHub API returns.
+    /// `None` for every legacy `signals[]`-driven posture (so those bodies
+    /// serialize `"language": null` and stay untouched).
+    language: Option<String>,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -292,6 +299,7 @@ impl FakeGithub {
                 resolution,
                 signals,
                 auth,
+                language: None,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -366,6 +374,39 @@ impl FakeGithub {
         )
     }
 
+    /// A public repo that serves a REALISTIC `/repos/{owner}/{repo}` body
+    /// (RGSD-1 walking skeleton): a top-level `language` string (e.g.
+    /// `"Rust"`, `"C++"`) plus `html_url`, and NO synthetic `signals[]`
+    /// array — exactly the shape the LIVE GitHub API returns.
+    ///
+    /// This is the posture the language-based `MemorySafetyLanguage`
+    /// detection is exercised against: the real API never provides the
+    /// synthetic `signals[]` field the legacy `for_public_repo` postures
+    /// inject, so a scrape of this body yields ZERO signals today (harvest
+    /// reads the absent `signals[]`) — the RGSD-1 RED. Once detection lands
+    /// in DELIVER, `parse_repo_facts` + `detect_signals` read the `language`
+    /// field and fire the `MemorySafetyLanguage` signal for a memory-safe
+    /// language, deriving the `org.openlore.philosophy.memory-safety`
+    /// candidate.
+    ///
+    /// Additive: every existing `signals[]`-driven posture is untouched
+    /// (their bodies serialize `"language": null`), so the legacy scrape
+    /// acceptance suite stays green through the §4 union bridge.
+    pub fn for_public_repo_with_language(target: &str, language: &str) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: Some(language.to_string()),
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
     /// Mark this fixture authenticated with the supplied remaining/limit
     /// rate budget (US-SCR-004 Ex 1). The token the production code sends is
     /// captured in the `seen_token` observation slot but NEVER echoed.
@@ -378,6 +419,7 @@ impl FakeGithub {
                 target: prev.target.clone(),
                 resolution: prev.resolution.clone(),
                 signals: prev.signals.clone(),
+                language: prev.language.clone(),
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -644,6 +686,20 @@ fn resolve_or_harvest_response(
     let signals: Vec<serde_json::Value> =
         fake.state.signals.iter().map(FakeSignal::as_json).collect();
 
+    // RGSD-1: the REAL `/repos` body carries a top-level `language` string +
+    // `html_url`. `language` is `Some` only for the realistic-body posture
+    // (`for_public_repo_with_language`); every legacy `signals[]` posture
+    // serves `"language": null`. `html_url` mirrors the public repo/user URL
+    // (the source_url a language-derived signal names as its evidence).
+    let html_url = match kind {
+        FakeTargetKind::Repo { owner, repo } => format!("https://github.com/{owner}/{repo}"),
+        FakeTargetKind::User { user } => format!("https://github.com/{user}"),
+    };
+    let language_json = match &fake.state.language {
+        Some(language) => serde_json::Value::String(language.clone()),
+        None => serde_json::Value::Null,
+    };
+
     let auth_json = match &fake.state.auth {
         FakeAuthMode::Anonymous => serde_json::json!({ "authenticated": false }),
         FakeAuthMode::Authenticated { remaining, limit } => serde_json::json!({
@@ -657,6 +713,8 @@ fn resolve_or_harvest_response(
         200,
         serde_json::json!({
             "target": target_json,
+            "language": language_json,
+            "html_url": html_url,
             "signals": signals,
             "auth": auth_json,
         }),
@@ -841,6 +899,55 @@ mod tests {
         assert_eq!(served.len(), 2, "every fixture signal must be served");
         assert_eq!(served[0]["kind"], "DependencyManifestPinned");
         assert_eq!(body["auth"]["authenticated"], false);
+    }
+
+    /// RGSD-1: `for_public_repo_with_language` serves a REALISTIC `/repos`
+    /// body — a top-level `language` string + `html_url`, and an EMPTY
+    /// `signals[]` array (the real API never provides synthetic signals).
+    /// This is the load-bearing shape the language-based detection reads;
+    /// the legacy `signals[]` postures keep `"language": null`.
+    #[tokio::test]
+    async fn for_public_repo_with_language_serves_language_and_no_signals() {
+        let fake = FakeGithub::for_public_repo_with_language("rust-lang/cargo", "Rust");
+        let handle = fake.serve_http().await;
+
+        let (status, body) =
+            get_json(&format!("{}/repos/rust-lang/cargo", handle.base_url())).await;
+
+        assert_eq!(status, 200, "a public repo must resolve at 200");
+        assert_eq!(body["target"]["kind"], "repo");
+        assert_eq!(
+            body["language"], "Rust",
+            "the realistic body must carry the real `language` field"
+        );
+        assert_eq!(
+            body["html_url"], "https://github.com/rust-lang/cargo",
+            "the realistic body must carry the repo `html_url` (signal source_url)"
+        );
+        let served = body["signals"].as_array().expect("signals array");
+        assert!(
+            served.is_empty(),
+            "the realistic body carries NO synthetic signals (real API shape)"
+        );
+    }
+
+    /// A legacy `signals[]` posture serves `"language": null` — the additive
+    /// `language` field never disturbs the existing signal-driven bodies.
+    #[tokio::test]
+    async fn legacy_signal_posture_serves_null_language() {
+        let fake = FakeGithub::for_public_repo(
+            "rust-lang/cargo",
+            vec![FakeSignal::new("X", "y", "https://x.test/z")],
+        );
+        let handle = fake.serve_http().await;
+        let (status, body) =
+            get_json(&format!("{}/repos/rust-lang/cargo", handle.base_url())).await;
+        assert_eq!(status, 200);
+        assert!(
+            body["language"].is_null(),
+            "legacy signal-driven bodies keep `language` null (additive change)"
+        );
+        assert_eq!(body["signals"].as_array().expect("signals array").len(), 1);
     }
 
     /// `for_public_user` resolves to a User (not a repo) — drives SG-3 /

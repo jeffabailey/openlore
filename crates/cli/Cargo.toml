@@ -198,6 +198,18 @@ name = "scrape_candidates"
 path = "../../tests/acceptance/scrape_candidates.rs"
 harness = true
 
+# RGSD-1 subprocess acceptance (real-GitHub signal detection walking
+# skeleton — feature `real-github-signal-detection`). Drives the real binary
+# via `FakeGithub::for_public_repo_with_language` (a realistic `/repos` body
+# carrying `language`, NO synthetic `signals[]`). DISTILL RED scaffold: the
+# happy scenario stays RED (memory-safety candidate absent) until DELIVER
+# lands `detect_signals`'s language arm; the negative is a GREEN-today
+# over-firing guardrail.
+[[test]]
+name = "scrape_real_signal_detection"
+path = "../../tests/acceptance/scrape_real_signal_detection.rs"
+harness = true
+
 # Slice-02 subprocess acceptance (scrape -> propose -> sign — US-SCR-003).
 # Drives the real binary via `assert_cmd` + `FakeGithub` + the slice-01
 # `FakePds`/`FakeIdentity` sign/publish path. Step 01-05 registers + RED
