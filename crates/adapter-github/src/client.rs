@@ -301,16 +301,26 @@ fn repo_url_from_target(body: &serde_json::Value) -> String {
     }
 }
 
-/// Read the committed file's public `html_url` out of a `GET /repos/{owner}/
-/// {repo}/contents/{path}` 200 body (RGSD-2). PURE — a value-in / value-out
-/// reshape of the already-fetched JSON (the network I/O lives in `lib.rs`).
+/// Read the public `html_url` out of a `GET /repos/{owner}/{repo}/contents/
+/// {path}` 200 body (RGSD-2/4). PURE — a value-in / value-out reshape of the
+/// already-fetched JSON (the network I/O lives in `lib.rs`).
 ///
-/// The real GitHub `contents` API returns the file's `html_url`
-/// (`https://github.com/{owner}/{repo}/blob/{ref}/{path}`); when it is absent
-/// the URL is reconstructed from `owner`/`repo`/`path` so a detected
-/// `DependencyManifestPinned` signal always names a public evidence URL the
-/// user can audit (design §3, KPI-SCR-3).
+/// The `contents` endpoint has TWO shapes: a FILE (`Cargo.lock`, `CHANGELOG.md`
+/// — RGSD-2/3) resolves to a JSON OBJECT carrying the file's `html_url`
+/// (`.../blob/{ref}/{path}`); a DIRECTORY (`docs/` — RGSD-4) resolves to a JSON
+/// ARRAY of its entries, with NO top-level `html_url`. So:
+///   - array body (a directory) → reconstruct the directory URL with `/tree/`
+///     (never `/blob/`, which is a file path GitHub would 404);
+///   - object body with `html_url` → use it verbatim (the file case);
+///   - object body without `html_url` → reconstruct the file URL with `/blob/`.
+/// Either way a detected signal always names a public evidence URL the user can
+/// audit (design §3, KPI-SCR-3).
 pub fn content_html_url(body: &serde_json::Value, owner: &str, repo: &str, path: &str) -> String {
+    if body.is_array() {
+        // A directory listing — the array carries no directory `html_url`, so
+        // reconstruct the tree URL for the path itself.
+        return format!("https://github.com/{owner}/{repo}/tree/HEAD/{path}");
+    }
     body.get("html_url")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
@@ -584,5 +594,36 @@ mod tests {
             assert_eq!(signal_kind_from_wire(wire), Some(expected));
         }
         assert_eq!(signal_kind_from_wire("nope"), None);
+    }
+
+    #[test]
+    fn content_html_url_resolves_file_object_directory_array_and_fallback() {
+        use serde_json::json;
+        // A FILE (Cargo.lock / CHANGELOG.md) resolves to an OBJECT carrying the
+        // file `html_url` (a `/blob/` URL) — used verbatim.
+        let file = json!({
+            "name": "Cargo.lock",
+            "html_url": "https://github.com/o/r/blob/main/Cargo.lock"
+        });
+        assert_eq!(
+            content_html_url(&file, "o", "r", "Cargo.lock"),
+            "https://github.com/o/r/blob/main/Cargo.lock"
+        );
+        // A DIRECTORY (docs/) resolves to an ARRAY with NO top-level html_url —
+        // reconstruct a `/tree/` URL (a `/blob/` URL would 404 for a directory).
+        let dir = json!([
+            { "name": "index.md", "html_url": "https://github.com/o/r/blob/main/docs/index.md" }
+        ]);
+        assert_eq!(
+            content_html_url(&dir, "o", "r", "docs"),
+            "https://github.com/o/r/tree/HEAD/docs",
+            "a directory (array body) must reconstruct a /tree/ URL, never /blob/"
+        );
+        // A file object MISSING html_url falls back to a `/blob/` file URL.
+        let file_no_url = json!({ "name": "Cargo.lock" });
+        assert_eq!(
+            content_html_url(&file_no_url, "o", "r", "Cargo.lock"),
+            "https://github.com/o/r/blob/HEAD/Cargo.lock"
+        );
     }
 }
