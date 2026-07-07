@@ -362,21 +362,10 @@ impl GithubAdapter {
                 .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")));
         }
 
-        // Read the refusal body so the classifier can distinguish a private
-        // target (404 + `private: true`) from a plain not-found 404 (WD-51 /
-        // I-SCR-2). The public API serves the SAME 404 status for both — the
-        // body discriminator is the only honest signal. A body that fails to
-        // parse degrades to an empty object, so an unrecognized refusal stays
-        // on the conservative `NotFound` arm (never silently treated as a
-        // successful empty harvest). This is still a PUBLIC endpoint
-        // (`/repos/...` or `/users/...`); no private surface is ever reached.
-        let status_code = status.as_u16();
-        let body = response
-            .json::<serde_json::Value>()
-            .await
-            .unwrap_or_else(|_| serde_json::json!({}));
-
-        Err(classify_status(status_code, &body, target))
+        // A non-2xx status is a refusal: read its body and classify it. This
+        // is still a PUBLIC endpoint (`/repos/...` or `/users/...`); no private
+        // surface is ever reached.
+        Err(classify_refusal(response, target).await)
     }
 
     /// Issue one PUBLIC GET against `{api_base}{url_path}`, attaching the
@@ -438,16 +427,11 @@ impl GithubAdapter {
         // 404 = absent (a total result, NOT an error) — the whole point of the
         // probe. Every other non-2xx is a real failure classified exactly as
         // get_public does (rate-limit / auth / shape), never read as "absent".
-        let status_code = status.as_u16();
-        if status_code == 404 {
+        if status.as_u16() == 404 {
             return Ok(None);
         }
         let target = format!("{owner}/{repo}");
-        let body = response
-            .json::<serde_json::Value>()
-            .await
-            .unwrap_or_else(|_| serde_json::json!({}));
-        Err(classify_status(status_code, &body, &target))
+        Err(classify_refusal(response, &target).await)
     }
 }
 
@@ -504,6 +488,28 @@ fn classify_status(status: u16, body: &serde_json::Value, target: &str) -> Githu
         401 => GithubError::TokenRejected,
         other => GithubError::ApiShape(format!("unexpected HTTP status {other} for {target}")),
     }
+}
+
+/// Read a non-2xx refusal body, then classify it into the railway-oriented
+/// [`GithubError`]. Shared by [`GithubAdapter::get_public`] and
+/// [`GithubAdapter::content_exists`] so the "read the refusal body, then
+/// classify" tail lives in ONE place (each caller already peeled off its own
+/// success / 404-absent arm before delegating here).
+///
+/// The body carries the 404 discriminator [`classify_status`] uses to tell a
+/// private target (404 + `private: true`) from a plain not-found — the public
+/// API serves the SAME 404 status for both, so the body is the only honest
+/// signal (WD-51 / I-SCR-2). A body that fails to parse degrades to an empty
+/// object, so an unrecognized refusal stays on the conservative `NotFound` arm
+/// (never silently treated as a successful empty harvest). The token is NEVER
+/// echoed (US-SCR-004).
+async fn classify_refusal(response: reqwest::Response, target: &str) -> GithubError {
+    let status_code = response.status().as_u16();
+    let body = response
+        .json::<serde_json::Value>()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({}));
+    classify_status(status_code, &body, target)
 }
 
 /// Whether a refusal body marks a PRIVATE/inaccessible target — the `private`
