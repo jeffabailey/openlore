@@ -36,9 +36,10 @@ pub struct RepoFacts {
     pub source_url: String,
 }
 
-/// The curated set of memory-safety languages (design §2) — the
-/// garbage-collected / ownership-safe languages that embody the memory-safety
-/// philosophy. Stored LOWERCASE so the match against GitHub's `language`
+/// The curated set of memory-safety languages (design §2) — languages with
+/// memory-safety guarantees (ownership-based like Rust, or runtime/GC-managed
+/// like Go, Python, Ruby, Java) that embody the memory-safety philosophy.
+/// Stored LOWERCASE so the match against GitHub's `language`
 /// string is case-insensitive. Deliberately EXCLUDES C, C++, and assembly
 /// (unsafe-by-default) — the over-firing guard the RGSD-1 negative scenario
 /// pins.
