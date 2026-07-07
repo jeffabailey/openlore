@@ -225,6 +225,23 @@ name = "scrape_dependency_pinning"
 path = "../../tests/acceptance/scrape_dependency_pinning.rs"
 harness = true
 
+# RGSD-3 subprocess acceptance (real-GitHub signal detection —
+# SemverAndChangelog from semver tags + a committed CHANGELOG; feature
+# `real-github-signal-detection`). Drives the real binary via
+# `FakeGithub::for_public_repo_with_semver_and_changelog` (a `/tags` list
+# carrying a semver name + `contents/CHANGELOG.md` → 200), adding ONE new
+# endpoint (`/tags`) to the harvest and reusing RGSD-2's `contents/*` probe for
+# the CHANGELOG. DISTILL RED scaffold: the happy scenario stays RED
+# (semantic-versioning candidate absent — harvest never lists `/tags` nor checks
+# a CHANGELOG) until DELIVER lands `list_tags` + the pure `is_semver_tag`
+# predicate + `RepoFacts.{semver_tag,changelog_url}` + the `SemverAndChangelog`
+# arm; both negatives are GREEN-today conjunction-guardrails (semver tags alone
+# → no candidate; a CHANGELOG alone → no candidate).
+[[test]]
+name = "scrape_semver_changelog"
+path = "../../tests/acceptance/scrape_semver_changelog.rs"
+harness = true
+
 # Slice-02 subprocess acceptance (scrape -> propose -> sign — US-SCR-003).
 # Drives the real binary via `assert_cmd` + `FakeGithub` + the slice-01
 # `FakePds`/`FakeIdentity` sign/publish path. Step 01-05 registers + RED

@@ -185,6 +185,22 @@ struct State {
     /// for ALL unconfigured `contents/*` paths, this makes every existing
     /// posture read as "no Cargo.lock" for the new probe (no regression).
     has_cargo_lock: bool,
+    /// The repo's tag names, as `GET /repos/{o}/{r}/tags` returns them (RGSD-3).
+    /// The HTTP handler serves this as a JSON array of `{"name": <tag>}` objects
+    /// (the real GitHub `tags` shape). **Empty by default** for EVERY posture
+    /// that does not set it — so the `/tags` endpoint serves `[]` (no tags) and
+    /// no `SemverAndChangelog` signal can ever fire on an unconfigured posture
+    /// (no regression). Set (with a clearly-semver name like `v1.2.3`) only by
+    /// the `for_public_repo_with_tags_and_changelog` family (RGSD-3 postures).
+    tags: Vec<String>,
+    /// Whether this repo has a committed `CHANGELOG.md` (RGSD-3). `true` serves
+    /// `GET /repos/{o}/{r}/contents/CHANGELOG.md` → **200** with a realistic
+    /// file body carrying the file `html_url` (200 = present); `false` (the
+    /// default for EVERY posture that does not set it) → **404** = absent, via
+    /// the same default-404 `contents/*` rule as `Cargo.lock`. The
+    /// `SemverAndChangelog` signal is the CONJUNCTION of a semver `tags` entry
+    /// AND a present CHANGELOG — neither half alone fires it.
+    has_changelog: bool,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -310,6 +326,8 @@ impl FakeGithub {
                 auth,
                 language: None,
                 has_cargo_lock: false,
+                tags: Vec::new(),
+                has_changelog: false,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -410,6 +428,8 @@ impl FakeGithub {
                 signals: Vec::new(),
                 language: Some(language.to_string()),
                 has_cargo_lock: false,
+                tags: Vec::new(),
+                has_changelog: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -446,12 +466,71 @@ impl FakeGithub {
                 signals: Vec::new(),
                 language: None,
                 has_cargo_lock: true,
+                tags: Vec::new(),
+                has_changelog: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// A public repo whose `GET /repos/{o}/{r}/tags` lists the supplied tag
+    /// names AND whose `contents/CHANGELOG.md` probe reflects `has_changelog`
+    /// (RGSD-3). This is the posture family the `SemverAndChangelog` detection
+    /// is exercised against — the signal is the CONJUNCTION of (a) a semver
+    /// tag among the listed tags AND (b) a present CHANGELOG.
+    ///
+    /// The HTTP handler serves:
+    /// - `GET /repos/{o}/{r}/tags` → **200** with a JSON array of
+    ///   `{"name": <tag>}` objects from `tags` (the real GitHub `tags` shape);
+    /// - `GET /repos/{o}/{r}/contents/CHANGELOG.md` → **200** with a realistic
+    ///   `contents` file body carrying the file `html_url` when `has_changelog`,
+    ///   else **404** (absent) via the same default-404 `contents/*` rule.
+    ///
+    /// The repo carries NO `language` and NO committed `Cargo.lock` (so ONLY
+    /// semver-and-changelog can fire, isolating it from the RGSD-1 memory-safety
+    /// and RGSD-2 dependency-pinning detections) and NO synthetic `signals[]`.
+    ///
+    /// Additive: every existing posture keeps `tags == []` (so `/tags` serves
+    /// `[]`) and `has_changelog == false` (so `contents/CHANGELOG.md` → 404), so
+    /// no `SemverAndChangelog` signal can fire on any existing posture — the
+    /// legacy scrape suite is untouched.
+    pub fn for_public_repo_with_tags_and_changelog(
+        target: &str,
+        tags: Vec<&str>,
+        has_changelog: bool,
+    ) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: None,
+                has_cargo_lock: false,
+                tags: tags.into_iter().map(str::to_string).collect(),
+                has_changelog,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// A public repo that BOTH follows semver in its tags (`v1.2.3`, …) AND
+    /// commits a `CHANGELOG.md` (RGSD-3 happy posture) — the CONJUNCTION that
+    /// fires the `SemverAndChangelog` signal → deriving the
+    /// `org.openlore.philosophy.semantic-versioning` candidate. SPIKE-verified
+    /// against real GitHub (ripgrep: semver-style `tags` + `contents/CHANGELOG.md`
+    /// → 200). Convenience over `for_public_repo_with_tags_and_changelog`.
+    pub fn for_public_repo_with_semver_and_changelog(target: &str) -> Self {
+        Self::for_public_repo_with_tags_and_changelog(
+            target,
+            vec!["v1.2.3", "v1.2.2", "v1.0.0"],
+            true,
+        )
     }
 
     /// Mark this fixture authenticated with the supplied remaining/limit
@@ -468,6 +547,8 @@ impl FakeGithub {
                 signals: prev.signals.clone(),
                 language: prev.language.clone(),
                 has_cargo_lock: prev.has_cargo_lock,
+                tags: prev.tags.clone(),
+                has_changelog: prev.has_changelog,
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -715,6 +796,14 @@ async fn github_http_route(
             // postures reading as "no Cargo.lock" (no regression).
             if path.contains("/contents/") {
                 Ok(contents_response(&fake, kind, &path))
+            } else if path.ends_with("/tags") {
+                // RGSD-3: `GET /repos/{o}/{r}/tags` is a SEPARATE endpoint from
+                // the repo resolve/harvest body — route it explicitly so a
+                // `list_tags` probe reads the posture's tag list. Served for
+                // EVERY resolvable posture; unconfigured postures carry `tags ==
+                // []` → `[]` (no tags), so `SemverAndChangelog` can never fire on
+                // them (no regression).
+                Ok(tags_response(&fake))
             } else {
                 Ok(resolve_or_harvest_response(&fake, kind, &path))
             }
@@ -723,44 +812,68 @@ async fn github_http_route(
     }
 }
 
-/// Serve the `GET /repos/{owner}/{repo}/contents/{file_path}` probe (RGSD-2).
+/// Serve the `GET /repos/{owner}/{repo}/contents/{file_path}` probe (RGSD-2/3).
 ///
 /// **200** with a realistic `contents` file body (carrying the file `html_url`)
-/// iff the probed file is a CONFIGURED present file — currently ONLY
-/// `Cargo.lock`, and ONLY when the posture declared a committed Cargo.lock
-/// (`for_public_repo_with_cargo_lock`). Every OTHER `contents/*` path, and
-/// `Cargo.lock` on a posture without one, → **404** (absent), the real GitHub
-/// `contents` "no such file" shape. This default-404 is structural: an
-/// unconfigured content path can never accidentally read as present.
+/// iff the probed file is a CONFIGURED present file — `Cargo.lock` when the
+/// posture declared a committed Cargo.lock (`has_cargo_lock`, RGSD-2), or
+/// `CHANGELOG.md` when the posture declared a committed CHANGELOG
+/// (`has_changelog`, RGSD-3). Every OTHER `contents/*` path, and a configured
+/// file on a posture without it, → **404** (absent), the real GitHub `contents`
+/// "no such file" shape. This default-404 is structural: an unconfigured
+/// content path can never accidentally read as present.
 fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> HttpResponse {
-    // Extract the file path after `/contents/` (e.g. `Cargo.lock`).
+    // Extract the file path after `/contents/` (e.g. `Cargo.lock`, `CHANGELOG.md`).
     let file_path = path
         .split_once("/contents/")
         .map(|(_, rest)| rest)
         .unwrap_or("");
 
-    let is_present_cargo_lock = file_path == "Cargo.lock" && fake.state.has_cargo_lock;
-    if is_present_cargo_lock {
+    // A file is present iff it is a configured-present file for this posture.
+    let present = match file_path {
+        "Cargo.lock" => fake.state.has_cargo_lock,
+        "CHANGELOG.md" => fake.state.has_changelog,
+        _ => false,
+    };
+    if present {
         let (owner, repo) = match kind {
             FakeTargetKind::Repo { owner, repo } => (owner.clone(), repo.clone()),
             // `contents` is a repo endpoint; a user target has no such path,
             // but stay total and mirror the login as owner/repo.
             FakeTargetKind::User { user } => (user.clone(), user.clone()),
         };
-        let html_url = format!("https://github.com/{owner}/{repo}/blob/master/Cargo.lock");
+        let html_url = format!("https://github.com/{owner}/{repo}/blob/master/{file_path}");
         return json_response(
             200,
             serde_json::json!({
-                "name": "Cargo.lock",
-                "path": "Cargo.lock",
+                "name": file_path,
+                "path": file_path,
                 "type": "file",
                 "html_url": html_url,
             }),
         );
     }
 
-    // Unconfigured content path (or Cargo.lock absent) → 404 = absent.
+    // Unconfigured content path (or a configured file absent) → 404 = absent.
     json_response(404, serde_json::json!({ "message": "Not Found" }))
+}
+
+/// Serve the `GET /repos/{owner}/{repo}/tags` list probe (RGSD-3).
+///
+/// **200** with a JSON array of `{"name": <tag>}` objects from the posture's
+/// `tags` list — the real GitHub `tags` API shape. **Empty (`[]`)** for every
+/// posture that does not set `tags` (the default), so an unconfigured posture
+/// lists no tags and the `SemverAndChangelog` signal can never fire on it (no
+/// regression). Always a 200 (a public repo's tags endpoint never 404s — an
+/// untagged repo simply returns `[]`).
+fn tags_response(fake: &FakeGithub) -> HttpResponse {
+    let tags: Vec<serde_json::Value> = fake
+        .state
+        .tags
+        .iter()
+        .map(|name| serde_json::json!({ "name": name }))
+        .collect();
+    json_response(200, serde_json::Value::Array(tags))
 }
 
 /// Serve the resolution + harvest happy-path response for a resolvable
@@ -1297,6 +1410,113 @@ mod tests {
                 .iter()
                 .all(|p| p.starts_with("/repos/") || p.starts_with("/users/")),
             "all recorded paths are on the public allowlist (no private surface)"
+        );
+    }
+
+    /// RGSD-3: `for_public_repo_with_semver_and_changelog` serves the `/tags`
+    /// list as a JSON array of `{"name": <tag>}` objects carrying a
+    /// clearly-semver name (`v1.2.3`) — the real GitHub `tags` shape. This is
+    /// the load-bearing shape the `list_tags` + `is_semver_tag` detection reads.
+    #[tokio::test]
+    async fn semver_and_changelog_posture_serves_semver_tags_array() {
+        let fake = FakeGithub::for_public_repo_with_semver_and_changelog("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/tags",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(status, 200, "the tags endpoint always resolves at 200");
+        let tags = body.as_array().expect("tags must be a JSON array");
+        assert!(!tags.is_empty(), "the semver posture lists tags");
+        assert!(
+            tags.iter().any(|t| t["name"] == "v1.2.3"),
+            "the semver posture must list a clearly-semver tag (v1.2.3)"
+        );
+    }
+
+    /// RGSD-3: the semver-and-changelog posture serves `contents/CHANGELOG.md`
+    /// → **200** with a realistic file body carrying the file `html_url` (200 =
+    /// present, the real GitHub `contents` shape) — the CHANGELOG half of the
+    /// conjunction, reusing RGSD-2's `contents/*` fork.
+    #[tokio::test]
+    async fn semver_and_changelog_posture_serves_200_on_contents_changelog() {
+        let fake = FakeGithub::for_public_repo_with_semver_and_changelog("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/CHANGELOG.md",
+            handle.base_url()
+        ))
+        .await;
+
+        assert_eq!(status, 200, "a committed CHANGELOG must resolve at 200 (present)");
+        assert_eq!(body["type"], "file");
+        assert_eq!(body["path"], "CHANGELOG.md");
+        assert_eq!(
+            body["html_url"],
+            "https://github.com/BurntSushi/ripgrep/blob/master/CHANGELOG.md",
+            "the contents body must carry the file html_url (the signal source_url)"
+        );
+    }
+
+    /// RGSD-3 conjunction-guard: a posture with semver tags but `has_changelog
+    /// == false` serves `contents/CHANGELOG.md` → **404** (absent). The
+    /// `/tags` list still carries the semver names — proving the two halves are
+    /// served INDEPENDENTLY so the production conjunction can be exercised.
+    #[tokio::test]
+    async fn semver_tags_without_changelog_serves_tags_but_404s_changelog() {
+        let fake = FakeGithub::for_public_repo_with_tags_and_changelog(
+            "torvalds/linux",
+            vec!["v6.9", "v1.0.0"],
+            false,
+        );
+        let handle = fake.serve_http().await;
+
+        let (tags_status, tags_body) =
+            get_json(&format!("{}/repos/torvalds/linux/tags", handle.base_url())).await;
+        assert_eq!(tags_status, 200);
+        assert!(
+            tags_body
+                .as_array()
+                .expect("tags array")
+                .iter()
+                .any(|t| t["name"] == "v6.9"),
+            "the semver tags are still served even without a CHANGELOG"
+        );
+
+        let (changelog_status, _) = get_json(&format!(
+            "{}/repos/torvalds/linux/contents/CHANGELOG.md",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            changelog_status, 404,
+            "a repo without a committed CHANGELOG must 404 the contents probe (absent)"
+        );
+    }
+
+    /// RGSD-3 no-regression: every UNCONFIGURED posture lists NO tags — the
+    /// `/tags` endpoint serves an EMPTY array `[]`. This is what keeps every
+    /// existing posture reading as "no semver tags" for the new `list_tags`
+    /// probe, so no `SemverAndChangelog` signal can ever fire on them.
+    #[tokio::test]
+    async fn unconfigured_posture_serves_empty_tags_array() {
+        let fake = FakeGithub::for_public_repo(
+            "rust-lang/cargo",
+            vec![FakeSignal::new("X", "y", "https://x.test/z")],
+        );
+        let handle = fake.serve_http().await;
+
+        let (status, body) =
+            get_json(&format!("{}/repos/rust-lang/cargo/tags", handle.base_url())).await;
+
+        assert_eq!(status, 200, "the tags endpoint never 404s (an untagged repo returns [])");
+        assert!(
+            body.as_array().expect("tags array").is_empty(),
+            "an unconfigured posture must list NO tags (empty array — no regression)"
         );
     }
 
