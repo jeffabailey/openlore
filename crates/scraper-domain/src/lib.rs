@@ -9,6 +9,8 @@
 //!
 //! ## Public surface
 //!
+//! - [`detect_signals`] + [`RepoFacts`] + [`MEMORY_SAFE_LANGUAGES`] — the pure
+//!   signal detection over real repo facts (RGSD-1; sibling of the derivation).
 //! - [`derive_candidates`] — the pure derivation (J-004b load-bearing surface).
 //! - [`load_mapping`] + [`SignalPredicateMapping`] — parse the embedded SSOT.
 //! - [`EMBEDDED_MAPPING_YAML`] — the compile-time SSOT snapshot.
@@ -20,12 +22,14 @@
 #![forbid(unsafe_code)]
 
 mod derive;
+mod detect;
 mod mapping;
 
 #[cfg(test)]
 mod proptest_strategies;
 
 pub use derive::derive_candidates;
+pub use detect::{detect_signals, RepoFacts, MEMORY_SAFE_LANGUAGES};
 pub use mapping::{
     load_mapping, MappingEntry, MappingError, SignalPredicateMapping, EMBEDDED_MAPPING_YAML,
     EMBODIES_PHILOSOPHY,

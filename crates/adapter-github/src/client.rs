@@ -200,6 +200,46 @@ fn parse_one_signal(entry: &serde_json::Value) -> Option<ports::Signal> {
     })
 }
 
+/// Reshape a real `/repos/{owner}/{repo}` response body into the pure
+/// [`RepoFacts`](scraper_domain::RepoFacts) the signal detector reads (RGSD-1,
+/// design §2). PURE: a value-in / value-out reshape of the already-fetched JSON
+/// (the network I/O lives in `lib.rs`), mirroring [`parse_signals`] /
+/// [`parse_auth_report`].
+///
+/// Reads the top-level `language` (a string → `Some`; `null`/absent → `None`)
+/// and `html_url` (the repo's public URL). When `html_url` is absent the URL is
+/// reconstructed from the `target` object's owner/repo so a detected signal
+/// always names a public evidence URL.
+pub fn parse_repo_facts(body: &serde_json::Value) -> scraper_domain::RepoFacts {
+    let language = body
+        .get("language")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let source_url = body
+        .get("html_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| repo_url_from_target(body));
+    scraper_domain::RepoFacts {
+        language,
+        source_url,
+    }
+}
+
+/// Reconstruct a public repo URL from the response body's `target` object when
+/// `html_url` is absent, so a detected signal always names a public evidence
+/// URL. Falls back to the bare GitHub host when no owner/repo is present.
+fn repo_url_from_target(body: &serde_json::Value) -> String {
+    let target = body.get("target");
+    let full_name = target
+        .and_then(|t| t.get("full_name"))
+        .and_then(serde_json::Value::as_str);
+    match full_name {
+        Some(full_name) => format!("https://github.com/{full_name}"),
+        None => "https://github.com".to_string(),
+    }
+}
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -389,6 +429,39 @@ mod tests {
     fn parse_signals_returns_empty_when_no_signals_array() {
         let body = serde_json::json!({ "target": { "kind": "user", "login": "torvalds" } });
         assert!(parse_signals(&body).is_empty());
+    }
+
+    /// `parse_repo_facts` reshapes a real `/repos` body into `RepoFacts`
+    /// (RGSD-1, design §2). A body with a top-level `language` STRING yields
+    /// `Some(language)` verbatim; a `language: null` or a body that omits the
+    /// field yields `None`. The `source_url` is read from `html_url`. PURE —
+    /// the pure decomposition of `harvest_repo`'s new detection union.
+    #[test]
+    fn parse_repo_facts_reads_language_and_source_url_from_a_real_body() {
+        // A realistic `/repos` body: top-level `language` string + `html_url`,
+        // NO synthetic `signals[]` (the shape the live API returns).
+        let with_language = serde_json::json!({
+            "target": { "kind": "repo", "full_name": "rust-lang/cargo" },
+            "language": "Rust",
+            "html_url": "https://github.com/rust-lang/cargo",
+        });
+        let facts = parse_repo_facts(&with_language);
+        assert_eq!(facts.language, Some("Rust".to_string()));
+        assert_eq!(facts.source_url, "https://github.com/rust-lang/cargo");
+
+        // `language: null` -> None (an empty repo the API reports as null).
+        let null_language = serde_json::json!({
+            "language": serde_json::Value::Null,
+            "html_url": "https://github.com/some-org/empty-repo",
+        });
+        assert_eq!(parse_repo_facts(&null_language).language, None);
+
+        // Language field entirely absent (a legacy `signals[]` body) -> None.
+        let absent_language = serde_json::json!({
+            "html_url": "https://github.com/some-org/legacy",
+            "signals": [],
+        });
+        assert_eq!(parse_repo_facts(&absent_language).language, None);
     }
 
     /// `signal_kind_from_wire` round-trips each recognized variant name and

@@ -42,7 +42,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{GithubError, GithubPort, ProbeOutcome, Signal, TargetKind};
+use ports::{GithubError, GithubPort, ProbeOutcome, Signal, SignalKind, TargetKind};
 
 pub mod client;
 pub mod probe;
@@ -252,7 +252,22 @@ impl GithubPort for GithubAdapter {
         // the effect-shell side channel so the verb can report it. The token
         // is NEVER recorded — an AuthReport carries only the budget numbers.
         record_auth_report(client::parse_auth_report(&body));
-        Ok(client::parse_signals(&body))
+        // RGSD-1 union bridge (design §4): the returned signals are the UNION
+        // of the NEW pure detection over real repo facts
+        // (`detect_signals(parse_repo_facts(body))` — reads the live `language`
+        // field) AND the legacy synthetic `signals[]` path (`parse_signals`,
+        // which the real API never populates but the existing FakeGithub
+        // postures still inject). Detection results lead so a real repo's
+        // language-derived signal is present; the legacy path fills the rest,
+        // deduped by `SignalKind` so a (currently impossible) both-present kind
+        // can never double-count. As detectors 2–5 land and the fake fixtures
+        // migrate to realistic bodies, the `parse_signals` path is removed
+        // (RGSD-6 cleanup).
+        let detected = scraper_domain::detect_signals(&client::parse_repo_facts(&body));
+        Ok(union_signals_by_kind(
+            detected,
+            client::parse_signals(&body),
+        ))
     }
 
     /// Harvest a BOUNDED cross-repo aggregate for a user / contributor target
@@ -291,6 +306,29 @@ pub const USER_AGGREGATE_SIGNAL_CAP: usize = 25;
 fn bound_user_aggregate(mut signals: Vec<Signal>) -> Vec<Signal> {
     signals.truncate(USER_AGGREGATE_SIGNAL_CAP);
     signals
+}
+
+/// Union the NEW pure detection with the legacy synthetic `signals[]` set,
+/// deduped by [`SignalKind`] against the DETECTED kinds only (RGSD-1 union
+/// bridge, design §4). PURE — a value-in / value-out merge so the bridge is
+/// testable without any network.
+///
+/// `detected` (the NEW pure detection) leads; each `legacy` signal is appended
+/// UNLESS its kind was already produced by detection — that is the "both
+/// present" case design §4 dedups so a kind can never double-count. Dedup is
+/// against the detected kinds ONLY, never within `legacy`: the legacy path
+/// legitimately carries multiple signals of the SAME kind (e.g. three
+/// `DocsPresentAndSubstantial` signals that collapse into one candidate
+/// downstream in `derive_candidates`), and those must all pass through.
+fn union_signals_by_kind(detected: Vec<Signal>, legacy: Vec<Signal>) -> Vec<Signal> {
+    let detected_kinds: Vec<SignalKind> = detected.iter().map(|s| s.kind).collect();
+    let mut out = detected;
+    for signal in legacy {
+        if !detected_kinds.contains(&signal.kind) {
+            out.push(signal);
+        }
+    }
+    out
 }
 
 impl GithubAdapter {
@@ -533,6 +571,67 @@ mod tests {
             bound_user_aggregate(small.clone()),
             small,
             "an at-or-under-cap aggregate must pass through unchanged"
+        );
+    }
+
+    /// `union_signals_by_kind` merges the NEW pure detection with the legacy
+    /// synthetic `signals[]` path, deduped by `SignalKind` (RGSD-1 union
+    /// bridge, design §4). Detection leads; a legacy signal whose kind is
+    /// already present is dropped so no predicate double-counts; a legacy
+    /// signal of a fresh kind is appended. Pure decomposition of
+    /// `harvest_repo`'s union — testable without any network.
+    #[test]
+    fn union_signals_by_kind_dedupes_with_detection_leading() {
+        let detected = Signal {
+            kind: SignalKind::MemorySafetyLanguage,
+            value: "primary language: Rust".to_string(),
+            source_url: "https://github.com/rust-lang/cargo".to_string(),
+        };
+        // A legacy signal of the SAME kind must be dropped (detection wins).
+        let legacy_same_kind = Signal {
+            kind: SignalKind::MemorySafetyLanguage,
+            value: "Rust + no unsafe blocks".to_string(),
+            source_url: "https://github.com/rust-lang/cargo".to_string(),
+        };
+        // A legacy signal of a FRESH kind must be appended.
+        let legacy_fresh_kind = Signal {
+            kind: SignalKind::DependencyManifestPinned,
+            value: "Cargo.lock committed".to_string(),
+            source_url: "https://github.com/rust-lang/cargo/blob/master/Cargo.lock".to_string(),
+        };
+
+        let unioned = union_signals_by_kind(
+            vec![detected.clone()],
+            vec![legacy_same_kind, legacy_fresh_kind.clone()],
+        );
+
+        assert_eq!(
+            unioned,
+            vec![detected, legacy_fresh_kind],
+            "detection leads, the duplicate-kind legacy signal is dropped, the \
+             fresh-kind legacy signal is appended"
+        );
+
+        // The empty-detection case passes the legacy set through verbatim so
+        // every existing FakeGithub `signals[]` posture stays untouched —
+        // INCLUDING multiple legacy signals of the SAME kind (they collapse
+        // downstream in `derive_candidates`, NOT here; dedup is against the
+        // detected kinds only, never within legacy).
+        let docs_a = Signal {
+            kind: SignalKind::DocsPresentAndSubstantial,
+            value: "docs/ directory present".to_string(),
+            source_url: "https://github.com/x/y/tree/master/docs".to_string(),
+        };
+        let docs_b = Signal {
+            kind: SignalKind::DocsPresentAndSubstantial,
+            value: "README 412 lines (> 200)".to_string(),
+            source_url: "https://github.com/x/y/blob/master/README.md".to_string(),
+        };
+        assert_eq!(
+            union_signals_by_kind(Vec::new(), vec![docs_a.clone(), docs_b.clone()]),
+            vec![docs_a, docs_b],
+            "with no detection ALL legacy signals pass through unchanged — even \
+             same-kind ones (they collapse downstream, not in the bridge)"
         );
     }
 

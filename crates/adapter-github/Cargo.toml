@@ -32,6 +32,14 @@ path = "src/lib.rs"
 #   `ports` ONLY for the GithubPort trait + value types it implements over.
 [dependencies]
 ports = { path = "../ports" }
+# PURE domain edge (RGSD-1, design §2): the EFFECT adapter fetches + reshapes
+# real `/repos` facts, the PURE `scraper-domain` DECIDES which signals fire
+# (`RepoFacts` + `detect_signals`). Dependencies point inward (adapter -> domain);
+# no cycle (`scraper-domain` does not depend on any adapter) and `scraper-domain`
+# stays pure. The `xtask check-arch` composition-root rule restricts who depends
+# on `adapter-*` (only cli/openlore-indexer) — it does NOT restrict an adapter
+# depending inward on a pure domain crate.
+scraper-domain = { path = "../scraper-domain" }
 async-trait = "0.1"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
