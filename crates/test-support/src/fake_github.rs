@@ -220,6 +220,25 @@ struct State {
     /// the SECOND disjunct of `DocsPresentAndSubstantial` — a `docs/` dir alone
     /// fires the signal even when the README is tiny/absent.
     has_docs_dir: bool,
+    /// Whether this repo has a `.github/workflows` CI directory (RGSD-5). `true`
+    /// serves `GET /repos/{o}/{r}/contents/.github/workflows` → **200** with a
+    /// realistic dir-listing body (a JSON ARRAY of entries — the real GitHub
+    /// `contents` shape for a directory) carrying an `html_url`; `false` (the
+    /// default for EVERY posture that does not set it) → **404** = absent, via the
+    /// same default-404 `contents/*` rule as `docs`. NOTE the probed path
+    /// (`.github/workflows`) carries a dot AND a slash: the `contents/*` router
+    /// matches on the FULL suffix after `contents/`, not the last segment. CI
+    /// workflows are the FIRST disjunct of `TestRatioOrCiMatrix` — CI workflows
+    /// present ALONE fires the signal even when there is no `tests/` dir.
+    has_ci_workflows: bool,
+    /// Whether this repo has a `tests/` directory (RGSD-5). `true` serves `GET
+    /// /repos/{o}/{r}/contents/tests` → **200** with a realistic dir-listing body
+    /// (a JSON ARRAY — the real GitHub `contents` directory shape) carrying an
+    /// `html_url`; `false` (the default for EVERY posture that does not set it) →
+    /// **404** = absent, via the same default-404 `contents/*` rule. A `tests/`
+    /// dir is the SECOND disjunct of `TestRatioOrCiMatrix` — a `tests/` dir ALONE
+    /// fires the signal even when there are no CI workflows.
+    has_tests_dir: bool,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -349,6 +368,8 @@ impl FakeGithub {
                 has_changelog: false,
                 readme_bytes: None,
                 has_docs_dir: false,
+                has_ci_workflows: false,
+                has_tests_dir: false,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -453,6 +474,8 @@ impl FakeGithub {
                 has_changelog: false,
                 readme_bytes: None,
                 has_docs_dir: false,
+                has_ci_workflows: false,
+                has_tests_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -493,6 +516,8 @@ impl FakeGithub {
                 has_changelog: false,
                 readme_bytes: None,
                 has_docs_dir: false,
+                has_ci_workflows: false,
+                has_tests_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -538,6 +563,8 @@ impl FakeGithub {
                 has_changelog,
                 readme_bytes: None,
                 has_docs_dir: false,
+                has_ci_workflows: false,
+                has_tests_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -602,6 +629,8 @@ impl FakeGithub {
                 has_changelog: false,
                 readme_bytes,
                 has_docs_dir,
+                has_ci_workflows: false,
+                has_tests_dir: false,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -627,6 +656,78 @@ impl FakeGithub {
         Self::for_public_repo_with_docs_evidence(target, None, true)
     }
 
+    /// A public repo whose test evidence is declared directly (RGSD-5): whether a
+    /// `.github/workflows` CI directory is present (`has_ci_workflows`, served by
+    /// `GET /repos/{o}/{r}/contents/.github/workflows`) and whether a `tests/`
+    /// directory is present (`has_tests_dir`, served by `GET
+    /// /repos/{o}/{r}/contents/tests`). This is the general builder the
+    /// `TestRatioOrCiMatrix` detection is exercised against — the signal is the
+    /// DISJUNCTION of (a) CI workflows present OR (b) a `tests/` dir present
+    /// (design §5). Either disjunct alone fires it. Both probes reuse RGSD-2's
+    /// `contents/*` fork (200 = present as a dir-listing JSON ARRAY, 404 = absent)
+    /// — NO new endpoint type. The precise "test/source ratio > 0.5" precision
+    /// (needs a full recursive tree walk) is DEFERRED; the walking skeleton uses
+    /// the cheap directory-presence proxy (design §3 — honest semantics).
+    ///
+    /// The HTTP handler serves:
+    /// - `GET /repos/{o}/{r}/contents/.github/workflows` → **200** with a realistic
+    ///   dir-listing JSON array carrying an `html_url` when `has_ci_workflows`, else
+    ///   **404** (absent) via the same default-404 `contents/*` rule;
+    /// - `GET /repos/{o}/{r}/contents/tests` → **200** with a realistic dir-listing
+    ///   JSON array when `has_tests_dir`, else **404** (absent).
+    ///
+    /// The repo carries NO `language`, NO `Cargo.lock`, NO `tags`, NO CHANGELOG,
+    /// NO README, NO `docs/` dir (so ONLY test-driven can fire, isolating it from
+    /// RGSD-1/2/3/4) and NO synthetic `signals[]`.
+    ///
+    /// Additive: every existing posture keeps `has_ci_workflows == false` (so
+    /// `contents/.github/workflows` → **404**) and `has_tests_dir == false` (so
+    /// `contents/tests` → **404**), so no `TestRatioOrCiMatrix` signal can fire on
+    /// any existing posture — the legacy scrape suite is untouched.
+    pub fn for_public_repo_with_test_evidence(
+        target: &str,
+        has_ci_workflows: bool,
+        has_tests_dir: bool,
+    ) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: None,
+                has_cargo_lock: false,
+                tags: Vec::new(),
+                has_changelog: false,
+                readme_bytes: None,
+                has_docs_dir: false,
+                has_ci_workflows,
+                has_tests_dir,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// A public repo with a `.github/workflows` CI directory present but NO
+    /// `tests/` dir (RGSD-5 happy A) — the CI-workflows disjunct of
+    /// `TestRatioOrCiMatrix`. SPIKE-verified against real GitHub (ripgrep:
+    /// `contents/.github/workflows` → 200). Fires the `test-driven` candidate via
+    /// CI workflows ALONE.
+    pub fn for_public_repo_with_ci_workflows(target: &str) -> Self {
+        Self::for_public_repo_with_test_evidence(target, true, false)
+    }
+
+    /// A public repo with a `tests/` directory present but NO CI workflows
+    /// (RGSD-5 happy B) — the tests-dir disjunct of `TestRatioOrCiMatrix`. Pins
+    /// the OR: a `tests/` dir ALONE fires the `test-driven` candidate even when
+    /// there are no CI workflows. SPIKE-verified against real GitHub (ripgrep:
+    /// `contents/tests` → 200).
+    pub fn for_public_repo_with_tests_dir(target: &str) -> Self {
+        Self::for_public_repo_with_test_evidence(target, false, true)
+    }
+
     /// Mark this fixture authenticated with the supplied remaining/limit
     /// rate budget (US-SCR-004 Ex 1). The token the production code sends is
     /// captured in the `seen_token` observation slot but NEVER echoed.
@@ -645,6 +746,8 @@ impl FakeGithub {
                 has_changelog: prev.has_changelog,
                 readme_bytes: prev.readme_bytes,
                 has_docs_dir: prev.has_docs_dir,
+                has_ci_workflows: prev.has_ci_workflows,
+                has_tests_dir: prev.has_tests_dir,
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -942,6 +1045,12 @@ fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> Ht
         // RGSD-4: `docs` is a DIRECTORY (not a file) — present iff the posture
         // declares a `docs/` dir. GitHub returns a JSON ARRAY for a directory.
         "docs" => fake.state.has_docs_dir,
+        // RGSD-5: `.github/workflows` + `tests` are DIRECTORIES — present iff the
+        // posture declares CI workflows / a `tests/` dir. NOTE `.github/workflows`
+        // carries a dot AND a slash: matching on the FULL suffix after
+        // `contents/` (this `file_path`, not the last segment) resolves it.
+        ".github/workflows" => fake.state.has_ci_workflows,
+        "tests" => fake.state.has_tests_dir,
         _ => false,
     };
     if present {
@@ -955,15 +1064,21 @@ fn contents_response(fake: &FakeGithub, kind: &FakeTargetKind, path: &str) -> Ht
         // real GitHub `contents` shape for a directory. `content_exists` treats
         // any 200 as "present"; the entries carry an `html_url` the adapter can
         // capture as the `docs_url` evidence. A FILE resolves to a single object.
-        if file_path == "docs" {
-            let dir_url = format!("https://github.com/{owner}/{repo}/tree/master/docs");
-            let entry_url = format!("https://github.com/{owner}/{repo}/blob/master/docs/index.md");
+        // RGSD-4/5: `docs`, `.github/workflows`, and `tests` are DIRECTORIES —
+        // GitHub returns a JSON ARRAY of entries for a directory (a FILE returns a
+        // single object). `content_exists` treats any 200 as "present"; the
+        // entries carry an `html_url` the adapter can capture as evidence.
+        let is_directory = matches!(file_path, "docs" | ".github/workflows" | "tests");
+        if is_directory {
+            let dir_url = format!("https://github.com/{owner}/{repo}/tree/master/{file_path}");
+            let entry_path = format!("{file_path}/index.md");
+            let entry_url = format!("https://github.com/{owner}/{repo}/blob/master/{entry_path}");
             return json_response(
                 200,
                 serde_json::json!([
                     {
                         "name": "index.md",
-                        "path": "docs/index.md",
+                        "path": entry_path,
                         "type": "file",
                         "html_url": entry_url,
                         "_dir_html_url": dir_url,
@@ -1781,6 +1896,108 @@ mod tests {
         ))
         .await;
         assert_eq!(docs_status, 404, "an unconfigured posture has no docs/ dir (404 — no regression)");
+    }
+
+    /// RGSD-5: `for_public_repo_with_ci_workflows` serves
+    /// `contents/.github/workflows` → **200** with a JSON ARRAY (the real GitHub
+    /// `contents` shape for a directory) and 404s `contents/tests` (no tests dir)
+    /// — the CI-workflows disjunct alone. Proves the dot+slash path is routed
+    /// correctly (match on the full suffix after `contents/`).
+    #[tokio::test]
+    async fn ci_workflows_posture_serves_200_array_on_github_workflows_and_404s_tests() {
+        let fake = FakeGithub::for_public_repo_with_ci_workflows("BurntSushi/ripgrep");
+        let handle = fake.serve_http().await;
+
+        let (ci_status, ci_body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/.github/workflows",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(ci_status, 200, "a present .github/workflows dir must resolve at 200");
+        assert!(
+            ci_body.is_array(),
+            "a directory resolves to a JSON array (the real GitHub contents shape)"
+        );
+        assert!(
+            !ci_body.as_array().expect("array").is_empty(),
+            "the .github/workflows dir listing carries at least one entry"
+        );
+
+        let (tests_status, _) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contents/tests",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            tests_status, 404,
+            "the CI-workflows-only posture has no tests/ dir (CI workflows alone must fire)"
+        );
+    }
+
+    /// RGSD-5: `for_public_repo_with_tests_dir` serves `contents/tests` → **200**
+    /// with a JSON ARRAY and 404s `contents/.github/workflows` (no CI) — the
+    /// tests-dir disjunct alone. Proves the two disjuncts are served
+    /// INDEPENDENTLY so the production OR can be exercised.
+    #[tokio::test]
+    async fn tests_dir_posture_serves_200_array_on_tests_and_404s_github_workflows() {
+        let fake = FakeGithub::for_public_repo_with_tests_dir("some-org/tested");
+        let handle = fake.serve_http().await;
+
+        let (tests_status, tests_body) = get_json(&format!(
+            "{}/repos/some-org/tested/contents/tests",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(tests_status, 200, "a present tests/ dir must resolve at 200");
+        assert!(
+            tests_body.is_array(),
+            "a directory resolves to a JSON array (the real GitHub contents shape)"
+        );
+
+        let (ci_status, _) = get_json(&format!(
+            "{}/repos/some-org/tested/contents/.github/workflows",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            ci_status, 404,
+            "the tests-dir-only posture has no CI workflows (tests/ alone must fire the signal)"
+        );
+    }
+
+    /// RGSD-5 no-regression: every UNCONFIGURED posture 404s BOTH
+    /// `contents/.github/workflows` and `contents/tests` — the default
+    /// `has_ci_workflows == false` + `has_tests_dir == false` guarantee. This is
+    /// what keeps every existing posture reading as "no CI workflows AND no tests
+    /// dir" for the new probes, so no `TestRatioOrCiMatrix` signal can ever fire
+    /// on them. Mirrors real octocat/Hello-World (404/404).
+    #[tokio::test]
+    async fn unconfigured_posture_404s_both_ci_workflows_and_tests() {
+        let fake = FakeGithub::for_public_repo(
+            "rust-lang/cargo",
+            vec![FakeSignal::new("X", "y", "https://x.test/z")],
+        );
+        let handle = fake.serve_http().await;
+
+        let (ci_status, _) = get_json(&format!(
+            "{}/repos/rust-lang/cargo/contents/.github/workflows",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            ci_status, 404,
+            "an unconfigured posture has no CI workflows (404 — no regression)"
+        );
+
+        let (tests_status, _) = get_json(&format!(
+            "{}/repos/rust-lang/cargo/contents/tests",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            tests_status, 404,
+            "an unconfigured posture has no tests/ dir (404 — no regression)"
+        );
     }
 
     /// The offline posture drops the connection — a client GET errors out
