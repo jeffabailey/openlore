@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 37c496a97172636497fc516f94684caba6e40afee61ec2d906bcd99e4485ab66 # shrinks to language = "C", cargo_lock_url = "https://github.com/a/-", source_url = "https://github.com/a/-"
+cc 0a104b4d88b1fe574c39c105e2c2b62c4c9d73cf4f8f3c804a988ae6f994eb2b # shrinks to language = "rust", cargo_lock_url = "https://github.com/0/-", source_url = "https://github.com/-/-"
