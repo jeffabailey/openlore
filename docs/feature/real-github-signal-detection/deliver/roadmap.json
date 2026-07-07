@@ -1,0 +1,57 @@
+{
+  "roadmap": {
+    "project_id": "real-github-signal-detection",
+    "slice": "rgsd-1",
+    "created_at": "2026-07-07T01:46:42Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton — detect MemorySafetyLanguage from the real language field",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "detect MemorySafetyLanguage from RepoFacts.language; harvest union",
+          "description": "Implement the RGSD-1 walking skeleton: a pure RepoFacts value type + a pure detect_signals detector (MemorySafetyLanguage arm only) + a MEMORY_SAFE_LANGUAGES set in scraper-domain; a pure parse_repo_facts (GitHub /repos JSON -> RepoFacts) in adapter-github; and rewire harvest_repo to UNION the detected signals with the legacy parse_signals path. A real scrape of a repo whose language is memory-safe (e.g. Rust) now yields the org.openlore.philosophy.memory-safety candidate end-to-end.",
+          "criteria": [
+            "RGSD-1 happy: a repo reporting language Rust derives the memory-safety candidate (scrape_repo_whose_language_is_rust_derives_the_memory_safety_candidate)",
+            "RGSD-1 guardrail: a C++ repo proposes NO memory-safety candidate (scrape_repo_whose_language_is_cpp_proposes_no_memory_safety_candidate stays green)",
+            "detection is pure + language-gated; confidence stays the mapping default 0.25",
+            "existing scrape suite (scrape_candidates/scrape_github/scrape_auth/scrape_sign) stays green via the union bridge"
+          ],
+          "test_file": "tests/acceptance/scrape_real_signal_detection.rs",
+          "scenario_name": "scrape_repo_whose_language_is_rust_derives_the_memory_safety_candidate",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/src/detect.rs",
+            "crates/scraper-domain/src/lib.rs",
+            "crates/adapter-github/Cargo.toml",
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs"
+          ],
+          "implementation_notes": "PURE (scraper-domain): (1) a RepoFacts value type — RGSD-1 needs { language: Option<String>, source_url: String }; place it in scraper-domain (a new detect.rs module or extend an existing one) and re-export from lib.rs. (2) MEMORY_SAFE_LANGUAGES: a curated const set of the memory-safe languages that embody the memory-safety philosophy — Rust, Go, Swift, Kotlin, Java, C#, Python, Ruby, Scala, Haskell, Elixir, Erlang, OCaml, Clojure — EXCLUDING C, C++, assembly. Match case-insensitively against the GitHub `language` string. (3) detect_signals(&RepoFacts) -> Vec<Signal>: pure total fn; for RGSD-1 implement ONLY the MemorySafetyLanguage arm — when facts.language is Some(l) and normalize/lowercase(l) is in MEMORY_SAFE_LANGUAGES, emit exactly one Signal{ kind: SignalKind::MemorySafetyLanguage, value: format!(\"primary language: {l}\") (HONEST — do not claim 'no unsafe verified'), source_url: facts.source_url.clone() }; else emit nothing. EFFECT (adapter-github): (4) add scraper-domain to crates/adapter-github/Cargo.toml [dependencies] (adapter -> pure domain; no cycle; scraper-domain stays pure). (5) parse_repo_facts(&serde_json::Value) -> scraper_domain::RepoFacts in client.rs (mirror parse_signals): read the top-level `language` (string or null -> Option) and `html_url` (fallback to a github.com/<owner>/<repo> URL if absent). (6) In harvest_repo (lib.rs), after fetching body + record_auth_report, build signals as the UNION of client::parse_signals(&body) (legacy synthetic path — existing tests) AND scraper_domain::detect_signals(&parse_repo_facts(&body)) (the new real path); dedup by SignalKind so a (currently impossible) both-present case cannot double-count. Existing FakeGithub bodies have language=null -> detect_signals yields [] -> those tests unchanged; the new FakeGithub language posture has no synthetic signals -> detection fires. Keep harvest_user unchanged for RGSD-1 (user aggregate is out of scope). Run cargo run -p xtask -- check-arch — adapter-github -> scraper-domain must stay green at 21 members; if genuinely flagged, update the rule in xtask/src/check_arch.rs (add it to files_to_modify) but verify the flag is real first. TEST PARADIGM (mandatory): author property-based unit tests (proptest) for the pure seams as DELIVER's RED_UNIT — detect_signals: for every language in MEMORY_SAFE_LANGUAGES (any case) exactly one MemorySafetyLanguage signal; for any out-of-set or None language, zero signals; parse_repo_facts: a body with a string `language` -> Some, null/absent -> None. Example-based is documented FALLBACK. The acceptance scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/scraper-domain/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from the committed DESIGN doc) + automated quality gate",
+    "approved_at": "2026-07-07",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step walking-skeleton slice, 1 genuine RED owned + 1 GREEN-today guardrail, ratio 1 step / 5 production files = 0.2, step ID valid, criteria <=5, no empty files). Fully specified by docs/feature/real-github-signal-detection/design/architecture-design.md §2/§4/§5 (RGSD-1); the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}
