@@ -263,7 +263,16 @@ impl GithubPort for GithubAdapter {
         // can never double-count. As detectors 2–5 land and the fake fixtures
         // migrate to realistic bodies, the `parse_signals` path is removed
         // (RGSD-6 cleanup).
-        let detected = scraper_domain::detect_signals(&client::parse_repo_facts(&body));
+        // RGSD-2: probe `contents/Cargo.lock` (a SECOND public endpoint) and set
+        // `cargo_lock_url` before detection. 200 => Some(file html_url) (a
+        // committed Cargo.lock — the manifest is pinned); 404 => None (absent, a
+        // total result, not an error). The pure `detect_signals` then fires the
+        // `DependencyManifestPinned` arm iff the probe found the file (design
+        // §2/§4). A rate-limit / auth failure on the probe propagates via `?`,
+        // never silently read as "absent".
+        let mut facts = client::parse_repo_facts(&body);
+        facts.cargo_lock_url = self.content_exists(owner, repo, "Cargo.lock").await?;
+        let detected = scraper_domain::detect_signals(&facts);
         Ok(union_signals_by_kind(
             detected,
             client::parse_signals(&body),
@@ -342,19 +351,8 @@ impl GithubAdapter {
     /// `path` is always on the public allowlist (`/repos/...` or
     /// `/users/...`); there is no private surface (WD-51 / I-SCR-2).
     async fn get_public(&self, path: &str, target: &str) -> Result<serde_json::Value, GithubError> {
-        let client = client::build_client()
-            .map_err(|e| GithubError::Network(format!("could not build HTTP client: {e}")))?;
         let url = format!("{}{}", self.api_base, path);
-
-        let mut request = client.get(&url);
-        if let Some(header) = self.auth.authorization_header() {
-            request = request.header(reqwest::header::AUTHORIZATION, header);
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))?;
+        let response = self.send_get(&url).await?;
 
         let status = response.status();
         if status.is_success() {
@@ -379,6 +377,77 @@ impl GithubAdapter {
             .unwrap_or_else(|_| serde_json::json!({}));
 
         Err(classify_status(status_code, &body, target))
+    }
+
+    /// Issue one PUBLIC GET against `{api_base}{url_path}`, attaching the
+    /// optional `Authorization: token <PAT>` header (the ONLY path the PAT
+    /// bytes leave the adapter — never logged/echoed; US-SCR-004). Shared by
+    /// [`get_public`](Self::get_public) and
+    /// [`content_exists`](Self::content_exists) so the client-build + auth-header
+    /// wiring lives in ONE place; each caller classifies the RESPONSE per its own
+    /// railway rules (a 404 is a refusal for `get_public`, but "absent" for
+    /// `content_exists`).
+    async fn send_get(&self, url: &str) -> Result<reqwest::Response, GithubError> {
+        let client = client::build_client()
+            .map_err(|e| GithubError::Network(format!("could not build HTTP client: {e}")))?;
+        let mut request = client.get(url);
+        if let Some(header) = self.auth.authorization_header() {
+            request = request.header(reqwest::header::AUTHORIZATION, header);
+        }
+        request
+            .send()
+            .await
+            .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))
+    }
+
+    /// Probe whether a public repo commits a file at `path` (RGSD-2). Issues
+    /// `GET {api_base}/repos/{owner}/{repo}/contents/{path}` and reads the
+    /// SPIKE-verified presence contract:
+    ///
+    /// - **2xx** => `Ok(Some(html_url))` — the file is present; the committed
+    ///   file's public `html_url` (read from the body, or reconstructed) becomes
+    ///   the `DependencyManifestPinned` signal's `source_url` (design §3);
+    /// - **404** => `Ok(None)` — the file is ABSENT. Absent is NOT an error: a
+    ///   repo without the file is a perfectly valid public repo, so the probe is
+    ///   a TOTAL, railway-oriented result (the negative guardrail relies on this);
+    /// - any OTHER status => the SAME [`GithubError`] classification
+    ///   `get_public` uses (403 => `RateLimited`, 401 => `TokenRejected`,
+    ///   transport => `Network`) so a rate-limit / auth failure mid-harvest is
+    ///   surfaced, never silently read as "absent".
+    ///
+    /// The path is on the public allowlist (`/repos/...`); no private surface is
+    /// reached (WD-51 / I-SCR-2). The token is NEVER logged (US-SCR-004).
+    async fn content_exists(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+    ) -> Result<Option<String>, GithubError> {
+        let url = format!("{}/repos/{owner}/{repo}/contents/{path}", self.api_base);
+        let response = self.send_get(&url).await?;
+
+        let status = response.status();
+        if status.is_success() {
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| GithubError::ApiShape(format!("contents body was not JSON: {e}")))?;
+            return Ok(Some(client::content_html_url(&body, owner, repo, path)));
+        }
+
+        // 404 = absent (a total result, NOT an error) — the whole point of the
+        // probe. Every other non-2xx is a real failure classified exactly as
+        // get_public does (rate-limit / auth / shape), never read as "absent".
+        let status_code = status.as_u16();
+        if status_code == 404 {
+            return Ok(None);
+        }
+        let target = format!("{owner}/{repo}");
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+        Err(classify_status(status_code, &body, &target))
     }
 }
 

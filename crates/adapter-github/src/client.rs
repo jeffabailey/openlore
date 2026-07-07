@@ -223,6 +223,12 @@ pub fn parse_repo_facts(body: &serde_json::Value) -> scraper_domain::RepoFacts {
     scraper_domain::RepoFacts {
         language,
         source_url,
+        // The Cargo.lock probe (RGSD-2) is a SEPARATE endpoint the effect shell
+        // issues after this body-reshape — `parse_repo_facts` reads ONLY the
+        // `/repos` body, so it defaults `cargo_lock_url` to `None`. `harvest_repo`
+        // fills it from `content_exists(owner, repo, "Cargo.lock")` before
+        // `detect_signals` runs (design §2/§4).
+        cargo_lock_url: None,
     }
 }
 
@@ -238,6 +244,22 @@ fn repo_url_from_target(body: &serde_json::Value) -> String {
         Some(full_name) => format!("https://github.com/{full_name}"),
         None => "https://github.com".to_string(),
     }
+}
+
+/// Read the committed file's public `html_url` out of a `GET /repos/{owner}/
+/// {repo}/contents/{path}` 200 body (RGSD-2). PURE — a value-in / value-out
+/// reshape of the already-fetched JSON (the network I/O lives in `lib.rs`).
+///
+/// The real GitHub `contents` API returns the file's `html_url`
+/// (`https://github.com/{owner}/{repo}/blob/{ref}/{path}`); when it is absent
+/// the URL is reconstructed from `owner`/`repo`/`path` so a detected
+/// `DependencyManifestPinned` signal always names a public evidence URL the
+/// user can audit (design §3, KPI-SCR-3).
+pub fn content_html_url(body: &serde_json::Value, owner: &str, repo: &str, path: &str) -> String {
+    body.get("html_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://github.com/{owner}/{repo}/blob/HEAD/{path}"))
 }
 
 /// Build the shared `reqwest::Client` the adapter uses for every request.

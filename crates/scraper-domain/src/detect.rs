@@ -34,6 +34,13 @@ pub struct RepoFacts {
     /// The public GitHub URL of the repo — flows into a detected signal's
     /// `source_url` (and thus the candidate's evidence).
     pub source_url: String,
+    /// The committed `Cargo.lock`'s public file URL (RGSD-2). `Some(url)` when
+    /// the effect shell's `content_exists(owner, repo, "Cargo.lock")` probe
+    /// returned 200 (a committed Cargo.lock — the dependency manifest is
+    /// pinned); `None` when it returned 404 (absent). Flows into the
+    /// [`SignalKind::DependencyManifestPinned`] signal's `source_url` so the
+    /// derived candidate names the Cargo.lock as its evidence (design §2/§3).
+    pub cargo_lock_url: Option<String>,
 }
 
 /// The curated set of memory-safety languages (design §2) — languages with
@@ -58,15 +65,49 @@ fn is_memory_safe_language(language: &str) -> bool {
 /// Detect the bounded public signals a real repo exhibits from its
 /// [`RepoFacts`]. PURE + total.
 ///
-/// RGSD-1 implements ONLY the `MemorySafetyLanguage` arm: when the primary
-/// `language` is present AND in [`MEMORY_SAFE_LANGUAGES`] (case-insensitive),
-/// emit exactly one [`SignalKind::MemorySafetyLanguage`] signal whose `value`
-/// is HONEST about what was measured — the primary language only, NOT "no
-/// unsafe blocks" (design §3, deferred). Every out-of-set or absent language
-/// yields no signal (the over-firing guard). Later detectors extend the
-/// returned vector with their own arms.
+/// Each detector arm is INDEPENDENT: a repo can fire both the
+/// `MemorySafetyLanguage` arm (RGSD-1) and the `DependencyManifestPinned` arm
+/// (RGSD-2) — the returned vector is the union of every arm that fired.
+///
+/// - `MemorySafetyLanguage` (RGSD-1): when the primary `language` is present
+///   AND in [`MEMORY_SAFE_LANGUAGES`] (case-insensitive), emit exactly one
+///   [`SignalKind::MemorySafetyLanguage`] signal whose `value` is HONEST about
+///   what was measured — the primary language only, NOT "no unsafe blocks"
+///   (design §3, deferred). Every out-of-set or absent language yields none.
+/// - `DependencyManifestPinned` (RGSD-2): when `cargo_lock_url` is `Some(url)`
+///   (a committed `Cargo.lock` — the manifest is pinned), emit exactly one
+///   [`SignalKind::DependencyManifestPinned`] signal sourced at that URL. A
+///   `None` (no committed Cargo.lock) yields none — detection is
+///   Cargo.lock-gated, never unconditional (design §2, the over-firing guard).
+///
+/// Later detectors (semver+changelog, docs, tests) extend the returned vector
+/// with their own arms.
 pub fn detect_signals(facts: &RepoFacts) -> Vec<Signal> {
-    detect_memory_safety_language(facts).into_iter().collect()
+    [
+        detect_memory_safety_language(facts),
+        detect_dependency_manifest_pinned(facts),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The `DependencyManifestPinned` detector arm (RGSD-2): fires when the repo
+/// commits a `Cargo.lock` (`cargo_lock_url` is `Some`), meaning its dependency
+/// manifest pins exact versions. Returns `Some(signal)` sourced at the
+/// committed Cargo.lock's public URL, or `None` when no Cargo.lock is present.
+/// PURE — a total predicate over the facts; the effect-shell probe that fills
+/// `cargo_lock_url` lives in `adapter-github`.
+fn detect_dependency_manifest_pinned(facts: &RepoFacts) -> Option<Signal> {
+    let cargo_lock_url = facts.cargo_lock_url.as_deref()?;
+    Some(Signal {
+        kind: SignalKind::DependencyManifestPinned,
+        // Honest semantics (design §3): a committed Cargo.lock pins the
+        // dependency manifest to exact versions — that is exactly what the
+        // probe measured.
+        value: "Cargo.lock committed (pinned dependencies)".to_string(),
+        source_url: cargo_lock_url.to_string(),
+    })
 }
 
 /// The `MemorySafetyLanguage` detector arm (RGSD-1): fires when the primary
@@ -133,6 +174,7 @@ mod tests {
             let facts = RepoFacts {
                 language: Some(language.clone()),
                 source_url: source_url.clone(),
+                cargo_lock_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(signals.len(), 1, "a memory-safety language fires exactly one signal");
@@ -163,6 +205,7 @@ mod tests {
             let facts = RepoFacts {
                 language: Some(language.to_string()),
                 source_url,
+                cargo_lock_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -174,10 +217,88 @@ mod tests {
         /// yields NO signal.
         #[test]
         fn an_absent_language_yields_no_signal(source_url in arb_source_url()) {
-            let facts = RepoFacts { language: None, source_url };
+            let facts = RepoFacts { language: None, source_url, cargo_lock_url: None };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
                 "an absent language must fire no signal"
+            );
+        }
+
+        /// Property (RGSD-2, design §2/§5): a repo whose `cargo_lock_url` is
+        /// `Some(url)` (a committed Cargo.lock) fires EXACTLY ONE
+        /// `DependencyManifestPinned` signal sourced at that URL — regardless
+        /// of the language (the arms are independent). The `language` is drawn
+        /// from the NON-memory-safe set so the memory-safety arm stays quiet,
+        /// isolating the dependency-pinning arm as the only thing that fires.
+        #[test]
+        fn a_committed_cargo_lock_fires_exactly_one_dependency_pinning_signal(
+            language in prop::sample::select(vec!["C", "C++", "Assembly", "COBOL"]),
+            cargo_lock_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: Some(language.to_string()),
+                source_url,
+                cargo_lock_url: Some(cargo_lock_url.clone()),
+            };
+            let signals = detect_signals(&facts);
+            prop_assert_eq!(
+                signals.len(), 1,
+                "a committed Cargo.lock fires exactly one signal (language {} is non-safe)",
+                language
+            );
+            prop_assert_eq!(signals[0].kind, SignalKind::DependencyManifestPinned);
+            prop_assert_eq!(
+                &signals[0].source_url, &cargo_lock_url,
+                "the dependency-pinning signal must be sourced at the committed Cargo.lock URL"
+            );
+        }
+
+        /// Property (RGSD-2, over-firing guard, design §2): a repo whose
+        /// `cargo_lock_url` is `None` (no committed Cargo.lock) fires NO
+        /// `DependencyManifestPinned` signal — detection is Cargo.lock-gated,
+        /// never unconditional. Paired with a non-memory-safe language so the
+        /// FULL signal set is empty (isolating the gate).
+        #[test]
+        fn an_absent_cargo_lock_fires_no_dependency_pinning_signal(
+            language in prop::sample::select(vec!["C", "C++", "Assembly", "COBOL"]),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: Some(language.to_string()),
+                source_url,
+                cargo_lock_url: None,
+            };
+            prop_assert!(
+                detect_signals(&facts)
+                    .iter()
+                    .all(|s| s.kind != SignalKind::DependencyManifestPinned),
+                "no committed Cargo.lock must fire no dependency-pinning signal (over-firing guard)"
+            );
+        }
+
+        /// Property (RGSD-2 + RGSD-1 independence, design §2): a repo that is
+        /// BOTH memory-safe AND commits a Cargo.lock fires BOTH signals — the
+        /// two detector arms are independent, neither suppresses the other.
+        #[test]
+        fn a_memory_safe_repo_with_a_cargo_lock_fires_both_signals(
+            language in arb_memory_safe_language(),
+            cargo_lock_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: Some(language),
+                source_url,
+                cargo_lock_url: Some(cargo_lock_url),
+            };
+            let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
+            prop_assert!(
+                kinds.contains(&SignalKind::MemorySafetyLanguage),
+                "the memory-safety arm must still fire when a Cargo.lock is also present"
+            );
+            prop_assert!(
+                kinds.contains(&SignalKind::DependencyManifestPinned),
+                "the dependency-pinning arm must fire alongside the memory-safety arm (independent arms)"
             );
         }
     }

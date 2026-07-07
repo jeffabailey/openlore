@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "real-github-signal-detection",
+    "slice": "rgsd-2",
+    "created_at": "2026-07-07T02:58:34Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Detect DependencyManifestPinned from a committed Cargo.lock",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "content_exists probe + RepoFacts.cargo_lock_url + DependencyManifestPinned arm",
+          "description": "Add a content_exists effect (GET /repos/{o}/{r}/contents/Cargo.lock; 200->present with the file html_url, 404->absent, other->error) in adapter-github; extend the pure RepoFacts with cargo_lock_url: Option<String>; add the DependencyManifestPinned arm to detect_signals (fires when cargo_lock_url is Some). harvest_repo probes contents/Cargo.lock and assembles the fuller RepoFacts, so a real repo with a committed Cargo.lock now yields the org.openlore.philosophy.dependency-pinning candidate.",
+          "criteria": [
+            "RGSD-2 happy: a repo whose contents/Cargo.lock is 200 derives the dependency-pinning candidate (scrape_repo_with_a_committed_cargo_lock_derives_the_dependency_pinning_candidate)",
+            "RGSD-2 guardrail: a repo whose contents/Cargo.lock is 404 proposes NO dependency-pinning candidate (scrape_repo_without_a_cargo_lock_proposes_no_dependency_pinning_candidate stays green)",
+            "detection stays pure + presence-gated; confidence stays the mapping default 0.25",
+            "RGSD-1 memory-safety detection + the existing scrape suite stay green (union bridge, default-404 for unconfigured contents)"
+          ],
+          "test_file": "tests/acceptance/scrape_dependency_pinning.rs",
+          "scenario_name": "scrape_repo_with_a_committed_cargo_lock_derives_the_dependency_pinning_candidate",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/src/detect.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs"
+          ],
+          "implementation_notes": "PURE (scraper-domain/detect.rs): (1) extend RepoFacts with `pub cargo_lock_url: Option<String>` (the committed Cargo.lock's file html_url when present; None when absent). Update any RepoFacts construction sites (RGSD-1's parse_repo_facts builds the body-derived fields — default cargo_lock_url to None there and let harvest_repo fill it, OR have harvest assemble the full struct). (2) In detect_signals, ADD the DependencyManifestPinned arm ALONGSIDE the existing MemorySafetyLanguage arm: when facts.cargo_lock_url is Some(url), push Signal{ kind: SignalKind::DependencyManifestPinned, value: \"Cargo.lock committed (pinned dependencies)\".to_string(), source_url: url.clone() }. Both arms are independent; a repo can fire both. EFFECT (adapter-github/lib.rs): (3) add an async method content_exists(&self, owner: &str, repo: &str, path: &str) -> Result<Option<String>, GithubError>: GET {api_base}/repos/{owner}/{repo}/contents/{path}; on 2xx parse the body and return Ok(Some(html_url)) (read the file `html_url`; fall back to a constructed blob URL if absent); on 404 return Ok(None) (absent is NOT an error); on other statuses map to the SAME GithubError classification get_public uses (rate-limit 403 -> RateLimited, 401 -> TokenRejected, network -> Network). Reuse get_public's client-build + auth-header logic — factor a shared helper if it reduces duplication, or add a sibling method. (4) In harvest_repo, after building the body-derived RepoFacts, call content_exists(owner, repo, \"Cargo.lock\")? and set facts.cargo_lock_url before detect_signals. Keep the RGSD-1 union with parse_signals. Keep harvest_user unchanged. client.rs: adjust parse_repo_facts / add a small pure helper if you parse the contents body there. Run cargo run -p xtask -- check-arch (stays 21). TEST PARADIGM (mandatory): DELIVER RED_UNIT — proptest/example unit tests for the pure seams: detect_signals fires DependencyManifestPinned iff cargo_lock_url.is_some() (and independently of the language arm); RepoFacts with Some/None cargo_lock_url; a parse helper for the contents html_url if added. content_exists's 200/404/other mapping is an adapter concern — cover it with an adapter-github integration/unit test against a stub if practical, else via the acceptance path. Example-based is documented FALLBACK. The acceptance scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from the committed DESIGN doc + SPIKE) + automated quality gate",
+    "approved_at": "2026-07-07",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step slice, 1 genuine RED owned + 1 GREEN-today guardrail, ratio 1 step / 3 production files = 0.33, step ID valid, criteria <=5). Specified by the RGSD design §1/§5 + the SPIKE (contents/Cargo.lock 200=present/404=absent, body carries file html_url); the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}
