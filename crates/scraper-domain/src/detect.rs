@@ -75,6 +75,22 @@ pub struct RepoFacts {
     /// DISJUNCTION -- a `docs/` dir alone fires the signal even without a
     /// substantial README (design section 2/5).
     pub docs_url: Option<String>,
+    /// The `.github/workflows` CI directory's public URL (RGSD-5). `Some(url)`
+    /// when the effect shell's `content_exists(owner, repo, ".github/workflows")`
+    /// probe returned 200 (the repo runs CI workflows); `None` when it returned
+    /// 404 (absent). One disjunct of the [`SignalKind::TestRatioOrCiMatrix`]
+    /// DISJUNCTION -- CI workflows alone fire the signal (design section 2/5).
+    /// Reuses the RGSD-2 `content_exists` probe (no new effect method).
+    pub ci_workflows_url: Option<String>,
+    /// The `tests/` directory's public URL (RGSD-5). `Some(url)` when the effect
+    /// shell's `content_exists(owner, repo, "tests")` probe returned 200 (the
+    /// repo invests in a test suite); `None` when it returned 404 (absent). The
+    /// OTHER disjunct of the [`SignalKind::TestRatioOrCiMatrix`] DISJUNCTION -- a
+    /// `tests/` dir alone fires the signal even without CI workflows (design
+    /// section 2/5). The deferred "test/source ratio > 0.5" precision (a full
+    /// recursive tree walk) is NOT claimed; the cheap directory-presence proxy is
+    /// used.
+    pub tests_dir_url: Option<String>,
 }
 
 /// The README byte-size floor at or above which a README counts as SUBSTANTIAL
@@ -130,10 +146,41 @@ pub fn detect_signals(facts: &RepoFacts) -> Vec<Signal> {
         detect_dependency_manifest_pinned(facts),
         detect_semver_and_changelog(facts),
         detect_docs_present_and_substantial(facts),
+        detect_test_ratio_or_ci_matrix(facts),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// The `TestRatioOrCiMatrix` detector arm (RGSD-5): fires when EITHER the repo
+/// runs CI workflows (`ci_workflows_url` is `Some`) OR has a `tests/` directory
+/// (`tests_dir_url` is `Some`) — the DISJUNCTION (design section 2/5). Either
+/// disjunct alone fires it; returns `None` when NEITHER holds. PURE — a total
+/// predicate over the facts; the effect-shell `content_exists` probes that fill
+/// `ci_workflows_url` / `tests_dir_url` live in `adapter-github` (reusing the
+/// RGSD-2 probe, no new effect method).
+///
+/// The emitted signal is HONEST about which evidence was measured (design
+/// section 3): when the CI disjunct fires (CI takes precedence when both are
+/// present) it names the CI workflows and is sourced at the workflows URL;
+/// otherwise it names the `tests/` directory and is sourced there. The deferred
+/// "test/source ratio > 0.5" precision (a full recursive tree walk) is NEVER
+/// claimed.
+fn detect_test_ratio_or_ci_matrix(facts: &RepoFacts) -> Option<Signal> {
+    if let Some(ci_workflows_url) = facts.ci_workflows_url.as_deref() {
+        return Some(Signal {
+            kind: SignalKind::TestRatioOrCiMatrix,
+            value: "CI workflows present (.github/workflows)".to_string(),
+            source_url: ci_workflows_url.to_string(),
+        });
+    }
+    let tests_dir_url = facts.tests_dir_url.as_deref()?;
+    Some(Signal {
+        kind: SignalKind::TestRatioOrCiMatrix,
+        value: "tests/ directory present".to_string(),
+        source_url: tests_dir_url.to_string(),
+    })
 }
 
 /// Whether a README of the given byte size counts as SUBSTANTIAL (RGSD-4): its
@@ -339,6 +386,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(signals.len(), 1, "a memory-safety language fires exactly one signal");
@@ -375,6 +424,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -395,6 +446,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             prop_assert!(
                 detect_signals(&facts).is_empty(),
@@ -423,6 +476,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let signals = detect_signals(&facts);
             prop_assert_eq!(
@@ -456,6 +511,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             prop_assert!(
                 detect_signals(&facts)
@@ -483,6 +540,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
             prop_assert!(
@@ -563,6 +622,8 @@ mod tests {
                 readme_bytes: None,
                 readme_url: None,
                 docs_url: None,
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let signals = detect_signals(&facts);
             let semver_signals: Vec<&Signal> = signals
@@ -611,6 +672,8 @@ mod tests {
                 readme_bytes: Some(readme_bytes),
                 readme_url: Some(readme_url),
                 docs_url: Some(docs_url),
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let kinds: Vec<SignalKind> = detect_signals(&facts).iter().map(|s| s.kind).collect();
             prop_assert!(kinds.contains(&SignalKind::MemorySafetyLanguage));
@@ -645,6 +708,8 @@ mod tests {
                 readme_bytes,
                 readme_url: readme_bytes.map(|_| readme_url.clone()),
                 docs_url: docs_present.then(|| docs_url.clone()),
+                ci_workflows_url: None,
+                tests_dir_url: None,
             };
             let signals = detect_signals(&facts);
             let docs_signals: Vec<&Signal> = signals
@@ -704,6 +769,8 @@ mod tests {
                     readme_bytes: Some(bytes),
                     readme_url: Some(readme_url.clone()),
                     docs_url: None,
+                    ci_workflows_url: None,
+                    tests_dir_url: None,
                 };
                 detect_signals(&facts)
                     .iter()
@@ -717,6 +784,89 @@ mod tests {
                 !fires(README_SUBSTANTIAL_BYTES - 1),
                 "a README one byte below the threshold with no docs dir must NOT fire"
             );
+        }
+
+        /// Property (RGSD-5, design section 2/5): the `TestRatioOrCiMatrix` arm
+        /// fires IFF EITHER CI workflows are present (`ci_workflows_url` is
+        /// `Some`) OR a `tests/` dir is present (`tests_dir_url` is `Some`) — the
+        /// DISJUNCTION. Neither disjunct alone is required; when it fires there is
+        /// EXACTLY ONE such signal, and it is HONEST about which evidence was
+        /// measured (design section 3): when the CI disjunct fires it names the CI
+        /// workflows and is sourced at the workflows URL (CI takes precedence when
+        /// both are present); otherwise it names the `tests/` dir and is sourced
+        /// there. `language`/`cargo_lock`/semver/docs are absent so this arm is
+        /// isolated. Both booleans span present/absent so all four quadrants of
+        /// the disjunction are exercised.
+        #[test]
+        fn test_ratio_or_ci_matrix_fires_only_on_the_ci_or_tests_disjunction(
+            ci_present in any::<bool>(),
+            tests_present in any::<bool>(),
+            ci_url in arb_source_url(),
+            tests_url in arb_source_url(),
+            source_url in arb_source_url(),
+        ) {
+            let facts = RepoFacts {
+                language: None,
+                source_url,
+                cargo_lock_url: None,
+                semver_tag: None,
+                changelog_url: None,
+                readme_bytes: None,
+                readme_url: None,
+                docs_url: None,
+                ci_workflows_url: ci_present.then(|| ci_url.clone()),
+                tests_dir_url: tests_present.then(|| tests_url.clone()),
+            };
+            let signals = detect_signals(&facts);
+            let test_signals: Vec<&Signal> = signals
+                .iter()
+                .filter(|s| s.kind == SignalKind::TestRatioOrCiMatrix)
+                .collect();
+            let should_fire = ci_present || tests_present;
+            prop_assert_eq!(
+                !test_signals.is_empty(),
+                should_fire,
+                "TestRatioOrCiMatrix must fire IFF CI workflows OR a tests/ dir \
+                 (ci_present={}, tests_present={})",
+                ci_present, tests_present
+            );
+            if should_fire {
+                prop_assert_eq!(
+                    test_signals.len(), 1,
+                    "the disjunction fires exactly one TestRatioOrCiMatrix signal"
+                );
+                // The deferred "test/source ratio > 0.5" precision is NEVER
+                // claimed (design section 3): the value must not claim a ratio.
+                prop_assert!(
+                    !test_signals[0].value.to_lowercase().contains("ratio"),
+                    "RGSD-5 must not claim a test/source ratio was computed (design section 3); got {:?}",
+                    test_signals[0].value
+                );
+                if ci_present {
+                    // CI takes precedence when both are present: sourced at the
+                    // workflows URL and names the CI workflows (design section 3).
+                    prop_assert!(
+                        test_signals[0].value.contains("workflows"),
+                        "a present CI directory must name the CI workflows in its value; got {:?}",
+                        test_signals[0].value
+                    );
+                    prop_assert_eq!(
+                        &test_signals[0].source_url, &ci_url,
+                        "the CI disjunct must source the signal at the .github/workflows URL"
+                    );
+                } else {
+                    // tests-only: sourced at the tests/ dir URL and names it.
+                    prop_assert!(
+                        test_signals[0].value.contains("tests/"),
+                        "the tests-dir disjunct must name the tests/ dir in its value; got {:?}",
+                        test_signals[0].value
+                    );
+                    prop_assert_eq!(
+                        &test_signals[0].source_url, &tests_url,
+                        "the tests-dir disjunct must source the signal at the tests/ dir URL"
+                    );
+                }
+            }
         }
     }
 

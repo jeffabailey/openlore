@@ -244,6 +244,14 @@ pub fn parse_repo_facts(body: &serde_json::Value) -> scraper_domain::RepoFacts {
         readme_bytes: None,
         readme_url: None,
         docs_url: None,
+        // The `contents/.github/workflows` and `contents/tests` probes (RGSD-5)
+        // are likewise SEPARATE endpoints — `parse_repo_facts` reads ONLY the
+        // `/repos` body, so both default to `None`. `harvest_repo` fills them from
+        // `content_exists(owner, repo, ".github/workflows")` and
+        // `content_exists(owner, repo, "tests")` before `detect_signals` runs
+        // (design section 2/5).
+        ci_workflows_url: None,
+        tests_dir_url: None,
     }
 }
 

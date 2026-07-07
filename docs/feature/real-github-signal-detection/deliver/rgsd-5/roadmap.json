@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "real-github-signal-detection",
+    "slice": "rgsd-5",
+    "created_at": "2026-07-07T19:01:50Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Detect TestRatioOrCiMatrix from CI workflows or a tests dir",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "RepoFacts ci/tests + TestRatioOrCiMatrix disjunction arm + two content_exists probes",
+          "description": "Extend RepoFacts with ci_workflows_url/tests_dir_url + a TestRatioOrCiMatrix detect arm firing on the DISJUNCTION (CI workflows present OR a tests/ dir present) in scraper-domain; harvest_repo probes contents/.github/workflows and contents/tests via the existing content_exists (no new effect method) and assembles the fuller RepoFacts — so a repo with CI workflows or a tests/ directory now yields the org.openlore.philosophy.test-driven candidate. The final detector; the 'test/source ratio > 0.5' precision (tree walk) is deferred.",
+          "criteria": [
+            "RGSD-5 happy A: CI workflows -> test-driven candidate (scrape_repo_with_ci_workflows_derives_the_test_driven_candidate)",
+            "RGSD-5 happy B: tests/ dir -> test-driven candidate (scrape_repo_with_a_tests_directory_derives_the_test_driven_candidate)",
+            "RGSD-5 guardrail: neither CI nor tests -> no candidate (disjunction; stays green)",
+            "RGSD-1..4 + existing scrape suite stay green (default-404 contents); confidence stays 0.25"
+          ],
+          "test_file": "tests/acceptance/scrape_test_ci.rs",
+          "scenario_name": "scrape_repo_with_ci_workflows_derives_the_test_driven_candidate",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/scraper-domain/src/detect.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs"
+          ],
+          "implementation_notes": "PURE (scraper-domain/detect.rs): (1) extend RepoFacts with `pub ci_workflows_url: Option<String>` (the .github/workflows dir url when present; None otherwise) and `pub tests_dir_url: Option<String>` (the tests/ dir url when present; None). Default both to None where parse_repo_facts builds body-facts; harvest fills them. (2) add the TestRatioOrCiMatrix arm to detect_signals ALONGSIDE the existing four arms: fire when `facts.ci_workflows_url.is_some() OR facts.tests_dir_url.is_some()` (the DISJUNCTION — guardrail pins that neither fires nothing). Emit Signal{ kind: SignalKind::TestRatioOrCiMatrix, value: <honest — e.g. \"CI workflows present (.github/workflows)\" when the CI disjunct fired, else \"tests/ directory present\">, source_url: <ci_workflows_url when CI fired, else tests_dir_url> }. Independent of the other arms. EFFECT (adapter-github/lib.rs): (3) in harvest_repo, after the RGSD-4 readme/docs probes: call content_exists(owner,repo,\".github/workflows\")? -> ci_workflows_url; call content_exists(owner,repo,\"tests\")? -> tests_dir_url (content_exists treats any 200 as present -> Some(url); a directory 200 returns a JSON array which the RGSD-4-fixed content_html_url resolves to a /tree/ URL). Set both on RepoFacts before detect_signals. Keep the union with parse_signals. Keep harvest_user unchanged. No new effect method is needed (reuse content_exists). client.rs: parse_repo_facts defaults the two new fields to None. Run cargo run -p xtask -- check-arch (stays 21). TEST PARADIGM (mandatory): DELIVER RED_UNIT — proptests for the TestRatioOrCiMatrix arm: fires iff ci_workflows_url.is_some() OR tests_dir_url.is_some(); CI-only fires (names CI, sourced at CI url), tests-only fires (names tests, sourced at tests url), neither yields none; independent of the other arms. Example-based is documented FALLBACK. Acceptance scenarios are pre-authored by DISTILL — do NOT rewrite them."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/scraper-domain/src/",
+      "crates/adapter-github/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from the committed DESIGN doc + SPIKE) + automated quality gate",
+    "approved_at": "2026-07-07",
+    "review_verdict": "APPROVED — automated quality gate PASS (single-step slice, 2 happy RED owned + 1 disjunction guardrail, ratio 1 step / 3 production files = 0.33, step ID valid, criteria <=5). Reuses content_exists (no new effect method). Specified by the RGSD design §1/§5 + the SPIKE (ripgrep .github/workflows + tests both 200 -> fires; Hello-World both 404 -> negative); the Phase-4 adversarial implementation review remains the substantive gate."
+  }
+}

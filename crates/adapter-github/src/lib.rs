@@ -299,6 +299,18 @@ impl GithubPort for GithubAdapter {
             facts.readme_url = Some(readme_url);
         }
         facts.docs_url = self.content_exists(owner, repo, "docs").await?;
+        // RGSD-5: probe `contents/.github/workflows` and `contents/tests` (both
+        // REUSE the RGSD-2 `content_exists` fork — NO new endpoint type), then set
+        // the two disjuncts of the `TestRatioOrCiMatrix` DISJUNCTION before
+        // detection. `content_exists(.., ".github/workflows")` → Some(dir url) when
+        // the repo runs CI workflows (200) / None when absent (404);
+        // `content_exists(.., "tests")` → Some(dir url) when a `tests/` directory
+        // 200s / None when absent (404). The pure `detect_signals` then fires the
+        // `TestRatioOrCiMatrix` arm iff EITHER CI workflows OR a tests/ dir is
+        // present (design section 2/5). A rate-limit / auth failure on either probe
+        // propagates via `?`, never silently read as "absent".
+        facts.ci_workflows_url = self.content_exists(owner, repo, ".github/workflows").await?;
+        facts.tests_dir_url = self.content_exists(owner, repo, "tests").await?;
         let detected = scraper_domain::detect_signals(&facts);
         Ok(union_signals_by_kind(
             detected,
