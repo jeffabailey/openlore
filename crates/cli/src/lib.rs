@@ -136,6 +136,29 @@ pub enum PhilosophyCommand {
         #[arg(value_name = "NAME_OR_OBJECT")]
         key: String,
     },
+    /// Mint a NEW philosophy — slice-24 (US-PV-003; ADR-059 §4.5).
+    /// `openlore philosophy add --name <n> --description <d> [--alias <a>...]
+    /// [--see-also <url>...]` composes an `org.openlore.philosophy` record,
+    /// signs it locally (reusing the claim signing model — ADR-006), and
+    /// persists it as a signed `<cid>.json` artifact + a `philosophies` row.
+    /// Local-first: nothing is signed or written before the sign prompt is
+    /// confirmed. A name colliding with a shipped seed is refused (AC-003.3);
+    /// an empty `--description` is a named-field error (AC-003.4).
+    Add {
+        /// The philosophy name — its normalized form is the derived object id
+        /// segment (`org.openlore.philosophy.<normalize(name)>`).
+        #[arg(long)]
+        name: String,
+        /// A one-line-or-more description of the philosophy.
+        #[arg(long)]
+        description: String,
+        /// Alias strings that triangulate onto this philosophy (repeatable).
+        #[arg(long)]
+        alias: Vec<String>,
+        /// See-also reference links (repeatable).
+        #[arg(long = "see-also")]
+        see_also: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -577,14 +600,43 @@ pub fn dispatch(cli: Cli) -> i32 {
             "the `ui` verb is dispatched as its own read-only composition root \
              before the read-write wiring (see Step 1.5 in `dispatch`)"
         ),
-        // Slice-22 (ADR-059): the offline `philosophy list` discovery verb is
-        // handled EARLY (Step 1.6 above) as its own store-independent entry
-        // point — it never reaches this read-write-wiring dispatch. This arm is
-        // unreachable but kept exhaustive for the match.
-        Command::Philosophy(..) => unreachable!(
-            "the `philosophy list` verb is dispatched offline before the \
-             read-write wiring (see Step 1.6 in `dispatch`)"
-        ),
+        // Slice-24 (ADR-059 §4.5): the `philosophy add` MINT verb needs BOTH
+        // the store and the signer (unlike the offline `list`/`show` reads), so
+        // it IS dispatched here, through the read-write wiring, AFTER the probe
+        // gauntlet + bootstrap-state check.
+        Command::Philosophy(PhilosophyCommand::Add {
+            name,
+            description,
+            alias,
+            see_also,
+        }) => match verbs::philosophy_add::run(
+            &wiring,
+            &verbs::philosophy_add::PhilosophyAddArgs {
+                name,
+                description,
+                aliases: alias,
+                see_also,
+            },
+        ) {
+            Ok(outcome) => {
+                print!("{}", outcome.stdout);
+                outcome.exit_code
+            }
+            Err(err) => {
+                eprintln!("openlore philosophy add: {err:#}");
+                1
+            }
+        },
+        // Slice-22/23 (ADR-059): the offline `philosophy list`/`show` verbs are
+        // handled EARLY (Steps 1.6/1.7 above) as their own store-independent
+        // entry points — they never reach this read-write-wiring dispatch. This
+        // arm is unreachable but kept exhaustive for the match.
+        Command::Philosophy(PhilosophyCommand::List { .. } | PhilosophyCommand::Show { .. }) => {
+            unreachable!(
+                "the `philosophy list`/`show` verbs are dispatched offline before the \
+                 read-write wiring (see Steps 1.6/1.7 in `dispatch`)"
+            )
+        }
     }
 }
 

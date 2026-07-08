@@ -38,6 +38,12 @@ pub mod philosophy_list;
 // resolves the key against the embedded seeds via `lexicon::philosophy::find`
 // (no store, no signer, no network).
 pub mod philosophy_show;
+// Slice-24 (philosophy vocabulary registry; ADR-059 §4.5): the `openlore
+// philosophy add` MINT verb — compose → sign → persist a NEW
+// `org.openlore.philosophy` record. Unlike `list`/`show` (offline seed reads)
+// it needs BOTH the store and the signer, so it is dispatched AFTER
+// `Wiring::production`.
+pub mod philosophy_add;
 pub mod scrape_github;
 // Slice-05 (appview search; step 01-04): the `openlore search` NETWORK verb
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario

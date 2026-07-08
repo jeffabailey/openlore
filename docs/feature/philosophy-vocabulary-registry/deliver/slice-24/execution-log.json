@@ -11,6 +11,11 @@
     {"sid":"02-01","p":"RED_ACCEPTANCE","s":"SKIPPED","d":"NOT_APPLICABLE:infra step owns no PA scenario; PA-1/2/5 owned by 03-01, PA-3 by 03-02","t":"2026-07-08T11:21:00Z"},
     {"sid":"02-01","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-07-08T11:35:00Z"},
     {"sid":"02-01","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-07-08T11:45:00Z"},
-    {"sid":"02-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-08T11:46:00Z"}
+    {"sid":"02-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-08T11:46:00Z"},
+    {"sid":"03-01","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-07-08T12:00:00Z"},
+    {"sid":"03-01","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-07-08T12:01:00Z"},
+    {"sid":"03-01","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-07-08T12:20:00Z"},
+    {"sid":"03-01","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-07-08T12:40:00Z"},
+    {"sid":"03-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-08T12:41:00Z"}
   ]
 }

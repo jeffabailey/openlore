@@ -72,6 +72,13 @@ impl OpenLorePaths {
     pub fn claims_dir(&self) -> PathBuf {
         self.data_dir.join("claims")
     }
+
+    /// Path to the minted-philosophy artifact directory:
+    /// `<data>/philosophies/` (ADR-059 §4.5, slice-24). Colocated with the
+    /// DuckDB file so it matches `DuckDbStorageAdapter`'s own write location.
+    pub fn philosophies_dir(&self) -> PathBuf {
+        self.data_dir.join("philosophies")
+    }
 }
 
 fn default_home() -> Result<PathBuf> {

@@ -63,6 +63,42 @@ pub fn render_record(record: &Philosophy) -> String {
     )
 }
 
+/// Render the compose preview for `philosophy add` (slice-24; US-PV-003 /
+/// AC-003.1/.2). Pure + total.
+///
+/// Names WHAT would be minted — the derived object id, the human name, the
+/// full description, aliases, seeAlso, and the minting author + compose
+/// timestamp — so the local-first user reviews the record BEFORE the sign
+/// prompt (nothing is signed or written until they confirm). The framing line
+/// mirrors `claim add`'s "asserted by you, not as truth" posture: a minted
+/// philosophy is proposed by the author, not decreed as canon. Format-tolerant:
+/// values render verbatim; layout is not a contract.
+pub fn render_compose_preview(record: &Philosophy, author_did: &str, composed_at: &str) -> String {
+    let id = object_id(&record.name);
+    let aliases = if record.aliases.is_empty() {
+        "(none)".to_string()
+    } else {
+        record.aliases.join(", ")
+    };
+    let see_also = if record.see_also.is_empty() {
+        "(none)".to_string()
+    } else {
+        record.see_also.join(", ")
+    };
+    format!(
+        "Compose preview (philosophy is minted by you, not decreed as canon)\n\
+         \x20 object:      {id}\n\
+         \x20 name:        {name}\n\
+         \x20 description: {description}\n\
+         \x20 aliases:     {aliases}\n\
+         \x20 seeAlso:     {see_also}\n\
+         \x20 author:      {author_did}\n\
+         \x20 composedAt:  {composed_at}\n",
+        name = record.name,
+        description = record.description,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Port-to-port unit test at the pure-renderer scope: the driving port is
@@ -112,5 +148,34 @@ mod tests {
             "the text view must not be a JSON array (JSON is strictly opt-in);\n\
              --- rendered ---\n{rendered}"
         );
+    }
+
+    /// The compose preview (slice-24) names the record being minted — its
+    /// derived object id, human name, full description, every alias, the author
+    /// DID, and the compose timestamp — so PA-2's "preview shown before the
+    /// sign prompt" beat holds. Pinned over a novel (non-seed) record so the
+    /// preview is exercised on genuinely new mint content.
+    #[test]
+    fn compose_preview_names_the_record_being_minted() {
+        let record = Philosophy {
+            name: "capability-security".to_string(),
+            description: "Grant each component only the minimum authority it needs.".to_string(),
+            aliases: vec!["ocap".to_string(), "cap-sec".to_string()],
+            see_also: vec!["https://en.wikipedia.org/wiki/Capability-based_security".to_string()],
+        };
+        let preview =
+            render_compose_preview(&record, "did:plc:test-jeff", "2026-07-08T12:00:00+00:00");
+
+        assert!(preview.contains(&object_id(&record.name)), "must name the object id");
+        assert!(preview.contains("capability-security"), "must name the philosophy");
+        assert!(
+            preview.contains(&record.description),
+            "must show the full description verbatim"
+        );
+        for alias in &record.aliases {
+            assert!(preview.contains(alias.as_str()), "must show alias {alias}");
+        }
+        assert!(preview.contains("did:plc:test-jeff"), "must name the author DID");
+        assert!(preview.contains("2026-07-08T12:00:00+00:00"), "must show composedAt");
     }
 }
