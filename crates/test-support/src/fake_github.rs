@@ -728,6 +728,53 @@ impl FakeGithub {
         Self::for_public_repo_with_test_evidence(target, false, true)
     }
 
+    /// A public repo whose REAL metadata fires ALL FIVE bounded signals via
+    /// genuine detection — the realistic replacement for the synthetic
+    /// `for_public_repo(target, signals)` scaffold (RGSD-6). Every fact the
+    /// five detectors read is configured on ONE posture so a scrape of this
+    /// body yields five candidates through `detect_signals` alone (NO synthetic
+    /// `signals[]`):
+    ///
+    /// - `language = "Rust"` → `MemorySafetyLanguage` (a memory-safety language);
+    /// - a committed `Cargo.lock` (`has_cargo_lock`) → `DependencyManifestPinned`;
+    /// - semver `tags` (`v1.2.3`, …) AND a present `CHANGELOG.md`
+    ///   (`has_changelog`) → `SemverAndChangelog` (the conjunction);
+    /// - a SUBSTANTIAL README (`readme_bytes >= README_SUBSTANTIAL_BYTES`, here
+    ///   20000) → `DocsPresentAndSubstantial` (the README disjunct);
+    /// - a `.github/workflows` CI directory (`has_ci_workflows`) →
+    ///   `TestRatioOrCiMatrix` (the CI disjunct).
+    ///
+    /// `has_docs_dir` / `has_tests_dir` stay `false` — the README and CI
+    /// disjuncts alone fire docs / test-driven, so the two second disjuncts are
+    /// deliberately left off to keep the posture minimal. This posture drives
+    /// REAL detection end-to-end and is what STEP 2 migrates the multi-signal
+    /// acceptance tests onto (retiring the `signals[]` scaffold).
+    pub fn for_public_repo_with_all_signals(target: &str) -> Self {
+        Self {
+            state: Arc::new(State {
+                target: target.to_string(),
+                resolution: Ok(Self::resolve_kind(target)),
+                signals: Vec::new(),
+                language: Some("Rust".to_string()),
+                has_cargo_lock: true,
+                tags: vec![
+                    "v1.2.3".to_string(),
+                    "v1.2.2".to_string(),
+                    "v1.0.0".to_string(),
+                ],
+                has_changelog: true,
+                readme_bytes: Some(20000),
+                has_docs_dir: false,
+                has_ci_workflows: true,
+                has_tests_dir: false,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
     /// Mark this fixture authenticated with the supplied remaining/limit
     /// rate budget (US-SCR-004 Ex 1). The token the production code sends is
     /// captured in the `seen_token` observation slot but NEVER echoed.
@@ -2014,5 +2061,71 @@ mod tests {
         .await
         .expect("offline probe must not hang");
         assert!(result.is_err(), "while offline the request must fail");
+    }
+
+    /// RGSD-6: `for_public_repo_with_all_signals` serves a `/repos` body whose
+    /// `language` is `"Rust"` (the `MemorySafetyLanguage` fact) with NO
+    /// synthetic `signals[]` — the realistic all-signals posture drives REAL
+    /// detection, never the legacy scaffold.
+    #[tokio::test]
+    async fn for_public_repo_with_all_signals_serves_language_and_no_synthetic_signals() {
+        let fake = FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo");
+        let handle = fake.serve_http().await;
+
+        let (status, body) =
+            get_json(&format!("{}/repos/rust-lang/cargo", handle.base_url())).await;
+
+        assert_eq!(status, 200, "a public repo must resolve at 200");
+        assert_eq!(
+            body["language"], "Rust",
+            "the all-signals body must carry the real `language` (MemorySafetyLanguage fact)"
+        );
+        assert!(
+            body["signals"].as_array().expect("signals array").is_empty(),
+            "the all-signals posture drives REAL detection — NO synthetic signals[]"
+        );
+    }
+
+    /// RGSD-6: the all-signals posture reflects EVERY remaining detector fact on
+    /// its dedicated route — `contents/Cargo.lock` (dependency-pinning), `/tags`
+    /// + `contents/CHANGELOG.md` (semver conjunction), a substantial `/readme`
+    /// (docs), and `contents/.github/workflows` (CI) — so a scrape fires all
+    /// five signals through genuine detection.
+    #[tokio::test]
+    async fn for_public_repo_with_all_signals_reflects_every_detector_fact() {
+        let fake = FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo");
+        let handle = fake.serve_http().await;
+        let base = handle.base_url();
+
+        let (cargo_lock_status, _) =
+            get_json(&format!("{base}/repos/rust-lang/cargo/contents/Cargo.lock")).await;
+        assert_eq!(cargo_lock_status, 200, "committed Cargo.lock → 200 (DependencyManifestPinned)");
+
+        let (_, tags_body) = get_json(&format!("{base}/repos/rust-lang/cargo/tags")).await;
+        let tags = tags_body.as_array().expect("tags array");
+        assert!(
+            tags.iter().any(|t| t["name"] == "v1.2.3"),
+            "the /tags route must list a semver tag (SemverAndChangelog half)"
+        );
+
+        let (changelog_status, _) =
+            get_json(&format!("{base}/repos/rust-lang/cargo/contents/CHANGELOG.md")).await;
+        assert_eq!(changelog_status, 200, "committed CHANGELOG → 200 (SemverAndChangelog half)");
+
+        let (_, readme_body) = get_json(&format!("{base}/repos/rust-lang/cargo/readme")).await;
+        assert_eq!(
+            readme_body["size"], 20000,
+            "the /readme route must report a substantial size (DocsPresentAndSubstantial)"
+        );
+        assert!(
+            readme_body["size"].as_u64().unwrap() >= 3000,
+            "README size must clear README_SUBSTANTIAL_BYTES"
+        );
+
+        let (ci_status, _) = get_json(&format!(
+            "{base}/repos/rust-lang/cargo/contents/.github/workflows"
+        ))
+        .await;
+        assert_eq!(ci_status, 200, "CI workflows dir → 200 (TestRatioOrCiMatrix)");
     }
 }
