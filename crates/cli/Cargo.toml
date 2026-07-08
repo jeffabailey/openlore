@@ -1168,3 +1168,22 @@ harness = true
 name = "philosophy_show"
 path = "../../tests/acceptance/philosophy_show.rs"
 harness = true
+
+# real-I/O acceptance: `openlore philosophy add` — MINT (compose → SIGN → persist)
+# a new philosophy (US-PV-003 / AC-003.1..4; ADR-059 §5 slice-24). The FIRST
+# philosophy slice that WRITES and SIGNS. Drives the REAL `openlore` bin via the
+# `run_openlore` / `run_openlore_with_stdin` support harness, signing through the
+# production composition root and persisting to the real local store under an
+# isolated `OPENLORE_HOME`. PA-1 is the walking skeleton (mint → sign → signed
+# <cid>.json artifact + printed object id); PA-2 is the local-first cancel
+# (empty stdin → no write, no PDS call); PA-3 is the seed-collision refusal
+# (non-zero + `--alias` guidance); PA-4 is the empty-description rejection
+# (named-field error, no panic); PA-5 pins the recorded author DID on the signed
+# artifact. Per Mandate 11 the sad paths are example-based, never PBT-generated at
+# this layer. Build-before-run: `cargo build --bin openlore`. DISTILL RED gate:
+# ALL PA-* classify RED (`philosophy` verb exists from slice-22 but has no `add`
+# subcommand → clap exit 2 = MISSING_FUNCTIONALITY) until DELIVER.
+[[test]]
+name = "philosophy_add"
+path = "../../tests/acceptance/philosophy_add.rs"
+harness = true
