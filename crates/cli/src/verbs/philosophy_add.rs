@@ -94,8 +94,19 @@ pub fn run(wiring: &Wiring, args: &PhilosophyAddArgs) -> Result<PhilosophyAddOut
     let author_did = wiring.identity.author_did().0.clone();
     let composed_at = wiring.clock.now_utc().to_rfc3339();
 
-    // Step 3 (03-02): the seed-collision pre-check lands here, before the
-    // preview + sign prompt, so a colliding name is refused with NO write.
+    // Step 3 (AC-003.3 / PA-3): seed-collision pre-check. A name that resolves
+    // to a shipped seed would duplicate an existing object id, so it is REFUSED
+    // here — BEFORE the preview, the sign prompt, and any write — with plain
+    // guidance (names the collision + hints `--alias` onto the existing one), a
+    // NON-ZERO exit, and NO record persisted (mirrors the local-first no-write
+    // proof). A handled outcome, never a panic. The `object_id UNIQUE` storage
+    // slot (02-01) remains defense-in-depth for the minted-vs-minted case.
+    if lexicon::philosophy::find(&args.name).is_some() {
+        return Ok(PhilosophyAddOutcome {
+            exit_code: 1,
+            stdout: seed_collision_guidance(&args.name, &object_id),
+        });
+    }
 
     // Step 4: render + print the preview, then block on the sign prompt. The
     // preview is written directly to stdout (not buffered into the outcome) so
@@ -170,4 +181,41 @@ pub fn run(wiring: &Wiring, args: &PhilosophyAddArgs) -> Result<PhilosophyAddOut
         exit_code: 0,
         stdout: out,
     })
+}
+
+/// Shape the plain seed-collision refusal guidance (AC-003.3 / PA-3). Names the
+/// colliding philosophy verbatim, says it already EXISTS as a shipped seed, and
+/// hints the recovery: reuse the existing one, or triangulate onto it with
+/// `--alias`. A pure `String` transform — the caller prints it with a non-zero
+/// exit; NOTHING is written.
+fn seed_collision_guidance(name: &str, object_id: &str) -> String {
+    format!(
+        "philosophy already exists: {name}\n\
+         a shipped seed already occupies {object_id} — reuse the existing \
+         philosophy as-is, or triangulate onto it with `--alias {name}` on a \
+         claim instead of minting a duplicate.\n"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The seed-collision guidance (PA-3) names the collision, states it already
+    /// EXISTS, and hints `--alias` — the three substrings the acceptance
+    /// scenario scans the CLI output for. Pinned as a pure `String` shaping test
+    /// (the pure seed-membership itself is property-covered in `lexicon`).
+    #[test]
+    fn seed_collision_guidance_names_collision_and_hints_alias() {
+        let guidance = seed_collision_guidance(
+            "memory-safety",
+            "org.openlore.philosophy.memory-safety",
+        );
+        assert!(guidance.contains("memory-safety"), "must name the collision");
+        assert!(
+            guidance.to_lowercase().contains("exist"),
+            "must say the philosophy already exists"
+        );
+        assert!(guidance.contains("--alias"), "must hint --alias onto the existing one");
+    }
 }
