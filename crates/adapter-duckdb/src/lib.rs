@@ -48,7 +48,7 @@ use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
 use duckdb::Connection;
 use ports::{
     AttributedClaim, AuthorRelationship, FederatedRow, GraphNode, ProbeOutcome, ScoringFilter,
-    SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
+    SignedPhilosophy, SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
 };
 
 mod graph_query;
@@ -56,6 +56,7 @@ mod peer_storage;
 mod probe;
 mod schema;
 mod schema_v3;
+mod schema_v4;
 mod store_read;
 
 pub use peer_storage::DuckDbPeerStorageAdapter;
@@ -72,6 +73,10 @@ pub struct DuckDbStorageAdapter {
     conn: Arc<Mutex<Connection>>,
     claims_dir: PathBuf,
     peer_claims_root: PathBuf,
+    /// Slice-24: `<root>/philosophies/` — where signed `<cid>.json`
+    /// minted-philosophy artifacts land (ADR-059 §4.5), colocated with the
+    /// other on-disk artifact directories under the storage root.
+    philosophies_dir: PathBuf,
 }
 
 impl DuckDbStorageAdapter {
@@ -99,6 +104,9 @@ impl DuckDbStorageAdapter {
         // reserved for slice-02 if installed separately; safe to skip).
         // See `schema_v3` + data-models.md §"Migration policy".
         schema_v3::run_migration(&mut conn)?;
+        // Slice-24 migration v4: minted-philosophy storage (`philosophies`
+        // table). Idempotent forward-only follow-on after v3 (ADR-059 §4.5).
+        schema_v4::run_migration(&mut conn)?;
 
         // Colocate `claims/` next to the DB file. data-models.md
         // §"DuckDB schema" defines the canonical layout
@@ -129,10 +137,27 @@ impl DuckDbStorageAdapter {
             }
         })?;
 
+        // Colocate `philosophies/` next to the DB file (ADR-059 §4.5). Signed
+        // `<cid>.json` minted-philosophy artifacts land here at write time; we
+        // only ensure the root exists at open.
+        let philosophies_dir = db_path
+            .parent()
+            .map(|p| p.join("philosophies"))
+            .unwrap_or_else(|| PathBuf::from("philosophies"));
+        fs::create_dir_all(&philosophies_dir).map_err(|err| {
+            StorageError::SchemaMigrationFailed {
+                message: format!(
+                    "create philosophies dir {}: {err}",
+                    philosophies_dir.display()
+                ),
+            }
+        })?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             claims_dir,
             peer_claims_root,
+            philosophies_dir,
         })
     }
 
@@ -164,6 +189,12 @@ impl DuckDbStorageAdapter {
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
     fn artifact_path(&self, cid: &Cid) -> PathBuf {
         self.claims_dir.join(format!("{}.json", cid.0))
+    }
+
+    /// Construct the minted-philosophy artifact path for a CID:
+    /// `<philosophies_dir>/<cid>.json` (ADR-059 §4.5).
+    fn philosophy_artifact_path(&self, cid: &Cid) -> PathBuf {
+        self.philosophies_dir.join(format!("{}.json", cid.0))
     }
 
     /// The set of DIDs with a currently-ACTIVE subscription
@@ -354,6 +385,99 @@ impl StoragePort for DuckDbStorageAdapter {
                 message: format!("insert into claim_references: {err}"),
             })?;
         }
+
+        tx.commit().map_err(|err| StorageError::WriteFailed {
+            cid: cid.clone(),
+            message: format!("commit tx: {err}"),
+        })?;
+
+        Ok(())
+    }
+
+    fn write_signed_philosophy(&self, signed: &SignedPhilosophy) -> Result<(), StorageError> {
+        // Mirrors `write_signed_claim`'s atomic contract (ADR-059 §4.5):
+        // artifact file first (tmp + fsync + rename), then the DB row inside a
+        // transaction. The artifact embeds `author_did` (self-describing, PA-5);
+        // the `object_id UNIQUE` slot is enforced by the DB — a duplicate
+        // surfaces `StorageError::WriteFailed` (typed, never a panic) so the
+        // CLI collision path can render a refusal (03-02 defense-in-depth).
+        let cid = &signed.signature.signed_cid;
+        let artifact = self.philosophy_artifact_path(cid);
+        let artifact_tmp = artifact.with_extension("json.tmp");
+
+        // Step 1: serialize the SignedPhilosophy once (embeds author_did).
+        let json_bytes =
+            serde_json::to_vec_pretty(signed).map_err(|err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: format!("serialize signed philosophy: {err}"),
+            })?;
+
+        // Step 2: atomic file write — tmp + fsync + rename (POSIX atomic).
+        {
+            let mut f =
+                fs::File::create(&artifact_tmp).map_err(|err| StorageError::WriteFailed {
+                    cid: cid.clone(),
+                    message: format!("create {}: {err}", artifact_tmp.display()),
+                })?;
+            f.write_all(&json_bytes)
+                .map_err(|err| StorageError::WriteFailed {
+                    cid: cid.clone(),
+                    message: format!("write {}: {err}", artifact_tmp.display()),
+                })?;
+            f.sync_all().map_err(|err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: format!("sync_all {}: {err}", artifact_tmp.display()),
+            })?;
+        }
+        fs::rename(&artifact_tmp, &artifact).map_err(|err| StorageError::WriteFailed {
+            cid: cid.clone(),
+            message: format!(
+                "rename {} -> {}: {err}",
+                artifact_tmp.display(),
+                artifact.display()
+            ),
+        })?;
+
+        // Step 3: DB transaction — insert the philosophies row.
+        let composed_at_naive =
+            parse_composed_at(&signed.composed_at).map_err(|err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: err,
+            })?;
+
+        let mut conn = self.conn.lock().map_err(|_| StorageError::WriteFailed {
+            cid: cid.clone(),
+            message: "connection mutex poisoned".to_string(),
+        })?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: format!("begin tx: {err}"),
+            })?;
+
+        tx.execute(
+            "INSERT INTO philosophies (cid, object_id, name, description, \
+             author_did, composed_at, artifact_path) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            duckdb::params![
+                cid.0,
+                signed.object_id,
+                signed.philosophy.name,
+                signed.philosophy.description,
+                signed.author_did.0,
+                composed_at_naive,
+                artifact.display().to_string(),
+            ],
+        )
+        .map_err(|err| StorageError::WriteFailed {
+            cid: cid.clone(),
+            message: format!(
+                "insert into philosophies (object_id {:?}): {err}",
+                signed.object_id
+            ),
+        })?;
 
         tx.commit().map_err(|err| StorageError::WriteFailed {
             cid: cid.clone(),
@@ -789,6 +913,144 @@ mod tests {
                 verification_method: format!("{author_did}#org.openlore.application"),
             },
         }
+    }
+
+    /// Build a minimal `SignedPhilosophy` for the slice-24 mint-storage tests.
+    /// `cid` is both the artifact filename stem and the row PK; `object_id` is
+    /// the derived join key carried onto the row (the `UNIQUE` slot).
+    fn signed_philosophy(
+        name: &str,
+        description: &str,
+        author_did: &str,
+        cid: &str,
+        object_id: &str,
+    ) -> SignedPhilosophy {
+        SignedPhilosophy {
+            philosophy: ports::lexicon::Philosophy {
+                name: name.to_string(),
+                description: description.to_string(),
+                aliases: Vec::new(),
+                see_also: Vec::new(),
+            },
+            object_id: object_id.to_string(),
+            author_did: Did(format!("{author_did}#org.openlore.application")),
+            composed_at: "2026-07-08T12:00:00Z".to_string(),
+            signature: SignatureBlock {
+                signed_cid: Cid(cid.to_string()),
+                signature_bytes: vec![0u8; 64],
+                verification_method: format!("{author_did}#org.openlore.application"),
+            },
+        }
+    }
+
+    /// Behavior (slice-24, ADR-059 §4.5): `write_signed_philosophy` persists
+    /// the signed `<cid>.json` artifact under `philosophies/` (embedding the
+    /// author DID — PA-5) AND the `philosophies` row (object_id + author_did).
+    #[test]
+    fn write_signed_philosophy_persists_artifact_and_row() {
+        let (dir, adapter) = open_tmp();
+        let signed = signed_philosophy(
+            "capability-security",
+            "Grant each component only the minimum authority it needs.",
+            "did:plc:test-jeff",
+            "bafyphilaaaa",
+            "org.openlore.philosophy.capability-security",
+        );
+
+        adapter
+            .write_signed_philosophy(&signed)
+            .expect("write signed philosophy");
+
+        // Row present carrying the derived object_id + the author DID.
+        {
+            let conn = adapter.conn.lock().expect("lock conn");
+            let (object_id, author_did): (String, String) = conn
+                .query_row(
+                    "SELECT object_id, author_did FROM philosophies WHERE cid = ?",
+                    duckdb::params!["bafyphilaaaa"],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("philosophies row must be present");
+            assert_eq!(object_id, "org.openlore.philosophy.capability-security");
+            assert!(
+                author_did.contains("did:plc:test-jeff"),
+                "row must record the author DID; got {author_did:?}"
+            );
+        }
+
+        // Artifact on disk under `philosophies/`, self-describing (author DID).
+        let artifact = dir.path().join("philosophies").join("bafyphilaaaa.json");
+        assert!(
+            artifact.exists(),
+            "signed philosophy artifact must exist at {}",
+            artifact.display()
+        );
+        let json = std::fs::read_to_string(&artifact).expect("read artifact");
+        assert!(
+            json.contains("did:plc:test-jeff"),
+            "the signed artifact must embed the author DID (self-describing, PA-5); got:\n{json}"
+        );
+    }
+
+    /// Behavior (slice-24, AC-003.3 defense-in-depth): a SECOND record with the
+    /// same `object_id` (different content ⟹ different cid) violates the
+    /// `object_id UNIQUE` slot and surfaces a TYPED `StorageError` (never a
+    /// panic), leaving exactly one row for that object id.
+    #[test]
+    fn duplicate_object_id_is_a_typed_error_not_a_panic() {
+        let (_dir, adapter) = open_tmp();
+        let first = signed_philosophy(
+            "capability-security",
+            "First description.",
+            "did:plc:test-jeff",
+            "bafyphilbbbb",
+            "org.openlore.philosophy.capability-security",
+        );
+        adapter
+            .write_signed_philosophy(&first)
+            .expect("first write succeeds");
+
+        let duplicate = signed_philosophy(
+            "capability-security",
+            "A DIFFERENT description (distinct cid, same object_id).",
+            "did:plc:test-jeff",
+            "bafyphilcccc",
+            "org.openlore.philosophy.capability-security",
+        );
+        let result = adapter.write_signed_philosophy(&duplicate);
+        assert!(
+            matches!(result, Err(StorageError::WriteFailed { .. })),
+            "a duplicate object_id must return a typed WriteFailed error, got {result:?}"
+        );
+
+        let conn = adapter.conn.lock().expect("lock conn");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM philosophies WHERE object_id = ?",
+                duckdb::params!["org.openlore.philosophy.capability-security"],
+                |row| row.get(0),
+            )
+            .expect("count query");
+        assert_eq!(
+            count, 1,
+            "object_id UNIQUE must keep exactly one row for the colliding id"
+        );
+    }
+
+    /// Behavior (slice-24): `open` migrates to schema v4 and the `philosophies`
+    /// table exists — the probe compares against v4, so its own schema is
+    /// accepted (probe asserts v4).
+    #[test]
+    fn migration_v4_registers_schema_version_four() {
+        let (_dir, adapter) = open_tmp();
+        let conn = adapter.conn.lock().expect("lock conn");
+        let observed = schema::read_version(&conn).expect("read schema version");
+        assert_eq!(
+            observed, 4,
+            "open must migrate to schema v4 (ADR-059 §4.5 minted storage)"
+        );
+        conn.execute_batch("SELECT * FROM philosophies LIMIT 0")
+            .expect("philosophies table must exist after migration v4");
     }
 
     /// Behavior: migration v3 creates all four peer-storage tables.

@@ -234,6 +234,18 @@ impl StoragePort for InMemoryStorage {
         panic!("Not yet implemented -- RED scaffold");
     }
 
+    // SCAFFOLD: true (slice-24) — the philosophy-mint acceptance scenarios
+    // (PA-1..5) drive the REAL `DuckDbStorageAdapter` through the subprocess
+    // binary, never this in-memory double, so this method stays a RED scaffold
+    // (the whole `InMemoryStorage` is an all-`panic!` scaffold). It exists only
+    // to satisfy the extended `StoragePort` trait surface.
+    fn write_signed_philosophy(
+        &self,
+        _signed: &ports::SignedPhilosophy,
+    ) -> Result<(), StorageError> {
+        panic!("Not yet implemented -- RED scaffold (slice-24 write_signed_philosophy)");
+    }
+
     fn read_signed_claim(&self, _cid: &Cid) -> Result<Option<SignedClaim>, StorageError> {
         panic!("Not yet implemented -- RED scaffold");
     }

@@ -165,9 +165,51 @@ pub enum StorageError {
     QueryFailed { message: String },
 }
 
+// -----------------------------------------------------------------------------
+// Slice-24 (philosophy vocabulary registry) — minted signed-philosophy record
+// -----------------------------------------------------------------------------
+//
+// The self-describing artifact persisted by `StoragePort::write_signed_philosophy`
+// and written to `<root>/philosophies/<cid>.json` (ADR-059 §4.5). It EMBEDS the
+// `author_did` (like `SignedClaim` embeds its author) so the record is
+// self-describing off the DB — the minted-philosophy author survives a store
+// rebuild (PA-5). The signing model is REUSED verbatim (ADR-006): the CLI
+// derives `signature.signed_cid` via `claim_domain::compute_cid` over the
+// record's canonical bytes and signs it via `IdentityPort::sign`; NO new
+// signing primitive is introduced. `object_id` is the derived join key
+// (`lexicon::object_id(name)`), carried explicitly so the storage layer can
+// enforce the `object_id UNIQUE` slot without re-deriving it.
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignedPhilosophy {
+    /// The composed `org.openlore.philosophy` record (name, description,
+    /// aliases, seeAlso). Its serde shape mirrors the Lexicon keys verbatim.
+    pub philosophy: lexicon::Philosophy,
+    /// The derived deterministic object id (`org.openlore.philosophy.<slug>`).
+    pub object_id: String,
+    /// The minting author's DID — embedded so the artifact is self-describing.
+    pub author_did: Did,
+    /// RFC3339 UTC compose timestamp (from `ClockPort::now_utc()`).
+    pub composed_at: String,
+    /// The signature block (reused `claim_domain::SignatureBlock`); its
+    /// `signed_cid` is this record's content address + artifact filename stem.
+    pub signature: SignatureBlock,
+}
+
 pub trait StoragePort {
     fn probe(&self) -> ProbeOutcome;
     fn write_signed_claim(&self, signed: &SignedClaim) -> Result<(), StorageError>;
+
+    /// Persist a locally-minted signed philosophy (ADR-059 §4.5, slice-24).
+    ///
+    /// Mirrors [`Self::write_signed_claim`]'s atomic contract: write the signed
+    /// `<cid>.json` artifact (tmp + fsync + rename, embedding `author_did`) AND
+    /// insert the `philosophies` row in one transaction-equivalent. The
+    /// `object_id UNIQUE` slot is enforced by the DB — a duplicate object id
+    /// surfaces a typed [`StorageError`] (never a panic) so the CLI collision
+    /// path (03-02) can render a refusal as defense-in-depth atop its seed
+    /// pre-check.
+    fn write_signed_philosophy(&self, signed: &SignedPhilosophy) -> Result<(), StorageError>;
     fn read_signed_claim(&self, cid: &Cid) -> Result<Option<SignedClaim>, StorageError>;
     fn query_by_subject(&self, subject: &str) -> Result<Vec<SignedClaim>, StorageError>;
     fn query_referencing(

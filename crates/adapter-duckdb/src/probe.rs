@@ -32,21 +32,24 @@ use serde_json::json;
 
 use crate::schema;
 use crate::schema_v3;
+use crate::schema_v4;
 
-/// The highest schema version THIS binary knows how to read. Slice-03
-/// teaches the adapter migration v3, so the forward-incompatibility
-/// refusal must compare against v3 — not the slice-01-only
-/// `schema::LATEST_VERSION` (=1), which would make the probe refuse its
-/// own freshly-applied v3 schema. Computed as the max of the two
-/// migration heads so adding future slices only requires bumping their
-/// own version constant.
+/// The highest schema version THIS binary knows how to read. Each slice
+/// that adds a migration bumps this: slice-03 taught migration v3, slice-24
+/// teaches migration v4, so the forward-incompatibility refusal must compare
+/// against v4 — not the slice-01-only `schema::LATEST_VERSION` (=1), which
+/// would make the probe refuse its own freshly-applied schema. Computed as
+/// the max of the migration heads so adding future slices only requires
+/// bumping their own version constant.
 const fn supported_version() -> i32 {
     let v1 = schema::LATEST_VERSION;
     let v3 = schema_v3::PEER_STORAGE_VERSION;
-    if v3 > v1 {
-        v3
+    let v4 = schema_v4::PHILOSOPHY_STORAGE_VERSION;
+    let max_v1_v3 = if v3 > v1 { v3 } else { v1 };
+    if v4 > max_v1_v3 {
+        v4
     } else {
-        v1
+        max_v1_v3
     }
 }
 
