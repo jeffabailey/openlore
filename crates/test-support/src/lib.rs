@@ -73,20 +73,8 @@ pub use fixtures_peer::{
 // storage/identity/pds reference.
 pub mod fake_github;
 pub use fake_github::{
-    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeSignal,
-    FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET,
-    FIXTURE_VALID_PAT,
-};
-
-// Slice-02 step 07-01: canonical GitHub-harvest fixtures. Symmetric with
-// `fixtures_peer.rs`; one free function per well-known signal set used
-// across US-SCR-001..005 acceptance scenarios. The fixtures supply raw
-// harvested EFFECT signals only; the candidate derivation (predicate, 0.25
-// default) is the PURE `scraper-domain`'s job downstream (WD-56).
-pub mod fixtures_github;
-pub use fixtures_github::{
-    fixture_cargo_five_signals, fixture_three_docs_signals_one_predicate,
-    fixture_torvalds_user_aggregate_signals,
+    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeTargetKind,
+    FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
 };
 
 // Slice-04 step 07-01 (DD-GRAPH): canonical scoring + traversal fixtures.

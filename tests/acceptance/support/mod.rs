@@ -2149,13 +2149,8 @@ pub fn assert_purge_state_delta(before: &HashMap<String, String>, after: &HashMa
 // Re-export the FakeGithub double + fixtures flat so the scrape_* files name
 // them via `use support::*` (matching how the slice-03 peer doubles surface).
 pub use openlore_test_support::fake_github::{
-    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeSignal,
-    FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET,
-    FIXTURE_VALID_PAT,
-};
-pub use openlore_test_support::{
-    fixture_cargo_five_signals, fixture_three_docs_signals_one_predicate,
-    fixture_torvalds_user_aggregate_signals,
+    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeTargetKind,
+    FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
 };
 
 /// A running `FakeGithub` in-process HTTP server, owning its own tokio

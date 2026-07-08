@@ -51,7 +51,7 @@ fn scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token() {
     // GIVEN an authenticated GitHub posture for the `torvalds` USER target
     // that would exhaust the anonymous budget, carrying a 4982/5000 rate
     // budget; and a valid PAT in the child's `GITHUB_TOKEN`.
-    let github = FakeGithub::for_public_user("torvalds", vec![])
+    let github = FakeGithub::for_public_user("torvalds")
         .authenticated(4982, 5000);
     let server = GithubServer::start(github);
 

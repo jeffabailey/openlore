@@ -217,7 +217,7 @@ fn scrape_github_resolves_user_target_and_derives_no_candidates_aggregation_defe
     // is deferred to slice-04 (WD-64), so a real user scrape yields ZERO signals
     // today — no synthetic aggregate is injected.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_user("torvalds", vec![]));
+    let github = GithubServer::start(FakeGithub::for_public_user("torvalds"));
 
     // WHEN Maria scrapes the bare-user target (no --sign).
     let outcome = run_openlore_scrape(&env, &["scrape", "github", "torvalds"], github.base_url());

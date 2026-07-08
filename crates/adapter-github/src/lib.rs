@@ -42,7 +42,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{GithubError, GithubPort, ProbeOutcome, Signal, SignalKind, TargetKind};
+use ports::{GithubError, GithubPort, ProbeOutcome, Signal, TargetKind};
 
 pub mod client;
 pub mod probe;
@@ -252,17 +252,11 @@ impl GithubPort for GithubAdapter {
         // the effect-shell side channel so the verb can report it. The token
         // is NEVER recorded — an AuthReport carries only the budget numbers.
         record_auth_report(client::parse_auth_report(&body));
-        // RGSD-1 union bridge (design §4): the returned signals are the UNION
-        // of the NEW pure detection over real repo facts
-        // (`detect_signals(parse_repo_facts(body))` — reads the live `language`
-        // field) AND the legacy synthetic `signals[]` path (`parse_signals`,
-        // which the real API never populates but the existing FakeGithub
-        // postures still inject). Detection results lead so a real repo's
-        // language-derived signal is present; the legacy path fills the rest,
-        // deduped by `SignalKind` so a (currently impossible) both-present kind
-        // can never double-count. As detectors 2–5 land and the fake fixtures
-        // migrate to realistic bodies, the `parse_signals` path is removed
-        // (RGSD-6 cleanup).
+        // The returned signals are ENTIRELY the product of REAL detection over
+        // the live repo facts (`detect_signals`) — the synthetic `signals[]`
+        // bridge is retired (RGSD-6). Each fact the five detectors read is
+        // fetched from a public endpoint below, then `detect_signals` fires the
+        // matching arm.
         // RGSD-2: probe `contents/Cargo.lock` (a SECOND public endpoint) and set
         // `cargo_lock_url` before detection. 200 => Some(file html_url) (a
         // committed Cargo.lock — the manifest is pinned); 404 => None (absent, a
@@ -311,72 +305,28 @@ impl GithubPort for GithubAdapter {
         // propagates via `?`, never silently read as "absent".
         facts.ci_workflows_url = self.content_exists(owner, repo, ".github/workflows").await?;
         facts.tests_dir_url = self.content_exists(owner, repo, "tests").await?;
-        let detected = scraper_domain::detect_signals(&facts);
-        Ok(union_signals_by_kind(
-            detected,
-            client::parse_signals(&body),
-        ))
+        Ok(scraper_domain::detect_signals(&facts))
     }
 
-    /// Harvest a BOUNDED cross-repo aggregate for a user / contributor target
-    /// (deep triangulation deferred to slice-04 per WD-64).
+    /// Harvest a USER / contributor target (WD-64). The bounded cross-repo
+    /// USER aggregate is DEFERRED to slice-04, so slice-02 derives NO signals
+    /// from a user target — a real user scrape reads zero repo-level signals
+    /// today. The `/users/{user}` body is still fetched so the observed
+    /// auth/rate-budget posture is surfaced (the CLI reports it), but the
+    /// returned signal set is empty (no synthetic aggregate is injected —
+    /// RGSD-6).
     ///
-    /// `GET {base}/users/{user}` and reshape the response's `signals[]`, then
-    /// CAP the aggregate to [`USER_AGGREGATE_SIGNAL_CAP`] so a user-target can
-    /// never fan out unboundedly (WD-64 / Q-DELIVER-4). The cap is the
-    /// slice-02 bound; deep cross-repo triangulation (a larger, scored walk)
-    /// is slice-04's concern.
+    /// `GET {base}/users/{user}` resolves + records the auth report, then
+    /// returns an empty signal set (deep, scored cross-repo triangulation is
+    /// slice-04's concern).
     async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
         let path = format!("/users/{user}");
         let body = self.get_public(&path, user).await?;
         // Surface the observed auth/rate-budget posture (ADR-019 §5); see
         // `harvest_repo`. The token is NEVER recorded here.
         record_auth_report(client::parse_auth_report(&body));
-        Ok(bound_user_aggregate(client::parse_signals(&body)))
+        Ok(Vec::new())
     }
-}
-
-/// The slice-02 bound on a USER-target's cross-repo aggregate (WD-64 /
-/// Q-DELIVER-4). A user with many public repos must NOT fan out unboundedly;
-/// the aggregate harvest is capped at this many signals (a small fixed cap —
-/// deep, scored cross-repo triangulation is deferred to slice-04). The cap is
-/// surfaced as a constant so the bound is explicit + auditable rather than an
-/// incidental side effect of how many signals a single response happened to
-/// carry.
-pub const USER_AGGREGATE_SIGNAL_CAP: usize = 25;
-
-/// Apply the slice-02 user-aggregate bound (WD-64): truncate the harvested
-/// aggregate to at most [`USER_AGGREGATE_SIGNAL_CAP`] signals. PURE — a
-/// value-in / value-out transform of the already-fetched signal set, so the
-/// bound is testable without any network. Repo harvests are NOT capped here:
-/// a repo's signal set is intrinsically bounded by the SSOT mapping, whereas a
-/// user aggregates across an unbounded number of public repos.
-fn bound_user_aggregate(mut signals: Vec<Signal>) -> Vec<Signal> {
-    signals.truncate(USER_AGGREGATE_SIGNAL_CAP);
-    signals
-}
-
-/// Union the NEW pure detection with the legacy synthetic `signals[]` set,
-/// deduped by [`SignalKind`] against the DETECTED kinds only (RGSD-1 union
-/// bridge, design §4). PURE — a value-in / value-out merge so the bridge is
-/// testable without any network.
-///
-/// `detected` (the NEW pure detection) leads; each `legacy` signal is appended
-/// UNLESS its kind was already produced by detection — that is the "both
-/// present" case design §4 dedups so a kind can never double-count. Dedup is
-/// against the detected kinds ONLY, never within `legacy`: the legacy path
-/// legitimately carries multiple signals of the SAME kind (e.g. three
-/// `DocsPresentAndSubstantial` signals that collapse into one candidate
-/// downstream in `derive_candidates`), and those must all pass through.
-fn union_signals_by_kind(detected: Vec<Signal>, legacy: Vec<Signal>) -> Vec<Signal> {
-    let detected_kinds: Vec<SignalKind> = detected.iter().map(|s| s.kind).collect();
-    let mut out = detected;
-    for signal in legacy {
-        if !detected_kinds.contains(&signal.kind) {
-            out.push(signal);
-        }
-    }
-    out
 }
 
 impl GithubAdapter {
@@ -732,107 +682,6 @@ mod tests {
             ResolvedTarget::Repo { .. } => panic!("a bare token must resolve as User"),
         }
     }
-
-    /// `bound_user_aggregate` enforces the WD-64 / Q-DELIVER-4 slice-02 cap:
-    /// an over-cap aggregate is truncated to EXACTLY `USER_AGGREGATE_SIGNAL_CAP`
-    /// (preserving the leading prefix order — a user-target can never fan out
-    /// unboundedly), while an at-or-under-cap aggregate passes through
-    /// unchanged. Pure decomposition of `harvest_user`'s GREEN body — the bound
-    /// is testable without any network.
-    #[test]
-    fn bound_user_aggregate_caps_an_oversized_aggregate_and_preserves_small_ones() {
-        use ports::SignalKind;
-
-        let signal = |n: usize| Signal {
-            kind: SignalKind::TestRatioOrCiMatrix,
-            value: format!("aggregate signal {n}"),
-            source_url: format!("https://github.com/torvalds#{n}"),
-        };
-
-        // Over the cap: truncate to exactly the cap, leading prefix preserved.
-        let oversized: Vec<Signal> = (0..USER_AGGREGATE_SIGNAL_CAP + 7).map(signal).collect();
-        let bounded = bound_user_aggregate(oversized.clone());
-        assert_eq!(
-            bounded.len(),
-            USER_AGGREGATE_SIGNAL_CAP,
-            "an over-cap user aggregate must be bounded to the slice-02 cap (WD-64)"
-        );
-        assert_eq!(
-            bounded.as_slice(),
-            &oversized[..USER_AGGREGATE_SIGNAL_CAP],
-            "the bound must preserve the leading prefix (no fan-out reordering)"
-        );
-
-        // At or under the cap: pass through unchanged.
-        let small: Vec<Signal> = (0..2).map(signal).collect();
-        assert_eq!(
-            bound_user_aggregate(small.clone()),
-            small,
-            "an at-or-under-cap aggregate must pass through unchanged"
-        );
-    }
-
-    /// `union_signals_by_kind` merges the NEW pure detection with the legacy
-    /// synthetic `signals[]` path, deduped by `SignalKind` (RGSD-1 union
-    /// bridge, design §4). Detection leads; a legacy signal whose kind is
-    /// already present is dropped so no predicate double-counts; a legacy
-    /// signal of a fresh kind is appended. Pure decomposition of
-    /// `harvest_repo`'s union — testable without any network.
-    #[test]
-    fn union_signals_by_kind_dedupes_with_detection_leading() {
-        let detected = Signal {
-            kind: SignalKind::MemorySafetyLanguage,
-            value: "primary language: Rust".to_string(),
-            source_url: "https://github.com/rust-lang/cargo".to_string(),
-        };
-        // A legacy signal of the SAME kind must be dropped (detection wins).
-        let legacy_same_kind = Signal {
-            kind: SignalKind::MemorySafetyLanguage,
-            value: "Rust + no unsafe blocks".to_string(),
-            source_url: "https://github.com/rust-lang/cargo".to_string(),
-        };
-        // A legacy signal of a FRESH kind must be appended.
-        let legacy_fresh_kind = Signal {
-            kind: SignalKind::DependencyManifestPinned,
-            value: "Cargo.lock committed".to_string(),
-            source_url: "https://github.com/rust-lang/cargo/blob/master/Cargo.lock".to_string(),
-        };
-
-        let unioned = union_signals_by_kind(
-            vec![detected.clone()],
-            vec![legacy_same_kind, legacy_fresh_kind.clone()],
-        );
-
-        assert_eq!(
-            unioned,
-            vec![detected, legacy_fresh_kind],
-            "detection leads, the duplicate-kind legacy signal is dropped, the \
-             fresh-kind legacy signal is appended"
-        );
-
-        // The empty-detection case passes the legacy set through verbatim so
-        // every existing FakeGithub `signals[]` posture stays untouched —
-        // INCLUDING multiple legacy signals of the SAME kind (they collapse
-        // downstream in `derive_candidates`, NOT here; dedup is against the
-        // detected kinds only, never within legacy).
-        let docs_a = Signal {
-            kind: SignalKind::DocsPresentAndSubstantial,
-            value: "docs/ directory present".to_string(),
-            source_url: "https://github.com/x/y/tree/master/docs".to_string(),
-        };
-        let docs_b = Signal {
-            kind: SignalKind::DocsPresentAndSubstantial,
-            value: "README 412 lines (> 200)".to_string(),
-            source_url: "https://github.com/x/y/blob/master/README.md".to_string(),
-        };
-        assert_eq!(
-            union_signals_by_kind(Vec::new(), vec![docs_a.clone(), docs_b.clone()]),
-            vec![docs_a, docs_b],
-            "with no detection ALL legacy signals pass through unchanged — even \
-             same-kind ones (they collapse downstream, not in the bridge)"
-        );
-    }
-
     /// `classify_status` maps HTTP refusal statuses onto the railway-oriented
     /// `GithubError` surface; the 401 path NEVER echoes a token value
     /// (US-SCR-004 no-token-leak).

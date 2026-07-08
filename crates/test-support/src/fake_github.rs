@@ -96,53 +96,6 @@ pub enum FakeTargetKind {
     User { user: String },
 }
 
-/// A harvested public signal, as the fake returns it before the pure
-/// `scraper-domain::derive_candidates` maps it to a candidate.
-///
-/// Fixture-local mirror of `scraper_domain::Signal` (component-boundaries
-/// §`crates/scraper-domain`): `kind` matches a `signal_predicate_mapping`
-/// entry; `value` is the human-readable detail a candidate names in its
-/// source-signal line; `source_url` is the public GitHub URL that becomes
-/// the candidate's evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FakeSignal {
-    /// Stable identifier matching a `jobs.yaml` mapping entry's signal kind
-    /// (e.g. `"DependencyManifestPinned"`, `"DocsPresentAndSubstantial"`).
-    pub kind: String,
-    /// Human-readable detail ("Cargo.lock committed (exact pins)",
-    /// "test ratio 0.61"). This is what a candidate names as its source.
-    pub value: String,
-    /// Public GitHub URL evidencing the signal (becomes candidate evidence).
-    pub source_url: String,
-}
-
-impl FakeSignal {
-    /// Convenience constructor for a fixture signal.
-    pub fn new(
-        kind: impl Into<String>,
-        value: impl Into<String>,
-        source_url: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            value: value.into(),
-            source_url: source_url.into(),
-        }
-    }
-
-    /// The fake's JSON view of one harvested signal, served under the
-    /// `signals` array of the resolve/harvest endpoints. The adapter
-    /// re-shapes this into `scraper_domain::Signal`; the fake just serves
-    /// the raw harvested EFFECT data (WD-56 pure/effect split).
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "kind": self.kind,
-            "value": self.value,
-            "source_url": self.source_url,
-        })
-    }
-}
-
 /// The auth posture a `FakeGithub` was constructed with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FakeAuthMode {
@@ -166,9 +119,6 @@ struct State {
     /// not-found / private / offline / rate-limited / token-rejected
     /// postures. Constructor-pinned (DD-SCR-3).
     resolution: Result<FakeTargetKind, FakeGithubErrorPosture>,
-    /// The signals `harvest_repo` / `harvest_user` returns on the happy
-    /// path. Empty for the no-matching-signals posture (US-SCR-002 Ex 2).
-    signals: Vec<FakeSignal>,
     /// The REAL `/repos/{owner}/{repo}` `language` field (RGSD-1). `Some`
     /// only for the realistic-body posture `for_public_repo_with_language`,
     /// which serves a live-shaped repo body (a `language` string, NO
@@ -313,10 +263,10 @@ impl FakeGithubErrorPosture {
 /// Deterministic read-only test double for the public GitHub API.
 ///
 /// Construct with a posture (`for_public_repo`, `for_public_user`,
-/// `for_not_found`, `for_private_target`, `offline`, `rate_limited_anon`,
-/// `with_rejected_token`, `authenticated`, `with_no_matching_signals`,
-/// `with_multi_signal_single_predicate`), then `serve_http()` to obtain a
-/// base URL the `adapter-github` resolves against via the
+/// `for_public_repo_with_*` real-fact builders, `for_not_found`,
+/// `for_private_target`, `offline`, `rate_limited_anon`, `with_rejected_token`,
+/// `authenticated`, `with_no_matching_signals`), then `serve_http()` to obtain
+/// a base URL the `adapter-github` resolves against via the
 /// `OPENLORE_GITHUB_API_BASE` env-var seam.
 #[derive(Clone)]
 pub struct FakeGithub {
@@ -353,14 +303,12 @@ impl FakeGithub {
     fn from_state(
         target: &str,
         resolution: Result<FakeTargetKind, FakeGithubErrorPosture>,
-        signals: Vec<FakeSignal>,
         auth: FakeAuthMode,
     ) -> Self {
         Self {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution,
-                signals,
                 auth,
                 language: None,
                 has_cargo_lock: false,
@@ -394,52 +342,40 @@ impl FakeGithub {
     // Happy-path postures
     // -------------------------------------------------------------------------
 
-    /// A public repo target that resolves to `Repo` and harvests the
-    /// supplied signal set. The canonical happy-path constructor for
-    /// US-SCR-001 / US-SCR-002 (SG-1 walking skeleton). `auth` defaults to
-    /// anonymous; chain `.authenticated(...)` to flip it.
-    pub fn for_public_repo(target: &str, signals: Vec<FakeSignal>) -> Self {
+    /// A public repo target that resolves to `Repo` (with NO synthetic
+    /// signals — a scrape drives REAL detection over the served body). Serves
+    /// `"language": null` + no configured facts, so detection fires nothing:
+    /// use the `for_public_repo_with_*` postures to configure the real facts a
+    /// detector reads. `auth` defaults to anonymous; chain `.authenticated(...)`.
+    pub fn for_public_repo(target: &str) -> Self {
         Self::from_state(
             target,
             Ok(Self::resolve_kind(target)),
-            signals,
             FakeAuthMode::Anonymous,
         )
     }
 
-    /// A public user/contributor target that resolves to `User` and
-    /// harvests a BOUNDED cross-repo aggregate (US-SCR-001 Ex 2; WD-64).
-    pub fn for_public_user(user: &str, signals: Vec<FakeSignal>) -> Self {
+    /// A public user/contributor target that resolves to `User` (US-SCR-001
+    /// Ex 2; WD-64). The bounded cross-repo USER aggregate is DEFERRED to
+    /// slice-04, so a user scrape derives no signals — the target resolves and
+    /// the auth posture is reported, but no candidates are proposed.
+    pub fn for_public_user(user: &str) -> Self {
         Self::from_state(
             user,
             Ok(FakeTargetKind::User {
                 user: user.to_string(),
             }),
-            signals,
             FakeAuthMode::Anonymous,
         )
     }
 
-    /// A public repo whose harvest yields ZERO signals the mapping can use
-    /// (US-SCR-002 Ex 2 — "no candidates derived", exit 0, not an error).
+    /// A public repo that resolves but yields ZERO detectable signals
+    /// (US-SCR-002 Ex 2 — "no candidates derived", exit 0, not an error). No
+    /// facts are configured, so `detect_signals` fires no arm.
     pub fn with_no_matching_signals(target: &str) -> Self {
         Self::from_state(
             target,
             Ok(Self::resolve_kind(target)),
-            Vec::new(),
-            FakeAuthMode::Anonymous,
-        )
-    }
-
-    /// A public repo whose harvest yields THREE distinct signals that all
-    /// map to the SAME predicate (docs/ + long README + high doc-comment
-    /// density => `documentation-first`). Used by SC-3 to assert the
-    /// collapse-into-one-candidate behavior (US-SCR-002 Ex 4 / I-SCR-4).
-    pub fn with_multi_signal_single_predicate(target: &str) -> Self {
-        Self::from_state(
-            target,
-            Ok(Self::resolve_kind(target)),
-            crate::fixtures_github::fixture_three_docs_signals_one_predicate(),
             FakeAuthMode::Anonymous,
         )
     }
@@ -467,7 +403,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: Some(language.to_string()),
                 has_cargo_lock: false,
                 tags: Vec::new(),
@@ -509,7 +444,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: None,
                 has_cargo_lock: true,
                 tags: Vec::new(),
@@ -556,7 +490,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: None,
                 has_cargo_lock: false,
                 tags: tags.into_iter().map(str::to_string).collect(),
@@ -622,7 +555,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: None,
                 has_cargo_lock: false,
                 tags: Vec::new(),
@@ -693,7 +625,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: None,
                 has_cargo_lock: false,
                 tags: Vec::new(),
@@ -754,7 +685,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: target.to_string(),
                 resolution: Ok(Self::resolve_kind(target)),
-                signals: Vec::new(),
                 language: Some("Rust".to_string()),
                 has_cargo_lock: true,
                 tags: vec![
@@ -786,7 +716,6 @@ impl FakeGithub {
             state: Arc::new(State {
                 target: prev.target.clone(),
                 resolution: prev.resolution.clone(),
-                signals: prev.signals.clone(),
                 language: prev.language.clone(),
                 has_cargo_lock: prev.has_cargo_lock,
                 tags: prev.tags.clone(),
@@ -813,7 +742,6 @@ impl FakeGithub {
         Self::from_state(
             target,
             Err(FakeGithubErrorPosture::NotFound),
-            Vec::new(),
             FakeAuthMode::Anonymous,
         )
     }
@@ -826,7 +754,6 @@ impl FakeGithub {
         Self::from_state(
             target,
             Err(FakeGithubErrorPosture::NotPublic),
-            Vec::new(),
             FakeAuthMode::Anonymous,
         )
     }
@@ -839,7 +766,6 @@ impl FakeGithub {
         let fake = Self::from_state(
             "",
             Err(FakeGithubErrorPosture::Network),
-            Vec::new(),
             FakeAuthMode::Anonymous,
         );
         fake.state.offline.store(true, Ordering::SeqCst);
@@ -856,7 +782,6 @@ impl FakeGithub {
             Err(FakeGithubErrorPosture::RateLimited {
                 authenticated: false,
             }),
-            Vec::new(),
             FakeAuthMode::Anonymous,
         )
     }
@@ -869,7 +794,6 @@ impl FakeGithub {
         Self::from_state(
             target,
             Err(FakeGithubErrorPosture::TokenRejected),
-            Vec::new(),
             FakeAuthMode::Anonymous,
         )
     }
@@ -1223,14 +1147,13 @@ fn resolve_or_harvest_response(
         }),
     };
 
-    let signals: Vec<serde_json::Value> =
-        fake.state.signals.iter().map(FakeSignal::as_json).collect();
-
     // RGSD-1: the REAL `/repos` body carries a top-level `language` string +
-    // `html_url`. `language` is `Some` only for the realistic-body posture
-    // (`for_public_repo_with_language`); every legacy `signals[]` posture
-    // serves `"language": null`. `html_url` mirrors the public repo/user URL
-    // (the source_url a language-derived signal names as its evidence).
+    // `html_url`. `language` is `Some` only for the realistic-body postures
+    // (`for_public_repo_with_language` / `_with_all_signals`); an unconfigured
+    // posture serves `"language": null`. `html_url` mirrors the public
+    // repo/user URL (the source_url a language-derived signal names as evidence).
+    // NO synthetic `signals[]` is ever served — a scrape drives REAL detection
+    // over the served facts (RGSD-6).
     let html_url = match kind {
         FakeTargetKind::Repo { owner, repo } => format!("https://github.com/{owner}/{repo}"),
         FakeTargetKind::User { user } => format!("https://github.com/{user}"),
@@ -1255,7 +1178,6 @@ fn resolve_or_harvest_response(
             "target": target_json,
             "language": language_json,
             "html_url": html_url,
-            "signals": signals,
             "auth": auth_json,
         }),
     )
@@ -1409,24 +1331,12 @@ mod tests {
             .expect("GET must succeed")
     }
 
-    /// `for_public_repo` resolves to a Repo and serves the supplied signal
-    /// set. The load-bearing happy-path contract: SG-1 cannot wire without
-    /// this returning every fixture signal at a 200.
+    /// `for_public_repo` resolves to a Repo at a 200 and serves NO synthetic
+    /// `signals[]` (RGSD-6): the body carries only the real repo shape
+    /// (`target` + `language: null`), so a scrape drives REAL detection.
     #[tokio::test]
-    async fn for_public_repo_resolves_and_serves_signals() {
-        let signals = vec![
-            FakeSignal::new(
-                "DependencyManifestPinned",
-                "Cargo.lock committed",
-                "https://x.test/1",
-            ),
-            FakeSignal::new(
-                "DocsPresentAndSubstantial",
-                "docs/ present",
-                "https://x.test/2",
-            ),
-        ];
-        let fake = FakeGithub::for_public_repo("rust-lang/cargo", signals);
+    async fn for_public_repo_resolves_at_200_with_no_synthetic_signals() {
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
         let (status, body) =
@@ -1435,17 +1345,18 @@ mod tests {
         assert_eq!(status, 200, "public repo must resolve at 200");
         assert_eq!(body["target"]["kind"], "repo");
         assert_eq!(body["target"]["full_name"], "rust-lang/cargo");
-        let served = body["signals"].as_array().expect("signals array");
-        assert_eq!(served.len(), 2, "every fixture signal must be served");
-        assert_eq!(served[0]["kind"], "DependencyManifestPinned");
+        assert!(
+            body.get("signals").is_none(),
+            "the body carries NO synthetic signals[] — a scrape drives REAL detection"
+        );
         assert_eq!(body["auth"]["authenticated"], false);
     }
 
     /// RGSD-1: `for_public_repo_with_language` serves a REALISTIC `/repos`
-    /// body — a top-level `language` string + `html_url`, and an EMPTY
-    /// `signals[]` array (the real API never provides synthetic signals).
-    /// This is the load-bearing shape the language-based detection reads;
-    /// the legacy `signals[]` postures keep `"language": null`.
+    /// body — a top-level `language` string + `html_url`, and NO synthetic
+    /// `signals[]` (the real API never provides synthetic signals). This is the
+    /// load-bearing shape the language-based detection reads; an unconfigured
+    /// posture keeps `"language": null`.
     #[tokio::test]
     async fn for_public_repo_with_language_serves_language_and_no_signals() {
         let fake = FakeGithub::for_public_repo_with_language("rust-lang/cargo", "Rust");
@@ -1464,30 +1375,26 @@ mod tests {
             body["html_url"], "https://github.com/rust-lang/cargo",
             "the realistic body must carry the repo `html_url` (signal source_url)"
         );
-        let served = body["signals"].as_array().expect("signals array");
         assert!(
-            served.is_empty(),
+            body.get("signals").is_none(),
             "the realistic body carries NO synthetic signals (real API shape)"
         );
     }
 
-    /// A legacy `signals[]` posture serves `"language": null` — the additive
-    /// `language` field never disturbs the existing signal-driven bodies.
+    /// An unconfigured posture serves `"language": null` — the `language`
+    /// field is `Some` only for the realistic-body postures.
     #[tokio::test]
-    async fn legacy_signal_posture_serves_null_language() {
-        let fake = FakeGithub::for_public_repo(
-            "rust-lang/cargo",
-            vec![FakeSignal::new("X", "y", "https://x.test/z")],
-        );
+    async fn unconfigured_posture_serves_null_language() {
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
         let (status, body) =
             get_json(&format!("{}/repos/rust-lang/cargo", handle.base_url())).await;
         assert_eq!(status, 200);
         assert!(
             body["language"].is_null(),
-            "legacy signal-driven bodies keep `language` null (additive change)"
+            "an unconfigured posture keeps `language` null"
         );
-        assert_eq!(body["signals"].as_array().expect("signals array").len(), 1);
+        assert!(body.get("signals").is_none(), "no synthetic signals[] is ever served");
     }
 
     /// RGSD-2: `for_public_repo_with_cargo_lock` serves the `contents/Cargo.lock`
@@ -1574,14 +1481,7 @@ mod tests {
     /// SA-1's user-target path (WD-64 bounded aggregate).
     #[tokio::test]
     async fn for_public_user_resolves_as_user() {
-        let fake = FakeGithub::for_public_user(
-            "torvalds",
-            vec![FakeSignal::new(
-                "MemorySafetyLanguage",
-                "C kernel",
-                "https://x.test/k",
-            )],
-        );
+        let fake = FakeGithub::for_public_user("torvalds");
         let handle = fake.serve_http().await;
 
         let (status, body) = get_json(&format!("{}/users/torvalds", handle.base_url())).await;
@@ -1672,14 +1572,7 @@ mod tests {
     /// is the only thing surfaced. Drives SA-1.
     #[tokio::test]
     async fn authenticated_posture_reports_budget_and_observes_token() {
-        let fake = FakeGithub::for_public_user(
-            "torvalds",
-            vec![FakeSignal::new(
-                "MemorySafetyLanguage",
-                "kernel",
-                "https://x.test/k",
-            )],
-        )
+        let fake = FakeGithub::for_public_user("torvalds")
         .authenticated(4982, 5000);
         let handle = fake.serve_http().await;
 
@@ -1712,10 +1605,7 @@ mod tests {
     /// `scraper_only_reads_public_data` allowlist gate (KPI-SCR-4).
     #[tokio::test]
     async fn seen_paths_records_every_requested_path() {
-        let fake = FakeGithub::for_public_repo(
-            "rust-lang/cargo",
-            vec![FakeSignal::new("X", "y", "https://x.test/z")],
-        );
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
         let _ = get_json(&format!("{}/repos/rust-lang/cargo", handle.base_url())).await;
@@ -1828,10 +1718,7 @@ mod tests {
     /// probe, so no `SemverAndChangelog` signal can ever fire on them.
     #[tokio::test]
     async fn unconfigured_posture_serves_empty_tags_array() {
-        let fake = FakeGithub::for_public_repo(
-            "rust-lang/cargo",
-            vec![FakeSignal::new("X", "y", "https://x.test/z")],
-        );
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
         let (status, body) =
@@ -1927,10 +1814,7 @@ mod tests {
     /// `DocsPresentAndSubstantial` signal can ever fire on them.
     #[tokio::test]
     async fn unconfigured_posture_404s_both_readme_and_contents_docs() {
-        let fake = FakeGithub::for_public_repo(
-            "rust-lang/cargo",
-            vec![FakeSignal::new("X", "y", "https://x.test/z")],
-        );
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
         let (readme_status, _) =
@@ -2020,10 +1904,7 @@ mod tests {
     /// on them. Mirrors real octocat/Hello-World (404/404).
     #[tokio::test]
     async fn unconfigured_posture_404s_both_ci_workflows_and_tests() {
-        let fake = FakeGithub::for_public_repo(
-            "rust-lang/cargo",
-            vec![FakeSignal::new("X", "y", "https://x.test/z")],
-        );
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
         let (ci_status, _) = get_json(&format!(
@@ -2081,7 +1962,7 @@ mod tests {
             "the all-signals body must carry the real `language` (MemorySafetyLanguage fact)"
         );
         assert!(
-            body["signals"].as_array().expect("signals array").is_empty(),
+            body.get("signals").is_none(),
             "the all-signals posture drives REAL detection — NO synthetic signals[]"
         );
     }
