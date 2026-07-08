@@ -80,6 +80,22 @@ pub fn validate_philosophy_json(value: &serde_json::Value) -> Result<Philosophy,
         }
     }
 
+    // Gate 1b (slice-24, AC-003.4): a PRESENT-but-blank required string
+    // (empty or whitespace-only) carries no usable value, so it is rejected
+    // exactly like an absent one — reusing `MissingField` (no parallel error
+    // type, ADR-059) so the error names the offending field. Placing this in
+    // the PURE validator means the scraper mint path inherits it too, not just
+    // the CLI. Non-string required values fall through to the serde gate below.
+    for field in REQUIRED_FIELDS {
+        if let Some(serde_json::Value::String(text)) = object.get(*field) {
+            if text.trim().is_empty() {
+                return Err(LexiconError::MissingField {
+                    field: (*field).to_string(),
+                });
+            }
+        }
+    }
+
     // Gate 2: optional `aliases` / `seeAlso` must be arrays of strings when
     // present — gated before serde so the error names the field.
     for field in OPTIONAL_STRING_ARRAY_FIELDS {
@@ -206,6 +222,53 @@ mod tests {
 
     use super::*;
     use proptest::prelude::*;
+    use serde_json::json;
+
+    proptest! {
+        /// AC-003.4 / PA-4 (slice-24): a PRESENT-but-blank required string
+        /// (empty or whitespace-only) is rejected with a NAMED-field error —
+        /// naming the offending field, reusing `LexiconError::MissingField` (no
+        /// parallel error type, ADR-059). Property over both required string
+        /// fields (name, description) and the whole blank equivalence class
+        /// (empty + arbitrary whitespace runs of spaces/tabs/newlines/CRs).
+        #[test]
+        fn blank_required_string_rejects_naming_the_field(
+            blank in "[ \\t\\n\\r]{0,8}",
+        ) {
+            let description_blank =
+                json!({ "name": "capability-security", "description": blank.clone() });
+            prop_assert_eq!(
+                validate_philosophy_json(&description_blank)
+                    .expect_err("a blank `description` must reject"),
+                LexiconError::MissingField { field: "description".to_string() }
+            );
+
+            let name_blank =
+                json!({ "name": blank.clone(), "description": "a real, non-blank description" });
+            prop_assert_eq!(
+                validate_philosophy_json(&name_blank)
+                    .expect_err("a blank `name` must reject"),
+                LexiconError::MissingField { field: "name".to_string() }
+            );
+        }
+    }
+
+    proptest! {
+        /// No regression (slice-24): a well-formed record — non-blank `name`
+        /// AND non-blank `description` — still validates and round-trips both
+        /// fields verbatim. The blank gate must not reject genuine content.
+        #[test]
+        fn well_formed_record_still_validates(
+            name in "[a-z][a-z0-9 _-]{0,20}",
+            description in "[A-Za-z][A-Za-z0-9 ._-]{0,60}",
+        ) {
+            let value = json!({ "name": name.clone(), "description": description.clone() });
+            let parsed = validate_philosophy_json(&value)
+                .expect("a well-formed philosophy record must validate");
+            prop_assert_eq!(parsed.name, name);
+            prop_assert_eq!(parsed.description, description);
+        }
+    }
 
     proptest! {
         /// Generalizing / round-trip (PS-1/PS-2 name-OR-object contract): every
