@@ -65,10 +65,7 @@ use support::*;
 fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing() {
     // GIVEN an initialized env + a public repo serving 5 public signals.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo (no --sign).
     let outcome = run_openlore_scrape(
@@ -161,10 +158,7 @@ fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing()
 fn scrape_github_prints_public_data_banner_before_any_harvest() {
     // GIVEN an initialized env + a public repo serving public signals.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo (no --sign).
     let outcome = run_openlore_scrape(
@@ -206,36 +200,37 @@ fn scrape_github_prints_public_data_banner_before_any_harvest() {
 }
 
 /// SG-3 (US-SCR-001 Ex 2; WD-64): a USER/contributor target resolves to a
-/// User (not a Repo) and harvests a BOUNDED cross-repo aggregate, reporting
-/// the signal count. (Deep cross-repo triangulation is deferred to slice-04;
-/// slice-02 harvests a bounded aggregate.)
+/// User (not a Repo) and harvests cleanly, but DERIVES NO candidates — the
+/// bounded cross-repo USER aggregate is DEFERRED to slice-04 (WD-64). A real
+/// user scrape today reads zero repo-level signals, so the honest slice-02
+/// outcome is "resolves as a user, harvests, proposes nothing" — never a
+/// synthetic aggregate. This pins the deferral as the observed behavior.
 ///
 /// Given the GitHub user torvalds is public; When `scrape github torvalds`;
-/// Then the target resolves as a user, a bounded aggregate signal count is
-/// reported, and candidates render normally.
+/// Then the target resolves as a user, the harvest completes, and NO candidate
+/// claims are derived (user aggregation deferred to slice-04) — exit 0.
 ///
 /// @us-scr-001 @real-io @driving_port @j-004a @wd-64 @edge
 #[test]
-fn scrape_github_resolves_user_target_and_harvests_bounded_aggregate() {
-    // GIVEN an initialized env + a PUBLIC USER target serving a BOUNDED
-    // cross-repo aggregate (two coarse signals; deep triangulation deferred
-    // to slice-04 per WD-64).
+fn scrape_github_resolves_user_target_and_derives_no_candidates_aggregation_deferred() {
+    // GIVEN an initialized env + a PUBLIC USER target. The USER-aggregate harvest
+    // is deferred to slice-04 (WD-64), so a real user scrape yields ZERO signals
+    // today — no synthetic aggregate is injected.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_user(
-        "torvalds",
-        fixture_torvalds_user_aggregate_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_user("torvalds", vec![]));
 
     // WHEN Maria scrapes the bare-user target (no --sign).
     let outcome = run_openlore_scrape(&env, &["scrape", "github", "torvalds"], github.base_url());
 
+    // THEN the run exits ZERO — a user target that resolves but yields no usable
+    // signals is a clean no-op, NOT an error (contrast SG-4's non-zero 404).
     assert_eq!(
         outcome.status, 0,
         "scrape of a public user must exit 0; \n--- stdout ---\n{}\n--- stderr ---\n{}",
         outcome.stdout, outcome.stderr
     );
 
-    // THEN the public-data-only banner precedes the first harvest line
+    // AND the public-data-only banner precedes the first harvest line
     // (the user is reassured BEFORE any network beat begins).
     let banner_idx = outcome
         .stdout
@@ -262,48 +257,28 @@ fn scrape_github_resolves_user_target_and_harvests_bounded_aggregate() {
         outcome.stdout
     );
 
-    // AND a BOUNDED aggregate signal count is reported (the fixture's two
-    // coarse cross-repo signals — bounded per WD-64, not an unbounded fan-out).
-    assert!(
-        outcome.stdout.contains("2 signals"),
-        "the bounded aggregate signal count (2 signals) must be reported; \n--- stdout ---\n{}",
-        outcome.stdout
-    );
-
-    // AND candidates render normally: a numbered list (1..2), one per distinct
-    // mapped predicate (test-driven + semantic-versioning).
-    for index in 1..=2 {
-        assert!(
-            outcome.stdout.contains(&format!("[{index}]")),
-            "expected a numbered candidate [{index}] in the user aggregate list; \
-             \n--- stdout ---\n{}",
-            outcome.stdout
-        );
-    }
-
-    // AND the subject of every candidate is the resolved user github_target.
-    assert!(
-        outcome.stdout.contains("github:torvalds"),
-        "the candidate list must name the resolved subject github:torvalds; \
-         \n--- stdout ---\n{}",
-        outcome.stdout
-    );
-
-    // AND every candidate is the conservative speculative default (0.25).
-    assert!(
-        outcome.stdout.contains("0.25"),
-        "every candidate must display the conservative default confidence 0.25; \
-         \n--- stdout ---\n{}",
-        outcome.stdout
-    );
-
-    // AND the "nothing is a claim until you sign it" footer is rendered.
+    // AND the no-candidates message is printed (US-SCR-002 Ex 2 shape): the
+    // USER-aggregate derivation is deferred to slice-04, so nothing is proposed.
     assert!(
         outcome
             .stdout
+            .contains("No candidate claims could be derived"),
+        "a user scrape must state that no candidate claims could be derived \
+         (aggregation deferred to slice-04); \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    // AND ZERO candidates are rendered — no numbered list and no footer.
+    assert!(
+        !outcome.stdout.contains("[1]"),
+        "a deferred user aggregate must render NO numbered candidate list; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome
+            .stdout
             .contains("nothing is a claim until you sign it"),
-        "the candidate-list footer must reassure that nothing is a claim until signed; \
-         \n--- stdout ---\n{}",
+        "a deferred user aggregate must render NO candidate-list footer; \n--- stdout ---\n{}",
         outcome.stdout
     );
 
@@ -646,10 +621,7 @@ fn scrape_github_without_sign_makes_zero_pds_writes() {
     // candidates ARE derived — the gate must hold regardless of how many
     // candidates are proposed, not only on the empty path).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo WITHOUT --sign.
     let outcome = run_openlore_scrape(
@@ -711,10 +683,7 @@ fn scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs() {
     // SAME server (idempotent target) backs every invocation — a pure read of
     // an unchanged target must yield an unchanged candidate list.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // count_candidates :: the rendered candidate count is the observable
     // proxy for "the same candidate list" — every `[n]` line is one candidate.

@@ -48,10 +48,7 @@ fn scrape_candidates_each_names_its_exact_source_signal() {
     // GIVEN an initialized env + a public repo serving the 5 canonical public
     // signals (one per jobs.yaml mapping entry → 5 derived candidates).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo (no --sign — this is a pure read).
     let outcome = run_openlore_scrape(
@@ -76,15 +73,17 @@ fn scrape_candidates_each_names_its_exact_source_signal() {
     //
     // so the originating signal substring MUST appear on a `from signal :` line
     // WITHIN candidate N's block (between the `[N]` marker and the `[N+1]`
-    // marker). Each expected substring is a distinct fragment of its fixture
-    // signal's detail string — a candidate the user cannot trace back to its
-    // signal is unauditable and breaks J-004b.
+    // marker). Each expected substring is a distinct fragment of the REAL signal
+    // its detector emitted — a candidate the user cannot trace back to its
+    // signal is unauditable and breaks J-004b. The candidates render in
+    // `detect_signals` arm order (memory-safety, dependency-pinning, semver,
+    // docs, test/ci — the first-appearance order the pure derivation preserves).
     let expected: &[(usize, &str)] = &[
-        (1, "Cargo.lock committed"),
-        (2, "docs/"),
-        (3, "test/source ratio 0.61"),
-        (4, "CHANGELOG"),
-        (5, "Rust"),
+        (1, "primary language: Rust"),
+        (2, "Cargo.lock committed (pinned dependencies)"),
+        (3, "semver tags + CHANGELOG present"),
+        (4, "substantial README (20000 bytes)"),
+        (5, "CI workflows present (.github/workflows)"),
     ];
 
     let stdout = &outcome.stdout;
@@ -135,10 +134,7 @@ fn scrape_candidates_footer_states_nothing_is_signed_until_user_signs() {
     // signal (the five canonical cargo signals → >=1 derived candidate, so the
     // footer is always rendered).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo (no --sign — a pure read; nothing is
     // signed or published).
@@ -197,10 +193,7 @@ fn scrape_candidates_all_default_to_speculative_quarter_confidence() {
     // signals — each maps to one derived candidate, so the rendered list carries
     // several candidate confidence lines to quantify over.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo (no --sign — a pure read; the scraper
     // only ever PROPOSES candidates, it never asserts a claim).
@@ -217,103 +210,6 @@ fn scrape_candidates_all_default_to_speculative_quarter_confidence() {
     // (gate candidate_confidence_no_autoinflate, KPI-SCR-2 / WD-52 / WD-10).
     assert_candidate_confidence(&outcome, 0.25, "speculative");
 }
-
-/// SC-4 (US-SCR-002 Ex 4; I-SCR-4): when THREE distinct signals all map to
-/// the `documentation-first` predicate, exactly ONE candidate is rendered
-/// and its source-signal line lists all three contributing signals (no
-/// near-duplicate candidates). The collapse is the PURE derivation's job;
-/// here we pin its user-visible rendering.
-///
-/// Given a target with a docs/ directory AND a 400-line README AND high
-/// doc-comment density; When the CLI derives candidates; Then exactly one
-/// documentation-first candidate is shown and its source-signal line lists
-/// all three contributing signals.
-///
-/// @us-scr-002 @real-io @driving_port @j-004b @i-scr-4 @edge
-#[test]
-fn scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one() {
-    // GIVEN an initialized env + a public repo whose harvest yields THREE
-    // DISTINCT signals (docs/ directory + a 400-line README + high doc-comment
-    // density) that ALL map to the single `documentation-first` predicate. The
-    // collapse is the PURE `scraper-domain` derivation's job (proven exhaustively
-    // at layer 2 — SD-4 + step 01-02); here we pin its user-visible rendering
-    // through the real CLI (the subprocess-layer view of SD-4).
-    let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::with_multi_signal_single_predicate(
-        "some-org/well-documented",
-    ));
-
-    // WHEN Maria scrapes the public repo (no --sign — a pure read).
-    let outcome = run_openlore_scrape(
-        &env,
-        &["scrape", "github", "some-org/well-documented"],
-        github.base_url(),
-    );
-
-    assert_eq!(
-        outcome.status, 0,
-        "scrape must exit 0 on the happy path; \n--- stdout ---\n{}\n--- stderr ---\n{}",
-        outcome.stdout, outcome.stderr
-    );
-
-    let stdout = &outcome.stdout;
-
-    // THEN exactly ONE candidate is rendered (no near-duplicate candidates):
-    // the three docs signals COLLAPSE into a single documentation-first
-    // candidate (US-SCR-002 Ex 4 / I-SCR-4). The renderer numbers candidates
-    // `[1]`, `[2]`, ...; a collapsed single candidate means `[1]` is present and
-    // `[2]` is absent.
-    assert!(
-        stdout.contains("[1]"),
-        "expected a numbered candidate [1] for the collapsed documentation-first \
-         predicate; \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
-        outcome.stderr
-    );
-    assert!(
-        !stdout.contains("[2]"),
-        "three signals for ONE predicate must collapse into exactly ONE candidate — \
-         a second candidate [2] means the collapse failed (I-SCR-4); \
-         \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
-        outcome.stderr
-    );
-
-    // AND that single candidate is the `documentation-first` philosophy (the
-    // predicate all three signals map to).
-    assert!(
-        stdout.contains("org.openlore.philosophy.documentation-first"),
-        "the collapsed candidate must be the documentation-first philosophy (the \
-         predicate all three docs signals map to); \
-         \n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
-        outcome.stderr
-    );
-
-    // AND its source-signal lines name ALL THREE contributing signals — the
-    // auditability contract for the collapse (each fixture signal's detail
-    // string appears on a `from signal :` line within the one candidate's
-    // block). This is what proves the collapse listed all N signals rather than
-    // silently dropping the duplicates.
-    let from_signal_lines: Vec<&str> = stdout
-        .lines()
-        .filter(|line| line.contains("from signal :"))
-        .collect();
-    for signal_substring in [
-        "docs/ directory present",
-        "README 412 lines (> 200)",
-        "doc-comment density high (0.34)",
-    ] {
-        assert!(
-            from_signal_lines
-                .iter()
-                .any(|line| line.contains(signal_substring)),
-            "the collapsed documentation-first candidate must list ALL THREE \
-             contributing signals — missing {signal_substring:?} on a `from signal :` \
-             line (auditability for the collapse, I-SCR-4); \
-             \n--- from-signal lines ---\n{}\n--- full stdout ---\n{stdout}",
-            from_signal_lines.join("\n")
-        );
-    }
-}
-
 /// SC-5: a candidate the user disagrees with is fully auditable and
 /// rejectable WITHOUT signing — because the candidate named its source
 /// signal, the user can see WHY it was proposed and simply not select it
@@ -321,7 +217,7 @@ fn scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one() {
 /// human-in-the-loop is real: a proposal can be reviewed and dropped, never
 /// auto-asserted.
 ///
-/// Given a candidate [1] dependency-pinning is proposed from "Cargo.lock
+/// Given a candidate [2] dependency-pinning is proposed from "Cargo.lock
 /// committed"; When the user reviews it and does NOT run `--sign`; Then the
 /// derivation named the source signal (so the user could audit it) and zero
 /// claims are persisted.
@@ -329,17 +225,16 @@ fn scrape_candidates_collapse_multiple_signals_for_one_predicate_into_one() {
 /// @us-scr-002 @real-io @driving_port @j-004b @kpi-scr-3 @edge
 #[test]
 fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_unsigned() {
-    // GIVEN an initialized env + a public repo serving the five canonical cargo
-    // signals — candidate [1] is the dependency-pinning proposal derived from the
-    // "Cargo.lock committed" signal (the one a user might disagree with).
+    // GIVEN an initialized env + a public repo whose REAL metadata fires all five
+    // detectors — candidate [2] is the dependency-pinning proposal derived from the
+    // "Cargo.lock committed" signal (the one a user might disagree with). It renders
+    // second because `detect_signals` emits memory-safety first, dependency-pinning
+    // second (the arm order the pure derivation preserves).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN Maria scrapes the public repo and reviews the proposal — crucially she
-    // does NOT run `--sign` (she disagrees with / is unconvinced by candidate [1]
+    // does NOT run `--sign` (she disagrees with / is unconvinced by candidate [2]
     // and simply does not select it). The scrape is a pure read.
     let outcome = run_openlore_scrape(
         &env,
@@ -353,19 +248,19 @@ fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_
         outcome.stdout, outcome.stderr
     );
 
-    // THEN the disagreed-with candidate [1] is AUDITABLE: its `from signal :` line
+    // THEN the disagreed-with candidate [2] is AUDITABLE: its `from signal :` line
     // names the exact source signal ("Cargo.lock committed") so the user can see
     // WHY it was proposed and judge it for herself (US-SCR-002 Ex 3 / KPI-SCR-3).
     // A proposal you cannot trace to a signal cannot be reviewed-and-rejected on
     // the merits — naming the signal is what makes the human-gate meaningful.
     let stdout = &outcome.stdout;
-    let start = stdout.find("[1]").unwrap_or_else(|| {
+    let start = stdout.find("[2]").unwrap_or_else(|| {
         panic!(
-            "expected a numbered candidate [1] in the candidate list; \n--- stdout ---\n{stdout}"
+            "expected a numbered candidate [2] in the candidate list; \n--- stdout ---\n{stdout}"
         )
     });
     let rest = &stdout[start..];
-    let block_end = rest[1..].find("[2]").map(|i| i + 1).unwrap_or(rest.len());
+    let block_end = rest[1..].find("[3]").map(|i| i + 1).unwrap_or(rest.len());
     let block = &rest[..block_end];
     let names_signal = block
         .lines()
@@ -373,10 +268,10 @@ fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_
         .any(|line| line.contains("Cargo.lock committed"));
     assert!(
         names_signal,
-        "the disagreed-with candidate [1] must name its source signal on a \
+        "the disagreed-with candidate [2] must name its source signal on a \
          `from signal :` line containing \"Cargo.lock committed\" so the user can \
          audit the derivation and choose to reject it (US-SCR-002 Ex 3 / KPI-SCR-3); \
-         \n--- candidate [1] block ---\n{block}\n--- full stdout ---\n{stdout}"
+         \n--- candidate [2] block ---\n{block}\n--- full stdout ---\n{stdout}"
     );
 
     // AND because she did not `--sign`, the reviewed-and-rejected proposal persists

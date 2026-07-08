@@ -43,8 +43,8 @@ use support::*;
 
 /// SS-1 (gate `scraper_reuses_slice01_publish_path`, I-SCR-6 — load-bearing;
 /// also the sign half of the SG-1 walking skeleton): `scrape github
-/// rust-lang/cargo --sign 1` pre-fills the slice-01 compose editor with
-/// candidate 1's fields, lets Maria raise confidence 0.25 -> 0.55, shows the
+/// rust-lang/cargo --sign 2` pre-fills the slice-01 compose editor with
+/// candidate 2's fields, lets Maria raise confidence 0.25 -> 0.55, shows the
 /// compose preview containing the literal "not as truth" (I-7), the
 /// confidence "0.55 (weighted)", and the DISPLAY-ONLY `derived-from:
 /// openlore-github-scraper (signal: Cargo.lock committed)` line; on Enter the
@@ -54,7 +54,7 @@ use support::*;
 /// the user's OWN `claims` table + own PDS exactly as a hand-authored claim.
 ///
 /// Given Maria has a candidate list for github:rust-lang/cargo; When she runs
-/// `--sign 1`, raises confidence to 0.55, accepts the other fields, presses
+/// `--sign 2`, raises confidence to 0.55, accepts the other fields, presses
 /// Enter to sign and confirms publish; Then the preview contained "not as
 /// truth", the claim is signed with Maria's DID via VerbClaimAdd, published
 /// via the SAME VerbClaimPublish path, records confidence 0.55 (numeric only,
@@ -65,29 +65,28 @@ use support::*;
 /// @j-004 @j-004c @j-001 @kpi-scr-1 @i-scr-6 @happy @release-gate
 #[test]
 fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
-    // GIVEN Maria has an initialized env + a public repo serving the five
-    // canonical cargo signals → five derived candidates. Candidate 1 is the
-    // dependency-pinning proposal derived from "Cargo.lock committed".
+    // GIVEN Maria has an initialized env + a public repo whose REAL metadata
+    // fires all five detectors → five derived candidates. Candidate 2 is the
+    // dependency-pinning proposal derived from "Cargo.lock committed" (it renders
+    // second — `detect_signals` emits memory-safety first, dependency-pinning
+    // second, the arm order the pure derivation preserves).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
-    // WHEN she runs `--sign 1` and walks the slice-01 compose editor: accept
+    // WHEN she runs `--sign 2` and walks the slice-01 compose editor: accept
     // subject / predicate / object / evidence (four Enters), raise confidence
     // 0.25 -> 0.55, press Enter to sign, then Y to publish (the two-prompt
     // contract; ADR-017 inherits the slice-01 sign/publish pipeline).
     let outcome = run_openlore_scrape_with_stdin(
         &env,
-        &["scrape", "github", "rust-lang/cargo", "--sign", "1"],
+        &["scrape", "github", "rust-lang/cargo", "--sign", "2"],
         github.base_url(),
         "\n\n\n\n0.55\n\nY\n",
     );
 
     assert_eq!(
         outcome.status, 0,
-        "scrape --sign 1 must exit 0 on the happy path; \
+        "scrape --sign 2 must exit 0 on the happy path; \
          \n--- stdout ---\n{}\n--- stderr ---\n{}",
         outcome.stdout, outcome.stderr
     );
@@ -146,31 +145,30 @@ fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
 /// SS-2 (gate `candidate_confidence_no_autoinflate`, sign-time half; I-SCR-3
 /// — load-bearing): accepting ALL candidate defaults unchanged signs exactly
 /// what was proposed. The signed claim's subject/predicate/object/evidence
-/// equal candidate 3's proposed values byte-for-byte AND the confidence is
+/// equal candidate 5's proposed values byte-for-byte AND the confidence is
 /// 0.25 (no auto-inflation). KPI-SCR-5 records this as a zero-edit sign.
 ///
-/// Given Tobias has a candidate list and selects candidate 3; When he
+/// Given Tobias has a candidate list and selects candidate 5; When he
 /// presses Enter through every field including the 0.25 confidence; Then the
-/// signed claim's fields equal candidate 3's proposed values and its
+/// signed claim's fields equal candidate 5's proposed values and its
 /// confidence is 0.25.
 ///
 /// @us-scr-003 @driving_port @real-io @j-004c @wd-52 @kpi-scr-2 @release-gate @edge
 #[test]
 fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation() {
-    // GIVEN Tobias has an initialized env + the public repo serving the five
-    // canonical cargo signals → five derived candidates. Candidate 3 is the
-    // test-driven proposal derived from the "test/source ratio 0.61" signal
-    // (signal `TestRatioOrCiMatrix` → `org.openlore.philosophy.test-driven`,
-    // its single source_url the candidate's only evidence). Its PROPOSED
-    // values are deterministic — the SSOT mapping + the fixture fix them
+    // GIVEN Tobias has an initialized env + the public repo whose
+    // REAL metadata → five detected signals → five derived candidates. Candidate
+    // 5 is the test-driven proposal derived from the "CI workflows present
+    // (.github/workflows)" signal (signal `TestRatioOrCiMatrix` →
+    // `org.openlore.philosophy.test-driven`, its single source_url — the CI
+    // workflows directory URL — the candidate's only evidence). It renders fifth
+    // because `detect_signals` emits test/ci LAST in arm order. Its PROPOSED
+    // values are deterministic — the SSOT mapping + the detectors fix them
     // exactly, so the test pins them as the byte-for-byte oracle below.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
-    // WHEN he runs `--sign 3` and presses Enter through EVERY pre-filled
+    // WHEN he runs `--sign 5` and presses Enter through EVERY pre-filled
     // compose field WITHOUT editing any of them: accept subject / predicate /
     // object / evidence (four Enters) AND accept the conservative 0.25
     // confidence default (a fifth Enter), then Enter to sign and Y to publish.
@@ -178,14 +176,14 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
     // changes nothing, so the proposal is signed exactly as derived.
     let outcome = run_openlore_scrape_with_stdin(
         &env,
-        &["scrape", "github", "rust-lang/cargo", "--sign", "3"],
+        &["scrape", "github", "rust-lang/cargo", "--sign", "5"],
         github.base_url(),
         "\n\n\n\n\n\nY\n",
     );
 
     assert_eq!(
         outcome.status, 0,
-        "scrape --sign 3 accepting all defaults must exit 0; \
+        "scrape --sign 5 accepting all defaults must exit 0; \
          \n--- stdout ---\n{}\n--- stderr ---\n{}",
         outcome.stdout, outcome.stderr
     );
@@ -194,17 +192,17 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
     // below target the exact signed record.
     let cid = published_cid_from_stdout(&outcome.stdout);
 
-    // THEN the signed-from-scraper claim's payload equals candidate 3's
+    // THEN the signed-from-scraper claim's payload equals candidate 5's
     // PROPOSED values BYTE-FOR-BYTE — no field drifted between proposal and
     // sign because the human edited nothing (KPI-SCR-5 zero-edit sign; WD-52 /
     // I-SCR-3 the sign half). Read the on-disk signed payload (the same
     // `claims/<cid>.json` → `SignedClaim` surface `assert_candidate_confidence_unchanged`
-    // uses) and compare each field to candidate 3's proposed values, which the
-    // SSOT mapping + the fixture fix exactly:
-    //   subject   : github:rust-lang/cargo            (the resolved target)
-    //   predicate : embodiesPhilosophy                (EMBODIES_PHILOSOPHY)
-    //   object    : org.openlore.philosophy.test-driven  (mapping entry 3)
-    //   evidence  : [the single TestRatioOrCiMatrix source_url]
+    // uses) and compare each field to candidate 5's proposed values, which the
+    // SSOT mapping + the detectors fix exactly:
+    //   subject   : github:rust-lang/cargo                 (the resolved target)
+    //   predicate : embodiesPhilosophy                     (EMBODIES_PHILOSOPHY)
+    //   object    : org.openlore.philosophy.test-driven    (the test/ci mapping)
+    //   evidence  : [the single TestRatioOrCiMatrix source_url — the CI dir URL]
     let artifact_path = env.claims_dir().join(format!("{cid}.json"));
     let json_bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| {
         panic!(
@@ -223,23 +221,23 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
 
     assert_eq!(
         signed.unsigned.subject, "github:rust-lang/cargo",
-        "accepting all defaults must sign candidate 3's PROPOSED subject \
+        "accepting all defaults must sign candidate 5's PROPOSED subject \
          byte-for-byte (no edit); signed payload = {signed:#?}"
     );
     assert_eq!(
         signed.unsigned.predicate, "embodiesPhilosophy",
-        "accepting all defaults must sign candidate 3's PROPOSED predicate \
+        "accepting all defaults must sign candidate 5's PROPOSED predicate \
          byte-for-byte (no edit); signed payload = {signed:#?}"
     );
     assert_eq!(
         signed.unsigned.object, "org.openlore.philosophy.test-driven",
-        "accepting all defaults must sign candidate 3's PROPOSED object \
+        "accepting all defaults must sign candidate 5's PROPOSED object \
          byte-for-byte (no edit); signed payload = {signed:#?}"
     );
     assert_eq!(
         signed.unsigned.evidence,
-        vec!["https://github.com/rust-lang/cargo/tree/master/tests".to_string()],
-        "accepting all defaults must sign candidate 3's PROPOSED evidence \
+        vec!["https://github.com/rust-lang/cargo/tree/HEAD/.github/workflows".to_string()],
+        "accepting all defaults must sign candidate 5's PROPOSED evidence \
          byte-for-byte (no edit); signed payload = {signed:#?}"
     );
 
@@ -264,14 +262,12 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
 /// @us-scr-003 @driving_port @real-io @j-004c @wd-62 @i-scr-7 @cid-stability @happy
 #[test]
 fn scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid() {
-    // GIVEN Maria has an initialized env + the public repo serving the five
-    // canonical cargo signals → five derived candidates. Candidate 1 is the
-    // dependency-pinning proposal derived from "Cargo.lock committed".
+    // GIVEN Maria has an initialized env + the public repo whose REAL metadata
+    // fires all five detectors → five derived candidates. Candidate 1 is the
+    // memory-safety proposal (detect_signals emits memory-safety first); this
+    // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN she signs candidate 1 with fields F, raising confidence 0.25 -> 0.55
     // and accepting the rest, then signs (Enter) and publishes (Y). The
@@ -411,10 +407,7 @@ fn scrape_sign_out_of_range_index_is_rejected_before_compose() {
     // canonical cargo signals → a candidate list of exactly five entries
     // (valid selection range 1..5). Candidate 9 does not exist.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN she runs `--sign 9` — an out-of-range index. No stdin is supplied:
     // the rejection must happen BEFORE any compose prompt, so the run never
@@ -478,14 +471,12 @@ fn scrape_sign_out_of_range_index_is_rejected_before_compose() {
 /// @us-scr-003 @driving_port @real-io @j-004c @error
 #[test]
 fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
-    // GIVEN Maria has an initialized env + the public repo serving the five
-    // canonical cargo signals → five derived candidates. Candidate 1 is the
-    // dependency-pinning proposal derived from "Cargo.lock committed".
+    // GIVEN Maria has an initialized env + the public repo whose REAL metadata
+    // fires all five detectors → five derived candidates. Candidate 1 is the
+    // memory-safety proposal (detect_signals emits memory-safety first); this
+    // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN she runs `--sign 1` and walks the slice-01 compose editor: accept
     // subject / predicate / object / evidence (four Enters), then types an
@@ -571,10 +562,7 @@ fn scrape_sign_declining_publish_retains_local_claim_with_publish_hint() {
     // canonical cargo signals → five derived candidates. He selects candidate
     // 2 (a valid 1-based index within the 1..5 range).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN he runs `--sign 2` and walks the slice-01 compose editor accepting
     // every pre-filled field (four Enters: subject / predicate / object /
@@ -679,10 +667,7 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
     // slice-01 compose-sign-publish gesture (US-SCR-005; the human-gate holds
     // PER candidate, batch is convenience never a bypass; WD-49 / J-004c).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN she runs `--sign 1,3,4` and walks EACH of the three compose editors
     // in turn, accepting every pre-filled field unchanged (four field Enters +
@@ -803,10 +788,7 @@ fn scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest() {
     // the batch: candidates 1 and 5 still get signed + published (US-SCR-005
     // Ex 2; batch fault isolation, WD-49 / J-004c).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN he runs `--sign 1,2,5`:
     //   - candidate 1: accept every field (four field Enters + the confidence
@@ -917,10 +899,7 @@ fn scrape_sign_batch_invalid_selection_list_is_rejected_before_compose() {
     // (valid selection range 1..5). The batch selection `1,1,9` is doubly
     // invalid: index 1 is DUPLICATED and index 9 is OUT OF RANGE.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // WHEN she runs `--sign 1,1,9` — an invalid batch selection list. No stdin
     // is supplied: the rejection must happen BEFORE any compose prompt, so the

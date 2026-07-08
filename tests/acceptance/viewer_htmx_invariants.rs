@@ -277,10 +277,7 @@ fn non_htmx_responses_are_byte_equivalent_to_slice_06() {
     seed_cached_peer_claims(&env, "did:plc:peer-axum", 3);
     // The REUSED slice-02 FakeGithub double serves the live POST /scrape harvest —
     // the ONLY mocked boundary; reached via OPENLORE_GITHUB_API_BASE.
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // Every enhanced route, requested WITHOUT the `HX-Request` header (the unchanged
@@ -396,10 +393,7 @@ fn htmx_fragment_routes_leave_the_store_read_only() {
     // The REUSED slice-02 FakeGithub double serves the live POST /scrape htmx
     // harvest — the ONLY mocked boundary — so the fragment harvest actually runs
     // (and must STILL persist nothing, BR-HX-4).
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
 
     // Capture the read-only universe BEFORE exercising any fragment route
     // (port-exposed names: `claims.row_count`, `peer_claims.row_count`).
@@ -467,10 +461,7 @@ fn no_swap_route_adds_a_write_or_sign_surface() {
     // The REUSED slice-02 FakeGithub double serves the live POST /scrape htmx
     // harvest — the ONLY mocked boundary — so the `#scrape-results` fragment
     // actually renders its candidates (and must STILL carry no sign control).
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN every htmx FRAGMENT route is requested (header-setting drivers): the

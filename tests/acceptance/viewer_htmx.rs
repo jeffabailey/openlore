@@ -589,10 +589,7 @@ fn submitting_scrape_with_htmx_returns_only_the_results_fragment() {
     // the response is a fragment (no full-page chrome). Persistence-zero is the
     // read-only gold guardrail (viewer_htmx_invariants.rs); here we pin the SHAPE.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);
@@ -675,7 +672,7 @@ fn scrape_with_no_candidates_swaps_in_guidance_fragment() {
     // double), reached through `start_with_github` (the OPENLORE_GITHUB_API_BASE
     // seam).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo("some-org/empty-repo", vec![]));
+    let github = GithubServer::start(FakeGithub::with_no_matching_signals("some-org/empty-repo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN Maria submits the target WITH the header (post_form_htmx).
@@ -836,10 +833,7 @@ fn submitting_scrape_without_htmx_returns_the_full_page() {
     // (`is_full_page()`) with the candidates (the same subject + derived-from)
     // rendered below the form.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let full = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
@@ -918,10 +912,7 @@ fn scrape_results_fragment_equals_the_full_page_results_region() {
     // in BOTH the fragment and the full page (parity); the fragment is a fragment
     // and the full page is a full page.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);

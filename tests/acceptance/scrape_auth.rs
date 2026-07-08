@@ -51,7 +51,7 @@ fn scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token() {
     // GIVEN an authenticated GitHub posture for the `torvalds` USER target
     // that would exhaust the anonymous budget, carrying a 4982/5000 rate
     // budget; and a valid PAT in the child's `GITHUB_TOKEN`.
-    let github = FakeGithub::for_public_user("torvalds", fixture_torvalds_user_aggregate_signals())
+    let github = FakeGithub::for_public_user("torvalds", vec![])
         .authenticated(4982, 5000);
     let server = GithubServer::start(github);
 
@@ -101,7 +101,7 @@ fn scrape_auth_unauthenticated_small_target_succeeds_within_anonymous_budget() {
     // repo target whose five signals stay well within the anonymous rate
     // budget. `for_public_repo` defaults to `FakeAuthMode::Anonymous`, so no
     // `GITHUB_TOKEN` is implied — and `run_openlore_scrape` (below) sets none.
-    let github = FakeGithub::for_public_repo("small-org/tiny-lib", fixture_cargo_five_signals());
+    let github = FakeGithub::for_public_repo_with_all_signals("small-org/tiny-lib");
     let server = GithubServer::start(github);
 
     // WHEN Tobias runs `scrape github small-org/tiny-lib` with NO GITHUB_TOKEN
@@ -304,7 +304,7 @@ fn scrape_auth_token_never_reaches_signed_claim_or_output_on_authenticated_sign(
     // `authenticated(..)` preserves the resolution + signals, so candidate 1
     // is the same dependency-pinning proposal the SS-* sign scenarios use.
     let github = GithubServer::start(
-        FakeGithub::for_public_repo("rust-lang/cargo", fixture_cargo_five_signals())
+        FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo")
             .authenticated(4982, 5000),
     );
 

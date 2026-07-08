@@ -65,10 +65,7 @@ fn operator_browses_live_proposals_without_signing_anything() {
     // repo with harvestable signals (the ONLY mocked boundary). The viewer reaches
     // it through OPENLORE_GITHUB_API_BASE, exactly as `scrape github` does.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo(
-        "rust-lang/cargo",
-        fixture_cargo_five_signals(),
-    ));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN Maria submits the target on the Live Scrape view (POST /scrape).
@@ -131,7 +128,7 @@ fn target_yielding_no_candidates_guides_the_operator() {
     // candidates (the reused FakeGithub serves a public repo with no signals from
     // which any candidate could be derived).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo("some-org/empty-repo", vec![]));
+    let github = GithubServer::start(FakeGithub::with_no_matching_signals("some-org/empty-repo"));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN Maria submits that target.
