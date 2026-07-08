@@ -1,0 +1,131 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-24",
+    "created_at": "2026-07-08T00:00:00Z",
+    "total_steps": 4
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pure mint core (lexicon) — blank-required-string rejection",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "validate_philosophy_json rejects blank/whitespace-only required strings (name, description)",
+          "description": "Extend the PURE lexicon::philosophy::validate_philosophy_json so a present-but-blank (empty or whitespace-only) required string field (name, description) is rejected with a named-field error — not just absence. Today the validator only checks presence (contains_key), so --description \"\" passes. Placing the guard in the pure validator (not a CLI-only check) means the scraper mint path inherits it too (AC-003.4). Pure core: no signer, no store, no network.",
+          "criteria": [
+            "AC-003.4 (invalid record: missing OR blank description -> named-field error, no panic)",
+            "PBT: for every required field, a blank/whitespace value yields a MissingField/InvalidField error naming that field",
+            "PBT: a well-formed record (non-blank name + description) still validates unchanged (no regression)"
+          ],
+          "test_file": "crates/lexicon/src/philosophy.rs",
+          "scenario_name": "rejects_blank_required_string_with_named_field_error",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs"
+          ],
+          "implementation_notes": "In validate_philosophy_json, after the presence + serde gates, add a blank-check on the required String fields: name.trim().is_empty() || description.trim().is_empty() -> a named-field error. REUSE the existing LexiconError variant used for the missing-description case (MissingField{field} or the nearest existing named-field variant — do NOT invent a parallel error type; check what claim.rs / the slice-22 validator uses and stay consistent). The error MUST name the offending field (PA-4 asserts the observable CLI stderr mentions 'description'). Do NOT panic/unwrap. TEST PARADIGM (mandatory): unit tests for this pure seam MUST be property-based (proptest) with example-based as documented FALLBACK — property: forall blank string s in {\"\", whitespace runs}, validate_philosophy_json(record with description=s) is Err naming 'description'; and forall well-formed record, Ok. Keep xtask check-arch green (pure-core, no I/O)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Signed philosophy persistence (adapter-duckdb) — schema_v4 + philosophies table + write",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "schema_v4 philosophies table + write_signed_philosophy (atomic artifact embedding author_did, object_id UNIQUE)",
+          "description": "Add a forward-only, idempotent schema_v4 migration creating the philosophies table (cid PK | object_id UNIQUE | name | description | author_did | composed_at | artifact_path), mirroring the schema.rs / schema_v3.rs runner + schema_version guard. Add a persistence method (write_signed_philosophy) behind the existing storage port surface that writes the signed <cid>.json artifact via the atomic tmp+fsync+rename path (embedding author_did so the record is self-describing, like SignedClaim) AND inserts the DB row. A duplicate object_id (UNIQUE violation) surfaces a typed error for the CLI collision path (02-01 provides the mechanism; the CLI refusal UX is 03-02).",
+          "criteria": [
+            "schema_v4 is idempotent (CREATE TABLE IF NOT EXISTS + schema_version guard) and forward-only; probe asserts v4",
+            "write_signed_philosophy persists the signed <cid>.json artifact (tmp+fsync+rename) with author_did embedded AND the philosophies row",
+            "object_id UNIQUE enforced; a duplicate object_id returns a typed error (not a panic) for the CLI collision path",
+            "no cross-table author elision; xtask check-arch stays green (21 members)"
+          ],
+          "test_file": "crates/adapter-duckdb/src/lib.rs",
+          "scenario_name": "writes_signed_philosophy_artifact_and_row; duplicate_object_id_is_a_typed_error",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/schema_v4.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "crates/ports/src/lib.rs"
+          ],
+          "implementation_notes": "Mirror schema_v3.rs::run_migration: a new schema_v4.rs with PHILOSOPHY_STORAGE_VERSION + CREATE TABLE IF NOT EXISTS philosophies (...) guarded by the schema_version table; wire run_migration into DuckDbStorageAdapter::open after schema_v3. Add the philosophies/ artifact dir alongside claims/. The write method mirrors write_signed_claim's atomic tmp+fsync+rename + tx: write philosophies/<cid>.json then INSERT. Define the port method on the existing StoragePort (or a sibling on the store surface) — NO new port trait (ADR-059 §3: registry adds no new port). The signed artifact JSON MUST embed author_did (self-describing). Duplicate object_id: catch the UNIQUE constraint violation and map to a typed StorageError variant (reuse existing variant if one fits) so 03-02 can render the refusal — do NOT unwrap/panic. TEST PARADIGM: pure/near-pure seams property-based where sensible; the DuckDB write is an integration test with a real temp store (mirror existing adapter-duckdb tests). Probe test asserts schema_v4."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "philosophy add CLI verb (compose -> sign -> persist) + collision refusal",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "philosophy add — compose, sign prompt, persist on confirm, print object id; local-first cancel; author DID in artifact",
+          "description": "Add Command::Philosophy(PhilosophyCommand::Add{ name, description, alias: Vec<String>, see_also: Vec<String> }) to the clap enum and a verbs/philosophy_add.rs that mirrors claim_add.rs's two-prompt flow: compose an unsigned philosophy from the flags, validate via the pure validate_philosophy_json, render a preview, print the sign prompt, block on stdin; on empty-stdin/EOF cancel cleanly (exit 0, NO write); on Enter canonicalize + compute_cid + sign (reuse claim_domain::{canonicalize, compute_cid, sign}) and persist via write_signed_philosophy, then print the derived object id and the written path. Wire the verb into the composition root (Wiring) with the store + signer (unlike show/list, add needs both).",
+          "criteria": [
+            "AC-003.1 (signed org.openlore.philosophy record composed, validated, persisted locally; object id printed)",
+            "AC-003.2 (mirrors claim add: sign prompt; local-first NO write before confirm; author DID recorded; no new signing model)",
+            "PA-1 philosophy_add_mints_signs_and_persists_a_new_record_printing_the_object_id (WALKING SKELETON)",
+            "PA-2 philosophy_add_with_empty_stdin_cancels_cleanly_without_writing",
+            "PA-5 philosophy_add_records_the_author_did_in_the_signed_artifact"
+          ],
+          "test_file": "tests/acceptance/philosophy_add.rs",
+          "scenario_name": "philosophy_add_mints_signs_and_persists_a_new_record_printing_the_object_id",
+          "depends_on": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/philosophy_add.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/render/philosophy.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "implementation_notes": "Mirror crates/cli/src/verbs/claim_add.rs: build an UnsignedPhilosophy value (name, description, aliases, see_also) from flags + ClockPort::now_utc() for composed_at; validate with lexicon::validate_philosophy_json BEFORE any prompt (AC-003.4 pre-sign hard error path feeds 03-02/01-01); render_compose_preview-style preview; print 'Press Enter to sign locally'; prompt_line/stdin; empty stdin EOF = clean cancel exit 0 no side effect (PA-2 — the local-first invariant, mirror WS-3); on Enter: canonicalize -> compute_cid -> IdentityPort sign -> StoragePort::write_signed_philosophy; print object_id (org.openlore.philosophy.<normalize(name)>) + 'Written to local store: <path>'. author_did comes from the signing identity (IdentityPort/Did) and MUST be embedded in the signed artifact (PA-5). Register module in verbs/mod.rs; dispatch in lib.rs AFTER Wiring::production (needs store+signer, unlike list/show). Reuse the single-record renderer from render/philosophy.rs. TEST PARADIGM: acceptance PA-1/2/5 are pre-authored subprocess tests — do NOT rewrite. Any new pure compose/preview helper gets a property/example unit test."
+        },
+        {
+          "id": "03-02",
+          "name": "seed-name collision refusal — non-zero exit, plain guidance, no duplicate",
+          "description": "Before signing/persisting, pre-check the composed name against the embedded seed set (and rely on object_id UNIQUE as defense-in-depth): a name that collides with a shipped seed is REFUSED with plain guidance (use the existing one, or --alias onto it), a NON-ZERO exit, and NO record written. A handled refusal, never a panic or a silent duplicate id.",
+          "criteria": [
+            "AC-003.3 (seed-name collision refused with guidance; no silent duplicate id; non-zero exit)",
+            "PA-3 philosophy_add_refuses_a_name_that_collides_with_a_seed"
+          ],
+          "test_file": "tests/acceptance/philosophy_add.rs",
+          "scenario_name": "philosophy_add_refuses_a_name_that_collides_with_a_seed",
+          "depends_on": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/philosophy_add.rs"
+          ],
+          "implementation_notes": "In verbs/philosophy_add.rs, after composing the object_id but BEFORE the sign prompt/persist, pre-check: if lexicon::philosophy::find(name) (or object_id match against seeds()) resolves to a SEED, return a NON-ZERO exit with guidance that names the collision and suggests reuse or --alias — and write NOTHING (mirror the local-first no-write proof). Keep the object_id UNIQUE storage error (02-01) as defense-in-depth for the minted-vs-minted case. Do NOT panic/unwrap on the refusal — a handled outcome. PA-3 asserts a non-zero exit + guidance substrings + no duplicate persisted. TEST PARADIGM: a small example unit test for the collision-guidance shaping is acceptable FALLBACK; the pure find/seed-membership is already property-covered. PA-3 is pre-authored — do NOT rewrite."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/ports/src/",
+      "crates/cli/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design §4.5 + §5 row 24) + automated quality gate",
+    "approved_at": "2026-07-08",
+    "review_verdict": "APPROVED — automated quality gate PASS (decomposition ratio 4 steps / 8 production files = 0.5, each of PA-1..5 owned once across the 4 steps, valid DAG 01-01 -> 02-01 -> 03-01 -> 03-02, step IDs match NN-NN, criteria <=5 per step, no empty files, DISTILL linkage present via test_file+scenario_name). Slice-24 fully specified by ADR-059 §4.5 minted storage + §5 row 24 + US-PV-003 AC-003.1..4; the Phase-4 adversarial implementation review is the substantive quality gate. Two DELIVER-scope design resolutions (pure-validator blank-string rejection; author_did embedded in signed artifact) carried from the slice-24 red-classification."
+  }
+}
