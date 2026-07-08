@@ -75,37 +75,31 @@ reused verbatim, no new signing model) → persist. Dispatched AFTER
 | check-arch | OK — 21 workspace members (no new crate); pure-core import ban intact |
 | Acceptance | `philosophy_add` 5/5 (PA-1..5) + 2 support self-tests = 7/7 GREEN |
 | Regression (lib/unit) | `cargo test --workspace --lib` → all crates GREEN, 0 failed (crafter-verified); `adapter-duckdb` 20 lib + 12 integration green |
-| **Phase-5 mutation** | **DEFERRED (environment-blocked)** — see below |
-| **Full acceptance-subprocess suite** | **DEFERRED (environment-blocked)** — see below |
+| **Phase-5 mutation** | **PASS** — pure-core `crates/lexicon/src/philosophy.rs` (incl. the new blank gate) = **100% viable kill (16/16, 3 unviable Default-substitutions, 0 survivors)**; effect shell reported. Report: `deliver/slice-24/mutation/mutation-report.md` |
+| **Full acceptance-subprocess suite** | **GREEN** — `cargo test --workspace` re-run on the uncontended box: every binary `ok`, 0 failed (incl. the viewer subprocess suite). The earlier "hang" was pure foundry CPU starvation, NOT a deadlock — `viewer_counter_claim_list_flags` passes on the clean re-run |
 
 Tests green: `philosophy_add` 7/7; workspace `--lib` sweep 0 failed; `adapter-duckdb`
-20 lib + 12 integration.
+20 lib + 12 integration; full `cargo test --workspace` re-run 0 failed.
 
-## Deferred gates — environment CPU starvation (2026-07-08)
+## Deferred gates — CLOSED (2026-07-08, same day)
 
-Two gates could not run and are DEFERRED, to be executed when the machine is
-uncontended:
+Both gates were deferred at finalize because an **unrelated `foundry` project
+build** (6–10 rustc processes, 45+ min) starved all CPU, so cargo test runs stalled
+at 0.00% CPU. Once that build finished, both gates were run to completion on the
+uncontended box and **both PASSED**:
 
-1. **Phase-5 feature-scoped mutation** (target ≥80% kill on the slice-24 pure
-   seams — chiefly `validate_philosophy_json`'s blank gate and the
-   `write_signed_philosophy` duplicate path).
-2. **Full `cargo test --workspace` acceptance-subprocess re-run** (the crafter's
-   DoD-4 gap).
+1. **Phase-5 mutation** — `cargo mutants -p lexicon --file crates/lexicon/src/philosophy.rs`
+   → 19 mutants, **16 caught / 3 unviable / 0 survivors = 100% viable kill**. Report:
+   `deliver/slice-24/mutation/mutation-report.md`.
+2. **Full `cargo test --workspace`** — every binary `ok`, 0 failed, including the
+   full viewer subprocess suite.
 
-Cause: an **unrelated `foundry` project build** (6–10 rustc processes, 45+ min)
-persistently starved all CPU on the box, so cargo test runs hung at 0.00% CPU and
-could not be scheduled. Independently, a **pre-existing** test
-`viewer_counter_claim_list_flags` (slice-06, exercises `StoreReadPort`, untouched
-by slice-24) deadlocked at 0.00 CPU — unrelated to this slice. Decision (user):
-finalize now on the strong existing evidence (acceptance 5/5, lib-regression
-green, adversarial review APPROVED with additive-only confirmation, check-arch OK)
-and run the two deferred gates once CPU frees up.
-
-Re-run commands when free:
-```
-cargo test --workspace                                   # close the full acceptance suite
-cargo mutants -p lexicon -p adapter-duckdb --in-diff HEAD~5   # feature-scoped mutation
-```
+The earlier apparent "deadlock" of `viewer_counter_claim_list_flags` was **CPU
+starvation, not a hang** — it passes on the clean re-run (as do all viewer tests;
+they are simply slow because each spawns the `openlore` UI subprocess). No test is
+genuinely deadlocked, and slice-24 did not touch the viewer read path
+(`store_read.rs` unchanged; `schema_v4` runs only at write-adapter `open()`, which
+the passing `philosophy_add` + adapter integration tests already exercise).
 
 ## Deviations: planned vs shipped
 
