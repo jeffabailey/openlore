@@ -253,23 +253,27 @@ pub fn resolve_object_advisory(object: &str) -> ObjectAdvisory {
         return ObjectAdvisory::NotPhilosophy;
     };
     let segment_normalized = normalize(segment);
+    // Parse the embedded seed set ONCE and share it across both passes.
+    let all_seeds = seeds();
 
     // Canonical takes precedence: a direct name match over every seed.
-    if let Some(seed) = seeds()
-        .into_iter()
+    if let Some(seed) = all_seeds
+        .iter()
         .find(|seed| normalize(&seed.name) == segment_normalized)
     {
-        return ObjectAdvisory::Canonical { name: seed.name };
+        return ObjectAdvisory::Canonical {
+            name: seed.name.clone(),
+        };
     }
 
     // Else an alias match reports the seed's canonical name.
-    if let Some(seed) = seeds().into_iter().find(|seed| {
+    if let Some(seed) = all_seeds.iter().find(|seed| {
         seed.aliases
             .iter()
             .any(|alias| normalize(alias) == segment_normalized)
     }) {
         return ObjectAdvisory::Alias {
-            canonical: seed.name,
+            canonical: seed.name.clone(),
         };
     }
 
