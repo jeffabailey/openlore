@@ -213,6 +213,70 @@ pub fn find(key: &str) -> Option<Philosophy> {
         .find(|seed| object_id(&seed.name) == key || normalize(&seed.name) == normalized_key)
 }
 
+// =============================================================================
+// Alias-aware compose-advisory resolver (slice-25 01-01; ADR-059 §5 row 25)
+// =============================================================================
+
+/// The display-only classification of a claim `--object` against the embedded
+/// philosophy vocabulary, for the `claim add` compose advisory (US-PV-004).
+///
+/// Pure verdict, NEVER a gate and NEVER a payload rewrite: the CLI turns this
+/// into ONE preview line, but the object the user typed is what gets signed
+/// (AC-004.3). `find()` matches name/object-id only; the `Alias` arm — matching
+/// a seed's `aliases` entry and reporting the canonical name — is new here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectAdvisory {
+    /// The object is the derived object-id of a known philosophy `name`.
+    Canonical { name: String },
+    /// The object matched a seed's ALIAS; `canonical` is that seed's `name`.
+    Alias { canonical: String },
+    /// In the `org.openlore.philosophy.*` namespace but matches no seed.
+    UnknownInNamespace,
+    /// Outside the philosophy namespace — not a philosophy claim, no advisory.
+    NotPhilosophy,
+}
+
+/// Classify a claim `--object` string for the compose advisory (pure + total,
+/// offline — embedded seeds only, no store/network).
+///
+/// Algorithm (ADR-059 §5 row 25): if `object` is not prefixed by the philosophy
+/// object-id prefix (`org.openlore.philosophy.`, derived from `object_id`) →
+/// `NotPhilosophy`. Else take the segment after the prefix and, over `seeds()`:
+/// if `normalize(segment) == normalize(seed.name)` for some seed → `Canonical`;
+/// else if `normalize(alias) == normalize(segment)` for some seed's alias →
+/// `Alias { canonical = seed.name }`; else → `UnknownInNamespace`. Reuses
+/// `seeds()`, `normalize()`, and the `object_id` prefix (`{NSID}.`) — never a
+/// second hardcoded prefix copy.
+pub fn resolve_object_advisory(object: &str) -> ObjectAdvisory {
+    let prefix = format!("{NSID}.");
+    let Some(segment) = object.strip_prefix(&prefix) else {
+        return ObjectAdvisory::NotPhilosophy;
+    };
+    let segment_normalized = normalize(segment);
+
+    // Canonical takes precedence: a direct name match over every seed.
+    if let Some(seed) = seeds()
+        .into_iter()
+        .find(|seed| normalize(&seed.name) == segment_normalized)
+    {
+        return ObjectAdvisory::Canonical { name: seed.name };
+    }
+
+    // Else an alias match reports the seed's canonical name.
+    if let Some(seed) = seeds().into_iter().find(|seed| {
+        seed.aliases
+            .iter()
+            .any(|alias| normalize(alias) == segment_normalized)
+    }) {
+        return ObjectAdvisory::Alias {
+            canonical: seed.name,
+        };
+    }
+
+    // In the namespace but matches no seed name or alias.
+    ObjectAdvisory::UnknownInNamespace
+}
+
 #[cfg(test)]
 mod tests {
     //! Port-to-port unit tests at the pure-resolver scope: the driving port is
@@ -284,6 +348,57 @@ mod tests {
             prop_assert_eq!(by_id.as_ref(), Some(&seed));
             let by_upper = find(&seed.name.to_uppercase());
             prop_assert_eq!(by_upper.as_ref(), Some(&seed));
+        }
+    }
+
+    proptest! {
+        /// 01-01 (AC-004.1/.2 + out-of-namespace): the compose-advisory resolver
+        /// classifies EVERY seed's derived object-id as `Canonical { name }`,
+        /// each of its aliases (in-namespace) as `Alias { canonical = name }`, an
+        /// in-namespace segment that matches no seed as `UnknownInNamespace`, and
+        /// an arbitrary out-of-namespace string as `NotPhilosophy`. Generalizing
+        /// (Hebert ch.3) over the whole embedded seed set + generated segments.
+        #[test]
+        fn resolve_object_advisory_classifies_known_alias_unknown_and_non_philosophy(
+            seed in prop::sample::select(seeds()),
+            unknown_seg in "[a-z][a-z0-9-]{0,20}",
+            outsider in ".*",
+        ) {
+            // Canonical: a seed's derived object-id resolves to Canonical{name}.
+            prop_assert_eq!(
+                resolve_object_advisory(&object_id(&seed.name)),
+                ObjectAdvisory::Canonical { name: seed.name.clone() }
+            );
+
+            // Alias: each in-namespace alias resolves to Alias{canonical=name},
+            // reporting the CANONICAL — not the typed alias segment.
+            for alias in &seed.aliases {
+                prop_assert_eq!(
+                    resolve_object_advisory(&format!("{NSID}.{alias}")),
+                    ObjectAdvisory::Alias { canonical: seed.name.clone() }
+                );
+            }
+
+            // Unknown-in-namespace: a prefixed segment matching NO seed name and
+            // NO seed alias resolves to UnknownInNamespace.
+            let seg_norm = normalize(&unknown_seg);
+            let matches_a_seed = seeds().iter().any(|s| {
+                normalize(&s.name) == seg_norm
+                    || s.aliases.iter().any(|a| normalize(a) == seg_norm)
+            });
+            prop_assume!(!matches_a_seed);
+            prop_assert_eq!(
+                resolve_object_advisory(&format!("{NSID}.{unknown_seg}")),
+                ObjectAdvisory::UnknownInNamespace
+            );
+
+            // Not-philosophy: any string NOT prefixed by `{NSID}.` resolves to
+            // NotPhilosophy (no advisory, no nagging).
+            prop_assume!(!outsider.starts_with(&format!("{NSID}.")));
+            prop_assert_eq!(
+                resolve_object_advisory(&outsider),
+                ObjectAdvisory::NotPhilosophy
+            );
         }
     }
 
