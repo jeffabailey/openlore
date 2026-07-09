@@ -60,38 +60,76 @@ pub(crate) fn query_by_object(
     conn: &Arc<Mutex<Connection>>,
     object: &str,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
-    query_attributed_dimension(conn, &DimensionFilter::Object(object.to_string()))
+    // Slice-26 (AC-005.1): the object read filters on the pure equivalence CLASS
+    // — the queried object plus its seed-alias siblings — so a claim authored on
+    // a near-synonym alias triangulates into a query for the canonical (and vice
+    // versa). Resolution is a read-time derivation only; the stored claim `object`
+    // (DB column + signed `<cid>.json`) is NEVER rewritten (AC-005.2). A no-alias /
+    // unknown / non-philosophy object resolves to a singleton class, reproducing
+    // today's exact-match read byte-for-byte (AT-5 no over-widening).
+    let class = lexicon::equivalence_class(object);
+    query_attributed_dimension(conn, &DimensionFilter::Object(class))
 }
 
 /// The dimension on which a per-claim attributed read filters. Both the
 /// `--object` and `--contributor` dimension reads share the SAME UNION-ALL
-/// projection (only the `WHERE` column differs), so they decompose to one
+/// projection (only the `WHERE` clause differs), so they decompose to one
 /// parameterized query rather than two near-identical SQL literals.
+///
+/// `Object` carries the resolved equivalence CLASS (>= 1 object-id): a singleton
+/// filters by exact `object = ?` (byte-for-byte today's read); a multi-member
+/// class filters by `object IN (?, …)` so alias-authored claims triangulate in
+/// (slice-26 / AC-005.1). The class is a read-time derivation — anti-merging is
+/// preserved (the UNION-ALL still projects `author_did` per row).
 enum DimensionFilter {
-    Object(String),
+    Object(Vec<String>),
     Subject(String),
     Contributor(Did),
 }
 
 impl DimensionFilter {
-    /// The fully-qualified `WHERE`-column for each store side. Own claims store
+    /// The fully-qualified `WHERE` clause for each store side. Own claims store
     /// the `#fragment` signing locator on `author_did`; the contributor filter
     /// therefore matches the bare DID via a `LIKE '<bare>%'` prefix so a query
     /// by the bare contributor DID still finds the locator-suffixed own rows.
-    fn where_clause(&self) -> (&'static str, &'static str) {
+    ///
+    /// A singleton object class emits `object = ?` (byte-identical to the
+    /// pre-slice-26 exact-match read); a multi-member class emits an
+    /// `object IN (?, …)` predicate with one placeholder per class member. Both
+    /// arms share the SAME placeholder count (the class binds identically on the
+    /// own and peer arms — see [`DimensionFilter::params`]).
+    fn where_clause(&self) -> (String, String) {
         match self {
-            DimensionFilter::Object(_) => ("c.object = ?", "pc.object = ?"),
-            DimensionFilter::Subject(_) => ("c.subject = ?", "pc.subject = ?"),
-            DimensionFilter::Contributor(_) => ("c.author_did LIKE ?", "pc.author_did LIKE ?"),
+            DimensionFilter::Object(class) if class.len() == 1 => {
+                ("c.object = ?".to_string(), "pc.object = ?".to_string())
+            }
+            DimensionFilter::Object(class) => {
+                let placeholders = vec!["?"; class.len()].join(", ");
+                (
+                    format!("c.object IN ({placeholders})"),
+                    format!("pc.object IN ({placeholders})"),
+                )
+            }
+            DimensionFilter::Subject(_) => {
+                ("c.subject = ?".to_string(), "pc.subject = ?".to_string())
+            }
+            DimensionFilter::Contributor(_) => (
+                "c.author_did LIKE ?".to_string(),
+                "pc.author_did LIKE ?".to_string(),
+            ),
         }
     }
 
-    /// The bound parameter value for the `WHERE` clause (same on both sides).
-    fn param(&self) -> String {
+    /// The ordered bound parameter values for ONE store arm's `WHERE` clause.
+    /// The caller binds this sequence on the own arm and again on the peer arm
+    /// (the UNION-ALL binds params positionally, per arm). An object class binds
+    /// each member in order (matching the `IN (?, …)` placeholders); a subject /
+    /// contributor filter binds its single value.
+    fn params(&self) -> Vec<String> {
         match self {
-            DimensionFilter::Object(object) => object.clone(),
-            DimensionFilter::Subject(subject) => subject.clone(),
-            DimensionFilter::Contributor(did) => format!("{}%", bare_did(&did.0)),
+            DimensionFilter::Object(class) => class.clone(),
+            DimensionFilter::Subject(subject) => vec![subject.clone()],
+            DimensionFilter::Contributor(did) => vec![format!("{}%", bare_did(&did.0))],
         }
     }
 }
@@ -118,7 +156,14 @@ fn query_attributed_dimension(
     filter: &DimensionFilter,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
     let (own_where, peer_where) = filter.where_clause();
-    let param = filter.param();
+    // The bind sequence for ONE arm; the UNION-ALL binds it on the own arm, then
+    // again on the peer arm (positional params, per arm). For a singleton object /
+    // subject / contributor filter this is `[value, value]` — byte-for-byte the
+    // pre-slice-26 binding; for a multi-member object class it is `[class…, class…]`.
+    let arm_params = filter.params();
+    let mut bind_params: Vec<String> = Vec::with_capacity(arm_params.len() * 2);
+    bind_params.extend(arm_params.iter().cloned());
+    bind_params.extend(arm_params.iter().cloned());
 
     // `peer_subscriptions.removed_at IS NULL` ⇒ SubscribedPeer; else
     // UnsubscribedCache (soft-remove residue, ADR-014). Read once.
@@ -151,7 +196,7 @@ fn query_attributed_dimension(
                 message: format!("prepare query_attributed_dimension: {err}"),
             })?;
         let rows = stmt
-            .query_map(duckdb::params![param, param], |row| {
+            .query_map(duckdb::params_from_iter(bind_params.iter()), |row| {
                 Ok(DimensionProjection {
                     author_did: row.get::<_, String>(0)?,
                     cid: row.get::<_, String>(1)?,
@@ -292,7 +337,14 @@ pub(crate) fn query_attributed_for_scoring(
 /// query shape (no near-duplicate SQL literal).
 fn scoring_filter_to_dimension(filter: &ScoringFilter) -> DimensionFilter {
     match filter {
-        ScoringFilter::ByObject { object } => DimensionFilter::Object(object.clone()),
+        // Slice-26 (AC-005.1): the weighted/score feed filters on the equivalence
+        // CLASS too, so `--weighted`/`--score` over the canonical philosophy
+        // aggregates alias-authored claims (grouped by subject in the pure
+        // `scoring::score` core). Read-time derivation only; stored objects
+        // immutable (AC-005.2). A singleton class reproduces the exact-match feed.
+        ScoringFilter::ByObject { object } => {
+            DimensionFilter::Object(lexicon::equivalence_class(object))
+        }
         ScoringFilter::BySubject { subject } => DimensionFilter::Subject(subject.clone()),
         ScoringFilter::ByContributor { author_did } => {
             DimensionFilter::Contributor(author_did.clone())
