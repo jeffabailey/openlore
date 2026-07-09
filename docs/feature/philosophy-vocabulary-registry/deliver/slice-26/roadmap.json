@@ -1,0 +1,79 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-26",
+    "created_at": "2026-07-08T00:00:00Z",
+    "total_steps": 2
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pure equivalence-class resolver (lexicon)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "equivalence_class(object) — canonical + alias object-ids for a seed philosophy (pure)",
+          "description": "Add a pure, total lexicon function that returns the set of philosophy object-ids that triangulate together. Given ANY object in a seed philosophy's class (the canonical object-id OR one of its alias object-ids), return ALL object-ids in that class: the canonical `org.openlore.philosophy.<normalize(name)>` plus one per alias `org.openlore.philosophy.<normalize(alias)>`. Given an object that is not a known philosophy (unknown-in-namespace, or a non-philosophy object), return the SINGLETON `[object]` — so a query by a no-alias philosophy or a non-philosophy object is byte-identical to today (no over-widening, AT-5). Offline; embedded seeds only.",
+          "criteria": [
+            "AC-005.1 (canonical query resolves to the full class; an alias object resolves to the SAME class)",
+            "AT-5 no-regression: an unknown/non-philosophy object → singleton [object]; a no-alias philosophy → [canonical] only",
+            "PBT: for every seed, equivalence_class(object_id(name)) == equivalence_class(object_id(alias)) == { canonical } ∪ { alias object-ids }, and the canonical is always first/present; an arbitrary non-namespaced string → singleton"
+          ],
+          "test_file": "crates/lexicon/src/philosophy.rs",
+          "scenario_name": "equivalence_class_returns_canonical_plus_alias_object_ids_or_singleton",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs",
+            "crates/lexicon/src/lib.rs"
+          ],
+          "implementation_notes": "Add `pub fn equivalence_class(object: &str) -> Vec<String>`. Algorithm: resolve the input object to its canonical seed (reuse the slice-25 `resolve_object_advisory`: Canonical{name} and Alias{canonical} both yield the seed name; UnknownInNamespace / NotPhilosophy → return `vec![object.to_string()]` singleton). For the resolved canonical seed, return `object_id(seed.name)` FIRST, then `object_id(alias)` for each alias (dedup, stable order). REUSE `resolve_object_advisory`/`seeds()`/`object_id()`/`normalize()` — do NOT reimplement resolution or the NSID prefix. Export from lexicon/lib.rs. Deterministic (canonical first, then aliases in seed order). TEST PARADIGM (mandatory): proptest — for every seed, object_id(name) and each object_id(alias) map to the SAME class == {canonical} ∪ {alias ids}; a non-namespaced arbitrary string maps to its own singleton. Keep check-arch green (pure core; 21 members)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Widen the object-dimension read to the equivalence class (adapter-duckdb graph_query)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "graph query --object / --score include alias-authored claims, grouped under canonical, anti-merging preserved, stored bytes immutable",
+          "description": "Widen the CLI object-dimension read (`adapter-duckdb::graph_query::query_by_object` / `DimensionFilter::Object`) so it filters on the pure `lexicon::equivalence_class(object)` (an `object IN (…)` predicate on BOTH the own `claims` and `peer_claims` UNION-ALL arms) instead of exact `object = ?`. This flows alias-object claims into `graph query --object <canonical>` AND `--weighted`/`--score` (the weighted path funnels through the same `DimensionFilter::Object` via `ScoringFilter::ByObject`). The returned per-claim rows are grouped/aggregated under the QUERIED canonical philosophy while EACH claim stays attributed to its own author (anti-merging — UNION-ALL still projects author_did; `xtask check-arch::no_cross_table_join_elides_author` stays green). Read-time DERIVED only: the stored claim `object` (DB column + signed `<cid>.json`) is NEVER rewritten (AC-005.2).",
+          "criteria": [
+            "AC-005.1 (canonical query/score INCLUDES alias-authored claims, each attributed, grouped under canonical)",
+            "AC-005.2 (stored objects immutable — resolution is a read-time derivation; on-disk artifact + DB object unchanged)",
+            "AT-1 (WS: alias-authored claim appears under the canonical query, attributed), AT-2 (two attributed rows, unmerged), AT-3 (weighted aggregates the alias claim), AT-4 stays GREEN (stored bytes immutable), AT-5 stays GREEN (no over-widening)"
+          ],
+          "test_file": "tests/acceptance/philosophy_alias_triangulation.rs",
+          "scenario_name": "graph_query_by_canonical_object_includes_alias_authored_claim_attributed",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-duckdb/src/graph_query.rs",
+            "crates/scoring/src/lib.rs"
+          ],
+          "implementation_notes": "In graph_query.rs: `query_by_object` (line ~59) computes `lexicon::equivalence_class(object)` and threads the class into the object filter. Change the `DimensionFilter::Object` path (where_clause line ~83 returns `('c.object = ?','pc.object = ?')`; param line ~92) to emit `c.object IN (?, ?, …)` / `pc.object IN (?, ?, …)` with the class values bound on BOTH arms (the UNION-ALL binds params per arm — keep the own+peer param ordering correct). A SINGLETON class reproduces the exact-match SQL byte-for-byte (AT-5 / --subject/--contributor untouched). Preserve the explicit per-row `author_did` projection — NO merging JOIN/GROUP BY (check-arch::no_cross_table_join_elides_author). GROUPING UNDER CANONICAL: verify AT-1/AT-3 — if the list/weighted view keys on each row's RAW object and would show/aggregate the alias row separately, canonicalize the returned in-memory rows' `object` to the QUERIED canonical (a DERIVED, display-only transform in the read result — the stored bytes stay the typed alias, AC-005.2 / AT-4). Only touch scoring/src/lib.rs if AT-3 needs the aggregation to group the alias row under canonical (the ByObject weight must count the alias-authored claim toward the queried canonical subject); prefer canonicalizing the row object at the read boundary so `scoring` needs no equivalence knowledge (per DESIGN row 26 split). TEST PARADIGM: acceptance AT-1..5 are pre-authored subprocess tests — do NOT rewrite; a near-pure SQL-builder or row-canonicalization helper gets an example/unit test. Keep check-arch green, 21 members, no new crate. NOTE: the VIEWER's `store_read::query_philosophy_survey` route is a documented FOLLOW-UP (US-PV-005 CLI ACs are satisfied by the graph_query widening); do not widen the viewer here unless a shared helper makes it free."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/scoring/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design §5 row 26 + the DISTILL read-path correction) + automated quality gate",
+    "approved_at": "2026-07-08",
+    "review_verdict": "APPROVED — automated quality gate PASS (2 steps / 3 candidate production files, AT-1..3 owned by 02-01 + the pure equivalence_class unit-owned by 01-01, valid DAG 01-01 -> 02-01, IDs match NN-NN, criteria <=5, DISTILL linkage present). Read-path corrected per the DISTILL finding: the CLI graph query --object/--weighted reads via adapter-duckdb::graph_query (query_by_object / DimensionFilter::Object / ScoringFilter::ByObject), NOT the viewer's query_philosophy_survey (viewer widening is a documented follow-up). Load-bearing invariants: anti-merging (per-author UNION-ALL, check-arch) + AC-005.2 stored-object immutability (AT-4). Minted-philosophy aliases OUT of scope (seed aliases only)."
+  }
+}

@@ -281,6 +281,53 @@ pub fn resolve_object_advisory(object: &str) -> ObjectAdvisory {
     ObjectAdvisory::UnknownInNamespace
 }
 
+// =============================================================================
+// Equivalence-class resolver (slice-26 01-01; ADR-059 §5 row 26) — pure + total
+// =============================================================================
+
+/// The set of philosophy object-ids that triangulate together with `object`.
+///
+/// Pure + total, offline (embedded seeds only). Given ANY object in a seed
+/// philosophy's family — the canonical object-id `object_id(name)` OR one of its
+/// alias object-ids `object_id(alias)` — returns EVERY object-id in that family:
+/// the canonical FIRST, then one per alias in seed order (deduped, stable). Given
+/// an object that is not a known philosophy (unknown-in-namespace, or a
+/// non-philosophy object) returns the SINGLETON `[object]`, so a query by a
+/// no-alias philosophy or a non-philosophy object stays byte-identical to an
+/// exact match (no over-widening — AT-5).
+///
+/// REUSES `resolve_object_advisory`/`find`/`object_id` — never a second copy of
+/// resolution or the NSID prefix. This is the pure seam the `adapter-duckdb`
+/// object-dimension read widens on (slice-26 02-01): resolution is a read-time
+/// derivation; it NEVER rewrites the stored claim object (AC-005.2).
+pub fn equivalence_class(object: &str) -> Vec<String> {
+    // Resolve to the seed's canonical NAME; a non-philosophy / unknown object has
+    // no family, so it is its own singleton class.
+    let canonical_name = match resolve_object_advisory(object) {
+        ObjectAdvisory::Canonical { name } => name,
+        ObjectAdvisory::Alias { canonical } => canonical,
+        ObjectAdvisory::UnknownInNamespace | ObjectAdvisory::NotPhilosophy => {
+            return vec![object.to_string()];
+        }
+    };
+
+    // `resolve_object_advisory` only reports Canonical/Alias for a seed match, so
+    // `find` succeeds; the singleton fallback keeps the function total regardless.
+    let Some(seed) = find(&canonical_name) else {
+        return vec![object.to_string()];
+    };
+
+    // Canonical object-id first, then each alias object-id (deduped, stable).
+    let mut class = vec![object_id(&seed.name)];
+    for alias in &seed.aliases {
+        let alias_id = object_id(alias);
+        if !class.contains(&alias_id) {
+            class.push(alias_id);
+        }
+    }
+    class
+}
+
 #[cfg(test)]
 mod tests {
     //! Port-to-port unit tests at the pure-resolver scope: the driving port is
@@ -403,6 +450,53 @@ mod tests {
                 resolve_object_advisory(&outsider),
                 ObjectAdvisory::NotPhilosophy
             );
+        }
+    }
+
+    proptest! {
+        /// 01-01 (AC-005.1 triangulation + AT-5 singleton no-over-widening):
+        /// `equivalence_class` maps EVERY object in a seed's family — the seed's
+        /// canonical object-id AND each of its alias object-ids — to the SAME
+        /// class `{ canonical } ∪ { alias ids }`, with the canonical FIRST; and
+        /// an arbitrary object that is NOT a known philosophy (out-of-namespace or
+        /// unknown-in-namespace) maps to its own SINGLETON `[object]` (so a query
+        /// by a no-alias philosophy or a non-philosophy object stays byte-identical
+        /// to today — no cross-class leak). Generalizing (Hebert ch.3) over the
+        /// whole embedded seed set + generated outsiders.
+        #[test]
+        fn equivalence_class_maps_seed_family_together_else_singleton(
+            seed in prop::sample::select(seeds()),
+            outsider in ".*",
+        ) {
+            // The expected class: canonical object-id FIRST, then each alias id in
+            // seed order (deduped, stable).
+            let mut expected = vec![object_id(&seed.name)];
+            for alias in &seed.aliases {
+                let alias_id = object_id(alias);
+                if !expected.contains(&alias_id) {
+                    expected.push(alias_id);
+                }
+            }
+
+            // The canonical object-id resolves to the whole class, canonical first.
+            let canonical_id = object_id(&seed.name);
+            let from_canonical = equivalence_class(&canonical_id);
+            prop_assert_eq!(&from_canonical, &expected);
+            prop_assert_eq!(from_canonical.first(), Some(&canonical_id));
+
+            // EVERY alias object-id resolves to the SAME class (triangulation is
+            // symmetric — an alias query sees the canonical + its siblings).
+            for alias in &seed.aliases {
+                prop_assert_eq!(equivalence_class(&object_id(alias)), expected.clone());
+            }
+
+            // A non-philosophy / unknown-in-namespace object → SINGLETON [object]
+            // (no over-widening; AT-5 no-regression guardrail).
+            prop_assume!(matches!(
+                resolve_object_advisory(&outsider),
+                ObjectAdvisory::NotPhilosophy | ObjectAdvisory::UnknownInNamespace
+            ));
+            prop_assert_eq!(equivalence_class(&outsider), vec![outsider.clone()]);
         }
     }
 

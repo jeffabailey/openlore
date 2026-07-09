@@ -89,8 +89,8 @@ pub mod philosophy;
 /// Re-export of the philosophy validator + derivation helpers for ergonomic
 /// call sites (`lexicon::validate_philosophy_json`, `lexicon::Philosophy`).
 pub use philosophy::{
-    normalize, object_id, resolve_object_advisory, seeds, validate_philosophy_json, ObjectAdvisory,
-    Philosophy,
+    equivalence_class, normalize, object_id, resolve_object_advisory, seeds,
+    validate_philosophy_json, ObjectAdvisory, Philosophy,
 };
 
 // =============================================================================
