@@ -1211,3 +1211,36 @@ harness = true
 name = "claim_compose_advisory"
 path = "../../tests/acceptance/claim_compose_advisory.rs"
 harness = true
+
+# Slice-26 (philosophy-alias-triangulation; DISTILL) real-I/O acceptance: ALIAS
+# TRIANGULATION in `graph query` — claims authored against a philosophy's ALIAS
+# aggregate under its CANONICAL object at READ time (US-PV-005 / AC-005.1..2;
+# ADR-059 §5 row 26). The PAYOFF read-time slice (J-002 discovery + J-004 breadth):
+# a claim on `…mem-safety` and one on `…memory-safety` (near-synonyms) CONNECT
+# under `graph query --object <canonical>` (and `--weighted`), each attributed to
+# its author (anti-merging preserved — the UNION-ALL read still projects
+# `author_did`), grouped under the canonical. It is a DERIVED read-time view: it
+# NEVER rewrites the stored claim objects (the signed `<cid>.json` bytes stay
+# immutable, AC-005.2). Drives the REAL `openlore` bin via `run_openlore*` +
+# `peer add`/`peer pull` (own claim via `claim add`; distinct-author peer claim via
+# the slice-04 `build_verifiable_peer_records_for_triples` seam — REAL Ed25519 +
+# CID recompute, NO new external fake) over a REAL local DuckDB under an isolated
+# `OPENLORE_HOME`. AT-1 is the walking skeleton (canonical + alias claims by
+# different authors → both included + attributed); AT-2 is anti-merging (two
+# distinct-cid rows, never merged); AT-3 is `--weighted` (the alias claim is
+# aggregated under canonical); AT-4 is the LOAD-BEARING immutability guarantee
+# (stored alias object byte-unchanged after a triangulated read); AT-5 is the
+# no-over-widening / singleton regression guard (a DIFFERENT class returns only its
+# exact matches). Per Mandate 11 the sad/edge paths are example-based, never
+# PBT-generated at this layer (the pure `equivalence_class` is property-tested at
+# layer 1 in `crates/lexicon` by DELIVER). Build-before-run: `cargo build --bin
+# openlore`. DISTILL RED gate: AT-1/AT-2 (plain `--object`) + AT-3 (`--weighted`)
+# classify RED (the CLI read path filters `object` EXACTLY — `graph_query::
+# query_by_object` + the scoring `ByObject` filter — so the alias-object claim is
+# excluded from a canonical query = MISSING_FUNCTIONALITY); AT-4 (immutability) +
+# AT-5 (no-regression) are GREEN-today guardrails until DELIVER lands
+# `equivalence_class` + the widened read.
+[[test]]
+name = "philosophy_alias_triangulation"
+path = "../../tests/acceptance/philosophy_alias_triangulation.rs"
+harness = true
