@@ -70,5 +70,317 @@
     "description": "A design deliberately keeps its surface area small, preferring the fewest concepts, dependencies, and moving parts that solve the problem. Minimal systems are easier to understand, audit, and maintain, and they resist the accretion of accidental complexity.",
     "aliases": ["minimal", "simplicity"],
     "seeAlso": ["https://en.wikipedia.org/wiki/Minimalism_(computing)"]
+  },
+  {
+    "name": "agile",
+    "description": "Software is delivered in short, iterative increments driven by close collaboration with customers and a willingness to respond to change over following a fixed plan. The Agile Manifesto values individuals and interactions, working software, and continuous feedback above rigid process and comprehensive up-front documentation.",
+    "aliases": ["agile-development", "agile-manifesto"],
+    "seeAlso": ["https://agilemanifesto.org"]
+  },
+  {
+    "name": "extreme-programming",
+    "description": "An agile method that pushes good practices to their limit: very short release cycles, test-first development, pair programming, continuous integration, and relentless refactoring. XP treats disciplined technical practice as the engine of adaptability, keeping the code always ready to change.",
+    "aliases": ["xp"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Extreme_programming"]
+  },
+  {
+    "name": "scrum",
+    "description": "An agile framework that organizes work into fixed-length sprints, with a product backlog, a committed sprint goal, and regular ceremonies for planning, review, and retrospective. Cross-functional teams inspect and adapt at each cadence, making progress and impediments continuously visible.",
+    "aliases": ["scrum-framework"],
+    "seeAlso": ["https://scrumguides.org"]
+  },
+  {
+    "name": "kanban",
+    "description": "Work is visualized on a board and pulled through explicit stages under work-in-progress limits, so flow and bottlenecks are made visible and manageable. Kanban optimizes for smooth, continuous delivery and evolutionary change rather than fixed iterations.",
+    "aliases": ["kanban-method"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Kanban_(development)"]
+  },
+  {
+    "name": "devops",
+    "description": "Development and operations are unified into a single culture and toolchain so that building, releasing, and running software is one shared, automated responsibility. Fast feedback loops, automation, and shared ownership shorten lead time and make deployment routine rather than risky.",
+    "aliases": ["dev-ops"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/DevOps"]
+  },
+  {
+    "name": "devsecops",
+    "description": "Security is woven into the DevOps pipeline as a continuous, automated, shared responsibility rather than a gate applied at the end. Threat modeling, dependency scanning, and policy checks shift left into every commit and build so that secure delivery moves at the speed of delivery.",
+    "aliases": ["secure-devops", "sec-dev-ops"],
+    "seeAlso": ["https://owasp.org/www-project-devsecops-guideline/"]
+  },
+  {
+    "name": "lean-software-development",
+    "description": "Adapted from lean manufacturing, it eliminates waste, amplifies learning, decides as late as responsibly possible, and delivers as fast as possible while building quality in. Value is defined from the customer's perspective and flow is optimized end to end rather than locally.",
+    "aliases": ["lean", "lean-development"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Lean_software_development"]
+  },
+  {
+    "name": "waterfall",
+    "description": "Development proceeds through sequential phases — requirements, design, implementation, verification, maintenance — each completed and signed off before the next begins. It favors up-front planning and documentation, trading adaptability for predictability and a clear paper trail.",
+    "aliases": ["waterfall-model", "sequential-development"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Waterfall_model"]
+  },
+  {
+    "name": "continuous-integration",
+    "description": "Developers merge their work into a shared mainline frequently, and every merge triggers an automated build and test run that surfaces integration problems within minutes. Keeping the mainline always green makes large, painful merges a thing of the past.",
+    "aliases": ["ci"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Continuous_integration"]
+  },
+  {
+    "name": "continuous-delivery",
+    "description": "Every change that passes the automated pipeline is kept in a releasable state, so shipping to production becomes a business decision rather than an engineering event. A reliable, repeatable release process makes deployments low-risk and on-demand.",
+    "aliases": ["cd"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Continuous_delivery"]
+  },
+  {
+    "name": "continuous-deployment",
+    "description": "Every change that passes the automated pipeline is released to production automatically, with no manual gate between a green build and live users. It demands strong test coverage, observability, and fast rollback so that automation, not ceremony, governs release.",
+    "aliases": ["continuous-deploy", "auto-deploy"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Continuous_deployment"]
+  },
+  {
+    "name": "trunk-based-development",
+    "description": "Everyone commits to a single shared trunk in small, frequent increments, using short-lived branches and feature flags instead of long-running divergent branches. Continuous integration into one mainline keeps merges trivial and the codebase always integrable.",
+    "aliases": ["trunk-based", "mainline-development"],
+    "seeAlso": ["https://trunkbaseddevelopment.com"]
+  },
+  {
+    "name": "gitops",
+    "description": "The desired state of infrastructure and applications is declared in Git, and automated controllers continuously reconcile the running system to match that source of truth. Git becomes the single audited control plane, making changes reviewable, reversible, and observable.",
+    "aliases": ["git-ops"],
+    "seeAlso": ["https://opengitops.dev"]
+  },
+  {
+    "name": "pair-programming",
+    "description": "Two developers work together at one workstation, one driving the keyboard while the other reviews and reasons about direction, swapping roles frequently. Continuous review, shared context, and real-time design discussion raise quality and spread knowledge as the code is written.",
+    "aliases": ["pairing"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Pair_programming"]
+  },
+  {
+    "name": "mob-programming",
+    "description": "The whole team works on the same task at the same time at one shared screen, rotating the driver while the group navigates. It maximizes collective knowledge, decision quality, and onboarding at the cost of concentrating everyone on a single stream of work.",
+    "aliases": ["mobbing", "ensemble-programming"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Mob_programming"]
+  },
+  {
+    "name": "code-review",
+    "description": "Changes are examined by peers before they merge, so defects, design problems, and knowledge gaps are caught by a second set of eyes. Beyond finding bugs, review spreads context, enforces shared standards, and makes authorship a collective, teachable act.",
+    "aliases": ["peer-review", "code-inspection"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Code_review"]
+  },
+  {
+    "name": "behavior-driven-development",
+    "description": "Requirements are captured as concrete, executable examples in a shared, ubiquitous language (typically Given-When-Then) that business and engineering both read. The examples become automated acceptance tests, aligning what is built with what was actually asked for.",
+    "aliases": ["bdd", "specification-by-example"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Behavior-driven_development"]
+  },
+  {
+    "name": "domain-driven-design",
+    "description": "Software structure mirrors the business domain, organized around bounded contexts and a ubiquitous language shared by experts and developers. Rich domain models, aggregates, and explicit context boundaries keep complex business logic coherent as the system grows.",
+    "aliases": ["ddd"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Domain-driven_design"]
+  },
+  {
+    "name": "acceptance-test-driven-development",
+    "description": "The team agrees on concrete acceptance criteria as automated tests before implementation, so everyone shares one definition of done. Collaboratively authored examples drive development from the user's perspective and become living, executable specifications.",
+    "aliases": ["atdd", "acceptance-tdd"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Acceptance_test-driven_development"]
+  },
+  {
+    "name": "solid",
+    "description": "Five object-oriented design principles — single responsibility, open-closed, Liskov substitution, interface segregation, and dependency inversion — that together keep code flexible and maintainable. Applied as a set, they push toward small, focused, loosely coupled components that are safe to extend.",
+    "aliases": ["solid-principles"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/SOLID"]
+  },
+  {
+    "name": "dry",
+    "description": "Every piece of knowledge has a single, unambiguous, authoritative representation in the system, so a change is made in exactly one place. Eliminating duplication of logic and intent prevents the drift and inconsistency that arise when copies fall out of sync.",
+    "aliases": ["dont-repeat-yourself"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Don%27t_repeat_yourself"]
+  },
+  {
+    "name": "kiss",
+    "description": "Prefer the simplest design that solves the problem, because simplicity is easier to understand, test, and change than cleverness. Complexity is added only when it earns its keep, keeping systems approachable and resistant to needless intricacy.",
+    "aliases": ["keep-it-simple", "keep-it-simple-stupid"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/KISS_principle"]
+  },
+  {
+    "name": "yagni",
+    "description": "Do not build functionality on speculation; add it only when a real, present requirement demands it. Deferring work you merely anticipate avoids the cost, risk, and maintenance burden of features that may never be needed.",
+    "aliases": ["you-arent-gonna-need-it"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/You_aren%27t_gonna_need_it"]
+  },
+  {
+    "name": "separation-of-concerns",
+    "description": "A system is divided so that each part addresses a distinct concern with minimal overlap, letting each be understood and changed in isolation. Clean boundaries between responsibilities reduce coupling and make the whole easier to reason about.",
+    "aliases": ["soc"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Separation_of_concerns"]
+  },
+  {
+    "name": "single-responsibility",
+    "description": "A module or class should have one reason to change, owning a single, well-defined responsibility. Concentrating one concern per unit keeps changes localized and prevents unrelated behaviors from becoming entangled.",
+    "aliases": ["single-responsibility-principle", "srp"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Single-responsibility_principle"]
+  },
+  {
+    "name": "composition-over-inheritance",
+    "description": "Build behavior by assembling small, focused components rather than deriving it through deep inheritance hierarchies. Favoring composition yields more flexible, less brittle designs that avoid the tight coupling and fragility of inherited implementation.",
+    "aliases": ["favor-composition", "favour-composition"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Composition_over_inheritance"]
+  },
+  {
+    "name": "law-of-demeter",
+    "description": "An object should talk only to its immediate collaborators and not reach through them into their internals. Limiting how far code knows about the shape of other objects reduces coupling and keeps changes from rippling across the system.",
+    "aliases": ["principle-of-least-knowledge", "dont-talk-to-strangers"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Law_of_Demeter"]
+  },
+  {
+    "name": "convention-over-configuration",
+    "description": "Frameworks supply sensible defaults so developers specify only the parts that deviate from convention, rather than configuring everything explicitly. Shared conventions cut boilerplate and decision fatigue while keeping projects consistent and predictable.",
+    "aliases": ["coc", "sensible-defaults"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Convention_over_configuration"]
+  },
+  {
+    "name": "fail-fast",
+    "description": "Detect invalid state or bad input at the earliest possible moment and stop immediately with a clear error, rather than proceeding on corrupt assumptions. Surfacing failures loudly and early makes bugs cheaper to find and prevents silent, compounding damage.",
+    "aliases": ["fail-early"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Fail-fast"]
+  },
+  {
+    "name": "principle-of-least-astonishment",
+    "description": "A component should behave the way its users reasonably expect, so that its behavior never surprises them. Aligning interfaces and defaults with prior conventions and intuition reduces error and cognitive load.",
+    "aliases": ["least-surprise", "pola"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Principle_of_least_astonishment"]
+  },
+  {
+    "name": "least-privilege",
+    "description": "Every process, user, and component is granted only the permissions strictly required to do its job, and no more. Minimizing authority shrinks the blast radius of a compromise or mistake and is a foundational security principle.",
+    "aliases": ["principle-of-least-privilege", "polp"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Principle_of_least_privilege"]
+  },
+  {
+    "name": "defense-in-depth",
+    "description": "Security relies on multiple independent, layered controls so that the failure of any single defense does not compromise the system. Overlapping safeguards force an attacker to defeat many barriers rather than one.",
+    "aliases": ["defence-in-depth", "layered-security"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Defense_in_depth_(computing)"]
+  },
+  {
+    "name": "inversion-of-control",
+    "description": "A framework or container, rather than application code, controls the flow and calls into the components you provide. Handing control of construction and invocation to the framework decouples policy from mechanism and makes components composable and testable.",
+    "aliases": ["ioc", "hollywood-principle"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Inversion_of_control"]
+  },
+  {
+    "name": "dependency-injection",
+    "description": "A component receives its collaborators from the outside instead of constructing them itself, so dependencies are explicit and swappable. Injecting collaborators decouples a unit from concrete implementations and makes it straightforward to test in isolation.",
+    "aliases": ["di"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Dependency_injection"]
+  },
+  {
+    "name": "loose-coupling",
+    "description": "Components depend on one another only through small, stable interfaces, so each can change internally without forcing changes in the others. Low coupling makes a system easier to evolve, test, and reason about part by part.",
+    "aliases": ["low-coupling", "decoupling"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Loose_coupling"]
+  },
+  {
+    "name": "high-cohesion",
+    "description": "The elements inside a module belong together, all contributing to a single, well-focused purpose. Strong cohesion makes modules easier to name, understand, and reuse, and it naturally pairs with loose coupling between them.",
+    "aliases": ["cohesion", "cohesive-design"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Cohesion_(computer_science)"]
+  },
+  {
+    "name": "clean-architecture",
+    "description": "Dependencies point inward toward a framework-agnostic core of business rules, while databases, UIs, and external services live at the replaceable outer edges. Keeping the domain independent of delivery mechanisms makes the system testable and resistant to churn in its tools.",
+    "aliases": ["clean-arch"],
+    "seeAlso": ["https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html"]
+  },
+  {
+    "name": "hexagonal-architecture",
+    "description": "The application core communicates with the outside world only through explicit ports, and adapters plug real technologies into those ports. Isolating the domain behind ports and adapters lets inputs and outputs be swapped or mocked without touching business logic.",
+    "aliases": ["ports-and-adapters", "ports-adapters"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Hexagonal_architecture_(software)"]
+  },
+  {
+    "name": "layered-architecture",
+    "description": "The system is organized into horizontal layers — such as presentation, application, domain, and data — where each layer depends only on the one beneath it. Clear layering separates responsibilities and localizes the impact of change to a single tier.",
+    "aliases": ["n-tier", "tiered-architecture"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Multitier_architecture"]
+  },
+  {
+    "name": "microservices",
+    "description": "An application is composed of small, independently deployable services, each owning a single capability and communicating over the network. Independent deployment and scaling per service buy team autonomy and resilience at the cost of distributed-systems complexity.",
+    "aliases": ["microservice-architecture", "micro-services"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Microservices"]
+  },
+  {
+    "name": "monolith",
+    "description": "The application is built and deployed as a single, unified unit in which all modules run in one process. A well-structured monolith offers simplicity, straightforward local reasoning, and easy refactoring, favoring cohesion over distribution until scale demands otherwise.",
+    "aliases": ["monolithic-architecture", "modular-monolith"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Monolithic_application"]
+  },
+  {
+    "name": "event-driven",
+    "description": "Components communicate by producing and reacting to events rather than calling each other directly, so producers and consumers stay decoupled in time and knowledge. Event flows enable asynchronous, extensible systems where new reactions can be added without changing the source.",
+    "aliases": ["event-driven-architecture", "eda"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Event-driven_architecture"]
+  },
+  {
+    "name": "twelve-factor-app",
+    "description": "A set of practices for building portable, scalable web services — explicit dependencies, config in the environment, stateless processes, disposability, and dev/prod parity among them. Following the twelve factors makes applications cloud-native and painless to deploy and operate.",
+    "aliases": ["12-factor", "twelve-factor"],
+    "seeAlso": ["https://12factor.net"]
+  },
+  {
+    "name": "infrastructure-as-code",
+    "description": "Servers, networks, and services are provisioned and changed through version-controlled, declarative definitions rather than manual clicks. Treating infrastructure as reviewable, repeatable code makes environments reproducible, auditable, and safe to recreate from scratch.",
+    "aliases": ["iac"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Infrastructure_as_code"]
+  },
+  {
+    "name": "observability",
+    "description": "A system is instrumented with logs, metrics, and traces so that its internal state can be understood from its external outputs. Rich telemetry lets operators ask new questions of production and diagnose unforeseen failures without shipping new code.",
+    "aliases": ["o11y"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Observability_(software)"]
+  },
+  {
+    "name": "idempotency",
+    "description": "An operation can be applied many times and leave the system in the same state as applying it once. Idempotent interfaces make retries, replays, and at-least-once delivery safe, which is essential for reliability in distributed systems.",
+    "aliases": ["idempotent", "idempotence"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Idempotence"]
+  },
+  {
+    "name": "statelessness",
+    "description": "Each request carries everything needed to process it, and the server retains no client session state between requests. Stateless components are trivially horizontally scalable and resilient, since any instance can handle any request interchangeably.",
+    "aliases": ["stateless", "stateless-services"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Stateless_protocol"]
+  },
+  {
+    "name": "api-first",
+    "description": "The interface contract is designed and agreed before implementation, so the API is a deliberate product rather than a byproduct of internal code. Designing the contract up front lets clients, servers, and tooling be built in parallel against a stable, documented shape.",
+    "aliases": ["api-first-design", "contract-first"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/API"]
+  },
+  {
+    "name": "security-by-design",
+    "description": "Security is a foundational design concern built into the architecture from the start, with safe defaults, rather than bolted on after the fact. Anticipating threats and minimizing attack surface early makes systems robust instead of retrofitted.",
+    "aliases": ["secure-by-design", "secure-by-default"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Secure_by_design"]
+  },
+  {
+    "name": "privacy-by-design",
+    "description": "Privacy protections are embedded into systems from inception through data minimization, purpose limitation, and privacy-preserving defaults. Treating personal data as a liability to be minimized makes protection proactive and structural rather than reactive.",
+    "aliases": ["privacy-first", "data-protection-by-design"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Privacy_by_design"]
+  },
+  {
+    "name": "graceful-degradation",
+    "description": "When a component or dependency fails, the system continues to provide reduced but useful service rather than collapsing entirely. Designing for partial failure — fallbacks, timeouts, and safe defaults — keeps the whole resilient under adverse conditions.",
+    "aliases": ["fail-soft", "fault-tolerant"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Fault_tolerance"]
+  },
+  {
+    "name": "eventual-consistency",
+    "description": "Replicas of data are allowed to diverge briefly and are guaranteed to converge to the same value once updates stop propagating. Trading immediate consistency for availability and partition tolerance lets distributed systems stay responsive at scale.",
+    "aliases": ["eventually-consistent"],
+    "seeAlso": ["https://en.wikipedia.org/wiki/Eventual_consistency"]
   }
 ]

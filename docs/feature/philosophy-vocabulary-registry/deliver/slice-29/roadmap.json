@@ -1,0 +1,53 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-29",
+    "created_at": "2026-07-09T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Expand the seeded vocabulary to the common software philosophies",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "seed the common software philosophies (process, design, architecture/ops) into seeds.json",
+          "description": "The slice-01 embedded seed vocabulary shipped 12 records skewed toward language/build/data properties. Users expect the philosophies that appear in most software projects (agile, xp, scrum, devops, solid, dry, kiss, clean-architecture, microservices, 12-factor, IaC, ...). Add ~50 curated org.openlore.philosophy records to crates/lexicon/src/seeds.json spanning three categories — process methodologies, design principles, architecture/ops patterns — each with a rich 2-sentence description, aliases, and a canonical seeAlso URL. No production code changes: seeds() reads the same include_str! file; every new record is validated by the existing generalizing property tests over prop::sample::select(seeds()).",
+          "criteria": [
+            "Every new seed validates through validate_philosophy_json (non-blank name+description; aliases/seeAlso arrays of strings)",
+            "GUARDRAIL every existing property test (find_resolves_every_seed_by_name_and_object_id, resolve_object_advisory_*, equivalence_class_*, find_is_total_and_sound) stays green over the widened set",
+            "GUARDRAIL seeds_tests::hard_pinned_names_are_all_present + ships_at_least_ten_seeds + seed_names_have_distinct_object_ids stay green (original 12 preserved)",
+            "OWNED every_seed_name_and_alias_normalizes_uniquely (no normalized name/alias collision — resolvers return the FIRST match)",
+            "OWNED seed_vocabulary_covers_common_software_philosophies (>= 60 records; canonical anchors across the three categories resolve by name AND object-id)"
+          ],
+          "test_file": "crates/lexicon/src/philosophy.rs",
+          "scenario_name": "every_seed_name_and_alias_normalizes_uniquely",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/seeds.json",
+            "crates/lexicon/src/philosophy.rs"
+          ],
+          "implementation_notes": "Pure data slice: the acceptance net already exists as generalizing property tests parameterized on prop::sample::select(seeds()), so widening seeds.json exercises every new record automatically. The ONE invariant a bare data edit can violate is token uniqueness: find/resolve_object_advisory return the first normalized match, so two seeds whose names OR aliases normalize to the same token would silently mis-resolve (and break find_resolves_every_seed_by_name_and_object_id). Pinned by the new every_seed_name_and_alias_normalizes_uniquely test, which fails naming the offending token. No crate/route/dependency change — check-arch stays at 21 members. Demo: openlore philosophy list."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/"
+    ],
+    "test_directories": [
+      "crates/lexicon/src/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (/nw:new wizard, user-directed scope) + automated quality gate (cargo test -p lexicon)",
+    "approved_at": "2026-07-09",
+    "review_verdict": "APPROVED — single-step pure-data slice. Existing generalizing property tests are the acceptance net; 2 owned pins (uniqueness invariant + coverage floor) added. All 47 lexicon tests green over the 64-record set; check-arch OK (21). No production logic changed."
+  }
+}

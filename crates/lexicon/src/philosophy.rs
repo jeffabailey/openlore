@@ -500,6 +500,57 @@ mod tests {
         }
     }
 
+    /// slice-29 (seed-vocabulary expansion): EVERY normalized name AND alias
+    /// across the whole seed set is globally unique. This is the invariant the
+    /// resolvers rely on — `find`/`resolve_object_advisory` return the FIRST
+    /// match, so a duplicated token would silently mis-resolve one seed to
+    /// another (and break `find_resolves_every_seed_by_name_and_object_id`).
+    /// Pinned explicitly so a future seed collision fails with a named token.
+    #[test]
+    fn every_seed_name_and_alias_normalizes_uniquely() {
+        use std::collections::HashMap;
+        let mut owner: HashMap<String, String> = HashMap::new();
+        for seed in seeds() {
+            for token in std::iter::once(&seed.name).chain(seed.aliases.iter()) {
+                let normalized = normalize(token);
+                if let Some(previous) = owner.insert(normalized.clone(), seed.name.clone()) {
+                    panic!(
+                        "seed token `{token}` (normalized `{normalized}`) collides: \
+                         owned by both `{previous}` and `{}`",
+                        seed.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// slice-29: the vocabulary is a SUBSTANTIAL, curated set spanning the three
+    /// categories a reader expects in most software projects — process
+    /// methodologies, design principles, and architecture/ops patterns. Anchored
+    /// on canonical names (resolvable by name AND derived object-id) so the
+    /// expansion cannot silently regress below a useful floor.
+    #[test]
+    fn seed_vocabulary_covers_common_software_philosophies() {
+        let all = seeds();
+        assert!(
+            all.len() >= 60,
+            "expected a substantial seeded vocabulary, found {}",
+            all.len()
+        );
+        for anchor in [
+            "agile",                 // process methodology
+            "devops",                // process methodology
+            "solid",                 // design principle
+            "dry",                   // design principle
+            "clean-architecture",    // architecture pattern
+            "infrastructure-as-code" // ops pattern
+        ] {
+            let record = find(anchor)
+                .unwrap_or_else(|| panic!("canonical philosophy `{anchor}` must be seeded"));
+            assert_eq!(find(&object_id(anchor)).as_ref(), Some(&record));
+        }
+    }
+
     proptest! {
         /// Totality + soundness/completeness (Oracle): `find` never panics on
         /// arbitrary input; any `Some(record)` genuinely matches the key by
