@@ -6,6 +6,11 @@
     {"sid":"01-01","p":"RED_ACCEPTANCE","s":"SKIPPED","d":"NOT_APPLICABLE:acceptance CA-1..5 owned by 02-01; 01-01 is pure lexicon driven by RED_UNIT proptest","t":"2026-07-09T01:57:00Z"},
     {"sid":"01-01","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-07-09T01:57:30Z"},
     {"sid":"01-01","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-07-09T01:58:30Z"},
-    {"sid":"01-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-09T01:59:00Z"}
+    {"sid":"01-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-09T01:59:00Z"},
+    {"sid":"02-01","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-07-09T02:00:00Z"},
+    {"sid":"02-01","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-07-09T02:04:00Z"},
+    {"sid":"02-01","p":"RED_UNIT","s":"SKIPPED","d":"NOT_APPLICABLE:no new pure helper beyond the preview string; advisory verdict is property-covered by 01-01 and CA-1..5 cover the preview line","t":"2026-07-09T02:04:10Z"},
+    {"sid":"02-01","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-07-09T02:35:00Z"},
+    {"sid":"02-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-07-09T02:36:00Z"}
   ]
 }

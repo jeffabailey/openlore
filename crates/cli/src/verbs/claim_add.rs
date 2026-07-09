@@ -37,6 +37,8 @@ use claim_domain::{
     canonicalize, compute_cid, ClaimReference, ConfidenceBucket, Did, SignedClaim, UnsignedClaim,
 };
 
+use lexicon::ObjectAdvisory;
+
 use crate::io::prompt_line;
 use crate::wiring::Wiring;
 
@@ -307,7 +309,35 @@ pub fn render_compose_preview(claim: &ComposedClaim) -> String {
     ));
     out.push_str(&format!("  author:     {}\n", claim.author_did));
     out.push_str(&format!("  composedAt: {}\n", claim.composed_at));
+
+    // Slice-25 (US-PV-004, AC-004.1/.2): a DISPLAY-ONLY advisory line for a
+    // philosophy-namespace `--object`. This shapes the preview STRING only — it
+    // never touches `build_unsigned_claim`/the signed bytes (AC-004.3), and it
+    // never blocks (an unknown object still signs on confirm). An out-of-
+    // namespace object appends NOTHING (CA-5: preview byte-identical to slice-01).
+    if let Some(advisory_line) = compose_object_advisory_line(&claim.object) {
+        out.push_str(&advisory_line);
+    }
     out
+}
+
+/// Render the display-only compose advisory line for a claim `--object`, or
+/// `None` when the object is not in the philosophy namespace (no advisory, no
+/// nagging — CA-5). Pure: delegates classification to the property-covered
+/// `lexicon::resolve_object_advisory` (slice-25 01-01) and only chooses wording.
+/// The domain substrings `resolves to` / `alias` / `not a known philosophy` are
+/// pinned by US-PV-004; the glyphs/layout are display choices.
+fn compose_object_advisory_line(object: &str) -> Option<String> {
+    match lexicon::resolve_object_advisory(object) {
+        ObjectAdvisory::Canonical { name } => Some(format!("  ↳ resolves to {name}\n")),
+        ObjectAdvisory::Alias { canonical } => {
+            Some(format!("  ↳ resolves to {canonical} (alias)\n"))
+        }
+        ObjectAdvisory::UnknownInNamespace => {
+            Some("  ⚠ not a known philosophy — will be signed as-is\n".to_string())
+        }
+        ObjectAdvisory::NotPhilosophy => None,
+    }
 }
 
 /// Render the bucket enum into its lowercase display label. The four
