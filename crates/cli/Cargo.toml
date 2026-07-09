@@ -1244,3 +1244,39 @@ harness = true
 name = "philosophy_alias_triangulation"
 path = "../../tests/acceptance/philosophy_alias_triangulation.rs"
 harness = true
+
+# Slice-27 (philosophy-vocabulary-registry — the LAST slice; DISTILL) subprocess +
+# real-I/O acceptance: the read-only `GET /philosophies` VIEWER VOCABULARY surface
+# (US-PV-006 / AC-006.1..2, job_id J-002; ADR-059 §5 row 27). Drives the REAL `openlore
+# ui` viewer over HTTP (`ViewerServer::get`) over a REAL DuckDB seeded via the REAL
+# `claim add` verb; the `/philosophies` render itself is store-independent (a PURE
+# projection of `lexicon::philosophy::seeds()` — offline, no store read, no network,
+# I-VIEW-3). Renders the shared philosophy vocabulary read-only — each philosophy's name
+# + description + a link to the EXISTING slice-10 `/philosophy?object=<object-id>`
+# traversal surface — with NO authoring control (no mint/edit form; the viewer holds no
+# key, I-VIEW-1/3), and adds a `("Philosophies", PHILOSOPHIES_URL)` entry to the slice-21
+# `LANDING_HUB_SURFACES` SSOT so the persistent nav links it on every page (AC-006.2).
+# VP-1 is the walking skeleton (memory-safety entry: name + verbatim description fragment
+# + `/philosophy?object=…memory-safety` traversal href); VP-2 is nav reach + active
+# marker; VP-3 is read-only (no authoring control); VP-4 is offline completeness (the
+# FULL `seeds()` vocabulary listed, count == `seeds().len()`); VP-5 is the no-regression /
+# single-source guard (the prior 8 nav links survive). Per Mandate 11 the sad/edge paths
+# are example-based, never PBT-generated at this layer (the pure `seeds()`→HTML projection
+# is property-tested at layer 1/2 in `crates/viewer-domain` by DELIVER). Build-before-run:
+# `cargo build --bin openlore`. DISTILL registers + RED gate; ALL VP-* classify RED (no
+# `/philosophies` route → terse 404, and `LANDING_HUB_SURFACES` carries no Philosophies
+# entry = MISSING_FUNCTIONALITY) until DELIVER. No new crate; the workspace stays 21.
+[[test]]
+name = "viewer_philosophies"
+path = "../../tests/acceptance/viewer_philosophies.rs"
+harness = true
+
+# Slice-27 GOLD / guardrail invariants (the cross-cutting I-VIEW-1/3 read-only + offline
+# guardrails + the slice-21 single-source nav invariant over the WHOLE `/philosophies`
+# surface). DISTILL registers + RED gate; the NoControl (CARDINAL) + Offline golds stay RED
+# until DELIVER (the surface is a 404 today — MISSING_FUNCTIONALITY); the SingleSource gold
+# stays RED (no route's nav links `/philosophies` until the SSOT entry is minted).
+[[test]]
+name = "viewer_philosophies_invariants"
+path = "../../tests/acceptance/viewer_philosophies_invariants.rs"
+harness = true
