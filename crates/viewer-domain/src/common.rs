@@ -148,7 +148,7 @@ pub const VIEWER_NAV_ID: &str = "viewer-nav";
 /// active marker in place. Held in ONE place (one mutation site).
 pub const VIEWER_NAV_ITEMS_ID: &str = "viewer-nav-items";
 
-/// The 8 shipped top-level entry-point surfaces the persistent left nav (and the
+/// The 9 shipped top-level entry-point surfaces the persistent left nav (and the
 /// slice-17 landing hub) link, as `(label, url)` pairs. The `url` is the route's
 /// URL CONST (NOT a hardcoded literal that could drift, R-LD-4). The SINGLE source
 /// of truth for the surface set (AC-001.3): [`render_viewer_nav`] reads it in-module
@@ -164,6 +164,11 @@ pub(crate) const LANDING_HUB_SURFACES: &[(&str, &str)] = &[
     ("Network Search", SEARCH_URL),
     ("Live Scrape", SCRAPE_URL),
     ("Peer Subscriptions", PEERS_URL),
+    // slice-27 (ADR-059 §5 row 27 / US-PV-006 AC-006.2): the read-only philosophy
+    // VOCABULARY surface. Appending it to this ONE SSOT makes the persistent nav link
+    // `/philosophies` on EVERY viewer page (and active-mark it on the surface itself)
+    // — no nav code changes; the nav is derived solely from this table.
+    ("Philosophies", PHILOSOPHIES_URL),
 ];
 
 /// Render the PERSISTENT LEFT NAV — `<nav id="viewer-nav">` wrapping a

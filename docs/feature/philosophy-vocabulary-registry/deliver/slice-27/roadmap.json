@@ -1,0 +1,82 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-27",
+    "created_at": "2026-07-09T00:00:00Z",
+    "total_steps": 2
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pure /philosophies view-model + nav SSOT entry (viewer-domain)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "philosophies surface renderer + PHILOSOPHIES_URL + LANDING_HUB_SURFACES entry (pure, offline)",
+          "description": "Add the pure read-only `/philosophies` view-model to `viewer-domain`: a `PHILOSOPHIES_URL = \"/philosophies\"` const and a pure renderer that lists the seed vocabulary (each philosophy's name + description) with a link to the existing `/philosophy?object=<object-id>` traversal, rendered through the shared `page_shell(title, PHILOSOPHIES_URL, content)`. Add `(\"Philosophies\", PHILOSOPHIES_URL)` to `LANDING_HUB_SURFACES` (the nav SSOT) so the persistent nav renders + active-marks it (AC-006.2). Read-only: NO authoring/mint/edit control, no `<form>` (I-VIEW-1/3). Offline/pure: reads `lexicon::seeds()` (no store, no network, no signing key).",
+          "criteria": [
+            "AC-006.1 renderer (name + description + `/philosophy?object=<object-id>` link; no authoring control; reads lexicon::seeds())",
+            "AC-006.2 (\"Philosophies\", \"/philosophies\") added to LANDING_HUB_SURFACES; page_shell(active=PHILOSOPHIES_URL) marks aria-current on /philosophies",
+            "nav-item single-source unit/property tests updated 8 -> 9 (the set stays EXACTLY LANDING_HUB_SURFACES)",
+            "xtask check-arch stays green (viewer-domain -> lexicon is a PURE->PURE edge; lexicon is serde-only, permitted by the deny-list); 21 members"
+          ],
+          "test_file": "crates/viewer-domain/src/tests.rs",
+          "scenario_name": "philosophies_surface_renders_seed_vocabulary_with_traversal_links; nav_item_set_is_exactly_landing_hub_surfaces",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/viewer-domain/Cargo.toml",
+            "crates/viewer-domain/src/philosophies.rs",
+            "crates/viewer-domain/src/lib.rs",
+            "crates/viewer-domain/src/common.rs",
+            "crates/viewer-domain/src/tests.rs"
+          ],
+          "implementation_notes": "Add `lexicon = { path = \"../lexicon\" }` to viewer-domain/Cargo.toml with a PURE->PURE comment mirroring the existing `appview-domain`/`scoring` edges. Create `crates/viewer-domain/src/philosophies.rs` mirroring `peers.rs`'s read-only-surface shape: `pub const PHILOSOPHIES_URL: &str = \"/philosophies\";` + a pure `pub fn render_philosophies_page() -> String` (or the repo's surface signature — check how `render_scrape_page`/`peers_page` return) that iterates `lexicon::philosophy::seeds()`, and for each renders name + description + `<a href=\"{PHILOSOPHY_URL}?object={lexicon::object_id(name)}\">` (REUSE `traversal::PHILOSOPHY_URL` + `lexicon::object_id` — do NOT hardcode `/philosophy` or the NSID prefix), wrapped in `common::page_shell(\"Philosophies\", PHILOSOPHIES_URL, content)`. NO form / no mint control. Register the module in lib.rs. Add `(\"Philosophies\", PHILOSOPHIES_URL)` to `LANDING_HUB_SURFACES` in common.rs (line ~158) — the nav is derived solely from this SSOT so no nav code changes; `render_viewer_nav_links` already keys aria-current off `*url == active`. Bump the nav-item-count / single-source tests in viewer-domain/src/tests.rs (and any acceptance-side count) from 8 to 9. Run `cargo xtask check-arch` — it should stay green automatically (deny-list permits the pure lexicon edge); if a positive allowed-deps enumeration flags it, extend that entry. TEST PARADIGM (mandatory): the pure renderer + nav-set are property/example unit-testable in-crate (proptest where a property fits — e.g. every seed appears once with a well-formed traversal href; the nav set equals LANDING_HUB_SURFACES). Acceptance VP-* are pre-authored subprocess/HTTP tests — do NOT rewrite. Keep 21 members, no new crate."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Wire the /philosophies route (adapter-http-viewer)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "register GET /philosophies -> the pure renderer (store-free), serving the surface end-to-end",
+          "description": "Register the `/philosophies` route in the viewer HTTP adapter so `GET /philosophies` serves the pure `viewer-domain` philosophies surface. The handler is STORE-FREE (the surface reads the embedded seeds, not the store), so it mirrors the `\"/scrape\" => html_ok(render_scrape_page(...))` arm, NOT the store-reading `peers_page`. No signing key, no PDS surface (I-VIEW-3). This closes the loop for the pre-authored VP-* HTTP acceptance scenarios.",
+          "criteria": [
+            "AC-006.1 GET /philosophies -> 200 with the vocabulary list (name + description + /philosophy?object= links), read-only, offline",
+            "VP-1 (WS list + traversal links), VP-3 (no authoring control), VP-4 (full offline seed set / no external asset host), VP-INV-NoControl, VP-INV-Offline all GREEN",
+            "VP-2 (nav reach + active marker on /philosophies) + VP-5 + VP-INV-SingleSource GREEN once the route serves the nav-bearing shell",
+            "no store handle / no signing key in the handler (mirrors the /scrape store-free arm); check-arch viewer capability boundary stays green"
+          ],
+          "test_file": "tests/acceptance/viewer_philosophies.rs",
+          "scenario_name": "get_philosophies_lists_the_vocabulary_with_traversal_links",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-http-viewer/src/lib.rs"
+          ],
+          "implementation_notes": "In `crates/adapter-http-viewer/src/lib.rs`, the `route` fn `match path` (~line 335; arms at 414 PHILOSOPHY_URL, 424 PEERS_URL, 432 \"/scrape\"): add a `PHILOSOPHIES_URL => html_ok(viewer_domain::philosophies::render_philosophies_page())` arm (use the repo's actual renderer name/signature from 01-01). Import `PHILOSOPHIES_URL` from viewer-domain. Mirror the STORE-FREE `/scrape` arm — do NOT pass `store.as_ref()` (the surface is offline over the embedded seeds). Keep the viewer read-only (no signing, no PDS). Run the pre-authored VP-* acceptance single-threaded (`-- --test-threads=1`) per the known viewer parallel-load flake. TEST PARADIGM: VP-1..5 + VP-INV-* are pre-authored HTTP subprocess tests — do NOT rewrite them; the route wiring is an effect-shell change greened by them + the adapter's own route test (mirror `route_dispatches_get_root_to_the_landing_page_with_200`, lib.rs ~2152, if the adapter unit-tests each route). Keep 21 members, no new crate."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/viewer-domain/src/",
+      "crates/adapter-http-viewer/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design §5 row 27 + the DISTILL DELIVER pointers) + automated quality gate",
+    "approved_at": "2026-07-09",
+    "review_verdict": "APPROVED — automated quality gate PASS (2 steps / candidate production files, VP-1/3/4 + INV owned by 02-01 + the pure renderer/nav owned by 01-01, valid DAG 01-01 -> 02-01, IDs match NN-NN, criteria <=5, DISTILL linkage present). Thin read-only viewer surface fully specified by ADR-059 §5 row 27 + US-PV-006 AC-006.1/2; reference class slice-15 /peers + slice-21 nav SSOT. New viewer-domain->lexicon PURE->PURE edge (deny-list permits it). Load-bearing: read-only / no authoring control (I-VIEW-1/3, VP-INV-NoControl) + nav single-source (VP-INV-SingleSource). Minted-philosophy listing in the viewer + the viewer's query_philosophy_survey widening (from slice-26) are documented follow-ups. This is the LAST slice of the feature."
+  }
+}

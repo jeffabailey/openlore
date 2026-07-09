@@ -930,12 +930,13 @@ fn landing_page_states_read_only_and_links_to_claims() {
     );
 }
 
-/// Behavior (slice-17 / US-LD-001 Theme 2 / C-3 / R-LD-4 / ADR-054 D4): the
-/// landing nav hub links ALL 8 shipped top-level surfaces, each a plain
-/// `<a href>` via its URL CONST — including the minted `SCRAPE_URL = "/scrape"`.
+/// Behavior (slice-17 / US-LD-001 Theme 2 / C-3 / R-LD-4 / ADR-054 D4; slice-27
+/// ADR-059 §5 row 27): the landing nav hub links ALL 9 shipped top-level surfaces,
+/// each a plain `<a href>` via its URL CONST — including the minted
+/// `SCRAPE_URL = "/scrape"` and the slice-27 `PHILOSOPHIES_URL = "/philosophies"`.
 /// A dropped surface (or a const swapped for a drifting literal) is killed here.
 #[test]
-fn landing_hub_links_all_eight_surfaces_via_url_consts() {
+fn landing_hub_links_all_nine_surfaces_via_url_consts() {
     let html = render_landing(&seeded_summary());
     for url in [
         MY_CLAIMS_URL,
@@ -946,6 +947,7 @@ fn landing_hub_links_all_eight_surfaces_via_url_consts() {
         SEARCH_URL,
         SCRAPE_URL,
         PEERS_URL,
+        PHILOSOPHIES_URL,
     ] {
         assert!(
             html.contains(&format!("href=\"{url}\"")),
@@ -957,6 +959,16 @@ fn landing_hub_links_all_eight_surfaces_via_url_consts() {
     assert_eq!(
         SCRAPE_URL, "/scrape",
         "SCRAPE_URL is the canonical /scrape route"
+    );
+    // The slice-27 /philosophies const holds its canonical value (DISTINCT from the
+    // slice-10 /philosophy per-object traversal survey).
+    assert_eq!(
+        PHILOSOPHIES_URL, "/philosophies",
+        "PHILOSOPHIES_URL is the canonical /philosophies route"
+    );
+    assert_ne!(
+        PHILOSOPHIES_URL, PHILOSOPHY_URL,
+        "the vocabulary index (/philosophies) is DISTINCT from the per-object survey (/philosophy)"
     );
 }
 
@@ -5543,4 +5555,110 @@ proptest! {
             );
         }
     }
+}
+
+// =============================================================================
+// slice-27 (ADR-059 §5 row 27 / US-PV-006): the read-only `/philosophies`
+// VOCABULARY surface. Port-to-port at domain scope — `render_philosophies_page`'s
+// signature IS the driving port; the observable outcome is the returned HTML
+// string. These are the layer-1/2 PURE-core tests the acceptance file
+// (`viewer_philosophies.rs`) defers to DELIVER: the `seeds()` → HTML projection is
+// exercised over the WHOLE embedded vocabulary here, so the subprocess ATs stay
+// EXAMPLE-only on the wired route.
+// =============================================================================
+
+proptest! {
+    /// AC-006.1 completeness (Generalizing / Hebert ch.3, over the WHOLE embedded
+    /// seed set): `render_philosophies_page` renders EVERY seed philosophy by NAME,
+    /// with its DESCRIPTION verbatim, AND a link to its EXISTING
+    /// `/philosophy?object=<object-id>` traversal survey (REUSING `href_philosophy`
+    /// over the DERIVED `object_id` — never a hardcoded NSID prefix). One property
+    /// covers all 12 seeds + any future seed (offline: a later-added seed surfaces
+    /// automatically).
+    #[test]
+    fn philosophies_page_renders_every_seed_name_description_and_traversal_href(
+        seed in prop::sample::select(lexicon::philosophy::seeds())
+    ) {
+        let page = render_philosophies_page();
+        prop_assert!(
+            page.contains(&seed.name),
+            "the vocabulary listing must render the {:?} philosophy by name; got:\n{page}",
+            seed.name
+        );
+        prop_assert!(
+            page.contains(&seed.description),
+            "the {:?} entry must render its DESCRIPTION verbatim; got:\n{page}",
+            seed.name
+        );
+        // The traversal href is byte-exact with the slice-10 `/philosophy?object=`
+        // route: object-ids are all-unreserved, so `href_philosophy` (which
+        // percent-encodes) is a no-op and equals `/philosophy?object=<object-id>`.
+        let object_id = lexicon::philosophy::object_id(&seed.name);
+        let expected_href = format!("href=\"/philosophy?object={object_id}\"");
+        prop_assert!(
+            page.contains(&expected_href),
+            "the {:?} entry must link its traversal survey ({expected_href}); got:\n{page}",
+            seed.name
+        );
+    }
+}
+
+/// AC-006.1/.2 (example — the whole-page invariants the property does not count):
+/// `render_philosophies_page` lists EXACTLY the embedded vocabulary (one traversal
+/// link per seed — neither a subset nor padded), carries NO authoring control
+/// (I-VIEW-1/3), and is composed through `page_shell` so the persistent nav links
+/// AND active-marks `/philosophies` (a `LANDING_HUB_SURFACES` entry). Mirrors the
+/// subprocess VP-3/VP-4/VP-2 assertions at the pure-core layer.
+#[test]
+fn philosophies_page_lists_exactly_the_vocabulary_read_only_and_nav_active() {
+    let page = render_philosophies_page();
+    let vocabulary = lexicon::philosophy::seeds();
+
+    // EXACTLY the vocabulary: one `?object=org.openlore.philosophy.` traversal link
+    // per seed — the nav's bare `/philosophy` link carries no `?object=`, so it is
+    // not counted (VP-4 count parity, at the pure layer).
+    let listed = page.matches("?object=org.openlore.philosophy.").count();
+    assert_eq!(
+        listed,
+        vocabulary.len(),
+        "the surface must list EXACTLY the {} embedded philosophies (one traversal \
+         link each), got {listed}; page:\n{page}",
+        vocabulary.len()
+    );
+
+    // Read-only (I-VIEW-1/3): NO executable / mutating authoring control.
+    let lowered = page.to_ascii_lowercase();
+    for banned in ["<form", "<button", "hx-post", "hx-put", "hx-delete"] {
+        assert!(
+            !lowered.contains(banned),
+            "the read-only philosophies surface must carry NO mutating control — \
+             found {banned:?}; page:\n{page}"
+        );
+    }
+
+    // Composed through `page_shell` (AC-006.2): the persistent nav links
+    // `/philosophies` AND marks it the active surface.
+    assert!(
+        page.contains(r#"href="/philosophies""#),
+        "the persistent nav must link the Philosophies surface; page:\n{page}"
+    );
+    assert!(
+        page.contains(&format!(
+            r#"<a href="{PHILOSOPHIES_URL}" aria-current="page""#
+        )),
+        "on /philosophies the nav must mark the Philosophies item active \
+         (aria-current=\"page\"); page:\n{page}"
+    );
+    // Full-page chrome + offline-first local asset (VP-INV-Offline at pure layer).
+    assert!(
+        page.contains("<!DOCTYPE html>") && page.contains(r#"id="viewer-main""#),
+        "the surface must be a complete full page through page_shell; page:\n{page}"
+    );
+    assert!(
+        page.contains(r#"src="/static/htmx.min.js""#)
+            && !page.contains("//cdn")
+            && !page.contains("https://unpkg"),
+        "the surface must reference only the LOCAL htmx asset (offline-first, no CDN); \
+         page:\n{page}"
+    );
 }

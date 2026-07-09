@@ -50,6 +50,15 @@ scoring = { path = "../scoring" }
 # `viewer-domain` pure: the bucketing is REUSED, never reimplemented here. Promoted
 # from a dev-dependency (was `/score` test-only) to a regular dep for production use.
 claim-domain = { path = "../claim-domain" }
+# PURE → PURE (slice-27; ADR-059 §5 row 27): the read-only `/philosophies`
+# vocabulary surface renders the embedded philosophy seed set
+# (`lexicon::philosophy::seeds()`) + REUSES `lexicon::philosophy::object_id` to
+# build each entry's `/philosophy?object=<object-id>` traversal href — never a
+# hardcoded NSID prefix. `lexicon` is a pure serde-only Lexicon model + validator
+# (no I/O, no async; the seeds are a compile-time `include_str!`), so this keeps
+# `viewer-domain` pure: the vocabulary + object-id derivation are REUSED, never
+# reimplemented here.
+lexicon = { path = "../lexicon" }
 
 [dev-dependencies]
 proptest = { workspace = true }
