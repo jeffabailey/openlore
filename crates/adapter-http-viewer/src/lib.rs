@@ -43,14 +43,16 @@ use viewer_domain::{
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
     LandingSummary,
-    peers_view, render_peers_fragment, render_peers_page, render_philosophy_fragment,
+    peers_view, render_peers_fragment, render_peers_page, render_philosophies_page,
+    render_philosophy_fragment,
     render_philosophy_page, render_project_fragment, render_project_page,
     render_score_page, render_score_results_fragment, render_scrape_page, render_viewer_nav_oob,
     render_scrape_results_fragment, render_search_page, render_search_results_fragment,
     resolve_author_relationship,
     CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
     PeersView, ScoreState,
-    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHY_URL, PROJECT_URL,
+    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL,
+    PHILOSOPHY_URL, PROJECT_URL,
     SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
 };
 
@@ -430,6 +432,15 @@ async fn route(
         // network, no store read. 200 even when no `GithubPort` is wired (the
         // form is harmless; only a POST runs the live harvest).
         "/scrape" => html_ok(render_scrape_page(&ScrapeState::Form)),
+        // `GET /philosophies` — the read-only philosophy VOCABULARY surface (slice-27;
+        // ADR-059 §5 row 27 / US-PV-006). STORE-FREE + OFFLINE: the pure renderer reads
+        // the embedded `lexicon::philosophy::seeds()` vocabulary (NOT the store, NO
+        // network), so — like the `/scrape` GET form arm above — it passes NO
+        // `store.as_ref()` and holds NO signing key (I-VIEW-3). Renders the vocabulary
+        // list (name + description + `/philosophy?object=<object-id>` traversal links)
+        // through `page_shell`, so the persistent nav marks it active (AC-006.2). A
+        // boosted nav click into it takes the OOB active-marker append below (D5).
+        PHILOSOPHIES_URL => html_ok(render_philosophies_page()),
         _ => match path.strip_prefix("/claims/") {
             // `GET /claims/{cid}` — the claim detail view (US-VIEW-002). A
             // non-empty CID segment routes to the detail handler; everything
@@ -2190,6 +2201,58 @@ mod tests {
         assert!(
             response.contains("My Claims"),
             "GET / must return the landing nav hub: {response}"
+        );
+    }
+
+    /// slice-27 (ADR-059 §5 row 27 / US-PV-006): `GET /philosophies` dispatches to the
+    /// STORE-FREE pure `render_philosophies_page()` renderer with a 200 vocabulary body
+    /// — a genuine `Request<Incoming>` routed through the real `route` path. Kills the
+    /// `delete PHILOSOPHIES_URL arm` mutant (which would fall through to the `_` 404 arm
+    /// — a `404` "Not found." body, failing the 200 + vocabulary-content assertion). The
+    /// store is a `FakeLandingStore`, but the arm reads NONE of it (offline over the
+    /// embedded seeds), proving the surface is store-independent (I-VIEW-3).
+    #[tokio::test]
+    async fn route_dispatches_get_philosophies_to_the_vocabulary_surface_with_200() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let store: SharedStore = Arc::new(FakeLandingStore::with_counts(12, 7, 2));
+        let addr = "127.0.0.1:0".parse().expect("loopback addr parses");
+        let server = ViewerServer::bind(addr, store).expect("bind loopback ephemeral port");
+        let bound = server.local_addr();
+        tokio::spawn(server.serve());
+
+        let mut stream = TcpStream::connect(bound)
+            .await
+            .expect("connect to the bound viewer");
+        stream
+            .write_all(
+                b"GET /philosophies HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write the GET /philosophies request");
+
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("read the full HTTP response");
+        let response = String::from_utf8_lossy(&raw);
+
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "GET /philosophies must dispatch to the vocabulary surface with 200 (not a \
+             404 route-miss): {response}"
+        );
+        // The vocabulary body (the dispatch reached `render_philosophies_page`, not an
+        // empty/404 body): the first seed by name + its traversal link into `/philosophy`.
+        assert!(
+            response.contains("memory-safety"),
+            "GET /philosophies must render the vocabulary (a seed by name): {response}"
+        );
+        assert!(
+            response.contains("/philosophy?object=org.openlore.philosophy."),
+            "GET /philosophies must render per-seed traversal links: {response}"
         );
     }
 
