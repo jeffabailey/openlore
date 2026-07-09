@@ -1,0 +1,78 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-25",
+    "created_at": "2026-07-08T00:00:00Z",
+    "total_steps": 2
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Pure advisory resolver (lexicon)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "alias-aware philosophy advisory resolver (pure, display-only)",
+          "description": "Add a pure, total lexicon function that classifies a claim `--object` string against the embedded philosophy seeds for the compose advisory: a canonical known object, an alias of a known philosophy (returning the canonical name), an in-namespace object that is neither, or an out-of-namespace object (not a philosophy — no advisory). Display-only: this NEVER changes any stored/signed bytes. `find()` today matches name/object-id only — the ALIAS arm is genuinely new.",
+          "criteria": [
+            "AC-004.1 (known → canonical; alias → canonical name, marked alias)",
+            "AC-004.2 (in-namespace-but-unknown → a distinct 'not a known philosophy' verdict)",
+            "out-of-namespace object → a distinct 'not a philosophy, no advisory' verdict",
+            "PBT: for every seed, its object_id resolves Canonical(name) and each of its aliases resolves Alias(canonical=name); an unknown in-namespace segment resolves Unknown; an out-of-namespace string resolves NotPhilosophy"
+          ],
+          "test_file": "crates/lexicon/src/philosophy.rs",
+          "scenario_name": "resolve_object_advisory_classifies_known_alias_unknown_and_non_philosophy",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs"
+          ],
+          "implementation_notes": "Add a pure ADT + resolver, e.g. `pub enum ObjectAdvisory { Canonical { name: String }, Alias { canonical: String }, UnknownInNamespace, NotPhilosophy }` and `pub fn resolve_object_advisory(object: &str) -> ObjectAdvisory`. Algorithm: if `object` does NOT start with the philosophy object-id prefix (`org.openlore.philosophy.`) → `NotPhilosophy` (reuse/derive the prefix constant already implied by `object_id`). Else take the segment after the prefix and, over `seeds()`: if `normalize(segment) == normalize(seed.name)` → `Canonical { name: seed.name }`; else if any `normalize(alias) == normalize(segment)` for that seed → `Alias { canonical: seed.name }`; else (no seed matches) → `UnknownInNamespace`. Total + offline (embedded seeds only; no store/network). REUSE `seeds()`, `normalize()`, and the prefix used by `object_id()` — do NOT hardcode a second copy of the prefix. TEST PARADIGM (mandatory): proptest — property over every seed (object_id → Canonical, each alias → Alias{canonical=name}); an in-namespace random-unknown segment → UnknownInNamespace; an arbitrary non-prefixed string → NotPhilosophy. Keep xtask check-arch green (pure core, 21 members)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Advisory line in the claim-add compose preview (cli)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "render the advisory line in render_compose_preview — display-only, signed bytes byte-unchanged",
+          "description": "Integrate the advisory into the `claim add` compose preview (`render_compose_preview` in verbs/claim_add.rs): for a philosophy-namespace `--object`, append one advisory line derived from `resolve_object_advisory` — a resolution line for a known/alias object (naming the canonical philosophy, marking alias resolutions), or a NON-BLOCKING 'not a known philosophy — will be signed as-is' warning for an in-namespace unknown. An out-of-namespace object appends NOTHING (preview byte-identical to today). NEVER blocks; NEVER routes resolution into the signed payload — the advisory feeds the PREVIEW STRING ONLY, the signed object bytes remain exactly what the user typed (AC-004.3).",
+          "criteria": [
+            "AC-004.1 (known → resolution advisory; alias → resolves to canonical, marked alias)",
+            "AC-004.2 (unknown in-namespace → non-blocking warning; the claim STILL signs unchanged on confirm)",
+            "AC-004.3 (byte-parity: signed <cid>.json object == the typed object verbatim, never the canonical rewrite; advisory is display-only)",
+            "CA-1 (WS), CA-2 (alias), CA-3 (unknown-still-signs), CA-4 (byte-parity), CA-5 stays GREEN (out-of-namespace → no advisory)"
+          ],
+          "test_file": "tests/acceptance/claim_compose_advisory.rs",
+          "scenario_name": "compose_advisory_known_object_shows_resolution_and_signs_normally",
+          "depends_on": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/cli/src/verbs/claim_add.rs"
+          ],
+          "implementation_notes": "In `render_compose_preview(claim: &ComposedClaim)` (claim_add.rs ~line 290), after the existing preview body, call `lexicon::resolve_object_advisory(&claim.object)` and append ONE line based on the verdict: Canonical{name} → e.g. `↳ resolves to <name>`; Alias{canonical} → e.g. `↳ resolves to <canonical> (alias)`; UnknownInNamespace → e.g. `⚠ not a known philosophy — will be signed as-is`; NotPhilosophy → append NOTHING (byte-identical preview — CA-5). The three domain substrings the ATs pin (case-insensitive) are `resolves to`, `alias`, `not a known philosophy` — keep them literally present; exact layout/emoji is your choice. CRITICAL (AC-004.3 / D3): the advisory affects ONLY the preview STRING. Do NOT touch `build_unsigned_claim`/the ComposedClaim object/the signed bytes — the object the user typed is signed verbatim. The verb never rejects on an unknown object (non-blocking). No new preview parameter that changes signing. TEST PARADIGM: acceptance CA-1..5 are pre-authored subprocess tests — do NOT rewrite them; any new pure preview-shaping helper gets an example/property unit test. Keep the existing `not as truth` literal + confidence labels intact (no preview regression). check-arch green, 21 members."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/cli/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (authored from settled ADR-059 design §5 row 25) + automated quality gate",
+    "approved_at": "2026-07-08",
+    "review_verdict": "APPROVED — automated quality gate PASS (decomposition ratio 2 steps / 2 production files = 1.0, CA-1..4 owned by 02-01 + the pure resolver unit-owned by 01-01, valid DAG 01-01 -> 02-01, IDs match NN-NN, criteria <=5, DISTILL linkage present via test_file+scenario_name). Thin advisory slice fully specified by ADR-059 §5 row 25 + US-PV-004 AC-004.1..3; display-only, byte-unchanged signed payload is the load-bearing invariant (CA-4). Alias resolution is a small pure lexicon seam here; the read-time aggregation is slice-26 (OUT)."
+  }
+}
