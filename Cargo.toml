@@ -77,3 +77,26 @@ maud = "0.27"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Dev-build speed (build-optimization pass).
+#
+# The default dev profile emits FULL DWARF (`debug = 2`) for every crate. That
+# debug info is the single biggest per-edit codegen + link cost, and it is paid
+# on the `openlore` binary AND each of the 63 `cli` integration-test binaries
+# (each statically links duckdb/tokio/atrium). `line-tables-only` keeps the
+# file:line in panic messages and backtraces — all the TDD loop needs — at a
+# fraction of the DWARF size, so both codegen and link shrink on every edit.
+#
+# CRUCIAL: this override is scoped to WORKSPACE MEMBERS only. Dependencies are
+# pinned at `debug = 2` via the `package."*"` block below (which, per Cargo,
+# matches all dependencies but no workspace member). Without that pin, lowering
+# `[profile.dev].debug` would also invalidate every dependency and force a
+# one-time rebuild of the (very expensive) duckdb C++ — so the pin keeps the
+# heavy dep artifacts untouched; only the crates you actually edit recompile.
+[profile.dev]
+debug = "line-tables-only"
+
+# Keep dependencies exactly at the current default so this change does NOT
+# trigger a duckdb / tokio / atrium rebuild. (`"*"` = all deps, not workspace.)
+[profile.dev.package."*"]
+debug = 2
