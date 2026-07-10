@@ -38,10 +38,19 @@ pub fn render_philosophy_list(seeds: &[Philosophy]) -> String {
 }
 
 /// Render one seed as its greppable block: the derived object id on its own
-/// line, then the human name + one-line description indented beneath it.
+/// line, then the human name + one-line description, then — when the seed carries
+/// any — an `aliases:` line listing the shorthand strings `philosophy show`
+/// resolves (slice-30). A seed with no aliases renders no such line (no empty
+/// label). Aliases render as bare, comma-separated strings (mirroring
+/// `render_record`), never NSID-prefixed object ids, so the greppable object-id
+/// surface is unchanged.
 fn render_seed_block(seed: &Philosophy) -> String {
     let id = object_id(&seed.name);
-    format!("{id}\n  {} — {}", seed.name, seed.description)
+    let mut block = format!("{id}\n  {} — {}", seed.name, seed.description);
+    if !seed.aliases.is_empty() {
+        block.push_str(&format!("\n  aliases: {}", seed.aliases.join(", ")));
+    }
+    block
 }
 
 /// Render ONE philosophy record in full for `philosophy show` (slice-23;
@@ -132,6 +141,36 @@ mod tests {
             assert!(
                 rendered.contains(&seed.description),
                 "rendered text must carry the seed description for {};\n--- rendered ---\n{rendered}",
+                seed.name
+            );
+        }
+    }
+
+    /// slice-31 (alias discoverability): each seed's list block surfaces the alias
+    /// strings that `philosophy show` now resolves (slice-30), under an `aliases:`
+    /// label — so a user browsing the vocabulary sees which shorthand strings map
+    /// onto each philosophy. Pinned over the WHOLE embedded set: every seed's
+    /// exact `aliases: <joined>` line renders (a seed with no aliases renders no
+    /// such line — no empty label).
+    #[test]
+    fn every_seed_renders_its_aliases_in_the_list() {
+        let seeds = seeds();
+        let rendered = render_philosophy_list(&seeds);
+
+        assert!(
+            rendered.contains("aliases:"),
+            "the list must label the alias strings it surfaces (alias discoverability);\n\
+             --- rendered ---\n{rendered}"
+        );
+        for seed in &seeds {
+            if seed.aliases.is_empty() {
+                continue;
+            }
+            let line = format!("aliases: {}", seed.aliases.join(", "));
+            assert!(
+                rendered.contains(&line),
+                "list must surface the aliases for {} as {line:?} (the shorthand \
+                 `philosophy show` resolves);\n--- rendered ---\n{rendered}",
                 seed.name
             );
         }

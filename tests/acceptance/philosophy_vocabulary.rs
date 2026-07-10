@@ -373,6 +373,45 @@ fn philosophy_list_defaults_to_human_text_not_json() {
     );
 }
 
+/// PV-7 (slice-31, US-PV-001 alias discoverability): `philosophy list` surfaces
+/// each seed's alias strings — the shorthand `philosophy show` now resolves
+/// (slice-30) — so a user browsing the vocabulary sees which strings map onto a
+/// philosophy without having to open each record. The list carries an `aliases:`
+/// label and the unambiguous `mem-safety` alias of `memory-safety`.
+///
+/// GIVEN the embedded seeds,
+/// WHEN the user runs `openlore philosophy list`,
+/// THEN stdout carries an `aliases:` label and the `mem-safety` alias string.
+///
+/// @us-pv-001 @driving_port @real-io @j-002 @alias @happy
+#[test]
+fn philosophy_list_surfaces_seed_aliases() {
+    let env = TestEnv::initialized();
+
+    let outcome = run_openlore(&env, &["philosophy", "list"]);
+    assert_eq!(
+        outcome.status, 0,
+        "openlore philosophy list must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Universe: cli.philosophy_list.aliases_labelled (the list labels the alias
+    // strings it surfaces), cli.philosophy_list.alias_present (an unambiguous
+    // alias renders). `mem-safety` is not a substring of any name/description, so
+    // its presence proves the alias line, not incidental prose.
+    let stdout = &outcome.stdout;
+    assert!(
+        stdout.contains("aliases:"),
+        "philosophy list must label the aliases it surfaces (alias discoverability, slice-31);\n\
+         --- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("mem-safety"),
+        "philosophy list must surface the `mem-safety` alias of memory-safety (the shorthand \
+         `philosophy show` resolves);\n--- stdout ---\n{stdout}"
+    );
+}
+
 /// PV-6 (US-PV-001 edge, AC-001.4 / I-9): discovery is LOCAL/offline. The
 /// embedded seeds are compiled into the binary (ADR-059 D3), so `philosophy
 /// list` must render the full vocabulary with the network disabled — no socket,

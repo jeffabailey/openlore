@@ -1,0 +1,46 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-31",
+    "created_at": "2026-07-10T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "philosophy list surfaces each seed's aliases (alias discoverability)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "render the aliases line in each philosophy list block",
+          "description": "slice-30 made `philosophy show <alias>` resolve, but `philosophy list` never shows WHICH alias strings a philosophy carries, so the shorthand is undiscoverable. Append an `aliases: <joined>` line to each list block in render_philosophy_list (crates/cli/src/render/philosophy.rs), rendered only when the seed has aliases. Bare comma-separated alias strings (mirroring render_record's convention) — NOT alias object-ids — so the slice-22 distinct-object-id count (PV-2) and object-id-form checks (PV-3) are untouched.",
+          "criteria": [
+            "OWNED every_seed_renders_its_aliases_in_the_list (each seed's exact `aliases: <joined>` line renders; a no-alias seed renders no empty label)",
+            "ACCEPTANCE philosophy_list_surfaces_seed_aliases (CLI `philosophy list` stdout carries an `aliases:` label and the unambiguous `mem-safety` alias)",
+            "GUARDRAIL every_seed_renders_its_object_id_name_and_description + rendered_text_is_not_a_json_array stay green",
+            "GUARDRAIL slice-22 philosophy_vocabulary acceptance (PV-1..PV-6: object ids, >=10 distinct count, id form, --json, text-default, network-disabled) stays green"
+          ],
+          "test_file": "crates/cli/src/render/philosophy.rs",
+          "scenario_name": "every_seed_renders_its_aliases_in_the_list",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/cli/src/render/philosophy.rs",
+            "tests/acceptance/philosophy_vocabulary.rs"
+          ],
+          "implementation_notes": "render_seed_block appends `\\n  aliases: {joined}` only when !seed.aliases.is_empty(); blocks stay \\n\\n-separated (the join is unchanged). Aliases render as bare strings, never NSID-prefixed object-ids, so distinct_object_ids (PV-2) does not count them and PV-3's object-id-form guard is unaffected. --json (PV-4) already serializes aliases via the full record — unchanged. Pure renderer change; no crate/dep/route change, check-arch stays 21. Demo: openlore philosophy list."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": ["crates/cli/src/render/"],
+    "test_directories": ["crates/cli/src/render/", "tests/acceptance/"],
+    "excluded_patterns": ["target/**"]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (user-directed polish) + automated quality gate",
+    "approved_at": "2026-07-10",
+    "review_verdict": "APPROVED — single-step pure-renderer polish. RED demonstrated before GREEN; 1 owned pure pin + 1 acceptance scenario; slice-22 list contract (object-id count/form, json, text-default) preserved by rendering bare aliases only."
+  }
+}
