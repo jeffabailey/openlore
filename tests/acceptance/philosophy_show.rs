@@ -250,6 +250,40 @@ fn philosophy_show_unknown_name_exits_non_zero_with_plain_guidance() {
     );
 }
 
+/// slice-30 (US-PV-002, name-or-object-OR-ALIAS): `show` accepts an ALIAS string
+/// too. Running `openlore philosophy show mem-safety` — where `mem-safety` is an
+/// alias of `memory-safety`, not its canonical name or object id — resolves to
+/// and renders the SAME canonical `memory-safety` record. This closes the gap the
+/// slice-23 skeleton left: a user who copied an alias (the strings `show` itself
+/// advertises under `aliases:`) can inspect the philosophy it triangulates onto.
+///
+/// GIVEN the embedded seeds,
+/// WHEN the user runs `openlore philosophy show mem-safety` (an alias),
+/// THEN it exits 0 and renders the canonical `memory-safety` record
+///      (name + description + aliases + seeAlso).
+///
+/// @us-pv-002 @driving_port @real-io @j-002 @alias @happy
+#[test]
+fn philosophy_show_by_alias_renders_the_canonical_record() {
+    let env = TestEnv::initialized();
+
+    // `mem-safety` is the load-bearing alias pin (ALIASES[0]) — unambiguous, not a
+    // substring of the canonical name. It is neither `NAME` nor `OBJECT_ID`, so a
+    // hit proves alias resolution, not name/object-id resolution.
+    let outcome = run_openlore(&env, &["philosophy", "show", ALIASES[0]]);
+    assert_eq!(
+        outcome.status, 0,
+        "openlore philosophy show <alias> must exit 0 (alias resolution, slice-30);\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Universe: cli.philosophy_show.resolves_alias (an alias resolves to the same
+    // canonical record a bare name / object id resolves to). Asserted against the
+    // same observable record surface as PS-1/PS-2.
+    assert_renders_memory_safety_record(&outcome.stdout);
+}
+
 /// PS-4 (US-PV-002 edge, AC-002.1 local-first): inspection is LOCAL/offline. The
 /// embedded seeds are compiled into the binary (ADR-059 D3), so `philosophy
 /// show` must render the full record with the network disabled — no socket, no

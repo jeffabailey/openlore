@@ -214,6 +214,45 @@ pub fn find(key: &str) -> Option<Philosophy> {
 }
 
 // =============================================================================
+// Name/object/alias resolver (slice-30) — pure + total
+// =============================================================================
+
+/// Resolve a philosophy seed by its bare name, its derived object id, OR any of
+/// its aliases — the key `philosophy show <name|object|alias>` drives on.
+///
+/// Pure + total. First tries [`find`] (canonical name or object id). Failing
+/// that, an ALIAS lookup: the key is treated as an alias segment — prefixed into
+/// the philosophy namespace if bare — and classified by [`resolve_object_advisory`];
+/// an `Alias { canonical }` verdict resolves to that canonical seed. A key that is
+/// neither a name, an object id, nor a known alias resolves to `None` (never a
+/// panic). Both `resolve("xp")` and `resolve("org.openlore.philosophy.xp")` return
+/// the `extreme-programming` seed, case-insensitively. REUSES
+/// `find`/`resolve_object_advisory`/`object_id` — never a second copy of the
+/// resolution logic or the NSID prefix. Unlike [`find`] (whose `Some` is always a
+/// name/object-id match), a `resolve` hit may be reached via an alias.
+pub fn resolve(key: &str) -> Option<Philosophy> {
+    // Exact name / object-id resolution first (find's contract).
+    if let Some(record) = find(key) {
+        return Some(record);
+    }
+    // Else treat the key as an alias segment. `resolve_object_advisory` matches
+    // aliases only in the philosophy namespace, so prefix a bare key with the
+    // NSID (via `object_id`) before classifying — never a second prefix copy.
+    let prefix = format!("{NSID}.");
+    let prefixed = if key.starts_with(&prefix) {
+        key.to_string()
+    } else {
+        object_id(key)
+    };
+    match resolve_object_advisory(&prefixed) {
+        ObjectAdvisory::Alias { canonical } => find(&canonical),
+        ObjectAdvisory::Canonical { .. }
+        | ObjectAdvisory::UnknownInNamespace
+        | ObjectAdvisory::NotPhilosophy => None,
+    }
+}
+
+// =============================================================================
 // Alias-aware compose-advisory resolver (slice-25 01-01; ADR-059 §5 row 25)
 // =============================================================================
 
@@ -548,6 +587,67 @@ mod tests {
             let record = find(anchor)
                 .unwrap_or_else(|| panic!("canonical philosophy `{anchor}` must be seeded"));
             assert_eq!(find(&object_id(anchor)).as_ref(), Some(&record));
+        }
+    }
+
+    proptest! {
+        /// slice-30 (`philosophy show <name|object|alias>`): `resolve` finds every
+        /// seed by its bare name, its derived object id, AND every one of its
+        /// aliases — in both bare and object-id form, and case-insensitively. This
+        /// is the name-or-object-OR-alias contract the `show` verb drives on, a
+        /// strict superset of `find`. Generalizing (Hebert ch.3) over the whole
+        /// embedded seed set; the global name/alias uniqueness pin guarantees each
+        /// alias resolves to exactly ONE seed.
+        #[test]
+        fn resolve_finds_every_seed_by_name_object_id_and_alias(
+            seed in prop::sample::select(seeds()),
+        ) {
+            // Superset of `find`: canonical name and derived object id still hit.
+            let by_name = resolve(&seed.name);
+            prop_assert_eq!(by_name.as_ref(), Some(&seed));
+            let by_object = resolve(&object_id(&seed.name));
+            prop_assert_eq!(by_object.as_ref(), Some(&seed));
+
+            // NEW: every alias resolves to its canonical seed — bare, in object-id
+            // form, and upper-cased (case-insensitive via `normalize`).
+            for alias in &seed.aliases {
+                let by_alias = resolve(alias);
+                prop_assert_eq!(by_alias.as_ref(), Some(&seed));
+                let by_alias_object = resolve(&object_id(alias));
+                prop_assert_eq!(by_alias_object.as_ref(), Some(&seed));
+                let by_alias_upper = resolve(&alias.to_uppercase());
+                prop_assert_eq!(by_alias_upper.as_ref(), Some(&seed));
+            }
+        }
+    }
+
+    proptest! {
+        /// slice-30 totality: `resolve` never panics on arbitrary input, and a
+        /// key that resolves to NO seed by name, object id, or alias returns
+        /// `None` (a linear-scan reference over the seed set confirms the miss).
+        #[test]
+        fn resolve_is_total_and_sound_over_arbitrary_input(key in ".*") {
+            match resolve(&key) {
+                Some(record) => {
+                    let key_norm = normalize(&key);
+                    let matches = object_id(&record.name) == key
+                        || normalize(&record.name) == key_norm
+                        || record.aliases.iter().any(|a| normalize(a) == key_norm)
+                        || record
+                            .aliases
+                            .iter()
+                            .any(|a| object_id(a) == key || object_id(a) == object_id(&key));
+                    prop_assert!(matches, "resolve returned a seed the key does not name");
+                }
+                None => {
+                    for seed in seeds() {
+                        prop_assert_ne!(normalize(&seed.name), normalize(&key));
+                        for alias in &seed.aliases {
+                            prop_assert_ne!(normalize(alias), normalize(&key));
+                        }
+                    }
+                }
+            }
         }
     }
 

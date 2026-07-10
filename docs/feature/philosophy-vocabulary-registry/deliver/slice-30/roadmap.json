@@ -1,0 +1,56 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-30",
+    "created_at": "2026-07-09T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "philosophy show resolves aliases to the canonical record",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "resolve name|object|alias in the pure lexicon layer and drive `philosophy show` on it",
+          "description": "Today `openlore philosophy show <key>` resolves a bare name or a derived object id via lexicon::philosophy::find, but an ALIAS (e.g. `xp`, `ci`, `tdd`) misses — `show xp` prints `no such philosophy`. US-PV-002's promise is that a user can inspect a philosophy by any string that triangulates onto it. Add a pure, total lexicon::philosophy::resolve(key) that layers alias resolution on top of find (reusing resolve_object_advisory + object_id — no second copy of the NSID prefix or resolution logic), and point the CLI show verb at resolve instead of find. find keeps its tight contract (Some => name/object-id match) so its soundness property test is untouched; resolve is the wider name-or-object-OR-alias resolver.",
+          "criteria": [
+            "OWNED resolve_finds_every_seed_by_name_object_id_and_alias (every seed resolves by name, object-id, and each alias — bare, object-id form, and case-insensitively)",
+            "OWNED resolve_is_total_and_sound_over_arbitrary_input (never panics; a hit genuinely names the key by name/object/alias; a miss means no seed matched)",
+            "GUARDRAIL find_is_total_and_sound_over_arbitrary_input + find_resolves_every_seed_by_name_and_object_id stay green (find contract unchanged)",
+            "ACCEPTANCE philosophy_show_by_alias_renders_the_canonical_record (CLI `show mem-safety` exits 0 and renders the memory-safety record)",
+            "GUARDRAIL the slice-23 philosophy_show acceptance scenarios (by-name, by-object-id, unknown-name, network-disabled) stay green"
+          ],
+          "test_file": "crates/lexicon/src/philosophy.rs",
+          "scenario_name": "resolve_finds_every_seed_by_name_object_id_and_alias",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/lexicon/src/philosophy.rs",
+            "crates/cli/src/verbs/philosophy_show.rs",
+            "tests/acceptance/philosophy_show.rs"
+          ],
+          "implementation_notes": "Pure resolver: resolve(key) = find(key), else prefix the key into the philosophy namespace if bare (object_id) and classify via resolve_object_advisory; an Alias{canonical} verdict resolves to find(canonical); anything else -> None. Total and offline (embedded seeds only). CLI change is a one-line swap of `find` for `resolve` in philosophy_show::run — the render/guidance paths are unchanged, so the unknown-name sad path and its plain guidance stay identical. No crate/dep/route change; check-arch stays at 21 members. Demo: openlore philosophy show xp."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/lexicon/src/",
+      "crates/cli/src/verbs/"
+    ],
+    "test_directories": [
+      "crates/lexicon/src/",
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (user-directed follow-on slice) + automated quality gate",
+    "approved_at": "2026-07-09",
+    "review_verdict": "APPROVED — single-step slice. RED demonstrated via stub before GREEN; 2 owned pure pins + 1 CLI acceptance scenario; find contract preserved. Reuses existing resolution seams (no duplicated NSID prefix)."
+  }
+}
