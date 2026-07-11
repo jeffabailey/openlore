@@ -66,6 +66,39 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **retraction-aware-search-filter: DESIGN 2026-07-11 — IN-PLACE EXTENSION, ZERO new crates
+  (workspace stays 21).** Adds an explicit, **opt-in, non-destructive, self-disclosing** filter
+  that HIDES author-soft-retracted claims from a network-search VIEW: `openlore search …
+  --hide-retracted` (slice 01, CLI) and `/search?hide_retracted=1` (slice 02, read-only viewer).
+  Reconciles I-AV-9 ("counter shown, not applied"): the DEFAULT path (no flag/param) is
+  byte-identical to today; the filter activates only on explicit user action, discloses the count
+  it hid, hides ONLY author self-retractions (a same-DID `Retracts` referencing the CID; D-3),
+  and never mutates the index / re-ranks / re-weights / re-verifies survivors. **OD-RF-1 resolved
+  = Branch A: the shipped `SearchResultDto.references` (DV-5) + per-row `author_did` already
+  distinguish author self-retraction from a third-party counter — ZERO ingest/schema/DTO change.**
+  - **`crates/appview-domain` (PURE)**: adds `partition_retracted(rows, hide_retracted) ->
+    {survivors, hidden_count}` — the SINGLE pure decision both surfaces invoke, run on the RAW
+    `NetworkResultRowRaw` rows (NOT the lossy `compose_results` `counter_annotation`). A
+    retraction event = the withdrawn original + its same-author marker record (both hidden);
+    `hidden_count` = EVENTS. Stays on the pure-core allowlist (no I/O).
+  - **`crates/cli` (DRIVER)**: `--hide-retracted` bool on the `openlore search` verb (ADR-027) +
+    the honesty footer + the empty-after-filter guided line; calls `partition_retracted` before
+    the existing render grouping. No index re-query.
+  - **`crates/viewer-domain` (PURE)** + **`crates/adapter-http-viewer` (EFFECT)**: the
+    "Hide retracted claims" checkbox → `?hide_retracted=1` GET-param on the slice-08 `/search`
+    route; the results-region hidden-count notice in both htmx shapes; read-only / loopback /
+    offline / no-key preserved. Runs the SAME pure predicate before `to_indexed_claim`.
+  - **Invariants I-RF-1..8** (opt-in default byte-identical; non-destructive; self-disclosing;
+    soft-retract-only [extends I-AV-2/I-AV-9]; pure core; read-only viewer; reversible/not-
+    persisted; row anatomy preserved) — feature-scoped; all INHERIT the slice-05 I-AV-9 +
+    slice-08 I-NS-* + slice-06/07 I-VIEW/I-HX. Mints KPI-RF-1 (explicit-hide adoption +
+    disclosure comprehension); realizes it on both surfaces.
+  - **ADR-060** (pure predicate over the existing reference graph; OD-RF-1 = Branch A; the
+    I-AV-9 reconciliation; alternatives — additive DTO marker REJECTED as unnecessary, building
+    on the lossy `counter_annotation` REJECTED, index-side filter REJECTED).
+  - See ADR-060, `docs/feature/retraction-aware-search-filter/feature-delta.md` (DESIGN sections)
+    + `docs/feature/retraction-aware-search-filter/design/wave-decisions.md`.
+
 - **slice-20 (viewer-search-full-follow-state): SHIPPED 2026-06-11 — IN-PLACE
   EXTENSION, ZERO new crates (workspace stays 21).** COMPLETES the slice-16 `/search`
   follow-state ADT (ADR-053) to its full FOUR arms by filling the already-present-but-
@@ -404,8 +437,7 @@ Future slices extend this inventory (planned / in-progress):
   COMPLETE as of slice-05. Documented additive future options (NOT yet built):
   ATProto Firehose / real-time ingest (deferred, ADR-024 revisit trigger), a
   hosted/community indexer (deferred, ADR-023 — the CLI talks to a configured URL),
-  cross-user / network-scale SCORING (deferred, WD-79), a retraction-aware search
-  FILTER (deferred, OD-AV-7 / I-AV-9), and a full presentational web AppView
+  cross-user / network-scale SCORING (deferred, WD-79), and a full presentational web AppView
   (locked OUT, OD-AV-6 — the `--share` resolver is CLI re-run only).
 
 The slice-04 "deferred to a later slice" item — real PLC DID-document multibase

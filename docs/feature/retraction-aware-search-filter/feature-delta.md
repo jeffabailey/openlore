@@ -673,3 +673,221 @@ Notes:
 - **DIVERGE artifacts**: none present for this feature (no `diverge/` dir); JTBD grounded directly
   in the shipped J-005 + RC-02/WD-11 retraction model. Noted as a (low) risk: no independent
   DIVERGE option-set preceded this narrowly-scoped brownfield delta.
+
+---
+
+## Wave: DESIGN / [REF] OD-RF-1 Resolution (the decisive question — settled against real code)
+
+> Owner: Morgan (nw-solution-architect) · Mode: propose · Date: 2026-07-11 · ADR-060.
+> DESIGN's first act per the slice-01 brief: settle OD-RF-1 (R-1, HIGH) against real indexer
+> data BEFORE committing slice-01 scope.
+
+**Verdict: BRANCH A — SUFFICIENT AS-IS. The shipped reference graph already lets a PURE
+predicate distinguish an author self-retraction from a third-party counter. Zero ingest change,
+zero schema change, zero DTO change. Slice 01 stays a pure-core change; R-1 is retired.**
+
+### Evidence (file/line)
+
+| # | Fact | Evidence |
+|---|---|---|
+| 1 | A retraction record mirrors the original's `subject`+`predicate`+`object`, is authored by the retracting user's OWN DID, and carries `references = [{Retracts, original_cid}]`. ⇒ it is co-returned by any dimensional query that returns the original. | `crates/cli/src/verbs/claim_retract.rs:98-115` |
+| 2 | The wire DTO `SearchResultDto` carries `author_did` (non-empty) **and** `references: Vec<ClaimReferenceDto{ref_type, cid}>`; `cid` is the REFERENCED claim's CID; `ref_type ∈ {retracts,corrects,counters,supersedes}`. | `crates/lexicon/src/appview_query.rs:70-107` |
+| 3 | The index persists + serializes `{referencing_cid (FK→indexed_claims), referenced_cid, ref_type}` — the referencing author is recoverable. | ADR-025 `indexed_claim_references` |
+| 4 | The CLI decode preserves per-row `author_did` + typed `references` into `NetworkResultRowRaw{author_did: Did, cid: Cid, references: Vec<ClaimReference>, …}`. | `crates/adapter-index-query/src/lib.rs:204-251` · `crates/ports/src/index_query.rs:42-54` |
+| 5 | A projection that emits exactly `{counter_cid, counter_author (=referencing author_did), countered_cid}` for every Counters/Retracts edge already exists. | `crates/cli/src/render/search.rs:223-243` |
+
+### The predicate (pure, total, over the raw rows)
+
+> C is **author-self-retracted** ⟺ ∃ row K in the result set with `K.author_did == C.author_did`
+> carrying a reference `{ ref_type == Retracts, cid == C.cid }`. A third-party counter
+> (`Counters`, or a `Retracts` by a DIFFERENT DID) does NOT match → shown + annotated (D-3 / I-AV-9).
+
+### Two subtleties the code surfaced (and their design resolution)
+
+- **The predicate must read the RAW rows, not `compose_results` output.** `compose_results`
+  collapses all counter/retract refs into ONE `counter_annotation` slot with a lowest-CID
+  tiebreak (`crates/appview-domain/src/compose.rs:77-100`), merging Counters+Retracts — LOSSY:
+  a claim both self-retracted AND third-party-countered could mask the self-retraction. Both
+  surfaces already hold the raw rows (CLI renders `NetworkSearchResultRaw.results` directly;
+  the viewer holds them before mapping to `IndexedClaim`→`compose_results`,
+  `crates/adapter-http-viewer/src/lib.rs:1229,1514-1539`). The predicate runs on the raw rows.
+- **A retraction is ONE event = original + its own marker record** (D-RF-D4). The retraction K
+  is itself an indexed row (same object). To match the locked US-RF-001 Ex 1 (12→10) + Ex 4
+  (all-retracted → empty), hiding C also hides its same-author marker K. `hidden_count` reports
+  **retraction EVENTS** (`|{C self-retracted}|`), NOT raw rows removed.
+
+### Slice-1 scope impact (back-propagation)
+
+- **No enlargement.** Slice 01 remains pure-core: one `appview-domain` function + CLI flag +
+  footer. The slice-01 "add up to ~0.5 day if OD-RF-1 forces an ingest marker" contingency does
+  **NOT** fire (Branch A). Estimate holds at ~1 day.
+- **One correction back-propagated to the slice-01 brief + the shared-artifacts table:** the
+  DISCUSS note `hidden_count = len(unfiltered) − len(survivors)` is **refined** — once the
+  retraction marker is understood as a separate indexed row, that length-difference
+  double-counts. `hidden_count` = retraction EVENTS (D-RF-D5). DISTILL gold fixtures MUST model
+  the original+marker pair, not the simplified 12→10 arithmetic.
+
+---
+
+## Wave: DESIGN / [REF] Design Decisions (DDD)
+
+All D-numbered per the wave contract; full rationale + alternatives in ADR-060.
+
+| # | Decision | Ref |
+|---|---|---|
+| **D-RF-D1** | OD-RF-1 = Branch A: pure predicate over the existing `{ref_type, referencing author_did, referenced_cid}` graph. No DTO/ingest/schema change. | ADR-060; OD-RF-1 |
+| **D-RF-D2** | ONE pure `partition_retracted` in `appview-domain`; CLI + viewer both invoke it on the raw `NetworkResultRowRaw` rows; no re-query, no duplicated logic. | D-2 / I-RF-5 |
+| **D-RF-D3** | Self-retraction rule (D-3 literal): hide C iff ∃ same-author K with `{Retracts, C.cid}`. Counters + different-author Retracts never hide. | D-3 / I-RF-4 |
+| **D-RF-D4** | A retraction event = the withdrawn original C **and** its same-author marker K; both hidden together (keeps the filtered view to standing reasoning; satisfies Ex 1/Ex 4). | D-3 spirit |
+| **D-RF-D5** | Disclosed `hidden_count` = retraction EVENTS (`|{C self-retracted}|`), refining the DISCUSS `len`-diff note (which double-counts the marker row). | D-4 / I-RF-3 |
+| **D-RF-D6** | Opt-in / non-destructive / self-disclosing: `hide==false` ⇒ rows unchanged + count 0 (byte-identical guard); survivors keep order + verbatim confidence; disclose count when ≥1; no misleading line when 0. | I-RF-1/2/3 / D-1/D-5 |
+| **D-RF-D7** | Viewer control = plain `?hide_retracted=1` GET-param / htmx toggle; read-only, no key, loopback, offline chrome, full page without `HX-Request`; not persisted. | I-RF-6/7 / D-7 |
+| **D-RF-D8** | Enforcement: in-crate `@property` (order+confidence stable) + default-unchanged byte guard + `appview-domain` stays on the pure-core allowlist (`check-arch` = 21) + per-feature mutation gate. | I-RF-2 / D-6 |
+
+---
+
+## Wave: DESIGN / [REF] Component Decomposition
+
+| Component | Path | Change-type | What changes |
+|---|---|---|---|
+| `appview-domain` (PURE) | `crates/appview-domain` | **EXTEND** | Add `partition_retracted(rows, hide_retracted) -> {survivors, hidden_count}` + the pure self-retraction detection over the raw rows' `references` graph. Added to the slice-05 pure-core allowlist (already on it). No I/O. |
+| `cli` (DRIVER) — `search` verb | `crates/cli/src/verbs/*search*`, `crates/cli/src/render/search.rs` | **EXTEND** | Add the `--hide-retracted` bool flag to the `openlore search` arg parser (ADR-027); call `partition_retracted` on `NetworkSearchResultRaw.results` before the existing render grouping; render the honesty footer + the empty-after-filter guided line. |
+| `viewer-domain` (PURE) | `crates/viewer-domain/src/search.rs` | **EXTEND** | Add the "Hide retracted claims" control to `render_search_form`; add the results-region hidden-count notice + the empty-after-filter guided copy to `SearchState::Results`/`NoResults` rendering (both htmx shapes). |
+| `adapter-http-viewer` (EFFECT) | `crates/adapter-http-viewer/src/lib.rs` | **EXTEND** | Parse `?hide_retracted=1` in the `GET /search` handler; call `partition_retracted` on the raw rows BEFORE `to_indexed_claim`→`compose_results`; thread the flag + count into `SearchState`. No new route, no write surface. |
+| `xtask` (dev tooling) | `xtask/src/check_arch.rs` | **REUSE / verify** | No new rule needed; verify `appview-domain` stays pure-core and workspace stays 21. |
+| `ports` | `crates/ports` | **REUSE** | `NetworkResultRowRaw` (with `references`) already carries everything; no new type. |
+| `lexicon` `SearchResultDto` | `crates/lexicon/src/appview_query.rs` | **REUSE (unchanged)** | `references` already on the wire (DV-5); no DTO change (Branch A). |
+| `adapter-index-query` / indexer server / `adapter-index-store` | `crates/adapter-index-query`, `adapter-xrpc-query-server`, `adapter-index-store` | **REUSE (unchanged)** | Decode + serve + store already carry the reference graph; no change. |
+
+**Net new code: one pure function (`appview-domain`) + a CLI flag/footer + a viewer toggle/notice.
+Zero new crates. Workspace stays 21; `cargo xtask check-arch` stays green.**
+
+### Driving ports (inbound)
+
+- **CLI**: `openlore search … --hide-retracted` — a boolean flag on the existing `search` verb
+  (ADR-027). No new port; the bool is passed into `partition_retracted`.
+- **HTTP (viewer)**: `GET /search?…&hide_retracted=1` — a query-param on the existing slice-08
+  route (ADR-038). No new route, no new outbound capability.
+
+### Driven ports (outbound) — unchanged
+
+- `IndexQueryPort` (`adapter-index-query`) — REUSED verbatim; the filter runs AFTER the existing
+  read, in the pure core. No second query, no index mutation (I-RF-2/5). No new adapter, no new
+  `probe()`.
+
+### External integrations
+
+- **None new.** The only outbound dependency is the self-hosted indexer over localhost XRPC
+  (already covered by the slice-05 CLI↔indexer consumer-driven contract test). This feature adds
+  no third-party API and no new contract-test surface.
+
+---
+
+## Wave: DESIGN / [REF] Reuse Analysis (mandatory — every overlapping component classified)
+
+| Existing component | Overlap with this feature | Verdict | Evidence / rationale |
+|---|---|---|---|
+| `appview-domain::compose_results` / `annotate_counter_relationship` | The counter/retract reference walk | **EXTEND (add sibling fn), NOT reuse-as-is** | `annotate_counter_relationship` is LOSSY (single-slot lowest-CID tiebreak, compose.rs:77-100) — unusable for the self-vs-third-party decision. Add `partition_retracted` over the RAW rows instead of building on the annotation. |
+| `cli/src/render/search.rs::network_counter_relationships` | Emits `{counter_cid, counter_author, countered_cid}` per Counters/Retracts edge | **REUSE the shape / EXTEND placement** | Exactly the tuple the predicate needs; the pure decision is hoisted into `appview-domain` (D-2), not duplicated in the renderer. |
+| `SearchResultDto.references` (DV-5) | The wire carrier of the reference graph | **REUSE unchanged** | Already carries `{ref_type, cid}` + per-row `author_did`; Branch A ⇒ no DTO change. |
+| `ports::NetworkResultRowRaw` | The raw attributed row the predicate consumes | **REUSE unchanged** | Already carries `{author_did, cid, references}`; no new type. |
+| slice-08 `/search` route + `SearchState` ADT + `Shape` fork | The viewer surface + htmx fork | **EXTEND in place** | Add the toggle + notice; no new route, no new `SearchState` variant needed (notice is a field/param on `Results`/`NoResults`). |
+| `openlore search` verb (ADR-027) | The CLI entry point | **EXTEND** | Add one boolean flag; the verb's transport + compose path is reused verbatim. |
+| slice-05 `IndexQueryPort` + `adapter-index-query` | The network read | **REUSE unchanged** | Filter runs post-read in the pure core; no second query, no adapter change. |
+| A NEW crate | — | **CREATE NEW → REJECTED** | No new bounded context; one pure function extends an existing pure crate. Zero new crates (D-6); workspace stays 21. |
+
+**CREATE NEW verdicts: NONE.** Every component is EXTEND or REUSE.
+
+---
+
+## Wave: DESIGN / [REF] Invariants I-RF-1..8 — enforcement mapping
+
+| Invariant | Design mechanism | Enforced by |
+|---|---|---|
+| I-RF-1 (opt-in, default byte-identical) | `hide==false` ⇒ `survivors==rows`, `hidden_count==0` (D-RF-D6) | default-unchanged byte-identical acceptance guard (release-blocking) |
+| I-RF-2 (non-destructive) | Filter drops rows only; no re-rank/re-weight/re-verify/index-write | in-crate `@property` (order + confidence stable) + mutation gate |
+| I-RF-3 (self-disclosing) | Footer/notice states count when ≥1; no misleading line when 0 | acceptance scenarios (CLI footer, viewer notice) |
+| I-RF-4 (soft-retract only) | D-RF-D3: same-author `Retracts` only; Counters + cross-author never hide | gold contract (self-vs-third-party) |
+| I-RF-5 (pure core) | `partition_retracted` in `appview-domain`; both surfaces invoke; no 2nd query | `check-arch` pure-core allowlist |
+| I-RF-6 (read-only viewer) | GET-param toggle; no write/sign/subscribe; loopback; offline; full page sans `HX-Request` | slice-06/07/08 viewer capability rule (`check-arch`) + acceptance |
+| I-RF-7 (reversible / not persisted) | Per-invocation / per-request bool; no stored preference | acceptance (no persisted state) |
+| I-RF-8 (row anatomy preserved) | Survivors keep `[verified]` + `author_did` + verbatim confidence; no merged row | reuses I-AV-2 3-layer anti-merging + `@property` |
+
+---
+
+## Wave: DESIGN / [REF] C4 diagrams (Mermaid)
+
+### Level 1 — System Context (unchanged topology; the filter is a view control)
+
+```mermaid
+C4Context
+  title System Context — retraction-aware-search-filter (opt-in view control on network discovery)
+  Person(rachel, "Rachel (P-002)", "CLI discovery operator; surveys standing reasoning")
+  Person(maria, "Maria (P-001)", "Read-only viewer operator; browser discovery")
+  System(cli, "openlore CLI", "Local-first; signs + queries; NEW: search --hide-retracted")
+  System(viewer, "openlore ui (read-only viewer)", "Loopback htmx; NEW: /search?hide_retracted=1")
+  System_Ext(indexer, "openlore-indexer", "Self-hosted AppView; verify-before-index; serves searchClaims (unchanged)")
+  Rel(rachel, cli, "Runs search --hide-retracted")
+  Rel(maria, viewer, "Ticks 'Hide retracted claims'")
+  Rel(cli, indexer, "Queries searchClaims over XRPC (read-only, unchanged)")
+  Rel(viewer, indexer, "Queries searchClaims over XRPC (read-only, unchanged)")
+```
+
+### Level 2 — Container (where the pure filter sits; the indexer is untouched)
+
+```mermaid
+C4Container
+  title Container — the retraction filter is one pure function both surfaces invoke
+  Person(op, "Discovery operator", "Rachel / Maria")
+  Container_Boundary(cli_b, "openlore CLI") {
+    Container(searchverb, "search verb + render", "Rust (cli)", "Parses --hide-retracted; renders footer + empty buffer")
+    Container(idxq, "adapter-index-query", "Rust (effect)", "IndexQueryPort over XRPC (unchanged)")
+  }
+  Container_Boundary(viewer_b, "openlore ui (read-only)") {
+    Container(httpviewer, "adapter-http-viewer", "Rust (effect)", "GET /search; parses ?hide_retracted=1 (no write surface)")
+    Container(vdom, "viewer-domain", "Rust (pure)", "SearchState render; toggle control + hidden-count notice")
+  }
+  Container(appview, "appview-domain (PURE CORE)", "Rust (pure)", "partition_retracted(rows, hide) -> (survivors, hidden_count) — the SINGLE decision both surfaces invoke")
+  System_Ext(indexer, "openlore-indexer", "Serves searchClaims; UNCHANGED (no filter pushdown, no schema change)")
+  Rel(op, searchverb, "search --hide-retracted")
+  Rel(op, httpviewer, "GET /search?hide_retracted=1")
+  Rel(searchverb, idxq, "Reads results (once)")
+  Rel(idxq, indexer, "searchClaims XRPC (read-only)")
+  Rel(httpviewer, indexer, "searchClaims XRPC (read-only)")
+  Rel(searchverb, appview, "Invokes partition_retracted on raw rows")
+  Rel(httpviewer, appview, "Invokes partition_retracted on raw rows")
+  Rel(httpviewer, vdom, "Renders survivors + notice")
+```
+
+No Level-3 Component diagram: the subsystem is one pure function extending an existing pure
+crate (below the 5-component threshold for a C4 L3).
+
+---
+
+## Wave: DESIGN / [REF] Open Questions — deferred to DISTILL / DELIVER
+
+| ID | Question | Owner | Recommendation |
+|---|---|---|---|
+| OD-RF-2 | Viewer control UI (checkbox vs two-state link) + label. | DISTILL | A labeled checkbox setting `?hide_retracted=1` (no-JS path = plain GET nav); label "Hide retracted claims". |
+| OD-RF-3 | Exact footer/notice wording + placement + empty-after-filter copy. | DISTILL | CLI footer line + viewer results-region notice (co-located with the rows); empty-after-filter gets the explicit "re-run/untick to see them" buffer. Content-frozen consts (like `SEARCH_NO_MERGE_FOOTER`). |
+| OD-RF-4 | Predicate signature (per-row vs partition). | **RESOLVED (DESIGN)** | `partition_retracted(rows, hide) -> {survivors, hidden_count}` — survivors + EVENT count in one pure pass (D-RF-D5). |
+| **OD-RF-5 (NEW)** | Should the DEFAULT (no-flag) view annotate/fold the bare retraction MARKER row (a confidence-1.0 no-evidence withdrawal record)? | Product / future feature | OUT of scope here (I-RF-1 keeps the default byte-identical). Track as a possible future default-view refinement; does NOT touch this filter's pure decision. |
+| Q-DELIVER-RF-1 | Exact `partition_retracted` input type + whether the CLI reuses `to_indexed_claim` or filters `NetworkResultRowRaw` directly. | DELIVER | Filter `NetworkResultRowRaw` directly on both surfaces (single type, single fn); shapes reuse existing `ports` ADTs. |
+
+---
+
+## Wave: DESIGN / [REF] Wave-Decisions Summary (DESIGN)
+
+- **OD-RF-1 = Branch A (SUFFICIENT AS-IS).** The reference graph already carries `{ref_type,
+  referencing author_did, referenced_cid}` end-to-end; a pure predicate distinguishes author
+  self-retraction from a third-party counter with ZERO ingest/schema/DTO change. R-1 retired.
+- **One pure decision, two surfaces:** `partition_retracted` in `appview-domain`, invoked by the
+  CLI (`--hide-retracted`) and the viewer (`?hide_retracted=1`) on the RAW rows (not the lossy
+  `compose_results` annotation).
+- **A retraction = one event (original + same-author marker), both hidden; count = events**
+  (D-RF-D4/D5) — refines the DISCUSS `len`-diff note; back-propagated to the slice-01 brief.
+- **Zero new crates; workspace stays 21; `check-arch` green; `appview-domain` stays pure.**
+- **No CREATE-NEW verdicts** in the Reuse Analysis; every component EXTEND or REUSE.
+- **ADR-060** written (Proposed).
+- **Deferred:** OD-RF-2/3 (DISTILL wording/UI), OD-RF-5 (NEW — default-view marker handling,
+  out of scope), Q-DELIVER-RF-1 (exact input type).

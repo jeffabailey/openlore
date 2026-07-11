@@ -70,3 +70,19 @@ learning.
 
 ~1 day: the pure predicate + the count are small; the flag + footer + empty buffer are thin
 wiring; verify/compose are inherited. Add up to ~0.5 day if OD-RF-1 forces an ingest marker.
+
+## DESIGN back-propagation (2026-07-11, ADR-060)
+
+- **OD-RF-1 = Branch A (SUFFICIENT AS-IS).** The shipped `SearchResultDto.references` + per-row
+  `author_did` already distinguish an author self-retraction (same-DID `Retracts` referencing
+  the CID) from a third-party counter. **No ingest/schema/DTO marker needed — the ~0.5-day
+  contingency above does NOT fire.** Slice 01 stays pure-core; estimate holds at ~1 day.
+- **Correction to the shared-artifact `hidden_count`.** The DISCUSS note `hidden_count =
+  len(unfiltered) − len(survivors)` is refined: a soft-retraction is a SEPARATE indexed row
+  (the marker record shares the original's object), so the naive length-difference
+  double-counts. **`hidden_count` = retraction EVENTS (`|{C author-self-retracted}|`)**, and
+  the filter hides the original C AND its same-author marker K together (D-RF-D4/D5). Gold
+  fixtures MUST model the original+marker pair (not the 12→10 arithmetic).
+- **Predicate:** pure `appview_domain::partition_retracted(rows: NetworkResultRowRaw, hide) ->
+  {survivors, hidden_count}`, run on the RAW rows (NOT `compose_results`' lossy
+  `counter_annotation`). See ADR-060 + feature-delta DESIGN sections.
