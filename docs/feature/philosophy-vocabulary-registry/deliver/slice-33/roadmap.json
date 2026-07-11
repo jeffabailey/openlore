@@ -1,0 +1,46 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-33",
+    "created_at": "2026-07-11T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "philosophy list surfaces each seed's seeAlso links (reference discoverability)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "render the seeAlso line in each philosophy list block",
+          "description": "slice-31 made `philosophy list` surface each seed's `aliases:` line, but the `seeAlso` reference links (only rendered today by `philosophy show` via render_record) are still invisible on the discovery surface — a user browsing the vocabulary cannot see where to read more without opening each record. Append a `seeAlso: <joined>` line to each list block in render_seed_block (crates/cli/src/render/philosophy.rs), rendered only when the seed carries any seeAlso. Bare comma-separated URL strings (mirroring the slice-31 aliases line and render_record's convention) — NOT object-ids — so the slice-22 distinct-object-id count (PV-2) and object-id-form checks (PV-3) are untouched (seeAlso URLs contain no `org.openlore.philosophy.` prefix).",
+          "criteria": [
+            "OWNED every_seed_renders_its_see_also_in_the_list (each seed's exact `seeAlso: <joined>` line renders in its list block; a no-seeAlso seed renders no empty label)",
+            "ACCEPTANCE philosophy_list_surfaces_seed_see_also (CLI `philosophy list` stdout carries a `seeAlso:` label and the memory-safety wikipedia reference URL)",
+            "GUARDRAIL every_seed_renders_its_aliases_in_the_list + every_seed_renders_its_object_id_name_and_description + rendered_text_is_not_a_json_array stay green",
+            "GUARDRAIL slice-22 philosophy_vocabulary acceptance (PV-1..PV-6: object ids, >=10 distinct count, id form, --json, text-default, network-disabled) + slice-31 philosophy_list_surfaces_seed_aliases stay green"
+          ],
+          "test_file": "crates/cli/src/render/philosophy.rs",
+          "scenario_name": "every_seed_renders_its_see_also_in_the_list",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/cli/src/render/philosophy.rs",
+            "tests/acceptance/philosophy_vocabulary.rs"
+          ],
+          "implementation_notes": "render_seed_block appends `\\n  seeAlso: {joined}` only when `!seed.see_also.is_empty()`, AFTER the slice-31 aliases line; blocks stay \\n\\n-separated. seeAlso values render as bare URL strings, never NSID-prefixed object-ids, so distinct_object_ids (PV-2) does not count them and PV-3's object-id-form guard is unaffected. --json (PV-4) already serializes seeAlso via the full record — unchanged. Pure renderer change; no crate/dep/route change, check-arch stays 21. Demo: openlore philosophy list. Mirrors slice-31 (aliases on the CLI list); viewer /philosophies seeAlso parity is a candidate slice-34."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": ["crates/cli/src/render/"],
+    "test_directories": ["crates/cli/src/render/", "tests/acceptance/"],
+    "excluded_patterns": ["target/**"]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (user-directed polish) + automated quality gate",
+    "approved_at": "2026-07-11",
+    "review_verdict": "SHIPPED — single-step pure-renderer polish mirroring slice-31 for seeAlso. RED demonstrated before GREEN (list carried aliases but no seeAlso line); 1 owned pin (+ no-seeAlso no-empty-label pin) + 1 acceptance scenario green. slice-22 list contract (object-id count/form, --json, text-default, network-disabled) + slice-31 aliases line preserved by rendering bare seeAlso URL strings only. No crate/dep/route change; check-arch stays 21."
+  }
+}

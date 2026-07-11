@@ -412,6 +412,45 @@ fn philosophy_list_surfaces_seed_aliases() {
     );
 }
 
+/// PV-8 (slice-33, US-PV-001 reference discoverability): `philosophy list` surfaces
+/// each seed's `seeAlso` reference links — until now only `philosophy show` rendered
+/// them — so a user browsing the vocabulary sees where to read more without opening
+/// each record. The list carries a `seeAlso:` label and the `memory-safety` seed's
+/// wikipedia reference URL.
+///
+/// GIVEN the embedded seeds,
+/// WHEN the user runs `openlore philosophy list`,
+/// THEN stdout carries a `seeAlso:` label and the memory-safety wikipedia URL.
+///
+/// @us-pv-001 @driving_port @real-io @j-002 @seealso @happy
+#[test]
+fn philosophy_list_surfaces_seed_see_also() {
+    let env = TestEnv::initialized();
+
+    let outcome = run_openlore(&env, &["philosophy", "list"]);
+    assert_eq!(
+        outcome.status, 0,
+        "openlore philosophy list must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+
+    // Universe: cli.philosophy_list.see_also_labelled (the list labels the reference
+    // links it surfaces), cli.philosophy_list.see_also_present (a concrete reference
+    // URL renders). The wikipedia URL is not a substring of any name/description, so
+    // its presence proves the seeAlso line, not incidental prose.
+    let stdout = &outcome.stdout;
+    assert!(
+        stdout.contains("seeAlso:"),
+        "philosophy list must label the seeAlso references it surfaces (reference \
+         discoverability, slice-33);\n--- stdout ---\n{stdout}"
+    );
+    assert!(
+        stdout.contains("https://en.wikipedia.org/wiki/Memory_safety"),
+        "philosophy list must surface the memory-safety seed's seeAlso reference URL;\n\
+         --- stdout ---\n{stdout}"
+    );
+}
+
 /// PV-6 (US-PV-001 edge, AC-001.4 / I-9): discovery is LOCAL/offline. The
 /// embedded seeds are compiled into the binary (ADR-059 D3), so `philosophy
 /// list` must render the full vocabulary with the network disabled — no socket,

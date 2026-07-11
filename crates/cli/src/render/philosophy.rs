@@ -40,8 +40,9 @@ pub fn render_philosophy_list(seeds: &[Philosophy]) -> String {
 /// Render one seed as its greppable block: the derived object id on its own
 /// line, then the human name + one-line description, then — when the seed carries
 /// any — an `aliases:` line listing the shorthand strings `philosophy show`
-/// resolves (slice-30). A seed with no aliases renders no such line (no empty
-/// label). Aliases render as bare, comma-separated strings (mirroring
+/// resolves (slice-30), and a `seeAlso:` line listing its reference links
+/// (slice-33). Each optional line renders only when its field is non-empty (no
+/// empty label). Both render as bare, comma-separated strings (mirroring
 /// `render_record`), never NSID-prefixed object ids, so the greppable object-id
 /// surface is unchanged.
 fn render_seed_block(seed: &Philosophy) -> String {
@@ -49,6 +50,9 @@ fn render_seed_block(seed: &Philosophy) -> String {
     let mut block = format!("{id}\n  {} — {}", seed.name, seed.description);
     if !seed.aliases.is_empty() {
         block.push_str(&format!("\n  aliases: {}", seed.aliases.join(", ")));
+    }
+    if !seed.see_also.is_empty() {
+        block.push_str(&format!("\n  seeAlso: {}", seed.see_also.join(", ")));
     }
     block
 }
@@ -174,6 +178,54 @@ mod tests {
                 seed.name
             );
         }
+    }
+
+    /// slice-33 (reference discoverability): each seed's list block surfaces its
+    /// `seeAlso` reference links — until now only `philosophy show` (render_record)
+    /// showed them — under a `seeAlso:` label, so a user browsing the vocabulary
+    /// sees where to read more without opening each record. Pinned over the WHOLE
+    /// embedded set: every seed's exact `seeAlso: <joined>` line renders.
+    #[test]
+    fn every_seed_renders_its_see_also_in_the_list() {
+        let seeds = seeds();
+        let rendered = render_philosophy_list(&seeds);
+
+        assert!(
+            rendered.contains("seeAlso:"),
+            "the list must label the seeAlso references it surfaces (reference discoverability);\n\
+             --- rendered ---\n{rendered}"
+        );
+        for seed in &seeds {
+            if seed.see_also.is_empty() {
+                continue;
+            }
+            let line = format!("seeAlso: {}", seed.see_also.join(", "));
+            assert!(
+                rendered.contains(&line),
+                "list must surface the seeAlso links for {} as {line:?};\n--- rendered ---\n{rendered}",
+                seed.name
+            );
+        }
+    }
+
+    /// The no-seeAlso branch pinned against a CONSTRUCTED record with no seeAlso
+    /// (all embedded seeds currently carry one, so this guards the empty-label
+    /// guarantee directly): a seed with no seeAlso renders its object id + name +
+    /// description but NO `seeAlso:` label.
+    #[test]
+    fn a_seed_with_no_see_also_renders_no_see_also_label() {
+        let bare = Philosophy {
+            name: "no-seealso-example".to_string(),
+            description: "A philosophy that carries no seeAlso links.".to_string(),
+            aliases: Vec::new(),
+            see_also: Vec::new(),
+        };
+        let block = render_seed_block(&bare);
+        assert!(
+            block.contains("no-seealso-example") && !block.contains("seeAlso:"),
+            "a seed with no seeAlso must render its name but NO empty `seeAlso:` label;\n\
+             --- block ---\n{block}"
+        );
     }
 
     /// The DEFAULT text view is NOT a JSON array (AC-001.3 — JSON is opt-in). A
