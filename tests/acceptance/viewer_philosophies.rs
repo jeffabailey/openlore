@@ -253,6 +253,59 @@ fn the_philosophies_surface_surfaces_seed_aliases() {
     );
 }
 
+/// slice-34 (viewer parity with the slice-33 CLI `philosophy list`): the read-only
+/// `/philosophies` surface SURFACES each seed's seeAlso reference links, each URL as a
+/// READ-ONLY external `<a href>` link, so a reader browsing the vocabulary can click
+/// through to the references without opening each record. External `<a href>` is a
+/// navigational link, NOT a loaded asset — the surface stays offline (references only
+/// the local htmx asset, no CDN host). Closes the alias/seeAlso discoverability arc.
+///
+/// Given the viewer is running;
+/// When she opens `/philosophies`;
+/// Then the `memory-safety` entry carries a `seeAlso:` label linking its wikipedia
+///   reference URL.
+///
+/// @us-pv-006 @j-002 @driving_port @driving_adapter @real-io @seealso @happy
+#[test]
+fn the_philosophies_surface_surfaces_seed_see_also() {
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 3);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(PHILOSOPHIES_URL);
+
+    assert_eq!(
+        response.status, 200,
+        "GET {PHILOSOPHIES_URL} must render a 200 read-only vocabulary page; body:\n{}",
+        response.body
+    );
+    // The browse surface must label + surface the seeAlso reference links (RED until the
+    // entry renderer appends the `seeAlso:` line — the slice-33 CLI line ported to the
+    // viewer as external links).
+    assert!(
+        response.body.contains("seeAlso:"),
+        "slice-34: the vocabulary surface must label the seeAlso references it surfaces; \
+         body:\n{}",
+        response.body
+    );
+    // …with the memory-safety seed's wikipedia reference rendered as a link (href).
+    assert!(
+        response
+            .body
+            .contains("href=\"https://en.wikipedia.org/wiki/Memory_safety\""),
+        "slice-34: the {MEMORY_SAFETY_NAME:?} entry must surface its seeAlso reference as a \
+         link (href to the wikipedia URL); body:\n{}",
+        response.body
+    );
+    // …and the surface stays offline: an external reference link is NOT a CDN asset host.
+    assert!(
+        !response.references_external_cdn(),
+        "slice-34: surfacing external seeAlso links must NOT introduce a CDN asset host \
+         (offline-first, I-VIEW-3); body:\n{}",
+        response.body
+    );
+}
+
 /// VP-2 (US-PV-006; AC-006.2 — the persistent-nav reachability guarantee): `/philosophies`
 /// is reachable AS A SURFACE from the persistent nav (slice-21) — it is a
 /// `LANDING_HUB_SURFACES` entry, so the nav renders a link to it on EVERY viewer page; and

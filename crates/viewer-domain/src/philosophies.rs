@@ -66,7 +66,9 @@ fn render_philosophy_vocabulary() -> Markup {
 /// maud's text auto-escape), a link to the EXISTING `/philosophy?object=<object-id>`
 /// traversal survey (slice-10), and — when the seed carries any — an `aliases:` line
 /// of its shorthand strings (slice-32, mirroring the CLI `philosophy list`; bare
-/// comma-joined TEXT, never links/object-ids). PURE total
+/// comma-joined TEXT, never links/object-ids) and a `seeAlso:` line of its reference
+/// links (slice-34; each URL a READ-ONLY external `<a href>`, never a `?object=`
+/// traversal link). PURE total
 /// function. The traversal href REUSES the shared [`href_philosophy`] over the
 /// DERIVED `lexicon::philosophy::object_id(name)` — never a hardcoded `/philosophy`
 /// path or NSID prefix (object-ids are all-unreserved, so the percent-encode is a
@@ -88,6 +90,24 @@ fn render_philosophy_entry(seed: &lexicon::philosophy::Philosophy) -> Markup {
             // slice-27 one-link-per-seed contract) stay untouched.
             @if !seed.aliases.is_empty() {
                 p { "aliases: " (seed.aliases.join(", ")) }
+            }
+            // slice-34 (viewer parity with the slice-33 CLI `philosophy list`): surface
+            // the seed's seeAlso reference links so a reader browsing the vocabulary can
+            // click through to the references (D5 read-only browse). Rendered ONLY when
+            // the seed has seeAlso (no empty label otherwise); each URL is a READ-ONLY
+            // external `<a href>` link (idiomatic HTML — external links are an established
+            // viewer pattern, and a navigational link is NOT a loaded CDN asset, so the
+            // offline invariant holds). seeAlso links are external references, never
+            // `?object=` traversal links, so the slice-27 one-link-per-seed contract and
+            // slice-32's no-mem-safety-object-link assertion stay untouched.
+            @if !seed.see_also.is_empty() {
+                p {
+                    "seeAlso: "
+                    @for (i, link) in seed.see_also.iter().enumerate() {
+                        @if i > 0 { ", " }
+                        a href=(link) { (link) }
+                    }
+                }
             }
         }
     }
@@ -141,6 +161,60 @@ mod tests {
         assert!(
             entry.contains("no-alias-example") && !entry.contains("aliases:"),
             "an aliasless entry must render its name but NO empty `aliases:` label; got:\n{entry}"
+        );
+    }
+
+    /// slice-34 (viewer parity with the slice-33 CLI `philosophy list`): EVERY seed's
+    /// entry on the read-only `/philosophies` surface surfaces its `seeAlso` reference
+    /// links under a `seeAlso:` label, each URL as a READ-ONLY external `<a href>` link
+    /// (idiomatic HTML — external links are an established viewer pattern). Because the
+    /// links are external references (never `?object=` traversal links), the slice-27
+    /// one-link-per-seed traversal contract is untouched. A seed with NO seeAlso renders
+    /// NO `seeAlso:` label (no empty line).
+    #[test]
+    fn every_seed_renders_its_see_also_on_the_philosophies_surface() {
+        for seed in lexicon::philosophy::seeds() {
+            let entry = render_philosophy_entry(&seed).into_string();
+            if seed.see_also.is_empty() {
+                assert!(
+                    !entry.contains("seeAlso:"),
+                    "the {:?} entry has no seeAlso and must render NO `seeAlso:` label; got:\n{entry}",
+                    seed.name
+                );
+            } else {
+                assert!(
+                    entry.contains("seeAlso:"),
+                    "the {:?} entry must label the seeAlso references it surfaces; got:\n{entry}",
+                    seed.name
+                );
+                for link in &seed.see_also {
+                    let expected_href = format!("href=\"{link}\"");
+                    assert!(
+                        entry.contains(&expected_href),
+                        "the {:?} entry must surface its seeAlso {link:?} as a link \
+                         ({expected_href}); got:\n{entry}",
+                        seed.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The no-seeAlso branch pinned against a CONSTRUCTED record with no seeAlso (all
+    /// embedded seeds currently carry one, so this guards the empty-label guarantee
+    /// directly): a philosophy with no seeAlso renders its name but NO `seeAlso:` label.
+    #[test]
+    fn a_philosophy_entry_with_no_see_also_renders_no_see_also_label() {
+        let bare = lexicon::philosophy::Philosophy {
+            name: "no-seealso-example".to_string(),
+            description: "A philosophy that carries no seeAlso links.".to_string(),
+            aliases: Vec::new(),
+            see_also: Vec::new(),
+        };
+        let entry = render_philosophy_entry(&bare).into_string();
+        assert!(
+            entry.contains("no-seealso-example") && !entry.contains("seeAlso:"),
+            "a seeAlso-less entry must render its name but NO empty `seeAlso:` label; got:\n{entry}"
         );
     }
 }

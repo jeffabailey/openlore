@@ -1,0 +1,46 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-34",
+    "created_at": "2026-07-11T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "the read-only /philosophies surface surfaces each seed's seeAlso links (viewer parity with slice-33)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "render the seeAlso links in each /philosophies vocabulary entry",
+          "description": "slice-33 made the CLI `philosophy list` surface each seed's `seeAlso:` reference links, but the read-only viewer `/philosophies` browse surface still renders only NAME + DESCRIPTION + traversal link + aliases (slice-32) — the reference links are invisible in the browser. Append a `seeAlso:` line to each entry in render_philosophy_entry (crates/viewer-domain/src/philosophies.rs), rendered only when the seed carries any seeAlso, with each URL as a READ-ONLY external `<a href>` link (idiomatic for HTML, unlike the CLI's bare text; external links are an established viewer pattern e.g. render_claim_detail). This closes the alias/reference discoverability arc: both discovery surfaces (CLI list + viewer) then show name + description + aliases + seeAlso.",
+          "criteria": [
+            "OWNED every_seed_renders_its_see_also_on_the_philosophies_surface (viewer-domain unit pin: each seed's entry carries a `seeAlso:` label and each seeAlso URL as an `<a href>`; a no-seeAlso seed renders no label)",
+            "ACCEPTANCE the_philosophies_surface_surfaces_seed_see_also (GET /philosophies body carries a `seeAlso:` label and the memory-safety wikipedia reference URL as a link)",
+            "GUARDRAIL the_philosophies_surface_surfaces_seed_aliases (slice-32) + the_philosophies_surface_lists_the_complete_seed_vocabulary + traversal-links stay green (one `?object=` traversal link per seed unchanged; seeAlso links carry no `?object=`)",
+            "GUARDRAIL the_philosophies_surface_exposes_no_authoring_control + invariants (no executable control; stays offline with no external CDN asset; nav SSOT) stay green — external `<a href>` is a read-only navigational link, NOT a loaded asset"
+          ],
+          "test_file": "crates/viewer-domain/src/philosophies.rs",
+          "scenario_name": "every_seed_renders_its_see_also_on_the_philosophies_surface",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/viewer-domain/src/philosophies.rs",
+            "tests/acceptance/viewer_philosophies.rs"
+          ],
+          "implementation_notes": "render_philosophy_entry appends `p { \"seeAlso: \" @for link { a href=(link) { (link) } } }` only when `!seed.see_also.is_empty()`, AFTER the slice-32 aliases line, joining multiple links with `, `. seeAlso renders as external `<a href>` links (NOT `?object=` traversal links), so the slice-27 one-link-per-seed traversal count (counting `?object=org.openlore.philosophy.`) is unaffected and slice-32's no-mem-safety-object-link assertion holds. NO authoring/mutating markup (no form/button/hx-*) so the no-executable-control invariant holds; references_external_cdn only matches htmx CDN hosts (unpkg/jsdelivr/cdnjs///cdn.) — a wikipedia link does not trip the offline invariant. Pure total function over seeds(); no store/network/signing-key. No crate/dep/route change, check-arch stays 21. Demo: openlore ui (127.0.0.1:8788) -> GET /philosophies. Closes the alias/seeAlso discoverability arc (slices 30-34)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": ["crates/viewer-domain/src/"],
+    "test_directories": ["crates/viewer-domain/src/", "tests/acceptance/"],
+    "excluded_patterns": ["target/**"]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (user-directed polish) + automated quality gate",
+    "approved_at": "2026-07-11",
+    "review_verdict": "SHIPPED — single-step pure-renderer viewer parity for slice-33; closes the alias/seeAlso discoverability arc (slices 30-34). RED demonstrated before GREEN (entry carried aliases but no seeAlso line); 1 owned viewer-domain pin (+ no-seeAlso no-empty-label pin) + 1 acceptance scenario green. Each seed's seeAlso renders as read-only external <a href> links on the /philosophies browse surface. slice-27/32 vocabulary/traversal/aliases/no-authoring invariants preserved (seeAlso links carry no ?object=); offline invariant confirmed green (external wikipedia link is not a CDN asset host). No crate/route/dep change; check-arch stays 21."
+  }
+}
