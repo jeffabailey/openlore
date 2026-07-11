@@ -575,6 +575,34 @@ jobs:
           the local-first model instead of competing with it. Reuses
           `openlore peer add` (no parallel subscription path).
 
+      - id: J-005d
+        name: Optionally hide soft-retracted claims from a discovery view (opt-in, non-destructive, honest)
+        story: >
+          When I am surveying network claims for a decision and some have been
+          SOFT-RETRACTED by their own authors, I want to explicitly hide the retracted
+          ones from THIS view — reversibly and with full disclosure of what was hidden —
+          so I can focus on standing reasoning without the system ever silently deciding
+          for me what I do not see.
+        load_bearing: false
+        rationale: >
+          An OPTIONAL view control layered on the discovery corpus, not the core
+          discovery. It reconciles I-AV-9 / OD-AV-7 ("counter shown, not applied — a
+          countered/retracted claim stays discoverable, never silently filtered/
+          down-weighted") with a real focusing need by being (a) opt-in — the default
+          view is byte-identical to today (retracted claims still shown + annotated);
+          (b) non-destructive — a view-only filter that never mutates the index,
+          re-verifies, re-orders survivors, or re-weights their scores; (c) self-
+          disclosing — when active it states "N retracted claim(s) hidden". Scope is
+          SOFT-RETRACT ONLY (author-withdrawn — a retraction counter-claim by the same
+          author DID referencing the original CID, RC-02 / WD-11); a claim a DIFFERENT
+          author merely countered stays shown + annotated (no heckler's veto; preserves
+          anti-merging I-AV-2). Realized on both surfaces: the CLI
+          `openlore search --hide-retracted` (ADR-027 verb) and the read-only viewer
+          `/search?hide_retracted=1` toggle (slice-08); one pure `appview-domain`
+          predicate invoked by both (ADR-007). See
+          docs/feature/retraction-aware-search-filter/feature-delta.md (Locked
+          Decisions D-1..D-7, invariants I-RF-1..8).
+
 
 # ---------------------------------------------------------------------------
 # Red cards — all resolved 2026-05-25. Retained here for decision provenance.
@@ -817,3 +845,27 @@ changelog:
       boundary: the follow itself stays the slice-03 CLI `openlore peer add`; the
       LOCAL graph already resolves all four arms on /project, /philosophy, etc.;
       slice-20 brings the network-search surface to parity.
+  - date: "2026-07-11"
+    feature: retraction-aware-search-filter
+    change: >
+      J-005d ADDED as a sub-job of J-005 (no new primary job; load_bearing: false) for
+      the retraction-aware-search-filter DISCUSS. It captures an EXPLICIT, opt-in FILTER
+      that hides SOFT-RETRACTED (author-withdrawn) claims from a network search view —
+      the deferred "retraction-aware search FILTER (OD-AV-7 / I-AV-9)" named in
+      architecture/brief.md's future-slices list. The cardinal design tension — adding a
+      filter to a surface whose invariant (I-AV-9) says results are NEVER silently
+      filtered — is reconciled by three simultaneous constraints locked as feature-delta
+      decisions D-1..D-3: opt-in (default byte-identical to today), non-destructive
+      (view-only; no index mutation / re-verify / re-rank / re-weight of survivors), and
+      self-disclosing ("N retracted claim(s) hidden"). Scope is soft-retract only
+      (author self-retraction referencing the original CID, RC-02 / WD-11); third-party
+      counters stay shown + annotated (no heckler's veto; anti-merging I-AV-2 preserved).
+      Realized CLI-first (`openlore search --hide-retracted`, ADR-027) then viewer-parity
+      (`/search?hide_retracted=1`, slice-08) over ONE pure appview-domain predicate
+      (ADR-007). Brownfield DELTA: zero new crates (extends appview-domain + cli +
+      viewer-domain + adapter-http-viewer; workspace stays 21). New leading KPI-RF-1
+      (explicit-hide adoption + disclosure comprehension) minted; all slice-05/08
+      guardrails (KPI-AV-2/3, KPI-VIEW-2, KPI-HX-G1/G2, KPI-5) plus a NEW default-unchanged
+      build guard inherited. Open decision OD-RF-1 (does SearchResultDto.references already
+      distinguish author-retraction from third-party counter?) flagged as the one HIGH
+      risk to settle first in slice 1.
