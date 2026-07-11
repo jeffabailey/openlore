@@ -112,6 +112,12 @@ const MEMORY_SAFETY_DESC_FRAGMENT: &str = "no use-after-free, no dangling pointe
 /// is a no-op and the href is byte-exact.
 const MEMORY_SAFETY_TRAVERSAL_HREF: &str =
     "href=\"/philosophy?object=org.openlore.philosophy.memory-safety\"";
+/// The `memory-safety` seed's aliases line (slice-32 — viewer parity with the slice-31
+/// CLI `philosophy list`): the entry surfaces the shorthand strings that triangulation
+/// resolves (`aliases: mem-safety, memory-safe`), as bare TEXT — never a link or an
+/// NSID object-id, so the traversal href above is untouched. The unambiguous `mem-safety`
+/// alias is the discoverability anchor (seeds.json).
+const MEMORY_SAFETY_ALIASES_LINE: &str = "aliases: mem-safety, memory-safe";
 /// The per-entry traversal-link marker (`?object=org.openlore.philosophy.<segment>`). One
 /// occurrence per listed philosophy — the persistent nav's `Philosophy Survey` link is
 /// bare `/philosophy` (no `?object=`), so this counts LISTED entries only, never the nav.
@@ -194,6 +200,55 @@ fn the_philosophies_surface_lists_the_vocabulary_with_traversal_links() {
         response.body.contains(MEMORY_SAFETY_TRAVERSAL_HREF),
         "VP-1 (AC-006.1): the {MEMORY_SAFETY_NAME:?} entry must link to its traversal \
          surface ({MEMORY_SAFETY_TRAVERSAL_HREF}); body:\n{}",
+        response.body
+    );
+}
+
+/// slice-32 (viewer parity with the slice-31 CLI `philosophy list`): the read-only
+/// `/philosophies` surface SURFACES each seed's aliases, so the shorthand strings that
+/// power triangulation (D4) are discoverable in the browser where the reader is already
+/// browsing the vocabulary (D5). Aliases render as bare TEXT (`aliases: mem-safety,
+/// memory-safe`), never as links nor NSID object-ids — the traversal href stays the
+/// name-only link, so the slice-27 object-link contract is untouched.
+///
+/// Given the viewer is running;
+/// When she opens `/philosophies`;
+/// Then the `memory-safety` entry carries an `aliases:` label listing the unambiguous
+///   `mem-safety` alias.
+///
+/// @us-pv-006 @j-002 @j-004 @driving_port @driving_adapter @real-io @aliases @happy
+#[test]
+fn the_philosophies_surface_surfaces_seed_aliases() {
+    let env = TestEnv::initialized();
+    seed_own_claims_via_cli(&env, 3);
+    let viewer = ViewerServer::start(&env);
+
+    let response = viewer.get(PHILOSOPHIES_URL);
+
+    assert_eq!(
+        response.status, 200,
+        "GET {PHILOSOPHIES_URL} must render a 200 read-only vocabulary page; body:\n{}",
+        response.body
+    );
+    // The vocabulary browse surface must surface the alias strings (RED until the entry
+    // renderer appends the `aliases:` line — the slice-31 CLI line ported to the viewer).
+    assert!(
+        response.body.contains(MEMORY_SAFETY_ALIASES_LINE),
+        "slice-32: the {MEMORY_SAFETY_NAME:?} entry must surface its aliases line \
+         ({MEMORY_SAFETY_ALIASES_LINE:?}) so the shorthand is discoverable in the browser; \
+         body:\n{}",
+        response.body
+    );
+    // …and it stays TEXT, never a link/object-id: the aliases must NOT be wrapped in an
+    // `?object=…mem-safety` traversal link (the traversal href is the name-only link, so
+    // the slice-27 one-link-per-seed contract is preserved).
+    assert!(
+        !response
+            .body
+            .contains("?object=org.openlore.philosophy.mem-safety"),
+        "slice-32: aliases must render as bare TEXT, never an object-id traversal link \
+         (found a mem-safety `?object=` link, which would break the slice-27 \
+         one-link-per-seed contract); body:\n{}",
         response.body
     );
 }

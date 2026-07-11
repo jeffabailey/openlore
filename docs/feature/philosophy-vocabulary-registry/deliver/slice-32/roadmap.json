@@ -1,0 +1,46 @@
+{
+  "roadmap": {
+    "project_id": "philosophy-vocabulary-registry",
+    "slice": "slice-32",
+    "created_at": "2026-07-11T00:00:00Z",
+    "total_steps": 1
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "the read-only /philosophies surface surfaces each seed's aliases (viewer parity with slice-31)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "render the aliases line in each /philosophies vocabulary entry",
+          "description": "slice-31 made the CLI `philosophy list` surface each seed's `aliases: <joined>`, but the read-only viewer `/philosophies` browse surface (slice-27) still renders only NAME + DESCRIPTION + traversal link — so the alias strings that power triangulation (D4) are undiscoverable in the browser (D5: the viewer is the read-only browse of the vocabulary). Append an `aliases: <joined>` line to each entry in render_philosophy_entry (crates/viewer-domain/src/philosophies.rs), rendered only when the seed has aliases. Bare comma-separated alias strings (mirroring the CLI slice-31 render_seed_block convention) as plain text — NOT alias object-ids and NOT links — so the slice-27 traversal-href checks (name links to /philosophy?object=<object-id>) and the object-id-form guarantees are untouched. Pure renderer change: no store read, no network, no authoring control (I-VIEW-1/3 preserved).",
+          "criteria": [
+            "OWNED every_seed_renders_its_aliases_on_the_philosophies_surface (viewer-domain unit pin: each seed's exact `aliases: <joined>` line renders in its entry; a no-alias seed renders no empty label)",
+            "ACCEPTANCE the_philosophies_surface_surfaces_seed_aliases (GET /philosophies body carries an `aliases:` label and the unambiguous `mem-safety` alias)",
+            "GUARDRAIL the_philosophies_surface_lists_the_complete_seed_vocabulary + the_philosophies_surface_lists_the_vocabulary_with_traversal_links stay green (every seed's name + /philosophy?object= traversal href unchanged)",
+            "GUARDRAIL the_philosophies_surface_exposes_no_authoring_control + viewer_philosophies_invariants (no executable control, stays offline with no external asset, nav SSOT) stay green"
+          ],
+          "test_file": "crates/viewer-domain/src/philosophies.rs",
+          "scenario_name": "every_seed_renders_its_aliases_on_the_philosophies_surface",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/viewer-domain/src/philosophies.rs",
+            "tests/acceptance/viewer_philosophies.rs"
+          ],
+          "implementation_notes": "render_philosophy_entry appends `p { \"aliases: \" (seed.aliases.join(\", \")) }` only when `!seed.aliases.is_empty()` (a no-alias seed renders no empty `<p>`). Aliases render as bare plain text inside the entry `<section>`, never as `<a>` links and never NSID-prefixed object-ids — so the traversal href stays the name-only link and slice-27's object-id/href assertions are unaffected. NO authoring/mutating markup added (no `<form>`/`<button>`/`hx-*`) so the no-executable-control + offline invariants hold. Pure total function over the embedded `lexicon::philosophy::seeds()` vocabulary; no store/network/signing-key. No crate/dep/route change, check-arch stays 21. Demo: openlore viewer (127.0.0.1:8788) → GET /philosophies. Deliberately mirrors slice-31 for the CLI; seeAlso surfacing is OUT of scope (candidate slice-33) to keep this a one-concern carpaccio slice."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": ["crates/viewer-domain/src/"],
+    "test_directories": ["crates/viewer-domain/src/", "tests/acceptance/"],
+    "excluded_patterns": ["target/**"]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (user-directed polish) + automated quality gate",
+    "approved_at": "2026-07-11",
+    "review_verdict": "SHIPPED — single-step pure-renderer viewer parity for slice-31. RED demonstrated before GREEN (memory-safety entry lacked its aliases line); 1 owned viewer-domain pin (+ aliasless no-empty-label pin) + 1 acceptance scenario green. Mirrors the CLI alias line onto the read-only /philosophies browse surface (D4 aliases / D5 read-only browse). slice-27 vocabulary/traversal/no-authoring/offline/nav-SSOT invariants preserved by rendering bare alias TEXT only (no links, no object-ids); domain exact-?object=-count unchanged. No crate/route/dep change; check-arch stays 21."
+  }
+}

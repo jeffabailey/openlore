@@ -63,8 +63,10 @@ fn render_philosophy_vocabulary() -> Markup {
 }
 
 /// Render ONE philosophy vocabulary entry: its NAME, its DESCRIPTION (verbatim, via
-/// maud's text auto-escape), and a link to the EXISTING
-/// `/philosophy?object=<object-id>` traversal survey (slice-10). PURE total
+/// maud's text auto-escape), a link to the EXISTING `/philosophy?object=<object-id>`
+/// traversal survey (slice-10), and — when the seed carries any — an `aliases:` line
+/// of its shorthand strings (slice-32, mirroring the CLI `philosophy list`; bare
+/// comma-joined TEXT, never links/object-ids). PURE total
 /// function. The traversal href REUSES the shared [`href_philosophy`] over the
 /// DERIVED `lexicon::philosophy::object_id(name)` — never a hardcoded `/philosophy`
 /// path or NSID prefix (object-ids are all-unreserved, so the percent-encode is a
@@ -78,6 +80,67 @@ fn render_philosophy_entry(seed: &lexicon::philosophy::Philosophy) -> Markup {
                 a href=(href_philosophy(&object_id)) { (seed.name) }
             }
             p { (seed.description) }
+            // slice-32 (viewer parity with the slice-31 CLI `philosophy list`): surface
+            // the shorthand alias strings that triangulation resolves (D4) so they are
+            // discoverable in the read-only browse (D5). Rendered ONLY when the seed has
+            // aliases (no empty label otherwise) as bare comma-joined TEXT — never an `<a>`
+            // link nor an NSID object-id, so the name-only traversal href above (and the
+            // slice-27 one-link-per-seed contract) stay untouched.
+            @if !seed.aliases.is_empty() {
+                p { "aliases: " (seed.aliases.join(", ")) }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// slice-32 (viewer parity with the slice-31 CLI `philosophy list`): EVERY seed
+    /// philosophy's entry on the read-only `/philosophies` surface surfaces its
+    /// `aliases: <joined>` line — the shorthand strings that power triangulation (D4)
+    /// are discoverable where the reader is already browsing (D5). Bare comma-joined
+    /// alias TEXT (mirroring the CLI `render_seed_block` convention), never `<a>` links
+    /// nor NSID object-ids, so the slice-27 name→`/philosophy?object=` traversal href is
+    /// untouched. A seed with NO aliases renders NO `aliases:` label (no empty line).
+    #[test]
+    fn every_seed_renders_its_aliases_on_the_philosophies_surface() {
+        for seed in lexicon::philosophy::seeds() {
+            let entry = render_philosophy_entry(&seed).into_string();
+            if seed.aliases.is_empty() {
+                assert!(
+                    !entry.contains("aliases:"),
+                    "the {:?} entry has no aliases and must render NO `aliases:` label; \
+                     got:\n{entry}",
+                    seed.name
+                );
+            } else {
+                let expected = format!("aliases: {}", seed.aliases.join(", "));
+                assert!(
+                    entry.contains(&expected),
+                    "the {:?} entry must surface its aliases line ({expected:?}); got:\n{entry}",
+                    seed.name
+                );
+            }
+        }
+    }
+
+    /// The no-alias branch pinned against a CONSTRUCTED alias-less record (all embedded
+    /// seeds currently carry aliases, so this guards the empty-label guarantee directly):
+    /// an aliasless philosophy renders its name + description but NO `aliases:` label.
+    #[test]
+    fn an_aliasless_philosophy_entry_renders_no_alias_label() {
+        let bare = lexicon::philosophy::Philosophy {
+            name: "no-alias-example".to_string(),
+            description: "A philosophy that carries no alias strings.".to_string(),
+            aliases: Vec::new(),
+            see_also: Vec::new(),
+        };
+        let entry = render_philosophy_entry(&bare).into_string();
+        assert!(
+            entry.contains("no-alias-example") && !entry.contains("aliases:"),
+            "an aliasless entry must render its name but NO empty `aliases:` label; got:\n{entry}"
+        );
     }
 }
