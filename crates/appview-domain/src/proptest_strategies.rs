@@ -37,10 +37,11 @@
 
 use chrono::{TimeZone, Utc};
 use claim_domain::{
-    canonicalize, compute_cid, sign, Cid, Confidence, Did, KeyId, SignatureBlock, SignedClaim,
-    SigningKey, UnsignedClaim, VerificationKey,
+    canonicalize, compute_cid, sign, Cid, ClaimReference, Confidence, Did, KeyId, ReferenceType,
+    SignatureBlock, SignedClaim, SigningKey, UnsignedClaim, VerificationKey,
 };
 use ed25519_dalek::SigningKey as DalekSigningKey;
+use ports::NetworkResultRowRaw;
 use proptest::prelude::*;
 
 use crate::{AuthorRelationship, IndexedClaim, RawRecord};
@@ -332,5 +333,184 @@ pub fn arbitrary_indexed_claims() -> impl Strategy<Value = Vec<IndexedClaim>> {
             .enumerate()
             .map(|(ordinal, cell)| indexed_claim_from(cell, ordinal))
             .collect()
+    })
+}
+
+// =============================================================================
+// RF (retraction-aware-search-filter) — arbitrary RAW rows with retraction shapes
+// =============================================================================
+//
+// Drives the `partition_retracted` structural `@property` set (identity when
+// `hide=false`; survivors are a verbatim order-preserving subsequence; idempotent;
+// no self-retracted original survives — ADR-060 D-RF-D2..D6). The generator emits
+// the RAW `ports::NetworkResultRowRaw` rows (full `references` graph) both search
+// surfaces feed to the predicate — NEVER `compose_results`' lossy single-slot
+// `counter_annotation` (ADR-060 §subtlety-1). Each generated ORIGINAL claim carries
+// one of four retraction postures so every run exercises self-retraction (hidden),
+// third-party retract / third-party counter (NEVER hidden — no heckler's veto,
+// I-RF-4), and plain standing rows.
+
+/// The retraction posture attached to a generated ORIGINAL claim. Only
+/// [`RetractionPosture::SelfRetracted`] makes the original author-self-retracted
+/// (hidden under the flag); the third-party postures pin the no-heckler's-veto
+/// rule (D-3 / I-RF-4). Self-contained (no cross-crate import).
+#[derive(Debug, Clone, Copy)]
+enum RetractionPosture {
+    /// A plain standing claim with no marker referencing it.
+    Standing,
+    /// A SAME-author `Retracts` marker → the original is author-self-retracted
+    /// (both original + marker hidden under `--hide-retracted`).
+    SelfRetracted,
+    /// A DIFFERENT-author `Retracts` marker → NOT a self-retraction (no heckler's
+    /// veto); the original stays shown.
+    ThirdPartyRetracted,
+    /// A DIFFERENT-author `Counters` marker → a disagreement counter; the original
+    /// stays shown + annotated (I-AV-9 / I-RF-4).
+    ThirdPartyCountered,
+}
+
+/// The four postures, weighted so BOTH the hidden path (self-retraction) and the
+/// never-hidden path (standing / third-party) are exercised every run.
+fn arb_posture_rf() -> impl Strategy<Value = RetractionPosture> {
+    prop_oneof![
+        2 => Just(RetractionPosture::Standing),
+        2 => Just(RetractionPosture::SelfRetracted),
+        1 => Just(RetractionPosture::ThirdPartyRetracted),
+        1 => Just(RetractionPosture::ThirdPartyCountered),
+    ]
+}
+
+/// One generated ORIGINAL-claim cell: an author index into [`AUTHORS`], a
+/// confidence in `[0.0, 1.0]` (carried verbatim to pin the non-destructive
+/// property), and the retraction posture materialized alongside it.
+#[derive(Debug, Clone)]
+struct RetractionCell {
+    author_idx: usize,
+    confidence: f64,
+    posture: RetractionPosture,
+}
+
+/// Strategy for a single [`RetractionCell`] over the bounded author universe.
+fn arb_retraction_cell() -> impl Strategy<Value = RetractionCell> {
+    (0..AUTHORS.len(), 0.0_f64..=1.0, arb_posture_rf()).prop_map(
+        |(author_idx, confidence, posture)| RetractionCell {
+            author_idx,
+            confidence,
+            posture,
+        },
+    )
+}
+
+/// Materialize one RAW row. `cid`s are prefix-namespaced (`bafyorig…` originals /
+/// `bafymark…` markers) + ordinal-encoded so every generated row carries a DISTINCT
+/// CID; `verified_against` is non-empty (verified-before-index); `composed_at` is a
+/// pinned deterministic value (pure — no clock). `references` carries the typed
+/// retraction/counter graph the predicate reads.
+fn raw_row(
+    author: &str,
+    cid: String,
+    subject: &str,
+    object: &str,
+    confidence: f64,
+    references: Vec<ClaimReference>,
+) -> NetworkResultRowRaw {
+    NetworkResultRowRaw {
+        author_did: Did(format!("{author}{APP_FRAGMENT}")),
+        cid: Cid(cid),
+        subject: subject.to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: object.to_string(),
+        confidence,
+        composed_at: Utc.with_ymd_and_hms(2026, 5, 26, 12, 0, 0).unwrap(),
+        verified_against: KeyId(format!("{author}{APP_FRAGMENT}")),
+        evidence: vec![format!("https://example.test/evidence/{subject}")],
+        references,
+    }
+}
+
+/// A same-/different-author `Retracts` or `Counters` marker row targeting
+/// `original_cid`. The marker is its OWN indexed row (it shares the original's
+/// dimensional fields, so any query returning the original also returns it —
+/// ADR-060 Context §1).
+fn marker_row(
+    author: &str,
+    ordinal: usize,
+    subject: &str,
+    object: &str,
+    ref_type: ReferenceType,
+    original_cid: &str,
+) -> NetworkResultRowRaw {
+    raw_row(
+        author,
+        format!("bafymark{ordinal:04}"),
+        subject,
+        object,
+        // A retraction marker is a high-confidence, no-evidence withdrawal record;
+        // its exact confidence is irrelevant to the predicate (structure-only).
+        1.0,
+        vec![ClaimReference {
+            ref_type,
+            cid: Cid(original_cid.to_string()),
+        }],
+    )
+}
+
+/// Generator for a NON-EMPTY `Vec<NetworkResultRowRaw>` mixing standing claims,
+/// author-self-retractions (original + same-author marker), and third-party
+/// retract / counter markers. Rows are emitted original-then-its-marker so the
+/// order-preserving-subsequence property is exercised on a non-trivial ordering.
+///
+/// Drives the `partition_retracted` structural invariants (identity when
+/// `hide=false`; verbatim ordered-subsequence survivors; idempotence; no
+/// self-retracted original survives). The counting semantics + heckler's-veto
+/// dominance cases are pinned by crafted example tests (an oracle would duplicate
+/// the predicate).
+pub fn arbitrary_raw_rows_with_retractions() -> impl Strategy<Value = Vec<NetworkResultRowRaw>> {
+    prop::collection::vec(arb_retraction_cell(), 1..=6).prop_map(|cells| {
+        let mut rows: Vec<NetworkResultRowRaw> = Vec::new();
+        for (ordinal, cell) in cells.iter().enumerate() {
+            let author = AUTHORS[cell.author_idx];
+            let subject = SUBJECTS[cell.author_idx % SUBJECTS.len()];
+            let object = OBJECTS[ordinal % OBJECTS.len()];
+            let original_cid = format!("bafyorig{ordinal:04}");
+            let other_author = AUTHORS[(cell.author_idx + 1) % AUTHORS.len()];
+
+            rows.push(raw_row(
+                author,
+                original_cid.clone(),
+                subject,
+                object,
+                cell.confidence,
+                Vec::new(),
+            ));
+            match cell.posture {
+                RetractionPosture::Standing => {}
+                RetractionPosture::SelfRetracted => rows.push(marker_row(
+                    author,
+                    ordinal,
+                    subject,
+                    object,
+                    ReferenceType::Retracts,
+                    &original_cid,
+                )),
+                RetractionPosture::ThirdPartyRetracted => rows.push(marker_row(
+                    other_author,
+                    ordinal,
+                    subject,
+                    object,
+                    ReferenceType::Retracts,
+                    &original_cid,
+                )),
+                RetractionPosture::ThirdPartyCountered => rows.push(marker_row(
+                    other_author,
+                    ordinal,
+                    subject,
+                    object,
+                    ReferenceType::Counters,
+                    &original_cid,
+                )),
+            }
+        }
+        rows
     })
 }
