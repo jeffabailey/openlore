@@ -351,6 +351,37 @@ name = "appview_search"
 path = "../../tests/acceptance/appview_search.rs"
 harness = true
 
+# Feature `retraction-aware-search-filter` slice-01 (DISTILL) subprocess + real-I/O
+# acceptance: the `openlore search … --hide-retracted` opt-in retraction filter
+# (US-RF-001; ADR-060). Drives the REAL `openlore` binary via `assert_cmd` against a
+# REAL `openlore-indexer serve` over a seeded `index.duckdb` whose corpus (built
+# inline via `seed_network_index_from_specs` + `RawRecordSpec::with_reference`)
+# holds an ORIGINAL claim + a same-author `Retracts` marker + a different-author
+# `Counters` marker — exercising the self-vs-third-party contract against REAL
+# indexer data. DISTILL registers + RED gate; RF-1/3/4/5/6/7/8 classify RED (the
+# `--hide-retracted` flag does not exist → clap rejects → non-zero exit =
+# MISSING_FUNCTIONALITY); RF-2 is a default-unchanged GOLD guard (green-by-design,
+# I-RF-1). The `appview_domain::partition_retracted` scaffold panics until DELIVER.
+# Build-before-run: `cargo build --bin openlore --bin openlore-indexer`. No new crate.
+[[test]]
+name = "search_hide_retracted"
+path = "../../tests/acceptance/search_hide_retracted.rs"
+harness = true
+
+# Feature `retraction-aware-search-filter` slice-02 (DISTILL) subprocess + real-I/O
+# acceptance: the read-only `openlore ui` `GET /search?hide_retracted=1` retraction
+# toggle (US-RF-002; ADR-060). Drives the REAL `openlore ui` viewer via `ViewerServer`
+# + in-test HTTP GET (with/without `HX-Request`) against a REAL `openlore-indexer
+# serve` over a seeded retraction corpus. DISTILL registers + RED gate;
+# RF-V1/V3/V4/V5/V6 classify RED (`?hide_retracted=1` is ignored today → no notice /
+# no control = MISSING_FUNCTIONALITY); RF-V2 is a default-unchanged GOLD guard
+# (green-by-design, I-RF-1). Same pure `partition_retracted` decision as slice-01.
+# Build-before-run: `cargo build --bin openlore --bin openlore-indexer`. No new crate.
+[[test]]
+name = "viewer_search_hide_retracted"
+path = "../../tests/acceptance/viewer_search_hide_retracted.rs"
+harness = true
+
 # Slice-05 layer-2 acceptance (pure `appview-domain` core — the verify-before-
 # index gate + anti-merging search composition; US-AV-001/002/004). Exercises the
 # PURE core DIRECTLY (no indexer subprocess), so it lives under the cli package's

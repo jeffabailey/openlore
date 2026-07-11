@@ -158,7 +158,7 @@ exists here" (which would betray discoverability, the whole point of J-005).
 | Artifact | Source of truth | Consumers | Integration risk |
 |---|---|---|---|
 | `retracted` marker on a result | the composed result's references/retraction graph (slice-05 `SearchResultDto.references`, DV-5) — whether it distinguishes author-retraction from third-party counter is **OD-RF-1** | the pure predicate (D-2), the "N hidden" count (D-4), both surfaces | **HIGH** — if the DTO cannot distinguish author-retraction from disagreement, D-3 cannot be honored without a DTO/ingest extension (see OD-RF-1 + Risks) |
-| `hidden_count` | computed by the surface as `len(unfiltered) - len(survivors)` after the pure predicate | CLI footer line, viewer notice | LOW — derived, single computation |
+| `hidden_count` | counts retraction **EVENTS**, not raw rows removed (per DESIGN OD-RF-1 resolution / D-RF-D5: a retraction event = the original claim C + its same-author marker record K, both hidden together, so `len(unfiltered) - len(survivors)` would double-count the marker) — produced by the pure `partition_retracted` in one pass (OD-RF-4) | CLI footer line, viewer notice | LOW — derived, single computation |
 | `hide_retracted` intent | CLI `--hide-retracted` flag / viewer `?hide_retracted=1` param | the predicate call, the honesty-line trigger | LOW — per-invocation, not persisted (D-7) |
 
 ### Slicing (by outcome + risk, not feature grouping)
@@ -891,3 +891,195 @@ crate (below the 5-component threshold for a C4 L3).
 - **ADR-060** written (Proposed).
 - **Deferred:** OD-RF-2/3 (DISTILL wording/UI), OD-RF-5 (NEW — default-view marker handling,
   out of scope), Q-DELIVER-RF-1 (exact input type).
+
+---
+
+## Wave: DISTILL / [REF] Reconciliation + Wave-Decisions (DISTILL)
+
+> Wave: **DISTILL** · Owner: Sentinel (nw-acceptance-designer) · Date: 2026-07-11 · ADR-060.
+> Primary machine artifact: `distill/red-classification.md`. Scenario SSOT: the two
+> executable `.rs` acceptance files (registered as `cli`-crate `[[test]]` targets).
+
+**Wave-Decision Reconciliation HARD GATE — PASSED (0 contradictions).** DISCUSS
+(D-1..D-7, I-RF-1..8) ↔ DESIGN (D-RF-D1..D8) ↔ slices 01/02 were checked pairwise. The
+only delta is DESIGN's EVENT-count refinement of the DISCUSS `hidden_count = len − len`
+note (a retraction event = original C + its same-author marker K; both hidden;
+`hidden_count` counts events) — an already-resolved back-propagation into slice-01, NOT a
+contradiction. No DEVOPS `wave-decisions.md` exists (brownfield delta, no new environment
+axis) → WARN, default matrix, proceed. Reconciliation logged: **passed**.
+
+**DISTILL decisions (OD-RF-2 / OD-RF-3 resolved as DISTILL's proposal; DELIVER may freeze
+copy):**
+- **OD-RF-2** (viewer control) → a labeled **"Hide retracted claims"** GET-param control
+  setting `?hide_retracted=1` (no-JS path = plain GET nav), per the DESIGN recommendation.
+- **OD-RF-3** (disclosure wording) → CLI **footer** line `N retracted claim(s) hidden` +
+  `re-run without --hide-retracted`; viewer **results-region notice** `N retracted claim(s)
+  hidden … Untick …`; empty-after-filter buffer names `… were soft-retracted …` +
+  re-run/untick guidance. Asserted as SUBSTRINGS (the exact surrounding copy stays
+  DELIVER's to freeze as content-frozen consts like `SEARCH_NO_MERGE_FOOTER`).
+- **OD-RF-3 zero-match wording** → when the filter is active but matched nothing, the
+  surface stays SILENT (no `retracted claim(s) hidden` line), per D-4 ("no misleading '0
+  hidden' line"); RF-8 pins this.
+
+**Outcomes Registry** — SKIPPED (documented): this repo has NO
+`docs/product/outcomes/registry.yaml` and the `nwave-ai outcomes` CLI is unavailable
+(missing `jsonschema`). `partition_retracted` is a new `specification`-kind contract that
+WOULD be one OUT-N row; registration is intentionally skipped and noted here.
+
+## Wave: DISTILL / [REF] Scenario list with tags
+
+Scenario SSOT is the two `.rs` files. 14 scenarios total across both surfaces (8 CLI +
+6 viewer); 2 are default-unchanged GOLD guards (green-by-design), 12 are RED. Error/edge
+ratio = 12/14 ≈ **86%** (target ≥40%). Happy path = RF-1, RF-V1.
+
+### Slice-01 CLI — `tests/acceptance/search_hide_retracted.rs` (US-RF-001)
+
+| # | Scenario | Tags |
+|---|---|---|
+| RF-1 | self-retracted claim hidden + honest "1 … hidden" footer (exit 0) | `@us-rf-001 @walking_skeleton @driving_adapter @real-io @adapter-integration @j-005 @kpi-rf-1 @i-rf-1 @i-rf-3 @happy` |
+| RF-2 | default (no flag) still shows the retracted claim + no footer (GOLD) | `@us-rf-001 @driving_adapter @real-io @i-rf-1 @default-unchanged @gold @regression @edge` |
+| RF-3 | a third-party COUNTER is NOT hidden (no heckler's veto) | `@us-rf-001 @driving_adapter @real-io @i-av-9 @i-rf-4 @no-hecklers-veto @edge` |
+| RF-4 | self-retraction DOMINATES a co-present third-party counter (anti-lossy) | `@us-rf-001 @driving_adapter @real-io @i-rf-4 @self-retraction-dominates @anti-lossy @edge` |
+| RF-5 | hiding never re-orders / re-weights survivors (order + verbatim confidence) | `@us-rf-001 @driving_adapter @real-io @property @i-rf-2 @non-destructive @edge` |
+| RF-6 | empty-after-filter → guided state, not a bare empty result | `@us-rf-001 @driving_adapter @real-io @i-rf-3 @empty-after-filter @error @edge` |
+| RF-7 | `hidden_count` = EVENTS, not raw rows (1, never 2) | `@us-rf-001 @driving_adapter @real-io @i-rf-3 @hidden-count-events @edge` |
+| RF-8 | zero retractions present → no misleading "hidden" line (D-4) | `@us-rf-001 @driving_adapter @real-io @i-rf-3 @d-4 @zero-retractions @edge` |
+
+### Slice-02 viewer — `tests/acceptance/viewer_search_hide_retracted.rs` (US-RF-002)
+
+| # | Scenario | Tags |
+|---|---|---|
+| RF-V1 | `?hide_retracted=1` full page: self-retracted absent + hidden-count notice | `@us-rf-002 @walking_skeleton @driving_adapter @real-io @adapter-integration @full-page @j-005 @kpi-rf-1 @i-rf-1 @i-rf-3 @happy` |
+| RF-V2 | default (no param) renders identically + no notice (GOLD) | `@us-rf-002 @driving_adapter @real-io @i-rf-1 @default-unchanged @gold @regression @edge` |
+| RF-V3 | htmx: only the `#search-results` fragment + notice (slice-07 parity) | `@us-rf-002 @driving_adapter @real-io @htmx-fragment @i-rf-6 @edge` |
+| RF-V4 | empty-after-filter → guided region ("untick to see them"), never blank | `@us-rf-002 @driving_adapter @real-io @empty-after-filter @i-rf-3 @error @edge` |
+| RF-V5 | third-party counter stays shown while a self-retraction is hidden (D-3) | `@us-rf-002 @driving_adapter @real-io @i-av-9 @i-rf-4 @no-hecklers-veto @edge` |
+| RF-V6 | the hide control is a read-only GET-param toggle (no write surface) | `@us-rf-002 @driving_adapter @real-io @read-only @i-rf-6 @invariant @edge` |
+
+## Wave: DISTILL / [REF] Adapter coverage (Mandate 6)
+
+The feature adds NO new driven adapter (Branch A: pure predicate over the shipped
+reference graph). Every scenario exercises the REUSED driven ports with REAL I/O
+(`@real-io @adapter-integration`).
+
+| Driven port / adapter | `@real-io` scenario | Mechanism |
+|---|---|---|
+| `IndexQueryPort` / `adapter-index-query` (CLI ← indexer XRPC) | RF-1..8 (all) | REAL `openlore-indexer serve` over an ephemeral localhost port over a REAL `index.duckdb` seeded through the REAL ingest gate |
+| `adapter-http-viewer` `GET /search` (viewer ← indexer) | RF-V1..V6 (all) | REAL `openlore ui` (`ViewerServer`) + in-test HTTP GET, wired to the REAL indexer via `OPENLORE_INDEXER_URL` |
+| `adapter-atproto-ingest` / `adapter-index-store` (seed path) | all | REAL `openlore-indexer ingest` pass over `RawRecordSpec` corpora incl. same-author `Retracts` + different-author `Counters` references (`with_reference`) |
+
+No `NO — MISSING` rows. No new adapter ⇒ no new infrastructure-failure surface (the
+slice-05/08 `Unreachable` degradation is unchanged and already covered).
+
+## Wave: DISTILL / [REF] Driving-adapter coverage (Mandate 1 / RCA P1)
+
+| Driving port (DESIGN) | Protocol exercised | Scenarios |
+|---|---|---|
+| CLI `openlore search … --hide-retracted` (ADR-027 verb + new flag) | subprocess (`assert_cmd`, real `openlore` bin) | RF-1..8 |
+| HTTP `GET /search?hide_retracted=1` (ADR-038 route + new param) | in-test HTTP GET, with/without `HX-Request` | RF-V1..V6 |
+
+Both driving adapters are entered via their real protocol; exit code / HTTP status +
+output format + argument/param handling are all asserted. No scenario calls the pure
+`partition_retracted` or `viewer-domain` render fns directly (those are DELIVER's
+layer-1/2 surface).
+
+## Wave: DISTILL / [REF] Scaffolds (Mandate 7)
+
+| Scaffold file | Marker | Symbol | Status |
+|---|---|---|---|
+| `crates/appview-domain/src/retraction.rs` | `// SCAFFOLD: true` | `partition_retracted(rows, hide_retracted) -> RetractionPartition{survivors, hidden_count}` + `RetractionPartition` | `panic!("… RED scaffold …")` body; exported from `lib.rs`; `cargo build -p appview-domain` OK |
+
+Indicative signature per ADR-060 (owned `Vec` in, `RetractionPartition` out — matches the
+codebase's `NetworkSearchResult` / `IngestOutcome` result-struct idiom). Q-DELIVER-RF-1
+(owned vs borrowed input; whether the CLI reuses `to_indexed_claim`) stays DELIVER's to
+finalize against the two call sites. No other scaffold needed — the subprocess/HTTP ATs
+import only existing symbols, so they COMPILE now and fail on ABSENT behavior (genuine
+RED), not on an import/scaffold error.
+
+## Wave: DISTILL / [REF] Test placement + precedent
+
+| File | Placement | Precedent |
+|---|---|---|
+| `tests/acceptance/search_hide_retracted.rs` | root `tests/acceptance/`, registered as a `cli`-crate `[[test]]` (`harness = true`) | mirrors `appview_search.rs` (slice-05 CLI subprocess + real-indexer suite); REUSES its `TestEnv` / `seed_network_index_from_specs` / `RawRecordSpec::with_reference` / `run_openlore_search` fixtures |
+| `tests/acceptance/viewer_search_hide_retracted.rs` | same | mirrors `viewer_network_search.rs` (slice-08 viewer HTTP gold-style); REUSES `ViewerServer::start_with_indexer` / `get` / `get_htmx` / `is_fragment` / `assert_search_html_*` |
+
+Retraction corpora are built INLINE via `seed_network_index_from_specs` +
+`RawRecordSpec::valid(...).with_reference(Retracts|Counters, cid)` — **zero changes to
+`tests/acceptance/support/mod.rs`** (the original+marker pair + the self-vs-third-party
+contract are expressed with existing public builders), so there is no new fixture surface
+to break (minimizes BROKEN risk). RF-3 reuses the shipped
+`NetworkIndexFixture::CounteredClaimPlusCounter`. Rust idiom: single file per slice (the
+viewer read-only guardrail RF-V6 folded into a clearly-marked INVARIANTS section rather
+than a separate `_invariants.rs`, matching the task's lean allowance).
+
+## Wave: DISTILL / [REF] Pre-DELIVER RED gate
+
+Full per-scenario verdict in `distill/red-classification.md`. Summary: **12 RED**
+(genuine `MISSING_FUNCTIONALITY`), **2 GREEN gold guards** (RF-2 / RF-V2 default-unchanged,
+I-RF-1 — must stay green through DELIVER), **0 BROKEN**. Gate PASSES.
+
+- CLI RED mechanism: `--hide-retracted` is an unknown clap arg → exit 2 → the exit-0
+  assertion fires. Viewer RED mechanism: `?hide_retracted=1` is ignored → 200 with every
+  row still shown + no notice/control → the notice/filter/control assertions fire.
+- One fix pass applied before sign-off: the first viewer run had wrong-observable
+  assertions (asserting a per-row cid the viewer HTML never renders); re-keyed to the
+  port-exposed observable (author DID + confidence). After the fix RF-V2 is green and the
+  five feature scenarios are genuine RED. The CLI renders each row's own `cid:`
+  (`crates/cli/src/render/search.rs:195`), so the slice-01 cid assertions are valid.
+- Build-before-run (carry into the DELIVER roadmap): `cargo build --bin openlore --bin
+  openlore-indexer` before running these ATs (the harness spawns BOTH; `cargo test` does
+  not rebuild a spawned binary).
+
+## Wave: DISTILL / [REF] DELIVER property set (for `partition_retracted`)
+
+`partition_retracted` is a pure total fn with obvious properties. DELIVER pins these as
+layer-1/2 PBT in `crates/appview-domain` (ADR-025; reuse
+`crates/appview-domain/src/proptest_strategies.rs`). Per Mandate 9 the layer-3 subprocess
+ATs above are example-only; these properties are the generative inner loop.
+
+1. **Identity when off** — `hide_retracted == false` ⇒ `survivors == rows` (unchanged,
+   same order) ∧ `hidden_count == 0` (I-RF-1 / D-RF-D6).
+2. **Survivors ⊆ input** — every survivor is an input row (never fabricated).
+3. **Order-preserving** — survivors appear in their original relative order (I-RF-2).
+4. **Confidence verbatim** — each survivor's `confidence` is byte-identical to its input
+   row (no re-weight, I-RF-2 / D-5).
+5. **`hidden_count` = self-retraction EVENTS** — `hidden_count == |{ C : ∃ same-author K
+   with { Retracts, C.cid } }|`, NOT raw rows removed (D-RF-D5); a single event (C + its
+   marker K = 2 rows) reports 1.
+6. **Self-retraction detection is graph-total (anti-lossy)** — C is hidden iff a
+   same-author `Retracts` to C.cid exists ANYWHERE in the set, independent of any
+   co-present third-party `Counters` (dominance; ADR-060 Earned-Trust #1).
+7. **No heckler's veto** — a `Counters`, or a `Retracts` by a DIFFERENT author, never
+   removes a row (D-3 / I-RF-4).
+8. **Marker co-hiding** — when C is hidden, its same-author marker K is hidden too; a
+   marker whose target C is NOT in the set does not hide anything on its own (D-RF-D4).
+9. **Idempotent** — `partition_retracted(partition_retracted(rows, true).survivors, true)`
+   has the same survivors ∧ `hidden_count == 0` on the second pass.
+
+Plus the in-crate `@property` (order + confidence stable) + the default-unchanged
+byte-identical guard + the `partition_retracted` per-feature mutation gate (D-RF-D8).
+
+## Wave: DISTILL / [REF] Pre-requisites for DELIVER
+
+- Shipped + REUSED: slice-05 `IndexQueryPort` + `adapter-index-query` + `compose_results`
+  + `SearchResultDto.references` (DV-5) + `ports::NetworkResultRowRaw` (carries
+  `{author_did, cid, references}`) + the `openlore search` verb (ADR-027); slice-08
+  `/search` route + `adapter-http-viewer` + `viewer-domain` render + slice-07 `Shape` fork.
+- The `partition_retracted` scaffold is committed as a `// SCAFFOLD: true` panic; DELIVER
+  replaces the body (RED→GREEN→COMMIT), then wires it into (a) the `cli` `search` verb
+  before render grouping and (b) the `adapter-http-viewer` `GET /search` handler before
+  `to_indexed_claim`/`compose_results` — on the RAW `NetworkResultRowRaw` rows in BOTH.
+- Workspace stays **21** members; `appview-domain` stays pure-core (`cargo xtask check-arch`
+  unchanged); no new crate, no new adapter, no new `probe()`.
+
+## Wave: DISTILL / [REF] Open items for the review gate
+
+- 2 intended-GREEN gold guards (RF-2 / RF-V2). Reviewer note: these are default-unchanged
+  regression guards (I-RF-1), the mechanical proof I-AV-9 is not weakened — green at
+  DISTILL by design and must STAY green through DELIVER (NOT fixture theater; they run the
+  real surface without the flag/param).
+- Disclosure/notice/empty-buffer/control COPY (OD-RF-2/3) is asserted as substrings; the
+  exact frozen wording is DELIVER's (content-frozen consts).
+- `@property` RF-5 is example-pinned at layer 3 (Mandate 9/11); the universal invariant is
+  DELIVER's layer-1/2 PBT (property set above).
+- The final 4-reviewer consolidated gate is the orchestrator's to run (not run here).

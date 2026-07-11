@@ -43,6 +43,7 @@
 
 mod compose;
 mod ingest;
+mod retraction;
 mod suggest;
 
 // Step 02-01 (AVC-1): proptest strategies for the verify-before-index gate's
@@ -54,6 +55,7 @@ pub mod proptest_strategies;
 
 pub use compose::compose_results;
 pub use ingest::ingest_decision;
+pub use retraction::{partition_retracted, RetractionPartition};
 pub use suggest::near_match_suggestion;
 
 use claim_domain::{Cid, Did, KeyId};
