@@ -122,7 +122,10 @@ fn no_four_arm_follow_state_render_adds_an_executable_control() {
 
         let path = format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}");
         responses.push((format!("GET {path} (full page)"), viewer.get(&path)));
-        responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(&path)));
+        responses.push((
+            format!("GET {path} (htmx fragment)"),
+            viewer.get_htmx(&path),
+        ));
         // `viewer` (and `indexer`) drop here.
     }
 
@@ -241,7 +244,11 @@ fn the_four_arm_resolution_adds_no_network_seam_index_stays_per_user_neutral() {
         let indexer = seed_network_index_from_specs(&env_local, sf_corpus_all_four_arms());
         let viewer = ViewerServer::start_with_indexer(&env_local, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "FF-INV-PerUserNeutral: local-operator render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "FF-INV-PerUserNeutral: local-operator render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -252,7 +259,11 @@ fn the_four_arm_resolution_adds_no_network_seam_index_stays_per_user_neutral() {
         let indexer = seed_network_index_from_specs(&env_clean, sf_corpus_all_four_arms());
         let viewer = ViewerServer::start_with_indexer(&env_clean, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "FF-INV-PerUserNeutral: clean-operator render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "FF-INV-PerUserNeutral: clean-operator render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -262,7 +273,12 @@ fn the_four_arm_resolution_adds_no_network_seam_index_stays_per_user_neutral() {
     for body in [&local_body, &clean_body] {
         assert_search_html_every_row_verified_and_attributed(
             body,
-            &[SF_OWN_BARE_DID, RACHEL_DID, TRAVERSAL_AUTHOR_TOBIAS, PRIYA_DID],
+            &[
+                SF_OWN_BARE_DID,
+                RACHEL_DID,
+                TRAVERSAL_AUTHOR_TOBIAS,
+                PRIYA_DID,
+            ],
         );
     }
     // …and ONLY the per-row AFFORDANCE differs, resolved LOCALLY (RED today): the
@@ -308,7 +324,11 @@ fn the_four_arm_resolution_does_not_merge_or_rerank() {
         let indexer = seed_network_index_from_specs(&env_with, sf_corpus_all_four_arms());
         let viewer = ViewerServer::start_with_indexer(&env_with, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "FF-INV-AttributionUnchanged: with-state render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "FF-INV-AttributionUnchanged: with-state render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -318,7 +338,11 @@ fn the_four_arm_resolution_does_not_merge_or_rerank() {
         let indexer = seed_network_index_from_specs(&env_without, sf_corpus_all_four_arms());
         let viewer = ViewerServer::start_with_indexer(&env_without, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "FF-INV-AttributionUnchanged: without-state render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "FF-INV-AttributionUnchanged: without-state render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -328,7 +352,12 @@ fn the_four_arm_resolution_does_not_merge_or_rerank() {
     for body in [&with_body, &without_body] {
         assert_search_html_every_row_verified_and_attributed(
             body,
-            &[SF_OWN_BARE_DID, RACHEL_DID, TRAVERSAL_AUTHOR_TOBIAS, PRIYA_DID],
+            &[
+                SF_OWN_BARE_DID,
+                RACHEL_DID,
+                TRAVERSAL_AUTHOR_TOBIAS,
+                PRIYA_DID,
+            ],
         );
         assert_search_html_has_no_merged_consensus_row(body);
         for confidence in ["0.95", "0.88", "0.74", "0.82"] {
@@ -382,7 +411,10 @@ fn the_two_new_indicators_are_neutral_never_pejorative() {
 
         let path = format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}");
         responses.push((format!("GET {path} (full page)"), viewer.get(&path)));
-        responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(&path)));
+        responses.push((
+            format!("GET {path} (htmx fragment)"),
+            viewer.get_htmx(&path),
+        ));
     }
 
     for (label, response) in &responses {

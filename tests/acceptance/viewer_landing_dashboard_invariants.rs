@@ -114,7 +114,10 @@ fn every_landing_render_leaves_the_store_read_only() {
     {
         let viewer = ViewerServer::start(&env);
         let page = viewer.get(LANDING_PATH);
-        assert_eq!(page.status, 200, "GET / must render so the read-only proof is over a REAL render");
+        assert_eq!(
+            page.status, 200,
+            "GET / must render so the read-only proof is over a REAL render"
+        );
         // viewer drops here — the `openlore ui` process is killed, the lock released.
     }
 
@@ -267,7 +270,10 @@ fn the_landing_summary_is_a_fixed_set_of_reads_invariant_to_store_size() {
     // read returns the right total invariant to store size (a per-row loop would
     // miscount / be observably slow; the strict 1-query bound per count is a DELIVER
     // adapter-duckdb unit/property test). The active-peer count is 2.
-    assert_eq!(page.status, 200, "the large store must render in one request");
+    assert_eq!(
+        page.status, 200,
+        "the large store must render in one request"
+    );
     assert_landing_shows_count(&page.body, "own claims", LARGE_OWN_CLAIMS);
     assert_landing_shows_count(&page.body, "active peers", 2);
 }
@@ -304,7 +310,10 @@ fn missing_is_distinct_from_zero_on_the_front_door() {
         seed_empty_store_for_landing(&env);
         let viewer = ViewerServer::start(&env);
         let page = viewer.get(LANDING_PATH);
-        assert_eq!(page.status, 200, "the empty store must render a 200 front door");
+        assert_eq!(
+            page.status, 200,
+            "the empty store must render a 200 front door"
+        );
         assert_landing_shows_count(&page.body, "peer claims", 0);
         // Scan each COUNT position (`"— <label>"`), NOT the bare marker: the page chrome
         // title ("OpenLore — Viewer") legitimately carries the em-dash, so a bare-marker

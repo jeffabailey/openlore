@@ -1327,8 +1327,13 @@ mod tests {
             ),
         ] {
             let peer_claim = signed_claim(peer_did, subject, object, cid);
-            peer.write_peer_claim(&Did(peer_did.to_string()), &peer_claim, &endpoint, Utc::now())
-                .expect("write cached peer claim");
+            peer.write_peer_claim(
+                &Did(peer_did.to_string()),
+                &peer_claim,
+                &endpoint,
+                Utc::now(),
+            )
+            .expect("write cached peer claim");
         }
 
         let read = storage.read_adapter();
@@ -1339,7 +1344,9 @@ mod tests {
             .distinct_own_author_dids()
             .expect("distinct_own_author_dids read succeeds");
         let expected_own: std::collections::HashSet<String> =
-            [format!("{local_did}#org.openlore.application")].into_iter().collect();
+            [format!("{local_did}#org.openlore.application")]
+                .into_iter()
+                .collect();
         assert_eq!(
             own_authors, expected_own,
             "distinct_own_author_dids must return EXACTLY the own author DID from `claims` \

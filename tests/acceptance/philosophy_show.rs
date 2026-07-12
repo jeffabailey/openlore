@@ -77,7 +77,12 @@ const DESC_FRAGMENTS: &[&str] = &["use-after-free", "buffer overruns"];
 
 /// Panic / stack-trace markers that MUST NOT leak on the unknown-name sad path
 /// (AC-002.2 "never a stack trace"). A plain, actionable message only.
-const PANIC_MARKERS: &[&str] = &["panicked", "RUST_BACKTRACE", "stack backtrace", "note: run with"];
+const PANIC_MARKERS: &[&str] = &[
+    "panicked",
+    "RUST_BACKTRACE",
+    "stack backtrace",
+    "note: run with",
+];
 
 /// Assert the combined `show memory-safety` output renders the FULL record:
 /// name + verbatim description fragments + both aliases + the seeAlso link.

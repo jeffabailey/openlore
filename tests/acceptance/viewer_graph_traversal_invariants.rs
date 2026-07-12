@@ -125,11 +125,9 @@ fn every_traversal_route_leaves_the_store_read_only() {
     // grouping — none may persist any survey/group/edge (I-GT-8 — zero new persisted
     // types).
     let project_path = format!("/project?subject={TRAVERSAL_PROJECT_CARGO}");
-    let philosophy_path =
-        format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
+    let philosophy_path = format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
     let empty_project_path = format!("/project?subject={TRAVERSAL_PROJECT_UNKNOWN}");
-    let empty_philosophy_path =
-        format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}");
+    let empty_philosophy_path = format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}");
 
     // Exercise EVERY traversal route inside a scope so the viewer's exclusive DuckDB
     // lock is RELEASED (on drop) BEFORE the `after` snapshot re-opens the store.
@@ -210,8 +208,7 @@ fn no_traversal_response_adds_a_write_or_sign_control() {
     );
 
     let project_path = format!("/project?subject={TRAVERSAL_PROJECT_CARGO}");
-    let philosophy_path =
-        format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
+    let philosophy_path = format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
 
     // Collect EVERY traversal response shape — each route in BOTH shapes — inside a
     // scope so the viewer's exclusive DuckDB lock is released on drop (mirrors the
@@ -247,7 +244,11 @@ fn no_traversal_response_adds_a_write_or_sign_control() {
         // link; I-GT-1 / WD-GT-3). Vacuously true when this shape renders no
         // cross-link; load-bearing when one IS present.
         let lower = r.body.to_lowercase();
-        for crosslink in ["/score?contributor=", "/project?subject=", "/philosophy?object="] {
+        for crosslink in [
+            "/score?contributor=",
+            "/project?subject=",
+            "/philosophy?object=",
+        ] {
             if lower.contains(crosslink) {
                 assert!(
                     lower.contains("<a href"),
@@ -298,8 +299,7 @@ fn the_traversal_page_chrome_stays_offline_no_cdn() {
     let viewer = ViewerServer::start(&env);
 
     let project_path = format!("/project?subject={TRAVERSAL_PROJECT_CARGO}");
-    let philosophy_path =
-        format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
+    let philosophy_path = format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
 
     for path in [project_path.as_str(), philosophy_path.as_str()] {
         // The no-header full page carries the chrome (the htmx `<script src>`). The
@@ -404,8 +404,7 @@ fn the_traversal_surface_works_fully_offline() {
     let viewer = ViewerServer::start(&env);
 
     let project_path = format!("/project?subject={TRAVERSAL_PROJECT_CARGO}");
-    let philosophy_path =
-        format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
+    let philosophy_path = format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}");
 
     for (route_label, path) in [("project", &project_path), ("philosophy", &philosophy_path)] {
         // Both shapes — the no-header full page (`get`) AND the htmx fragment
@@ -439,7 +438,12 @@ fn the_traversal_surface_works_fully_offline() {
             // NO Unavailable / degraded notice — traversal has no outbound edge to
             // fail, so it NEVER renders the slice-08 `/search` Unavailable arm.
             let lowered = body.to_ascii_lowercase();
-            for banned in ["unavailable", "network error", "could not reach", "try again"] {
+            for banned in [
+                "unavailable",
+                "network error",
+                "could not reach",
+                "try again",
+            ] {
                 assert!(
                     !lowered.contains(banned),
                     "GT-INV-Offline ({route_label} / {shape}): the offline traversal \

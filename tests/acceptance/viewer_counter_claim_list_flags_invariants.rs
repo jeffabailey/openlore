@@ -177,7 +177,10 @@ fn no_claims_list_render_with_flags_adds_a_write_or_sign_control() {
             ("countered full page", countered_server.get("/claims")),
             ("countered fragment", countered_server.get_htmx("/claims")),
             ("un-countered full page", uncountered_server.get("/claims")),
-            ("un-countered fragment", uncountered_server.get_htmx("/claims")),
+            (
+                "un-countered fragment",
+                uncountered_server.get_htmx("/claims"),
+            ),
         ];
 
         shapes
@@ -355,7 +358,12 @@ fn the_flagged_claims_list_renders_fully_offline() {
     for (label, body) in [("full page", &full_body), ("fragment", &fragment_body)] {
         assert_list_row_flagged_countered(body, &countered_cid);
         let lower = body.to_lowercase();
-        for notice in ["unavailable", "network error", "could not reach", "try again"] {
+        for notice in [
+            "unavailable",
+            "network error",
+            "could not reach",
+            "try again",
+        ] {
             assert!(
                 !lower.contains(notice),
                 "LF-INV-Offline: the offline-rendered /claims list ({label}) must show NO \

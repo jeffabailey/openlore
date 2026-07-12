@@ -754,7 +754,11 @@ fn absent_contributor_renders_a_named_no_suggestion_empty_state() {
          action=\"/search\">`); body:\n{}",
         response.body
     );
-    for dimension_field in ["name=\"object\"", "name=\"contributor\"", "name=\"subject\""] {
+    for dimension_field in [
+        "name=\"object\"",
+        "name=\"contributor\"",
+        "name=\"subject\"",
+    ] {
         assert!(
             response.body.contains(dimension_field),
             "the dimension-selector form must offer the {dimension_field} input \
@@ -1176,12 +1180,7 @@ fn an_unfollowed_author_row_shows_cli_follow_guidance_text_only() {
     // input, no `Subscribe` affordance, no `>Follow<` button label, no `hx-post`
     // follow swap.
     let lowered = response.body.to_ascii_lowercase();
-    for banned in [
-        "name=\"follow\"",
-        "subscribe",
-        ">follow<",
-        "hx-post",
-    ] {
+    for banned in ["name=\"follow\"", "subscribe", ">follow<", "hx-post"] {
         assert!(
             !lowered.contains(&banned.to_ascii_lowercase()),
             "N-17 (I-NS-1): the follow guidance must be TEXT ONLY — NO executable \

@@ -210,7 +210,12 @@ fn run_dimension(
             display_value,
             empty_policy,
         )),
-        Ok(result) => Ok(render_network_result(wiring, dimension, result, hide_retracted)),
+        Ok(result) => Ok(render_network_result(
+            wiring,
+            dimension,
+            result,
+            hide_retracted,
+        )),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
         Err(IndexQueryError::Unreachable { .. }) => {
@@ -353,8 +358,7 @@ fn render_network_result(
     };
     let relationship_for =
         |author_did: &str| -> AuthorRelationship { resolve_relationship(wiring, author_did) };
-    let mut stdout =
-        render::render_network_search_result(dimension, &survivors, &relationship_for);
+    let mut stdout = render::render_network_search_result(dimension, &survivors, &relationship_for);
 
     // Honest disclosure (I-RF-3): only when the filter actually hid a retraction
     // EVENT. `hidden_count == 0` prints NO line (D-4 — no misleading "0 hidden").

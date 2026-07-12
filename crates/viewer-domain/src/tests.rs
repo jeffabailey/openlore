@@ -1,4 +1,3 @@
-
 //! In-crate unit + property tests for the PURE viewer core. Port-to-port at
 //! domain scope: the pure function signature IS the driving port
 //! (nw-tdd-methodology §Port-to-Port). The confidence-verbatim rendering is
@@ -2722,8 +2721,8 @@ fn search_filtered_results_discloses_the_hidden_event_count_and_untick_guidance(
 /// untick guidance — an explicit withdrawn state, NEVER a blank region.
 #[test]
 fn search_all_retracted_names_the_withdrawn_state_never_a_blank_region() {
-    let html =
-        render_search_results_fragment(&SearchState::AllRetracted { hidden_count: 2 }).into_string();
+    let html = render_search_results_fragment(&SearchState::AllRetracted { hidden_count: 2 })
+        .into_string();
 
     assert!(
         html.contains(SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT),

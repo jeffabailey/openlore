@@ -257,8 +257,14 @@ mod tests {
         let preview =
             render_compose_preview(&record, "did:plc:test-jeff", "2026-07-08T12:00:00+00:00");
 
-        assert!(preview.contains(&object_id(&record.name)), "must name the object id");
-        assert!(preview.contains("capability-security"), "must name the philosophy");
+        assert!(
+            preview.contains(&object_id(&record.name)),
+            "must name the object id"
+        );
+        assert!(
+            preview.contains("capability-security"),
+            "must name the philosophy"
+        );
         assert!(
             preview.contains(&record.description),
             "must show the full description verbatim"
@@ -266,7 +272,13 @@ mod tests {
         for alias in &record.aliases {
             assert!(preview.contains(alias.as_str()), "must show alias {alias}");
         }
-        assert!(preview.contains("did:plc:test-jeff"), "must name the author DID");
-        assert!(preview.contains("2026-07-08T12:00:00+00:00"), "must show composedAt");
+        assert!(
+            preview.contains("did:plc:test-jeff"),
+            "must name the author DID"
+        );
+        assert!(
+            preview.contains("2026-07-08T12:00:00+00:00"),
+            "must show composedAt"
+        );
     }
 }

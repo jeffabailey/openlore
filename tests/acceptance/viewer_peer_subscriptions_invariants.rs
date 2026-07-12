@@ -343,7 +343,12 @@ fn the_peers_surface_works_fully_offline() {
         // NO Unavailable / degraded notice — /peers has no outbound edge to fail, so it
         // NEVER renders the slice-08 `/search` Unavailable arm.
         let lowered = body.to_ascii_lowercase();
-        for banned in ["unavailable", "network error", "could not reach", "try again"] {
+        for banned in [
+            "unavailable",
+            "network error",
+            "could not reach",
+            "try again",
+        ] {
             assert!(
                 !lowered.contains(banned),
                 "PS-INV-Offline ({shape}): the offline /peers render must NOT show a \

@@ -100,7 +100,12 @@ const SEED_COLLISION_NAME: &str = "memory-safety";
 
 /// Panic / stack-trace markers that MUST NOT leak on the sad paths (AC-003.4
 /// "no panic — completes the RED scaffold"). A plain, actionable message only.
-const PANIC_MARKERS: &[&str] = &["panicked", "RUST_BACKTRACE", "stack backtrace", "note: run with"];
+const PANIC_MARKERS: &[&str] = &[
+    "panicked",
+    "RUST_BACKTRACE",
+    "stack backtrace",
+    "note: run with",
+];
 
 /// The full flag set for minting the novel philosophy (name + description +
 /// both aliases + seeAlso). Shared by the happy-path scenarios (PA-1, PA-2, PA-5)
@@ -453,8 +458,12 @@ fn philosophy_add_records_the_author_did_in_the_signed_artifact() {
         artifacts
     );
 
-    let json = std::fs::read_to_string(&artifacts[0])
-        .unwrap_or_else(|e| panic!("read signed philosophy artifact {}: {e}", artifacts[0].display()));
+    let json = std::fs::read_to_string(&artifacts[0]).unwrap_or_else(|e| {
+        panic!(
+            "read signed philosophy artifact {}: {e}",
+            artifacts[0].display()
+        )
+    });
 
     // The author DID this scenario signed as (`did:plc:test-jeff`), read from the
     // identity port rather than hard-coded — stays port-derived.

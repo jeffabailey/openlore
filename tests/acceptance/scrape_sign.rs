@@ -71,7 +71,9 @@ fn scrape_sign_one_candidate_signs_and_publishes_via_slice_01_pipeline() {
     // second — `detect_signals` emits memory-safety first, dependency-pinning
     // second, the arm order the pure derivation preserves).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she runs `--sign 2` and walks the slice-01 compose editor: accept
     // subject / predicate / object / evidence (four Enters), raise confidence
@@ -166,7 +168,9 @@ fn scrape_sign_accepting_all_defaults_signs_proposal_byte_for_byte_no_inflation(
     // values are deterministic — the SSOT mapping + the detectors fix them
     // exactly, so the test pins them as the byte-for-byte oracle below.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN he runs `--sign 5` and presses Enter through EVERY pre-filled
     // compose field WITHOUT editing any of them: accept subject / predicate /
@@ -267,7 +271,9 @@ fn scrape_sign_provenance_is_display_only_and_does_not_alter_signed_cid() {
     // memory-safety proposal (detect_signals emits memory-safety first); this
     // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she signs candidate 1 with fields F, raising confidence 0.25 -> 0.55
     // and accepting the rest, then signs (Enter) and publishes (Y). The
@@ -407,7 +413,9 @@ fn scrape_sign_out_of_range_index_is_rejected_before_compose() {
     // canonical cargo signals → a candidate list of exactly five entries
     // (valid selection range 1..5). Candidate 9 does not exist.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she runs `--sign 9` — an out-of-range index. No stdin is supplied:
     // the rejection must happen BEFORE any compose prompt, so the run never
@@ -476,7 +484,9 @@ fn scrape_sign_out_of_range_confidence_reprompts_without_writing() {
     // memory-safety proposal (detect_signals emits memory-safety first); this
     // scenario signs candidate 1 regardless of which philosophy it carries.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she runs `--sign 1` and walks the slice-01 compose editor: accept
     // subject / predicate / object / evidence (four Enters), then types an
@@ -562,7 +572,9 @@ fn scrape_sign_declining_publish_retains_local_claim_with_publish_hint() {
     // canonical cargo signals → five derived candidates. He selects candidate
     // 2 (a valid 1-based index within the 1..5 range).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN he runs `--sign 2` and walks the slice-01 compose editor accepting
     // every pre-filled field (four Enters: subject / predicate / object /
@@ -667,7 +679,9 @@ fn scrape_sign_batch_walks_each_candidate_through_individual_compose_and_sign() 
     // slice-01 compose-sign-publish gesture (US-SCR-005; the human-gate holds
     // PER candidate, batch is convenience never a bypass; WD-49 / J-004c).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she runs `--sign 1,3,4` and walks EACH of the three compose editors
     // in turn, accepting every pre-filled field unchanged (four field Enters +
@@ -788,7 +802,9 @@ fn scrape_sign_batch_skip_one_candidate_does_not_abort_the_rest() {
     // the batch: candidates 1 and 5 still get signed + published (US-SCR-005
     // Ex 2; batch fault isolation, WD-49 / J-004c).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN he runs `--sign 1,2,5`:
     //   - candidate 1: accept every field (four field Enters + the confidence
@@ -899,7 +915,9 @@ fn scrape_sign_batch_invalid_selection_list_is_rejected_before_compose() {
     // (valid selection range 1..5). The batch selection `1,1,9` is doubly
     // invalid: index 1 is DUPLICATED and index 9 is OUT OF RANGE.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN she runs `--sign 1,1,9` — an invalid batch selection list. No stdin
     // is supplied: the rejection must happen BEFORE any compose prompt, so the

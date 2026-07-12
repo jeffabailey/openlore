@@ -184,7 +184,10 @@ fn a_fresh_empty_store_shows_honest_zero_counts_and_the_full_hub() {
 
     // THEN the summary shows honest zeros (Some(0) → "0"), DISTINCT from the
     // missing-number marker, AND the full hub renders so the new operator can navigate.
-    assert_eq!(page.status, 200, "an empty store still renders a 200 landing page");
+    assert_eq!(
+        page.status, 200,
+        "an empty store still renders a 200 landing page"
+    );
     assert_landing_shows_count(&page.body, "own claims", 0);
     assert_landing_shows_count(&page.body, "peer claims", 0);
     assert_landing_shows_count(&page.body, "active peers", 0);

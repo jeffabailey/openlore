@@ -1451,7 +1451,10 @@ mod tests {
         // pure-core arm must still pass for `viewer-domain`. Mirrors the
         // `viewer-domain → appview-domain` pure→pure edge above.
         let w = ws(&[
-            ("viewer-domain", &["maud", "ports", "appview-domain", "scoring"]),
+            (
+                "viewer-domain",
+                &["maud", "ports", "appview-domain", "scoring"],
+            ),
             ("scoring", &["ports", "claim-domain", "serde", "chrono"]),
             ("appview-domain", &["claim-domain", "serde", "chrono"]),
             ("ports", &["async-trait", "claim-domain"]),

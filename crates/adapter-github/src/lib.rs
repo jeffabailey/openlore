@@ -303,7 +303,9 @@ impl GithubPort for GithubAdapter {
         // `TestRatioOrCiMatrix` arm iff EITHER CI workflows OR a tests/ dir is
         // present (design section 2/5). A rate-limit / auth failure on either probe
         // propagates via `?`, never silently read as "absent".
-        facts.ci_workflows_url = self.content_exists(owner, repo, ".github/workflows").await?;
+        facts.ci_workflows_url = self
+            .content_exists(owner, repo, ".github/workflows")
+            .await?;
         facts.tests_dir_url = self.content_exists(owner, repo, "tests").await?;
         Ok(scraper_domain::detect_signals(&facts))
     }

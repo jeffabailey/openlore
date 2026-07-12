@@ -88,7 +88,10 @@ fn operator_sees_their_signed_claims_in_the_browser_with_zero_sql() {
     // THEN the page renders (200) and shows the claim as a row — subject,
     // predicate, object, the stored confidence numeric VERBATIM (0.90, FR-VIEW-8),
     // and its CID. Observable rendered text only (the operator's browser view).
-    assert_eq!(page.status, 200, "GET /claims must render the My Claims page");
+    assert_eq!(
+        page.status, 200,
+        "GET /claims must render the My Claims page"
+    );
     for needle in [
         "rust-lang/rust",
         "is-maintained-by",
@@ -127,7 +130,10 @@ fn empty_store_guides_a_first_run_operator() {
 
     // THEN he sees guided empty-state text pointing to the CLI — never a blank
     // page. Assert on the OBSERVABLE guidance, framed in domain language.
-    assert_eq!(page.status, 200, "an empty store still renders a guided page");
+    assert_eq!(
+        page.status, 200,
+        "an empty store still renders a guided page"
+    );
     assert!(
         page.body_contains("not signed any claims yet")
             || page.body_contains("claims you sign with the CLI will appear here"),
@@ -260,7 +266,10 @@ fn operator_views_the_full_evidence_behind_one_claim() {
     let page = viewer.get(&format!("/claims/{cid}"));
 
     // THEN she sees all claim fields AND both evidence URLs.
-    assert_eq!(page.status, 200, "the detail page must render for a known CID");
+    assert_eq!(
+        page.status, 200,
+        "the detail page must render for a known CID"
+    );
     for needle in [
         "tokio-rs/tokio",
         "has-license",
@@ -423,7 +432,10 @@ fn no_federated_claims_yet_is_guided() {
     let page = viewer.get("/peer-claims");
 
     // THEN she sees the guided no-peers message — never a blank page.
-    assert_eq!(page.status, 200, "an empty peer set still renders a guided page");
+    assert_eq!(
+        page.status, 200,
+        "an empty peer set still renders a guided page"
+    );
     assert!(
         page.body_contains("No federated claims yet"),
         "the empty Peer Claims view must show the guided no-peers message; \

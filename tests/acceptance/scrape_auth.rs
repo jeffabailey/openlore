@@ -51,8 +51,7 @@ fn scrape_auth_authenticated_harvest_reports_budget_and_never_leaks_token() {
     // GIVEN an authenticated GitHub posture for the `torvalds` USER target
     // that would exhaust the anonymous budget, carrying a 4982/5000 rate
     // budget; and a valid PAT in the child's `GITHUB_TOKEN`.
-    let github = FakeGithub::for_public_user("torvalds")
-        .authenticated(4982, 5000);
+    let github = FakeGithub::for_public_user("torvalds").authenticated(4982, 5000);
     let server = GithubServer::start(github);
 
     // WHEN Maria runs `scrape github torvalds` with the PAT set.
@@ -304,8 +303,7 @@ fn scrape_auth_token_never_reaches_signed_claim_or_output_on_authenticated_sign(
     // `authenticated(..)` preserves the resolution + signals, so candidate 1
     // is the same dependency-pinning proposal the SS-* sign scenarios use.
     let github = GithubServer::start(
-        FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo")
-            .authenticated(4982, 5000),
+        FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo").authenticated(4982, 5000),
     );
 
     // WHEN Maria runs `scrape github rust-lang/cargo --sign 1` with the PAT set

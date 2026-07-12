@@ -65,7 +65,9 @@ use support::*;
 fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing() {
     // GIVEN an initialized env + a public repo serving 5 public signals.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo (no --sign).
     let outcome = run_openlore_scrape(
@@ -158,7 +160,9 @@ fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing()
 fn scrape_github_prints_public_data_banner_before_any_harvest() {
     // GIVEN an initialized env + a public repo serving public signals.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo (no --sign).
     let outcome = run_openlore_scrape(
@@ -621,7 +625,9 @@ fn scrape_github_without_sign_makes_zero_pds_writes() {
     // candidates ARE derived — the gate must hold regardless of how many
     // candidates are proposed, not only on the empty path).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo WITHOUT --sign.
     let outcome = run_openlore_scrape(
@@ -683,7 +689,9 @@ fn scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs() {
     // SAME server (idempotent target) backs every invocation — a pure read of
     // an unchanged target must yield an unchanged candidate list.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // count_candidates :: the rendered candidate count is the observable
     // proxy for "the same candidate list" — every `[n]` line is one candidate.

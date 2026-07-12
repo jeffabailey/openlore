@@ -416,8 +416,14 @@ fn a_contributor_with_no_countered_contributions_renders_score_with_no_markers()
     assert!(
         !response.body.contains(&format!(
             "<a href=\"/claims/{}\">{LIST_COUNTERED_FLAG_TEXT}</a>",
-            seeded.uncountered_cids.first().map(String::as_str).unwrap_or("")
-        )) && !response.body.contains(&format!(">{LIST_COUNTERED_FLAG_TEXT}</a>")),
+            seeded
+                .uncountered_cids
+                .first()
+                .map(String::as_str)
+                .unwrap_or("")
+        )) && !response
+            .body
+            .contains(&format!(">{LIST_COUNTERED_FLAG_TEXT}</a>")),
         "SF-6: a contributor with NO countered contributions must carry NO \
          {LIST_COUNTERED_FLAG_TEXT:?} flag anchor anywhere on /score (empty presence set -> \
          nothing rendered; AC-002-NO-NOISE); body was:\n{}",

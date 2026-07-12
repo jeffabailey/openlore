@@ -685,9 +685,11 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
 
         let param = format!("{}%", bare_did(&contributor.0));
 
-        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare query_contributor_scoring_feed: {err}"),
-        })?;
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare query_contributor_scoring_feed: {err}"),
+            })?;
         let row_iter = stmt
             .query_map(duckdb::params![param, param], |row| {
                 Ok((
@@ -707,10 +709,18 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
 
         let mut feed = Vec::new();
         for row in row_iter {
-            let (author_did, cid, subject, predicate, object, confidence, composed_at, source_table) =
-                row.map_err(|err| StoreReadError::QueryFailed {
-                    detail: format!("row decode query_contributor_scoring_feed: {err}"),
-                })?;
+            let (
+                author_did,
+                cid,
+                subject,
+                predicate,
+                object,
+                confidence,
+                composed_at,
+                source_table,
+            ) = row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode query_contributor_scoring_feed: {err}"),
+            })?;
             let bare_author = bare_did(&author_did);
             let relationship = match source_table.as_str() {
                 "Own" => AuthorRelationship::You,
@@ -786,9 +796,11 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                      WHERE pcr.referenced_cid = ? AND pcr.ref_type = 'counters' \
                    ) ORDER BY composed_at, source_table, cid";
 
-        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare query_counter_claims: {err}"),
-        })?;
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare query_counter_claims: {err}"),
+            })?;
         let row_iter = stmt
             .query_map(duckdb::params![target_cid, target_cid], |row| {
                 Ok((
@@ -810,10 +822,17 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         // statement open across the filesystem reads.
         let mut staged: Vec<(String, String, f64, DateTime<Utc>, String, String)> = Vec::new();
         for row in row_iter {
-            let (author_did, cid, confidence, composed_at, fetched_from_pds, artifact_path, source_table) =
-                row.map_err(|err| StoreReadError::QueryFailed {
-                    detail: format!("row decode query_counter_claims: {err}"),
-                })?;
+            let (
+                author_did,
+                cid,
+                confidence,
+                composed_at,
+                fetched_from_pds,
+                artifact_path,
+                source_table,
+            ) = row.map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("row decode query_counter_claims: {err}"),
+            })?;
             let _ = source_table;
             staged.push((
                 author_did,
@@ -884,9 +903,11 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
              )"
         );
 
-        let mut stmt = conn.prepare(&sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare counter_presence_for: {err}"),
-        })?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare counter_presence_for: {err}"),
+            })?;
 
         // Bind the CID list TWICE (the own arm's IN then the peer arm's IN). The two
         // `IN` lists share the SAME placeholder positions in order, so chaining the
@@ -935,9 +956,11 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                    GROUP BY ps.peer_did, ps.peer_handle, ps.subscribed_at \
                    ORDER BY ps.subscribed_at, ps.peer_did";
 
-        let mut stmt = conn.prepare(sql).map_err(|err| StoreReadError::QueryFailed {
-            detail: format!("prepare list_active_peer_subscriptions: {err}"),
-        })?;
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|err| StoreReadError::QueryFailed {
+                detail: format!("prepare list_active_peer_subscriptions: {err}"),
+            })?;
         let row_iter = stmt
             .query_map([], |row| {
                 Ok(PeerSubscriptionSummary {
@@ -1222,9 +1245,9 @@ mod counter_presence_tests {
         let n = countered.len(); // 5
         for size in [1usize, n, 5 * n] {
             let page = page_of(size);
-            let presence = read
-                .counter_presence_for(&page)
-                .unwrap_or_else(|err| panic!("presence read for page size {size} must succeed: {err:?}"));
+            let presence = read.counter_presence_for(&page).unwrap_or_else(|err| {
+                panic!("presence read for page size {size} must succeed: {err:?}")
+            });
             assert_eq!(
                 presence,
                 expected_for(size),

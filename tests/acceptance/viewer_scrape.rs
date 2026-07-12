@@ -65,7 +65,9 @@ fn operator_browses_live_proposals_without_signing_anything() {
     // repo with harvestable signals (the ONLY mocked boundary). The viewer reaches
     // it through OPENLORE_GITHUB_API_BASE, exactly as `scrape github` does.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN Maria submits the target on the Live Scrape view (POST /scrape).
@@ -102,7 +104,11 @@ fn operator_browses_live_proposals_without_signing_anything() {
     // The HARD human-gate guardrail: NO sign control on the surface (BR-VIEW-1).
     // A form/button that would submit a signing action is forbidden — the live
     // view can describe signing-via-CLI but never offer a sign affordance.
-    for sign_control_marker in ["name=\"sign\"", "Sign claim", "type=\"submit\" value=\"sign"] {
+    for sign_control_marker in [
+        "name=\"sign\"",
+        "Sign claim",
+        "type=\"submit\" value=\"sign",
+    ] {
         assert!(
             !page.body_contains(sign_control_marker),
             "the Live Scrape view must render NO sign control ({sign_control_marker:?}) \
@@ -136,7 +142,10 @@ fn target_yielding_no_candidates_guides_the_operator() {
 
     // THEN she sees the guided zero-candidates message with a suggested
     // alternative — never a blank result.
-    assert_eq!(page.status, 200, "a zero-candidate scrape still renders a guided page");
+    assert_eq!(
+        page.status, 200,
+        "a zero-candidate scrape still renders a guided page"
+    );
     assert!(
         page.body_contains("No candidate claims could be derived"),
         "a target yielding no candidates must show the guided message; \
@@ -175,7 +184,10 @@ fn network_failure_clarifies_the_store_view_still_works_offline() {
 
     // THEN the page reports, in plain language, that GitHub could not be reached
     // AND that her store view still works offline.
-    assert_eq!(page.status, 200, "a network-down scrape still renders a guided page");
+    assert_eq!(
+        page.status, 200,
+        "a network-down scrape still renders a guided page"
+    );
     assert!(
         page.body_contains("GitHub could not be reached"),
         "the network-down render must name the cause in domain language; \
@@ -206,7 +218,10 @@ fn network_failure_clarifies_the_store_view_still_works_offline() {
         "panicked at",
     ] {
         assert!(
-            !page.body.to_lowercase().contains(&leaked_internal.to_lowercase()),
+            !page
+                .body
+                .to_lowercase()
+                .contains(&leaked_internal.to_lowercase()),
             "the network-down render must leak NO transport internals \
              ({leaked_internal:?}) — plain-language cause + offline-store note only \
              (DISTILL resolution of the DESIGN /scrape NetworkDown nit); \

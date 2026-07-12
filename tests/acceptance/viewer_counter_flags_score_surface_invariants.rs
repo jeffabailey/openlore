@@ -324,7 +324,12 @@ fn the_flagged_score_surface_renders_fully_offline() {
     // network call, and never degrades (I-CF-5 / KPI-5 / AC-SCORE-LOCAL).
     assert_score_row_flagged_countered(&body, &countered);
     let lower = body.to_lowercase();
-    for notice in ["unavailable", "network error", "could not reach", "try again"] {
+    for notice in [
+        "unavailable",
+        "network error",
+        "could not reach",
+        "try again",
+    ] {
         assert!(
             !lower.contains(notice),
             "SF-INV-Offline: the offline-rendered /score ({notice:?}) must show NO degraded \

@@ -97,10 +97,11 @@ pub fn run_migration(conn: &mut Connection) -> Result<(), StorageError> {
             message: format!("begin v4 migration tx: {err}"),
         })?;
 
-    tx.execute_batch(PHILOSOPHY_STORAGE_SQL)
-        .map_err(|err| StorageError::SchemaMigrationFailed {
+    tx.execute_batch(PHILOSOPHY_STORAGE_SQL).map_err(|err| {
+        StorageError::SchemaMigrationFailed {
             message: format!("apply migration v4: {err}"),
-        })?;
+        }
+    })?;
 
     tx.execute(
         "INSERT INTO schema_version (version, applied_at, description) \

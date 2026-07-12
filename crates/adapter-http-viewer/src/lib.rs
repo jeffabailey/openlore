@@ -33,27 +33,23 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim,
-    NetworkResultRowRaw, PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
+    GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim, NetworkResultRowRaw,
+    PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
 };
 use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
-    group_philosophy, group_project, render_claim_detail, render_claim_detail_fragment,
+    group_philosophy, group_project, peers_view, render_claim_detail, render_claim_detail_fragment,
     render_claim_not_found_fragment, render_claims_page, render_claims_view_panel_fragment,
     render_error, render_landing, render_peer_claims_page, render_peer_claims_view_panel_fragment,
-    LandingSummary,
-    peers_view, render_peers_fragment, render_peers_page, render_philosophies_page,
-    render_philosophy_fragment,
-    render_philosophy_page, render_project_fragment, render_project_page,
-    render_score_page, render_score_results_fragment, render_scrape_page, render_viewer_nav_oob,
-    render_scrape_results_fragment, render_search_page, render_search_results_fragment,
-    resolve_author_relationship,
-    CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread, PageView, PeerClaimRowView,
-    PeersView, ScoreState,
-    ScrapeState, SearchState, TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL,
-    PHILOSOPHY_URL, PROJECT_URL,
-    SCRAPE_NO_CANDIDATES_NOTICE, SCORE_URL, SEARCH_URL,
+    render_peers_fragment, render_peers_page, render_philosophies_page, render_philosophy_fragment,
+    render_philosophy_page, render_project_fragment, render_project_page, render_score_page,
+    render_score_results_fragment, render_scrape_page, render_scrape_results_fragment,
+    render_search_page, render_search_results_fragment, render_viewer_nav_oob,
+    resolve_author_relationship, CandidateRowView, ClaimDetailView, ClaimRowView, CounterThread,
+    LandingSummary, PageView, PeerClaimRowView, PeersView, ScoreState, ScrapeState, SearchState,
+    TraversalView, HTMX_ASSET_URL, PEERS_URL, PHILOSOPHIES_URL, PHILOSOPHY_URL, PROJECT_URL,
+    SCORE_URL, SCRAPE_NO_CANDIDATES_NOTICE, SEARCH_URL,
 };
 
 /// Re-export the PURE read-only launch banner formatter so the `cli` composition
@@ -1395,7 +1391,11 @@ fn read_local_active_set(store: &dyn StoreReadPort) -> std::collections::HashSet
 /// (R-FS-6), so the set is collected VERBATIM (bared on both sides at membership time).
 fn read_local_own_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
     own_dids_read_with_fault_seam(store.distinct_own_author_dids())
-        .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
+        .map(|dids| {
+            dids.into_iter()
+                .map(|did| bare_did(&did).to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1412,7 +1412,11 @@ fn read_local_own_set(store: &dyn StoreReadPort) -> std::collections::HashSet<St
 /// set is bared here for symmetry with the own set.
 fn read_local_cached_set(store: &dyn StoreReadPort) -> std::collections::HashSet<String> {
     cached_peer_dids_read_with_fault_seam(store.distinct_cached_peer_author_dids())
-        .map(|dids| dids.into_iter().map(|did| bare_did(&did).to_string()).collect())
+        .map(|dids| {
+            dids.into_iter()
+                .map(|did| bare_did(&did).to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1474,9 +1478,7 @@ fn active_set_read_with_fault_seam<T>(
 /// In a release build (`debug_assertions` off) this is the identity function: the
 /// real read result flows through verbatim, with NO env-var read compiled in.
 #[cfg(debug_assertions)]
-fn own_dids_read_with_fault_seam<T>(
-    read: Result<T, StoreReadError>,
-) -> Result<T, StoreReadError> {
+fn own_dids_read_with_fault_seam<T>(read: Result<T, StoreReadError>) -> Result<T, StoreReadError> {
     if std::env::var_os("OPENLORE_VIEWER_FAIL_OWN_DIDS_READ").is_some() {
         return Err(StoreReadError::Unreadable {
             detail: "own-DIDs read fault injected (test-only seam)".to_string(),
@@ -1488,9 +1490,7 @@ fn own_dids_read_with_fault_seam<T>(
 /// Release identity: NO seam, NO env-var read compiled into the binary.
 #[cfg(not(debug_assertions))]
 #[inline]
-fn own_dids_read_with_fault_seam<T>(
-    read: Result<T, StoreReadError>,
-) -> Result<T, StoreReadError> {
+fn own_dids_read_with_fault_seam<T>(read: Result<T, StoreReadError>) -> Result<T, StoreReadError> {
     read
 }
 
@@ -1841,14 +1841,14 @@ mod tests {
         peer_claims_page, to_indexed_claim, Shape, SharedStore, ViewerServer, HTMX_ASSET,
         HTMX_ASSET_SHA256,
     };
-    use http_body_util::BodyExt;
-    use hyper::StatusCode;
     use chrono::Utc;
     use claim_domain::{Cid, Did, KeyId};
+    use http_body_util::BodyExt;
+    use hyper::StatusCode;
     use ports::{
         AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow,
-        NetworkResultRowRaw, Page, PageRequest, PeerClaimRow, PeerSubscriptionSummary, StoreReadError,
-        StoreReadPort, SurveyRow,
+        NetworkResultRowRaw, Page, PageRequest, PeerClaimRow, PeerSubscriptionSummary,
+        StoreReadError, StoreReadPort, SurveyRow,
     };
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
@@ -1936,7 +1936,10 @@ mod tests {
         );
         // …and the fragmented `author_did` is carried through UNCHANGED (the render
         // still shows the app-identity shape; only the relationship is enriched).
-        assert_eq!(claim.author_did.0, "did:plc:rachel-test#org.openlore.application");
+        assert_eq!(
+            claim.author_did.0,
+            "did:plc:rachel-test#org.openlore.application"
+        );
     }
 
     /// SF-5 (C-3 / NFR-SF-4): the relationship is resolved against the LOCAL active
@@ -2072,10 +2075,7 @@ mod tests {
         }
         // slice-18: the empty-page counter-presence lookup — no CIDs in, the empty
         // set out. Inert for the slice-17 landing tests (they never list claims).
-        fn counter_presence_for(
-            &self,
-            _c: &[String],
-        ) -> Result<HashSet<String>, StoreReadError> {
+        fn counter_presence_for(&self, _c: &[String]) -> Result<HashSet<String>, StoreReadError> {
             Ok(HashSet::new())
         }
 
@@ -2108,10 +2108,7 @@ mod tests {
         fn query_philosophy_survey(&self, _o: &str) -> Result<Vec<SurveyRow>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
-        fn query_counter_claims(
-            &self,
-            _t: &str,
-        ) -> Result<Vec<CounterClaimRow>, StoreReadError> {
+        fn query_counter_claims(&self, _t: &str) -> Result<Vec<CounterClaimRow>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
         fn list_active_peer_subscriptions(
@@ -2123,14 +2120,10 @@ mod tests {
         // are NOT on the `GET /` landing path — unreachable for these tests. The
         // `/search` follow-state resolution is exercised end-to-end by the FF-* ATs
         // over the REAL DuckDB adapter (Pillar 3), not this fake.
-        fn distinct_own_author_dids(
-            &self,
-        ) -> Result<HashSet<String>, StoreReadError> {
+        fn distinct_own_author_dids(&self) -> Result<HashSet<String>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
-        fn distinct_cached_peer_author_dids(
-            &self,
-        ) -> Result<HashSet<String>, StoreReadError> {
+        fn distinct_cached_peer_author_dids(&self) -> Result<HashSet<String>, StoreReadError> {
             unimplemented!("not read by the landing dashboard")
         }
     }
@@ -2391,7 +2384,12 @@ mod tests {
     /// Build a fake landing store whose four counts all succeed, with an EXPLICIT
     /// countered count (the slice-17 [`FakeLandingStore::with_counts`] defaults it to
     /// `Ok(0)`; the `/claims` header test needs a distinctive non-zero value).
-    fn fake_store_with_countered(own: usize, peer: usize, active: usize, countered: usize) -> FakeLandingStore {
+    fn fake_store_with_countered(
+        own: usize,
+        peer: usize,
+        active: usize,
+        countered: usize,
+    ) -> FakeLandingStore {
         FakeLandingStore {
             own_claims: Ok(own),
             peer_claims: Ok(peer),

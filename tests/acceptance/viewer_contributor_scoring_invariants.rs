@@ -138,7 +138,11 @@ fn every_score_route_leaves_the_store_read_only() {
         // Every posture (rich / sparse / empty) in BOTH shapes — the no-header full
         // page (`get`) AND the htmx fragment (`get_htmx`). Each is a LOCAL read +
         // pure compute that must persist NOTHING.
-        for path in [rich_path.as_str(), sparse_path.as_str(), empty_path.as_str()] {
+        for path in [
+            rich_path.as_str(),
+            sparse_path.as_str(),
+            empty_path.as_str(),
+        ] {
             let full_page = viewer.get(path);
             assert_eq!(
                 full_page.status, 200,
@@ -221,7 +225,11 @@ fn no_score_response_adds_a_write_or_sign_control() {
     let mut responses = Vec::new();
     {
         let viewer = ViewerServer::start(&env);
-        for path in [rich_path.as_str(), sparse_path.as_str(), empty_path.as_str()] {
+        for path in [
+            rich_path.as_str(),
+            sparse_path.as_str(),
+            empty_path.as_str(),
+        ] {
             responses.push((format!("GET {path} (full page)"), viewer.get(path)));
             responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(path)));
         }
@@ -439,7 +447,12 @@ fn the_score_surface_works_fully_offline() {
         // sparse "treat as a lead" line is a DISTINCT, legitimate render and is NOT
         // banned here (the rich trail is non-sparse, so it does not appear anyway).
         let lowered = body.to_ascii_lowercase();
-        for banned in ["unavailable", "network error", "could not reach", "try again"] {
+        for banned in [
+            "unavailable",
+            "network error",
+            "could not reach",
+            "try again",
+        ] {
             assert!(
                 !lowered.contains(banned),
                 "C-INV-Offline ({shape}): the offline `/score` render must NOT show a \
@@ -514,8 +527,11 @@ fn a_rendered_score_is_never_shown_without_its_breakdown_summing_to_the_weight()
     // network seam wired (plain `ViewerServer::start`): /score is a LOCAL read
     // (I-CS-5). The conflicting contributor is the LOCAL user (`You` + the
     // collaborator both fall under the local user's contributor scope).
-    let conflict_did =
-        seed_contributor_rich_sparse_and_conflicting(&env, CONTRIBUTOR_RICH_DID, CONTRIBUTOR_SPARSE_DID);
+    let conflict_did = seed_contributor_rich_sparse_and_conflicting(
+        &env,
+        CONTRIBUTOR_RICH_DID,
+        CONTRIBUTOR_SPARSE_DID,
+    );
 
     let rich_path = format!("/score?contributor={CONTRIBUTOR_RICH_DID}");
     let sparse_path = format!("/score?contributor={CONTRIBUTOR_SPARSE_DID}");
@@ -556,8 +572,16 @@ fn a_rendered_score_is_never_shown_without_its_breakdown_summing_to_the_weight()
                  render a calm 200; body:\n{}",
                 fragment.body
             );
-            rendered.push((format!("GET {path} (full page)"), is_multi_row, full_page.body));
-            rendered.push((format!("GET {path} (htmx fragment)"), is_multi_row, fragment.body));
+            rendered.push((
+                format!("GET {path} (full page)"),
+                is_multi_row,
+                full_page.body,
+            ));
+            rendered.push((
+                format!("GET {path} (htmx fragment)"),
+                is_multi_row,
+                fragment.body,
+            ));
         }
         // `viewer` drops here — the `openlore ui` process is killed and its exclusive
         // DuckDB lock released.
@@ -611,6 +635,10 @@ fn a_rendered_score_is_never_shown_without_its_breakdown_summing_to_the_weight()
     let conflict_full_page = &rendered[4].2;
     let conflict_fragment = &rendered[5].2;
     for body in [conflict_full_page, conflict_fragment] {
-        assert_score_html_breakdown_attributed_and_verbatim(body, &[&conflict_did], &["0.40", "0.55"]);
+        assert_score_html_breakdown_attributed_and_verbatim(
+            body,
+            &[&conflict_did],
+            &["0.40", "0.55"],
+        );
     }
 }

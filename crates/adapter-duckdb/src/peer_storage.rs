@@ -1092,7 +1092,12 @@ mod tests {
         let peer_counter_cid = "bafypeercounter000000000000000000000000000";
         let peer_counter = signed_counter_authored_by(peer_did, peer_counter_cid, target_cid);
         let written = peer
-            .write_peer_claim(&Did(peer_did.to_string()), &peer_counter, &endpoint, Utc::now())
+            .write_peer_claim(
+                &Did(peer_did.to_string()),
+                &peer_counter,
+                &endpoint,
+                Utc::now(),
+            )
             .expect("write peer counter via PeerStoragePort");
         assert!(written.written, "the peer counter must be newly written");
 
@@ -1212,7 +1217,9 @@ mod tests {
             .collect();
         assert_eq!(
             active,
-            [active_peer.to_string()].into_iter().collect::<HashSet<_>>(),
+            [active_peer.to_string()]
+                .into_iter()
+                .collect::<HashSet<_>>(),
             "the soft-removed peer is EXCLUDED from active subscriptions (removed_at IS NULL, \
              ADR-052)"
         );

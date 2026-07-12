@@ -201,8 +201,7 @@ mod seeds_tests {
             .expect("seeds.json must be valid JSON");
         let records = value.as_array().expect("seeds.json must be a JSON array");
         for record in records {
-            validate_philosophy_json(record)
-                .expect("every embedded philosophy seed must validate");
+            validate_philosophy_json(record).expect("every embedded philosophy seed must validate");
         }
     }
 
@@ -305,11 +304,11 @@ mod seeds_tests {
         // pins the exact value mapping: whitespace and '_' collapse to a single
         // '-'; any other punctuation is dropped WITHOUT emitting a separator.
         let cases: &[(&str, &str)] = &[
-            ("Memory Safety", "memory-safety"),   // whitespace -> '-'
-            ("memory_safety", "memory-safety"),   // underscore -> '-'
+            ("Memory Safety", "memory-safety"),       // whitespace -> '-'
+            ("memory_safety", "memory-safety"),       // underscore -> '-'
             ("  Memory   Safety  ", "memory-safety"), // runs collapse + trim
-            ("test.driven", "testdriven"),        // punctuation dropped, no '-'
-            ("C++ style", "c-style"),             // '+' dropped, space -> '-'
+            ("test.driven", "testdriven"),            // punctuation dropped, no '-'
+            ("C++ style", "c-style"),                 // '+' dropped, space -> '-'
         ];
         for (input, expected) in cases {
             assert_eq!(

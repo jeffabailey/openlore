@@ -439,14 +439,16 @@ fn the_philosophies_surface_lists_the_complete_seed_vocabulary() {
         assert!(
             response.body.contains(&seed.name),
             "VP-4 (AC-006.1): the listing must render the {:?} philosophy by name; body:\n{}",
-            seed.name, response.body
+            seed.name,
+            response.body
         );
         let href = traversal_href_for(&seed.name);
         assert!(
             response.body.contains(&href),
             "VP-4 (AC-006.1): the {:?} entry must link its traversal surface ({href}); \
              body:\n{}",
-            seed.name, response.body
+            seed.name,
+            response.body
         );
     }
     // …and the surface lists EXACTLY the vocabulary — the count of per-entry traversal

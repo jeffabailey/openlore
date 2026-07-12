@@ -176,8 +176,14 @@ fn no_flagged_graph_surface_render_adds_a_write_or_sign_control() {
         let server = ViewerServer::start(&env);
         let project = format!("/project?subject={}", edges.entity);
         let shapes = [
-            ("/peer-claims full page".to_string(), server.get("/peer-claims")),
-            ("/peer-claims fragment".to_string(), server.get_htmx("/peer-claims")),
+            (
+                "/peer-claims full page".to_string(),
+                server.get("/peer-claims"),
+            ),
+            (
+                "/peer-claims fragment".to_string(),
+                server.get_htmx("/peer-claims"),
+            ),
             ("/project full page".to_string(), server.get(&project)),
             ("/project fragment".to_string(), server.get_htmx(&project)),
         ];
@@ -329,7 +335,12 @@ fn the_flagged_graph_surfaces_render_fully_offline() {
     assert_edge_flagged_countered(&project_body, &edge_countered);
     for (label, body) in [("/peer-claims", &peer_body), ("/project", &project_body)] {
         let lower = body.to_lowercase();
-        for notice in ["unavailable", "network error", "could not reach", "try again"] {
+        for notice in [
+            "unavailable",
+            "network error",
+            "could not reach",
+            "try again",
+        ] {
             assert!(
                 !lower.contains(notice),
                 "CF-INV-Offline: the offline-rendered {label} ({notice:?}) must show NO \

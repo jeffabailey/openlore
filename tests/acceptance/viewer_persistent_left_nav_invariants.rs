@@ -171,7 +171,11 @@ fn the_persistent_nav_stays_offline_with_the_vendored_asset() {
 
     // The surface references NO external CDN host (offline-first; GREEN today).
     let surface = viewer.get("/claims");
-    assert_eq!(surface.status, 200, "NAV-INV-Offline: GET /claims must be 200; body:\n{}", surface.body);
+    assert_eq!(
+        surface.status, 200,
+        "NAV-INV-Offline: GET /claims must be 200; body:\n{}",
+        surface.body
+    );
     assert!(
         !surface.references_external_cdn(),
         "NAV-INV-Offline (I-HX-2): the surface must reference NO external CDN host (the \
@@ -309,7 +313,11 @@ fn the_landing_still_links_all_eight_surfaces() {
     let viewer = ViewerServer::start(&env);
 
     let response = viewer.get("/");
-    assert_eq!(response.status, 200, "NAV-INV-LandingNoRegression: GET / must be 200; body:\n{}", response.body);
+    assert_eq!(
+        response.status, 200,
+        "NAV-INV-LandingNoRegression: GET / must be 200; body:\n{}",
+        response.body
+    );
     // The landing STILL links all 8 surfaces (GREEN today — the slice-17 inline hub;
     // after DELIVER, the SAME 8 via the persistent nav). No link is lost.
     assert_landing_links_all_surfaces(&response.body);
@@ -335,7 +343,11 @@ fn the_landing_now_sources_its_surface_links_from_the_persistent_nav() {
     let viewer = ViewerServer::start(&env);
 
     let response = viewer.get("/");
-    assert_eq!(response.status, 200, "NAV-INV-LandingViaNav: GET / must be 200; body:\n{}", response.body);
+    assert_eq!(
+        response.status, 200,
+        "NAV-INV-LandingViaNav: GET / must be 200; body:\n{}",
+        response.body
+    );
     // The landing now carries the persistent nav container (RED today — the landing hub
     // is an inline `<a href>` list, NOT a `<nav id="viewer-nav">`). The migration to the
     // shared `page_shell` + `render_viewer_nav` path is what this gold pins.

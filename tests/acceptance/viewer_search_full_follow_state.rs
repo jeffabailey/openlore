@@ -165,7 +165,12 @@ fn all_four_follow_states_render_with_peer_add_only_on_the_genuinely_new_author(
     // enrichment; attribution + the verified marker are UNCHANGED — C-5).
     assert_search_html_every_row_verified_and_attributed(
         &response.body,
-        &[SF_OWN_BARE_DID, RACHEL_DID, TRAVERSAL_AUTHOR_TOBIAS, PRIYA_DID],
+        &[
+            SF_OWN_BARE_DID,
+            RACHEL_DID,
+            TRAVERSAL_AUTHOR_TOBIAS,
+            PRIYA_DID,
+        ],
     );
     // …the operator's OWN claim shows the neutral self indicator + NO add (RED today:
     // the `You` arm is empty + no own-DID read exists → renders `peer add`).
@@ -264,7 +269,10 @@ fn a_soft_removed_cached_peer_in_isolation_shows_the_residue_indicator_and_no_ad
          body:\n{}",
         response.body
     );
-    assert_search_html_every_row_verified_and_attributed(&response.body, &[TRAVERSAL_AUTHOR_TOBIAS]);
+    assert_search_html_every_row_verified_and_attributed(
+        &response.body,
+        &[TRAVERSAL_AUTHOR_TOBIAS],
+    );
     // …Tobias shows the neutral residue indicator + no add (RED today: he resolves
     // NetworkUnfollowed → `peer add`, since no cached-peer read exists yet).
     assert_search_row_shows_residue_indicator(&response.body, TRAVERSAL_AUTHOR_TOBIAS);
@@ -417,7 +425,10 @@ fn the_slice16_followed_and_unfollowed_states_are_byte_stable_with_no_new_indica
     // …and NEITHER new indicator appears anywhere — the two new arms add NOTHING
     // where they do not apply (no own claim, no soft-removed peer → no You, no
     // UnsubscribedCache). This is the additive / no-regression CARDINAL guarantee.
-    for unexpected in [SF_SELF_INDICATOR_DEFAULT, SF_REMOVED_CACHED_INDICATOR_DEFAULT] {
+    for unexpected in [
+        SF_SELF_INDICATOR_DEFAULT,
+        SF_REMOVED_CACHED_INDICATOR_DEFAULT,
+    ] {
         assert!(
             !response.body.contains(unexpected),
             "FF-6 (C-7, CARDINAL): a slice-16-shaped search (no own claim, no soft-removed \
@@ -728,7 +739,10 @@ fn the_four_follow_states_render_identically_under_htmx_and_no_js() {
     // (own) + the residue indicator (Tobias) appear in BOTH (RED today — parity by
     // construction once the two arms render). Rachel "Following" + Priya `peer add`
     // in both (byte-stable).
-    for (label, body) in [("htmx fragment", &fragment.body), ("full page", &full_page.body)] {
+    for (label, body) in [
+        ("htmx fragment", &fragment.body),
+        ("full page", &full_page.body),
+    ] {
         assert!(
             body.contains(SF_OWN_BARE_DID) && body.contains(TRAVERSAL_AUTHOR_TOBIAS),
             "FF-10: the {label} must attribute the own + cached author rows; body:\n{body}"

@@ -267,7 +267,11 @@ fn exactly_one_nav_item_is_marked_active_on_the_page_and_updates_on_a_boosted_sw
 
     // WHEN she is on `/claims` (full page).
     let full = viewer.get("/claims");
-    assert_eq!(full.status, 200, "NAV-3: GET /claims must be 200; body:\n{}", full.body);
+    assert_eq!(
+        full.status, 200,
+        "NAV-3: GET /claims must be 200; body:\n{}",
+        full.body
+    );
     // THEN exactly ONE `aria-current="page"` marker appears (RED today — none exist).
     let active_count = full.body.matches(ARIA_CURRENT).count();
     assert_eq!(
@@ -516,8 +520,16 @@ fn the_boosted_content_region_is_byte_identical_to_the_full_page_viewer_main() {
     let path = "/claims";
     let boosted = viewer.get_boosted(path);
     let full = viewer.get(path);
-    assert_eq!(boosted.status, 200, "NAV-8: boosted GET {path} must be 200; body:\n{}", boosted.body);
-    assert_eq!(full.status, 200, "NAV-8: full GET {path} must be 200; body:\n{}", full.body);
+    assert_eq!(
+        boosted.status, 200,
+        "NAV-8: boosted GET {path} must be 200; body:\n{}",
+        boosted.body
+    );
+    assert_eq!(
+        full.status, 200,
+        "NAV-8: full GET {path} must be 200; body:\n{}",
+        full.body
+    );
 
     // Both responses must carry the outer content region (RED today — no `#viewer-main`
     // exists, so the parity comparison never reaches a false pass).

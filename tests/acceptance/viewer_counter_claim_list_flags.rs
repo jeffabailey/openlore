@@ -548,7 +548,8 @@ fn a_mixed_page_flags_only_the_countered_rows_in_their_unchanged_positions() {
                  `composed_at DESC, cid` order {:?} verbatim — the additive 'Countered' flag \
                  must NOT move/reorder/group any row; {cid:?} rendered out of position (the \
                  flag is a per-row marker, never a sort key; I-LF-2 / I-LF-4); body was:\n{}",
-                seeded.ordered_cids, page.body
+                seeded.ordered_cids,
+                page.body
             );
         }
         prev_offset = Some(offset);

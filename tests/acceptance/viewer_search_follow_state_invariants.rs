@@ -119,7 +119,10 @@ fn no_search_follow_state_render_adds_an_executable_control() {
 
         let path = format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}");
         responses.push((format!("GET {path} (full page)"), viewer.get(&path)));
-        responses.push((format!("GET {path} (htmx fragment)"), viewer.get_htmx(&path)));
+        responses.push((
+            format!("GET {path} (htmx fragment)"),
+            viewer.get_htmx(&path),
+        ));
         // `viewer` (and `indexer`) drop here.
     }
 
@@ -230,12 +233,18 @@ fn every_search_follow_state_render_leaves_the_store_read_only() {
 fn the_relationship_resolution_adds_no_network_seam_index_stays_per_user_neutral() {
     // GIVEN — render-1: an operator who FOLLOWS Rachel, over the reachable index.
     let env_following = TestEnv::initialized();
-    let _rachel_sub = seed_active_subscription_for(&env_following, RACHEL_DID, RACHEL_ACTIVE_SUB_SEED);
+    let _rachel_sub =
+        seed_active_subscription_for(&env_following, RACHEL_DID, RACHEL_ACTIVE_SUB_SEED);
     let following_body = {
-        let indexer = seed_network_index_from_specs(&env_following, sf_corpus_one_followed_one_unfollowed());
+        let indexer =
+            seed_network_index_from_specs(&env_following, sf_corpus_one_followed_one_unfollowed());
         let viewer = ViewerServer::start_with_indexer(&env_following, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "SF-INV-PerUserNeutral: following-operator render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "SF-INV-PerUserNeutral: following-operator render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -243,10 +252,15 @@ fn the_relationship_resolution_adds_no_network_seam_index_stays_per_user_neutral
     // (a SEPARATE clean store — no `peer add`). The index corpus is byte-identical.
     let env_none = TestEnv::initialized();
     let none_body = {
-        let indexer = seed_network_index_from_specs(&env_none, sf_corpus_one_followed_one_unfollowed());
+        let indexer =
+            seed_network_index_from_specs(&env_none, sf_corpus_one_followed_one_unfollowed());
         let viewer = ViewerServer::start_with_indexer(&env_none, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "SF-INV-PerUserNeutral: none-following-operator render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "SF-INV-PerUserNeutral: none-following-operator render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
@@ -291,20 +305,30 @@ fn the_follow_state_resolution_does_not_merge_or_rerank() {
     let env_with = TestEnv::initialized();
     let _rachel_sub = seed_active_subscription_for(&env_with, RACHEL_DID, RACHEL_ACTIVE_SUB_SEED);
     let with_body = {
-        let indexer = seed_network_index_from_specs(&env_with, sf_corpus_one_followed_one_unfollowed());
+        let indexer =
+            seed_network_index_from_specs(&env_with, sf_corpus_one_followed_one_unfollowed());
         let viewer = ViewerServer::start_with_indexer(&env_with, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "SF-INV-AttributionUnchanged: with-subscription render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "SF-INV-AttributionUnchanged: with-subscription render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 
     // GIVEN render-WITHOUT: an operator who follows nobody, over the SAME corpus.
     let env_without = TestEnv::initialized();
     let without_body = {
-        let indexer = seed_network_index_from_specs(&env_without, sf_corpus_one_followed_one_unfollowed());
+        let indexer =
+            seed_network_index_from_specs(&env_without, sf_corpus_one_followed_one_unfollowed());
         let viewer = ViewerServer::start_with_indexer(&env_without, indexer);
         let r = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));
-        assert_eq!(r.status, 200, "SF-INV-AttributionUnchanged: without-subscription render must be 200; body:\n{}", r.body);
+        assert_eq!(
+            r.status, 200,
+            "SF-INV-AttributionUnchanged: without-subscription render must be 200; body:\n{}",
+            r.body
+        );
         r.body
     };
 

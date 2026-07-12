@@ -732,13 +732,15 @@ fn a_counter_with_a_missing_artifact_still_renders_degrading_only_its_reason() {
         response.body.contains(&counter.author_did),
         "D2: the counter's author DID {:?} must STILL render (it comes from the DB ref \
          lookup, not the deleted artifact);\n--- body ---\n{}",
-        counter.author_did, response.body
+        counter.author_did,
+        response.body
     );
     assert!(
         response.body.contains(&counter.cid),
         "D2: the counter's CID {:?} must STILL render (the drill-link target, from the DB \
          ref lookup);\n--- body ---\n{}",
-        counter.cid, response.body
+        counter.cid,
+        response.body
     );
 
     // THEN: only the best-effort `reason` degrades — the entry shows the explicit "no

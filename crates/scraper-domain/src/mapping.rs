@@ -154,7 +154,9 @@ fn parse_entry(entry: EntryDto) -> Result<MappingEntry, MappingError> {
     let signal_kind = signal_kind_for_description(&entry.signal)
         .ok_or_else(|| MappingError::MalformedEntry(entry.signal.clone()))?;
     if lexicon::philosophy::find(&entry.predicate).is_none() {
-        return Err(MappingError::UnknownPhilosophy { object: entry.predicate });
+        return Err(MappingError::UnknownPhilosophy {
+            object: entry.predicate,
+        });
     }
     Ok(MappingEntry {
         signal_kind,

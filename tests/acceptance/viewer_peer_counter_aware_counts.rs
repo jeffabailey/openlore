@@ -195,7 +195,10 @@ fn the_peer_claims_header_shows_the_same_countered_count_as_the_landing() {
     // THEN the `/peer-claims` header shows the SAME "(1 countered)" the landing shows, and
     // the two counts are EQUAL (single source — WD-PC-8).
     assert_eq!(landing.status, 200, "GET / must render (200)");
-    assert_eq!(peer_claims.status, 200, "GET /peer-claims must render (200)");
+    assert_eq!(
+        peer_claims.status, 200,
+        "GET /peer-claims must render (200)"
+    );
     assert_landing_peer_countered_count(&landing.body, COUNTERED_PEER_CLAIMS);
     assert_peer_claims_header_countered_count(&peer_claims.body, COUNTERED_PEER_CLAIMS);
     assert_landing_and_peer_claims_countered_consistent(&landing.body, &peer_claims.body);
@@ -540,7 +543,10 @@ fn the_countered_count_never_re_weights_the_peer_claims_count_and_own_line_untou
     assert_landing_peer_countered_count(&page.body, COUNTERED_PEER_CLAIMS);
     // The peer-claims count is NOT deducted by the countered count (never "total-1 peer claims").
     assert!(
-        !page.body_contains(&format!("{} peer claims", peer_total - COUNTERED_PEER_CLAIMS)),
+        !page.body_contains(&format!(
+            "{} peer claims",
+            peer_total - COUNTERED_PEER_CLAIMS
+        )),
         "the peer-claims count must NOT be re-weighted/deducted by the countered count — it \
          renders the genuine total beside the count, never total-minus-countered (C-4 \
          additive); body was:\n{}",
@@ -735,7 +741,10 @@ fn the_peer_claims_header_countered_count_renders_offline() {
 
     // THEN the header countered count renders fully offline, and the page references only
     // the vendored local htmx asset.
-    assert_eq!(page.status, 200, "GET /peer-claims must render fully offline (200)");
+    assert_eq!(
+        page.status, 200,
+        "GET /peer-claims must render fully offline (200)"
+    );
     assert_peer_claims_header_countered_count(&page.body, COUNTERED_PEER_CLAIMS);
     assert!(
         !page.references_external_cdn(),
@@ -794,7 +803,10 @@ fn the_countered_peer_count_is_a_fixed_aggregate_read_invariant_to_store_size() 
     // THEN the countered-peer count renders correctly (1) in ONE request — the aggregate
     // read returns the right total invariant to store size (a per-row loop would miscount /
     // be observably slow; the strict 1-query bound is a DELIVER adapter-duckdb unit test).
-    assert_eq!(page.status, 200, "the large store must render in one request");
+    assert_eq!(
+        page.status, 200,
+        "the large store must render in one request"
+    );
     assert_landing_peer_countered_count(&page.body, COUNTERED_PEER_CLAIMS);
 }
 

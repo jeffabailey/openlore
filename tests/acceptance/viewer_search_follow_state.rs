@@ -164,8 +164,10 @@ fn all_followed_results_show_following_everywhere_and_no_add_command_anywhere() 
     // GIVEN Maria follows BOTH Rachel and Tobias (two REAL `peer add`s), AND a
     // reachable index whose results are ONLY by those two.
     let env = TestEnv::initialized();
-    let _rachel_sub = seed_active_subscription_for(&env, TRAVERSAL_AUTHOR_RACHEL, RACHEL_ACTIVE_SUB_SEED);
-    let _tobias_sub = seed_active_subscription_for(&env, TRAVERSAL_AUTHOR_TOBIAS, TOBIAS_ACTIVE_SUB_SEED);
+    let _rachel_sub =
+        seed_active_subscription_for(&env, TRAVERSAL_AUTHOR_RACHEL, RACHEL_ACTIVE_SUB_SEED);
+    let _tobias_sub =
+        seed_active_subscription_for(&env, TRAVERSAL_AUTHOR_TOBIAS, TOBIAS_ACTIVE_SUB_SEED);
     let indexer = seed_network_index_from_specs(&env, sf_corpus_all_authors_followed());
     let viewer = ViewerServer::start_with_indexer(&env, indexer);
 
@@ -217,7 +219,10 @@ fn none_followed_results_preserve_the_slice08_status_quo() {
     // empty active set), AND a reachable index holding the slice-08 headline corpus
     // (nine unfollowed authors). No `seed_active_subscription_for` is called.
     let env = TestEnv::initialized();
-    let indexer = seed_network_index(&env, NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed);
+    let indexer = seed_network_index(
+        &env,
+        NetworkIndexFixture::ReproducibleBuildsNineAuthorsUnfollowed,
+    );
     let viewer = ViewerServer::start_with_indexer(&env, indexer);
 
     let response = viewer.get(&format!("/search?object={SF_OBJECT_REPRODUCIBLE_BUILDS}"));

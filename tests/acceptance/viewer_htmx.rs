@@ -589,7 +589,9 @@ fn submitting_scrape_with_htmx_returns_only_the_results_fragment() {
     // the response is a fragment (no full-page chrome). Persistence-zero is the
     // read-only gold guardrail (viewer_htmx_invariants.rs); here we pin the SHAPE.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);
@@ -833,7 +835,9 @@ fn submitting_scrape_without_htmx_returns_the_full_page() {
     // (`is_full_page()`) with the candidates (the same subject + derived-from)
     // rendered below the form.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let full = viewer.post_form("/scrape", &[("target", "rust-lang/cargo")]);
@@ -912,7 +916,9 @@ fn scrape_results_fragment_equals_the_full_page_results_region() {
     // in BOTH the fragment and the full page (parity); the fragment is a fragment
     // and the full page is a full page.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     let frag = viewer.post_form_htmx("/scrape", &[("target", "rust-lang/cargo")]);

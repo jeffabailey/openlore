@@ -115,8 +115,14 @@ fn every_counter_aware_render_leaves_the_store_read_only() {
         let viewer = ViewerServer::start(&env);
         let landing = viewer.get(LANDING_PATH);
         let claims = viewer.get(CLAIMS_LIST_PATH);
-        assert_eq!(landing.status, 200, "GET / must render so the read-only proof is real");
-        assert_eq!(claims.status, 200, "GET /claims must render so the read-only proof is real");
+        assert_eq!(
+            landing.status, 200,
+            "GET / must render so the read-only proof is real"
+        );
+        assert_eq!(
+            claims.status, 200,
+            "GET /claims must render so the read-only proof is real"
+        );
         // viewer drops here — the `openlore ui` process is killed, the lock released.
     }
 
@@ -230,7 +236,10 @@ fn the_counter_aware_surfaces_render_fully_offline() {
 
     // THEN the countered count renders on both surfaces fully offline.
     assert_eq!(landing.status, 200, "GET / must render fully offline (200)");
-    assert_eq!(claims.status, 200, "GET /claims must render fully offline (200)");
+    assert_eq!(
+        claims.status, 200,
+        "GET /claims must render fully offline (200)"
+    );
     assert_landing_countered_count(&landing.body, COUNTERED_OWN_CLAIMS);
     assert_claims_header_countered_count(&claims.body, COUNTERED_OWN_CLAIMS);
 }
@@ -274,7 +283,10 @@ fn the_countered_count_is_a_fixed_aggregate_read_invariant_to_store_size() {
     // THEN the countered count renders correctly (3) in ONE request — the aggregate read
     // returns the right total invariant to store size (a per-row loop would miscount / be
     // observably slow; the strict 1-query bound is a DELIVER adapter-duckdb unit test).
-    assert_eq!(page.status, 200, "the large store must render in one request");
+    assert_eq!(
+        page.status, 200,
+        "the large store must render in one request"
+    );
     assert_landing_countered_count(&page.body, COUNTERED_OWN_CLAIMS);
 }
 
@@ -309,7 +321,10 @@ fn missing_is_distinct_from_zero_for_the_countered_count() {
         let _held = seed_landing_store_none_countered(&env);
         let viewer = ViewerServer::start(&env);
         let page = viewer.get(LANDING_PATH);
-        assert_eq!(page.status, 200, "the none-countered store must render a 200 front door");
+        assert_eq!(
+            page.status, 200,
+            "the none-countered store must render a 200 front door"
+        );
         assert_landing_countered_count(&page.body, 0);
         assert!(
             !page.body_contains("(— countered)"),

@@ -393,9 +393,8 @@ pub trait StoreReadPort: Send + Sync {
     /// SUCCESSFUL read of empty, DISTINCT from a FAILED read — the shell maps the
     /// `Result` to the empty set via `unwrap_or_default()`, degrading the `You` arm
     /// INDEPENDENTLY).
-    fn distinct_own_author_dids(
-        &self,
-    ) -> Result<std::collections::HashSet<String>, StoreReadError>;
+    fn distinct_own_author_dids(&self)
+        -> Result<std::collections::HashSet<String>, StoreReadError>;
 
     /// The DISTINCT set of CACHED peer author DIDs — the `UnsubscribedCache`-arm
     /// presence read for the `/search` follow-state resolution (slice-20 /

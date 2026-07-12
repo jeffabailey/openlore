@@ -176,7 +176,10 @@ fn the_peers_list_full_page_and_fragment_render_the_same_region() {
     let fragment = viewer.get_htmx(PEERS_PATH);
 
     assert_eq!(full.status, 200, "PS-2: the no-JS request must return 200");
-    assert_eq!(fragment.status, 200, "PS-2: the htmx request must return 200");
+    assert_eq!(
+        fragment.status, 200,
+        "PS-2: the htmx request must return 200"
+    );
     // The shapes differ only in chrome: the no-JS request is a full page, the HX-Request
     // response is the bare fragment (no chrome) — I-PS-5.
     assert!(
@@ -251,7 +254,13 @@ fn the_per_peer_count_is_never_a_merged_total() {
         response.body
     );
     let lowered = response.body.to_ascii_lowercase();
-    for banned in ["all peers", "all subscriptions", "consensus", "combined total", "total across"] {
+    for banned in [
+        "all peers",
+        "all subscriptions",
+        "consensus",
+        "combined total",
+        "total across",
+    ] {
         assert!(
             !lowered.contains(banned),
             "PS-3 (J-003a / I-PS-3): the /peers render must carry NO merged \"all peers\" / \

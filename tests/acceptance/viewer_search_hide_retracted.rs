@@ -139,7 +139,9 @@ fn hide_retracted_full_page_removes_self_retracted_claim_and_shows_the_notice() 
     );
     // The results-region notice discloses the hidden EVENT count (1) + how to restore.
     assert!(
-        response.body.contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
+        response
+            .body
+            .contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
         "expected the results-region notice '1 {VIEWER_NOTICE_FRAGMENT}':\n{}",
         response.body
     );
@@ -240,7 +242,9 @@ fn hide_retracted_with_htmx_returns_only_the_filtered_results_fragment_with_the_
     );
     // The notice is present IN the swapped fragment (both shapes carry it).
     assert!(
-        response.body.contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
+        response
+            .body
+            .contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
         "the swapped fragment must carry the '1 {VIEWER_NOTICE_FRAGMENT}' notice:\n{}",
         response.body
     );
@@ -353,7 +357,9 @@ fn a_third_party_countered_claim_stays_shown_while_a_self_retraction_is_hidden()
         response.body
     );
     assert!(
-        response.body.contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
+        response
+            .body
+            .contains(&format!("1 {VIEWER_NOTICE_FRAGMENT}")),
         "expected the '1 {VIEWER_NOTICE_FRAGMENT}' notice:\n{}",
         response.body
     );

@@ -1394,7 +1394,10 @@ mod tests {
             body["language"].is_null(),
             "an unconfigured posture keeps `language` null"
         );
-        assert!(body.get("signals").is_none(), "no synthetic signals[] is ever served");
+        assert!(
+            body.get("signals").is_none(),
+            "no synthetic signals[] is ever served"
+        );
     }
 
     /// RGSD-2: `for_public_repo_with_cargo_lock` serves the `contents/Cargo.lock`
@@ -1412,7 +1415,10 @@ mod tests {
         ))
         .await;
 
-        assert_eq!(status, 200, "a committed Cargo.lock must resolve at 200 (present)");
+        assert_eq!(
+            status, 200,
+            "a committed Cargo.lock must resolve at 200 (present)"
+        );
         assert_eq!(body["type"], "file");
         assert_eq!(body["path"], "Cargo.lock");
         assert_eq!(
@@ -1472,7 +1478,10 @@ mod tests {
         let (status, body) =
             get_json(&format!("{}/repos/BurntSushi/ripgrep", handle.base_url())).await;
 
-        assert_eq!(status, 200, "the repo resolve path is untouched by the contents fork");
+        assert_eq!(
+            status, 200,
+            "the repo resolve path is untouched by the contents fork"
+        );
         assert_eq!(body["target"]["kind"], "repo");
         assert_eq!(body["target"]["full_name"], "BurntSushi/ripgrep");
     }
@@ -1572,8 +1581,7 @@ mod tests {
     /// is the only thing surfaced. Drives SA-1.
     #[tokio::test]
     async fn authenticated_posture_reports_budget_and_observes_token() {
-        let fake = FakeGithub::for_public_user("torvalds")
-        .authenticated(4982, 5000);
+        let fake = FakeGithub::for_public_user("torvalds").authenticated(4982, 5000);
         let handle = fake.serve_http().await;
 
         let (status, body) = get_with_optional_token(
@@ -1666,12 +1674,14 @@ mod tests {
         ))
         .await;
 
-        assert_eq!(status, 200, "a committed CHANGELOG must resolve at 200 (present)");
+        assert_eq!(
+            status, 200,
+            "a committed CHANGELOG must resolve at 200 (present)"
+        );
         assert_eq!(body["type"], "file");
         assert_eq!(body["path"], "CHANGELOG.md");
         assert_eq!(
-            body["html_url"],
-            "https://github.com/BurntSushi/ripgrep/blob/master/CHANGELOG.md",
+            body["html_url"], "https://github.com/BurntSushi/ripgrep/blob/master/CHANGELOG.md",
             "the contents body must carry the file html_url (the signal source_url)"
         );
     }
@@ -1724,7 +1734,10 @@ mod tests {
         let (status, body) =
             get_json(&format!("{}/repos/rust-lang/cargo/tags", handle.base_url())).await;
 
-        assert_eq!(status, 200, "the tags endpoint never 404s (an untagged repo returns [])");
+        assert_eq!(
+            status, 200,
+            "the tags endpoint never 404s (an untagged repo returns [])"
+        );
         assert!(
             body.as_array().expect("tags array").is_empty(),
             "an unconfigured posture must list NO tags (empty array — no regression)"
@@ -1746,12 +1759,17 @@ mod tests {
         ))
         .await;
 
-        assert_eq!(status, 200, "a repo with a README must resolve /readme at 200");
-        assert_eq!(body["name"], "README.md");
-        assert_eq!(body["size"], 20000, "the readme body must carry the size in bytes");
         assert_eq!(
-            body["html_url"],
-            "https://github.com/BurntSushi/ripgrep/blob/master/README.md",
+            status, 200,
+            "a repo with a README must resolve /readme at 200"
+        );
+        assert_eq!(body["name"], "README.md");
+        assert_eq!(
+            body["size"], 20000,
+            "the readme body must carry the size in bytes"
+        );
+        assert_eq!(
+            body["html_url"], "https://github.com/BurntSushi/ripgrep/blob/master/README.md",
             "the readme body must carry the file html_url (the signal source_url)"
         );
     }
@@ -1770,7 +1788,10 @@ mod tests {
         ))
         .await;
 
-        assert_eq!(status, 404, "a README-only posture must 404 the contents/docs probe (absent)");
+        assert_eq!(
+            status, 404,
+            "a README-only posture must 404 the contents/docs probe (absent)"
+        );
     }
 
     /// RGSD-4: `for_public_repo_with_docs_dir` serves `contents/docs` → **200**
@@ -1817,16 +1838,25 @@ mod tests {
         let fake = FakeGithub::for_public_repo("rust-lang/cargo");
         let handle = fake.serve_http().await;
 
-        let (readme_status, _) =
-            get_json(&format!("{}/repos/rust-lang/cargo/readme", handle.base_url())).await;
-        assert_eq!(readme_status, 404, "an unconfigured posture has no README (404 — no regression)");
+        let (readme_status, _) = get_json(&format!(
+            "{}/repos/rust-lang/cargo/readme",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(
+            readme_status, 404,
+            "an unconfigured posture has no README (404 — no regression)"
+        );
 
         let (docs_status, _) = get_json(&format!(
             "{}/repos/rust-lang/cargo/contents/docs",
             handle.base_url()
         ))
         .await;
-        assert_eq!(docs_status, 404, "an unconfigured posture has no docs/ dir (404 — no regression)");
+        assert_eq!(
+            docs_status, 404,
+            "an unconfigured posture has no docs/ dir (404 — no regression)"
+        );
     }
 
     /// RGSD-5: `for_public_repo_with_ci_workflows` serves
@@ -1844,7 +1874,10 @@ mod tests {
             handle.base_url()
         ))
         .await;
-        assert_eq!(ci_status, 200, "a present .github/workflows dir must resolve at 200");
+        assert_eq!(
+            ci_status, 200,
+            "a present .github/workflows dir must resolve at 200"
+        );
         assert!(
             ci_body.is_array(),
             "a directory resolves to a JSON array (the real GitHub contents shape)"
@@ -1879,7 +1912,10 @@ mod tests {
             handle.base_url()
         ))
         .await;
-        assert_eq!(tests_status, 200, "a present tests/ dir must resolve at 200");
+        assert_eq!(
+            tests_status, 200,
+            "a present tests/ dir must resolve at 200"
+        );
         assert!(
             tests_body.is_array(),
             "a directory resolves to a JSON array (the real GitHub contents shape)"
@@ -1980,7 +2016,10 @@ mod tests {
 
         let (cargo_lock_status, _) =
             get_json(&format!("{base}/repos/rust-lang/cargo/contents/Cargo.lock")).await;
-        assert_eq!(cargo_lock_status, 200, "committed Cargo.lock → 200 (DependencyManifestPinned)");
+        assert_eq!(
+            cargo_lock_status, 200,
+            "committed Cargo.lock → 200 (DependencyManifestPinned)"
+        );
 
         let (_, tags_body) = get_json(&format!("{base}/repos/rust-lang/cargo/tags")).await;
         let tags = tags_body.as_array().expect("tags array");
@@ -1989,9 +2028,14 @@ mod tests {
             "the /tags route must list a semver tag (SemverAndChangelog half)"
         );
 
-        let (changelog_status, _) =
-            get_json(&format!("{base}/repos/rust-lang/cargo/contents/CHANGELOG.md")).await;
-        assert_eq!(changelog_status, 200, "committed CHANGELOG → 200 (SemverAndChangelog half)");
+        let (changelog_status, _) = get_json(&format!(
+            "{base}/repos/rust-lang/cargo/contents/CHANGELOG.md"
+        ))
+        .await;
+        assert_eq!(
+            changelog_status, 200,
+            "committed CHANGELOG → 200 (SemverAndChangelog half)"
+        );
 
         let (_, readme_body) = get_json(&format!("{base}/repos/rust-lang/cargo/readme")).await;
         assert_eq!(
@@ -2007,6 +2051,9 @@ mod tests {
             "{base}/repos/rust-lang/cargo/contents/.github/workflows"
         ))
         .await;
-        assert_eq!(ci_status, 200, "CI workflows dir → 200 (TestRatioOrCiMatrix)");
+        assert_eq!(
+            ci_status, 200,
+            "CI workflows dir → 200 (TestRatioOrCiMatrix)"
+        );
     }
 }

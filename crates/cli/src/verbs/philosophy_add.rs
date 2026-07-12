@@ -175,7 +175,10 @@ pub fn run(wiring: &Wiring, args: &PhilosophyAddArgs) -> Result<PhilosophyAddOut
 
     let mut out = String::new();
     out.push_str(&format!("Minted philosophy: {object_id}\n"));
-    out.push_str(&format!("Written to local store: {}\n", artifact_path.display()));
+    out.push_str(&format!(
+        "Written to local store: {}\n",
+        artifact_path.display()
+    ));
 
     Ok(PhilosophyAddOutcome {
         exit_code: 0,
@@ -207,15 +210,19 @@ mod tests {
     /// (the pure seed-membership itself is property-covered in `lexicon`).
     #[test]
     fn seed_collision_guidance_names_collision_and_hints_alias() {
-        let guidance = seed_collision_guidance(
-            "memory-safety",
-            "org.openlore.philosophy.memory-safety",
+        let guidance =
+            seed_collision_guidance("memory-safety", "org.openlore.philosophy.memory-safety");
+        assert!(
+            guidance.contains("memory-safety"),
+            "must name the collision"
         );
-        assert!(guidance.contains("memory-safety"), "must name the collision");
         assert!(
             guidance.to_lowercase().contains("exist"),
             "must say the philosophy already exists"
         );
-        assert!(guidance.contains("--alias"), "must hint --alias onto the existing one");
+        assert!(
+            guidance.contains("--alias"),
+            "must hint --alias onto the existing one"
+        );
     }
 }

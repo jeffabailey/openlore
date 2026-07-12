@@ -130,8 +130,7 @@ fn open_a_project_survey_with_htmx_returns_only_the_traversal_fragment() {
     seed_project_survey_trail(&env, TRAVERSAL_PROJECT_CARGO, TRAVERSAL_AUTHOR_RACHEL);
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let response = viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(
         response.status, 200,
@@ -193,11 +192,13 @@ fn the_project_survey_full_page_and_fragment_render_the_same_region() {
     let viewer = ViewerServer::start(&env);
 
     let full = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
-    let fragment =
-        viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let fragment = viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(full.status, 200, "GT-2: the no-JS request must return 200");
-    assert_eq!(fragment.status, 200, "GT-2: the htmx request must return 200");
+    assert_eq!(
+        fragment.status, 200,
+        "GT-2: the htmx request must return 200"
+    );
     // The shapes differ only in chrome: the no-JS request is a full page, the
     // HX-Request response is the bare fragment (no chrome) — I-GT-6.
     assert!(
@@ -264,8 +265,7 @@ fn a_project_survey_renders_two_authors_on_one_philosophy_as_two_rows() {
     let seeded_cids = read_peer_claim_cids_for(&env, &peer_did);
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let response = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(
         response.status, 200,
@@ -318,8 +318,7 @@ fn a_project_survey_lists_contributors_as_links_to_their_score() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let response = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(
         response.status, 200,
@@ -353,8 +352,7 @@ fn a_claim_less_project_renders_the_guided_no_claims_state_not_a_crash() {
     let viewer = ViewerServer::start(&env);
 
     let full = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_UNKNOWN}"));
-    let fragment =
-        viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_UNKNOWN}"));
+    let fragment = viewer.get_htmx(&format!("/project?subject={TRAVERSAL_PROJECT_UNKNOWN}"));
 
     // A calm 200 guided state in BOTH shapes — emptiness (and even a read error)
     // degrades to the guided state, never a 5xx / hang / panic (I-GT-4 / NFR-VIEW-6).
@@ -414,8 +412,7 @@ fn the_project_survey_renders_fully_with_the_network_disabled() {
     seed_project_survey_trail(&env, TRAVERSAL_PROJECT_CARGO, TRAVERSAL_AUTHOR_RACHEL);
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let response = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(
         response.status, 200,
@@ -434,7 +431,12 @@ fn the_project_survey_renders_fully_with_the_network_disabled() {
     // NO Unavailable / degraded notice — `/project` has no outbound edge to fail, so
     // it NEVER renders the slice-08 `/search` Unavailable arm.
     let lowered = response.body.to_ascii_lowercase();
-    for banned in ["unavailable", "network error", "could not reach", "try again"] {
+    for banned in [
+        "unavailable",
+        "network error",
+        "could not reach",
+        "try again",
+    ] {
         assert!(
             !lowered.contains(banned),
             "GT-6: the offline `/project` render must NOT show a network-degraded \
@@ -495,8 +497,9 @@ fn open_a_philosophy_survey_with_htmx_returns_only_the_traversal_fragment() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let response = viewer
-        .get_htmx(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
+    let response = viewer.get_htmx(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
 
     assert_eq!(
         response.status, 200,
@@ -556,13 +559,18 @@ fn the_philosophy_survey_full_page_and_fragment_render_the_same_region() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let full =
-        viewer.get(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
-    let fragment = viewer
-        .get_htmx(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
+    let full = viewer.get(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
+    let fragment = viewer.get_htmx(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
 
     assert_eq!(full.status, 200, "GT-8: the no-JS request must return 200");
-    assert_eq!(fragment.status, 200, "GT-8: the htmx request must return 200");
+    assert_eq!(
+        fragment.status, 200,
+        "GT-8: the htmx request must return 200"
+    );
     assert!(
         full.is_full_page(),
         "GT-8: the no-JS response must be a complete full page (chrome present); body \
@@ -620,8 +628,9 @@ fn a_philosophy_survey_renders_two_authors_on_one_project_as_two_rows() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
+    let response = viewer.get(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
 
     assert_eq!(
         response.status, 200,
@@ -675,8 +684,9 @@ fn a_shared_contributor_across_projects_is_a_single_traversal_link() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
+    let response = viewer.get(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
 
     assert_eq!(
         response.status, 200,
@@ -709,9 +719,12 @@ fn a_claim_less_philosophy_renders_the_guided_no_claims_state() {
     let env = TestEnv::initialized();
     let viewer = ViewerServer::start(&env);
 
-    let full = viewer.get(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}"));
-    let fragment = viewer
-        .get_htmx(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}"));
+    let full = viewer.get(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}"
+    ));
+    let fragment = viewer.get_htmx(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_UNKNOWN}"
+    ));
 
     assert_eq!(
         full.status, 200,
@@ -774,8 +787,7 @@ fn survey_cells_render_as_traversal_links_to_the_next_entity() {
     seed_project_survey_trail(&env, TRAVERSAL_PROJECT_CARGO, TRAVERSAL_AUTHOR_RACHEL);
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
+    let response = viewer.get(&format!("/project?subject={TRAVERSAL_PROJECT_CARGO}"));
 
     assert_eq!(
         response.status, 200,
@@ -821,8 +833,9 @@ fn traversal_cross_links_are_plain_anchors_navigable_without_js() {
     );
     let viewer = ViewerServer::start(&env);
 
-    let response =
-        viewer.get(&format!("/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"));
+    let response = viewer.get(&format!(
+        "/philosophy?object={TRAVERSAL_PHILOSOPHY_REPRO_BUILDS}"
+    ));
 
     assert_eq!(
         response.status, 200,

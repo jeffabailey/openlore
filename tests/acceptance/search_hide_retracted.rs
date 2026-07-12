@@ -465,7 +465,8 @@ fn hiding_never_reorders_or_reweights_the_survivors() {
             unfiltered.stdout.contains(conf) && filtered.stdout.contains(conf),
             "survivor confidence {conf} must be byte-identical across the unfiltered and \
              filtered runs (I-RF-2 non-destructive):\nunfiltered:\n{}\nfiltered:\n{}",
-            unfiltered.stdout, filtered.stdout
+            unfiltered.stdout,
+            filtered.stdout
         );
     }
 }

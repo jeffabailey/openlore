@@ -577,12 +577,12 @@ mod tests {
             all.len()
         );
         for anchor in [
-            "agile",                 // process methodology
-            "devops",                // process methodology
-            "solid",                 // design principle
-            "dry",                   // design principle
-            "clean-architecture",    // architecture pattern
-            "infrastructure-as-code" // ops pattern
+            "agile",                  // process methodology
+            "devops",                 // process methodology
+            "solid",                  // design principle
+            "dry",                    // design principle
+            "clean-architecture",     // architecture pattern
+            "infrastructure-as-code", // ops pattern
         ] {
             let record = find(anchor)
                 .unwrap_or_else(|| panic!("canonical philosophy `{anchor}` must be seeded"));

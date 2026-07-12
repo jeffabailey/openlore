@@ -74,7 +74,9 @@ fn viewer_is_read_only() {
         &["https://github.com/rust-lang/rust/blob/HEAD/COPYRIGHT"],
     );
     seed_peer_claims_via_pull(&env, "did:plc:peer-axum", 3);
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // Capture the read-only universe BEFORE exercising any route (port-exposed
     // names: `claims.row_count`, `peer_claims.row_count`).
@@ -133,7 +135,9 @@ fn derived_from_only_on_candidates() {
         &["https://github.com/tokio-rs/tokio/blob/HEAD/LICENSE"],
     );
     seed_peer_claims_via_pull(&env, "did:plc:peer-axum", 2);
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("tokio-rs/tokio"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "tokio-rs/tokio",
+    ));
     let viewer = ViewerServer::start_with_github(&env, github);
 
     // WHEN the live-scrape view AND every persisted view are rendered.

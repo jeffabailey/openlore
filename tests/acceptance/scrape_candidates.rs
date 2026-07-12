@@ -48,7 +48,9 @@ fn scrape_candidates_each_names_its_exact_source_signal() {
     // GIVEN an initialized env + a public repo serving the 5 canonical public
     // signals (one per jobs.yaml mapping entry → 5 derived candidates).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo (no --sign — this is a pure read).
     let outcome = run_openlore_scrape(
@@ -134,7 +136,9 @@ fn scrape_candidates_footer_states_nothing_is_signed_until_user_signs() {
     // signal (the five canonical cargo signals → >=1 derived candidate, so the
     // footer is always rendered).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo (no --sign — a pure read; nothing is
     // signed or published).
@@ -193,7 +197,9 @@ fn scrape_candidates_all_default_to_speculative_quarter_confidence() {
     // signals — each maps to one derived candidate, so the rendered list carries
     // several candidate confidence lines to quantify over.
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo (no --sign — a pure read; the scraper
     // only ever PROPOSES candidates, it never asserts a claim).
@@ -231,7 +237,9 @@ fn scrape_candidates_disagreed_candidate_is_auditable_and_persists_nothing_when_
     // second because `detect_signals` emits memory-safety first, dependency-pinning
     // second (the arm order the pure derivation preserves).
     let env = TestEnv::initialized();
-    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals("rust-lang/cargo"));
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
 
     // WHEN Maria scrapes the public repo and reviews the proposal — crucially she
     // does NOT run `--sign` (she disagrees with / is unconvinced by candidate [2]

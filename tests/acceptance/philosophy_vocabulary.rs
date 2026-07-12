@@ -366,7 +366,9 @@ fn philosophy_list_defaults_to_human_text_not_json() {
 
     // And the human view still surfaces the vocabulary (a well-known id renders).
     assert!(
-        outcome.stdout.contains(&format!("{NSID_PREFIX}memory-safety")),
+        outcome
+            .stdout
+            .contains(&format!("{NSID_PREFIX}memory-safety")),
         "the default text view must still surface the vocabulary (e.g. \
          {NSID_PREFIX}memory-safety);\n--- stdout ---\n{}",
         outcome.stdout

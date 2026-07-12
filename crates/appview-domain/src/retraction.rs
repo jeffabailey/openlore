@@ -164,7 +164,12 @@ mod tests {
 
     /// Build one raw row for the crafted example corpora. `references` carries the
     /// typed retraction/counter graph the predicate reads off the RAW rows.
-    fn row(author: &str, cid: &str, confidence: f64, references: Vec<ClaimReference>) -> NetworkResultRowRaw {
+    fn row(
+        author: &str,
+        cid: &str,
+        confidence: f64,
+        references: Vec<ClaimReference>,
+    ) -> NetworkResultRowRaw {
         NetworkResultRowRaw {
             author_did: Did(format!("{author}{APP}")),
             cid: Cid(cid.to_string()),
@@ -270,15 +275,24 @@ mod tests {
     fn hidden_count_is_events_not_rows() {
         let standing = row("did:plc:sven-test", "bafystanding", 0.6, vec![]);
         let original = row("did:plc:priya-test", "bafyorig", 0.8, vec![]);
-        let marker = row("did:plc:priya-test", "bafymark", 1.0, vec![retracts("bafyorig")]);
-
-        let partition = partition_retracted(
-            vec![standing.clone(), original, marker],
-            true,
+        let marker = row(
+            "did:plc:priya-test",
+            "bafymark",
+            1.0,
+            vec![retracts("bafyorig")],
         );
 
-        assert_eq!(partition.hidden_count, 1, "one withdrawal event, not two rows");
-        assert_eq!(partition.survivors, vec![standing], "only the standing row survives");
+        let partition = partition_retracted(vec![standing.clone(), original, marker], true);
+
+        assert_eq!(
+            partition.hidden_count, 1,
+            "one withdrawal event, not two rows"
+        );
+        assert_eq!(
+            partition.survivors,
+            vec![standing],
+            "only the standing row survives"
+        );
     }
 
     /// Two distinct self-retractions ⇒ `hidden_count == 2` (distinct events).
@@ -304,9 +318,18 @@ mod tests {
     #[test]
     fn self_retraction_dominates_a_co_present_third_party_counter() {
         let original = row("did:plc:priya-test", "bafyorig", 0.8, vec![]);
-        let self_marker = row("did:plc:priya-test", "bafymark", 1.0, vec![retracts("bafyorig")]);
-        let third_party_counter =
-            row("did:plc:sven-test", "bafycounter", 0.5, vec![counters("bafyorig")]);
+        let self_marker = row(
+            "did:plc:priya-test",
+            "bafymark",
+            1.0,
+            vec![retracts("bafyorig")],
+        );
+        let third_party_counter = row(
+            "did:plc:sven-test",
+            "bafycounter",
+            0.5,
+            vec![counters("bafyorig")],
+        );
 
         let partition = partition_retracted(
             vec![original, self_marker, third_party_counter.clone()],
@@ -327,15 +350,29 @@ mod tests {
     #[test]
     fn third_party_counter_or_different_author_retract_never_hides() {
         let original = row("did:plc:priya-test", "bafyorig", 0.8, vec![]);
-        let foreign_retract =
-            row("did:plc:sven-test", "bafyfr", 1.0, vec![retracts("bafyorig")]);
-        let foreign_counter =
-            row("did:plc:rachel-test", "bafyfc", 0.5, vec![counters("bafyorig")]);
+        let foreign_retract = row(
+            "did:plc:sven-test",
+            "bafyfr",
+            1.0,
+            vec![retracts("bafyorig")],
+        );
+        let foreign_counter = row(
+            "did:plc:rachel-test",
+            "bafyfc",
+            0.5,
+            vec![counters("bafyorig")],
+        );
         let rows = vec![original, foreign_retract, foreign_counter];
 
         let partition = partition_retracted(rows.clone(), true);
 
-        assert_eq!(partition.hidden_count, 0, "no self-retraction ⇒ nothing hidden");
-        assert_eq!(partition.survivors, rows, "no heckler's veto: every row survives");
+        assert_eq!(
+            partition.hidden_count, 0,
+            "no self-retraction ⇒ nothing hidden"
+        );
+        assert_eq!(
+            partition.survivors, rows,
+            "no heckler's veto: every row survives"
+        );
     }
 }

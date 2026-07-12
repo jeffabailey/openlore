@@ -666,7 +666,10 @@ fn the_claims_header_countered_count_renders_offline() {
 
     // THEN the header countered count renders fully offline, and the page references only
     // the vendored local htmx asset.
-    assert_eq!(page.status, 200, "GET /claims must render fully offline (200)");
+    assert_eq!(
+        page.status, 200,
+        "GET /claims must render fully offline (200)"
+    );
     assert_claims_header_countered_count(&page.body, COUNTERED_OWN_CLAIMS);
     assert!(
         !page.references_external_cdn(),
@@ -722,7 +725,10 @@ fn the_countered_count_is_a_fixed_aggregate_read_invariant_to_store_size() {
     // THEN the countered count renders correctly (3) in ONE request — the aggregate read
     // returns the right total invariant to store size (a per-row loop would miscount / be
     // observably slow; the strict 1-query bound is a DELIVER adapter-duckdb unit test).
-    assert_eq!(page.status, 200, "the large store must render in one request");
+    assert_eq!(
+        page.status, 200,
+        "the large store must render in one request"
+    );
     assert_landing_countered_count(&page.body, COUNTERED_OWN_CLAIMS);
 }
 

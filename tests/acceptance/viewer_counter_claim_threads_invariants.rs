@@ -200,10 +200,7 @@ fn no_detail_response_with_counters_adds_a_write_or_sign_control() {
         let uncountered_path = format!("/claims/{}", uncountered_cid);
 
         let shapes = [
-            (
-                "countered full page",
-                countered_viewer.get(&countered_path),
-            ),
+            ("countered full page", countered_viewer.get(&countered_path)),
             (
                 "countered fragment",
                 countered_viewer.get_htmx(&countered_path),

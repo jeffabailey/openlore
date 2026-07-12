@@ -331,7 +331,10 @@ fn the_score_fragment_and_full_page_render_the_same_score_region() {
     let fragment = viewer.get_htmx(&format!("/score?contributor={CONTRIBUTOR_RICH_DID}"));
 
     assert_eq!(full.status, 200, "C-3: the no-JS request must return 200");
-    assert_eq!(fragment.status, 200, "C-3: the htmx request must return 200");
+    assert_eq!(
+        fragment.status, 200,
+        "C-3: the htmx request must return 200"
+    );
     // The shapes differ only in chrome: the no-JS request is a full page, the
     // HX-Request response is the bare fragment (no chrome) — I-CS-7.
     assert!(

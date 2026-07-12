@@ -125,7 +125,10 @@ fn every_peer_counter_aware_render_leaves_the_store_read_only() {
         let viewer = ViewerServer::start(&env);
         let landing = viewer.get(LANDING_PATH);
         let peer_claims = viewer.get(PEER_CLAIMS_LIST_PATH);
-        assert_eq!(landing.status, 200, "GET / must render so the read-only proof is real");
+        assert_eq!(
+            landing.status, 200,
+            "GET / must render so the read-only proof is real"
+        );
         assert_eq!(
             peer_claims.status, 200,
             "GET /peer-claims must render so the read-only proof is real"
@@ -170,7 +173,10 @@ fn no_peer_counter_aware_render_adds_a_write_or_mutating_control() {
     // THEN both render (200) and carry NO write/compose/sign/subscribe/follow control —
     // the countered count is render-only text (C-1 CARDINAL).
     assert_eq!(landing.status, 200, "GET / must render (200)");
-    assert_eq!(peer_claims.status, 200, "GET /peer-claims must render (200)");
+    assert_eq!(
+        peer_claims.status, 200,
+        "GET /peer-claims must render (200)"
+    );
     assert_landing_read_only_no_control(&landing.body);
     assert_landing_read_only_no_control(&peer_claims.body);
 }
@@ -200,7 +206,10 @@ fn the_peer_counter_aware_chrome_stays_offline_no_cdn() {
 
     // THEN neither page references an off-host CDN (only the vendored local htmx asset).
     assert_eq!(landing.status, 200, "GET / must render the full page");
-    assert_eq!(peer_claims.status, 200, "GET /peer-claims must render the full page");
+    assert_eq!(
+        peer_claims.status, 200,
+        "GET /peer-claims must render the full page"
+    );
     assert!(
         !landing.references_external_cdn(),
         "the front door must reference only the vendored local /static/htmx.min.js — no \
@@ -244,7 +253,10 @@ fn the_peer_counter_aware_surfaces_render_fully_offline() {
 
     // THEN the countered-peer count renders on both surfaces fully offline.
     assert_eq!(landing.status, 200, "GET / must render fully offline (200)");
-    assert_eq!(peer_claims.status, 200, "GET /peer-claims must render fully offline (200)");
+    assert_eq!(
+        peer_claims.status, 200,
+        "GET /peer-claims must render fully offline (200)"
+    );
     assert_landing_peer_countered_count(&landing.body, COUNTERED_PEER_CLAIMS);
     assert_peer_claims_header_countered_count(&peer_claims.body, COUNTERED_PEER_CLAIMS);
 }
@@ -289,7 +301,10 @@ fn the_countered_peer_count_is_a_fixed_aggregate_read_invariant_to_store_size() 
     // THEN the countered-peer count renders correctly (1) in ONE request — the aggregate
     // read returns the right total invariant to store size (a per-row loop would miscount /
     // be observably slow; the strict 1-query bound is a DELIVER adapter-duckdb unit test).
-    assert_eq!(page.status, 200, "the large store must render in one request");
+    assert_eq!(
+        page.status, 200,
+        "the large store must render in one request"
+    );
     assert_landing_peer_countered_count(&page.body, COUNTERED_PEER_CLAIMS);
 }
 

@@ -7237,7 +7237,9 @@ impl ViewerServer {
     ///
     /// SCAFFOLD: true (slice-06).
     pub fn start(env: &TestEnv) -> Self {
-        Self::start_inner(env, None, None, None, false, false, false, false, false, false)
+        Self::start_inner(
+            env, None, None, None, false, false, false, false, false, false,
+        )
     }
 
     /// Start a `openlore ui --port 0` viewer over the env's REAL store AND wire the
@@ -8197,7 +8199,12 @@ pub fn assert_search_html_counter_shown_not_applied(
 
     // 3. The counter is SHOWN, NEVER applied: no filter/down-weight language.
     let lowered = body.to_ascii_lowercase();
-    for banned in ["filtered out", "down-weighted", "suppressed", "hidden by counter"] {
+    for banned in [
+        "filtered out",
+        "down-weighted",
+        "suppressed",
+        "hidden by counter",
+    ] {
         assert!(
             !lowered.contains(banned),
             "I-NS-3: the counter must be SHOWN, never APPLIED — found {banned:?} in \
@@ -8397,8 +8404,16 @@ fn rich_trail_seed_peer(contributor_did: &str) -> SeedPeer<'_> {
         peer_did: contributor_did,
         seed: [23u8; 32],
         triples: &[
-            ("github:bazelbuild/bazel", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.86),
-            ("github:NixOS/nixpkgs", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.90),
+            (
+                "github:bazelbuild/bazel",
+                SCORE_OBJECT_REPRODUCIBLE_BUILDS,
+                0.86,
+            ),
+            (
+                "github:NixOS/nixpkgs",
+                SCORE_OBJECT_REPRODUCIBLE_BUILDS,
+                0.90,
+            ),
             (
                 "github:reproducible-builds/diffoscope",
                 SCORE_OBJECT_REPRODUCIBLE_BUILDS,
@@ -8455,7 +8470,11 @@ fn sparse_trail_seed_peer(contributor_did: &str) -> SeedPeer<'_> {
     SeedPeer {
         peer_did: contributor_did,
         seed: [29u8; 32],
-        triples: &[("github:torvalds/linux", SCORE_OBJECT_REPRODUCIBLE_BUILDS, 0.95)],
+        triples: &[(
+            "github:torvalds/linux",
+            SCORE_OBJECT_REPRODUCIBLE_BUILDS,
+            0.95,
+        )],
     }
 }
 
@@ -8806,7 +8825,13 @@ pub fn assert_score_html_renders_no_claims(body: &str, queried_did: &str) {
     );
     // Emptiness is NOT a zero score — no fabricated weight/bucket appears, and no
     // raw error/stack trace leaks (I-CS-5 reliability).
-    for banned in ["[SPARSE]", "weight", "panicked", "RUST_BACKTRACE", "thread 'main'"] {
+    for banned in [
+        "[SPARSE]",
+        "weight",
+        "panicked",
+        "RUST_BACKTRACE",
+        "thread 'main'",
+    ] {
         assert!(
             !body.contains(banned),
             "OD-CS-6: the empty state must show NO fabricated score and NO leaked \
@@ -9307,11 +9332,7 @@ pub fn seed_philosophy_survey_trail(env: &TestEnv, philosophy: &str, spanning_au
 /// graph` (the GQE-2 identical-content-two-authors fixture shape): the LOCAL user
 /// (`You`) + a pulled peer both assert the same (subject, object) at different
 /// confidences, landing two attributed rows on one survey group.
-pub fn seed_two_author_same_edge(
-    env: &TestEnv,
-    subject: &str,
-    object: &str,
-) -> (String, String) {
+pub fn seed_two_author_same_edge(env: &TestEnv, subject: &str, object: &str) -> (String, String) {
     // The LOCAL user's OWN claim (via the real `claim add` verb → the local DID) AND
     // a pulled PEER claim (via the real `peer add` + `peer pull` verbs → Tobias) by
     // a SECOND, DISTINCT author both assert the SAME (subject, object) at DISTINCT
@@ -9499,7 +9520,10 @@ pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_did
         // percent-encoded into the query component (ADR-044 §security). The expected
         // href mirrors the production `encode_query_component` exactly.
         let bare = did.split('#').next().unwrap_or(did);
-        let expected_href = format!("/score?contributor={}", encode_query_component_for_test(bare));
+        let expected_href = format!(
+            "/score?contributor={}",
+            encode_query_component_for_test(bare)
+        );
         // Render-only navigation TEXT: a plain `<a href=…>` anchor, never a button/form
         // control. The exact `<a href="<expected>">` opening tag MUST appear (so a no-JS
         // click is a full navigation that LANDS on the contributor's /score).
@@ -9516,7 +9540,10 @@ pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_did
         .iter()
         .map(|did| {
             let bare = did.split('#').next().unwrap_or(did);
-            format!("/score?contributor={}", encode_query_component_for_test(bare))
+            format!(
+                "/score?contributor={}",
+                encode_query_component_for_test(bare)
+            )
         })
         .collect();
     assert_eq!(
@@ -9536,8 +9563,7 @@ pub fn assert_traversal_html_contributors_link_to_score(body: &str, expected_did
 fn encode_query_component_for_test(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
-        let unreserved =
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
+        let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
         if unreserved {
             out.push(byte as char);
         } else {
@@ -9557,10 +9583,7 @@ fn encode_query_component_for_test(value: &str) -> String {
 /// The render-only `<a href>` carries no executable control.
 ///
 /// SCAFFOLD: true (slice-10).
-pub fn assert_traversal_html_crosslink_is_plain_anchor(
-    body: &str,
-    expected_hrefs: &[&str],
-) {
+pub fn assert_traversal_html_crosslink_is_plain_anchor(body: &str, expected_hrefs: &[&str]) {
     assert!(
         !expected_hrefs.is_empty(),
         "GT-9/GT-12/GT-14: the crosslink-anchor assertion needs ≥1 expected href (the \
@@ -9738,7 +9761,12 @@ pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str)
     // the empty CONTENT invents no drill link. The HX-Request fragment carries no chrome,
     // so `strip_persistent_nav` returns it unchanged and the check still covers it fully.
     let content = strip_persistent_nav(body).to_ascii_lowercase();
-    for banned in ["href=\"/project", "href=\"/philosophy", "href=\"/score", "cid"] {
+    for banned in [
+        "href=\"/project",
+        "href=\"/philosophy",
+        "href=\"/score",
+        "cid",
+    ] {
         assert!(
             !content.contains(banned),
             "I-GT-4: the guided NoClaims state must fabricate NO traversal edge in the \
@@ -9747,7 +9775,12 @@ pub fn assert_traversal_html_renders_no_claims(body: &str, queried_entity: &str)
     }
     // No leaked stack trace / raw error internals — a calm guided state, never a panic
     // surface (I-GT-4 / NFR-VIEW-6).
-    for banned in ["panicked", "RUST_BACKTRACE", "thread 'main'", "stack backtrace"] {
+    for banned in [
+        "panicked",
+        "RUST_BACKTRACE",
+        "thread 'main'",
+        "stack backtrace",
+    ] {
         assert!(
             !body.contains(banned),
             "I-GT-4: the guided NoClaims state must leak NO stack trace / error \
@@ -10011,12 +10044,8 @@ pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterT
         (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_claim_two_counters_distinct_authors: peer add for {did} must succeed;\n\
@@ -10051,7 +10080,8 @@ pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterT
     // computed (so the local target_cid the own counter targets is the stored one).
     let target_cids = read_peer_claim_cids_for(env, COUNTER_TARGET_AUTHOR_RACHEL);
     assert_eq!(
-        target_cids, vec![target_cid.clone()],
+        target_cids,
+        vec![target_cid.clone()],
         "seed_claim_two_counters_distinct_authors: the pulled Rachel target CID must \
          match the deterministically computed one; got {target_cids:?}"
     );
@@ -10088,7 +10118,10 @@ pub fn seed_claim_two_counters_distinct_authors(env: &TestEnv) -> SeededCounterT
         "seed_claim_two_counters_distinct_authors: expected exactly ONE pulled Tobias \
          counter; got {tobias_cids:?}"
     );
-    let peer_counter_cid = tobias_cids.into_iter().next().expect("one Tobias counter CID");
+    let peer_counter_cid = tobias_cids
+        .into_iter()
+        .next()
+        .expect("one Tobias counter CID");
 
     // Return BOTH counters in deterministic order (own first, then peer) — each
     // attributed to its OWN author DID + CID (anti-merging by construction).
@@ -10747,9 +10780,21 @@ pub fn seed_claims_list_one_countered(env: &TestEnv) -> SeededClaimsList {
     // (distinct subjects → distinct CIDs). These are the un-countered rows; nothing
     // references them.
     for (subject, predicate, object) in [
-        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
-        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
-        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
+        (
+            "github:rust-lang/rust",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.memory-safety",
+        ),
+        (
+            "github:denoland/deno",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.secure-by-default",
+        ),
+        (
+            "github:ziglang/zig",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.no-hidden-control-flow",
+        ),
     ] {
         seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
     }
@@ -10846,8 +10891,16 @@ pub fn seed_claims_list_target_two_counters_distinct_authors(env: &TestEnv) -> S
     // STEP 1 — sign several PLAIN own claims via the production `claim add` write path
     // (distinct subjects → distinct CIDs). These are the un-countered rows.
     for (subject, predicate, object) in [
-        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
-        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+        (
+            "github:rust-lang/rust",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.memory-safety",
+        ),
+        (
+            "github:denoland/deno",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.secure-by-default",
+        ),
     ] {
         seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
     }
@@ -10893,12 +10946,8 @@ pub fn seed_claims_list_target_two_counters_distinct_authors(env: &TestEnv) -> S
         (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_claims_list_target_two_counters_distinct_authors: peer add for {did} must \
@@ -10969,10 +11018,26 @@ pub fn seed_claims_list_none_countered(env: &TestEnv) -> SeededClaimsList {
     // `counter_presence_for` returns the EMPTY set and the list renders byte-identically
     // to slice-06. NO counter is authored, NO peer is added/pulled.
     for (subject, predicate, object) in [
-        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
-        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
-        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
-        ("github:rust-lang/cargo", "embodiesPhilosophy", "org.openlore.philosophy.dependency-pinning"),
+        (
+            "github:rust-lang/rust",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.memory-safety",
+        ),
+        (
+            "github:denoland/deno",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.secure-by-default",
+        ),
+        (
+            "github:ziglang/zig",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.no-hidden-control-flow",
+        ),
+        (
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+        ),
     ] {
         seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
     }
@@ -11012,16 +11077,55 @@ pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
     // proxy is meaningful (many rows, a known countered subset interleaved among them).
     let mut own_targets: Vec<String> = Vec::new();
     for (subject, predicate, object) in [
-        ("github:rust-lang/rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
-        ("github:denoland/deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
-        ("github:ziglang/zig", "embodiesPhilosophy", "org.openlore.philosophy.no-hidden-control-flow"),
-        ("github:rust-lang/cargo", "embodiesPhilosophy", "org.openlore.philosophy.dependency-pinning"),
-        ("github:golang/go", "embodiesPhilosophy", "org.openlore.philosophy.simplicity"),
-        ("github:python/cpython", "embodiesPhilosophy", "org.openlore.philosophy.readability"),
-        ("github:nodejs/node", "embodiesPhilosophy", "org.openlore.philosophy.event-driven"),
-        ("github:elixir-lang/elixir", "embodiesPhilosophy", "org.openlore.philosophy.fault-tolerance"),
+        (
+            "github:rust-lang/rust",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.memory-safety",
+        ),
+        (
+            "github:denoland/deno",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.secure-by-default",
+        ),
+        (
+            "github:ziglang/zig",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.no-hidden-control-flow",
+        ),
+        (
+            "github:rust-lang/cargo",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.dependency-pinning",
+        ),
+        (
+            "github:golang/go",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.simplicity",
+        ),
+        (
+            "github:python/cpython",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.readability",
+        ),
+        (
+            "github:nodejs/node",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.event-driven",
+        ),
+        (
+            "github:elixir-lang/elixir",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.fault-tolerance",
+        ),
     ] {
-        own_targets.push(seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]));
+        own_targets.push(seed_own_claim_with_evidence(
+            env,
+            subject,
+            predicate,
+            object,
+            0.90,
+            &[],
+        ));
     }
 
     // STEP 2 — counter a KNOWN subset of Maria's OWN claims via distinct PEER counters
@@ -11061,15 +11165,18 @@ pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
         Some(COUNTER_PEER_REASON_VERBATIM),
     );
 
-    let rachel_pds =
-        PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, vec![rachel_record_a, rachel_record_b]);
+    let rachel_pds = PeerPds::for_peer(
+        COUNTER_TARGET_AUTHOR_RACHEL,
+        vec![rachel_record_a, rachel_record_b],
+    );
     let tobias_pds = PeerPds::for_peer(COUNTER_AUTHOR_TOBIAS, vec![tobias_record]);
 
     for (did, pds) in [
         (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_claims_list_mixed_pages: peer add for {did} must succeed;\n\
@@ -11139,9 +11246,7 @@ pub fn seed_claims_list_mixed_pages(env: &TestEnv) -> SeededClaimsList {
 pub fn assert_list_row_flagged_countered(body: &str, countered_cid: &str) {
     // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
     // (maud emits no whitespace inside the element). Scan the rendered HTML only.
-    let marker = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&marker),
         "assert_list_row_flagged_countered: the countered row for {countered_cid:?} must \
@@ -11163,9 +11268,7 @@ pub fn assert_list_row_not_flagged(body: &str, uncountered_cid: &str) {
     // The un-countered row carries NO `<a href="/claims/{cid}">Countered</a>` flag
     // anchor. (Its bare CID still appears in the row's CID cell — we assert the
     // absence of the FLAG anchor specifically, not the CID text.)
-    let marker = format!(
-        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         !body.contains(&marker),
         "assert_list_row_not_flagged: the un-countered row for {uncountered_cid:?} must \
@@ -11193,9 +11296,7 @@ pub fn assert_list_flag_links_to_thread(body: &str, countered_cid: &str) {
     // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
     // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
     // whitespace inside the element). Scan the rendered HTML only.
-    let anchor = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let anchor = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&anchor),
         "assert_list_flag_links_to_thread: the 'Countered' marker on the countered row for \
@@ -11231,9 +11332,7 @@ pub fn assert_list_flag_is_single_neutral_presence(body: &str, target_cid: &str)
     // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
     // marker on its row, NEVER one-per-counter and never a count. Count the exact anchor
     // occurrences for this CID — it must appear EXACTLY once.
-    let marker = format!(
-        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     let occurrences = body.matches(&marker).count();
     assert_eq!(
         occurrences, 1,
@@ -11640,12 +11739,8 @@ pub fn seed_peer_claims_one_countered(env: &TestEnv) -> SeededPeerClaimsList {
         (surveyed_peer, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_peer_claims_one_countered: peer add for {did} must succeed;\n\
@@ -11792,12 +11887,8 @@ pub fn seed_peer_claims_target_two_counters_distinct_authors(
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
         (maria_did, &maria_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_peer_claims_target_two_counters_distinct_authors: peer add for {did} must \
@@ -12014,12 +12105,8 @@ pub fn seed_project_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyEdge
         (surveyed_author, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_project_survey_one_edge_countered: peer add for {did} must succeed;\n\
@@ -12127,12 +12214,8 @@ pub fn seed_philosophy_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyE
         (surveyed_author, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_philosophy_survey_one_edge_countered: peer add for {did} must succeed;\n\
@@ -12198,9 +12281,7 @@ pub fn seed_philosophy_survey_one_edge_countered(env: &TestEnv) -> SeededSurveyE
 /// whose single `countered_cids` entry is the twice-countered edge.
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn seed_project_survey_edge_two_counters_distinct_authors(
-    env: &TestEnv,
-) -> SeededSurveyEdges {
+pub fn seed_project_survey_edge_two_counters_distinct_authors(env: &TestEnv) -> SeededSurveyEdges {
     // Rachel is the SURVEYED contributor asserting the SHARED project subject across THREE
     // DISTINCT philosophies (three edges across three groups land in `peer_claims` — the
     // LOCAL `/project` survey rows, Pillar 3 / I-GT-2). TWO DISTINCT peers (Tobias + Uli)
@@ -12218,7 +12299,11 @@ pub fn seed_project_survey_edge_two_counters_distinct_authors(
         &[
             (surveyed_project, TRAVERSAL_PHILOSOPHY_DEP_PINNING, 0.90),
             (surveyed_project, TRAVERSAL_PHILOSOPHY_REPRO_BUILDS, 0.74),
-            (surveyed_project, "org.openlore.philosophy.memory-safety", 0.25),
+            (
+                surveyed_project,
+                "org.openlore.philosophy.memory-safety",
+                0.25,
+            ),
         ],
     );
     // BOTH counters target Rachel's FIRST surveyed edge — its deterministic CID.
@@ -12256,12 +12341,8 @@ pub fn seed_project_survey_edge_two_counters_distinct_authors(
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
         (second_counter_author, &uli_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_project_survey_edge_two_counters_distinct_authors: peer add for {did} must \
@@ -12435,9 +12516,7 @@ pub fn seed_survey_none_countered(env: &TestEnv, dimension: &str) -> SeededSurve
 /// and only those — in ONE request. Returns the [`SeededSurveyEdges`].
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn seed_project_survey_many_groups_known_countered_subset(
-    env: &TestEnv,
-) -> SeededSurveyEdges {
+pub fn seed_project_survey_many_groups_known_countered_subset(env: &TestEnv) -> SeededSurveyEdges {
     // Rachel is the SURVEYED contributor asserting the SHARED project subject across MANY
     // DISTINCT philosophies — eight edges. Since `/project` groups by `object`
     // (philosophy), eight DISTINCT objects yield EIGHT groups: a genuinely LARGE,
@@ -12545,7 +12624,8 @@ pub fn seed_project_survey_many_groups_known_countered_subset(
         added.stdout, added.stderr
     );
     for (did, pds) in &counter_pds {
-        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_project_survey_many_groups_known_countered_subset: peer add for {did} must \
@@ -12611,9 +12691,7 @@ pub fn seed_project_survey_many_groups_known_countered_subset(
 pub fn assert_peer_claim_row_flagged_countered(body: &str, countered_cid: &str) {
     // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
     // (maud emits no whitespace inside the element). Scan the rendered HTML only.
-    let marker = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&marker),
         "assert_peer_claim_row_flagged_countered: the countered /peer-claims row for \
@@ -12632,9 +12710,7 @@ pub fn assert_peer_claim_row_not_flagged(body: &str, uncountered_cid: &str) {
     // The un-countered row carries NO `<a href="/claims/{cid}">Countered</a>` flag
     // anchor. (Its bare CID still appears in the row's CID cell — we assert the
     // absence of the FLAG anchor specifically, not the CID text.)
-    let marker = format!(
-        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         !body.contains(&marker),
         "assert_peer_claim_row_not_flagged: the un-countered /peer-claims row for \
@@ -12661,9 +12737,7 @@ pub fn assert_peer_claim_flag_links_to_thread(body: &str, countered_cid: &str) {
     // The marker is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
     // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
     // whitespace inside the element). Scan the rendered HTML only.
-    let anchor = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let anchor = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&anchor),
         "assert_peer_claim_flag_links_to_thread: the 'Countered' marker on the countered \
@@ -12695,9 +12769,7 @@ pub fn assert_peer_claim_flag_is_single_neutral_presence(body: &str, target_cid:
     // referenced_cid) to ONE presence membership → EXACTLY ONE render-only "Countered"
     // marker on its row, NEVER one-per-counter and never a count. Count the exact anchor
     // occurrences for this CID — it must appear EXACTLY once.
-    let marker = format!(
-        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     let occurrences = body.matches(&marker).count();
     assert_eq!(
         occurrences, 1,
@@ -12817,9 +12889,7 @@ pub fn assert_peer_claims_order_byte_identical(flagged: &str, ordered_cids: &[St
 pub fn assert_edge_flagged_countered(body: &str, countered_cid: &str) {
     // The flag is the render-only one-hop anchor `<a href="/claims/{cid}">Countered</a>`
     // (maud emits no whitespace inside the element). Scan the rendered HTML only.
-    let marker = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&marker),
         "assert_edge_flagged_countered: the traversal edge for the countered CID \
@@ -12838,9 +12908,7 @@ pub fn assert_edge_not_flagged(body: &str, uncountered_cid: &str) {
     // The un-countered edge carries NO `<a href="/claims/{cid}">Countered</a>` flag anchor.
     // (Its bare CID still appears in the edge's CID cell — we assert the absence of the
     // FLAG anchor specifically, not the CID text.)
-    let marker = format!(
-        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         !body.contains(&marker),
         "assert_edge_not_flagged: the un-countered traversal edge for {uncountered_cid:?} \
@@ -12868,9 +12936,7 @@ pub fn assert_edge_flag_links_to_thread(body: &str, countered_cid: &str) {
     // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
     // whitespace inside the element). Scan the rendered HTML only. The EDGE sibling of
     // [`assert_peer_claim_flag_links_to_thread`].
-    let anchor = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let anchor = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&anchor),
         "assert_edge_flag_links_to_thread: the 'Countered' marker on the countered traversal \
@@ -12903,9 +12969,7 @@ pub fn assert_edge_flag_is_single_neutral_presence(body: &str, target_cid: &str)
     // marker on its edge, NEVER one-per-counter and never a count. Count the exact anchor
     // occurrences for this CID — it must appear EXACTLY once. The EDGE sibling of
     // [`assert_peer_claim_flag_is_single_neutral_presence`].
-    let marker = format!(
-        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     let occurrences = body.matches(&marker).count();
     assert_eq!(
         occurrences, 1,
@@ -12951,10 +13015,7 @@ pub fn assert_edge_flag_is_single_neutral_presence(body: &str, target_cid: &str)
 /// byte offsets) byte-for-byte. This is the CARDINAL no-regroup gold (I-CF-9).
 ///
 /// SCAFFOLD: true (slice-13).
-pub fn assert_survey_grouping_and_order_byte_identical(
-    flagged: &str,
-    ordered_cids: &[String],
-) {
+pub fn assert_survey_grouping_and_order_byte_identical(flagged: &str, ordered_cids: &[String]) {
     // ELIDE the additive markers: remove every `<a href="/claims/{cid}">Countered</a>`
     // anchor (the ONLY thing slice-13 adds — appended INSIDE the CID `<td>`, see
     // viewer-domain `render_edge_row`). What remains IS the slice-10 traversal byte-stream
@@ -13173,12 +13234,11 @@ pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededS
     // REAL Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies).
     // Each record's `rkey` IS its deterministic CID, so we can pick ONE as the
     // counter's target BEFORE either is pulled.
-    let (contributor_records, contributor_pubkey_hex) =
-        build_verifiable_peer_records_for_triples(
-            contributor_did,
-            contributor_seed,
-            &contributor_triples,
-        );
+    let (contributor_records, contributor_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        contributor_did,
+        contributor_seed,
+        &contributor_triples,
+    );
     // The counter targets the FIRST contribution CID (any one of the rich trail's
     // rows; a DISTINCT peer counters it — self-counter is BLOCKED by construction).
     let target_cid = contributor_records
@@ -13211,12 +13271,8 @@ pub fn seed_score_breakdown_one_contribution_countered(env: &TestEnv) -> SeededS
         (contributor_did, &contributor_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_score_breakdown_one_contribution_countered: peer add for {did} must \
@@ -13313,12 +13369,11 @@ pub fn seed_score_breakdown_target_two_counters_distinct_authors(
     // STEP 1 — build the contributor's verifiable trail records UP FRONT. Each
     // record's `rkey` IS its deterministic CID, so we can pick ONE as the SHARED
     // counter target BEFORE either peer is pulled.
-    let (contributor_records, contributor_pubkey_hex) =
-        build_verifiable_peer_records_for_triples(
-            contributor_did,
-            contributor_seed,
-            &contributor_triples,
-        );
+    let (contributor_records, contributor_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        contributor_did,
+        contributor_seed,
+        &contributor_triples,
+    );
     // Both counters target the SAME (FIRST) contribution CID — the presence-only
     // proof: TWO distinct authors, ONE referenced_cid → ONE marker.
     let target_cid = contributor_records
@@ -13363,12 +13418,8 @@ pub fn seed_score_breakdown_target_two_counters_distinct_authors(
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
         (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_score_breakdown_target_two_counters_distinct_authors: peer add for \
@@ -13483,8 +13534,18 @@ pub fn seed_score_breakdown_identical_subtotals_one_countered(
     // the SAME object triangulates it. Each record's `rkey` IS its deterministic CID,
     // so we can pick ONE twin as the counter target BEFORE anything is pulled.
     let contributor_quadruples: [(&str, &str, f64, &str); 3] = [
-        (twin_subject, object, twin_confidence, "https://example.test/twin-a"),
-        (twin_subject, object, twin_confidence, "https://example.test/twin-b"),
+        (
+            twin_subject,
+            object,
+            twin_confidence,
+            "https://example.test/twin-a",
+        ),
+        (
+            twin_subject,
+            object,
+            twin_confidence,
+            "https://example.test/twin-b",
+        ),
         (
             triangulating_subject,
             object,
@@ -13532,12 +13593,8 @@ pub fn seed_score_breakdown_identical_subtotals_one_countered(
         (contributor_did, &contributor_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_score_breakdown_identical_subtotals_one_countered: peer add for {did} \
@@ -13649,12 +13706,11 @@ pub fn seed_score_breakdown_none_countered(env: &TestEnv) -> SeededScoreBreakdow
 
     // STEP 1 — build the contributor's verifiable trail records UP FRONT (the same
     // REAL Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies).
-    let (contributor_records, contributor_pubkey_hex) =
-        build_verifiable_peer_records_for_triples(
-            contributor_did,
-            contributor_seed,
-            &contributor_triples,
-        );
+    let (contributor_records, contributor_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        contributor_did,
+        contributor_seed,
+        &contributor_triples,
+    );
     let contributor_pds = PeerPds::for_peer(contributor_did, contributor_records);
 
     // STEP 2 — subscribe to the contributor via the real `peer add` verb (resolver
@@ -13770,12 +13826,11 @@ pub fn seed_score_breakdown_many_pairings_known_countered_subset(
     // Ed25519 crypto + deterministic CID-recompute the pull pipeline verifies). Each
     // record's `rkey` IS its deterministic CID, so we can pick a KNOWN SUBSET as the
     // counter targets BEFORE anything is pulled.
-    let (contributor_records, contributor_pubkey_hex) =
-        build_verifiable_peer_records_for_triples(
-            contributor_did,
-            contributor_seed,
-            &contributor_triples,
-        );
+    let (contributor_records, contributor_pubkey_hex) = build_verifiable_peer_records_for_triples(
+        contributor_did,
+        contributor_seed,
+        &contributor_triples,
+    );
 
     // The KNOWN countered subset: contributions at indices 0, 5, and 10 — spread across
     // the THREE DISTINCT objects (index 0 in object #0, index 5 in object #1, index 10 in
@@ -13928,9 +13983,7 @@ pub fn assert_score_row_flagged_countered(body: &str, countered_cid: &str) {
     // `<a href="/claims/{cid}">Countered</a>` (maud emits no whitespace inside the
     // element), rendered BESIDE the contribution's verbatim subtotal. Scan the rendered
     // HTML only (Mandate 8 universe = the port-exposed rendered surface).
-    let marker = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&marker),
         "assert_score_row_flagged_countered: the countered /score contribution row for \
@@ -13951,9 +14004,7 @@ pub fn assert_score_row_not_flagged(body: &str, uncountered_cid: &str) {
     // flag anchor. (Its bare CID still appears in the row's CID cell — we assert the
     // absence of the FLAG anchor specifically, not the CID text.) Renders exactly as
     // slice-09 (AC-002-NO-NOISE / I-CF-2).
-    let marker = format!(
-        "<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{uncountered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         !body.contains(&marker),
         "assert_score_row_not_flagged: the un-countered /score contribution row for \
@@ -13986,9 +14037,7 @@ pub fn assert_score_flag_is_single_neutral_presence(body: &str, target_cid: &str
     // exact anchor occurrences for this CID — it must appear EXACTLY once. The SCORING
     // sibling of [`assert_edge_flag_is_single_neutral_presence`] /
     // [`assert_list_flag_is_single_neutral_presence`].
-    let marker = format!(
-        "<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let marker = format!("<a href=\"/claims/{target_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     let occurrences = body.matches(&marker).count();
     assert_eq!(
         occurrences, 1,
@@ -14044,9 +14093,7 @@ pub fn assert_score_flag_links_to_thread(body: &str, countered_cid: &str) {
     // — navigation TEXT to the slice-11 thread, never an executable control (maud emits no
     // whitespace inside the element). Scan the rendered HTML only. The SCORING sibling of
     // [`assert_list_flag_links_to_thread`] / [`assert_edge_flag_links_to_thread`].
-    let anchor = format!(
-        "<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>"
-    );
+    let anchor = format!("<a href=\"/claims/{countered_cid}\">{LIST_COUNTERED_FLAG_TEXT}</a>");
     assert!(
         body.contains(&anchor),
         "assert_score_flag_links_to_thread: the 'Countered' marker on the countered /score \
@@ -14095,10 +14142,7 @@ pub fn assert_score_flag_links_to_thread(body: &str, countered_cid: &str) {
 /// the slice-09 `parse_score_pairings` + Σ-subtotal==weight check on the remaining
 /// slice-09 breakdown markup; ALSO asserts the countered contribution's parsed
 /// subtotal equals its un-countered twin's (FULL original value preserved).
-pub fn assert_score_html_breakdown_sums_to_weight_with_flag(
-    body: &str,
-    countered_cids: &[String],
-) {
+pub fn assert_score_html_breakdown_sums_to_weight_with_flag(body: &str, countered_cids: &[String]) {
     // ELIDE every additive `<a href="/claims/{cid}">Countered</a>` marker from the
     // FLAGGED body so the subtotal parse sees the UNCHANGED slice-09 breakdown markup
     // (the marker is additive markup BESIDE the verbatim subtotal cell; eliding it must
@@ -14414,12 +14458,15 @@ pub fn seed_peer_subscribed_zero_claims(env: &TestEnv) -> HeldSubscriptions {
     // Build a verifiable record set + start the peer's PDS so `peer add` can resolve the
     // DID and register the subscription. We deliberately do NOT `peer pull`, so NO
     // `peer_claims` row lands — the active subscription has a per-peer count of 0.
-    let (records, _pubkey_hex) =
-        build_verifiable_peer_records_for_triples(PEERS_NEWPEER_DID, [13u8; 32], &[(
+    let (records, _pubkey_hex) = build_verifiable_peer_records_for_triples(
+        PEERS_NEWPEER_DID,
+        [13u8; 32],
+        &[(
             "github:newpeer/repo",
             "org.openlore.philosophy.dependency-pinning",
             0.50,
-        )]);
+        )],
+    );
     let pds = PeerPds::for_peer(PEERS_NEWPEER_DID, records);
 
     // Subscribe via the real `peer add` verb (resolver wired for THIS peer) — NO pull.
@@ -14743,7 +14790,13 @@ pub fn assert_peers_empty_state_present(body: &str) {
     );
     // The empty state is NOT a blank page and NOT an error surface — no leaked stack trace
     // / panic / 5xx internals (graceful degradation, NFR-PS-6).
-    for banned in ["panicked", "RUST_BACKTRACE", "thread 'main'", "stack backtrace", "500 Internal"] {
+    for banned in [
+        "panicked",
+        "RUST_BACKTRACE",
+        "thread 'main'",
+        "stack backtrace",
+        "500 Internal",
+    ] {
         assert!(
             !body.contains(banned),
             "US-PS-003: the guided empty state must leak NO stack trace / error internal \
@@ -14923,7 +14976,12 @@ pub fn sf_corpus_all_authors_followed() -> Vec<openlore_test_support::RawRecordS
     use openlore_test_support::RawRecordSpec;
     let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
     vec![
-        RawRecordSpec::valid(TRAVERSAL_AUTHOR_RACHEL, "github:NixOS/nixpkgs", object, 0.88),
+        RawRecordSpec::valid(
+            TRAVERSAL_AUTHOR_RACHEL,
+            "github:NixOS/nixpkgs",
+            object,
+            0.88,
+        ),
         RawRecordSpec::valid(
             TRAVERSAL_AUTHOR_TOBIAS,
             "github:rust-lang/cargo",
@@ -15216,8 +15274,13 @@ pub const SF_REMOVED_CACHED_INDICATOR_DEFAULT: &str = "A peer you removed (cache
 /// Accepted NEUTRAL self-indicator phrasings (the DEFAULT + close synonyms within
 /// the OQ-2 neutral gate). A `You` row's affordance must contain ONE of these AND
 /// no `peer add` command. None is pejorative.
-const SF_SELF_INDICATOR_ACCEPTED: &[&str] =
-    &["Your own claim", "your own claim", "Your claim", "(you)", "Yourself"];
+const SF_SELF_INDICATOR_ACCEPTED: &[&str] = &[
+    "Your own claim",
+    "your own claim",
+    "Your claim",
+    "(you)",
+    "Yourself",
+];
 
 /// Accepted NEUTRAL residue-indicator phrasings (the DEFAULT + close synonyms
 /// within the OQ-2 neutral gate). An `UnsubscribedCache` row's affordance must
@@ -15272,7 +15335,12 @@ pub fn sf_corpus_all_four_arms() -> Vec<openlore_test_support::RawRecordSpec> {
         // Rachel — the FOLLOWED peer → `SubscribedPeer` ("Following").
         RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
         // Tobias — the SOFT-REMOVED-but-cached peer → `UnsubscribedCache` (residue).
-        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+        RawRecordSpec::valid(
+            TRAVERSAL_AUTHOR_TOBIAS,
+            "github:rust-lang/cargo",
+            object,
+            0.74,
+        ),
         // Priya — the genuinely-NEW author → `NetworkUnfollowed` (`peer add`).
         RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82),
     ]
@@ -15321,7 +15389,12 @@ pub fn sf_corpus_all_arms_many_new() -> Vec<openlore_test_support::RawRecordSpec
     let mut specs = vec![
         RawRecordSpec::valid(SF_OWN_BARE_DID, "github:openlore/self", object, 0.95),
         RawRecordSpec::valid(RACHEL_DID, "github:NixOS/nixpkgs", object, 0.88),
-        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+        RawRecordSpec::valid(
+            TRAVERSAL_AUTHOR_TOBIAS,
+            "github:rust-lang/cargo",
+            object,
+            0.74,
+        ),
     ];
     for (i, subject) in [
         "github:bazelbuild/bazel",
@@ -15367,7 +15440,12 @@ pub fn sf_corpus_cached_and_new() -> Vec<openlore_test_support::RawRecordSpec> {
     use openlore_test_support::{RawRecordSpec, PRIYA_DID};
     let object = SF_OBJECT_REPRODUCIBLE_BUILDS;
     vec![
-        RawRecordSpec::valid(TRAVERSAL_AUTHOR_TOBIAS, "github:rust-lang/cargo", object, 0.74),
+        RawRecordSpec::valid(
+            TRAVERSAL_AUTHOR_TOBIAS,
+            "github:rust-lang/cargo",
+            object,
+            0.74,
+        ),
         RawRecordSpec::valid(PRIYA_DID, "github:bazelbuild/bazel", object, 0.82),
     ]
 }
@@ -15462,11 +15540,7 @@ pub fn seed_active_and_cached_peer_for(env: &TestEnv, peer_did: &str, seed: [u8;
         &[SeedPeer {
             peer_did,
             seed,
-            triples: &[(
-                "github:NixOS/nixpkgs",
-                SF_OBJECT_REPRODUCIBLE_BUILDS,
-                0.88,
-            )],
+            triples: &[("github:NixOS/nixpkgs", SF_OBJECT_REPRODUCIBLE_BUILDS, 0.88)],
         }],
     );
     // Pin the GENUINE active-and-cached state: ONE active subscription row
@@ -15778,14 +15852,14 @@ pub const LANDING_MISSING_COUNT_MARKER: &str = "—";
 /// for the href (the load-bearing navigation target) — see
 /// [`assert_landing_links_all_surfaces`].
 pub const LANDING_TOP_LEVEL_SURFACES: &[(&str, &str)] = &[
-    ("My Claims", "/claims"),         // MY_CLAIMS_URL
-    ("Peer Claims", "/peer-claims"),  // PEER_CLAIMS_URL
-    ("Project Survey", "/project"),   // PROJECT_URL
+    ("My Claims", "/claims"),             // MY_CLAIMS_URL
+    ("Peer Claims", "/peer-claims"),      // PEER_CLAIMS_URL
+    ("Project Survey", "/project"),       // PROJECT_URL
     ("Philosophy Survey", "/philosophy"), // PHILOSOPHY_URL
-    ("Contributor Score", "/score"),  // SCORE_URL
-    ("Network Search", "/search"),    // SEARCH_URL
-    ("Live Scrape", "/scrape"),       // SCRAPE_URL (NEW this slice)
-    ("Peer Subscriptions", "/peers"), // PEERS_URL
+    ("Contributor Score", "/score"),      // SCORE_URL
+    ("Network Search", "/search"),        // SEARCH_URL
+    ("Live Scrape", "/scrape"),           // SCRAPE_URL (NEW this slice)
+    ("Peer Subscriptions", "/peers"),     // PEERS_URL
 ];
 
 /// The deep / parameterized routes that must NOT appear as a top-level hub link
@@ -15794,10 +15868,10 @@ pub const LANDING_TOP_LEVEL_SURFACES: &[(&str, &str)] = &[
 /// that NONE of these appears as a hub `href=` target — see
 /// [`assert_landing_no_deep_route_toplevel`].
 pub const LANDING_DEEP_ROUTES_FORBIDDEN_AT_TOPLEVEL: &[&str] = &[
-    "/claims/bafy",      // /claims/{cid} detail (a CID-addressed deep route)
-    "?contributor=",     // /score?contributor=… parameterized
-    "?subject=",         // /project?subject=… parameterized
-    "?object=",          // /philosophy?object=… parameterized
+    "/claims/bafy",  // /claims/{cid} detail (a CID-addressed deep route)
+    "?contributor=", // /score?contributor=… parameterized
+    "?subject=",     // /project?subject=… parameterized
+    "?object=",      // /philosophy?object=… parameterized
 ];
 
 /// Seed the env's REAL store to the KNOWN landing summary — 12 own claims (real
@@ -16142,15 +16216,15 @@ pub const COUNTERED_PEER_TOBIAS_DID: &str = COUNTER_AUTHOR_TOBIAS; // did:plc:to
 /// a score/deduction/verdict. The asserts scan the rendered body (lowercased) for NONE of
 /// these — see [`assert_countered_copy_is_neutral`].
 pub const COUNTERED_BANNED_VERDICT_COPY: &[&str] = &[
-    "disputed by",   // a "by N" total (the count is presence-once, never a tally)
-    "refuted",       // a verdict
-    "false",         // a verdict
-    "penalty",       // a deduction
-    "deduction",     // a deduction
-    "deducted",      // a deduction
-    "invalid",       // a verdict
-    "wrong",         // a verdict
-    "discredited",   // a verdict
+    "disputed by", // a "by N" total (the count is presence-once, never a tally)
+    "refuted",     // a verdict
+    "false",       // a verdict
+    "penalty",     // a deduction
+    "deduction",   // a deduction
+    "deducted",    // a deduction
+    "invalid",     // a verdict
+    "wrong",       // a verdict
+    "discredited", // a verdict
 ];
 
 /// Run the ADR-055 countered-own-claims `COUNT(DISTINCT)` aggregate DIRECTLY against the
@@ -16292,12 +16366,8 @@ pub fn seed_landing_store_with_countered_own_claims(env: &TestEnv) -> HeldSubscr
         (COUNTERED_PEER_RACHEL_DID, &rachel_pds),
         (COUNTERED_PEER_TOBIAS_DID, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_landing_store_with_countered_own_claims: peer add for {did} must succeed;\n\
@@ -16385,8 +16455,16 @@ pub fn seed_landing_store_none_countered(env: &TestEnv) -> HeldSubscriptions {
 pub fn seed_landing_store_one_own_claim_countered_twice(env: &TestEnv) -> HeldSubscriptions {
     // STEP 1 — sign several plain own claims; ONE of them is the twice-countered target.
     for (subject, predicate, object) in [
-        ("github:slice18/plain-rust", "embodiesPhilosophy", "org.openlore.philosophy.memory-safety"),
-        ("github:slice18/plain-deno", "embodiesPhilosophy", "org.openlore.philosophy.secure-by-default"),
+        (
+            "github:slice18/plain-rust",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.memory-safety",
+        ),
+        (
+            "github:slice18/plain-deno",
+            "embodiesPhilosophy",
+            "org.openlore.philosophy.secure-by-default",
+        ),
     ] {
         seed_own_claim_with_evidence(env, subject, predicate, object, 0.90, &[]);
     }
@@ -16426,12 +16504,8 @@ pub fn seed_landing_store_one_own_claim_countered_twice(env: &TestEnv) -> HeldSu
         (COUNTERED_PEER_RACHEL_DID, &rachel_pds),
         (COUNTERED_PEER_TOBIAS_DID, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(
-            env,
-            &["peer", "add", did],
-            did,
-            pds.endpoint_url(),
-        );
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_landing_store_one_own_claim_countered_twice: peer add for {did} must succeed;\n\
@@ -16794,7 +16868,13 @@ pub fn read_countered_peer_claims_count(env: &TestEnv) -> usize {
 fn counter_peer_claim_by_operator(env: &TestEnv, peer_cid: &str) {
     let outcome = run_openlore_with_stdin(
         env,
-        &["claim", "counter", peer_cid, "--reason", COUNTER_REASON_VERBATIM],
+        &[
+            "claim",
+            "counter",
+            peer_cid,
+            "--reason",
+            COUNTER_REASON_VERBATIM,
+        ],
         "\nN\n",
     );
     assert_eq!(
@@ -16842,10 +16922,26 @@ pub fn seed_landing_store_with_countered_peer_claims(env: &TestEnv) -> SeededPee
         surveyed_peer,
         rachel_seed,
         &[
-            ("github:peer/rachel-axum", "org.openlore.philosophy.ergonomics", 0.40),
-            ("github:peer/rachel-tokio", "org.openlore.philosophy.async-runtime", 0.70),
-            ("github:peer/rachel-serde", "org.openlore.philosophy.zero-copy", 0.70),
-            ("github:peer/rachel-hyper", "org.openlore.philosophy.composability", 0.70),
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.40,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-hyper",
+                "org.openlore.philosophy.composability",
+                0.70,
+            ),
         ],
     );
     // Counter Rachel's FIRST surveyed claim — its deterministic CID is the counter target.
@@ -16945,10 +17041,26 @@ pub fn seed_landing_store_no_peer_claim_countered(env: &TestEnv) -> SeededPeerCl
         surveyed_peer,
         rachel_seed,
         &[
-            ("github:peer/rachel-axum", "org.openlore.philosophy.ergonomics", 0.70),
-            ("github:peer/rachel-tokio", "org.openlore.philosophy.async-runtime", 0.70),
-            ("github:peer/rachel-serde", "org.openlore.philosophy.zero-copy", 0.70),
-            ("github:peer/rachel-hyper", "org.openlore.philosophy.composability", 0.70),
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-hyper",
+                "org.openlore.philosophy.composability",
+                0.70,
+            ),
         ],
     );
     let rachel_pds = PeerPds::for_peer(surveyed_peer, rachel_records);
@@ -17024,8 +17136,16 @@ pub fn seed_landing_store_one_peer_claim_countered_twice(env: &TestEnv) -> Seede
         COUNTER_AUTHOR_TOBIAS,
         tobias_seed,
         &[
-            ("github:peer/tobias-rust", "org.openlore.philosophy.memory-safety", 0.40),
-            ("github:peer/tobias-tokio", "org.openlore.philosophy.async-runtime", 0.70),
+            (
+                "github:peer/tobias-rust",
+                "org.openlore.philosophy.memory-safety",
+                0.40,
+            ),
+            (
+                "github:peer/tobias-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
         ],
     );
     let target_cid = tobias_records
@@ -17049,7 +17169,8 @@ pub fn seed_landing_store_one_peer_claim_countered_twice(env: &TestEnv) -> Seede
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
         (COUNTER_TARGET_AUTHOR_RACHEL, &rachel_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_landing_store_one_peer_claim_countered_twice: peer add for {did} must succeed;\n\
@@ -17131,8 +17252,16 @@ pub fn seed_landing_store_peer_claims_countered_each_arm(env: &TestEnv) -> Seede
         surveyed_peer,
         rachel_seed,
         &[
-            ("github:peer/rachel-arm-a", "org.openlore.philosophy.ergonomics", 0.70),
-            ("github:peer/rachel-arm-b", "org.openlore.philosophy.zero-copy", 0.70),
+            (
+                "github:peer/rachel-arm-a",
+                "org.openlore.philosophy.ergonomics",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-arm-b",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
         ],
     );
     // Claim A — countered by the operator (`claim_references` arm). Claim B — countered by
@@ -17163,7 +17292,8 @@ pub fn seed_landing_store_peer_claims_countered_each_arm(env: &TestEnv) -> Seede
         (surveyed_peer, &rachel_pds),
         (COUNTER_AUTHOR_TOBIAS, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_landing_store_peer_claims_countered_each_arm: peer add for {did} must succeed;\n\
@@ -17250,16 +17380,28 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
     // STEP 1 — the slice-18 OWN substrate: 3 NAMED own claims to be peer-countered (part of
     // the 12) + 9 plain own claims so `count_claims == 12`.
     let target_a = seed_own_claim_with_evidence(
-        env, "github:slice19/aaa", "embodiesPhilosophy",
-        "org.openlore.philosophy.dependency-pinning", 0.90, &[],
+        env,
+        "github:slice19/aaa",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.dependency-pinning",
+        0.90,
+        &[],
     );
     let target_b = seed_own_claim_with_evidence(
-        env, "github:slice19/bbb", "embodiesPhilosophy",
-        "org.openlore.philosophy.memory-safety", 0.90, &[],
+        env,
+        "github:slice19/bbb",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.memory-safety",
+        0.90,
+        &[],
     );
     let target_c = seed_own_claim_with_evidence(
-        env, "github:slice19/ccc", "embodiesPhilosophy",
-        "org.openlore.philosophy.reproducible-builds", 0.30, &[],
+        env,
+        "github:slice19/ccc",
+        "embodiesPhilosophy",
+        "org.openlore.philosophy.reproducible-builds",
+        0.30,
+        &[],
     );
     seed_own_claims_via_cli(env, LANDING_OWN_CLAIMS - COUNTERED_OWN_CLAIMS);
 
@@ -17273,10 +17415,26 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
         PEER_COUNT_SURVEYED_DID,
         priya_seed,
         &[
-            ("github:peer/priya-axum", "org.openlore.philosophy.ergonomics", 0.40),
-            ("github:peer/priya-tokio", "org.openlore.philosophy.async-runtime", 0.70),
-            ("github:peer/priya-serde", "org.openlore.philosophy.zero-copy", 0.70),
-            ("github:peer/priya-hyper", "org.openlore.philosophy.composability", 0.70),
+            (
+                "github:peer/priya-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.40,
+            ),
+            (
+                "github:peer/priya-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/priya-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+            (
+                "github:peer/priya-hyper",
+                "org.openlore.philosophy.composability",
+                0.70,
+            ),
         ],
     );
     let peer_target = priya_records
@@ -17287,20 +17445,43 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
 
     let rachel_seed = [7u8; 32];
     let tobias_seed = [9u8; 32];
-    let (rachel_counter_a, rachel_pubkey_hex) =
-        build_verifiable_peer_counter_record(COUNTERED_PEER_RACHEL_DID, rachel_seed, &target_a, Some(COUNTER_PEER_REASON_VERBATIM));
-    let (rachel_counter_c, _r2) =
-        build_verifiable_peer_counter_record(COUNTERED_PEER_RACHEL_DID, rachel_seed, &target_c, Some(COUNTER_PEER_REASON_VERBATIM));
-    let (tobias_counter_b, tobias_pubkey_hex) =
-        build_verifiable_peer_counter_record(COUNTERED_PEER_TOBIAS_DID, tobias_seed, &target_b, Some(COUNTER_PEER_REASON_VERBATIM));
-    let (tobias_counter_c, _t2) =
-        build_verifiable_peer_counter_record(COUNTERED_PEER_TOBIAS_DID, tobias_seed, &target_c, Some(COUNTER_PEER_REASON_VERBATIM));
+    let (rachel_counter_a, rachel_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_RACHEL_DID,
+        rachel_seed,
+        &target_a,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (rachel_counter_c, _r2) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_RACHEL_DID,
+        rachel_seed,
+        &target_c,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (tobias_counter_b, tobias_pubkey_hex) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &target_b,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
+    let (tobias_counter_c, _t2) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &target_c,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
     // Tobias ALSO counters Priya's PEER claim P (the peer-arm countered-peer-claim).
-    let (tobias_counter_peer, _t3) =
-        build_verifiable_peer_counter_record(COUNTERED_PEER_TOBIAS_DID, tobias_seed, &peer_target, Some(COUNTER_PEER_REASON_VERBATIM));
+    let (tobias_counter_peer, _t3) = build_verifiable_peer_counter_record(
+        COUNTERED_PEER_TOBIAS_DID,
+        tobias_seed,
+        &peer_target,
+        Some(COUNTER_PEER_REASON_VERBATIM),
+    );
 
     let priya_pds = PeerPds::for_peer(PEER_COUNT_SURVEYED_DID, priya_records);
-    let rachel_pds = PeerPds::for_peer(COUNTERED_PEER_RACHEL_DID, vec![rachel_counter_a, rachel_counter_c]);
+    let rachel_pds = PeerPds::for_peer(
+        COUNTERED_PEER_RACHEL_DID,
+        vec![rachel_counter_a, rachel_counter_c],
+    );
     let tobias_pds = PeerPds::for_peer(
         COUNTERED_PEER_TOBIAS_DID,
         vec![tobias_counter_b, tobias_counter_c, tobias_counter_peer],
@@ -17311,7 +17492,8 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
         (COUNTERED_PEER_RACHEL_DID, &rachel_pds),
         (COUNTERED_PEER_TOBIAS_DID, &tobias_pds),
     ] {
-        let added = run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
+        let added =
+            run_openlore_with_peer_resolver(env, &["peer", "add", did], did, pds.endpoint_url());
         assert_eq!(
             added.status, 0,
             "seed_landing_store_with_countered_peer_and_own: peer add for {did} must succeed;\n\
@@ -17323,9 +17505,21 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
         env,
         &["peer", "pull"],
         &[
-            PeerSeam { peer_did: PEER_COUNT_SURVEYED_DID, peer_endpoint: priya_pds.endpoint_url(), peer_pubkey_hex: &priya_pubkey_hex },
-            PeerSeam { peer_did: COUNTERED_PEER_RACHEL_DID, peer_endpoint: rachel_pds.endpoint_url(), peer_pubkey_hex: &rachel_pubkey_hex },
-            PeerSeam { peer_did: COUNTERED_PEER_TOBIAS_DID, peer_endpoint: tobias_pds.endpoint_url(), peer_pubkey_hex: &tobias_pubkey_hex },
+            PeerSeam {
+                peer_did: PEER_COUNT_SURVEYED_DID,
+                peer_endpoint: priya_pds.endpoint_url(),
+                peer_pubkey_hex: &priya_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTERED_PEER_RACHEL_DID,
+                peer_endpoint: rachel_pds.endpoint_url(),
+                peer_pubkey_hex: &rachel_pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: COUNTERED_PEER_TOBIAS_DID,
+                peer_endpoint: tobias_pds.endpoint_url(),
+                peer_pubkey_hex: &tobias_pubkey_hex,
+            },
         ],
     );
     assert_eq!(
@@ -17366,10 +17560,15 @@ pub fn seed_landing_store_with_countered_peer_and_own(env: &TestEnv) -> HeldSubs
 pub fn landing_peer_total(env: &TestEnv) -> usize {
     let db_path = env.duckdb_path();
     let conn = duckdb::Connection::open(&db_path).unwrap_or_else(|err| {
-        panic!("open DuckDB at {} for peer_claims total read: {err}", db_path.display())
+        panic!(
+            "open DuckDB at {} for peer_claims total read: {err}",
+            db_path.display()
+        )
     });
-    conn.query_row("SELECT COUNT(*) FROM peer_claims", [], |row| row.get::<_, i64>(0))
-        .unwrap_or_else(|err| panic!("query peer_claims total: {err}")) as usize
+    conn.query_row("SELECT COUNT(*) FROM peer_claims", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .unwrap_or_else(|err| panic!("query peer_claims total: {err}")) as usize
 }
 
 /// Pile on `count` MORE plain cached peer claims (a SECOND surveyed peer, none countered) so
@@ -17402,7 +17601,12 @@ pub fn seed_extra_plain_peer_claims(env: &TestEnv, count: usize) {
     let (records, pubkey_hex) =
         build_verifiable_peer_records_for_triples(bulk_peer, bulk_seed, &triple_refs);
     let pds = PeerPds::for_peer(bulk_peer, records);
-    let added = run_openlore_with_peer_resolver(env, &["peer", "add", bulk_peer], bulk_peer, pds.endpoint_url());
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", bulk_peer],
+        bulk_peer,
+        pds.endpoint_url(),
+    );
     assert_eq!(
         added.status, 0,
         "seed_extra_plain_peer_claims: peer add for {bulk_peer} must succeed;\n\
@@ -17425,10 +17629,26 @@ pub fn seed_extra_plain_peer_claims(env: &TestEnv, count: usize) {
         COUNTER_TARGET_AUTHOR_RACHEL,
         [7u8; 32],
         &[
-            ("github:peer/rachel-axum", "org.openlore.philosophy.ergonomics", 0.40),
-            ("github:peer/rachel-tokio", "org.openlore.philosophy.async-runtime", 0.70),
-            ("github:peer/rachel-serde", "org.openlore.philosophy.zero-copy", 0.70),
-            ("github:peer/rachel-hyper", "org.openlore.philosophy.composability", 0.70),
+            (
+                "github:peer/rachel-axum",
+                "org.openlore.philosophy.ergonomics",
+                0.40,
+            ),
+            (
+                "github:peer/rachel-tokio",
+                "org.openlore.philosophy.async-runtime",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-serde",
+                "org.openlore.philosophy.zero-copy",
+                0.70,
+            ),
+            (
+                "github:peer/rachel-hyper",
+                "org.openlore.philosophy.composability",
+                0.70,
+            ),
         ],
     );
     let rachel_pds = PeerPds::for_peer(COUNTER_TARGET_AUTHOR_RACHEL, rachel_records);
@@ -17534,7 +17754,12 @@ pub fn assert_landing_peer_countered_count(body: &str, n: usize) {
     // "peer claims" and the parenthetical is DELIVER's render decision; we tolerate a single
     // space (the headline copy) and fall back to a same-line scan that still requires the
     // "peer claims" label to PRECEDE the parenthetical.
-    assert_countered_count_beside_label(body, "peer claims", n, "US-PC-001 — \"4 peer claims (1 countered)\"");
+    assert_countered_count_beside_label(
+        body,
+        "peer claims",
+        n,
+        "US-PC-001 — \"4 peer claims (1 countered)\"",
+    );
 }
 
 /// Assert the rendered landing body shows "(`n` countered)" at the count position of the
@@ -17669,7 +17894,10 @@ pub fn assert_peer_claims_header_countered_missing(body: &str) {
 /// presence check is unambiguous.
 ///
 /// SCAFFOLD: true (slice-19).
-pub fn assert_landing_and_peer_claims_countered_consistent(landing_body: &str, peer_claims_body: &str) {
+pub fn assert_landing_and_peer_claims_countered_consistent(
+    landing_body: &str,
+    peer_claims_body: &str,
+) {
     let peer_count = extract_countered_parenthetical(peer_claims_body).unwrap_or_else(|| {
         panic!(
             "assert_landing_and_peer_claims_countered_consistent: the `/peer-claims` body must \
