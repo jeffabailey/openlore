@@ -109,6 +109,41 @@ pub const SEARCH_SELF_INDICATOR: &str = "Your own claim";
 /// [`render_cached_unsubscribed_indicator`].
 pub const SEARCH_REMOVED_CACHED_INDICATOR: &str = "A peer you removed (cached)";
 
+/// The read-only `?hide_retracted=1` GET-param CONTROL label the `/search` form
+/// renders (feature `retraction-aware-search-filter`; US-RF-002 / OD-RF-2 / ADR-060).
+/// A plain GET-param checkbox toggle — a public-data READ affordance, NEVER a
+/// write/sign/subscribe control (I-RF-6): the read-only viewer holds no key. Held in
+/// ONE place; the SUBSTRING the RF-V6 acceptance gate keys on.
+pub const SEARCH_HIDE_RETRACTED_LABEL: &str = "Hide retracted claims";
+
+/// The `<input name>` / GET-param key of the read-only hide toggle
+/// (`?hide_retracted=1`, feature `retraction-aware-search-filter`). Held in ONE place
+/// so the form control's `name` and the effect shell's param key cannot drift apart.
+pub const SEARCH_HIDE_RETRACTED_PARAM: &str = "hide_retracted";
+
+/// Content-frozen retraction-count noun MIRRORING the slice-01 CLI
+/// `cli::render::search::RETRACTION_HIDDEN_COUNT_NOUN` (US-RF-001/002 / OD-RF-3 /
+/// D-RF-D5): the honest unit is retraction EVENTS — "1 retracted claim(s) hidden",
+/// NOT 2 rows. The CLI const lives in the `cli` crate (which `viewer-domain` cannot
+/// import), so the SUBSTRING is mirrored VERBATIM here so both surfaces stay
+/// byte-identical. Do NOT paraphrase — the exact phrasing is the disclosure contract.
+pub const SEARCH_RETRACTION_HIDDEN_COUNT_NOUN: &str = "retracted claim(s) hidden";
+
+/// The viewer re-run guidance appended to EVERY hide disclosure — the browser
+/// equivalent of the CLI `re-run without --hide-retracted` (US-RF-002 / I-RF-3): the
+/// filter is non-destructive + reversible, so the surface ALWAYS names how to restore
+/// the hidden rows (untick the read-only GET-param control). Held in ONE place;
+/// carries the "Untick" verb the RF-V1/V4 acceptance gate keys on.
+pub const SEARCH_RETRACTION_UNTICK_GUIDANCE: &str =
+    "Untick the Hide retracted claims control to see them again.";
+
+/// Content-frozen empty-after-filter fragment MIRRORING the slice-01 CLI
+/// `cli::render::search::RETRACTION_ALL_HIDDEN_FRAGMENT` (US-RF-002 / RF-V4 / I-RF-3):
+/// when the filter hid EVERY result, the guided region states the claims
+/// `were soft-retracted` — an explicit "they exist but were withdrawn" state, never a
+/// bare blank region. Do NOT paraphrase.
+pub const SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT: &str = "were soft-retracted";
+
 /// Resolve the four-arm [`AuthorRelationship`] for ONE search-result author against
 /// the operator's THREE LOCAL presence sets (slice-20 / US-FS-001/002 / ADR-057 D2).
 /// PURE total deterministic function — the SSOT for the `/search` follow-state
@@ -189,6 +224,42 @@ pub enum SearchState {
     /// transport detail, so the raw error/URL/status CANNOT be interpolated,
     /// guaranteeing no leaked internals (I-NS-2) by construction.
     Unavailable,
+    /// A REACHABLE index returned rows AND `?hide_retracted=1` hid ≥1 author-self-
+    /// retraction EVENT while ≥1 SURVIVOR remains (feature
+    /// `retraction-aware-search-filter`; US-RF-002 / RF-V1/V3/V5 / ADR-060). Carries
+    /// the SURVIVORS' `compose_results` projection (the SAME anti-merging core
+    /// [`Results`] uses — the viewer holds no second grouping path), the search
+    /// `dimension` (same honest-framing footer selection as [`Results`]), AND the
+    /// disclosed hidden EVENT count. `hidden_count` is `>= 1` BY CONSTRUCTION — a
+    /// zero-count filter yields [`Results`] (no misleading "0 hidden" line, D-4), so a
+    /// notice-with-zero is UNREPRESENTABLE (nw-fp-domain-modeling §4). The renderer
+    /// ALWAYS emits the disclosure notice for this variant, in BOTH htmx shapes
+    /// (I-RF-3 / RF-V3 — it lives in the shared results-region fragment).
+    FilteredResults {
+        /// The SURVIVORS' REUSED per-author `compose_results` output (anti-merging by
+        /// construction — decided on the RAW rows in the effect shell BEFORE this
+        /// lossy projection, ADR-060 §subtlety-1).
+        result: appview_domain::NetworkSearchResult,
+        /// The dimension the search ran along — selects the dimension-specific footer
+        /// (CONTRIBUTOR → the honest-framing line; OBJECT/SUBJECT → none), exactly as
+        /// [`Results`].
+        dimension: appview_domain::SearchDimension,
+        /// The number of author-self-retraction EVENTS hidden (D-RF-D5) — `>= 1` by
+        /// construction. Disclosed VERBATIM in the "N retracted claim(s) hidden" notice.
+        hidden_count: u32,
+    },
+    /// `?hide_retracted=1` hid EVERY matching row (feature
+    /// `retraction-aware-search-filter`; US-RF-002 / RF-V4 / I-RF-3): the guided
+    /// empty-after-filter region names that all `hidden_count` results
+    /// `were soft-retracted` + how to untick to restore them — never a blank region,
+    /// never a crash. DISTINCT from [`NoResults`] (the index returned ZERO rows): here
+    /// the rows EXIST but were all author-self-retracted (the withdrawn state, not the
+    /// absent state).
+    AllRetracted {
+        /// The number of author-self-retraction EVENTS hidden — `>= 1` by construction
+        /// (this variant only arises when the filter emptied a NON-empty result set).
+        hidden_count: u32,
+    },
 }
 
 /// Render the network-search swap-target FRAGMENT (slice-08; ADR-037): the
@@ -238,13 +309,21 @@ pub fn render_search_page(state: &SearchState) -> String {
     // `<main id="viewer-main">`); `active = SEARCH_URL` marks the Network Search nav
     // item current. The `render_*_fragment` fn is UNCHANGED (it rides `Shape::Fragment`
     // for the #search-results swap).
+    // feature retraction-aware-search-filter (US-RF-002 / OD-RF-2 / RF-V6): reflect the
+    // active hide state on the read-only toggle so unticking restores the hidden rows.
+    // The filter-bearing states (FilteredResults / AllRetracted) are the ONLY ones the
+    // toggle is active for; every other state renders it unchecked.
+    let hide_active = matches!(
+        state,
+        SearchState::FilteredResults { .. } | SearchState::AllRetracted { .. }
+    );
     let body = html! {
         h1 { "Network Search" }
         p { (SEARCH_PUBLIC_DATA_NOTICE) }
         nav {
             a href=(MY_CLAIMS_URL) { "My Claims" }
         }
-        (render_search_form())
+        (render_search_form(hide_active))
         (render_search_results_fragment(state))
     };
     page_shell("OpenLore — Network Search", SEARCH_URL, body)
@@ -260,7 +339,7 @@ pub fn render_search_page(state: &SearchState) -> String {
 /// this dimension". It carries NO sign/follow control. Enhanced with
 /// `hx-get`/`hx-target` so an in-browser submit swaps ONLY the `#search-results`
 /// region; the no-JS path is a plain `GET` to `/search`.
-fn render_search_form() -> Markup {
+fn render_search_form(hide_active: bool) -> Markup {
     html! {
         form method="get" action=(SEARCH_URL)
              hx-get=(SEARCH_URL)
@@ -272,6 +351,15 @@ fn render_search_form() -> Markup {
             input type="text" id="contributor" name="contributor";
             label for="subject" { "Project / subject" }
             input type="text" id="subject" name="subject";
+            // feature retraction-aware-search-filter (US-RF-002 / OD-RF-2 / I-RF-6 /
+            // RF-V6): the read-only `?hide_retracted=1` toggle — a plain GET-param
+            // checkbox (a public-data READ affordance), NEVER a write/sign/subscribe
+            // control (the viewer holds no signing key). `checked[hide_active]`
+            // reflects the active state so unticking + submitting restores the hidden
+            // rows via the SAME GET path (no JS required).
+            label for=(SEARCH_HIDE_RETRACTED_PARAM) { (SEARCH_HIDE_RETRACTED_LABEL) }
+            input type="checkbox" id=(SEARCH_HIDE_RETRACTED_PARAM)
+                  name=(SEARCH_HIDE_RETRACTED_PARAM) value="1" checked[hide_active];
             button type="submit" { "Search" }
         }
     }
@@ -301,6 +389,58 @@ fn render_search_result(state: &SearchState) -> Markup {
             SearchState::Unavailable => {
                 p { (SEARCH_UNAVAILABLE_NOTICE) }
             }
+            // FilteredResults (US-RF-002 / RF-V1/V3/V5): the disclosure notice ABOVE
+            // the SURVIVORS + the SAME per-author groups + footer `Results` renders.
+            // The notice lives here (in the shared results-region fragment), so BOTH
+            // htmx shapes carry it (I-RF-3 / RF-V3 parity by construction).
+            SearchState::FilteredResults {
+                result,
+                dimension,
+                hidden_count,
+            } => {
+                (render_retraction_notice(*hidden_count))
+                (render_search_author_groups(result))
+                (render_search_footer(*dimension))
+            }
+            // AllRetracted (US-RF-002 / RF-V4 / I-RF-3): the guided empty-after-filter
+            // region — the rows EXIST but were all withdrawn, so this is NOT a blank
+            // region and NOT `NoResults`.
+            SearchState::AllRetracted { hidden_count } => {
+                (render_all_retracted_region(*hidden_count))
+            }
+        }
+    }
+}
+
+/// Render the honest retraction disclosure notice shown IN the results region above
+/// the survivors when `?hide_retracted=1` hid ≥1 author-self-retraction EVENT
+/// (US-RF-002 / RF-V1/V3/V5 / I-RF-3): "N retracted claim(s) hidden" (N = EVENTS,
+/// D-RF-D5 — the honest unit, MIRRORING the slice-01 CLI footer via
+/// [`SEARCH_RETRACTION_HIDDEN_COUNT_NOUN`]) + the untick-to-restore guidance. It lives
+/// in the shared results-region fragment, so BOTH htmx shapes carry it (RF-V3 parity).
+/// PURE total function.
+fn render_retraction_notice(hidden_count: u32) -> Markup {
+    html! {
+        p {
+            (hidden_count) " " (SEARCH_RETRACTION_HIDDEN_COUNT_NOUN) ". "
+            (SEARCH_RETRACTION_UNTICK_GUIDANCE)
+        }
+    }
+}
+
+/// Render the guided empty-after-filter region when `?hide_retracted=1` hid EVERY
+/// matching row (US-RF-002 / RF-V4 / I-RF-3): names that all `hidden_count` results
+/// `were soft-retracted` by their authors (via [`SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT`],
+/// MIRRORING the slice-01 CLI buffer) + the untick guidance — an explicit withdrawn
+/// state, never a bare blank region. PURE total function.
+fn render_all_retracted_region(hidden_count: u32) -> Markup {
+    html! {
+        p {
+            "All " (hidden_count) " matching claim(s) "
+            (SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT)
+            " by their authors and are hidden from this view ("
+            (hidden_count) " " (SEARCH_RETRACTION_HIDDEN_COUNT_NOUN) "). "
+            (SEARCH_RETRACTION_UNTICK_GUIDANCE)
         }
     }
 }

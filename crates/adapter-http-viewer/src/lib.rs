@@ -25,7 +25,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use appview_domain::{compose_results, NetworkSearchResult};
+use appview_domain::{compose_results, partition_retracted, NetworkSearchResult};
 use claim_domain::{Cid, Did, KeyId};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -1214,20 +1214,51 @@ async fn resolve_search_state(
             queried_value: display_value,
         },
         Ok(raw) => {
-            // REUSE the pure anti-merging core: map the flat attributed transport
-            // rows into `IndexedClaim`s and re-compose per-author (no merge, counter
-            // kept). The viewer holds NO second grouping/verification path. The
-            // `dimension` is carried into the state so the renderer adds the
-            // dimension-specific honest-framing footer (CONTRIBUTOR → "not a
-            // community consensus", US-NS-003 / AC-003.2); the grouping is identical
-            // across dimensions.
-            let claims = raw
-                .results
-                .into_iter()
-                .map(|row| to_indexed_claim(row, &own, &active, &cached))
-                .collect();
-            let result: NetworkSearchResult = compose_results(claims, dimension);
-            SearchState::Results { result, dimension }
+            // feature retraction-aware-search-filter (US-RF-002 / ADR-060): apply the
+            // SINGLE pure `partition_retracted` decision to the RAW attributed rows
+            // BEFORE the lossy map to `IndexedClaim`/`compose_results` (ADR-060
+            // §subtlety-1 — the raw rows retain the full `references` graph the filter
+            // reads; `compose_results`' single-slot `counter_annotation` does not).
+            // `?hide_retracted=1` ⇒ drop each author-self-retraction EVENT + disclose
+            // the count; absent / `0` ⇒ identity (survivors == rows, count 0), so the
+            // default path stays byte-stable (I-RF-1 / RF-V2). This is the SAME pure
+            // predicate the slice-01 CLI `--hide-retracted` verb wires.
+            let hide_retracted = parse_hide_retracted(query);
+            let partition = partition_retracted(raw.results, hide_retracted);
+            if hide_retracted && partition.survivors.is_empty() {
+                // Every matching row was withdrawn — the guided empty-after-filter
+                // region, NOT a bare `NoResults` (the rows EXIST but were all
+                // author-self-retracted; RF-V4 / I-RF-3). `hidden_count >= 1` here
+                // because `raw` was non-empty (the zero-row case is the arm above).
+                SearchState::AllRetracted {
+                    hidden_count: partition.hidden_count,
+                }
+            } else {
+                // REUSE the pure anti-merging core over the SURVIVORS: map the flat
+                // attributed rows into `IndexedClaim`s and re-compose per-author (no
+                // merge, counter kept). The viewer holds NO second grouping path. The
+                // `dimension` is carried into the state so the renderer adds the
+                // dimension-specific honest-framing footer (CONTRIBUTOR → "not a
+                // community consensus", US-NS-003 / AC-003.2).
+                let claims = partition
+                    .survivors
+                    .into_iter()
+                    .map(|row| to_indexed_claim(row, &own, &active, &cached))
+                    .collect();
+                let result: NetworkSearchResult = compose_results(claims, dimension);
+                if partition.hidden_count >= 1 {
+                    // ≥1 survivor AND ≥1 hidden EVENT ⇒ survivors + the disclosure
+                    // notice (RF-V1/V3/V5). A zero count stays `Results` (no misleading
+                    // "0 hidden" line, D-4 — the default path, RF-V2).
+                    SearchState::FilteredResults {
+                        result,
+                        dimension,
+                        hidden_count: partition.hidden_count,
+                    }
+                } else {
+                    SearchState::Results { result, dimension }
+                }
+            }
         }
         // SOFT, non-fatal (I-NS-2 / WD-116): an unreachable/malformed/not-found
         // index degrades to the FIXED Unavailable notice — never a crash, never a
@@ -1324,6 +1355,16 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
         .filter_map(|pair| pair.strip_prefix(prefix.as_str()))
         .next()
         .map(percent_decode_form)
+}
+
+/// Parse the read-only `?hide_retracted=1` GET-param toggle (feature
+/// `retraction-aware-search-filter`; US-RF-002 / ADR-060). `1` ⇒ hide the
+/// author-self-retractions; absent / `0` / any other value ⇒ the byte-stable default
+/// (no filter — RF-V2 / I-RF-1). PURE total function over the raw query string. This
+/// is a public-data READ control: it selects a view, it NEVER writes/signs/subscribes
+/// (I-RF-6 — the viewer holds no key). Reuses [`query_param`] so it decodes uniformly.
+fn parse_hide_retracted(query: Option<&str>) -> bool {
+    query_param(query, "hide_retracted").as_deref() == Some("1")
 }
 
 /// Read the operator's LOCAL active-subscription set ONCE and materialize the BARE
