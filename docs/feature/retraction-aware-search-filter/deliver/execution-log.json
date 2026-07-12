@@ -116,6 +116,42 @@
       "d": "PASS",
       "detail": "618ebaaf8d4e6162fa7d5d2564bfb1eb9b3fb5fa — feat(retraction-aware-search-filter): DELIVER 02-01 — viewer /search?hide_retracted=1 read-only parity + notice; wiring-verified (2 production files changed: crates/adapter-http-viewer/src/lib.rs, crates/viewer-domain/src/search.rs; no test files touched)",
       "t": "2026-07-12T01:05:40Z"
+    },
+    {
+      "gate": "post-merge-integration",
+      "s": "PASS",
+      "d": "PASS",
+      "detail": "orchestrator ran all 14 feature scenarios + shipped regressions together: search_hide_retracted 10, viewer_search_hide_retracted 8, appview_search 24, viewer_network_search 20 — all green (62 total, 0 failed); cargo xtask check-arch OK (21). Elevator-Pitch demos (US-RF-001 openlore search --hide-retracted; US-RF-002 viewer /search?hide_retracted=1) covered end-to-end by the RF-1/RF-V1 walking-skeleton subprocess+HTTP scenarios.",
+      "stories_demoed": ["US-RF-001", "US-RF-002"],
+      "t": "2026-07-12T01:15:00Z"
+    },
+    {
+      "gate": "phase-3-refactor",
+      "s": "PASS",
+      "d": "PASS",
+      "detail": "L1-L6 refactor pass (nw-functional-software-crafter): no changes warranted — code clean across all levels; shared-const mirror kept (hoisting view copy into pure appview-domain would regress the ADR-007 boundary). Suite green, check-arch OK. No commit.",
+      "t": "2026-07-12T01:20:00Z"
+    },
+    {
+      "gate": "phase-4-adversarial-review",
+      "s": "PASS",
+      "d": "PASS",
+      "detail": "nw-software-crafter-reviewer: APPROVED, 0 defects / 0 testing theater. Traced RF-4 full-graph dominance, no-heckler-veto, event-vs-row count, identity default, ADT-enforced zero-hidden silence; RF-2/RF-V2 confirmed genuine default-unchanged guards.",
+      "t": "2026-07-12T01:30:00Z"
+    },
+    {
+      "gate": "phase-5-mutation",
+      "s": "PASS",
+      "d": "PASS",
+      "detail": "cargo-mutants 25.3.1 feature-scoped: 27/27 viable mutants killed = 100% (>=80% gate). PRIMARY retraction.rs 17/17 100% first pass; secondary cli/viewer disclosure 10/10 after 5 added in-crate render tests; 2 equivalent (no Default). Commit 3976875.",
+      "t": "2026-07-12T01:40:00Z"
+    },
+    {
+      "gate": "phase-6-integrity",
+      "s": "PASS",
+      "d": "PASS",
+      "detail": "MANUAL verification (des-verify-integrity broken in env): 3 TDD-step commits (a2475aa/e65628d/618ebaa) each carry a Step-ID trailer matching the roadmap; 5 phases logged per step + gates; check-arch OK (21). Substituted for des-verify-integrity per approved manual-TDD mode.",
+      "t": "2026-07-12T01:45:00Z"
     }
   ]
 }

@@ -1,0 +1,88 @@
+{
+  "roadmap": {
+    "project_id": "retraction-aware-search-filter",
+    "created_at": "2026-07-11T00:00:00Z",
+    "total_steps": 3,
+    "note": "DES tooling (des-init-log/des-verify-integrity) is broken in this environment (No module named 'des'); DELIVER runs in orchestrator-approved manual-TDD mode. execution-log.json is maintained by the orchestrator in the 3.0 schema; substantive gates (TDD, 14 acceptance tests, L1-L6 refactor, adversarial review, mutation >=80%, check-arch) are all enforced via cargo."
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "slice-01 — the opt-in, non-destructive, self-disclosing CLI retraction filter (openlore search --hide-retracted, US-RF-001, ADR-060)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "the pure partition_retracted predicate over the raw reference graph (appview-domain)",
+          "description": "Replace the RED scaffold crates/appview-domain/src/retraction.rs with the real pure total function `partition_retracted(rows: &[NetworkResultRowRaw], hide_retracted: bool) -> RetractionPartition{survivors, hidden_count}`. Self-retraction rule (D-RF-D3): a claim C is author-self-retracted iff some row K has K.author_did == C.author_did carrying {Retracts, C.cid}. A retraction EVENT = the withdrawn original C + its same-author marker K, both dropped from survivors (D-RF-D4); hidden_count counts EVENTS not raw rows (D-RF-D5). hide_retracted==false => identity (survivors==rows, hidden_count==0). Third-party Counters and different-author Retracts never hide (D-3/I-RF-4). Detection runs on the FULL references graph of the raw rows, NOT compose_results' lossy counter_annotation (anti-lossy, ADR-060 Earned-Trust #1). Pure: no I/O, appview-domain stays on the pure-core allowlist (ADR-007, check-arch).",
+          "criteria": [
+            "OWNED partition_retracted is a pure total fn; PBT (proptest_strategies) pins: hide=false => identity; survivors subset of input; survivor order preserved; survivor confidence verbatim; idempotent; hidden_count == count of author-self-retraction events; self-retraction dominates a co-present third-party counter; a third-party Counters/different-author Retracts never hides its target",
+            "GUARDRAIL the // SCAFFOLD: true marker and panic body are removed; the fn is exported from lib.rs",
+            "GUARDRAIL check-arch OK (21 members); appview-domain acquires no I/O dep"
+          ],
+          "test_file": "crates/appview-domain/src/retraction.rs",
+          "scenario_name": "partition_retracted_properties",
+          "depends_on": [],
+          "files_to_modify": [
+            "crates/appview-domain/src/retraction.rs",
+            "crates/appview-domain/src/lib.rs",
+            "crates/appview-domain/src/proptest_strategies.rs"
+          ],
+          "implementation_notes": "Pure core only — no CLI/viewer wiring here (that is 01-02/02-01). Reuse ports::NetworkResultRowRaw and claim_domain::ReferenceType. The layer-1/2 PBT is DELIVER's per ADR-025. No acceptance scenario greens from this step alone (all 14 are subprocess/HTTP); RF-2/RF-V2 gold guards stay green."
+        },
+        {
+          "id": "01-02",
+          "name": "wire --hide-retracted into the search verb + the honest disclosure footer + empty-after-filter buffer",
+          "description": "Add the opt-in `--hide-retracted` boolean flag to `openlore search` (clap), invoke partition_retracted on the raw attributed rows BEFORE render, render the survivors unchanged (non-destructive), and emit the honest disclosure: when hidden_count>=1 a footer 'N retracted claim(s) hidden' (N = events) + 're-run without --hide-retracted' guidance; when the filter hides ALL results, a guided empty-after-filter buffer ('… were soft-retracted' + re-run guidance) instead of a bare empty; when hidden_count==0, NO disclosure line (D-4). Default path (no flag) byte-identical to today (I-RF-1).",
+          "criteria": [
+            "ACCEPTANCE tests/acceptance/search_hide_retracted.rs RF-1,RF-3,RF-4,RF-5,RF-6,RF-7,RF-8 GREEN; RF-2 (default-unchanged gold guard) STAYS GREEN",
+            "GUARDRAIL disclosure count is EVENTS (RF-7: '1' not '2'); survivors keep order + verbatim confidence (RF-5); third-party counter not hidden (RF-3); self-retraction dominates (RF-4)",
+            "GUARDRAIL the default no-flag path prints no 'hidden' footer (RF-2) — opt-in preserved"
+          ],
+          "test_file": "tests/acceptance/search_hide_retracted.rs",
+          "scenario_name": "hide_retracted_removes_self_retracted_claim_and_discloses_the_count",
+          "depends_on": ["01-01"],
+          "files_to_modify": [
+            "crates/cli/src/verbs/search.rs",
+            "crates/cli/src/render/search.rs"
+          ],
+          "implementation_notes": "EXTEND the existing search verb + render (no new crate/route). Disclosure fragments may be frozen as content consts (sibling of SEARCH_NO_MERGE_FOOTER). Substrings asserted by DISTILL: 'retracted claim(s) hidden', 're-run without --hide-retracted', 'were soft-retracted'. Build both openlore + openlore-indexer before the acceptance run (the harness spawns both)."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "slice-02 — viewer parity: the read-only /search?hide_retracted=1 toggle (US-RF-002)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "wire ?hide_retracted=1 into the read-only viewer /search + the on-page notice",
+          "description": "Parse the read-only GET param `hide_retracted=1` in adapter-http-viewer's /search handler, invoke the SAME partition_retracted on the raw rows, and render (viewer-domain) the survivors plus an explicit on-page notice ('N retracted claim(s) hidden' / empty-after-filter buffer) mirroring the CLI. The toggle is a plain GET-param control — no authoring/mutating markup (read-only, offline, no signing key: I-VIEW invariants). hide_retracted absent/0 renders the default byte-stable /search surface (RF-V2 gold guard).",
+          "criteria": [
+            "ACCEPTANCE tests/acceptance/viewer_search_hide_retracted.rs RF-V1,RF-V3,RF-V4,RF-V5,RF-V6 GREEN; RF-V2 (default-unchanged gold guard) STAYS GREEN",
+            "GUARDRAIL read-only/offline/no-key preserved (no form/button/mutating hx-*, no external CDN); notice keyed off port-observable HTML (author DID + confidence + notice text)",
+            "GUARDRAIL check-arch OK (21); no new crate/route"
+          ],
+          "test_file": "tests/acceptance/viewer_search_hide_retracted.rs",
+          "scenario_name": "viewer_search_hide_retracted_removes_self_retracted_and_shows_notice",
+          "depends_on": ["01-01", "01-02"],
+          "files_to_modify": [
+            "crates/adapter-http-viewer/src/lib.rs",
+            "crates/viewer-domain/src/search.rs"
+          ],
+          "implementation_notes": "EXTEND the slice-08 /search surface in place (toggle + notice), reuse partition_retracted (single pure decision both surfaces invoke). The exact file paths (viewer-domain search module, adapter-http-viewer search handler) should be confirmed by the crafter against the current tree. Reuse the CLI disclosure-fragment consts where sensible for single-source wording."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": ["crates/appview-domain/src/", "crates/cli/src/", "crates/adapter-http-viewer/src/", "crates/viewer-domain/src/"],
+    "test_directories": ["crates/appview-domain/src/", "tests/acceptance/"],
+    "excluded_patterns": ["target/**"]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (manual-TDD mode — DES tooling broken; consolidated DISTILL review already APPROVED all 3 waves)",
+    "approved_at": "2026-07-11",
+    "review_verdict": "3-step roadmap covering both slices; every one of the 14 DISTILL acceptance scenarios maps to a step (01-02 greens 7 CLI + keeps RF-2 gold; 02-01 greens 5 viewer + keeps RF-V2 gold; 01-01 is the pure-core predicate both surfaces reuse). Decomposition ratio 3 steps / ~6 files = 0.5 (< 2.5 OK). No orphan scenarios. Walking-skeleton scenarios RF-1 (CLI) + RF-V1 (viewer) map to the surface-wiring steps."
+  }
+}
