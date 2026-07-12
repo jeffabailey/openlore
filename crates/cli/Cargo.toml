@@ -1,6 +1,9 @@
 [package]
 name = "cli"
-version = "0.0.1"
+# 0.1.x series per ADR-011 (the 0.x MAJOR communicates "API not stable" while
+# sibling slices iterate). release.yml (github-release-binaries) asserts the
+# pushed v* tag equals this version before building (DA-5).
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
