@@ -66,6 +66,34 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **homebrew-binary-distribution: DESIGN 2026-07-12 — ZERO new crates; NO Rust (workspace stays
+  21). A THIRD install channel (Homebrew tap) — Ruby formula + YAML/shell CI only.** Adds an
+  in-repo Homebrew tap (`Formula/openlore.rb`) so non-Rust users install the prebuilt `openlore`
+  CLI with `brew install jeffabailey/openlore/openlore` (verified by brew's sha256), and stay
+  current with `brew upgrade`. The `openlore` binary is a **black box** — reused as a prebuilt
+  GitHub-Release tarball; no binary production, no CDN, no cross-compile added.
+  - **`Formula/openlore.rb` (CREATE NEW, Ruby/Homebrew DSL)**: a single multi-platform formula
+    (`on_macos`/`on_linux` × `on_arm`/`on_intel` url+sha256 → `bin.install "openlore"`); no
+    `depends_on "rust"`, no service/plist (prebuilt-only + no-phone-home guardrails).
+  - **Autobump (CREATE NEW: `scripts/release/bump-formula.sh` + a `bump-formula` job) EXTENDS the
+    future `release.yml`**: on each `v*` release, regenerates the formula's `version` + 4 `sha256`
+    from the published `.sha256` and commits to `main` (trunk-based, no PR), sequenced after
+    artifact upload via `needs:` (ordering guard). A per-triple `brew install` + `openlore
+    --version` **smoke test is the Earned-Trust probe** — blocks the release if any url+sha256
+    fails. Formula enforcement = `brew audit`/`brew style` + a freshness assertion (`version ==
+    tag`), the Ruby analog of `xtask check-arch`.
+  - **BLOCKING PREREQUISITE**: `release.yml` producing the ADR-011 4-platform tarball+`.sha256`
+    matrix (+ cosign + SBOM) **does not exist yet** — it is a separate DEVOPS feature. The formula
+    + autobump are DESIGNED against ADR-011's locked contract but are **not executable** until
+    `release.yml` + one real tagged release ship. Design now, split the build.
+  - **ADR-061** (in-repo tap; prebuilt-not-source; sha256-via-brew with cosign as a complementary
+    provenance layer per ADR-012; openlore-CLI-only; autobump = in-`release.yml` commit-to-main
+    with a smoke-test probe; the release.yml blocking prerequisite). Promotes the "Homebrew tap:
+    Reserved/deferred" line in ADR-011 + `distribution.md` §1.3 from Reserved → Accepted.
+  - See ADR-061, `docs/feature/homebrew-binary-distribution/feature-delta.md` (DESIGN sections),
+    `docs/feature/homebrew-binary-distribution/design/wave-decisions.md`, and
+    `docs/feature/homebrew-binary-distribution/design/upstream-changes.md`.
+
 - **retraction-aware-search-filter: DESIGN 2026-07-11 — IN-PLACE EXTENSION, ZERO new crates
   (workspace stays 21).** Adds an explicit, **opt-in, non-destructive, self-disclosing** filter
   that HIDES author-soft-retracted claims from a network-search VIEW: `openlore search …
@@ -584,6 +612,28 @@ that generalizes it.
   dependency or hand-rolled inline, Q-DELIVER-AV-8); license-clean (MIT/Apache-2.0)
   and within the pure-core allowlist (no I/O), like slice-02/03's pure deps.
 
+## Release pipeline (deployment topology)
+
+OpenLore ships as bare CLI binaries (no service, no containers). Release delivery
+is tag-driven and immutable, governed by ADR-011 (matrix + naming) and ADR-012
+(supply-chain). Designed by feature `github-release-binaries` (DEVOPS);
+`.github/workflows/release.yml` is authored in that feature's DELIVER wave.
+
+- **Trigger**: `push: tags: ['v*']` only (trunk-based; tags from `main`, no PRs).
+  Disjoint from `ci.yml` (PR/push) and `nightly.yml` (schedule) — purely additive.
+- **Job DAG**: `verify` (reuse `ci.yml` commit+acceptance gates on the tagged
+  ref) -> `build-release` (4-triple native matrix, ADR-011) ->
+  `sign-sbom-provenance` (cosign keyless + CycloneDX SBOM + SLSA attestation,
+  ADR-012, all OIDC/first-party) -> `publish` (GitHub Releases).
+- **Artifacts per tag**: 4× `openlore-{version}-{triple}.tar.gz` +
+  `.sha256`/`.sig`/`.cert` each + release-wide `sbom.cdx.json` + CHANGELOG excerpt.
+- **Deferred**: crates.io publish (needs `CRATES_IO_TOKEN`), 8-cell substrate
+  gate, full mutation-sweep release gate, real-PDS Pact — infrastructure unbuilt
+  (see `docs/feature/github-release-binaries/feature-delta.md` §Changed Assumptions).
+- **Unblocks**: `homebrew-binary-distribution` (formula consumes the tarball
+  names + `.sha256`; a future `bump-formula` job extends `release.yml` via a
+  reserved `needs: [publish]` extension point).
+
 ## SSOT discipline
 
 - This brief is **cross-feature**. Add a row to **Component Inventory** when a
@@ -626,4 +676,7 @@ that generalizes it.
 - KPI contracts: `docs/product/kpi-contracts.yaml`
 - Jobs (JTBD): `docs/product/jobs.yaml`
 - CI policy: `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`
+- Release pipeline design (greenfield `release.yml`):
+  `docs/feature/github-release-binaries/feature-delta.md`,
+  `docs/feature/github-release-binaries/environments.yaml`; ADR-011, ADR-012
 - Supply-chain policy: `deny.toml`

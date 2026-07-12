@@ -43,7 +43,7 @@
 
 | Channel | Status | Trigger to implement |
 |---|---|---|
-| Homebrew tap | Reserved | Post-slice-05, when there are enough non-Rust users to justify the maintenance |
+| Homebrew tap | ~~Reserved~~ → **Accepted (ADR-061, 2026-07-12)** | Post-slice-05, when there are enough non-Rust users to justify the maintenance — **trigger fired; see ADR-061 + `docs/feature/homebrew-binary-distribution/`. Note: gated on the not-yet-existing `release.yml` prerequisite** |
 | AUR package | Reserved | Community submission acceptable; maintainership remains community's |
 | Nix flake | Reserved | Post-slice-03 if a user contributes one (Nix users tend to self-serve) |
 | `cargo binstall` support | Easy add | Acceptable to do in slice-01 — add the required `[package.metadata.binstall]` block to `Cargo.toml`. DELIVER's call. |

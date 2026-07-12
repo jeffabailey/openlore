@@ -44,7 +44,7 @@ Each binary is built on its native runner (no cross-compile in slice-01).
 |---|---|
 | `x86_64-pc-windows-msvc` | >= 3 user requests on GitHub issues, OR slice-05 AppView introduces a need we can't avoid |
 | `x86_64-unknown-linux-musl` | `keyring` crate's musl-static-link story improves OR WSL2 fallback file mechanism is determined insufficient for musl users |
-| Homebrew tap | Post-slice-05 (non-Rust user base exists) |
+| Homebrew tap | Post-slice-05 (non-Rust user base exists) — **PROMOTED to Accepted by ADR-061 (2026-07-12); trigger fired** |
 | AUR / Nix flake | Community contribution acceptable; no commitment from us |
 | `cargo binstall` metadata | DELIVER's call; zero-cost add but not blocking |
 | Auto-updater | Out of scope for local-first ethos; user updates manually |

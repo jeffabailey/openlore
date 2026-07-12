@@ -1,0 +1,197 @@
+schema_version: 1
+
+# Structured journey schema for homebrew-binary-distribution.
+# Companion to docs/feature/homebrew-binary-distribution/feature-delta.md.
+# Gherkin is embedded per step (no standalone .feature file per the DISCUSS convention).
+# LEAN journey: one CLI-install happy path + upgrade. Infrastructure feature (a THIRD install
+# channel) consuming the shipped release.yml 4-tarball + .sha256 matrix (ADR-011,
+# openlore-foundation/devops/distribution.md §1.2). It reinvents no binary production.
+
+journey:
+  name: "Install and upgrade the openlore CLI via a Homebrew tap"
+  goal: >
+    Install the prebuilt `openlore` CLI binary with one `brew install
+    jeffabailey/openlore/openlore` (verified by brew via the release pipeline's sha256, no
+    build-from-source, no Rust toolchain), and keep it current with one `brew upgrade openlore` —
+    without ever adding a background updater or phoning home.
+  persona: "P-001 Senior Engineer Solo Builder (installs-via-Homebrew hat); stands in for the macOS/Homebrew-Linux non-Rust user at install time"
+  job_id: J-006
+  feature_id: homebrew-binary-distribution
+
+  scope_notes: >
+    Infrastructure / distribution. This journey builds, signs, and publishes NOTHING new. It adds
+    ONE artifact — the tap formula Formula/openlore.rb — plus a release-time step that keeps that
+    formula in sync with each v* tag. It CONSUMES the already-shipped 4-platform release tarballs +
+    .sha256 companions. Scope is the `openlore` CLI ONLY (never openlore-indexer, D-3). The formula
+    installs a prebuilt binary (D-2), verified by brew's sha256 check (D-4), and registers NO
+    service/daemon/auto-updater and does NOT phone home (D-5, distribution.md §6). Windows is not a
+    target (no msvc tarball exists, ADR-011).
+
+  emotional_arc:
+    start: "Wary-curious — 'I want to try openlore, but not install Rust or babysit a compile, and I don't fully trust a random tap not to bolt on an updater.'"
+    middle: "One-command-relief (install in seconds, no compile) -> Verified-confidence (brew checked the sha256; `openlore --version` prints the exact released version)."
+    end: "Stays-current-trust — `brew upgrade openlore` pulls the next release when SHE asks; no daemon, no phone-home; the local-first promise held."
+    arc_pattern: friction-removal-with-explicit-trust-buffer
+
+steps:
+
+  - id: 1
+    name: "Tap + install the prebuilt binary"
+    command: "brew install jeffabailey/openlore/openlore   # (one-time `brew tap jeffabailey/openlore <repo-url>` first if OD-HB-1 (a) applies)"
+
+    tui_mockup: |
+      $ brew install jeffabailey/openlore/openlore
+      ==> Fetching jeffabailey/openlore/openlore
+      ==> Downloading https://github.com/jeffabailey/openlore/releases/download/v${version}/openlore-${version}-${triple}.tar.gz
+      ==> Verifying sha256 for openlore-${version}-${triple}.tar.gz ... ok
+      ==> Installing openlore from jeffabailey/openlore
+      /opt/homebrew/Cellar/openlore/${version}: 3 files, ... installed
+      # No service registered. No Rust toolchain used. No compilation.
+
+    shared_artifacts:
+      - name: "version"
+        source: "the latest v* git tag / workspace Cargo.toml (stamped into the tarball names by release.yml)"
+        displayed_as: "${version}"
+        consumers: ["tarball filename", ".sha256 companion", "Formula/openlore.rb version+url", "step 2 `openlore --version`"]
+      - name: "triple"
+        source: "the user's platform, resolved by the formula's on_macos/on_linux + on_arm/on_intel branch"
+        displayed_as: "${triple}"
+        consumers: ["step 1 tarball url selection (one of the 4 shipped triples)"]
+      - name: "sha256"
+        source: "the .sha256 companion published beside each release tarball (distribution.md §1.2)"
+        displayed_as: "(verified by brew)"
+        consumers: ["Formula/openlore.rb per-triple sha256 field", "brew's download verification"]
+
+    emotional_state:
+      entry: "Wary-curious"
+      exit: "One-command-relief"
+
+    integration_checkpoint: |
+      REUSES the shipped release.yml 4-tarball + .sha256 matrix UNCHANGED (ADR-011). The formula's
+      per-triple sha256 MUST equal the published .sha256 (D-4); brew aborts on mismatch. The formula
+      carries NO depends_on rust/cargo and runs NO build step (D-2). Installs ONLY `openlore`, never
+      openlore-indexer (D-3). OD-HB-1 governs whether the bare `brew install` resolves to the in-repo
+      tap or needs a one-time explicit-URL `brew tap` (settled in slice 01).
+
+    failure_modes:
+      - "sha256 mismatch (corrupt/tampered download) -> brew aborts with a checksum error; nothing installed (D-4)"
+      - "Unsupported platform (e.g. Windows) -> no matching triple branch; not a target (ADR-011)"
+      - "Bare `brew install` before the OD-HB-1 tap step -> 'homebrew-openlore not found'; README documents the exact one-time `brew tap` invocation (R-2)"
+
+    gherkin: |
+      Scenario: One command installs a verified openlore binary on PATH
+        Given Maria is on an aarch64-apple-darwin Mac with Homebrew and no Rust toolchain
+        And openlore v0.1.0 is published with its aarch64-apple-darwin tarball and .sha256
+        When she runs `brew install jeffabailey/openlore/openlore`
+        Then brew downloads the aarch64-apple-darwin tarball and verifies its sha256
+        And `openlore` is installed on her PATH without any compilation
+        And only the openlore CLI is installed, never openlore-indexer
+
+      Scenario: A tampered or mismatched download is rejected, installing nothing
+        Given the downloaded tarball's sha256 does not match the formula's sha256
+        When brew attempts the install
+        Then brew aborts with a checksum-mismatch error
+        And no openlore binary is placed on PATH
+
+  - id: 2
+    name: "Confirm the right binary landed"
+    command: "openlore --version"
+
+    tui_mockup: |
+      $ openlore --version
+      openlore ${version}
+      # greppable, verbatim proof the exact released version is on PATH.
+
+    shared_artifacts:
+      - name: "version"
+        source: "same version artifact as step 1 (single source of truth)"
+        displayed_as: "openlore ${version}"
+        consumers: ["step 2 user confirmation", "must equal the installed tarball's version"]
+
+    emotional_state:
+      entry: "One-command-relief"
+      exit: "Verified-confidence"
+
+    integration_checkpoint: |
+      `openlore --version` MUST print the same ${version} whose tarball brew installed (version is the
+      shared artifact across the tarball name, the formula, and this output). No service/launchd/systemd
+      unit exists and no update-check network call is made (D-5 guardrail, mechanically asserted).
+
+    failure_modes:
+      - "`openlore` not found on PATH after install -> Homebrew prefix not on PATH; brew doctor guidance"
+      - "Version prints an older release than expected -> the formula lagged the tag; fixed by the step-3 auto-bump (KPI-HB-3)"
+
+    gherkin: |
+      Scenario: Version output confirms the exact released binary, with no updater added
+        Given Maria has installed openlore via the tap
+        When she runs `openlore --version`
+        Then it prints "openlore 0.1.0" (the released version)
+        And no brew service, launchd, or systemd unit for openlore exists
+        And running openlore makes no update-check or telemetry network call
+
+  - id: 3
+    name: "Stay current with an explicit upgrade (formula auto-bumped on each release)"
+    command: "brew update && brew upgrade openlore"
+
+    tui_mockup: |
+      # On each v* release, release.yml regenerates Formula/openlore.rb (version + 4 sha256) from
+      # the published .sha256 companions and commits it (trunk-based; OD-HB-2).
+      $ brew update && brew upgrade openlore
+      ==> Upgrading jeffabailey/openlore/openlore
+          ${old_version} -> ${version}
+      ==> Downloading .../openlore-${version}-${triple}.tar.gz ... sha256 ok
+      # Explicit, user-initiated. No auto-updater. No already-installed user is upgraded silently.
+
+    shared_artifacts:
+      - name: "version"
+        source: "the new v* tag; the auto-bump step writes it into Formula/openlore.rb (D-6)"
+        displayed_as: "${old_version} -> ${version}"
+        consumers: ["step 3 upgrade target", "KPI-HB-3 freshness assertion (formula version == tag)"]
+
+    emotional_state:
+      entry: "Verified-confidence"
+      exit: "Stays-current-trust"
+
+    integration_checkpoint: |
+      The formula-bump step runs STRICTLY AFTER the 4 tarballs + .sha256 are uploaded for the tag; it
+      never points the formula at an unpublished tarball (R-1 ordering guard). A per-triple `brew
+      install` + `openlore --version` CI smoke test gates the release so a bad bump fails CI, not the
+      user. Bumping the formula changes only what a FUTURE explicit `brew upgrade` fetches — no silent
+      upgrade, no phone-home (D-5). OD-HB-2 (the exact bump mechanism) is DEVOPS's headline decision.
+
+    failure_modes:
+      - "Formula lags the latest tag (stale) -> `brew upgrade` is a silent no-op; prevented by D-6 auto-bump + KPI-HB-3 assertion"
+      - "Bump races the upload (wrong version/sha256 published) -> install 404/checksum-fail; prevented by strict post-upload ordering + smoke test"
+
+    gherkin: |
+      Scenario: A new release makes brew upgrade fetch the new verified version
+        Given openlore v0.1.1 has been released with its 4 tarballs and .sha256 companions
+        When the release pipeline runs its formula-bump step
+        Then Formula/openlore.rb is updated to version 0.1.1 with the 4 new sha256 values and committed
+        And a user who runs `brew update && brew upgrade openlore` receives openlore 0.1.1, sha256-verified
+
+      Scenario: Bumping the formula never upgrades anyone silently
+        Given the formula has been bumped to a new version
+        Then no already-installed user's binary changes until they explicitly run `brew upgrade`
+        And no update-check or announcement network call is made by openlore
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "version"
+      must_match_across: [1, 2, 3]
+      failure_message: "The formula version, the installed tarball name, and `openlore --version` output MUST agree; a lagging formula version (stale tap) makes `brew upgrade` a silent no-op and breaks KPI-HB-3."
+    - artifact: "sha256"
+      must_match_across: [1, 3]
+      failure_message: "Each formula sha256 MUST equal the published .sha256 for that tarball; a hand-typed or drifted hash fails every install (D-4)."
+
+changelog:
+  - date: "2026-07-12"
+    feature: "homebrew-binary-distribution"
+    change: >
+      Initial LEAN journey for the Homebrew tap install/upgrade flow (J-006): tap+install a prebuilt
+      sha256-verified `openlore` binary (no build-from-source, no Rust toolchain), confirm via
+      `openlore --version`, and stay current with an explicit `brew upgrade` backed by a release-time
+      formula auto-bump. Consumes the shipped release.yml 4-tarball + .sha256 matrix (ADR-011); adds
+      no binary production. Guardrails: openlore-CLI-only (D-3), prebuilt-only (D-2), sha256-via-brew
+      (D-4), no-auto-updater / no-phone-home (D-5, distribution.md §6). Headline open decision OD-HB-2
+      (the auto-bump mechanism) flagged for DESIGN/DEVOPS.

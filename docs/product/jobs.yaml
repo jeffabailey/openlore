@@ -604,6 +604,72 @@ jobs:
           Decisions D-1..D-7, invariants I-RF-1..8).
 
 
+  - id: J-006
+    name: Install and upgrade the openlore CLI with one Homebrew command
+    primary: false                  # a distribution convenience channel, not a core capability
+    # Origin: the planned/deferred "Homebrew tap" item in ADR-011 (deferred list) and
+    # openlore-foundation/devops/distribution.md §1.3 ("Reserved / deferred until post-slice-05,
+    # when there are enough non-Rust users to justify the maintenance"). Post-slice-05 trigger fired.
+    job_story: >
+      When I want to try or keep openlore current on macOS (or Homebrew-Linux) and I do NOT want to
+      compile from source or hand-verify a tarball, I want to install it with one `brew install` and
+      upgrade with one `brew upgrade`, so I get a verified, working `openlore` binary on my PATH in
+      seconds — no Rust toolchain, no manual checksum, no background updater.
+
+    functional:
+      - Install the prebuilt `openlore` CLI binary via a Homebrew tap (no build-from-source).
+      - brew verifies the download against the sha256 the release pipeline already publishes.
+      - Upgrade with `brew upgrade openlore`; no Rust toolchain required.
+      - Installs the `openlore` CLI ONLY — never `openlore-indexer`.
+
+    emotional:
+      - Relief: no 5-10 min compile, no Rust toolchain, no manual sha256 check.
+      - Confidence: brew verified the download; `openlore --version` proves the right binary landed.
+      - Trust preserved: no auto-updater, no phone-home; upgrades stay explicit (`brew upgrade`).
+
+    social:
+      - Recommend openlore to non-Rust colleagues with a one-liner they already trust.
+      - Fits the macOS-native `brew install` habit; no bespoke installer to explain.
+
+    four_forces:
+      push: >
+        `cargo install openlore` compiles a whole workspace (~5-10 min) and needs a Rust toolchain
+        the user may not have; the raw-tarball path forces manual sha256 verification and a manual
+        move onto PATH. Both are friction for a "just let me try it" moment.
+      pull: >
+        One `brew install jeffabailey/openlore/openlore` yields a verified `openlore` on PATH in
+        seconds (no compile); `brew upgrade openlore` keeps it current; brew does the sha256 check.
+      anxiety: >
+        "Will a Homebrew formula add a background updater, register a service, or phone home —
+        betraying the local-first / no-auto-updater promise I chose openlore for?" Mitigation: the
+        formula installs exactly one binary, registers NO service/daemon (distribution.md §6), and
+        OpenLore does not phone home; every upgrade is an explicit, user-initiated `brew upgrade`.
+      habit: >
+        macOS devs already `brew install` everything and `brew upgrade` on their own cadence. The
+        tap must feel like any other formula — no new cognitive surface, no bespoke installer.
+
+    # Light opportunity view (full scoring intentionally skipped — lean; single distribution job).
+    opportunity_score:
+      importance: 6     # a convenience channel; core capability is unaffected (cargo/tarball exist)
+      satisfaction: 3   # cargo install + raw tarball already work, but are heavier (compile / manual sha)
+      score: 9          # 6 + max(6 - 3, 0) = 9
+      verdict: convenience-channel   # improvable-but-served; not underserved-primary
+
+    success_signals:
+      - A non-Rust user installs a verified `openlore` in one command and runs `--version` in <60s.
+      - `brew upgrade openlore` fetches the next release with zero manual formula maintenance.
+      - Post-install there is no brew service / launchd / systemd unit and no update-check network call.
+      - The formula installs ONLY `openlore`, never `openlore-indexer`.
+
+    related_jobs: [J-001]   # J-006 is the install/upgrade surface for the whole CLI (J-001 is its core job)
+
+    # Realized by the homebrew-binary-distribution feature (slices 01-02). See
+    # docs/feature/homebrew-binary-distribution/feature-delta.md (Locked Decisions D-1..D-7,
+    # KPIs KPI-HB-1..3). Both stories US-HB-001 (install) + US-HB-002 (release-time auto-bump)
+    # trace to J-006. No new primary job; a distribution channel complementing the shipped
+    # `cargo install` (crates.io) and raw GitHub-Release-tarball channels.
+
+
 # ---------------------------------------------------------------------------
 # Red cards — all resolved 2026-05-25. Retained here for decision provenance.
 # Binding form lives in docs/feature/openlore-foundation/feature-delta.md
@@ -869,3 +935,31 @@ changelog:
       build guard inherited. Open decision OD-RF-1 (does SearchResultDto.references already
       distinguish author-retraction from third-party counter?) flagged as the one HIGH
       risk to settle first in slice 1.
+  - date: "2026-07-12"
+    feature: homebrew-binary-distribution
+    change: >
+      J-006 ADDED (primary: false) — install/upgrade the openlore CLI with one Homebrew command.
+      Origin: the planned/deferred "Homebrew tap" in ADR-011 (deferred list) + distribution.md §1.3
+      ("Reserved / deferred until post-slice-05"); the post-slice-05 trigger has fired. A THIRD
+      install channel complementing the shipped `cargo install openlore` (crates.io) and the raw
+      GitHub-Release-tarball + `curl | tar xz` channels — it does NOT duplicate them. Value =
+      one-command install + one-command upgrade + sha256 verification handled by brew, for
+      macOS/Homebrew-Linux users without a Rust toolchain. Light four-forces (push: cargo compile
+      ~5-10 min + toolchain, tarball needs manual sha; pull: one verified `brew install` in seconds;
+      anxiety: "does the formula add an updater/service/phone-home?" — mitigated by no-service /
+      no-phone-home guardrail, distribution.md §6; habit: macOS devs already `brew install`). Light
+      opportunity_score (6/3 → 9, verdict convenience-channel); full scoring intentionally skipped
+      (lean, single distribution job). Persona P-001 wearing an installs-via-Homebrew hat. Realized
+      by homebrew-binary-distribution (slices 01-02): US-HB-001 (in-repo dogfood formula installs
+      the current release on the maintainer's Mac) + US-HB-002 (release-time auto-bump keeps the
+      formula in sync so `brew upgrade` works). Locked decisions D-1 tap-in-repo
+      (`Formula/openlore.rb` in github.com/jeffabailey/openlore; `brew install
+      jeffabailey/openlore/openlore`), D-2 prebuilt-tarball-not-source, D-3 openlore-CLI-only,
+      D-4 sha256-via-brew (== pipeline `.sha256`), D-5 no-auto-update-daemon / no-phone-home,
+      D-6 formula-bump-on-release, D-7 consumes-shipped-release-matrix (ADR-011). Headline open
+      question OD-HB-2 (the auto-bump mechanism) handed to DESIGN/DEVOPS. New KPIs KPI-HB-1..3
+      (install success ≥95% across 4 triples; time-to-install <60s; formula freshness == tag);
+      measurement is telemetry-free (CI install smoke tests + release-pipeline assertions + public
+      download counts), honoring local-first. Companion journey:
+      docs/product/journeys/install-via-homebrew.yaml. Walking skeleton: No (thin brownfield;
+      consumes the shipped release pipeline).
