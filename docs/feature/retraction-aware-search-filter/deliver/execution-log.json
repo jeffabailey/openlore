@@ -1,0 +1,78 @@
+{
+  "schema_version": "3.0",
+  "feature_id": "retraction-aware-search-filter",
+  "project_id": "retraction-aware-search-filter",
+  "note": "DES CLIs broken in this environment (No module named 'des'); this log is maintained manually by the orchestrator in manual-TDD mode per user approval 2026-07-11. Phase entries reflect the crafter's actual TDD cycle; integrity verification (Phase 6) is via cargo test + check-arch, not des-verify-integrity.",
+  "events": [
+    {
+      "sid": "01-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS: read scaffold + ADR-060 + NetworkResultRowRaw + claim_domain::{ClaimReference,ReferenceType} + compose.rs (lossy counter_annotation to avoid); confirmed Vec<NetworkResultRowRaw> signature matches ADR-060 indicative sig; no production callers yet",
+      "t": "2026-07-11T23:56:04Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: pure-core step; the 14 subprocess acceptance scenarios in tests/acceptance/*.rs are owned by CLI/viewer wiring steps 01-02/02-01 and were not touched",
+      "t": "2026-07-11T23:56:05Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS: wrote 4 proptest invariants + 4 example corpora in retraction.rs #[cfg(test)] + arbitrary_raw_rows_with_retractions strategy; ran cargo test -p appview-domain retraction -> all 8 FAILED via scaffold panic! at retraction.rs:83 (right reason: missing behavior, compiled cleanly)",
+      "t": "2026-07-11T23:56:06Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS: implemented partition_retracted (4 named pure predicates); cargo test -p appview-domain -> 28 passed 0 failed; cargo xtask check-arch -> OK (21 members); cargo build -p appview-domain clean, no warnings",
+      "t": "2026-07-11T23:56:07Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS: a2475aa2bb03ef0356c4a366f84016b7adaab18c — feat(retraction-aware-search-filter): DELIVER 01-01 — pure partition_retracted predicate + PBT",
+      "t": "2026-07-11T23:56:08Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS: read search_hide_retracted.rs (8 RF scenarios + wording substrings), retraction.rs (partition_retracted -> RetractionPartition{survivors,hidden_count}), verbs/search.rs + render/search.rs (located raw NetworkResultRowRaw rows in run_dimension Ok(result) branch, BEFORE compose/render), lib.rs clap Search variant, NetworkSearchResultRaw fields; confirmed appview-domain already a cli dep; SEARCH_NO_MERGE_FOOTER as content-const precedent",
+      "t": "2026-07-12T00:00:30Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS: built both bins (openlore + openlore-indexer), ran cargo test --test search_hide_retracted -> 7 feature scenarios FAILED for right reason (clap 'unexpected argument --hide-retracted' -> exit 2 != 0, MISSING_FUNCTIONALITY), RF-2 gold guard (default_search_without_the_flag) PASSED green-by-design; ATs unmodified",
+      "t": "2026-07-12T00:12:00Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: no new pure helper needed — partition_retracted (01-01) already has full proptest coverage incl. hidden_count=EVENTS semantics; the disclosure formatters are trivial inline formatting over content consts, greened + pinned directly by the ATs (RF-1/6/7 assert the exact substrings + event count)",
+      "t": "2026-07-12T00:12:30Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS: added --hide-retracted clap flag (lib.rs) + SearchArgs.hide_retracted, threaded through run/run_dimension_{object,contributor,subject}/run_dimension into render_network_result which runs partition_retracted on RAW rows then renders survivors + disclosure; added render_retraction_disclosure + render_all_retracted_buffer + 3 content consts (render/search.rs). Rebuilt both bins clean (no warnings). search_hide_retracted 8/8 green (RF-2 unchanged); appview_search 24/24 green (no regression); cargo xtask check-arch OK (21)",
+      "t": "2026-07-12T00:20:00Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS: e65628d6c1371b4e37ccc85afc7e8f538f9b57f1 — feat(retraction-aware-search-filter): DELIVER 01-02 — openlore search --hide-retracted opt-in filter + honest disclosure; wiring-verified (3 production files changed: verbs/search.rs, render/search.rs, lib.rs; no test files touched)",
+      "t": "2026-07-12T00:24:27Z"
+    }
+  ]
+}
