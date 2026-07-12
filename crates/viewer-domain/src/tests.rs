@@ -2674,6 +2674,97 @@ fn search_full_page_embeds_the_results_fragment_verbatim() {
     );
 }
 
+// -------------------------------------------------------------------------
+// `--hide-retracted` disclosure (feature `retraction-aware-search-filter`; ADR-060)
+// -------------------------------------------------------------------------
+// Fast in-crate unit tier for the PURE viewer retraction-disclosure renderers. The
+// subprocess/HTTP acceptance suite (`tests/acceptance/viewer_search_hide_retracted.rs`)
+// drives the SAME strings end-to-end over a real viewer + indexer; these pin the
+// content-frozen disclosure at the pure `render_search_*` boundary (the driving port
+// at domain scope) so a whole-function mutation is caught in <1ms without HTTP.
+
+/// Behavior (US-RF-002 / RF-V1/V3/V5 / D-RF-D5): a `FilteredResults` state discloses
+/// "N retracted claim(s) hidden" (N = self-retraction EVENTS) + the untick guidance
+/// ABOVE the surviving rows — the survivor still renders (drop-only, never a blank
+/// region). Pins the notice content + count interpolation.
+#[test]
+fn search_filtered_results_discloses_the_hidden_event_count_and_untick_guidance() {
+    let result = search_result(&[(
+        "did:plc:sven-test#org.openlore.application",
+        "bafysven",
+        "org.openlore.philosophy.reproducible-builds",
+        0.72,
+    )]);
+
+    let html = render_search_results_fragment(&SearchState::FilteredResults {
+        result,
+        dimension: appview_domain::SearchDimension::Object,
+        hidden_count: 3,
+    })
+    .into_string();
+
+    assert!(
+        html.contains(&format!("3 {SEARCH_RETRACTION_HIDDEN_COUNT_NOUN}")),
+        "the notice discloses the hidden EVENT count + the frozen noun; got:\n{html}"
+    );
+    assert!(
+        html.contains("Untick"),
+        "the notice names how to untick to restore the hidden rows; got:\n{html}"
+    );
+    assert!(
+        html.contains("did:plc:sven-test#org.openlore.application"),
+        "the surviving row still renders beneath the notice (drop-only); got:\n{html}"
+    );
+}
+
+/// Behavior (US-RF-002 / RF-V4 / I-RF-3): an `AllRetracted` state renders the guided
+/// empty-after-filter region — all N results `were soft-retracted` + the count + the
+/// untick guidance — an explicit withdrawn state, NEVER a blank region.
+#[test]
+fn search_all_retracted_names_the_withdrawn_state_never_a_blank_region() {
+    let html =
+        render_search_results_fragment(&SearchState::AllRetracted { hidden_count: 2 }).into_string();
+
+    assert!(
+        html.contains(SEARCH_RETRACTION_ALL_HIDDEN_FRAGMENT),
+        "the region names the withdrawn ('were soft-retracted') state; got:\n{html}"
+    );
+    assert!(
+        html.contains("All 2 matching claim(s)"),
+        "the region opens with the guided 'All N matching claim(s)' framing; got:\n{html}"
+    );
+    assert!(
+        html.contains(&format!("2 {SEARCH_RETRACTION_HIDDEN_COUNT_NOUN}")),
+        "the region discloses the hidden EVENT count; got:\n{html}"
+    );
+    assert!(
+        html.contains("Untick"),
+        "the region names how to untick to restore; got:\n{html}"
+    );
+}
+
+/// Behavior (US-RF-002 / OD-RF-2 / RF-V6): a filter-bearing state renders the full
+/// `/search` page with the read-only hide-retracted toggle reflected CHECKED, so
+/// unticking + resubmitting restores the hidden rows via the same GET path. Pins the
+/// page chrome + the active-toggle reflection (the form + its `checked` attribute).
+#[test]
+fn search_page_reflects_the_active_hide_toggle_for_a_filter_bearing_state() {
+    let page = render_search_page(&SearchState::AllRetracted { hidden_count: 1 });
+
+    assert!(
+        page.contains("Network Search"),
+        "the page renders its chrome/title; got:\n{page}"
+    );
+    assert!(
+        page.contains(SEARCH_HIDE_RETRACTED_LABEL),
+        "the page renders the read-only hide-retracted control label; got:\n{page}"
+    );
+    assert!(
+        page.contains("checked"),
+        "the hide toggle reflects the active filter state (checked); got:\n{page}"
+    );
+}
+
 /// Behavior (US-NS-003 / AC-003.2 — the CONTRIBUTOR render path): a CONTRIBUTOR
 /// search renders ONE developer's verified trail under a SINGLE author DID, every
 /// row carrying `[verified]` + the author DID + the VERBATIM confidence, AND the

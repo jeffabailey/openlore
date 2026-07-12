@@ -515,3 +515,54 @@ pub fn render_share_link(dimension: SearchDimension, value: &str) -> String {
          {SHARE_QUERY_NOT_SNAPSHOT_SEMANTICS}\n"
     )
 }
+
+#[cfg(test)]
+mod retraction_disclosure_tests {
+    //! Fast in-crate unit tier for the PURE `--hide-retracted` disclosure renderers
+    //! (feature `retraction-aware-search-filter`; ADR-060). The subprocess acceptance
+    //! suite (`tests/acceptance/search_hide_retracted.rs`) exercises the SAME strings
+    //! end-to-end; these pin the content-frozen disclosure contract at the pure
+    //! render-function boundary (the driving port at domain scope) so a whole-function
+    //! mutation (`String::new()` / `"xyzzy"`) is caught in <1ms without spawning the CLI.
+    use super::*;
+
+    /// The honest disclosure footer (US-RF-001 / I-RF-3 / D-RF-D5): "N retracted
+    /// claim(s) hidden" (N = self-retraction EVENTS, the honest unit) + the re-run
+    /// guidance. Both fragments are content-frozen — the user-visible contract.
+    #[test]
+    fn disclosure_footer_states_the_event_count_and_rerun_guidance() {
+        let footer = render_retraction_disclosure(2);
+        assert!(
+            footer.contains(&format!("2 {RETRACTION_HIDDEN_COUNT_NOUN}")),
+            "footer discloses the hidden EVENT count + the frozen noun; got: {footer:?}"
+        );
+        assert!(
+            footer.contains(RETRACTION_RERUN_GUIDANCE),
+            "footer names how to re-run without the flag; got: {footer:?}"
+        );
+    }
+
+    /// The guided empty-after-filter buffer (US-RF-001 / RF-6 / I-RF-3): when the
+    /// filter hid EVERY result, the buffer names that all N results `were
+    /// soft-retracted` + the count + the re-run guidance — never a bare empty result.
+    #[test]
+    fn all_retracted_buffer_names_the_withdrawn_state_and_count() {
+        let buffer = render_all_retracted_buffer(3);
+        assert!(
+            buffer.contains("All 3 matching claim(s)"),
+            "buffer opens with the guided 'All N matching claim(s)' framing; got: {buffer:?}"
+        );
+        assert!(
+            buffer.contains(RETRACTION_ALL_HIDDEN_FRAGMENT),
+            "buffer names the withdrawn ('were soft-retracted') state; got: {buffer:?}"
+        );
+        assert!(
+            buffer.contains(&format!("3 {RETRACTION_HIDDEN_COUNT_NOUN}")),
+            "buffer discloses the hidden EVENT count; got: {buffer:?}"
+        );
+        assert!(
+            buffer.contains(RETRACTION_RERUN_GUIDANCE),
+            "buffer names how to re-run without the flag; got: {buffer:?}"
+        );
+    }
+}
