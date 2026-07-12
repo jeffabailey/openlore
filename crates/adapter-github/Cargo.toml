@@ -48,3 +48,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[lints]
+workspace = true

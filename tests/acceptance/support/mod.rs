@@ -10,6 +10,17 @@
 //! VALUE; assertions are stand-alone functions; doubles are imported
 //! from the shared `openlore-test-support` crate. Composition, not
 //! inheritance.
+
+// Intentional test-support patterns: fixtures are re-exported for SIBLING
+// acceptance files (unused HERE), trait-impl params are intentionally unused,
+// some match arms are per-slice `todo!()` scaffolds, and a few test helpers
+// take wide argument lists. Scoped to this test-support module only.
+#![allow(
+    unused_imports,
+    unused_variables,
+    unreachable_patterns,
+    clippy::too_many_arguments
+)]
 //!
 //! ## Subprocess seam (DD-2 + DD-5)
 //!
@@ -323,7 +334,7 @@ impl FakeIdentity {
     /// involve Maria (US-002 Example 3, US-003 Example 2, WS-10).
     pub fn maria() -> Self {
         // Maria's seed is 32 bytes of 0x01 per the shared FakeIdentity.
-        let seed_hex: String = std::iter::repeat("01").take(32).collect();
+        let seed_hex: String = "01".repeat(32);
         Self {
             inner: SharedFakeIdentity::maria(),
             seed_hex,
@@ -2517,7 +2528,7 @@ pub fn assert_candidate_confidence_unchanged(env: &TestEnv, cid: &str, expected:
 
     // Confidence is a crate-private-wrapped f64; round-trip through serde to
     // read its numeric value (the same trick test-support uses to build it).
-    let actual: f64 = serde_json::to_value(&signed.unsigned.confidence)
+    let actual: f64 = serde_json::to_value(signed.unsigned.confidence)
         .ok()
         .and_then(|v| v.as_f64())
         .unwrap_or_else(|| {
@@ -5305,9 +5316,9 @@ pub struct SearchAnchors {
 /// Search the index across EVERY `SearchDimension` for one record's anchors,
 /// returning `(dimension_label, rows)` per dimension. Used by the AV-3
 /// search-absence + search-presence assertions.
-fn search_every_dimension<'a>(
+fn search_every_dimension(
     env: &TestEnv,
-    anchors: &'a SearchAnchors,
+    anchors: &SearchAnchors,
 ) -> Vec<(&'static str, Vec<IndexedRow>)> {
     vec![
         (

@@ -1314,3 +1314,6 @@ harness = true
 name = "viewer_philosophies_invariants"
 path = "../../tests/acceptance/viewer_philosophies_invariants.rs"
 harness = true
+
+[lints]
+workspace = true

@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_key_type() {
         // secp256k1-pub multicodec is `0xe7 0x01` + 33 compressed key bytes.
-        let encoded = encode_with_prefix(&[0xe7, 0x01], &vec![5u8; 33]);
+        let encoded = encode_with_prefix(&[0xe7, 0x01], &[5u8; 33]);
         assert_eq!(
             decode_ed25519_multibase(&encoded),
             Err(DecodeError::UnsupportedKeyType)

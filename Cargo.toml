@@ -100,3 +100,11 @@ debug = "line-tables-only"
 # trigger a duckdb / tokio / atrium rebuild. (`"*"` = all deps, not workspace.)
 [profile.dev.package."*"]
 debug = 2
+
+[workspace.lints.clippy]
+# `doc_lazy_continuation` began firing on ~135 pre-existing doc-comment list
+# items after a stable rustfmt/clippy bump. Pure doc-format churn, not a
+# correctness signal — allow it repo-wide (reversible). Crates opt in below.
+doc_lazy_continuation = "allow"
+# Sibling lint (rust-1.91 clippy) for the same doc-comment-list drift.
+doc_overindented_list_items = "allow"

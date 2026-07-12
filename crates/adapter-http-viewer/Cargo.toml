@@ -82,3 +82,6 @@ sha2 = "0.10"
 # new edge (the timestamp arrives already-built on the transport row; capability
 # surface + xtask check-arch unchanged). Same workspace `chrono` line `ports` uses.
 chrono = { workspace = true }
+
+[lints]
+workspace = true

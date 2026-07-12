@@ -46,7 +46,7 @@ pub struct LandingSummary {
 /// EVERY route including `/` (ADR-058 D2 / Migration). slice-21 step 01-02 REMOVED the
 /// slice-17 inline landing hub that used to read the SAME table: the surface set is now
 /// genuinely single-source (AC-001.3), with no landing-only second list to drift.
-
+///
 /// Render the viewer's landing page (`GET /`) as a complete HTML document (maud).
 /// PURE: a TOTAL function of the [`LandingSummary`] — no I/O, no panic on ANY of the
 /// 2³ `Option` combinations. States the view is read-only (the operator is told, up

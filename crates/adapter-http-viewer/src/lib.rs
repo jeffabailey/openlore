@@ -1830,6 +1830,10 @@ fn html_not_found(body: String) -> Response<Full<Bytes>> {
 }
 
 #[cfg(test)]
+// These tests intentionally hold `FAULT_ENV_LOCK` (a std Mutex serializing
+// env-var access) across `.await` in single-task `#[tokio::test]`s, and assert
+// on non-empty vendored consts — both flagged by clippy but correct here.
+#[allow(clippy::await_holding_lock, clippy::const_is_empty)]
 mod tests {
     //! Adapter-level unit tests for the slice-07 htmx surface. The asset integrity
     //! test pins the vendored htmx bytes so they cannot silently drift (ADR-031).

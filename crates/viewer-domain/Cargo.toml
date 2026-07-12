@@ -68,3 +68,6 @@ proptest = { workspace = true }
 # for the claim `composed_at`. (`claim-domain`'s `Cid`/`Did` value types are now a
 # regular dep above.) Dev-dependency only.
 chrono = { workspace = true }
+
+[lints]
+workspace = true
