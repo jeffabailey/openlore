@@ -77,6 +77,45 @@
       "d": "PASS",
       "detail": "e65628d6c1371b4e37ccc85afc7e8f538f9b57f1 — feat(retraction-aware-search-filter): DELIVER 01-02 — openlore search --hide-retracted opt-in filter + honest disclosure; wiring-verified (3 production files changed: verbs/search.rs, render/search.rs, lib.rs; no test files touched)",
       "t": "2026-07-12T00:24:27Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "detail": "read viewer_search_hide_retracted.rs (6 RF scenarios + wording substrings), appview-domain/src/retraction.rs (partition_retracted -> RetractionPartition{survivors,hidden_count}), cli render/search.rs (disclosure consts — cli crate, not importable by viewer-domain, so substrings mirrored), viewer-domain/src/search.rs (SearchState ADT + render_search_page/fragment/form), adapter-http-viewer/src/lib.rs (resolve_search_state — located RAW NetworkResultRowRaw rows in the Ok(raw) arm BEFORE to_indexed_claim/compose_results); confirmed appview-domain already an adapter-http-viewer dep",
+      "t": "2026-07-12T01:00:00Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "detail": "built both bins (openlore + openlore-indexer), ran cargo test --test viewer_search_hide_retracted -> RF-V1/V3/V4/V5/V6 FAILED for the right reason (param ignored -> self-retracted Priya still rendered, no notice, no 'Hide retracted claims' control), RF-V2 gold guard PASSED green-by-design; ATs unmodified",
+      "t": "2026-07-12T01:01:00Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: the new pure viewer-domain render helpers (render_retraction_notice, render_all_retracted_region, hide control on render_search_form) are content-frozen formatters fully driven + pinned by the ATs at the port boundary (RF-V1/V4/V6 assert the exact substrings + event count); partition_retracted already carries full proptest coverage from 01-01; a separate unit test would duplicate identical substring assertions (Test Duplication)",
+      "t": "2026-07-12T01:02:00Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "detail": "viewer-domain/src/search.rs: added 5 content consts (mirroring cli wording), 2 SearchState variants (FilteredResults{hidden_count>=1}, AllRetracted{hidden_count}), render_retraction_notice + render_all_retracted_region helpers, and the read-only hide_retracted GET-param control on render_search_form (checked[hide_active]). adapter-http-viewer/src/lib.rs: parse_hide_retracted + wired partition_retracted over RAW rows in resolve_search_state BEFORE to_indexed_claim/compose_results (identity on default -> byte-stable Results). Rebuilt both bins clean (no warnings). viewer_search_hide_retracted 6/6 green (RF-V2 unchanged); viewer_network_search 20/20 green (no regression); viewer-domain 142 unit tests green; cargo xtask check-arch OK (21). Wiring-verified: git diff shows both production files changed (no fixture theater)",
+      "t": "2026-07-12T01:03:00Z"
+    },
+    {
+      "sid": "02-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "detail": "618ebaaf8d4e6162fa7d5d2564bfb1eb9b3fb5fa — feat(retraction-aware-search-filter): DELIVER 02-01 — viewer /search?hide_retracted=1 read-only parity + notice; wiring-verified (2 production files changed: crates/adapter-http-viewer/src/lib.rs, crates/viewer-domain/src/search.rs; no test files touched)",
+      "t": "2026-07-12T01:05:40Z"
     }
   ]
 }
