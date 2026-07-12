@@ -85,6 +85,16 @@ pub enum Command {
         /// result snapshot.
         #[arg(long)]
         share: bool,
+        /// HIDE author-self-retracted claims from THIS view only (opt-in,
+        /// non-destructive; feature `retraction-aware-search-filter`, US-RF-001).
+        /// Absent ⇒ today's default path, byte-identical (I-RF-1). When set, a
+        /// claim whose OWN author published a `Retracts` marker for it is removed
+        /// from the current results and the surface discloses exactly how many
+        /// retraction EVENTS it hid + how to re-run without the flag. A
+        /// third-party `Counters`/`Retracts` never hides a row (D-3, no
+        /// heckler's veto).
+        #[arg(long)]
+        hide_retracted: bool,
         /// OPEN a shared `openlore://search?<dim>=<value>` link (the CLI re-run
         /// resolver, Q-DELIVER-AV-3 / US-AV-006 Ex2): RE-RUNS the encoded query
         /// against the CURRENT index (the link encoded the QUERY, never a
@@ -571,6 +581,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             subject,
             show,
             share,
+            hide_retracted,
             link,
         } => match verbs::search::run(
             &wiring,
@@ -580,6 +591,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                 subject,
                 show,
                 share,
+                hide_retracted,
                 link,
             },
         ) {

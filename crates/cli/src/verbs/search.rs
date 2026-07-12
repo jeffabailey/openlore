@@ -70,6 +70,14 @@ pub struct SearchArgs {
     /// `--share`: emit a stable query-encoding link instead of running the query
     /// (WD-110 / I-AV-8 — encodes the QUERY, never a snapshot).
     pub share: bool,
+    /// `--hide-retracted`: opt-in, non-destructive retraction filter over THIS
+    /// view (feature `retraction-aware-search-filter`, US-RF-001). Absent ⇒
+    /// today's byte-identical default (I-RF-1). When set, the verb runs the pure
+    /// `appview_domain::partition_retracted` over the RAW attributed rows (the
+    /// full `references` graph — NOT the lossy compose annotation) BEFORE the
+    /// render, drops every author-self-retracted claim + its same-author marker
+    /// (one EVENT), and discloses the hidden EVENT count + the re-run guidance.
+    pub hide_retracted: bool,
     /// A positional `openlore://search?<dim>=<value>` link to OPEN (the CLI
     /// re-run resolver, Q-DELIVER-AV-3 / US-AV-006 Ex2). When supplied, the verb
     /// PARSES the link (the inverse of the 05-12 `--share` emitter grammar),
@@ -108,13 +116,13 @@ pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
         return run_show(wiring, args, cid);
     }
     if let Some(object) = &args.object {
-        return run_dimension_object(wiring, object);
+        return run_dimension_object(wiring, object, args.hide_retracted);
     }
     if let Some(contributor) = &args.contributor {
-        return run_dimension_contributor(wiring, contributor);
+        return run_dimension_contributor(wiring, contributor, args.hide_retracted);
     }
     if let Some(subject) = &args.subject {
-        return run_dimension_subject(wiring, subject);
+        return run_dimension_subject(wiring, subject, args.hide_retracted);
     }
     run_no_dimension(args)
 }
@@ -132,7 +140,11 @@ pub fn run(wiring: &Wiring, args: &SearchArgs) -> Result<SearchOutcome> {
 ///
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query`, exiting 0 (the SOFT, non-fatal contract; WD-116).
-fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> {
+fn run_dimension_object(
+    wiring: &Wiring,
+    object: &str,
+    hide_retracted: bool,
+) -> Result<SearchOutcome> {
     // The OBJECT dimension queries + displays the SAME value, and an empty result
     // probes the index for a near-match suggestion (a typo'd philosophy URI is one
     // edit from the correct one — US-AV-002 Ex 4 / AV-12).
@@ -142,6 +154,7 @@ fn run_dimension_object(wiring: &Wiring, object: &str) -> Result<SearchOutcome> 
         object,
         object,
         EmptyPolicy::SuggestNearMatch,
+        hide_retracted,
     )
 }
 
@@ -173,6 +186,7 @@ fn run_dimension(
     query_value: &str,
     display_value: &str,
     empty_policy: EmptyPolicy,
+    hide_retracted: bool,
 ) -> Result<SearchOutcome> {
     let indexer_url = std::env::var(INDEXER_URL_ENV).unwrap_or_default();
     if indexer_url.is_empty() {
@@ -196,7 +210,7 @@ fn run_dimension(
             display_value,
             empty_policy,
         )),
-        Ok(result) => Ok(render_network_result(wiring, dimension, result)),
+        Ok(result) => Ok(render_network_result(wiring, dimension, result, hide_retracted)),
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
         Err(IndexQueryError::Unreachable { .. }) => {
@@ -285,14 +299,69 @@ fn known_objects_near(
 /// rows + the resolver to the PURE renderer (banner-first, per-author groups,
 /// `[verified]` per row, the no-merge footer with the distinct-author count +
 /// `peer add` pointer).
+///
+/// ## The `--hide-retracted` opt-in filter (feature `retraction-aware-search-filter`)
+///
+/// When `hide_retracted` is set, the RAW attributed rows (the full `references`
+/// graph — NOT `compose_results`' lossy `counter_annotation`, ADR-060 §subtlety-1)
+/// are run through the SINGLE pure decision [`appview_domain::partition_retracted`]
+/// BEFORE the render. Only the survivors are rendered — in their ORIGINAL relative
+/// order + with verbatim confidence (non-destructive, I-RF-2) — and the surface
+/// discloses the hidden retraction-EVENT count + how to re-run without the flag:
+///
+/// - survivors remain + `hidden_count >= 1` ⇒ append the honest disclosure footer.
+/// - EVERY row hidden (`survivors` empty, `hidden_count >= 1`) ⇒ the guided
+///   empty-after-filter buffer (NOT a bare empty result, I-RF-3).
+/// - `hidden_count == 0` ⇒ NO disclosure line at all (no misleading line, D-4).
+///
+/// Absent the flag this is the byte-identical default path (I-RF-1): `partition_
+/// retracted(rows, false)` returns the rows unchanged with `hidden_count == 0`.
 fn render_network_result(
     wiring: &Wiring,
     dimension: SearchDimension,
     result: NetworkSearchResultRaw,
+    hide_retracted: bool,
 ) -> SearchOutcome {
+    let NetworkSearchResultRaw {
+        results,
+        distinct_author_count,
+        total_claims,
+        suggestion,
+    } = result;
+
+    // The SINGLE pure decision both surfaces invoke over the RAW rows. When
+    // `hide_retracted == false` this returns the rows unchanged, `hidden_count == 0`
+    // (the byte-identical default guard, I-RF-1).
+    let partition = appview_domain::partition_retracted(results, hide_retracted);
+    let hidden_count = partition.hidden_count;
+
+    // I-RF-3 emotional-arc buffer: `--hide-retracted` hid EVERY result. Show the
+    // explicit guided state naming the hidden EVENTS + the re-run guidance, never a
+    // bare "nothing exists here" empty result.
+    if hide_retracted && partition.survivors.is_empty() && hidden_count >= 1 {
+        return SearchOutcome {
+            exit_code: 0,
+            stdout: render::render_all_retracted_buffer(hidden_count),
+        };
+    }
+
+    let survivors = NetworkSearchResultRaw {
+        results: partition.survivors,
+        distinct_author_count,
+        total_claims,
+        suggestion,
+    };
     let relationship_for =
         |author_did: &str| -> AuthorRelationship { resolve_relationship(wiring, author_did) };
-    let stdout = render::render_network_search_result(dimension, &result, &relationship_for);
+    let mut stdout =
+        render::render_network_search_result(dimension, &survivors, &relationship_for);
+
+    // Honest disclosure (I-RF-3): only when the filter actually hid a retraction
+    // EVENT. `hidden_count == 0` prints NO line (D-4 — no misleading "0 hidden").
+    if hidden_count >= 1 {
+        stdout.push_str(&render::render_retraction_disclosure(hidden_count));
+    }
+
     SearchOutcome {
         exit_code: 0,
         stdout,
@@ -354,7 +423,11 @@ fn dimension_flag(dimension: SearchDimension) -> &'static str {
 ///
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query --contributor`, exiting 0 (the SOFT contract; WD-116).
-fn run_dimension_contributor(wiring: &Wiring, contributor: &str) -> Result<SearchOutcome> {
+fn run_dimension_contributor(
+    wiring: &Wiring,
+    contributor: &str,
+    hide_retracted: bool,
+) -> Result<SearchOutcome> {
     // The wire query matches the indexed `author_did` exactly, so query with the
     // RESOLVED app-identity DID; but the empty message names the ORIGINAL handle the
     // user typed (`github:nobody-here`, not the resolved DID — AV-17), and an absent
@@ -366,6 +439,7 @@ fn run_dimension_contributor(wiring: &Wiring, contributor: &str) -> Result<Searc
         &author_did,
         contributor,
         EmptyPolicy::NoSuggestion,
+        hide_retracted,
     )
 }
 
@@ -415,7 +489,11 @@ fn resolve_contributor_to_did(contributor: &str) -> String {
 ///
 /// An unreachable indexer degrades GRACEFULLY to a clear local-only message
 /// pointing at `graph query --subject`, exiting 0 (the SOFT contract; WD-116).
-fn run_dimension_subject(wiring: &Wiring, subject: &str) -> Result<SearchOutcome> {
+fn run_dimension_subject(
+    wiring: &Wiring,
+    subject: &str,
+    hide_retracted: bool,
+) -> Result<SearchOutcome> {
     // The SUBJECT dimension queries + displays the SAME project URI; an empty result
     // probes for a near-match (a typo'd project URI is one edit from a known one),
     // mirroring the OBJECT dimension's AV-12 behavior.
@@ -425,6 +503,7 @@ fn run_dimension_subject(wiring: &Wiring, subject: &str) -> Result<SearchOutcome
         subject,
         subject,
         EmptyPolicy::SuggestNearMatch,
+        hide_retracted,
     )
 }
 
@@ -610,10 +689,13 @@ fn run_resolve_link(wiring: &Wiring, link: &str) -> Result<SearchOutcome> {
     // The contributor dimension's link already carries the RESOLVED DID (the
     // 05-12 emitter encoded `bare_did(resolve_contributor_to_did(..))`, AV-29), so
     // re-running matches the indexed `author_did` exactly — no second resolution.
+    // A shared link encodes the QUERY only (dimension + value, I-AV-8); the
+    // `--hide-retracted` VIEW control is not part of the link grammar in this slice,
+    // so opening a link re-runs the standard (non-hidden) view.
     match dimension {
-        SearchDimension::Object => run_dimension_object(wiring, &value),
-        SearchDimension::Subject => run_dimension_subject(wiring, &value),
-        SearchDimension::Contributor => run_dimension_contributor(wiring, &value),
+        SearchDimension::Object => run_dimension_object(wiring, &value, false),
+        SearchDimension::Subject => run_dimension_subject(wiring, &value, false),
+        SearchDimension::Contributor => run_dimension_contributor(wiring, &value, false),
     }
 }
 

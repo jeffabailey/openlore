@@ -359,6 +359,55 @@ pub fn render_empty_network_search(
     out
 }
 
+// -----------------------------------------------------------------------------
+// `--hide-retracted` disclosure (feature `retraction-aware-search-filter`; ADR-060)
+// -----------------------------------------------------------------------------
+
+/// Content-frozen retraction-count noun (US-RF-001 / OD-RF-3). The honest unit is
+/// EVENTS — one author self-retraction (an original + its same-author marker) reads
+/// as `1 retracted claim(s) hidden`, NOT 2 (D-RF-D5). The disclosure lines below
+/// are the SINGLE SOURCE for this wording so the CLI + the slice-02 viewer stay
+/// byte-identical. Do NOT paraphrase — the exact phrasing is the user-visible
+/// disclosure contract.
+pub const RETRACTION_HIDDEN_COUNT_NOUN: &str = "retracted claim(s) hidden";
+
+/// Content-frozen re-run guidance appended to EVERY `--hide-retracted` disclosure
+/// (US-RF-001 / I-RF-3): the filter is non-destructive + reversible, so the surface
+/// always names how to see the hidden claims again. Do NOT paraphrase.
+pub const RETRACTION_RERUN_GUIDANCE: &str = "re-run without --hide-retracted";
+
+/// Content-frozen empty-after-filter fragment (US-RF-001 / RF-6 / I-RF-3): when the
+/// filter hid EVERY result, the guided buffer states the claims `were soft-retracted`
+/// — an explicit "they exist but were withdrawn" state, never a bare "nothing exists
+/// here". Do NOT paraphrase.
+pub const RETRACTION_ALL_HIDDEN_FRAGMENT: &str = "were soft-retracted";
+
+/// Render the honest retraction disclosure footer appended AFTER the survivor
+/// results (US-RF-001 / I-RF-3): "N retracted claim(s) hidden" (N = retraction
+/// EVENTS, D-RF-D5) + the re-run guidance. Emitted ONLY when `hidden_count >= 1`
+/// (the verb suppresses it at `0` — no misleading line, D-4). PURE function.
+pub fn render_retraction_disclosure(hidden_count: u32) -> String {
+    format!(
+        "\n{hidden_count} {RETRACTION_HIDDEN_COUNT_NOUN}. \
+         To see them, {RETRACTION_RERUN_GUIDANCE}.\n"
+    )
+}
+
+/// Render the guided empty-after-filter buffer (US-RF-001 / RF-6 / I-RF-3): when
+/// `--hide-retracted` hid EVERY matching claim, the surface names that all
+/// `hidden_count` results `were soft-retracted` by their authors + the re-run
+/// guidance — an emotional-arc buffer, NOT a bare empty result that reads as
+/// "nothing exists here". The public-data banner precedes it (I-AV-4, every search
+/// session). PURE function.
+pub fn render_all_retracted_buffer(hidden_count: u32) -> String {
+    format!(
+        "{SEARCH_PUBLIC_DATA_BANNER}\n\n\
+         All {hidden_count} matching claim(s) {RETRACTION_ALL_HIDDEN_FRAGMENT} by their \
+         authors and are hidden from this view ({hidden_count} {RETRACTION_HIDDEN_COUNT_NOUN}).\n\
+         To see them, {RETRACTION_RERUN_GUIDANCE}.\n"
+    )
+}
+
 /// Content-frozen `--show` signature-verified line prefix (US-AV-004 Ex1 /
 /// KPI-AV-3): the inspected record's signature was VERIFIED against the author's
 /// DID. The `<did>` is filled with the bare author DID. This renders the SAME
