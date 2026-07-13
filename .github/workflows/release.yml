@@ -112,22 +112,27 @@ jobs:
       matrix:
         include:
           - triple: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-14              # native (Apple Silicon)
           - triple: x86_64-apple-darwin
-            runner: macos-13
+            # CROSS-COMPILED from the Apple-Silicon macos-14 runner rather than a
+            # native macos-13 Intel runner. GitHub's Intel-macOS runners are scarce
+            # and deprecation-tracked (ADR-011 flagged macos-13 as "the last Intel
+            # image"); depending on one left this cell QUEUED indefinitely. macOS
+            # arm64→x86_64 cross-compile is well-supported (universal SDK + clang
+            # multi-arch). RELAXES ADR-011's "native build per target" for this one
+            # cell — noted here + in the release. All cells build via `--target`.
+            runner: macos-14
           - triple: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-latest         # native
           - triple: aarch64-unknown-linux-gnu
-            # HIGH RISK (environments.yaml linux-arm64): GitHub-hosted arm64
-            # Linux runner. GA + free for public repos, but schedulability is
-            # account/runner-group dependent. If this label is unschedulable,
-            # the fallback (per environments.yaml) is cargo-zigbuild/cross from
-            # ubuntu-latest — which RELAXES ADR-011's no-cross-compile for this
-            # one cell and MUST be noted in the release. Not wired until needed.
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-24.04-arm      # native (GitHub-hosted arm64 Linux)
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Install the exact target so every cell builds via `--target` — native
+          # for 3 cells, cross (arm64→x86_64 macOS) for x86_64-apple-darwin.
+          targets: ${{ matrix.triple }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.triple }}
@@ -150,9 +155,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build release binary (native)
+      - name: Build release binary
         shell: bash
-        run: cargo build --release -p cli --bin openlore
+        # Explicit --target for every cell (native for 3, cross for x86_64-apple-darwin).
+        run: cargo build --release -p cli --bin openlore --target ${{ matrix.triple }}
 
       - name: Package tarball + sha256
         shell: bash
@@ -161,8 +167,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           TRIPLE="${{ matrix.triple }}"
           NAME="openlore-${VERSION}-${TRIPLE}.tar.gz"
-          # Tarball contains just the `openlore` binary at the archive root.
-          tar -czf "$NAME" -C target/release openlore
+          # With --target, the binary lands under target/<triple>/release/.
+          tar -czf "$NAME" -C "target/${TRIPLE}/release" openlore
           # shasum -a 256 exists on both macOS and Ubuntu runners (portable).
           shasum -a 256 "$NAME" > "$NAME.sha256"
           echo "Built $NAME"
