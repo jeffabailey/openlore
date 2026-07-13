@@ -82,6 +82,15 @@ jobs:
         run: cargo run -p xtask -- check-arch
       - name: cargo xtask check-probes
         run: cargo run -p xtask -- check-probes
+      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer)
+        # Several acceptance suites (appview_search, indexer_ingest,
+        # viewer_network_search, search_hide_retracted, …) spawn the `openlore`
+        # and the CROSS-package `openlore-indexer` executables via the test-support
+        # resolver, which locates them in target/debug. `nextest` builds test
+        # harnesses, NOT these `[[bin]]` targets (openlore-indexer is bin-only, so
+        # cli's dev-dependency on it is ignored) — so build them explicitly first.
+        # The test files themselves document this "Build-before-run" requirement.
+        run: cargo build --bin openlore --bin openlore-indexer
       - name: cargo nextest run --workspace
         # --test-threads=1 works around the adapter-system-clock OPENLORE_TEST_NOW
         # env-var race (see ci.yml header). Keep in lock-step with ci.yml.

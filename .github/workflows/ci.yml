@@ -102,7 +102,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer)
+        # Acceptance suites spawn the `openlore` and CROSS-package `openlore-indexer`
+        # executables via the test-support resolver (target/debug). nextest builds
+        # test harnesses, not these `[[bin]]` targets — build them explicitly first
+        # (openlore-indexer is bin-only, so cli's dev-dependency on it is ignored).
+        run: cargo build --bin openlore --bin openlore-indexer
       - name: cargo nextest run --workspace
         # --test-threads=1 works around the OPENLORE_TEST_NOW env-var race in
         # adapter-system-clock tests. See file header comment.
-        run: cargo nextest run --workspace --test-threads=1
+        # --no-fail-fast: surface EVERY failing test in one run (dev feedback),
+        # rather than stopping at the first — the run still fails if any test does.
+        run: cargo nextest run --workspace --test-threads=1 --no-fail-fast
