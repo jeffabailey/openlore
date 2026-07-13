@@ -223,12 +223,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo cyclonedx --format json --package cli
-          # cargo-cyclonedx writes <manifest-dir>/<crate>.cdx.json; locate + normalize.
-          SBOM="$(find . -name '*.cdx.json' -not -path './dist/*' | head -n1)"
-          if [ -z "$SBOM" ]; then echo "::error::no CycloneDX SBOM produced"; exit 1; fi
-          cp "$SBOM" dist/sbom.cdx.json
-          echo "SBOM: $SBOM -> dist/sbom.cdx.json"
+          # cargo-cyclonedx 0.5.x: scope with --manifest-path (NOT --package, which
+          # it rejects), and --override-filename controls the base name. It writes a
+          # per-package `sbom.json` in EACH crate dir; the cli package's SBOM (the
+          # shipped binary's dependency tree) is the one we publish as sbom.cdx.json.
+          cargo cyclonedx --format json --manifest-path crates/cli/Cargo.toml --override-filename sbom
+          if [ ! -f crates/cli/sbom.json ]; then
+            echo "::error::cli CycloneDX SBOM not produced"
+            find . -name 'sbom.json' -not -path './target/*' | head
+            exit 1
+          fi
+          cp crates/cli/sbom.json dist/sbom.cdx.json
+          echo "SBOM: crates/cli/sbom.json -> dist/sbom.cdx.json ($(wc -c < dist/sbom.cdx.json) bytes)"
 
       # --- stage: cosign keyless sign each tarball (.sig + .cert per tarball) ---
       - name: Install cosign
