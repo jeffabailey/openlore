@@ -44,7 +44,7 @@ members = [
 edition = "2021"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jeffbailey/openlore"
+repository = "https://github.com/jeffabailey/openlore"
 authors = ["OpenLore contributors"]
 
 # Shared dependencies pinned at the workspace root. Crates opt-in via

@@ -25,7 +25,7 @@ viewer. Your claims live in a local store first; federation over
 ## Install
 
 ```sh
-git clone https://github.com/jeffbailey/openlore
+git clone https://github.com/jeffabailey/openlore
 cd openlore
 cargo build            # or: cargo build --release
 ```
