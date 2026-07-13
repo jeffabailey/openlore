@@ -19,28 +19,28 @@
 class Openlore < Formula
   desc "Local-first CLI for authoring and querying federated philosophical claims"
   homepage "https://github.com/jeffabailey/openlore"
-  version "0.1.0-rc6"
+  version "0.1.0"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do
-      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0-rc6/openlore-0.1.0-rc6-aarch64-apple-darwin.tar.gz"
-      sha256 "4c5f3c94b5e0df2110aed1f5aed8d302971bfb1bf814e7b34a590ddcb0e24277"
+      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0/openlore-0.1.0-aarch64-apple-darwin.tar.gz"
+      sha256 "685a0427582b0a549a1e39c470670cfb81ddbd8cf7bc1052478924dd490dd919"
     end
     on_intel do
-      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0-rc6/openlore-0.1.0-rc6-x86_64-apple-darwin.tar.gz"
-      sha256 "1e455d4790d08f0303a5171bce9fda154d5678ac890db9f45eab392f477c830d"
+      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0/openlore-0.1.0-x86_64-apple-darwin.tar.gz"
+      sha256 "df3bf0a1dad8a5e3cef2d2d1df5a8dc739c8bb3e69c7bcf67c9c346a8b2e0c12"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0-rc6/openlore-0.1.0-rc6-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "7254eabbf4c2ba6cb91bf31e85e42b30c14fe40ceeb0d8754592ccb81caa09e3"
+      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0/openlore-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "440955ab3c96a16eb87fcf93528780e467f1c0f322938568161f7cdca090a861"
     end
     on_intel do
-      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0-rc6/openlore-0.1.0-rc6-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "7cfb6c773a74c24684e615d910a23e7380225ef134036213cc55c29819753012"
+      url "https://github.com/jeffabailey/openlore/releases/download/v0.1.0/openlore-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "36d62d3e198061f42479fee8e5cdaeddd60013b488a35ab535dc0e7ecfff9146"
     end
   end
 
