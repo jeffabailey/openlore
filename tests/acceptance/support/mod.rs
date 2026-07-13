@@ -464,6 +464,30 @@ pub struct CliOutcome {
     pub stderr: String,
 }
 
+/// Resolve a workspace binary's path robustly.
+///
+/// Prefers `CARGO_BIN_EXE_<name>` (cargo sets it for SAME-package bins; nextest
+/// sets it for workspace bins), and falls back to deriving `target/<profile>/
+/// <name>` from THIS test binary's own location. The fallback is what makes a
+/// CROSS-package bin like `openlore-indexer` (a different package, wired as a
+/// dev-dependency so it gets built) resolve under plain `cargo test` and under
+/// any nextest version — not only when the env var happens to be set. Without
+/// it, `assert_cmd::cargo::cargo_bin("openlore-indexer")` panics
+/// "CARGO_BIN_EXE_openlore-indexer is unset" in CI (I-AV subprocess ATs).
+fn resolve_workspace_bin(name: &str) -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os(format!("CARGO_BIN_EXE_{name}")) {
+        return p.into();
+    }
+    // current_exe() for an integration test = target/<profile>/deps/<test>-<hash>.
+    let mut dir = std::env::current_exe().expect("current_exe for the test binary");
+    dir.pop(); // drop the test executable file name
+    if dir.ends_with("deps") {
+        dir.pop(); // deps -> target/<profile>
+    }
+    dir.push(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    dir
+}
+
 /// Run `openlore <args>` with `OPENLORE_HOME` set to `env.home`, plus
 /// the slice-01 stub env vars (`OPENLORE_DID`, `OPENLORE_KEY_SEED_HEX`)
 /// that drive the in-binary IdentityPort adapter against the same
@@ -4523,7 +4547,7 @@ pub fn av28_two_more_matching_claims() -> Vec<openlore_test_support::RawRecordSp
 fn spawn_indexer_serve(env: &TestEnv, source: FakeIngestServer) -> IndexerHandle {
     use std::io::{BufRead, BufReader};
 
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = resolve_workspace_bin("openlore-indexer");
     let mut child = Command::new(&bin)
         .arg("serve")
         .env_clear()
@@ -5806,7 +5830,7 @@ pub fn run_openlore_indexer_with_source(
     source_url: &str,
     pubkey_seams: &[(&str, &str)],
 ) -> CliOutcome {
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = resolve_workspace_bin("openlore-indexer");
     let mut cmd = Command::new(&bin);
     cmd.args(args)
         .env_clear()
@@ -5851,7 +5875,7 @@ pub fn run_openlore_indexer_with_fsync_lying_store(
     args: &[&str],
     source_url: &str,
 ) -> CliOutcome {
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = resolve_workspace_bin("openlore-indexer");
     let output = Command::new(&bin)
         .args(args)
         .env_clear()
@@ -6145,7 +6169,7 @@ pub fn run_openlore_indexer_with_plc_resolver(
     source_url: &str,
     plc_endpoint: &str,
 ) -> CliOutcome {
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = resolve_workspace_bin("openlore-indexer");
     let output = Command::new(&bin)
         .args(args)
         .env_clear()
@@ -6458,7 +6482,7 @@ pub fn assert_indexer_help_has_no_signing_verb(env: &TestEnv) {
 /// Mirrors [`run_openlore_indexer_with_source`]'s clean-env discipline but threads
 /// NO source/index seam — the help surface short-circuits before any wiring.
 pub fn run_openlore_indexer_help(env: &TestEnv) -> CliOutcome {
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = resolve_workspace_bin("openlore-indexer");
     let output = Command::new(&bin)
         .args(["--help"])
         .env_clear()
