@@ -36,5 +36,14 @@ jobs:
         os: [macos-14, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Put Homebrew on PATH
+        shell: bash
+        # macOS runners ship brew on PATH already; ubuntu runners have Linuxbrew
+        # installed at the standard prefix but do NOT export it — add it so the
+        # smoke script's `brew` resolves. No-op on macOS (the dir is absent).
+        run: |
+          if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
+            echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+          fi
       - name: brew tap → trust → install → version
         run: bash scripts/release/smoke-test-formula.sh
