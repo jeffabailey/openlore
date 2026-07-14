@@ -1,0 +1,40 @@
+# Formula smoke test — feature homebrew-binary-distribution.
+#
+# Runs the REAL user-facing `brew tap → trust → install` flow against the live tap +
+# GitHub Release and asserts `openlore --version`, so a broken formula (bad sha256,
+# missing release asset, tap/trust regression) fails CI instead of the user. Triggers
+# whenever the formula (or this test) changes on main — including the release.yml
+# `bump-formula` autobump commit — plus on demand.
+name: Formula smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Formula/openlore.rb"
+      - "scripts/release/smoke-test-formula.sh"
+      - ".github/workflows/formula-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: formula-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: brew install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 = Apple Silicon (aarch64-apple-darwin), ubuntu-latest = x86_64 Linux.
+        # x86_64-apple-darwin + aarch64-linux paths are validated by release.yml's build
+        # matrix; Intel-mac runners are scarce (ADR-011) so they are not smoke-tested here.
+        os: [macos-14, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: brew tap → trust → install → version
+        run: bash scripts/release/smoke-test-formula.sh

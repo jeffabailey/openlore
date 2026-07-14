@@ -7,10 +7,15 @@
 #
 # Homebrew formula for the openlore CLI — feature homebrew-binary-distribution (ADR-061).
 #
-# In-repo tap (D-1). Install flow (OD-HB-1, one-time explicit-URL tap needed because
-# Homebrew otherwise resolves `jeffabailey/openlore` to a `homebrew-openlore` repo):
+# In-repo tap (D-1). Install flow — three steps, NO separate homebrew-openlore repo:
 #     brew tap jeffabailey/openlore https://github.com/jeffabailey/openlore
+#     brew trust jeffabailey/openlore
 #     brew install jeffabailey/openlore/openlore
+#   1. explicit-URL tap (OD-HB-1): Homebrew's `user/name` shorthand otherwise resolves
+#      to a `homebrew-name` repo, so the URL is required to point at THIS repo.
+#   2. brew trust (Homebrew 6.0.0+): third-party taps are ignored until trusted; a
+#      custom-remote tap must be trusted whole-tap (`brew trust --formula …` is rejected).
+#      Older Homebrew has no `trust` command — that step is a harmless no-op there.
 #
 # Prebuilt tarball, NOT build-from-source (D-2): the url/sha256 pairs point at the
 # release.yml artifacts (ADR-011 matrix); brew verifies each download against the

@@ -24,6 +24,29 @@ viewer. Your claims live in a local store first; federation over
 
 ## Install
 
+### Homebrew (prebuilt binary — macOS + Linux)
+
+```sh
+brew tap jeffabailey/openlore https://github.com/jeffabailey/openlore
+brew trust jeffabailey/openlore   # Homebrew 6.0.0+: trust the tap (custom remote)
+brew install jeffabailey/openlore/openlore
+openlore --version                # → openlore 0.1.0
+```
+
+The tap lives in **this** repo — there is no separate `homebrew-openlore` repo. Two
+things are load-bearing and easy to miss:
+
+- the **explicit URL** on `brew tap` is required, because Homebrew's `user/name`
+  shorthand otherwise looks for a `github.com/user/homebrew-name` repo;
+- **`brew trust jeffabailey/openlore`** is required on Homebrew 6.0.0+ before it will
+  install a third-party custom-remote tap (older Homebrew has no `trust` command and
+  needs no trust step).
+
+Binaries are the signed GitHub-Release artifacts, sha256-verified by brew. Upgrade with
+`brew upgrade openlore`.
+
+### From source
+
 ```sh
 git clone https://github.com/jeffabailey/openlore
 cd openlore
