@@ -1049,3 +1049,231 @@ ADR-023's indexer boundary.
 - **ADR-023 reconciliation**: recorded in **Changed Assumptions** — this feature is the additive,
   self-hosted-serverless realization of ADR-023's deferred hosted mode; ADR-023 is FLAGGED for DESIGN,
   NOT modified.
+
+---
+
+## Wave: DESIGN / [REF] Design Decisions (DDD)
+
+> Wave: **DESIGN** (application / component scope) · Mode: **propose** · Owner: Morgan
+> (nw-solution-architect) · Date: 2026-07-15 · ADR: **ADR-062** · Style unchanged (ADR-009 hexagonal
+> modular monolith + ADR-007 functional Rust; the `atproto/` Worker is a NEW TS deployment target).
+> Builds on SPIKE-00 (OD-SF-1 RESOLVED = opaque transport) — not re-opened.
+
+Each DDD resolves an open decision with a verdict + one-line rationale. Full trade-offs (PROPOSE
+mode: the alternatives are kept visible so the user can override) are in the Decisions table below
+and in ADR-062.
+
+| # | Decision | Verdict + rationale |
+|---|---|---|
+| **DDD-1** (OD-SF-1) | Rust↔Worker boundary + record storage | **Opaque, content-addressed HTTP blob store** (`PUT/GET /records/:cid` verbatim; CLI-minted CID; Worker computes no CID). SPIKE-00 proved `putRecord` re-encode diverges on f16-representable confidence; opaque is the only KPI-SF-1-safe shape. |
+| **DDD-2** (storage medium) | KV vs Durable Object vs R2 | **Single Durable Object per instance** ("my repo" object: blobs + manifest, transactional). Strong read-after-write protects the round-trip CI test + interrupted-push resume; single-owner ⇒ single DO is the natural model. KV/R2 = documented alternatives. |
+| **DDD-3** (record blob format) | raw CBOR vs lexicon-JSON | **Verbatim lexicon-JSON signed record, keyed by the Rust-minted CID.** Reuses the shipped J-003 `parse_signed_claim` (zero new decode), keeps the card CBOR-free; Rust re-canonicalizes on pull to re-establish the CID (J-003's WD-24 discipline). |
+| **DDD-4** (OD-SF-2) | `openlore publish` verb grammar | **`openlore publish {init, push, pull, status}`** — matches the shipped `peer {add,pull,remove}` / `claim {add,publish,retract}` group-subcommand style + the user's git-like push/pull habit. Overload with `claim publish` is documented, not conflated (see Open Questions). |
+| **DDD-5** (OD-SF-3) | cross-instance pull transport | **(b) byte-preserving opaque read variant.** Reuse `resolve_peer` (DID→serviceEndpoint, unchanged) + read via `/manifest` + `GET /records/:cid`; decode + verify CID + signature LOCALLY in Rust, reusing J-003's verification/attribution/anti-merging verbatim. (a) XRPC-wrapper on the Worker = documented fallback. |
+| **DDD-6** (OD-SF-4) | card URL + Bluesky link | **Card at `GET /`; manual profile-link paste; NO `did:web`/handle verification** (lean default, out of scope per DISCUSS). Card renders from the instance's own `/manifest`, read-only, per-author attribution, no consensus row (D-7). |
+| **DDD-7** (CID conformance) | fix ADR-006 float or leave | **Leave it.** The opaque transport sidesteps the ciborium-vs-DAG-CBOR shortest-float gap; fixing the core is a CID-changing wire break for every existing claim. Documented revisit trigger (standard-PDS interop JTBD) + the `0.0`/`0.5`/`1.0` regression guard. |
+| **DDD-8** (capability boundary) | write vs read surfaces | **Split ports: write-capable `PublishPort` (my instance only, wired only in the `publish` root) vs read-only instance port (cross-instance pull + card).** New `xtask check-arch` rule `publish_write_capability_isolated`; extends ADR-023's signing-incapable boundary to write-incapable pull. |
+
+---
+
+## Wave: DESIGN / [REF] Component Decomposition
+
+Paths are workspace-relative to `/Users/jeffbailey/Projects/foss/leading/openlore/`. The `openlore`
+binary + `crates/claim-domain` (CID/canonicalize/compute_cid/verify) are REUSED UNCHANGED — the
+single-canonicalizer invariant is load-bearing (SPIKE-00).
+
+| Component | Path | Change | Responsibility |
+|---|---|---|---|
+| **`atproto/` Cloudflare Worker (TS)** | `atproto/` (NEW folder; workerd/wrangler) | **CREATE NEW** | The dumb opaque store: `PUT/GET /records/:cid` (verbatim), `GET /manifest` (index + display projection), `GET /` (public read-only card). NO JS IPLD/CBOR/CID libs; computes no CID; canonicalizes nothing. Storage = one Durable Object per instance. |
+| **`PublishPort` + `InstanceReadPort` traits + boundary ADTs** | `crates/ports` | **EXTEND** | Pure trait contracts: write-capable `PublishPort` (mint-side push + own-instance read/round-trip) and read-only `InstanceReadPort` (`get_record`, `list_manifest`); `PublishError` + probe-refusal reasons (`publish.cid_roundtrip_failed`, `publish.instance_unreachable`). All ports live in `ports` (established pattern). |
+| **`crates/publish-domain` (pure)** | `crates/publish-domain` (NEW) | **CREATE NEW** | The pure decision core: `plan_push(local_cids, instance_cids) -> PushPlan` (diff → new vs skip; additive + idempotent) and `reconcile_pull(local, pulled) -> ReconcilePlan` (in-sync no-op / insert / conflict-surface; NEVER silent overwrite). No I/O (pure-core allowlist). Mirrors the scraper-domain/appview-domain/viewer-domain norm. Fold-into-`cli` = documented alternative. |
+| **`crates/adapter-publish-http` (effect)** | `crates/adapter-publish-http` (NEW) | **CREATE NEW** | Implements `PublishPort` + `InstanceReadPort` over HTTP (reuses workspace `reqwest`/rustls — NO new HTTP crate) against the opaque Worker. `probe()` round-trips a `0.0`/`0.5`/`1.0` canary CID (Earned-Trust startup gate). |
+| **`openlore publish {init,push,pull,status}` verbs + wiring** | `crates/cli` | **EXTEND** | The SOLE composition root: wire the publish adapter, `init` records + probes the ADR-027 configurable instance URL (D-5), `push`/`pull` call `publish-domain` + `claim-domain`, `status` reports sync state. Write-capable `PublishPort` wired ONLY here. |
+| **Cross-instance (J-003) pull transport delta** | `crates/cli` (peer-pull verb) + `crates/adapter-publish-http` (read surface) | **EXTEND** | For an openlore-opaque peer, resolve DID→serviceEndpoint (`adapter-atproto-did`, unchanged), read via `InstanceReadPort`, reuse J-003 verification/attribution/anti-merging verbatim. Peer-pull wires the READ-ONLY port (never writes to a peer). |
+| **`parse_signed_claim` (lexicon-JSON → SignedClaim)** | `crates/adapter-atproto-pds/src/peer_read.rs` → hoist candidate | **REUSE / (optional) EXTEND** | Reused for both own-pull and cross-instance pull. RECOMMENDED (Open Questions): hoist the pure JSON→SignedClaim decode into `claim-domain`/`lexicon` so both adapters share ONE parse path; else duplicate the ~40-line parse in the new adapter. |
+| **`xtask check-arch`** | `xtask` | **EXTEND** | New rule `publish_write_capability_isolated` (write `PublishPort` wired only in the `publish` root; pull/card read surfaces depend only on `InstanceReadPort`) + `publish-domain` added to the pure-core allowlist + an `atproto/` no-IPLD/CBOR dependency guard. |
+| `openlore` binary, `claim-domain`, `adapter-atproto-did` (DID resolution), local DuckDB `StoragePort` | — | **REUSE UNCHANGED** | CID/sign/verify, DID→serviceEndpoint resolution, local source-of-truth store. Zero change (single-canonicalizer + local-first invariants). |
+
+**Crate count**: workspace 21 → **23 production** (`+publish-domain` pure, `+adapter-publish-http`
+effect) + 1 test-support + 1 xtask = **25 workspace members** (if `publish-domain` is kept as its
+own crate; 24 if folded into `cli`). The `atproto/` Worker is a SEPARATE TS deployment, NOT a
+workspace member.
+
+---
+
+## Wave: DESIGN / [REF] Driving Ports
+
+- **Rust (CLI, new driving surface)**: `openlore publish init <url>` (US-SF-001), `openlore publish
+  push` (US-SF-002/003), `openlore publish pull` (US-SF-004), `openlore publish status` (sync state).
+- **TS (Worker, new driving surface)**: `GET /` (public card, US-SF-005), `PUT /records/:cid` +
+  `GET /records/:cid` (opaque store, US-SF-002/003/004), `GET /manifest` (enumeration for
+  pull/card/cross-instance).
+- **Reused unchanged**: `openlore peer add` / `openlore peer pull` (US-SF-006) — cross-instance is a
+  driven-transport delta, NOT a new driving verb.
+
+## Wave: DESIGN / [REF] Driven Ports + Adapters
+
+- **`PublishPort` (NEW, write-capable, driven)** — CLI → MY instance: `put_record(cid, bytes)`,
+  own-instance read for round-trip; adapter `adapter-publish-http`. Wired only in the `publish` root.
+- **`InstanceReadPort` (NEW, read-only, driven)** — CLI → ANY openlore instance: `get_record(cid)`,
+  `list_manifest()`; adapter `adapter-publish-http`. Wired in the pull/card read path; cannot write.
+- **REUSED driven**: `claim-domain` (CID/canonicalize/verify — the single canonicalizer),
+  `adapter-atproto-did` (`resolve_peer` DID→serviceEndpoint for OD-SF-3), the J-003 verb-level
+  verification + `peer_claims` attribution/anti-merging machinery, `StoragePort`/`adapter-duckdb`
+  (local reconcile).
+
+## Wave: DESIGN / [REF] Technology Choices
+
+| Choice | Pin | License | Rationale |
+|---|---|---|---|
+| Cloudflare Workers runtime | workerd | Apache-2.0 | The self-hosted-serverless target (D-1/D-2); user's own account (no shared operator). |
+| Worker deploy tool | wrangler | Apache-2.0/MIT | Standard Cloudflare deploy; `wrangler deploy` is the user's habit (US-SF-001). |
+| Worker storage | Durable Objects | (platform) | Strong read-after-write + atomic manifest (DDD-2). |
+| Worker language | TypeScript | Apache-2.0 | Typed; the `atproto/` code is ours (MIT/Apache like the workspace). |
+| Worker router | hand-rolled `fetch` handler or `itty-router` | MIT | 4 routes; keep deps minimal. **NO** `@ipld/dag-cbor` / `multiformats` on the CID path (SPIKE-00 invariant). |
+| Rust HTTP client | workspace `reqwest` (rustls) | MIT/Apache-2.0 | REUSED — the same production dep `adapter-github`/`adapter-atproto-ingest`/`adapter-index-query` already carry; NO new HTTP crate; cargo-deny-clean. |
+| Rust core | `claim-domain` (`ciborium` CID/sign/verify) | (existing) | REUSED UNCHANGED — the sole canonicalizer. |
+
+**External-integration annotation (for platform-architect / DEVOPS)**: the CLI↔Worker boundary is
+a FIRST-PARTY HTTP contract between two components WE own (Rust client ↔ our TS Worker), the highest
+-risk boundary in this feature. **Recommended: a consumer-driven contract test** (e.g. Pact, or a
+CI round-trip harness) pinning `PUT/GET /records/:cid` byte-verbatim + `/manifest` shape, run
+against `wrangler dev` (workerd) in CI — this operationalizes KPI-SF-1 (the North Star) and the
+`0.0`/`0.5`/`1.0` regression guard. The Bluesky profile link is a MANUAL paste (no API integration)
+→ no contract test needed.
+
+---
+
+## Wave: DESIGN / [REF] Decisions Table
+
+| DDD | Decision | Chosen | Alternatives (visible for override — PROPOSE mode) |
+|---|---|---|---|
+| DDD-1 | Rust↔Worker boundary | Opaque content-addressed blob store | `putRecord` server-assigned CID (REJECTED: float divergence); WASM `claim-domain` on Worker (REJECTED: second canonicalizer) |
+| DDD-2 | Storage medium | **Durable Object** (per-instance repo object) | KV (simpler/edge-cached, but eventual-consistency round-trip flake + manifest write-rate); R2 (large blobs later — revisit) |
+| DDD-3 | Blob format | Verbatim lexicon-JSON, Rust-minted CID key | Raw canonical CBOR (stronger identity, needs new decode + CBOR card) |
+| DDD-4 | Verb grammar | `openlore publish {init,push,pull,status}` | `openlore instance {…}` / `openlore mirror {…}` (disambiguates the `claim publish` overload) |
+| DDD-5 | Cross-instance transport | (b) byte-preserving opaque read + local verify | (a) Worker XRPC `listRecords` wrapper (literal-zero-Rust-change J-003, asymmetric Worker) |
+| DDD-6 | Card + Bluesky link | Card at `/`, manual paste, no verification | `did:web`/handle bidirectional verification (out of scope) |
+| DDD-7 | CID conformance | Leave ADR-006 as-is + revisit trigger | Fix core to strict-float64 dag-cbor (CID-changing wire break) |
+| DDD-8 | Capability boundary | Split write `PublishPort` / read-only `InstanceReadPort` | Single port (REJECTED: write leaks into pull/card) |
+
+---
+
+## Wave: DESIGN / [REF] Reuse Analysis (HARD GATE)
+
+Every overlapping component classified EXTEND vs CREATE NEW; every CREATE NEW challenged.
+
+| Component | Verdict | Justification (CREATE NEW challenged) |
+|---|---|---|
+| `crates/claim-domain` (CID/canonicalize/verify) | **REUSE** | The single canonicalizer (SPIKE-00 invariant). Zero change; any second CID computer is a divergence hazard. |
+| `crates/adapter-atproto-did` (`resolve_peer`) | **REUSE** | DID document → serviceEndpoint resolution is standard + unchanged for OD-SF-3; the endpoint just points at a Cloudflare instance instead of a bsky PDS. |
+| J-003 peer-pull machinery (`peer_claims`, verify-before-store, anti-merging) | **EXTEND** | Verification/attribution/anti-merging reused VERBATIM; the ONLY delta is a byte-preserving opaque read transport (DDD-5). Not a new job (D-8). |
+| `crates/ports` | **EXTEND** | All port traits live here (PdsPort/GithubPort/IndexQueryPort precedent); add `PublishPort` + `InstanceReadPort` + ADTs. No new ports crate. |
+| `crates/cli` (composition root) | **EXTEND** | The sole Rust composition root (I-3); add the `publish` verb group + wiring. No second CLI root. |
+| `parse_signed_claim` (JSON→SignedClaim) | **REUSE** (hoist recommended) | Reused for own + cross-instance pull; hoist the pure decode into `claim-domain`/`lexicon` to share one parse path (Open Questions), else duplicate ~40 lines. |
+| `crates/adapter-publish-http` | **CREATE NEW** | *Challenged*: `adapter-atproto-pds` is XRPC/PDS-specific; `adapter-index-query` is the indexer XRPC client; neither speaks the opaque content-addressed contract. New external protocol + new port ⇒ new adapter justified. Reuses `reqwest` (no new transport dep). |
+| `crates/publish-domain` (pure) | **CREATE NEW** | *Challenged*: the push-diff + reconcile decisions are pure + testable and every subsystem here has a pure core (scraper/appview/viewer-domain). Justified by the norm; **fold-into-`cli` is the documented lean alternative** if minimal crate count is preferred. |
+| `atproto/` Worker (TS) | **CREATE NEW** | D-2 LOCKS a new TS/Workers deployment target not assumed to reuse Rust crates. No existing component is a Cloudflare Worker. Justified by decision. |
+| `xtask check-arch` | **EXTEND** | Add the write-capability-isolation rule + pure-core allowlist entry + `atproto/` no-IPLD guard. No new tooling crate. |
+
+**Verdict**: 6 REUSE/EXTEND, 3 CREATE NEW (all challenged + justified: a locked new deployment
+target, a new external protocol adapter, and a pure decision core consistent with the shipped norm).
+
+---
+
+## Wave: DESIGN / [REF] C4 — System Context (L1)
+
+```mermaid
+C4Context
+  title System Context — serverless-philosophy-federation
+  Person(maria, "Maria (P-001)", "Publisher/sharer: owns + shares her philosophy graph")
+  Person(audience, "Card audience", "Anyone Maria links from her Bluesky profile")
+  Person(rachel, "Rachel (peer, P-002)", "Another self-hosting author")
+  System(cli, "openlore CLI", "Rust; local-first authoring, signing, publish, federated read")
+  SystemDb(duckdb, "Local DuckDB", "Maria's source of truth (canonical)")
+  System(myinstance, "Maria's Cloudflare instance", "Her OWN opaque content-addressed store + card")
+  System(peerinstance, "Rachel's Cloudflare instance", "Her OWN opaque store + card")
+  System_Ext(bsky, "Bluesky profile", "External; hosts a manual link to the card")
+  Rel(maria, cli, "Authors, signs, publishes, pulls with")
+  Rel(cli, duckdb, "Reads/writes canonical claims in")
+  Rel(cli, myinstance, "Pushes signed records to / pulls back from (CID-verified)")
+  Rel(cli, peerinstance, "Pulls verified peer claims from (J-003 transport delta)")
+  Rel(maria, bsky, "Pastes her card URL into")
+  Rel(audience, myinstance, "Views the read-only philosophy card at /")
+  Rel(audience, bsky, "Follows the card link from")
+  Rel(rachel, peerinstance, "Owns + publishes to")
+```
+
+## Wave: DESIGN / [REF] C4 — Container (L2)
+
+```mermaid
+C4Container
+  title Container Diagram — serverless-philosophy-federation
+  Person(maria, "Maria (P-001)")
+  Person(audience, "Card audience")
+  System_Boundary(cli_b, "openlore CLI (Rust, single binary — ADR-009)") {
+    Container(publishverbs, "publish verbs", "crates/cli", "init/push/pull/status; sole composition root; wires write PublishPort here only")
+    Container(peerverbs, "peer verbs", "crates/cli", "peer add/pull; reuses J-003 verify + anti-merging")
+    Container(pubdomain, "publish-domain", "Rust pure crate", "plan_push (diff) + reconcile_pull (no silent overwrite)")
+    Container(claimdomain, "claim-domain", "Rust pure crate (REUSED)", "the SOLE canonicalizer: compute_cid + verify")
+    Container(pubadapter, "adapter-publish-http", "Rust effect (reqwest)", "PublishPort (write) + InstanceReadPort (read); probe() round-trips a 0.0/0.5/1.0 canary")
+    Container(didadapter, "adapter-atproto-did", "Rust effect (REUSED)", "resolve_peer: DID doc -> serviceEndpoint")
+  }
+  ContainerDb(duckdb, "Local DuckDB", "single file (REUSED)", "canonical local claims + peer_claims")
+  System_Boundary(worker_b, "atproto/ Worker (TypeScript, workerd — CREATE NEW)") {
+    Container(card, "card handler", "TS", "GET / read-only HTML from manifest; signing-incapable")
+    Container(store, "opaque store handler", "TS", "PUT/GET /records/:cid VERBATIM; computes no CID; no IPLD lib")
+    Container(manifest, "manifest handler", "TS", "GET /manifest: CID list + display projection")
+    ContainerDb(dostore, "Durable Object", "per-instance repo", "blobs + manifest, transactional, strongly consistent")
+  }
+  System(peerworker, "Peer's atproto/ Worker", "Rachel's own opaque instance (manifest + /records/:cid)")
+  System_Ext(bsky, "Bluesky profile")
+  Rel(maria, publishverbs, "Runs")
+  Rel(maria, peerverbs, "Runs")
+  Rel(publishverbs, pubdomain, "Plans push/reconcile with")
+  Rel(publishverbs, claimdomain, "Mints/verifies CID with")
+  Rel(publishverbs, pubadapter, "Pushes/pulls via")
+  Rel(pubadapter, store, "PUT/GET /records/:cid (verbatim bytes)")
+  Rel(pubadapter, manifest, "GET /manifest (enumerate)")
+  Rel(store, dostore, "Reads/writes blobs in")
+  Rel(manifest, dostore, "Reads index from")
+  Rel(card, dostore, "Renders card from manifest in")
+  Rel(publishverbs, duckdb, "Reconciles local (no silent overwrite)")
+  Rel(peerverbs, didadapter, "Resolves peer DID with")
+  Rel(peerverbs, pubadapter, "Reads peer records (read-only InstanceReadPort)")
+  Rel(pubadapter, peerworker, "GET /manifest + /records/:cid (byte-preserving)")
+  Rel(peerverbs, claimdomain, "Recomputes CID + verifies signature with")
+  Rel(peerverbs, duckdb, "Stores verified peer_claims (attributed, never merged)")
+  Rel(audience, card, "Views read-only card")
+  Rel(audience, bsky, "Follows manual card link from")
+```
+
+> L3 (Component) is NOT warranted: the `atproto/` Worker is 3 thin handlers + one DO, and the Rust
+> side reuses established pure/effect crate boundaries — no single container has ≥5 novel internal
+> components (per the C4 discipline). The Container view is the right stopping point.
+
+---
+
+## Wave: DESIGN / [REF] Open Questions (deferred to DISTILL / DELIVER)
+
+- **Q-SF-D1 (DELIVER)** — Manifest schema details: exact JSON shape of `/manifest` (ordered CID
+  list + per-CID display projection), pagination/cursor if a graph grows large, and whether the
+  display projection is a flat array or keyed map. Design fixes the CONTRACT (enumerate + display,
+  advisory-only); the wire schema is DELIVER's.
+- **Q-SF-D2 (DELIVER)** — Auth for write-to-my-instance: `PUT /records/:cid` is a write to the
+  user's OWN instance. Slice-01 may accept an unauthenticated same-owner deploy (single-tenant,
+  the user controls their Cloudflare account + can gate at the edge); a shared-secret / bearer token
+  from `publish init` is the likely first hardening. Out of scope for the walking skeleton (DISCUSS
+  Out of Scope: "auth … out"), flagged here.
+- **Q-SF-D3 (DELIVER)** — Bulk / interrupted-push reconcile diff strategy: `plan_push` diffs by CID
+  set; the exact resume marker + idempotency key (US-SF-003 partial-then-resume) and whether the
+  manifest read is one call or paged. The DO's atomic manifest makes this tractable; the algorithm
+  is DELIVER's.
+- **Q-SF-D4 (DELIVER)** — Hoist `parse_signed_claim` into `claim-domain`/`lexicon` (shared pure
+  decode) vs duplicate in `adapter-publish-http`. RECOMMENDED: hoist (DRY, single parse path); noted
+  as an Upstream Change. Generalize its `PdsError` return to a shared decode error.
+- **Q-SF-D5 (DISTILL)** — Opaque-instance detection for cross-instance pull: a `GET
+  /.well-known/openlore-instance` marker vs a `/manifest` capability probe to distinguish an
+  openlore-opaque instance from a generic PDS at a resolved serviceEndpoint.
+- **Q-SF-D6 (DELIVER)** — `publish-domain` as its own crate vs folded into `cli` (DDD-3 alternative);
+  decide at DELIVER based on the reconcile logic's actual size.

@@ -66,6 +66,44 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **serverless-philosophy-federation: DESIGN 2026-07-15 — ADDITIVE. +2 Rust production crates
+  (`publish-domain` pure + `adapter-publish-http` effect; workspace 21 → 23 prod / 25 members, or 24
+  if `publish-domain` folds into `cli`) + a NEW non-workspace `atproto/` TypeScript/Cloudflare-Workers
+  deployment target.** The self-hosted-serverless realization of ADR-023's deferred hosted mode: each
+  user deploys their OWN Cloudflare Worker (they own it → sovereignty preserved; no central authority,
+  D-1/D-3/D-4), pushes locally-signed claims to it, serves a public read-only card linkable from
+  Bluesky, pulls it back into local DuckDB (CID-verified), and pulls from OTHER users' instances
+  (J-003 transport delta). SPIKE-00 (OD-SF-1) proved the Worker MUST be an **opaque, content-addressed
+  byte store** — the CID is minted ONLY by `claim-domain::compute_cid`; the Worker stores/returns
+  bytes VERBATIM and computes no CID (a JS `@ipld/dag-cbor` PDS diverges on f16-representable
+  confidence `0.0`/`0.5`/`1.0` because `ciborium` emits shortest-form floats — a latent ADR-006 gap
+  the opaque transport sidesteps).
+  - **`atproto/` Worker (TS, CREATE NEW; workerd/wrangler/Durable Object)**: `PUT/GET /records/:cid`
+    (verbatim), `GET /manifest` (CID list + display projection), `GET /` (read-only, signing- AND
+    write-incapable card). NO JS IPLD/CBOR/CID libs on the CID path.
+  - **`crates/publish-domain` (PURE, CREATE NEW)**: `plan_push` (additive/idempotent diff) +
+    `reconcile_pull` (in-sync no-op / insert / conflict-surface, never silent overwrite). Fold-into-
+    `cli` documented alternative.
+  - **`crates/adapter-publish-http` (EFFECT, CREATE NEW)**: implements the write-capable `PublishPort`
+    + read-only `InstanceReadPort` over the workspace `reqwest` (no new HTTP crate); `probe()`
+    round-trips a `0.0`/`0.5`/`1.0` canary CID (Earned-Trust startup gate).
+  - **`crates/ports` (EXTEND)**: `PublishPort` (write) + `InstanceReadPort` (read-only) split + ADTs.
+    **`crates/cli` (EXTEND, sole composition root)**: `openlore publish {init,push,pull,status}`;
+    write `PublishPort` wired ONLY here; the J-003 peer-pull verb gains the byte-preserving
+    opaque-read transport (DID→serviceEndpoint resolution REUSED unchanged). **`claim-domain` +
+    `adapter-atproto-did` REUSED unchanged.**
+  - **`xtask` (EXTEND)**: new `publish_write_capability_isolated` rule (write port wired only in the
+    `publish` root; pull/card read-only) + `publish-domain` pure-core allowlist + an `atproto/`
+    no-IPLD/CBOR dependency guard.
+  - **ADR-062** (opaque content-addressed transport; Durable-Object medium; OD-SF-3 byte-preserving
+    read; CID-conformance leave-it + revisit trigger; `putRecord` server-assigned-CID REJECTED per
+    SPIKE-00 float divergence; the additive realization of ADR-023's deferred hosted mode).
+    References ADR-006 (latent float gap, unmodified), ADR-023 (reconciled, unmodified), ADR-027
+    (configurable URL, reused).
+  - See ADR-062, `docs/feature/serverless-philosophy-federation/feature-delta.md` (DESIGN sections),
+    `docs/feature/serverless-philosophy-federation/design/wave-decisions.md`,
+    `docs/feature/serverless-philosophy-federation/spike/findings.md`.
+
 - **homebrew-binary-distribution: DESIGN 2026-07-12 — ZERO new crates; NO Rust (workspace stays
   21). A THIRD install channel (Homebrew tap) — Ruby formula + YAML/shell CI only.** Adds an
   in-repo Homebrew tap (`Formula/openlore.rb`) so non-Rust users install the prebuilt `openlore`
