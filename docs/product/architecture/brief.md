@@ -100,8 +100,20 @@ Shipped slice extensions:
     SPIKE-00 float divergence; the additive realization of ADR-023's deferred hosted mode).
     References ADR-006 (latent float gap, unmodified), ADR-023 (reconciled, unmodified), ADR-027
     (configurable URL, reused).
-  - See ADR-062, `docs/feature/serverless-philosophy-federation/feature-delta.md` (DESIGN sections),
-    `docs/feature/serverless-philosophy-federation/design/wave-decisions.md`,
+  - **DEVOPS 2026-07-15 (platform topology)**: per-user serverless — **NO central deploy pipeline**.
+    Each user self-deploys their own Worker (`wrangler deploy`, atomic/recreate; rollback =
+    `wrangler rollback`). The DEVOPS deliverable is a NEW `publish-contract.yml` GitHub Actions
+    workflow that runs the CLI↔Worker round-trip on a LOCAL `wrangler dev` (workerd — no real deploy,
+    no `CLOUDFLARE_API_TOKEN`) with a `0.0/0.5/1.0` float regression guard, operationalizing KPI-SF-1
+    (the round-trip-CID North Star; KPI-SF-1..5 now in `docs/product/kpi-contracts.yaml`). `ci.yml
+    --workspace` already covers the 2 new crates; `release.yml` does NOT build/deploy the Worker (it
+    is user-deployed, not a release artifact). Write-auth = per-instance bearer token as a Cloudflare
+    Worker secret (`wrangler secret put`); reads public. Observability owner-only (Workers analytics +
+    `wrangler tail`) — NO central telemetry (sovereignty).
+  - See ADR-062, `docs/feature/serverless-philosophy-federation/feature-delta.md` (DESIGN + DEVOPS
+    sections), `docs/feature/serverless-philosophy-federation/design/wave-decisions.md`,
+    `docs/feature/serverless-philosophy-federation/devops/wave-decisions.md`,
+    `docs/feature/serverless-philosophy-federation/environments.yaml`,
     `docs/feature/serverless-philosophy-federation/spike/findings.md`.
 
 - **homebrew-binary-distribution: DESIGN 2026-07-12 — ZERO new crates; NO Rust (workspace stays

@@ -18,7 +18,7 @@
 #   notes:                  caveats, deferrals, links
 
 schema_version: 1
-last_updated: 2026-06-04  # slice-08 (viewer-network-search) realizes KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on the browser /search surface (no new KPI minted)
+last_updated: 2026-07-15  # serverless-philosophy-federation DEVOPS: +KPI-SF-1..5 (KPI-SF-1 = round-trip CID integrity North Star, CI contract test; telemetry-free per sovereignty). slice-08 realized KPI-AV-1/2/3/4/5 + KPI-VIEW-2 + KPI-HX-G1/2/3 on /search (no new KPI)
 
 kpis:
   - id: KPI-1
@@ -455,6 +455,63 @@ kpis:
     measurement_method: "route inventory (no new write/sign route; swaps ride GET + the existing POST /scrape) + key-access audit (zero key reads) + loopback-bind assertion (viewer_htmx_invariants); carries the slice-06 KPI-VIEW-2 three-layer enforcement (StoreReadPort no-mutation type + xtask viewer capability rule + behavioral gold)"
     baseline_at_ga: "MET (release-blocking) — the swaps ride GET + the existing POST /scrape; no new write/sign route, zero key reads in the web process, loopback-only bind, as of slice-07 ship."
     notes: "Guardrail / cardinal. Carries the slice-06 KPI-VIEW-2 (read-only / no key) cardinal gate verbatim across the new swap surface. A single new reachable write/sign route, any key read, or any non-loopback bind is a release blocker (UNSHIPPABLE)."
+
+  # --- serverless-philosophy-federation (KPI-SF-1..5), recorded at DEVOPS 2026-07-15 ---
+  # Self-hosted serverless, NO central instance (ADR-062, D-1/D-3/D-4): measurement is
+  # telemetry-free (no phone-home / sovereignty). Instruments are CI contract/render/verify
+  # tests + manual dogfood timing. KPI-SF-1 is the North Star (round-trip CID integrity).
+  # DISCUSS defined these in feature-delta.md and flagged they belong in this SSOT (no
+  # per-feature outcome-kpis.md duplicated — lean). DEVOPS records the measurement instruments.
+
+  - id: KPI-SF-1
+    name: "Round-trip CID integrity (CLI->Worker->CLI byte-faithful)"
+    type: north-star
+    feature_origin: serverless-philosophy-federation
+    persona: P-001
+    target: "100% of pushed-then-pulled claims have an identical recomputed CID (zero tolerance)"
+    measurement_method: "CI round-trip contract test (NEW .github/workflows/publish-contract.yml): `openlore publish init`->push->pull against a local `wrangler dev` (workerd) atproto/ Worker, assert recomputed CID == pushed CID, INCLUDING the 0.0/0.5/1.0 f16-float regression guard (SPIKE-00 divergence). No real deploy, no CLOUDFLARE_API_TOKEN. Enforced structurally by the single-canonicalizer invariant (Rust claim-domain::compute_cid; the Worker computes no CID)."
+    baseline_at_ga: "n/a (no CLI<->Worker pipe exists pre-feature); target enforced by the CI contract test on the publish surface"
+    notes: "North star of the feature — the whole mirror/card thesis rests on it. Release-blocking: a CID mismatch (or the 0.0/0.5/1.0 guard failing) fails CI on main. Operationalizes the DESIGN external-integration annotation (ADR-062). TS Worker mutation testing is out of scope; this contract test is the Worker's load-bearing guard."
+
+  - id: KPI-SF-2
+    name: "Time-to-value: deploy + register + first round-trip on own instance"
+    type: leading
+    feature_origin: serverless-philosophy-federation
+    persona: P-001
+    target: "< 10 minutes wall-clock from `wrangler deploy` to first `publish pull` success"
+    measurement_method: "manual dogfood timing on a real-deploy instance (the user's own Cloudflare account); recorded at slice demo. NO telemetry (sovereignty — each user runs their own instance)."
+    baseline_at_ga: "0 (no self-host path existed pre-feature)"
+    notes: "Leading (secondary). Deliberately telemetry-free / manual: there is no central instance to instrument. Owner-only Cloudflare `wrangler tail` / Workers analytics assist local debugging but are not aggregated."
+
+  - id: KPI-SF-3
+    name: "Card fidelity (renders 100% pushed claims, attributed, 0 consensus rows)"
+    type: leading
+    feature_origin: serverless-philosophy-federation
+    persona: P-001
+    target: "card renders 100% of explicitly-pushed claims, each attributed to author DID; 0 consensus/merged rows"
+    measurement_method: "CI render assertion: fixture instance -> GET / card HTML -> assert per-claim attribution + no merge row (owned by DELIVER)"
+    baseline_at_ga: "0 (no card existed pre-feature)"
+    notes: "Leading. Carries the anti-merging guardrail (D-7) onto the public card surface — the card is read-only + signing-incapable-by-construction."
+
+  - id: KPI-SF-4
+    name: "Cross-instance pull verification + attribution (Cloudflare transport)"
+    type: leading
+    feature_origin: serverless-philosophy-federation
+    persona: P-002
+    target: "100% of cross-instance-pulled claims signature+CID verified before store + attribution preserved (0 merged rows)"
+    measurement_method: "acceptance test reusing the J-003 verification/attribution suite over the Cloudflare-instance transport (byte-preserving opaque read; owned by DELIVER)"
+    baseline_at_ga: "J-003 covers bsky.social PDS transport; the Cloudflare-instance transport is the new surface (transport delta only, D-8)"
+    notes: "Leading. Extends KPI-FED-1/6 (attribution + verify-before-store) onto the self-hosted-serverless peer transport; reuses J-003 machinery verbatim (no new federation job)."
+
+  - id: KPI-SF-5
+    name: "Local-first preserved (offline authoring never depends on the instance)"
+    type: guardrail
+    feature_origin: serverless-philosophy-federation
+    persona: P-001
+    target: "100% of compose/sign/local `graph query` succeed with the instance unreachable"
+    measurement_method: "offline CI guard test — compose/sign/query with the instance unreachable; `publish push`/`pull` fail cleanly (non-zero) without blocking authoring"
+    baseline_at_ga: "100% today (guardrail — extends KPI-5; MUST NOT regress)"
+    notes: "Guardrail. Any release that lets the instance being unreachable block local authoring/query is blocked. Reinforces KPI-5 (local-first invariant) for the publish surface."
 
   # --- slice-08 (viewer-network-search), recorded at finalize 2026-06-04 ---
   # The browser network-discovery `GET /search` view on the read-only `openlore ui`

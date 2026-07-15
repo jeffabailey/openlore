@@ -1277,3 +1277,231 @@ C4Container
   openlore-opaque instance from a generic PDS at a resolved serviceEndpoint.
 - **Q-SF-D6 (DELIVER)** — `publish-domain` as its own crate vs folded into `cli` (DDD-3 alternative);
   decide at DELIVER based on the reconcile logic's actual size.
+
+---
+
+## Wave: DEVOPS / [REF] Platform Readiness Header
+
+> Wave: **DEVOPS** (lean) · Owner: Apex (nw-platform-architect) · Date: 2026-07-15 · Builds on
+> DESIGN (ADR-062, DDD-1..8) + SPIKE-00. **The defining reality**: this feature is **self-hosted
+> serverless with NO central instance** (D-1/D-3/D-4, ADR-062). There is therefore **NO central
+> deploy pipeline** — each user deploys their OWN Cloudflare Worker to their OWN account via
+> `wrangler deploy`. DEVOPS here is NOT "deploy to prod"; it is (1) a **CI contract test** that
+> operationalizes KPI-SF-1 (the North Star), (2) the **per-user self-deploy model**, and (3) the
+> **write-auth secrets framing**. Machine artifact: `../environments.yaml`; decisions:
+> `devops/wave-decisions.md`.
+
+## Wave: DEVOPS / [REF] Environment Matrix
+
+Three target environments. The Worker runs on Cloudflare edge (workerd); the `openlore` CLI runs on
+macOS/Linux. No container runtime (serverless).
+
+| Environment | What it is | Platform | Preconditions | Used by |
+|---|---|---|---|---|
+| **`clean-instance`** | A fresh Worker with an empty Durable Object (no records, empty manifest) | Cloudflare workerd (real or `wrangler dev`) | Worker deployed/started; DO empty | US-SF-001 "empty-but-valid" card; first-push; fresh-machine rebuild (US-SF-004) |
+| **`wrangler-dev`** | Local workerd started by `npx wrangler dev` — **the CI contract-test environment**. NO real deploy, NO Cloudflare account, NO `CLOUDFLARE_API_TOKEN` | CI: ubuntu-latest (+ macos-14 optional); local dev | node present; `npx wrangler` resolvable; `openlore` binary built | KPI-SF-1 CI round-trip contract test (headline); the `0.0/0.5/1.0` float regression guard |
+| **`real-deploy`** | A user's OWN `wrangler deploy`d instance at `https://openlore.<me>.workers.dev` (or custom domain) | Cloudflare edge (user's account) | User's Cloudflare account; `wrangler deploy` run; write-auth secret set (`wrangler secret put`) | Manual dogfood (KPI-SF-2 timing); production card serving; cross-instance federation (US-SF-006). **NOT exercised in CI.** |
+
+Platform coverage: **CI** = ubuntu-latest (primary) + macos-14 (optional parity, mirrors
+`formula-smoke.yml`'s matrix); **Worker runtime** = Cloudflare workerd (edge); **CLI** =
+macOS (aarch64/x86_64) + Linux (x86_64/aarch64), per the shipped release matrix (ADR-011).
+
+## Wave: DEVOPS / [REF] CI/CD Pipeline Outline
+
+**Headline deliverable — a NEW `publish-contract.yml` workflow (or job).** Modeled on
+`formula-smoke.yml` (matrix + PATH-handling + `bash script` pattern). It is the CI realization of the
+DESIGN external-integration annotation ("consumer-driven contract test … run against `wrangler dev`
+in CI") and operationalizes KPI-SF-1. DELIVER writes the YAML; DEVOPS fixes the shape.
+
+- **Triggers** (disjoint from the existing workflows — additive):
+  - `push` on `main` with `paths:` `atproto/**`, `crates/adapter-publish-http/**`,
+    `crates/publish-domain/**`, `crates/ports/**` (the `PublishPort`/`InstanceReadPort` surface), and
+    `.github/workflows/publish-contract.yml` (self-trigger).
+  - `workflow_dispatch` (on-demand).
+  - Trunk-based: triggers fire on commits to `main` (no PR gate — house rule).
+- **Runner matrix**: `ubuntu-latest` (primary) + optionally `macos-14`. `fail-fast: false`.
+- **Steps** (single `bash` job, no deploy):
+  1. `actions/checkout@v4`.
+  2. Ensure node + `npx wrangler` (node is present on GitHub runners; use `npx wrangler` — no global
+     install, no `CLOUDFLARE_API_TOKEN`). Guard Homebrew/Linuxbrew PATH the same way
+     `formula-smoke.yml` does if any brew-installed tool is needed (node is not, so likely a no-op).
+  3. `cargo build --bin openlore` (Rust toolchain via the repo's standard action; reuse `ci.yml`'s
+     cache pattern).
+  4. Start the Worker in the background: `npx wrangler dev` in `atproto/` (local workerd, an ephemeral
+     `http://127.0.0.1:<port>` — **no deploy, no account**), health-poll until the port answers.
+  5. **CLI↔Worker round-trip**: `openlore publish init http://127.0.0.1:<port>` → `publish push`
+     → `publish pull`; **assert recomputed CID == pushed CID** (KPI-SF-1).
+  6. **Float regression guard (mandatory)**: include claims at confidence **`0.0` / `0.5` / `1.0`**
+     (the f16-representable values SPIKE-00 found diverge under a re-encoding `putRecord` PDS) and
+     assert each round-trips CID-identical over the opaque transport. This is the standing regression
+     case against the rejected DDD-1 alternative.
+  7. Teardown: kill the `wrangler dev` background process.
+- **Quality gate**: the job is **blocking on `main`** — a CID mismatch (or the float guard failing)
+  fails CI. This is the CI-side of the DESIGN "round-trip CID is a hard gate."
+- **NO deploy job.** There is no central instance to deploy to; each user self-deploys (below). CI
+  never holds a `CLOUDFLARE_API_TOKEN` and never runs a real `wrangler deploy`.
+- **Already covered — do NOT duplicate**: `ci.yml` runs `cargo nextest run --workspace`, which
+  automatically covers the 2 NEW Rust crates' (`publish-domain`, `adapter-publish-http`) unit +
+  acceptance tests, plus `crates/ports`/`crates/cli` deltas. `publish-contract.yml` adds ONLY the
+  cross-boundary round-trip that `--workspace` cannot exercise (it needs a live Worker).
+- **Local quality gates** (mirror, not duplicate): the round-trip is runnable locally the same way
+  (`wrangler dev` + `openlore publish` round-trip) — a pre-push convenience, not a new gate; CI on
+  `main` remains authoritative.
+
+## Wave: DEVOPS / [REF] Monitoring Contracts
+
+Measurement is **telemetry-free** (local-first / no-phone-home / sovereignty — each user runs their
+own instance, so there is NO central telemetry). One row per KPI (mirrors the DISCUSS Measurement
+Plan; DEVOPS fixes the instrument).
+
+| KPI | Type | Instrument (DEVOPS contract) | Where it runs |
+|---|---|---|---|
+| **KPI-SF-1** (round-trip CID integrity) | North Star | The `publish-contract.yml` CLI↔Worker round-trip test **+ the `0.0/0.5/1.0` float regression guard** | CI (`wrangler dev`), per push to the publish surface + on demand |
+| **KPI-SF-2** (deploy→register→first round-trip < 10 min) | Leading | **Documented manual dogfood timing** — wall-clock from `wrangler deploy` to first `publish pull` success. No telemetry; recorded at slice demo | Manual (dogfood), `real-deploy` |
+| **KPI-SF-3** (card renders 100% pushed claims, attributed, 0 consensus rows) | Leading | CI render assertion: fixture instance → `GET /` card HTML → assert per-claim attribution + no merge row (owned by DELIVER) | CI |
+| **KPI-SF-4** (cross-instance pulls 100% signature+CID verified + attributed) | Leading | Acceptance test reusing the J-003 verification/attribution suite over the Cloudflare-instance transport (owned by DELIVER) | CI |
+| **KPI-SF-5** (offline authoring never depends on the instance) | Guardrail | **Offline-authoring guard test** — compose/sign/`graph query` with the instance unreachable; must stay 100% green (must-not-regress) | CI |
+
+**Per-user runtime observability (owner-only)**: Cloudflare's built-in **Workers analytics** +
+**`wrangler tail`** give the instance OWNER live request/error logs for THEIR own Worker. There is no
+aggregation across instances and no central dashboard — by design (sovereignty). Guardrail metrics
+(anti-merging, no-central-authority, signing-incapable) are enforced structurally (types +
+`xtask check-arch` `publish_write_capability_isolated` + the `atproto/` no-IPLD guard), not by
+runtime monitoring.
+
+## Wave: DEVOPS / [REF] Deployment Strategy
+
+**Per-user atomic (recreate).** Each user runs `wrangler deploy` from `atproto/` to their OWN
+Cloudflare account; `wrangler deploy` atomically replaces the Worker (workerd promotes the new version
+edge-wide). There is NO central rollout, NO canary/blue-green, and NO shared operator — a canary
+across a single-owner instance would be meaningless, and there is no central fleet to progressively
+roll. **Rollback** = re-run `wrangler deploy` on a prior `atproto/` revision, or `wrangler rollback`
+to a previous Worker version (Cloudflare's built-in). The Durable Object (the user's records) is
+unaffected by a Worker code redeploy — the store persists across atomic code swaps, so rollback is
+code-only and non-destructive to data. Data "rollback" is not applicable: `PUT /records/:cid` is
+idempotent per CID (re-PUT is a no-op), and the CLI never mutates existing records.
+
+## Wave: DEVOPS / [REF] Per-User Deploy Model + Write-Auth Secrets
+
+**Per-user deploy flow (documented, not automated by CI):**
+
+1. User has a Cloudflare account + `wrangler` (their own; a pre-requisite, US-SF-001).
+2. `wrangler deploy` from `atproto/` stands up their instance at `https://openlore.<me>.workers.dev`
+   (or a custom domain) with its single Durable Object.
+3. `openlore publish init <url>` **REGISTERS the already-deployed instance URL** (the lean DESIGN
+   default, D-5 / ADR-027 configurable URL) — it probes reachability and records the URL as the
+   publish target. It does **NOT** run `wrangler deploy`. *(Option, flagged not decided — DELIVER owns
+   CLI internals: `init` could later shell out to `wrangler deploy` to automate stand-up; heavier,
+   couples the CLI to the Cloudflare toolchain, and is out of the walking-skeleton scope. Lean default
+   = register-only.)*
+
+**Write-auth secrets framing (so a random party cannot push to MY instance) — Q-SF-D2, DISTILL owns
+the detailed contract; DEVOPS frames the approach + where the secret lives:**
+
+- **Model**: a **per-instance bearer token** the OWNER sets as a **Cloudflare Worker secret** via
+  `wrangler secret put PUBLISH_TOKEN`. The CLI sends it (e.g. `Authorization: Bearer …`, configured at
+  `publish init` time) on **writes** (`PUT /records/:cid`, i.e. `publish push`). **Reads stay public**:
+  `GET /records/:cid`, `GET /manifest`, and the `GET /` card are unauthenticated (the card is a public
+  surface by design, D-7; cross-instance J-003 pull reads the public read surface).
+- **Where it lives**: the token is a **Cloudflare Worker secret** (encrypted at rest in the user's
+  account) and a CLI-side config value — **NEVER committed to the repo**, never in `wrangler.toml`,
+  never in CI. CI's `wrangler dev` contract test needs no token (single-owner local workerd; the write
+  path can run unauthenticated or with a throwaway dev token supplied inline — never a real secret).
+- **Slice-01 posture**: the walking skeleton MAY accept an unauthenticated same-owner deploy (the user
+  controls their Cloudflare account and can gate at the edge); the bearer token is the likely first
+  hardening (Q-SF-D2). This matches DESIGN's Open Question and the DISCUSS "auth … out of scope for the
+  walking skeleton."
+
+## Wave: DEVOPS / [REF] Mutation Testing Strategy
+
+**Per-feature — UNCHANGED.** The project's existing per-feature mutation strategy (recorded in
+`CLAUDE.md`, kill-rate gate >= 80%) covers the 2 NEW Rust crates (`publish-domain`,
+`adapter-publish-http`) automatically — they are workspace members exercised by the standard
+per-delivery mutation run. **No `CLAUDE.md` rewrite.** **TS Worker mutation testing is OUT OF SCOPE**
+(the `atproto/` Worker is deliberately dumb — ~4 routes, no domain logic, no CID computation — and is
+not a workspace member; its one load-bearing property, byte round-trip / KPI-SF-1, is guarded by the
+CI contract test, not by mutation). Noted as a known, accepted gap.
+
+## Wave: DEVOPS / [REF] Observability Stack
+
+- **Metrics/logs (Worker runtime, owner-only)**: Cloudflare built-in **Workers analytics** +
+  **`wrangler tail`** — per-instance, owner-scoped. No exporter, no OpenTelemetry, no central sink.
+- **CLI**: the existing greppable/structured CLI output (round-trip verdicts, `verified N/N`,
+  refusal reasons `publish.cid_roundtrip_failed` / `publish.instance_unreachable`) is the CLI-side
+  observability surface — local, inspectable, no phone-home.
+- **NO central telemetry** — sovereignty (D-1/D-3/D-4): each user runs their own instance; there is no
+  shared operator to aggregate to, and adding one would re-introduce the exact central-authority
+  failure mode the feature exists to avoid. This is a deliberate constraint, not a gap.
+
+## Wave: DEVOPS / [REF] Branching Strategy
+
+**Trunk-based (house rule — commit to `main`, NO PRs).** The `publish-contract.yml` workflow triggers
+on `push` to `main` scoped to `atproto/**` + the publish crates (paths above) + `workflow_dispatch`.
+Robust CI gates on every commit to `main` are the safety net (trunk-based requirement): the round-trip
+contract test + the float guard + `ci.yml`'s `--workspace` nextest are the release-gating checks. No
+branch-protection/PR-review gate is designed (it would contradict the house rule); the authoritative
+gate is CI-on-`main`.
+
+## Wave: DEVOPS / [REF] Coexistence Matrix
+
+The new `publish-contract.yml` must be **additive** and must NOT break the four existing workflows.
+Triggers are disjoint (path-scoped), so no cross-firing.
+
+| Existing workflow | Purpose | Interaction with `publish-contract.yml` |
+|---|---|---|
+| `ci.yml` | `cargo nextest run --workspace` (+ lint/build) | **Complementary** — already covers the 2 new crates' unit/acceptance tests via `--workspace`. `publish-contract.yml` adds ONLY the live-Worker round-trip `--workspace` cannot run. No overlap, no conflict. |
+| `release.yml` | Build + publish the `openlore` binary release artifacts (+ `bump-formula`) | **Disjoint** — release.yml does **NOT** build or deploy the `atproto/` Worker. The Worker is **user-deployed, not a release artifact** (per-user self-deploy). No new release job. |
+| `nightly.yml` | Nightly scheduled checks | **Disjoint** — different trigger (schedule); no path overlap. |
+| `formula-smoke.yml` | Homebrew formula install smoke test | **Disjoint** — different paths (`Formula/**`); it is the STRUCTURAL MODEL for the new workflow (matrix + PATH + `bash script`), not a conflict. |
+
+## Wave: DEVOPS / [REF] Pre-requisites
+
+DESIGN constraints the platform must satisfy (from ADR-062 / DDD-1..8 / SPIKE-00):
+
+- **Opaque-store invariants**: the Worker computes NO CID, stores/returns bytes VERBATIM, and carries
+  NO JS IPLD/CBOR/`multiformats` on the CID path (SPIKE-00 invariant, DDD-1). The single canonicalizer
+  is `claim-domain::compute_cid` (Rust), reused unchanged.
+- **Write/read capability split**: write-capable `PublishPort` wired ONLY in the `publish` composition
+  root; pull + card use the read-only `InstanceReadPort` (DDD-8; `xtask check-arch`
+  `publish_write_capability_isolated`).
+- **ADR-027 configurable URL**: the CLI reaches any instance via a configurable URL (D-5) —
+  `https://openlore.<me>.workers.dev` replaces `http://127.0.0.1:<port>`; `wrangler dev`'s local URL is
+  the CI form.
+- **CI toolchain**: node + `npx wrangler` available on the runner (no `CLOUDFLARE_API_TOKEN`); Rust
+  toolchain to `cargo build --bin openlore`.
+- **Real deploy**: a Cloudflare account — **the user's, never CI's** — for `real-deploy` / dogfood.
+- **Idempotent writes**: `PUT /records/:cid` is idempotent per CID (re-PUT = no-op) — required for the
+  interrupted-push-resume and re-push-no-duplicates behaviors (US-SF-003).
+- **Vendor-neutrality note**: Cloudflare is the chosen edge, but the CLI transport is a **generic
+  opaque HTTP contract** (`PUT/GET /records/:cid`, `GET /manifest`, `GET /`) per ADR-062 — a
+  non-Cloudflare host serving the same contract would satisfy the CLI unchanged. The DEVOPS choices
+  (workerd/wrangler) are the chosen realization, not a contract lock-in.
+
+## Wave: DEVOPS / [REF] Changed Assumptions
+
+None. The DEVOPS wave introduces no change to DESIGN assumptions — it operationalizes ADR-062 as-is
+(the CI contract test realizes the DESIGN external-integration annotation; the per-user deploy model
+realizes D-1/D-5; the secrets framing realizes Q-SF-D2 which DESIGN already flagged to DISTILL/DELIVER).
+No `upstream-changes.md` is warranted.
+
+## Wave: DEVOPS / [REF] Wave-Decisions Summary
+
+- **Deployment target**: Edge / serverless (Cloudflare Workers / workerd); no containers.
+- **The defining reality**: self-hosted serverless, NO central instance → NO central deploy pipeline.
+  DEVOPS = a CI contract test + a per-user self-deploy model + a write-auth secrets frame.
+- **CI/CD**: GitHub Actions; NEW `publish-contract.yml` (modeled on `formula-smoke.yml`) runs the
+  CLI↔Worker round-trip on `wrangler dev` (local workerd, no deploy, no token) with the `0.0/0.5/1.0`
+  float regression guard — operationalizing KPI-SF-1. `ci.yml --workspace` already covers the 2 new
+  Rust crates. NO deploy job.
+- **Deployment strategy**: per-user atomic `wrangler deploy` (recreate); rollback = redeploy prior
+  revision / `wrangler rollback`; DO data persists across code swaps.
+- **Observability**: Cloudflare built-in (Workers analytics + `wrangler tail`) owner-only + greppable
+  CLI output; NO central telemetry (sovereignty).
+- **Branching**: trunk-based (commit to `main`, no PRs); CI-on-`main` is the authoritative gate.
+- **Mutation testing**: per-feature UNCHANGED (Rust crates covered; no `CLAUDE.md` rewrite); TS Worker
+  mutation out of scope.
+- **Explicitly NOT in CI**: a real `wrangler deploy`, a `CLOUDFLARE_API_TOKEN`, any central instance.
+- **Machine artifact**: `../environments.yaml`. **Decisions**: `devops/wave-decisions.md`.
+- **Handoff**: nw-acceptance-designer (DISTILL) — `environments.yaml` parametrizes acceptance
+  scenarios over `clean-instance` / `wrangler-dev` / `real-deploy`; the contract-test shape + float
+  guard is the KPI-SF-1 acceptance anchor.

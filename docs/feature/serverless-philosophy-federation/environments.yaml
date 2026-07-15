@@ -1,0 +1,79 @@
+# environments.yaml — serverless-philosophy-federation
+# Consumed by DISTILL (nw-acceptance-designer) for Mandate 4 (Environmental Realism):
+# parametrizes acceptance scenarios over the target environments below.
+#
+# THE DEFINING REALITY: self-hosted serverless, NO central instance (ADR-062, D-1/D-3/D-4).
+# There is NO central deploy pipeline — each user deploys their OWN Cloudflare Worker.
+# The CI contract test uses LOCAL `wrangler dev` (workerd) only — never a real deploy,
+# never CLOUDFLARE_API_TOKEN.
+
+target_environments:
+  - name: clean-instance
+    description: "Fresh Worker, empty Durable Object (no records, empty manifest)"
+    platform: [cloudflare-workerd]
+    preconditions:
+      - "Worker deployed or `wrangler dev` running"
+      - "Durable Object empty"
+    used_by:
+      - "US-SF-001 empty-but-valid card"
+      - "US-SF-002 first push"
+      - "US-SF-004 fresh-machine rebuild"
+
+  - name: wrangler-dev
+    description: >-
+      Local workerd started by `npx wrangler dev` — THE CI contract-test environment.
+      No real deploy, no Cloudflare account, no CLOUDFLARE_API_TOKEN.
+    platform: [ubuntu-latest, macos-14]
+    preconditions:
+      - "node present on runner"
+      - "`npx wrangler` resolvable"
+      - "`openlore` binary built (`cargo build --bin openlore`)"
+    used_by:
+      - "KPI-SF-1 CI round-trip contract test (headline)"
+      - "0.0/0.5/1.0 float regression guard"
+
+  - name: real-deploy
+    description: >-
+      A user's OWN `wrangler deploy`d instance at https://openlore.<me>.workers.dev
+      (or custom domain). Used for manual dogfood — NOT exercised in CI.
+    platform: [cloudflare-workerd]
+    preconditions:
+      - "User's own Cloudflare account"
+      - "`wrangler deploy` run from atproto/"
+      - "Write-auth secret set via `wrangler secret put` (owner-only)"
+    used_by:
+      - "KPI-SF-2 dogfood timing (deploy->register->first round-trip)"
+      - "Production card serving (US-SF-005)"
+      - "Cross-instance federation (US-SF-006)"
+
+coexistence_matrix:
+  - tool: ci.yml
+    must_not_break: true
+    note: "cargo nextest run --workspace already covers publish-domain + adapter-publish-http; publish-contract.yml is additive (live-Worker round-trip only)"
+  - tool: release.yml
+    must_not_break: true
+    note: "Does NOT build/deploy the atproto/ Worker — the Worker is user-deployed, not a release artifact. No new release job."
+  - tool: nightly.yml
+    must_not_break: true
+    note: "Disjoint trigger (schedule); no path overlap"
+  - tool: formula-smoke.yml
+    must_not_break: true
+    note: "Disjoint paths (Formula/**); it is the STRUCTURAL MODEL for publish-contract.yml (matrix + PATH + bash script)"
+
+platform_coverage:
+  CI: [GitHub Actions ubuntu-latest, GitHub Actions macos-14 (optional parity)]
+  Worker_runtime: [Cloudflare workerd (edge)]
+  CLI: [macOS aarch64, macOS x86_64, Linux x86_64, Linux aarch64]  # per ADR-011 release matrix
+
+deployment_assumptions:
+  - "Each user OWNS and DEPLOYS their own instance (no central authority, no shared operator)"
+  - "There is NO central deploy pipeline — DEVOPS = CI contract test + per-user self-deploy model"
+  - "The CI contract test uses local `wrangler dev` (workerd) ONLY — never a real deploy, never CLOUDFLARE_API_TOKEN"
+  - "The Worker computes NO CID — it stores/returns bytes VERBATIM; the sole canonicalizer is Rust claim-domain::compute_cid (SPIKE-00 invariant)"
+  - "publish is idempotent per CID — re-PUT /records/:cid is a no-op (enables interrupted-push resume + re-push-no-duplicates)"
+  - "Deployment is atomic/recreate (`wrangler deploy` replaces the Worker); rollback = redeploy prior revision or `wrangler rollback`"
+  - "The Durable Object (user records) persists across Worker code redeploys — rollback is code-only, non-destructive to data"
+  - "Write path (PUT /records/:cid, publish push) is owner-authed via a per-instance bearer token set as a Cloudflare Worker secret (wrangler secret put); reads (GET records/manifest/card) stay public"
+  - "Write-auth secret NEVER lives in the repo, wrangler.toml, or CI — Cloudflare Worker secret + CLI config only"
+  - "Observability is owner-only (Cloudflare Workers analytics + `wrangler tail`) + greppable CLI output; NO central telemetry (sovereignty)"
+  - "The CLI transport is a generic opaque HTTP contract (ADR-062) — a non-Cloudflare host serving the same contract would satisfy the CLI unchanged"
