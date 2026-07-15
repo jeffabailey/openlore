@@ -670,6 +670,147 @@ jobs:
     # `cargo install` (crates.io) and raw GitHub-Release-tarball channels.
 
 
+  - id: J-007
+    name: Self-host my own serverless instance and publicly share my philosophy graph
+    primary: false                  # a new publish/share surface, not a replacement for the core J-001 authoring
+    walking_skeleton_for: serverless-philosophy-federation   # PRIMARY (headline) job for this feature
+    job_story: >
+      When I want to OWN and publicly share my philosophy graph without depending on
+      a central service, I want to deploy my OWN serverless (Cloudflare) instance from
+      the openlore code and get a shareable, read-only philosophy card I can link from
+      my Bluesky profile, so I control my data AND can show my reasoning off — with no
+      third-party authority in the trust path.
+
+    functional:
+      - Deploy a personally-owned serverless instance (Cloudflare Worker) from the `atproto/` code.
+      - Register that instance's URL with the CLI (the ADR-027 configurable-URL contract; my
+        instance URL simply replaces `http://127.0.0.1:<port>` with `https://openlore.<me>.workers.dev`).
+      - Publish (push) my locally-signed claims to my own instance so it reflects my graph.
+      - Serve a PUBLIC, read-only philosophy card (a web page hosted on my instance) that renders
+        my signed claims with per-author attribution, at a stable, Bluesky-profile-linkable URL.
+
+    emotional:
+      - Sovereign: "This Cloudflare instance is MINE. No one else is the authority for my claims."
+      - Proud-to-share: "I can point people at a clean public card that IS my reasoning trail."
+      - Reassured: "Publishing to my own instance never mutates or overwrites my local source of truth."
+
+    social:
+      - A Bluesky-linkable identity surface — the philosophy card becomes a public, shareable
+        dimension of my developer identity (a NEW social surface for the CLI-first P-001).
+      - Recommend openlore by handing someone a card URL, not a wall of unstructured blog prose.
+      - Model data-sovereignty in practice: "I host my own; you can host yours; we federate peer-to-peer."
+
+    four_forces:
+      push: >
+        Today my published claims either live only in my local DuckDB (private, unshareable) or on a
+        shared PDS I do not control. There is no surface I OWN end-to-end that also renders a clean,
+        public, linkable view of my reasoning. Blog posts are unstructured; a bsky.social PDS is
+        someone else's host.
+      pull: >
+        One deploy stands up a serverless instance I own outright; one push populates it; a public
+        card at my-own URL renders my attributed claims and drops straight into my Bluesky bio —
+        sovereignty AND shareability without a central operator.
+      anxiety: >
+        (a) "Does hosting on Cloudflare re-introduce a central authority — the exact thing openlore
+            exists to avoid?" Mitigation: the instance is the USER's OWN (they deploy it, they own the
+            data, no shared operator is in the trust path); this is self-hosted serverless, NOT a
+            central/community-operated service (the reconciliation of ADR-023's deferred hosted mode).
+        (b) "Will publishing to my instance overwrite or diverge from my local source of truth?"
+            Mitigation: local DuckDB stays the source of truth; push is additive + CID-verified;
+            local-first authoring/query never depends on the instance (KPI-5).
+        (c) "Will a public card expose data I did not mean to publish?" Mitigation: the card renders
+            ONLY claims I explicitly pushed; it is read-only; it signs/mutates nothing.
+      habit: >
+        Devs already deploy Workers with `wrangler deploy` and paste links into their profiles. The
+        deploy + publish + card flow must feel like that, and the CLI side must reuse the learned
+        push/pull mental model — not a new cognitive surface.
+
+    # Light opportunity view (full scoring intentionally skipped — lean; new publish/share surface).
+    opportunity_score:
+      importance: 8     # data-sovereignty + a shareable public identity surface are load-bearing to the ethos
+      satisfaction: 1   # no tool gives a self-owned, self-hosted, verifiable, linkable philosophy card
+      score: 15         # 8 + max(8 - 1, 0) = 15
+      verdict: underserved-primary-for-slice   # primary (headline) job for serverless-philosophy-federation
+
+    success_signals:
+      - A dogfood user deploys their own instance and completes a first push in <10 minutes.
+      - The public card URL renders the user's pushed claims, each attributed to the author DID,
+        read-only, and the user pastes it into their Bluesky profile.
+      - The user affirms "this instance is mine" — no shared operator, no central authority, and their
+        local store is untouched by publishing.
+
+    related_jobs: [J-001, J-003, J-008]
+
+    # Realized by the serverless-philosophy-federation feature. See
+    # docs/feature/serverless-philosophy-federation/feature-delta.md (Locked Decisions D-1..D-9,
+    # KPIs KPI-SF-1..5). Companion journey: docs/product/journeys/host-and-share-philosophy.yaml.
+    # Requirement 4 ("pull from OTHER instances") is NOT a new job — it traces to J-003 (federated
+    # read) with the Cloudflare-instance transport as the delta (peer_claims + signature/CID
+    # verification + anti-merging invariants carry over unchanged). The data-sync mechanics
+    # (push local->instance, pull instance->local) are the sibling job J-008.
+
+
+  - id: J-008
+    name: Keep my local store and my own hosted instance in sync (round-trip integrity)
+    primary: false
+    job_story: >
+      When I publish claims from my laptop but want my own hosted instance to mirror them —
+      and to be able to rebuild or reconcile my local DuckDB from my instance later — I want to
+      push my local graph to my instance and pull it back with byte-for-byte CID integrity,
+      so my instance is a faithful, verifiable mirror I own, not a lossy copy.
+
+    functional:
+      - Push local claims to my own instance (`openlore publish push`); pushes are additive + idempotent.
+      - Pull my instance's records back into local DuckDB (`openlore publish pull`); never silently
+        overwrite a local claim — reconcile with attribution + CID checks.
+      - Guarantee round-trip integrity: a claim pushed to my instance and pulled back has an
+        IDENTICAL recomputed CID (canonicalization survives the CLI<->Worker boundary).
+      - Report sync state (what is local-only, instance-only, or in-sync).
+
+    emotional:
+      - Durable: "My reasoning survives a lost laptop — my own instance is a verifiable mirror."
+      - In control: "Sync is explicit and additive; nothing is overwritten or merged behind my back."
+      - Trusting the pipe: "What I pushed is exactly what I pull back — the CID proves it."
+
+    social:
+      - Own a portable, verifiable copy of my graph across machines without a third-party sync service.
+
+    four_forces:
+      push: >
+        A local-only DuckDB is a single point of loss and cannot be shared; a naive copy to a host
+        risks divergence, silent overwrite, or canonicalization drift that breaks CID verification.
+      pull: >
+        An explicit, additive, CID-verified round-trip: push my graph up, pull it back identical.
+        My instance becomes a mirror I can rebuild local state from, with integrity I can check.
+      anxiety: >
+        (a) "Will pulling from my instance overwrite local claims I edited?" Mitigation: pull is a
+            reconcile, never a silent overwrite; local remains source of truth; conflicts surfaced.
+        (b) "Will the CLI<->Worker boundary corrupt canonicalization so CIDs no longer match?"
+            Mitigation: round-trip CID integrity is a hard guardrail (KPI-SF-1) — a mismatch is a
+            rejected sync, not a silent accept.
+      habit: >
+        Devs already think in `git push` / `git pull`. The publish push/pull verbs must map to that
+        additive, explicit, integrity-checked mental model.
+
+    opportunity_score:
+      importance: 7     # durability + verifiable mirror; enables the J-007 card to have data
+      satisfaction: 1   # no local-first tool offers a self-owned, CID-verified graph mirror
+      score: 13         # 7 + max(7 - 1, 0) = 13
+      verdict: underserved-secondary   # the data pipe beneath J-007; the walking-skeleton round-trip lives here
+
+    success_signals:
+      - A claim pushed to the user's instance and pulled back has an identical recomputed CID (100%).
+      - A user rebuilds/reconciles their local DuckDB from their own instance with zero silent overwrites.
+      - The user can answer "what is in sync, what is local-only, what is instance-only" in one command.
+
+    related_jobs: [J-001, J-007]
+
+    # Realized by the serverless-philosophy-federation feature (walking skeleton = the thin
+    # push-one-claim -> own Worker -> pull-it-back round-trip; slice-01). See the feature-delta.
+    # J-008 is the data pipe; J-007 is the publish/share surface it feeds; J-003 (unchanged) is the
+    # cross-instance federated READ of OTHER users' instances (requirement 4).
+
+
 # ---------------------------------------------------------------------------
 # Red cards — all resolved 2026-05-25. Retained here for decision provenance.
 # Binding form lives in docs/feature/openlore-foundation/feature-delta.md
@@ -963,3 +1104,31 @@ changelog:
       download counts), honoring local-first. Companion journey:
       docs/product/journeys/install-via-homebrew.yaml. Walking skeleton: No (thin brownfield;
       consumes the shipped release pipeline).
+  - date: "2026-07-13"
+    feature: serverless-philosophy-federation
+    change: >
+      J-007 ADDED (primary: false; headline job for serverless-philosophy-federation) — self-host
+      my OWN serverless (Cloudflare) instance and publicly share my philosophy graph via a
+      read-only, Bluesky-profile-linkable philosophy card. And J-008 ADDED (primary: false) — keep
+      my local DuckDB and my own hosted instance in sync with CID-verified round-trip integrity
+      (push local->instance, pull instance->local). The feature builds a Cloudflare-hostable AT
+      Protocol app (code in a NEW `atproto/` folder) for the four requirements: (1) public
+      philosophy card + Bluesky-profile link -> J-007; (2) pull my instance -> local DuckDB -> J-008;
+      (3) push local CLI -> my instance -> J-008 (publish surface J-007); (4) pull from OTHER users'
+      instances -> J-003 (NO new job — the Cloudflare-instance transport is a delta on federated
+      read; peer_claims + signature/CID verification + anti-merging invariants carry over unchanged).
+      Hosting model is SELF-HOSTED SERVERLESS: each user deploys their OWN instance; federation is
+      peer-to-peer between users' own instances; there is NO central/community-operated authority —
+      this is the form in which ADR-023's DEFERRED "hosted deployment mode" is realized WITHOUT
+      re-introducing the central-authority failure mode ADR-023 rejected (the CLI already talks to a
+      configurable URL, ADR-027, so a Cloudflare instance URL is purely additive). Light
+      opportunity scores (J-007 15, J-008 13); full scoring skipped (lean). Walking skeleton = the
+      thin push-one-claim -> own Worker -> pull-it-back round-trip (J-008, slice-01), preceded by a
+      SPIKE to validate the Cloudflare Worker<->CLI mechanism. The Rust-CLI <-> Cloudflare-TS
+      boundary + how a Worker stores/serves ATProto records is the headline open question handed to
+      DESIGN (OD-SF-1); the `atproto/` stack choice is a DESIGN decision, not DISCUSS's. Persona
+      P-001 gains a publisher/sharer hat (the Bluesky-card social dimension); P-002 wears the
+      federation-reader hat for requirement 4. Companion journey:
+      docs/product/journeys/host-and-share-philosophy.yaml. See
+      docs/feature/serverless-philosophy-federation/feature-delta.md (Locked Decisions D-1..D-9,
+      KPIs KPI-SF-1..5, Changed Assumptions = the ADR-023 reconciliation).

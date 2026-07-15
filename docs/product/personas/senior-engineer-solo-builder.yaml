@@ -142,3 +142,43 @@ persona:
         - A row/edge countered by N authors shows ONE neutral marker (presence-only); the per-counter attribution lives in the slice-11 thread the flag links to.
         - The presence read is the SAME slice-12 batch read (counter_presence_for) — ONE aggregate query per render (no N+1); LOCAL + offline; no per-row artifact read; no new read method.
         - On /score the flag is DEFERRED (slice-14) precisely because a flag beside a weight risks a 'does being countered lower the weight?' misread; the scanner hat does NOT yet extend to /score.
+
+    # -------------------------------------------------------------------------
+    # Publisher/sharer hat (serverless-philosophy-federation).
+    # Added 2026-07-13 by Luna during DISCUSS for serverless-philosophy-federation.
+    # The NEW social/shareable dimension for the otherwise CLI-first, private P-001.
+    # -------------------------------------------------------------------------
+    - id: publisher-sharer
+      activated_in_slice: serverless-philosophy-federation (slices 01, 04)
+      one_liner: >
+        P-001 wearing the publisher/sharer hat has deployed their OWN serverless (Cloudflare)
+        instance from the `atproto/` code, pushed their locally-signed claims to it, and wants a
+        clean PUBLIC, read-only philosophy card — at a stable URL they OWN — that they can link from
+        their Bluesky profile. It is the first time this private, CLI-first, local-first persona gets
+        an intentional PUBLIC identity surface, and the load-bearing tension is doing so WITHOUT
+        surrendering sovereignty to a central authority (the instance is theirs; no shared operator).
+
+      typical_session:
+        - "Deploy my own instance: `wrangler deploy` the atproto/ Worker; register it with `openlore publish init https://openlore.maria.workers.dev`"
+        - "Push my graph: `openlore publish push` — my local signed claims now mirror on MY instance"
+        - "Open https://openlore.maria.workers.dev/ — my philosophy card renders my attributed claims, read-only"
+        - "Paste that URL into my Bluesky profile bio as my reasoning trail"
+        - "Confirm my local DuckDB is untouched — publishing was additive, source of truth stayed local"
+
+      load_bearing_anxieties:
+        - "Does hosting on Cloudflare make this a central authority — the exact thing openlore exists to avoid?"
+        - "Will publishing overwrite or diverge from my local source of truth?"
+        - "Will the public card expose claims I did not explicitly choose to publish?"
+
+      load_bearing_signals_of_success:
+        - "The instance is unambiguously MINE — I deployed it, I own the data, no shared operator is in the trust path."
+        - "The card is read-only and renders ONLY what I pushed, each claim attributed to my author DID."
+        - "My local store is the source of truth and is never mutated by a push or a card render."
+
+      ux_guardrails_specific_to_publisher_sharer:
+        - Self-hosted serverless ONLY: the instance is the user's OWN Cloudflare deploy; NO central/community-operated service (the ADR-023 reconciliation).
+        - The public card is READ-ONLY: it holds no signing key, authors/mutates nothing, and renders only explicitly-pushed claims (mirrors the ADR-023 signing-incapable-by-construction boundary).
+        - Publishing is ADDITIVE + CID-verified: the local DuckDB stays the source of truth; a push/pull never silently overwrites a local claim (KPI-SF-1 round-trip integrity).
+        - Local-first preserved (KPI-5): compose/sign/local `graph query` never depend on the instance being reachable.
+        - Anti-merging carries onto the card and cross-instance reads: every rendered claim shows its author DID; no "consensus" row, ever.
+        - The instance URL is just the ADR-027 configurable URL (`https://openlore.<me>.workers.dev` in place of `http://127.0.0.1:<port>`) — a purely additive transport, not a new contract.

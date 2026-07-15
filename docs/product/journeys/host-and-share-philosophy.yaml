@@ -1,0 +1,348 @@
+schema_version: 1
+
+# Structured journey schema for serverless-philosophy-federation.
+# Companion to docs/feature/serverless-philosophy-federation/feature-delta.md.
+# Gherkin is embedded per step (no standalone .feature file per the DISCUSS convention).
+# LEAN journey: self-host deploy + publish + public card + round-trip sync, then a cross-instance
+# read that REFERENCES the existing subscribe-and-read-federated.yaml (J-003) rather than
+# re-authoring federated-read semantics.
+#
+# Hosting model (load-bearing): SELF-HOSTED SERVERLESS. The Cloudflare Worker is the user's OWN
+# instance deployed from the NEW `atproto/` folder. There is NO central/community-operated
+# authority. This is the form in which ADR-023's DEFERRED "hosted deployment mode" is realized
+# WITHOUT re-introducing the central-authority failure mode ADR-023 rejected. The CLI reaches the
+# instance via the ADR-027 configurable URL (my instance URL replaces http://127.0.0.1:<port>).
+
+journey:
+  name: "Host and share my philosophy graph from my own serverless instance"
+  goal: >
+    Deploy my OWN serverless (Cloudflare) instance from the `atproto/` code, publish (push) my
+    locally-signed claims to it with CID-verified round-trip integrity, serve a PUBLIC read-only
+    philosophy card at a stable Bluesky-profile-linkable URL, and expand my dataset by pulling from
+    OTHER users' instances — all while my local DuckDB stays the source of truth and no central
+    authority is in the trust path.
+  persona: "P-001 Senior Engineer Solo Builder (publisher/sharer hat)"
+  secondary_persona: "P-002 researcher-tech-lead (federation-reader hat, step 5 cross-instance pull)"
+  job_id: J-007                      # headline job for this feature
+  also_addresses: [J-008]            # the push/pull round-trip data pipe
+  references_job: J-003              # step 5 (cross-instance pull) IS J-003 with a new transport
+  feature_id: serverless-philosophy-federation
+
+  scope_notes: >
+    Cross-cutting: Rust CLI (new `openlore publish` verbs) <-> a NEW TS/Cloudflare-Workers app (code
+    in `atproto/`, does not exist yet) <-> ATProto records <-> cross-instance peer-to-peer sync <-> a
+    public web card. The Rust-CLI <-> Cloudflare-TS boundary and how a Worker stores/serves ATProto
+    records is a DESIGN decision (OD-SF-1) — this journey is solution-neutral about it. The public
+    card is READ-ONLY and signing-incapable (mirrors the ADR-023 indexer boundary). Requirement 4
+    (step 5) REUSES J-003 federated-read semantics (peer_claims, signature+CID verification,
+    anti-merging, per-author attribution) — see subscribe-and-read-federated.yaml; the ONLY delta is
+    the peer's PDS endpoint resolves to their Cloudflare instance instead of a bsky.social PDS.
+
+  emotional_arc:
+    start: "Skeptical-sovereign — 'I want a public surface, but not at the cost of handing my data to a central host.'"
+    middle: "Ownership-relief (my instance is live and it is MINE) -> Integrity-trust (what I pushed pulls back byte-identical, CID-verified)."
+    end: "Proud-to-share — 'a clean public card at my own URL, linked from my Bluesky profile; my local store never moved.'"
+    arc_pattern: sovereignty-preserved-then-shareable
+
+  steps:
+
+    - id: 1
+      name: "Deploy my own serverless instance and register it"
+      command: "wrangler deploy   #(atproto/ Worker)  then  openlore publish init https://openlore.maria.workers.dev"
+
+      tui_mockup: |
+        $ wrangler deploy
+        Total Upload: ... KiB
+        Published openlore-atproto (x.xx sec)
+          https://openlore.maria.workers.dev
+
+        $ openlore publish init https://openlore.maria.workers.dev
+        Registering my instance ... ok
+          instance_url : https://openlore.maria.workers.dev
+          author_did   : did:plc:maria-test  (my signing identity — unchanged)
+          card_url     : https://openlore.maria.workers.dev/   (public, read-only)
+        This instance is YOURS. No central authority is in the trust path.
+        Your local store remains the source of truth (`openlore graph query` is unchanged, offline).
+
+      shared_artifacts:
+        - name: "instance_url"
+          source: "the URL of the user's OWN deployed Cloudflare Worker; registered via `openlore publish init` (the ADR-027 configurable URL)"
+          displayed_as: "https://openlore.maria.workers.dev"
+          consumers: ["publish push", "publish pull", "card_url derivation", "Bluesky profile link"]
+        - name: "author_did"
+          source: "the user's existing ATProto DID with per-app derived key (WD-12 / RC-03) — unchanged by hosting"
+          displayed_as: "did:plc:maria-test"
+          consumers: ["pushed record attribution", "card render attribution", "peer resolution for step 5"]
+
+      emotional_state:
+        entry: "Skeptical-sovereign"
+        exit: "Ownership-relief"
+
+      integration_checkpoint: |
+        The deployed Worker is the USER's OWN instance (self-hosted serverless; no shared operator).
+        `openlore publish init` only RECORDS the instance URL as config (ADR-027 configurable URL); it
+        does not change the CLI contract. The user's signing identity (author_did) is unchanged — the
+        instance holds NO signing key (read/serve only; mirrors the ADR-023 signing-incapable boundary).
+        Local-first is preserved: `openlore graph query` and compose/sign never depend on the instance.
+
+      failure_modes:
+        - "`wrangler deploy` fails (no Cloudflare account / auth) -> Cloudflare tooling reports it; `openlore` is uninvolved; nothing registered."
+        - "`openlore publish init` given an unreachable URL -> reports it cannot reach the instance; does NOT register a dead URL (offline-first is not speculative-register)."
+        - "User expects the instance to become their signing authority -> reject: the instance is read/serve only; signing stays local (author_did unchanged)."
+
+      gherkin: |
+        Scenario: Deploy and register my own serverless instance
+          Given Maria has deployed the atproto/ Worker to her own Cloudflare account at https://openlore.maria.workers.dev
+          When she runs `openlore publish init https://openlore.maria.workers.dev`
+          Then the CLI records the instance URL as her configured publish target
+          And it confirms the instance is hers with no central authority in the trust path
+          And her author DID and local store are unchanged
+
+    - id: 2
+      name: "Publish (push) my local claims to my own instance"
+      command: "openlore publish push"
+
+      tui_mockup: |
+        $ openlore publish push
+        Publishing to https://openlore.maria.workers.dev ...
+          local claims        : 42
+          already on instance : 40 (skipped)
+          pushed              : 2 new
+          verified            : 2/2 CIDs recomputed on the instance match local CIDs
+        Pushed 2 claims in 0.9s. Additive only — no local claim was modified.
+
+      shared_artifacts:
+        - name: "claim_cid"
+          source: "claim-domain content-addressed CID; recomputed on the instance and MUST match the local CID (round-trip integrity)"
+          displayed_as: "bafy..."
+          consumers: ["instance record key", "publish pull round-trip check", "card render", "step 5 cross-instance verification"]
+
+      emotional_state:
+        entry: "Ownership-relief"
+        exit: "Integrity-trust"
+
+      integration_checkpoint: |
+        Push is ADDITIVE + idempotent (re-pushing an existing claim is a no-op). Every pushed claim's
+        CID is recomputed on the instance and MUST equal the local CID (KPI-SF-1). A mismatch is a
+        REJECTED push (canonicalization drift across the CLI<->Worker boundary), never a silent accept.
+        The local DuckDB (source of truth) is never mutated by a push.
+
+      failure_modes:
+        - "Instance unreachable -> push reports it and exits non-zero; local store untouched; retry later (local-first: authoring never blocked)."
+        - "A claim's CID recomputed on the instance does not match the local CID -> that claim is rejected (canonicalization mismatch), reported, others proceed."
+        - "Partial push interrupted -> additive + idempotent, so a re-run resumes with no duplicates."
+
+      gherkin: |
+        Scenario: Push local claims to my instance with round-trip CID integrity
+          Given Maria has 42 signed claims locally and 40 already on her instance
+          When she runs `openlore publish push`
+          Then the 2 new claims are pushed to https://openlore.maria.workers.dev
+          And each pushed claim's CID recomputed on the instance matches its local CID
+          And none of Maria's local claims are modified
+
+        Scenario: A claim whose CID does not survive the boundary is rejected
+          Given one claim's CID recomputed on the instance does not match its local CID
+          When Maria runs `openlore publish push`
+          Then that claim is rejected and reported as a canonicalization mismatch
+          And the other claims are pushed normally
+
+    - id: 3
+      name: "View my public philosophy card (read-only) and link it from Bluesky"
+      command: "open https://openlore.maria.workers.dev/"
+
+      tui_mockup: |
+        # Rendered by MY Cloudflare Worker at my own URL — public, read-only, no signing key.
+        +-- https://openlore.maria.workers.dev/ ---------------------------------+
+        | Maria's Philosophy Card                            did:plc:maria-test  |
+        | ---------------------------------------------------------------------- |
+        | github:rust-lang/cargo                                                 |
+        |   embodiesPhilosophy  reproducible-builds   confidence 0.78            |
+        |     evidence  https://doc.rust-lang.org/cargo/reference/build-cache... |
+        |     cid       bafy...m9pq                                              |
+        | ...                                                                    |
+        | Every claim attributed to did:plc:maria-test. Read-only. No consensus. |
+        +------------------------------------------------------------------------+
+        # Paste https://openlore.maria.workers.dev/ into your Bluesky profile bio.
+
+      shared_artifacts:
+        - name: "card_url"
+          source: "derived from instance_url (the public read-only page served by the user's own Worker)"
+          displayed_as: "https://openlore.maria.workers.dev/"
+          consumers: ["the Bluesky profile link", "sharing the card with others"]
+        - name: "author_did"
+          source: "same as step 1"
+          displayed_as: "did:plc:maria-test"
+          consumers: ["per-claim attribution on the card (anti-merging)"]
+
+      emotional_state:
+        entry: "Integrity-trust"
+        exit: "Proud-to-share"
+
+      integration_checkpoint: |
+        The card renders ONLY claims the user explicitly pushed, each attributed to the author DID
+        (anti-merging — no "consensus" row). The card is READ-ONLY: the Worker holds no signing key and
+        mutates/authors nothing. The card_url is stable and directly linkable from a Bluesky profile.
+
+      failure_modes:
+        - "Card requested before any push -> renders an empty-but-valid card ('no claims published yet'), not an error."
+        - "A visitor expects to edit/counter from the card -> the card offers no write control; authoring stays in the CLI (read-only surface)."
+
+      gherkin: |
+        Scenario: The public card renders my pushed claims, attributed, read-only
+          Given Maria has pushed her claims to her instance
+          When anyone opens https://openlore.maria.workers.dev/
+          Then the card renders Maria's claims each attributed to did:plc:maria-test
+          And the page offers no authoring or editing control
+          And no claim is shown as a merged or consensus entry
+
+        Scenario: The card is a stable URL linkable from a Bluesky profile
+          Given Maria's card is served at https://openlore.maria.workers.dev/
+          When she pastes that URL into her Bluesky profile
+          Then visitors following the link reach her read-only philosophy card
+
+    - id: 4
+      name: "Pull my instance back into local DuckDB (reconcile / rebuild)"
+      command: "openlore publish pull"
+
+      tui_mockup: |
+        $ openlore publish pull
+        Pulling from https://openlore.maria.workers.dev ...
+          instance records : 42
+          new locally      : 0 (local is source of truth; all present)
+          verified         : 42/42 CIDs match local
+        In sync. No local claim overwritten.
+
+        # On a fresh laptop, the same command rebuilds local state from the instance:
+        #   new locally     : 42   verified 42/42   -> local DuckDB reconstructed, attribution intact.
+
+      shared_artifacts:
+        - name: "claim_cid"
+          source: "same as step 2; the pull-back CID MUST equal the pushed CID (round-trip integrity)"
+          displayed_as: "bafy..."
+          consumers: ["local reconcile key", "round-trip integrity assertion (KPI-SF-1)"]
+
+      emotional_state:
+        entry: "Proud-to-share"
+        exit: "Integrity-trust (durable) — 'my reasoning survives a lost laptop, verifiably.'"
+
+      integration_checkpoint: |
+        Pull is a RECONCILE, never a silent overwrite: a record already present locally with a matching
+        CID is a no-op; a genuine conflict is surfaced, not auto-resolved. Round-trip integrity holds —
+        a claim pushed in step 2 and pulled here has an IDENTICAL recomputed CID (KPI-SF-1). On a fresh
+        machine the pull rebuilds local DuckDB from the user's own instance with attribution intact.
+
+      failure_modes:
+        - "Instance unreachable -> pull reports it and exits non-zero; local store untouched."
+        - "A pulled record's CID does not match a local claim's CID for the same logical record -> surfaced as a conflict, NOT silently overwritten."
+        - "Pull on a fresh machine -> reconstructs local state; each record verified before insert."
+
+      gherkin: |
+        Scenario: Pull is an additive reconcile that never overwrites local claims
+          Given Maria's instance holds the 42 claims she pushed
+          And her local store already holds those 42 claims
+          When she runs `openlore publish pull`
+          Then every pulled record's CID matches the local CID
+          And no local claim is overwritten
+          And the CLI reports the stores are in sync
+
+        Scenario: Rebuild local DuckDB from my own instance on a fresh machine
+          Given Maria has a fresh machine with an empty local store
+          And her instance holds 42 pushed claims
+          When she runs `openlore publish pull`
+          Then all 42 claims are reconstructed into local DuckDB with attribution intact
+          And each record's CID is verified before it is stored
+
+    - id: 5
+      name: "Expand my dataset by pulling from ANOTHER user's instance (federated read — J-003)"
+      command: "openlore peer add did:plc:rachel-test   then   openlore peer pull"
+
+      tui_mockup: |
+        # Requirement 4 REUSES the J-003 federated-read flow verbatim. The ONLY delta: Rachel's DID
+        # document resolves her PDS endpoint to HER OWN Cloudflare instance, not a bsky.social PDS.
+        $ openlore peer add did:plc:rachel-test
+        Resolving DID ... ok   PDS: https://openlore.rachel.workers.dev   (her own instance)
+        Subscribed. Peer claims land in peer_claims (separate from your own).
+
+        $ openlore peer pull
+          did:plc:rachel-test (openlore.rachel.workers.dev)
+            fetched 7  new 5  verified 5/5 signatures + CIDs  stored peer_claims (attribution preserved)
+        Pulled 5 new peer claims. None merged with your own; query with --federated.
+
+      shared_artifacts:
+        - name: "peer_instance_url"
+          source: "resolved from the peer's DID document (their PDS endpoint = their own Cloudflare instance)"
+          displayed_as: "https://openlore.rachel.workers.dev"
+          consumers: ["peer pull fetch URLs", "peer claim attribution"]
+        - name: "claim_cid"
+          source: "peer claim CID recomputed locally on ingest; MUST match the peer's published CID (J-003 KPI-FED-6)"
+          displayed_as: "bafy..."
+          consumers: ["peer_claims store key", "graph query --federated output", "counter-claim reference target"]
+
+      emotional_state:
+        entry: "Integrity-trust"
+        exit: "Sovereign-confident — 'I expanded my dataset from Rachel's own instance; attribution intact; nothing merged.'"
+
+      integration_checkpoint: |
+        This step is J-003 (federated read) with the Cloudflare-instance transport as the ONLY delta.
+        ALL J-003 invariants carry over UNCHANGED: peer claims land in the SEPARATE peer_claims layer
+        (never author_claims); every claim's signature is verified and its CID recomputed before store;
+        anti-merging holds (every claim attributed to its author DID; no consensus row). See
+        subscribe-and-read-federated.yaml for the full federated-read journey — it is NOT re-authored here.
+
+      failure_modes:
+        - "See subscribe-and-read-federated.yaml (J-003) — the peer-add / peer-pull failure modes carry over unchanged (unreachable PDS, invalid signature, CID mismatch, schema-version unknown)."
+        - "Delta-only failure: the peer DID resolves to a Cloudflare instance that is down -> that peer's pull is skipped, others proceed, exit non-zero (same as any unreachable PDS)."
+
+      gherkin: |
+        Scenario: Pull claims from another user's Cloudflare instance (J-003 transport delta)
+          Given Rachel's DID document resolves her PDS endpoint to https://openlore.rachel.workers.dev
+          And Maria has subscribed to did:plc:rachel-test
+          When Maria runs `openlore peer pull`
+          Then Rachel's claims are fetched from her Cloudflare instance
+          And each claim's signature is verified and its CID recomputed before storage
+          And the claims are stored in peer_claims attributed to Rachel, never merged with Maria's own
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "instance_url"
+      must_match_across: [1, 2, 3, 4]
+      failure_message: "The registered instance URL, the push/pull target, and the card URL MUST agree; drift points the CLI at the wrong host or serves a stale card."
+    - artifact: "claim_cid"
+      must_match_across: [2, 4]
+      failure_message: "A claim pushed to the instance (step 2) and pulled back (step 4) MUST have an IDENTICAL recomputed CID; a mismatch means canonicalization did not survive the CLI<->Worker boundary and the round-trip-integrity thesis (KPI-SF-1) is broken."
+    - artifact: "claim_cid"
+      must_match_across: [2, 5]
+      failure_message: "A peer's claim CID recomputed on cross-instance pull (step 5) MUST match the peer's published CID (J-003 KPI-FED-6); the federation-verification contract carries over to the Cloudflare-instance transport unchanged."
+
+  anti_merging_guarantee:
+    description: >
+      Carried over from J-003 / subscribe-and-read-federated.yaml. Every surface that lists claims —
+      the public card (step 3), the local reconcile (step 4), and cross-instance federated reads
+      (step 5) — MUST display per-author attribution. NO surface, including the public web card, may
+      render multiple authors' claims as a single "consensus" row.
+    enforced_at:
+      - "step 3 (public card): every claim rendered under its author DID; no consensus row"
+      - "step 5 (cross-instance pull): reuses the J-003 peer_claims separation + attributed --federated output"
+
+  local_first_guarantee:
+    description: >
+      Compose/sign and `openlore graph query` (local) NEVER depend on the instance being reachable
+      (KPI-5). The instance is a publish/share/mirror surface, not a dependency of core authoring.
+    enforced_at:
+      - "steps 1-2: init/push report and exit non-zero when the instance is unreachable; local store untouched"
+      - "the instance holds no signing key (read/serve only; mirrors the ADR-023 signing-incapable-by-construction boundary)"
+
+changelog:
+  - date: "2026-07-13"
+    feature: serverless-philosophy-federation
+    change: >
+      Initial LEAN journey for the self-host + publish + public-card + round-trip-sync flow (J-007
+      headline, J-008 data pipe), with step 5 (cross-instance pull) REFERENCING
+      subscribe-and-read-federated.yaml (J-003) rather than re-authoring federated-read semantics —
+      the ONLY delta is the peer's PDS endpoint resolves to their own Cloudflare instance. Self-hosted
+      serverless model (each user owns their instance; no central authority) is the reconciliation of
+      ADR-023's deferred hosted mode; the CLI reaches the instance via the ADR-027 configurable URL.
+      Round-trip CID integrity (KPI-SF-1) and anti-merging on the public card are the load-bearing
+      guardrails. The Rust-CLI <-> Cloudflare-TS boundary + how a Worker stores/serves ATProto records
+      is flagged as the headline DESIGN open question (OD-SF-1). Walking skeleton = the thin
+      push-one-claim -> own Worker -> pull-it-back round-trip (slice-01), preceded by a SPIKE.
