@@ -212,6 +212,41 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-09-26T21:56:31Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T21:58:37Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS: PP-2 and PP-3 activated; both passed on first run (02-01 plan_push already covers them) \u2014 no business-logic failure observed",
+      "t": "2026-09-26T22:15:44Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS: FakeInstance re-PUT integration tests (2) passed on first run \u2014 FakeInstance already idempotent; mutation (drop dedupe) turns both red",
+      "t": "2026-09-26T22:26:14Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS: Worker check-then-append moved into blockConcurrencyWhile; contract script re-push pushed:0 + concurrent re-PUT checks PASS under wrangler dev; publish suites green",
+      "t": "2026-09-26T23:05:59Z"
+    },
+    {
+      "sid": "02-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T23:05:59Z"
     }
   ]
 }

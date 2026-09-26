@@ -118,10 +118,15 @@ export class OpenloreInstance extends DurableObject {
   }
 
   /**
-   * Stage (and, with the header, commit) one record. All writes for one
-   * request land in a single multi-key `put` — atomic in the DO — and the
-   * DO's input gate serialises concurrent requests, so the append sequence
-   * never races.
+   * Stage (and, with the header, commit) one record. Idempotent per CID
+   * (ADR-062 §1): a re-PUT of an existing CID — with or without the commit
+   * header — is a no-op success; the blob stays the first write and the
+   * manifest never gains a second entry for it.
+   *
+   * The check-then-append runs inside `blockConcurrencyWhile`, so no other
+   * request is delivered to this DO between reading `committed:<cid>` /
+   * `manifest-length` and writing them back: concurrent identical PUTs can
+   * never double-append. All writes land in ONE multi-key `put` (atomic).
    */
   private async storeRecord(cid: string, request: Request): Promise<Response> {
     const body = new Uint8Array(await request.arrayBuffer());
@@ -129,7 +134,16 @@ export class OpenloreInstance extends DurableObject {
     if (entry.kind === "malformed") {
       return respond(400, "text/plain", "malformed manifest entry header");
     }
+    await this.ctx.blockConcurrencyWhile(() => this.stageAndCommit(cid, body, entry));
+    return respond(201, "text/plain", null);
+  }
 
+  /** The atomic check-then-write for one PUT; see `storeRecord`. */
+  private async stageAndCommit(
+    cid: string,
+    body: Uint8Array,
+    entry: ManifestEntryHeader,
+  ): Promise<void> {
     const storage = this.ctx.storage;
     const writes: Record<string, unknown> = {};
 
@@ -149,6 +163,5 @@ export class OpenloreInstance extends DurableObject {
     if (Object.keys(writes).length > 0) {
       await storage.put(writes);
     }
-    return respond(201, "text/plain", null);
   }
 }
