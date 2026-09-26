@@ -1,0 +1,18 @@
+{
+  "name": "openlore-atproto",
+  "version": "0.0.1",
+  "private": true,
+  "description": "openlore opaque serverless instance: a DUMB content-addressed byte store (ADR-062). Computes no CID, parses no record.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "contract": "bash scripts/contract-roundtrip.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260926.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.141.0"
+  }
+}

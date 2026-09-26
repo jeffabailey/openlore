@@ -32,6 +32,10 @@
 //! 5. Only the `cli` crate depends on `adapter-*` crates. (`xtask` and
 //!    `openlore-test-support` are first-party tooling, not shipped — they
 //!    are exempt by name.)
+//! 6. The `atproto/` Worker's npm tree (`package.json` + `package-lock.json`)
+//!    MUST NOT contain any `@ipld/*`, `multiformats` or `cbor*` package — it
+//!    is an opaque byte store; Rust `claim-domain` is the sole canonicalizer
+//!    (ADR-062 §1/§2; [`classify_atproto_npm_manifest`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1094,6 +1098,89 @@ pub fn scan_viewer_fail_seam_guard(workspace_root: &Path) -> anyhow::Result<Vec<
     Ok(findings)
 }
 
+/// The `atproto/` Worker's npm manifests the no-IPLD/CBOR guard reads
+/// (serverless-philosophy-federation, ADR-062 §1/§2).
+const ATPROTO_NPM_MANIFESTS: &[&str] = &["atproto/package.json", "atproto/package-lock.json"];
+
+/// Pure rule (ADR-062): the `atproto/` Worker is an OPAQUE byte store — the
+/// Rust `claim-domain` is the SOLE canonicalizer, so the Worker must never
+/// be able to decode, re-encode or CID a record. Returns every banned
+/// package named anywhere in an npm manifest (`package.json` dependency keys
+/// or `package-lock.json` `node_modules/<name>` keys, transitive included):
+/// any `@ipld/*`, `multiformats`, or `cbor*` package. Sorted, de-duplicated.
+pub fn classify_atproto_npm_manifest(manifest_text: &str) -> Vec<String> {
+    json_object_keys(manifest_text)
+        .iter()
+        .map(|key| npm_package_name_of(key))
+        .filter(|name| is_banned_atproto_package(name))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Every JSON object key (a string literal followed by `:`) in `text`.
+fn json_object_keys(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut keys = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b'"' {
+            end += if bytes[end] == b'\\' { 2 } else { 1 };
+        }
+        let end = end.min(bytes.len());
+        let after = text[end.saturating_add(1).min(text.len())..].trim_start();
+        if after.starts_with(':') {
+            keys.push(text[start..end].to_string());
+        }
+        index = end + 1;
+    }
+    keys
+}
+
+/// `node_modules/a/node_modules/@scope/b` → `@scope/b`; a bare name is itself.
+fn npm_package_name_of(key: &str) -> &str {
+    key.rsplit_once("node_modules/")
+        .map_or(key, |(_, name)| name)
+}
+
+fn is_banned_atproto_package(name: &str) -> bool {
+    name.starts_with("@ipld/") || name == "multiformats" || name.starts_with("cbor")
+}
+
+/// Effect shell for the `atproto/` no-IPLD/CBOR guard: read the Worker's
+/// `package.json` + `package-lock.json` and report every banned package. A
+/// missing manifest is "nothing to scan".
+pub fn scan_atproto_npm_dependencies(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for rel in ATPROTO_NPM_MANIFESTS {
+        let path = workspace_root.join(rel);
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_atproto_npm_manifest(&text)
+                .into_iter()
+                .map(|name| {
+                    format!(
+                "{}: the atproto/ Worker depends on `{name}` — it must stay an OPAQUE byte \
+                 store with no IPLD/CBOR/multiformats codec; Rust claim-domain is the SOLE \
+                 canonicalizer (ADR-062 §1/§2)",
+                path.display()
+            )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -1106,6 +1193,7 @@ pub fn run() -> anyhow::Result<i32> {
     let autoconfirm_findings = scan_autoconfirm_guard(&workspace_root)?;
     let pubkey_seam_findings = scan_pubkey_seam_guard(&workspace_root)?;
     let viewer_fail_seam_findings = scan_viewer_fail_seam_guard(&workspace_root)?;
+    let atproto_npm_findings = scan_atproto_npm_dependencies(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1113,6 +1201,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(autoconfirm_findings);
     rendered.extend(pubkey_seam_findings);
     rendered.extend(viewer_fail_seam_findings);
+    rendered.extend(atproto_npm_findings);
 
     if rendered.is_empty() {
         println!(
@@ -1713,6 +1802,75 @@ mod tests {
         assert!(
             v.is_empty(),
             "production-like healthy workspace should have zero violations, got: {v:?}"
+        );
+    }
+
+    // --- atproto/ Worker: no IPLD/CBOR/multiformats (ADR-062 §1/§2) ---------
+
+    fn lockfile_with(packages: &[String]) -> String {
+        let entries: Vec<String> = packages
+            .iter()
+            .map(|name| format!("\"node_modules/{name}\": {{ \"version\": \"1.0.0\" }}"))
+            .collect();
+        format!(
+            "{{ \"name\": \"openlore-atproto\", \"lockfileVersion\": 3, \"packages\": {{ \
+             \"\": {{ \"devDependencies\": {{ \"wrangler\": \"4.0.0\" }} }}, {} }} }}",
+            entries.join(", ")
+        )
+    }
+
+    fn safe_package_name() -> impl proptest::strategy::Strategy<Value = String> {
+        proptest::string::string_regex("(@[a-z]{2,6}/)?[a-d][a-z-]{1,10}").expect("regex")
+    }
+
+    fn banned_package_name() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just("multiformats".to_string()),
+            "[a-z-]{1,10}".prop_map(|rest| format!("@ipld/{rest}")),
+            "[a-z-]{0,6}".prop_map(|rest| format!("cbor{rest}")),
+        ]
+    }
+
+    proptest::proptest! {
+        /// Property: a banned codec package ANYWHERE in the Worker's
+        /// dependency tree (direct, scoped, or nested `node_modules`) is
+        /// reported, and ONLY the banned packages are reported.
+        #[test]
+        fn atproto_guard_reports_exactly_the_banned_codec_packages(
+            safe in proptest::collection::vec(safe_package_name(), 0..6),
+            banned in banned_package_name(),
+            nested_under in proptest::option::of(safe_package_name()),
+        ) {
+            let banned_key = match &nested_under {
+                Some(parent) => format!("{parent}/node_modules/{banned}"),
+                None => banned.clone(),
+            };
+            let mut packages = safe.clone();
+            packages.push(banned_key);
+            let clean = classify_atproto_npm_manifest(&lockfile_with(&safe));
+            let dirty = classify_atproto_npm_manifest(&lockfile_with(&packages));
+            proptest::prop_assert_eq!(clean, Vec::<String>::new());
+            proptest::prop_assert_eq!(dirty, vec![banned]);
+        }
+    }
+
+    #[test]
+    fn atproto_guard_passes_the_dumb_worker_manifest() {
+        let package_json = r#"{
+          "name": "openlore-atproto",
+          "description": "opaque store; no @ipld/dag-cbor, no multiformats, no cbor",
+          "devDependencies": { "typescript": "5.6.3", "wrangler": "4.0.0",
+                               "@cloudflare/workers-types": "4.0.0" }
+        }"#;
+        assert_eq!(
+            classify_atproto_npm_manifest(package_json),
+            Vec::<String>::new()
+        );
+        let with_codec = package_json.replace("\"typescript\"", "\"@ipld/dag-cbor\"");
+        assert_eq!(
+            classify_atproto_npm_manifest(&with_codec),
+            vec!["@ipld/dag-cbor".to_string()]
         );
     }
 }

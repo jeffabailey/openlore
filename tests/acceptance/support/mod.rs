@@ -18163,3 +18163,12 @@ pub fn assert_local_claims_unchanged(env: &TestEnv, before: &[String]) {
         "publish must never mutate the local claim store (additive, D-6)"
     );
 }
+
+/// GOLD FIXTURE (RT-4 float regression guard): the three f16-representable
+/// confidences SPIKE-00 proved a re-encoding `putRecord` PDS corrupts. Each
+/// must round-trip through the opaque transport with a byte-identical CID
+/// (ADR-062 Alternatives + §3). The live-Worker mirror of this fixture is
+/// `atproto/scripts/contract-roundtrip.sh` (publish-contract.yml).
+pub fn gold_claims_confidence_0_half_1() -> [f64; 3] {
+    [0.0, 0.5, 1.0]
+}

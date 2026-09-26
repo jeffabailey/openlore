@@ -1,0 +1,17 @@
+# openlore opaque instance (ADR-062 §1/§2) — ONE Worker + ONE Durable Object
+# per user instance. The Worker is DUMB: it stores and returns record bytes
+# verbatim and never computes a CID (Rust claim-domain is the sole
+# canonicalizer). Local dev/CI: `npx wrangler dev` (workerd). Deploy is a
+# USER-run `npx wrangler deploy` against the user's OWN Cloudflare account —
+# never from CI.
+name = "openlore-instance"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[[durable_objects.bindings]]
+name = "INSTANCE"
+class_name = "OpenloreInstance"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OpenloreInstance"]

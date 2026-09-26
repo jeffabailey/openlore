@@ -155,12 +155,55 @@ fn publish_push_exits_nonzero_when_the_instance_is_unreachable_and_leaves_author
 ///
 /// @us-sf-002 @kpi-sf-1 @gold-fixture @float-guard @regression @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-002 0.0/0.5/1.0 float round-trip guard)"]
 fn publish_round_trips_confidence_zero_half_one_each_cid_identical() {
-    todo!(
-        "DELIVER: For each confidence in [0.0, 0.5, 1.0] (gold_claims_confidence_0_half_1): \
-         push the claim to a FakeInstance and pull it back; assert the recomputed CID is \
-         byte-identical to the pushed CID for ALL THREE. This fences off the rejected \
-         re-encode transport (SPIKE-00 / ADR-062)."
+    // Given Maria has registered her own instance.
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::fresh();
+    let init = run_openlore_publish(&env, &["init", instance.endpoint_url()], &instance);
+    assert_eq!(
+        init.status, 0,
+        "`publish init <url>` must register the instance;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
     );
+
+    // And she holds one signed claim at EACH gold confidence 0.0 / 0.5 / 1.0.
+    let gold_cids: Vec<String> = gold_claims_confidence_0_half_1()
+        .into_iter()
+        .map(|confidence| seed_one_signed_local_claim(&env, confidence))
+        .collect();
+    let local_before = local_claim_cids(&env);
+
+    // When she pushes them to her instance and pulls them back.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        pull.status, 0,
+        "`publish pull` must exit 0 (every CID verified);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+
+    // Then ALL THREE recompute (in Rust) to the byte-identical pushed CID.
+    let mut committed = instance.stored_cids();
+    committed.sort();
+    let mut expected = gold_cids.clone();
+    expected.sort();
+    assert_eq!(
+        committed, expected,
+        "the instance must commit exactly the three gold-fixture CIDs"
+    );
+    gold_cids
+        .iter()
+        .for_each(|cid| assert_instance_stores_cid(&instance, cid));
+    assert_eq!(
+        publish_verified_count(&pull.stdout),
+        3,
+        "pull must verify 3 of 3 gold-fixture CIDs; stdout:\n{}",
+        pull.stdout
+    );
+    assert_local_claims_unchanged(&env, &local_before);
 }

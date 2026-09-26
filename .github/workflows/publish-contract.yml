@@ -1,0 +1,67 @@
+# Publish contract test — feature serverless-philosophy-federation (DV-1, ADR-062).
+#
+# The REAL integration test for the `atproto/` Worker: type-check it (strict),
+# audit its npm tree, start it under LOCAL workerd (`wrangler dev`), then drive
+# the REAL `openlore` CLI through `publish init <url>` -> `push` -> `pull` with
+# the 0.0 / 0.5 / 1.0 gold-fixture claims, failing on any CID mismatch. The
+# Rust acceptance suite covers the same contract against the FakeInstance
+# double; this job proves the Worker honours it byte-for-byte.
+#
+# Never deploys: no `wrangler deploy`, no Cloudflare account, no API token —
+# deployment is a user-run step against the user's OWN account.
+name: Publish contract test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "atproto/**"
+      - "crates/publish-domain/**"
+      - "crates/adapter-publish-http/**"
+      - "crates/lexicon/**"
+      - "crates/cli/src/verbs/publish.rs"
+      - ".github/workflows/publish-contract.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  contract:
+    name: wrangler dev round trip (0.0/0.5/1.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: atproto/package-lock.json
+      - name: npm ci
+        working-directory: atproto
+        run: npm ci
+      - name: tsc --noEmit (strict via tsconfig)
+        working-directory: atproto
+        run: npx tsc --noEmit
+      - name: npm audit --audit-level=high
+        working-directory: atproto
+        run: npm audit --audit-level=high
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build openlore
+        run: cargo build --release -p cli --bin openlore
+      - name: wrangler dev -> publish init/push/pull round trip
+        run: bash atproto/scripts/contract-roundtrip.sh target/release/openlore
