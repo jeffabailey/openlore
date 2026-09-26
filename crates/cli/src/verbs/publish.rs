@@ -9,7 +9,9 @@
 //! this module only sequences effects.
 //!
 //! - `init <url>` — probe, then record `<url>` as the publish target.
-//! - `push` — for each own signed claim: stage the verbatim lexicon-JSON blob
+//! - `push` — plan from ONE manifest read (Q-SF-D3: local CIDs minus the
+//!   manifest's CIDs; already-present claims are skipped, never re-probed),
+//!   then for each claim to push: stage the verbatim lexicon-JSON blob
 //!   under its Rust-minted CID, read it back, recompute the CID in Rust, and
 //!   ONLY on a match commit the manifest entry (verify before manifest
 //!   append; manifest append = commit). The local store is never written.
@@ -73,6 +75,29 @@ pub enum PushResult {
     Rejected { cid: Cid, detail: String },
 }
 
+/// The result of `publish push`: one result per claim the plan sent, plus
+/// how many local claims the instance's manifest already listed (skipped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushReport {
+    pub instance_url: String,
+    pub results: Vec<PushResult>,
+    pub skipped: usize,
+}
+
+impl PushReport {
+    /// Claims stored, read back, CID-verified, and committed.
+    pub fn committed_count(&self) -> usize {
+        self.results
+            .iter()
+            .filter(|r| matches!(r, PushResult::Committed { .. }))
+            .count()
+    }
+
+    fn all_committed(&self) -> bool {
+        self.committed_count() == self.results.len()
+    }
+}
+
 /// The result of `publish pull`: one verdict per manifest entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullReport {
@@ -127,16 +152,26 @@ fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let instance_url = resolve_target(wiring)?;
     let instance = wiring::publish_port_for(&instance_url);
     wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
-    let results = own_signed_claims(wiring)?
+    let manifest = instance
+        .fetch_manifest()
+        .with_context(|| format!("reading the manifest of {instance_url}"))?;
+    let plan = publish_domain::plan_push(
+        &own_claim_cids(wiring)?,
+        &publish_domain::manifest_cids(&manifest),
+    );
+    let results = plan
+        .to_push
         .iter()
-        .map(|signed| push_one(instance.as_ref(), signed))
+        .map(|cid| push_one(instance.as_ref(), &own_signed_claim(wiring, cid)?))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let all_committed = results
-        .iter()
-        .all(|r| matches!(r, PushResult::Committed { .. }));
+    let report = PushReport {
+        instance_url,
+        results,
+        skipped: plan.skipped.len(),
+    };
     Ok(PublishOutcome {
-        exit_code: if all_committed { 0 } else { 1 },
-        stdout: render_publish_push(&instance_url, &results),
+        exit_code: if report.all_committed() { 0 } else { 1 },
+        stdout: render_publish_push(&report),
     })
 }
 
@@ -147,10 +182,9 @@ fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let manifest = instance
         .fetch_manifest()
         .with_context(|| format!("reading the manifest of {instance_url}"))?;
-    let verdicts = manifest
-        .entries
+    let verdicts = publish_domain::manifest_cids(&manifest)
         .iter()
-        .map(|entry| verify_record(instance.as_ref(), &Cid(entry.cid.clone())))
+        .map(|cid| verify_record(instance.as_ref(), cid))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let report = PullReport {
         instance_url,
@@ -223,8 +257,9 @@ fn verify_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<R
     )
 }
 
-/// Every signed claim in the user's OWN local store (read-only).
-fn own_signed_claims(wiring: &Wiring) -> anyhow::Result<Vec<SignedClaim>> {
+/// The CIDs of every claim in the user's OWN local store, in the store's
+/// stable listing order (read-only port).
+fn own_claim_cids(wiring: &Wiring) -> anyhow::Result<Vec<Cid>> {
     let total = wiring
         .store_read
         .count_claims()
@@ -236,17 +271,17 @@ fn own_signed_claims(wiring: &Wiring) -> anyhow::Result<Vec<SignedClaim>> {
             limit: total as u64,
         })
         .context("listing own claims")?;
-    page.rows
-        .iter()
-        .map(|row| {
-            let cid = Cid(row.cid.clone());
-            wiring
-                .storage
-                .read_signed_claim(&cid)
-                .with_context(|| format!("reading signed claim {}", row.cid))?
-                .ok_or_else(|| anyhow!("signed claim {} is listed but missing", row.cid))
-        })
-        .collect()
+    Ok(page.rows.into_iter().map(|row| Cid(row.cid)).collect())
+}
+
+/// One of the user's own signed claims, read (never written) from its local
+/// artifact.
+fn own_signed_claim(wiring: &Wiring, cid: &Cid) -> anyhow::Result<SignedClaim> {
+    wiring
+        .storage
+        .read_signed_claim(cid)
+        .with_context(|| format!("reading signed claim {}", cid.0))?
+        .ok_or_else(|| anyhow!("signed claim {} is listed but missing", cid.0))
 }
 
 /// The registered target, else the env-seam fallback, else a hint to init.

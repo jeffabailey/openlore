@@ -34,14 +34,55 @@ use support::*;
 ///
 /// @us-sf-003 @driving_port @real-io @j-008 @happy
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-003 bulk push additive + CID-verified)"]
 fn publish_push_sends_only_new_claims_additive_and_cid_verified() {
-    todo!(
-        "DELIVER: Given local_graph_of(42) and a FakeInstance already holding 1 of them; \
-         When `publish push`; Then 41 pushed + 1 skipped, 41/41 CIDs verified, \
-         instance.records.cids grows by 41, and local.claims.row_count is UNCHANGED. \
-         Universe: instance.records.cids (append 41), cli.publish.{{pushed,skipped,verified}}, \
-         local.claims.row_count (unchanged)."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria has 42 signed claims in her local graph, and her instance
+    // already holds 1 of them (a prior push).
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cids = local_graph_of(&env, 42);
+    let already_pushed = local_cids[17].clone();
+    let instance = instance_already_holding(&env, std::slice::from_ref(&already_pushed));
+    let before = capture_push_universe(&env, &instance, "");
+
+    // When she pushes her whole graph.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let after = capture_push_universe(&env, &instance, &push.stdout);
+
+    // Then 41 are pushed, 1 skipped, 41/41 CID-verified; the instance's record
+    // set grows by exactly the 41 new CIDs (it now holds all 42); her local
+    // store's row count is unchanged (implicit-unchanged slot).
+    let mut all_local = local_cids.clone();
+    all_local.sort();
+    let expected = Delta::new()
+        .with_slot("instance.records.cids", set_to(format!("{all_local:?}")))
+        .with_slot("cli.publish.pushed", set_to("41".to_string()))
+        .with_slot("cli.publish.skipped", set_to("1".to_string()))
+        .with_slot("cli.publish.verified", set_to("41/41".to_string()));
+    assert_state_delta(&before, &after, &push_universe(), &expected);
+
+    // And each newly pushed record recomputes (in Rust) to its local CID.
+    for cid in local_cids.iter().filter(|cid| **cid != already_pushed) {
+        assert_instance_stores_cid(&instance, cid);
+    }
+
+    // And the plan came from the manifest: the already-present claim was never
+    // probed, re-read, or re-sent record-by-record.
+    let touched_skipped: Vec<String> = instance
+        .recorded_requests()
+        .iter()
+        .filter(|r| r.path == format!("/records/{already_pushed}"))
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert!(
+        touched_skipped.is_empty(),
+        "the already-present claim must be skipped from the manifest diff, never probed; \
+         got {touched_skipped:?}"
     );
 }
 
@@ -87,12 +128,31 @@ fn publish_push_resumes_after_interruption_without_duplicates() {
 ///
 /// @us-sf-003 @j-008 @guardrail
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-003 push never mutates local store)"]
 fn publish_push_never_mutates_the_local_store() {
-    todo!(
-        "DELIVER: Given local_graph_of(N); capture local.claims universe BEFORE; \
-         When `publish push`; Then local.claims.{{row_count, cids, bytes}} are ALL UNCHANGED \
-         (additive-only, D-6)."
+    use support::state_delta::{assert_state_delta, Delta};
+
+    // Given Maria's local graph of 5 signed claims and her empty instance.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    local_graph_of(&env, 5);
+    let instance = FakeInstance::fresh();
+    let before = capture_local_claims_universe(&env);
+
+    // When she pushes her whole graph.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let after = capture_local_claims_universe(&env);
+
+    // Then her local store is UNCHANGED in every slot — row count, CID set,
+    // and every byte on disk (additive-only, D-6): the empty delta.
+    assert_state_delta(&before, &after, &local_claims_universe(), &Delta::new());
+    assert_eq!(
+        instance.stored_cids().len(),
+        5,
+        "the push itself must have happened (all 5 claims on the instance)"
     );
 }
 

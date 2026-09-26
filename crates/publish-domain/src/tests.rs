@@ -5,6 +5,7 @@ use super::*;
 use claim_domain::proptest_strategies::arb_unsigned_claim;
 use claim_domain::{Confidence, SignatureBlock, UnsignedClaim};
 use proptest::prelude::*;
+use std::collections::BTreeSet;
 
 /// Confidence values biased toward the f16-representable gold values
 /// (`0.0`/`0.5`/`1.0`) that a re-encoding transport would corrupt (SPIKE-00).
@@ -114,6 +115,101 @@ fn carries_the_marker(status: u16, body: &[u8]) -> bool {
         && serde_json::from_slice::<serde_json::Value>(body)
             .map(|json| is_well_formed_marker(&json))
             .unwrap_or(false)
+}
+
+/// A push-plan scenario: distinct local CIDs (in local order) and the
+/// instance's manifest CIDs — some of the local ones (a prior push) plus
+/// records the local store does not hold (pushed from elsewhere).
+fn arb_local_and_remote() -> impl Strategy<Value = (Vec<Cid>, Vec<Cid>)> {
+    (
+        prop::collection::btree_set("bafy[a-z2-7]{6}", 0..40),
+        prop::collection::btree_set("bafz[a-z2-7]{6}", 0..8),
+        any::<u64>(),
+    )
+        .prop_flat_map(|(local, foreign, shuffle_seed)| {
+            let local: Vec<String> = local.into_iter().collect();
+            let len = local.len();
+            (
+                Just(local),
+                prop::collection::vec(any::<bool>(), len),
+                Just(foreign),
+                Just(shuffle_seed),
+            )
+        })
+        .prop_map(|(local, on_remote, foreign, shuffle_seed)| {
+            let remote = local
+                .iter()
+                .zip(&on_remote)
+                .filter(|(_, on)| **on)
+                .map(|(cid, _)| cid.clone())
+                .chain(foreign)
+                .collect::<Vec<_>>();
+            let rotate = if remote.is_empty() {
+                0
+            } else {
+                (shuffle_seed as usize) % remote.len()
+            };
+            let mut remote = remote;
+            remote.rotate_left(rotate);
+            (
+                local.into_iter().map(Cid).collect(),
+                remote.into_iter().map(Cid).collect(),
+            )
+        })
+}
+
+fn cid_set(cids: &[Cid]) -> BTreeSet<String> {
+    cids.iter().map(|cid| cid.0.clone()).collect()
+}
+
+proptest! {
+    /// Q-SF-D3 partition: every local claim is either pushed or skipped
+    /// (never lost, never both); nothing already on the instance is re-sent;
+    /// only claims the instance already lists are skipped.
+    #[test]
+    fn the_push_plan_partitions_local_into_missing_and_already_present(
+        (local, remote) in arb_local_and_remote(),
+    ) {
+        let plan = plan_push(&local, &remote);
+        let (to_push, skipped, remote) =
+            (cid_set(&plan.to_push), cid_set(&plan.skipped), cid_set(&remote));
+        prop_assert_eq!(to_push.union(&skipped).cloned().collect::<BTreeSet<_>>(), cid_set(&local));
+        prop_assert!(to_push.is_disjoint(&skipped));
+        prop_assert!(to_push.is_disjoint(&remote));
+        prop_assert!(skipped.is_subset(&remote));
+        prop_assert_eq!(plan.to_push.len() + plan.skipped.len(), local.len());
+    }
+
+    /// Deterministic + stable: the plan keeps local order in both halves and
+    /// does not depend on the order the manifest lists its records in.
+    #[test]
+    fn the_push_plan_keeps_local_order_whatever_the_manifest_order(
+        (local, remote) in arb_local_and_remote(),
+    ) {
+        let plan = plan_push(&local, &remote);
+        let mut reversed_remote = remote.clone();
+        reversed_remote.reverse();
+        prop_assert_eq!(&plan_push(&local, &reversed_remote), &plan);
+        let local_order = |half: &[Cid]| {
+            local.iter().filter(|cid| half.contains(cid)).cloned().collect::<Vec<_>>()
+        };
+        prop_assert_eq!(&plan.to_push, &local_order(&plan.to_push));
+        prop_assert_eq!(&plan.skipped, &local_order(&plan.skipped));
+    }
+
+    /// Idempotence (PP-2/PP-3): once the plan has been applied (the instance
+    /// now also lists every pushed CID), re-planning pushes nothing and skips
+    /// every local claim.
+    #[test]
+    fn re_planning_after_applying_the_plan_pushes_nothing(
+        (local, remote) in arb_local_and_remote(),
+    ) {
+        let plan = plan_push(&local, &remote);
+        let applied: Vec<Cid> = remote.iter().chain(&plan.to_push).cloned().collect();
+        let replan = plan_push(&local, &applied);
+        prop_assert!(replan.to_push.is_empty(), "re-plan still pushes {:?}", replan.to_push);
+        prop_assert_eq!(replan.skipped, local);
+    }
 }
 
 proptest! {

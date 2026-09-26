@@ -25,9 +25,10 @@
 //! `unreachable` (nothing listens at the URL) and `not_an_openlore_instance`
 //! (reachable, but an ordinary web site whose `/manifest` is HTML with no
 //! openlore marker) — step 01-03, Q-SF-D5; `with_cid_mismatch` (stored bytes
-//! drift so the Rust recompute differs) — step 01-05. The remaining
-//! adversarial postures (`requiring_write_token`, `with_records`) land with
-//! the scenarios that need them.
+//! drift so the Rust recompute differs) — step 01-05; `with_records` (an
+//! instance that already holds committed records — a prior push) — step
+//! 02-01. The remaining adversarial posture (`requiring_write_token`) lands
+//! with the scenario that needs it.
 //!
 //! Every request that crosses the seam — in any posture — is appended to a
 //! request log ([`FakeInstance::recorded_requests`]): method, path, headers,
@@ -95,6 +96,16 @@ impl Store {
             self.manifest.iter().map(|(_, e)| e.clone()).collect();
         serde_json::json!({ "openlore": openlore_marker(), "records": records })
     }
+}
+
+/// A record an instance already holds before the scenario runs: its blob
+/// under `cid` and the committed manifest display entry (JSON), exactly as a
+/// prior committing `PUT /records/:cid` would have left them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreloadedRecord {
+    pub cid: String,
+    pub bytes: Vec<u8>,
+    pub manifest_entry: serde_json::Value,
 }
 
 /// How the double answers — the posture a scenario puts it in.
@@ -187,6 +198,20 @@ impl FakeInstance {
     /// anything is committed is entirely the CLI's decision.
     pub fn with_cid_mismatch() -> Self {
         Self::start(Store::default(), Posture::CidMismatch)
+    }
+
+    /// A reachable, well-behaved openlore instance that ALREADY holds
+    /// `records` (blob + committed manifest entry each, in the given order) —
+    /// the state a prior push leaves behind (PP-1..PP-3).
+    pub fn with_records(records: impl IntoIterator<Item = PreloadedRecord>) -> Self {
+        let preloaded = records
+            .into_iter()
+            .fold(Store::default(), |mut store, record| {
+                store.put_blob(&record.cid, record.bytes);
+                store.commit_entry(&record.cid, record.manifest_entry);
+                store
+            });
+        Self::start(preloaded, Posture::OpenloreInstance)
     }
 
     /// Base URL of the running double (e.g. `http://127.0.0.1:54321`).

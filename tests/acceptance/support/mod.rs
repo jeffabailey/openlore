@@ -18360,3 +18360,191 @@ pub fn assert_status_reports(status: &CliOutcome, instance_url: &str, reachabili
 pub fn gold_claims_confidence_0_half_1() -> [f64; 3] {
     [0.0, 0.5, 1.0]
 }
+
+// -----------------------------------------------------------------------------
+// serverless-philosophy-federation slice-02 — bulk `publish push` (US-SF-003)
+// -----------------------------------------------------------------------------
+
+pub use openlore_test_support::PreloadedRecord;
+
+/// Given: the user's OWN local graph of `count` distinct signed claims, written
+/// through the PRODUCTION storage adapter (`adapter-duckdb`'s `StoragePort`,
+/// the same write path `claim add` ends in) and signed by the env identity via
+/// the real `claim-domain` pipeline (canonicalize → CID → sign). In-process so
+/// a 42-claim graph costs one DB open, not 42 `claim add` subprocesses.
+/// Returns the Rust-minted CIDs in seeding order. A precondition only — never
+/// an expected end-state.
+pub fn local_graph_of(env: &TestEnv, count: usize) -> Vec<String> {
+    use ports::StoragePort;
+
+    let seed: [u8; 32] = (0..32)
+        .map(|i| u8::from_str_radix(&env.identity.seed_hex[2 * i..2 * i + 2], 16).expect("seed"))
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("32-byte seed");
+    let signing_key = claim_domain::SigningKey(
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+            .to_bytes()
+            .to_vec(),
+    );
+    let key_id = format!("{}#org.openlore.application", env.identity.author_did());
+    let storage = adapter_duckdb::DuckDbStorageAdapter::open(&env.duckdb_path())
+        .unwrap_or_else(|err| panic!("local_graph_of: open the local store: {err:?}"));
+    (0..count)
+        .map(|i| {
+            let unsigned = claim_domain::UnsignedClaim {
+                subject: format!("github:maria/project-{i:03}"),
+                predicate: "embodiesPhilosophy".to_string(),
+                object: "org.openlore.philosophy.local-first".to_string(),
+                evidence: vec![format!("https://github.com/maria/project-{i:03}")],
+                confidence: serde_json::from_value(serde_json::json!(0.86)).expect("confidence"),
+                author_did: claim_domain::Did(key_id.clone()),
+                composed_at: "2026-05-25T12:00:00Z".to_string(),
+                references: Vec::new(),
+                reason: None,
+            };
+            let canonical = claim_domain::canonicalize(&unsigned).expect("canonicalize");
+            let cid = claim_domain::compute_cid(&canonical);
+            let mut signature = claim_domain::sign(&cid, &signing_key).expect("sign");
+            signature.verification_method = key_id.clone();
+            let signed = claim_domain::SignedClaim {
+                unsigned,
+                signature,
+            };
+            storage
+                .write_signed_claim(&signed)
+                .unwrap_or_else(|err| panic!("local_graph_of: store claim {i}: {err:?}"));
+            cid.0
+        })
+        .collect()
+}
+
+/// Given: a FakeInstance that ALREADY holds `cids` — each one's verbatim
+/// lexicon-JSON record blob + committed display entry, built from the user's
+/// own local signed claim by the SAME pure `publish-domain` functions a real
+/// push uses (so the preloaded state is exactly what a prior push left).
+pub fn instance_already_holding(env: &TestEnv, cids: &[String]) -> FakeInstance {
+    let records: Vec<PreloadedRecord> = cids
+        .iter()
+        .map(|cid| {
+            let signed = local_signed_claim(env, cid);
+            PreloadedRecord {
+                cid: cid.clone(),
+                bytes: publish_domain::record_bytes_of(&signed).0,
+                manifest_entry: serde_json::to_value(publish_domain::display_projection(&signed))
+                    .expect("display entry serializes"),
+            }
+        })
+        .collect();
+    FakeInstance::with_records(records)
+}
+
+/// Read one of the user's own signed claims from its on-disk artifact (the
+/// path the local `claims` row points at). Test-support raw SQL only.
+fn local_signed_claim(env: &TestEnv, cid: &str) -> claim_domain::SignedClaim {
+    let conn = duckdb::Connection::open(env.duckdb_path())
+        .unwrap_or_else(|err| panic!("open DuckDB for claim artifact: {err}"));
+    let artifact: String = conn
+        .query_row(
+            "SELECT artifact_path FROM claims WHERE cid = ?",
+            duckdb::params![cid],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|err| panic!("no local claim {cid}: {err}"));
+    let bytes = std::fs::read(&artifact).unwrap_or_else(|err| panic!("read {artifact}: {err}"));
+    serde_json::from_slice(&bytes).unwrap_or_else(|err| panic!("parse {artifact}: {err}"))
+}
+
+/// The counts `publish push` reports on its `pushed: P, skipped: S, verified:
+/// V/T` summary line (`cli.publish.{pushed,skipped,verified}`), as strings
+/// (`verified` keeps its `V/T` form). An absent line (no push has run) is
+/// all-zero.
+pub fn publish_push_counts(stdout: &str) -> (String, String, String) {
+    let field = |line: &str, name: &str| -> Option<String> {
+        line.split(',')
+            .find_map(|part| part.trim().strip_prefix(&format!("{name}: ")))
+            .map(str::to_string)
+    };
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("pushed: "))
+        .and_then(|line| {
+            Some((
+                field(line, "pushed")?,
+                field(line, "skipped")?,
+                field(line, "verified")?,
+            ))
+        })
+        .unwrap_or_else(|| ("0".to_string(), "0".to_string(), "0/0".to_string()))
+}
+
+/// Capture the PP-1 bulk-push universe over PORT-EXPOSED observables only:
+/// the double's committed record set (sorted), the CLI's push report counts,
+/// and the local store's row count.
+pub fn capture_push_universe(
+    env: &TestEnv,
+    instance: &FakeInstance,
+    push_stdout: &str,
+) -> HashMap<String, String> {
+    let (pushed, skipped, verified) = publish_push_counts(push_stdout);
+    let mut instance_cids = instance.stored_cids();
+    instance_cids.sort();
+    HashMap::from([
+        (
+            "instance.records.cids".to_string(),
+            format!("{instance_cids:?}"),
+        ),
+        ("cli.publish.pushed".to_string(), pushed),
+        ("cli.publish.skipped".to_string(), skipped),
+        ("cli.publish.verified".to_string(), verified),
+        (
+            "local.claims.row_count".to_string(),
+            local_claim_cids(env).len().to_string(),
+        ),
+    ])
+}
+
+/// The PP-1 universe slot names (port-exposed).
+pub fn push_universe() -> HashSet<String> {
+    [
+        "instance.records.cids",
+        "cli.publish.pushed",
+        "cli.publish.skipped",
+        "cli.publish.verified",
+        "local.claims.row_count",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// Capture the PP-4 local-claims universe (D-6): the row count, the sorted
+/// CID set, and a fingerprint of every byte under the local data directory
+/// ([`local_store_bytes`] — the DuckDB store + the signed-claim files).
+pub fn capture_local_claims_universe(env: &TestEnv) -> HashMap<String, String> {
+    use std::hash::{Hash, Hasher};
+    let cids = local_claim_cids(env);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    local_store_bytes(env).hash(&mut hasher);
+    HashMap::from([
+        ("local.claims.row_count".to_string(), cids.len().to_string()),
+        ("local.claims.cids".to_string(), format!("{cids:?}")),
+        (
+            "local.claims.bytes".to_string(),
+            format!("{:016x}", hasher.finish()),
+        ),
+    ])
+}
+
+/// The PP-4 universe slot names (port-exposed).
+pub fn local_claims_universe() -> HashSet<String> {
+    [
+        "local.claims.row_count",
+        "local.claims.cids",
+        "local.claims.bytes",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}

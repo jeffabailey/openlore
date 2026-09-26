@@ -2,7 +2,7 @@
 
 use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
 
-use crate::verbs::publish::{PullReport, PushResult};
+use crate::verbs::publish::{PullReport, PushReport, PushResult};
 
 /// `publish init` success: the registered instance, the UNCHANGED signing
 /// identity, the derived public card URL, and the ownership confirmation —
@@ -18,16 +18,17 @@ pub fn render_publish_init(instance_url: &str, author_did: &str, card_url: &str)
     )
 }
 
-/// `publish push`: one line per claim + the committed tally.
-pub fn render_publish_push(instance_url: &str, results: &[PushResult]) -> String {
-    let lines: String = results.iter().map(render_push_result).collect();
-    let committed = results
-        .iter()
-        .filter(|r| matches!(r, PushResult::Committed { .. }))
-        .count();
+/// `publish push`: one line per claim sent, the committed tally, and the
+/// `pushed: P, skipped: S, verified: V/T` summary (skipped = already listed
+/// in the instance's manifest, so never sent).
+pub fn render_publish_push(report: &PushReport) -> String {
+    let lines: String = report.results.iter().map(render_push_result).collect();
+    let committed = report.committed_count();
+    let sent = report.results.len();
     format!(
-        "Pushing to {instance_url}\n{lines}{committed}/{} claims pushed and CID-verified\n",
-        results.len()
+        "Pushing to {}\n{lines}{committed}/{sent} claims pushed and CID-verified\n\
+         pushed: {committed}, skipped: {}, verified: {committed}/{sent}\n",
+        report.instance_url, report.skipped
     )
 }
 

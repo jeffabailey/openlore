@@ -17,11 +17,16 @@
 //!    instance returned and compare it with the CID they were pushed under;
 //!    [`judge_readback`] — the push-side verify-before-commit gate (CID
 //!    recompute AND verbatim bytes).
+//! 5. [`plan_push`] — Q-SF-D3: the bulk-push plan, a pure diff of the local
+//!    CID set against the instance manifest's CID set (no resume marker; the
+//!    manifest IS the commit log).
 //!
 //! NO I/O, NO async, NO clock. The instance never computes a CID; this crate
 //! never talks to the instance.
 
 #![forbid(unsafe_code)]
+
+use std::collections::HashSet;
 
 use claim_domain::{Cid, SignedClaim};
 use ports::{
@@ -252,6 +257,38 @@ fn recompute_cid(returned: &RecordBytes) -> Result<Cid, UnreadableRecord> {
     lexicon::decode_signed_claim(&wire)
         .map(|signed| signed.signature.signed_cid)
         .map_err(|err| unreadable(format!("record is not a signed lexicon claim: {err}")))
+}
+
+// -----------------------------------------------------------------------------
+// 5. Bulk push plan (Q-SF-D3)
+// -----------------------------------------------------------------------------
+
+/// What a bulk `publish push` will do: the local claims to send, and those
+/// the instance's manifest already lists (skipped). Both keep local order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushPlan {
+    pub to_push: Vec<Cid>,
+    pub skipped: Vec<Cid>,
+}
+
+/// Diff the user's local CIDs against the CIDs the instance's manifest
+/// already lists (Q-SF-D3): push only what is missing, skip what is there.
+pub fn plan_push(local: &[Cid], remote: &[Cid]) -> PushPlan {
+    let already_present: HashSet<&Cid> = remote.iter().collect();
+    let (skipped, to_push) = local
+        .iter()
+        .cloned()
+        .partition(|cid| already_present.contains(cid));
+    PushPlan { to_push, skipped }
+}
+
+/// The CIDs an instance's manifest lists — its committed record set.
+pub fn manifest_cids(manifest: &InstanceManifest) -> Vec<Cid> {
+    manifest
+        .entries
+        .iter()
+        .map(|entry| Cid(entry.cid.clone()))
+        .collect()
 }
 
 #[cfg(test)]
