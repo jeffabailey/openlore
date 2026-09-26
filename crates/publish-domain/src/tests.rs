@@ -97,6 +97,25 @@ fn is_well_formed_marker(manifest: &serde_json::Value) -> bool {
             .is_some()
 }
 
+/// A `/manifest` response body: arbitrary JSON (serialized), arbitrary
+/// bytes (usually not JSON), or an ordinary HTML page.
+fn arb_manifest_body() -> impl Strategy<Value = Vec<u8>> {
+    prop_oneof![
+        arb_json().prop_map(|json| json.to_string().into_bytes()),
+        prop::collection::vec(any::<u8>(), 0..64),
+        Just(b"<!doctype html><title>my blog</title><p>hello</p>".to_vec()),
+    ]
+}
+
+/// Does this response carry the marker a registration requires (2xx + JSON +
+/// well-formed openlore envelope)?
+fn carries_the_marker(status: u16, body: &[u8]) -> bool {
+    (200..300).contains(&status)
+        && serde_json::from_slice::<serde_json::Value>(body)
+            .map(|json| is_well_formed_marker(&json))
+            .unwrap_or(false)
+}
+
 proptest! {
     /// Q-SF-D5: classification is TOTAL and marker-driven — any JSON is
     /// classified without panicking; it is an opaque instance exactly when it
@@ -114,6 +133,65 @@ proptest! {
             classify_instance(&with_marker(manifest, contract_version)),
             InstanceKind::OpaqueInstance { contract_version }
         );
+    }
+
+    /// Q-SF-D5 at the probe boundary: a response that is not a 2xx JSON body
+    /// carrying the openlore envelope (HTML, non-JSON bytes, marker-less JSON,
+    /// any non-2xx status) NEVER classifies as an openlore instance — it is
+    /// refused as not-an-openlore-instance, never as unreachable.
+    #[test]
+    fn a_response_without_the_marker_is_never_an_openlore_instance(
+        status in 100_u16..600,
+        body in arb_manifest_body(),
+    ) {
+        prop_assume!(!carries_the_marker(status, &body));
+        let classified =
+            classify_manifest_observation(&ManifestObservation::Responded { status, body });
+        prop_assert!(
+            matches!(classified, Err(InstanceError::NotAnOpenloreInstance { .. })),
+            "expected NotAnOpenloreInstance, got {:?}", classified
+        );
+    }
+
+    /// Refusal ordering: an observation with no HTTP response is ALWAYS
+    /// unreachable (checked before any marker), while a 2xx marked manifest
+    /// is ALWAYS an instance, whatever else it carries.
+    #[test]
+    fn unreachable_precedes_the_marker_check_and_a_marked_manifest_registers(
+        detail in "[a-z ]{0,24}",
+        status in 200_u16..300,
+        manifest in arb_json(),
+        contract_version in any::<u64>(),
+    ) {
+        let url = "https://openlore.maria.workers.dev".to_string();
+        let unreachable = classify_manifest_observation(&ManifestObservation::Unreachable {
+            url: url.clone(),
+            detail: detail.clone(),
+        });
+        prop_assert_eq!(unreachable, Err(InstanceError::Unreachable { url, detail }));
+
+        let mut marked = with_marker(manifest, contract_version);
+        if let Some(object) = marked.as_object_mut() {
+            object.insert("records".to_string(), serde_json::json!([]));
+        }
+        let body = marked.to_string().into_bytes();
+        let classified =
+            classify_manifest_observation(&ManifestObservation::Responded { status, body });
+        prop_assert_eq!(
+            classified.map(|manifest| manifest.contract_version),
+            Ok(contract_version)
+        );
+    }
+
+    /// The public card lives at the instance root: `card_url` is the
+    /// instance URL with exactly one trailing `/`, however many it was given.
+    #[test]
+    fn card_url_is_the_instance_root_with_one_trailing_slash(
+        base in "https?://[a-z0-9.-]{1,24}(:[0-9]{2,5})?",
+        trailing_slashes in 0_usize..3,
+    ) {
+        let instance_url = format!("{base}{}", "/".repeat(trailing_slashes));
+        prop_assert_eq!(card_url(&instance_url), format!("{base}/"));
     }
 
     /// The verdict is `Verified` iff the pushed CID equals the recomputed CID.

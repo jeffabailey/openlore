@@ -4,12 +4,17 @@ use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
 
 use crate::verbs::publish::{PullReport, PushResult};
 
-/// `publish init` success: the registered instance + the UNCHANGED signing
-/// identity (the instance never becomes a signing authority).
-pub fn render_publish_init(instance_url: &str, author_did: &str) -> String {
+/// `publish init` success: the registered instance, the UNCHANGED signing
+/// identity, the derived public card URL, and the ownership confirmation —
+/// the instance is the user's own, with no central authority in the trust
+/// path (D-1/D-4) and never a signing authority (D-6/D-7).
+pub fn render_publish_init(instance_url: &str, author_did: &str, card_url: &str) -> String {
     format!(
         "Registered publish target {instance_url}\n  \
-         author: {author_did} (unchanged — signing stays local)\n"
+         instance_url: {instance_url}\n  \
+         author_did: {author_did} (unchanged — signing stays local)\n  \
+         card_url: {card_url}\n\
+         This instance is yours: no central authority in the trust path.\n"
     )
 }
 

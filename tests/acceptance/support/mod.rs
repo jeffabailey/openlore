@@ -18007,6 +18007,57 @@ pub fn run_openlore_publish(env: &TestEnv, args: &[&str], instance: &FakeInstanc
     }
 }
 
+/// Port-exposed observable `config.publish_target`: the instance URL recorded
+/// by `publish init` in `<config>/publish.toml`, or `None` when no target has
+/// been registered. Reads the persisted config only — never the
+/// `OPENLORE_PUBLISH_ENDPOINT` fallback seam, which is not a registration.
+pub fn registered_publish_target(env: &TestEnv) -> Option<String> {
+    let path = env
+        .home
+        .join(".config")
+        .join("openlore")
+        .join("publish.toml");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let config: toml::Value = toml::from_str(&text)
+        .unwrap_or_else(|err| panic!("{} is not valid TOML: {err}", path.display()));
+    config
+        .get("instance_url")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Universe-bound: a refused `publish init` names the refusal in plain words
+/// (`message`) AND emits the structured `health.startup.refused` event for the
+/// `publish` adapter carrying `reason_code` — and never claims a registration.
+pub fn assert_init_refused_with(init: &CliOutcome, message: &str, reason_code: &str) {
+    assert!(
+        init.stderr.contains(message),
+        "refused `publish init` must say {message:?} on stderr;\n--- stderr ---\n{}",
+        init.stderr
+    );
+    let refusal: serde_json::Value = init
+        .stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "health.startup.refused")
+        .unwrap_or_else(|| {
+            panic!(
+                "refused `publish init` must emit health.startup.refused;\n--- stderr ---\n{}",
+                init.stderr
+            )
+        });
+    assert_eq!(refusal["adapter"], "publish", "refusal adapter: {refusal}");
+    assert_eq!(
+        refusal["structured"]["reason_code"], reason_code,
+        "refusal reason_code: {refusal}"
+    );
+    assert!(
+        !init.stdout.contains("Registered publish target"),
+        "a refused `publish init` must never report a registration;\n--- stdout ---\n{}",
+        init.stdout
+    );
+}
+
 /// Author ONE signed claim into the local store through the REAL `claim add`
 /// verb (sign confirmed, publish-to-PDS declined) and return its Rust-minted
 /// CID. This is a Given (precondition), never the expected end-state.

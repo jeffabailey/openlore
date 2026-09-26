@@ -84,7 +84,7 @@ pub const REASON_NOT_AN_OPENLORE_INSTANCE: &str = "publish.not_an_openlore_insta
 /// a value, never a panic.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum InstanceError {
-    #[error("instance unreachable at {url}: {detail}")]
+    #[error("cannot reach instance at {url} (instance unreachable): {detail}")]
     Unreachable { url: String, detail: String },
     #[error("not an openlore instance: {detail}")]
     NotAnOpenloreInstance { detail: String },

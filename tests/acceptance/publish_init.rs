@@ -38,15 +38,54 @@ use support::*;
 ///
 /// @us-sf-001 @driving_port @real-io @j-007 @happy
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-001 register-own-instance happy path)"]
 fn publish_init_registers_reachable_instance_and_prints_owned_identity() {
-    todo!(
-        "DELIVER: Given a reachable FakeInstance::fresh() with the openlore marker manifest; \
-         When `openlore publish init <url>`; Then the target is recorded, stdout names \
-         instance_url + the unchanged author_did + the derived card_url + the 'no central \
-         authority' confirmation, and local.claims.row_count is UNCHANGED. \
-         Universe: config.publish_target, cli.stdout.identity_block, local.claims.row_count."
+    // Given Maria's own reachable instance carrying the openlore marker, and a
+    // local store holding one signed claim.
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::fresh();
+    seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+    assert_eq!(
+        registered_publish_target(&env),
+        None,
+        "precondition: no publish target registered yet"
     );
+
+    // When she registers it.
+    let url = instance.endpoint_url().to_string();
+    let init = run_openlore_publish(&env, &["init", &url], &instance);
+
+    // Then the command succeeds and the target is recorded.
+    assert_eq!(
+        init.status, 0,
+        "`publish init` must register a reachable openlore instance;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
+    );
+    assert_eq!(
+        registered_publish_target(&env).as_deref(),
+        Some(url.as_str()),
+        "config.publish_target must record the registered instance URL"
+    );
+
+    // And stdout names the instance, the UNCHANGED author DID, the derived
+    // card URL, and confirms there is no central authority in the trust path.
+    let card_url = format!("{url}/");
+    for expected in [
+        format!("instance_url: {url}"),
+        format!("author_did: {}", env.identity.author_did()),
+        format!("card_url: {card_url}"),
+        "no central authority".to_string(),
+    ] {
+        assert!(
+            init.stdout.contains(&expected),
+            "`publish init` stdout must contain {expected:?};\n--- stdout ---\n{}",
+            init.stdout
+        );
+    }
+
+    // And the local store is untouched (D-6/D-7).
+    assert_local_claims_unchanged(&env, &local_before);
 }
 
 // =============================================================================
@@ -60,13 +99,37 @@ fn publish_init_registers_reachable_instance_and_prints_owned_identity() {
 ///
 /// @us-sf-001 @error @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-001 unreachable URL not registered)"]
 fn publish_init_refuses_to_register_an_unreachable_instance_url() {
-    todo!(
-        "DELIVER: Given a FakeInstance::unreachable() at the given URL; When `publish init`; \
-         Then exit non-zero with an 'cannot reach instance' message and config.publish_target \
-         stays UNSET (nothing recorded)."
+    // Given no instance is reachable at the URL, and a local store holding
+    // one signed claim.
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::unreachable();
+    seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+
+    // When Björn tries to register it.
+    let init = run_openlore_publish(&env, &["init", instance.endpoint_url()], &instance);
+
+    // Then the CLI refuses with a greppable 'cannot reach instance' message.
+    assert_ne!(
+        init.status, 0,
+        "`publish init` must refuse an unreachable URL;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
     );
+    assert_init_refused_with(
+        &init,
+        "cannot reach instance",
+        "publish.instance_unreachable",
+    );
+
+    // And NOTHING was registered (offline-first is not speculative-register),
+    // and the local store is untouched.
+    assert_eq!(
+        registered_publish_target(&env),
+        None,
+        "config.publish_target must stay UNSET after an unreachable-URL refusal"
+    );
+    assert_local_claims_unchanged(&env, &local_before);
 }
 
 /// PI-3: Registering never makes the instance a signing authority. Maria's
@@ -94,14 +157,42 @@ fn publish_init_never_changes_the_signing_identity_or_local_store() {
 ///
 /// @us-sf-001 @error @q-sf-d5 @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-001 Q-SF-D5 non-openlore URL refused)"]
 fn publish_init_refuses_a_reachable_url_that_is_not_an_openlore_instance() {
-    todo!(
-        "DELIVER: Given a FakeInstance::not_an_openlore_instance() (reachable, manifest lacks \
-         the openlore marker); When `publish init`; Then exit non-zero with a 'not an openlore \
-         instance' message and config.publish_target stays UNSET. Binds Q-SF-D5: detection \
-         marker = the openlore discriminator in GET /manifest."
+    // Given a reachable URL serving an ordinary web page (its /manifest lacks
+    // the openlore marker), and a local store holding one signed claim.
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::not_an_openlore_instance();
+    seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+
+    // When Maria tries to register it.
+    let init = run_openlore_publish(&env, &["init", instance.endpoint_url()], &instance);
+
+    // Then the CLI refuses with a greppable 'not an openlore instance' message
+    // (distinct from the unreachable refusal).
+    assert_ne!(
+        init.status, 0,
+        "`publish init` must refuse a non-openlore URL;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
     );
+    assert_init_refused_with(
+        &init,
+        "not an openlore instance",
+        "publish.not_an_openlore_instance",
+    );
+    assert!(
+        !init.stderr.contains("cannot reach instance"),
+        "a reachable non-openlore URL must not be reported as unreachable;\n--- stderr ---\n{}",
+        init.stderr
+    );
+
+    // And NOTHING was registered, and the local store is untouched.
+    assert_eq!(
+        registered_publish_target(&env),
+        None,
+        "config.publish_target must stay UNSET after a not-an-openlore-instance refusal"
+    );
+    assert_local_claims_unchanged(&env, &local_before);
 }
 
 // =============================================================================

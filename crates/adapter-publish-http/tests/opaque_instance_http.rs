@@ -142,6 +142,25 @@ fn probe_refuses_a_reachable_url_whose_manifest_lacks_the_openlore_marker() {
 }
 
 #[test]
+fn probe_refuses_an_ordinary_html_site_as_not_an_openlore_instance_not_unreachable() {
+    let (base_url, _seen) = serve(Box::new(|_req| {
+        (
+            200,
+            b"<!doctype html><title>my blog</title><p>hello</p>".to_vec(),
+        )
+    }));
+    let adapter = HttpPublishAdapter::for_instance(&base_url);
+
+    let (reason, structured) = refusal_reason(adapter.probe()).expect("probe must refuse");
+
+    assert_eq!(reason, ProbeRefusalReason::PublishNotAnOpenloreInstance);
+    assert_eq!(
+        structured["reason_code"],
+        "publish.not_an_openlore_instance"
+    );
+}
+
+#[test]
 fn stage_and_commit_send_the_record_bytes_verbatim_and_only_the_commit_carries_the_projection() {
     let (base_url, seen) = serve(Box::new(|req| match req.path.as_str() {
         "/manifest" => (200, marked_manifest()),

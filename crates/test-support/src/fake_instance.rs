@@ -21,10 +21,12 @@
 //! the server (RAII per-scenario isolation — same shape as the acceptance
 //! `FakePds` wrapper).
 //!
-//! Postures: slice-01 step 01-01 ships `fresh` (an empty, well-behaved
-//! instance). The adversarial postures (`unreachable`,
-//! `not_an_openlore_instance`, `with_cid_mismatch`, `requiring_write_token`,
-//! `with_records`) land with the scenarios that need them.
+//! Postures: `fresh` (an empty, well-behaved instance — step 01-01);
+//! `unreachable` (nothing listens at the URL) and `not_an_openlore_instance`
+//! (reachable, but an ordinary web site whose `/manifest` is HTML with no
+//! openlore marker) — step 01-03, Q-SF-D5. The remaining adversarial
+//! postures (`with_cid_mismatch`, `requiring_write_token`, `with_records`)
+//! land with the scenarios that need them.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -68,19 +70,51 @@ impl Store {
     }
 }
 
+/// How the double answers — the posture a scenario puts it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Posture {
+    /// A well-behaved openlore opaque instance (the four ADR-062 routes).
+    OpenloreInstance,
+    /// A reachable ordinary web site: every route (incl. `/manifest`) is an
+    /// HTML page with no openlore marker.
+    OrdinaryWebSite,
+}
+
 /// Opaque content-addressed instance double. See module docs.
 pub struct FakeInstance {
     store: Arc<Mutex<Store>>,
     base_url: String,
-    server: tokio::task::JoinHandle<()>,
-    runtime: Option<tokio::runtime::Runtime>,
+    /// The running server + its runtime; `None` for the `unreachable`
+    /// posture, where nothing listens at `base_url`.
+    server: Option<(tokio::task::JoinHandle<()>, tokio::runtime::Runtime)>,
 }
 
 impl FakeInstance {
     /// A reachable, empty, well-behaved openlore instance: its `/manifest`
     /// carries the openlore marker and lists no records yet.
     pub fn fresh() -> Self {
-        Self::start(Store::default())
+        Self::start(Store::default(), Posture::OpenloreInstance)
+    }
+
+    /// No instance is reachable at the URL: a loopback port that was bound
+    /// then released, so connections are refused (PI-2).
+    pub fn unreachable() -> Self {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("FakeInstance: reserve a loopback port")
+            .port();
+        Self {
+            store: Arc::new(Mutex::new(Store::default())),
+            base_url: format!("http://127.0.0.1:{port}"),
+            server: None,
+        }
+    }
+
+    /// A reachable URL that is NOT an openlore instance: an ordinary web
+    /// site whose `GET /manifest` is an HTML page lacking the openlore
+    /// marker envelope (PI-4, Q-SF-D5).
+    pub fn not_an_openlore_instance() -> Self {
+        Self::start(Store::default(), Posture::OrdinaryWebSite)
     }
 
     /// Base URL of the running double (e.g. `http://127.0.0.1:54321`).
@@ -114,7 +148,7 @@ impl FakeInstance {
             .expect("FakeInstance store mutex poisoned")
     }
 
-    fn start(initial: Store) -> Self {
+    fn start(initial: Store, posture: Posture) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_io()
@@ -130,23 +164,22 @@ impl FakeInstance {
             "http://{}",
             listener.local_addr().expect("FakeInstance: local_addr")
         );
-        let server = runtime.spawn(serve(listener, Arc::clone(&store)));
+        let server = runtime.spawn(serve(listener, Arc::clone(&store), posture));
         Self {
             store,
             base_url,
-            server,
-            runtime: Some(runtime),
+            server: Some((server, runtime)),
         }
     }
 }
 
 impl Drop for FakeInstance {
     fn drop(&mut self) {
-        self.server.abort();
         // Shut the runtime down on a background thread so a worker parked on
         // `accept()` can never block the test thread (the macOS shutdown
         // hazard the acceptance `FakePds` wrapper documents).
-        if let Some(runtime) = self.runtime.take() {
+        if let Some((server, runtime)) = self.server.take() {
+            server.abort();
             let _ = std::thread::Builder::new()
                 .name("fake-instance-shutdown".to_string())
                 .spawn(move || drop(runtime));
@@ -161,7 +194,7 @@ impl Drop for FakeInstance {
 type HttpRequest = hyper::Request<hyper::body::Incoming>;
 type HttpResponse = hyper::Response<http_body_util::Full<bytes::Bytes>>;
 
-async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>) {
+async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, posture: Posture) {
     use hyper::server::conn::http1;
     use hyper_util::rt::TokioIo;
 
@@ -171,7 +204,15 @@ async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>) {
         };
         let store = Arc::clone(&store);
         tokio::spawn(async move {
-            let svc = hyper::service::service_fn(move |req| route(Arc::clone(&store), req));
+            let svc = hyper::service::service_fn(move |req| {
+                let store = Arc::clone(&store);
+                async move {
+                    match posture {
+                        Posture::OpenloreInstance => route(store, req).await,
+                        Posture::OrdinaryWebSite => Ok(ordinary_web_page()),
+                    }
+                }
+            });
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), svc)
                 .await;
@@ -235,6 +276,16 @@ async fn route(
         _ => respond(404, "text/plain", b"no such route".to_vec()),
     };
     Ok(response)
+}
+
+/// What an ordinary (non-openlore) web site serves on every route: a 200
+/// HTML page with no openlore marker.
+fn ordinary_web_page() -> HttpResponse {
+    respond(
+        200,
+        "text/html; charset=utf-8",
+        b"<!doctype html><title>Maria's blog</title><p>Just an ordinary web site.</p>".to_vec(),
+    )
 }
 
 fn respond(status: u16, content_type: &str, body: Vec<u8>) -> HttpResponse {

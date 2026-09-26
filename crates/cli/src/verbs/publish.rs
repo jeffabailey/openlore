@@ -114,7 +114,11 @@ fn init(wiring: &Wiring, instance_url: &str) -> Result<PublishOutcome, PublishVe
     register_target(wiring, instance_url)?;
     Ok(PublishOutcome {
         exit_code: 0,
-        stdout: render_publish_init(instance_url, &wiring.identity.author_did().0),
+        stdout: render_publish_init(
+            instance_url,
+            &wiring.identity.author_did().0,
+            &publish_domain::card_url(instance_url),
+        ),
     })
 }
 

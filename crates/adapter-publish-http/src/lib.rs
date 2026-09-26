@@ -25,6 +25,7 @@ use ports::{
     InstanceError, InstanceManifest, InstanceReadPort, ManifestEntry, ProbeOutcome,
     ProbeRefusalReason, PublishPort, RecordBytes,
 };
+use publish_domain::ManifestObservation;
 
 /// Request header carrying the manifest v1 display projection (ASCII JSON)
 /// on the committing `PUT /records/:cid`.
@@ -61,6 +62,28 @@ impl HttpPublishAdapter {
         InstanceError::Unreachable {
             url: self.base_url.clone(),
             detail: err.to_string(),
+        }
+    }
+
+    /// One `GET /manifest` attempt, observed as raw facts for the pure
+    /// classifier. A transport failure (incl. a body cut off mid-read) is
+    /// `Unreachable`; any HTTP response is `Responded` with its bytes.
+    fn observe_manifest(&self) -> ManifestObservation {
+        let unreachable = |err: reqwest::Error| ManifestObservation::Unreachable {
+            url: self.base_url.clone(),
+            detail: err.to_string(),
+        };
+        let response = match self.client.get(self.url("/manifest")).send() {
+            Ok(response) => response,
+            Err(err) => return unreachable(err),
+        };
+        let status = response.status().as_u16();
+        match response.bytes() {
+            Ok(body) => ManifestObservation::Responded {
+                status,
+                body: body.to_vec(),
+            },
+            Err(err) => unreachable(err),
         }
     }
 
@@ -101,23 +124,7 @@ impl InstanceReadPort for HttpPublishAdapter {
     }
 
     fn fetch_manifest(&self) -> Result<InstanceManifest, InstanceError> {
-        let response = self
-            .client
-            .get(self.url("/manifest"))
-            .send()
-            .map_err(|e| self.unreachable(&e))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(InstanceError::NotAnOpenloreInstance {
-                detail: format!("GET /manifest returned HTTP {}", status.as_u16()),
-            });
-        }
-        let body = response.bytes().map_err(|e| self.unreachable(&e))?;
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|_| InstanceError::NotAnOpenloreInstance {
-                detail: "GET /manifest did not return JSON".to_string(),
-            })?;
-        publish_domain::read_manifest(&manifest)
+        publish_domain::classify_manifest_observation(&self.observe_manifest())
     }
 
     fn get_record(&self, cid: &Cid) -> Result<RecordBytes, InstanceError> {
