@@ -3,7 +3,10 @@
 # The REAL integration test for the `atproto/` Worker: type-check it (strict),
 # audit its npm tree, start it under LOCAL workerd (`wrangler dev`), then drive
 # the REAL `openlore` CLI through `publish init <url>` -> `push` -> `pull` with
-# the 0.0 / 0.5 / 1.0 gold-fixture claims, failing on any CID mismatch. The
+# the 0.0 / 0.5 / 1.0 gold-fixture claims, failing on any CID mismatch; then
+# a second `push` must report `pushed: 0` and raw re-PUTs (incl. concurrent
+# identical ones) of a committed CID must leave the manifest's length and
+# distinct-CID set unchanged — real Durable Object idempotency (step 02-02). The
 # Rust acceptance suite covers the same contract against the FakeInstance
 # double; this job proves the Worker honours it byte-for-byte.
 #
@@ -20,6 +23,7 @@ on:
       - "crates/adapter-publish-http/**"
       - "crates/lexicon/**"
       - "crates/cli/src/verbs/publish.rs"
+      - "crates/cli/src/render/publish.rs"
       - ".github/workflows/publish-contract.yml"
   workflow_dispatch:
 
@@ -37,7 +41,7 @@ env:
 
 jobs:
   contract:
-    name: wrangler dev round trip (0.0/0.5/1.0)
+    name: wrangler dev round trip (0.0/0.5/1.0) + idempotency
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -63,5 +67,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build openlore
         run: cargo build --release -p cli --bin openlore
-      - name: wrangler dev -> publish init/push/pull round trip
+      - name: wrangler dev -> publish init/push/pull round trip + idempotent re-push
         run: bash atproto/scripts/contract-roundtrip.sh target/release/openlore

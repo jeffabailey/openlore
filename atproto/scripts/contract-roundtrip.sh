@@ -7,7 +7,9 @@
 # `publish init <url>` -> `publish push` -> `publish pull` with the
 # 0.0 / 0.5 / 1.0 gold-fixture claims (the f16-representable confidences a
 # re-encoding transport corrupts) seeded in a throwaway local store. Fails on
-# any CID mismatch or on anything other than `3/3 CIDs verified`.
+# any CID mismatch or on anything other than `3/3 CIDs verified`. Then
+# asserts idempotency (step 02-02): a re-push reports `pushed: 0` and raw
+# re-PUTs (incl. concurrent ones) of a committed CID never grow the manifest.
 #
 # Usage: atproto/scripts/contract-roundtrip.sh [path/to/openlore]
 #   OPENLORE_BIN   the openlore binary (default: target/release/openlore)
@@ -118,4 +120,43 @@ manifest_count="$(grep -o '"cid":"[^"]*"' <<<"${manifest}" | wc -l | tr -d ' ')"
 [[ "${manifest_count}" == "${expected_total}" ]] \
   || fail "manifest lists ${manifest_count} records, expected ${expected_total}"
 
-echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker"
+# --- 5. Idempotency under real workerd (step 02-02, ADR-062 §1) -------------
+# 5a. Re-push of an already-complete set pushes nothing and adds no entry.
+repush_out="$("${OPENLORE_BIN}" publish push)" || fail "re-push: ${repush_out}"
+echo "${repush_out}"
+grep -qx "pushed: 0, skipped: ${expected_total}, verified: 0/0" <<<"${repush_out}" \
+  || fail "re-push did not report 'pushed: 0, skipped: ${expected_total}'"
+
+# 5b. Raw re-PUTs of a committed CID — with the commit header, without it, and
+# a burst of concurrent identical committing PUTs — are no-op successes: the
+# stored bytes stay the first write and the manifest gains no entry.
+target_cid="${seeded_cids[0]}"
+original_bytes="$(curl -fsS "${INSTANCE_URL}/records/${target_cid}" | shasum -a 256)"
+reput_entry="{\"cid\":\"${target_cid}\",\"note\":\"re-put\"}"
+reput() {
+  curl -fsS -o /dev/null -X PUT --data-binary "not-the-original-bytes" "$@" \
+    "${INSTANCE_URL}/records/${target_cid}"
+}
+reput -H "x-openlore-manifest-entry: ${reput_entry}" || fail "committing re-PUT was not a success"
+reput || fail "bare re-PUT was not a success"
+burst_pids=()
+for _ in 1 2 3 4 5 6 7 8; do
+  reput -H "x-openlore-manifest-entry: ${reput_entry}" &
+  burst_pids+=("$!")
+done
+for pid in "${burst_pids[@]}"; do
+  wait "${pid}" || fail "a concurrent committing re-PUT was not a success"
+done
+
+[[ "$(curl -fsS "${INSTANCE_URL}/records/${target_cid}" | shasum -a 256)" == "${original_bytes}" ]] \
+  || fail "a re-PUT overwrote the stored bytes of ${target_cid}"
+manifest_after="$(curl -fsS "${INSTANCE_URL}/manifest")"
+manifest_cids="$(grep -o '"cid":"[^"]*"' <<<"${manifest_after}")"
+after_count="$(wc -l <<<"${manifest_cids}" | tr -d ' ')"
+[[ "${after_count}" == "${expected_total}" ]] \
+  || fail "manifest grew to ${after_count} entries after re-push/re-PUT, expected ${expected_total}"
+duplicates="$(sort <<<"${manifest_cids}" | uniq -d)"
+[[ -z "${duplicates}" ]] || fail "manifest lists a CID more than once: ${duplicates}"
+echo "contract-roundtrip: re-push pushed 0; re-PUTs (incl. 8 concurrent) left the manifest at ${expected_total} distinct CIDs"
+
+echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent"

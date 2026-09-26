@@ -97,13 +97,31 @@ fn publish_push_sends_only_new_claims_additive_and_cid_verified() {
 ///
 /// @us-sf-003 @edge @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-003 idempotent re-push, no duplicates)"]
 fn publish_push_is_idempotent_re_push_creates_no_duplicates() {
-    todo!(
-        "DELIVER: Given a FakeInstance already holding all 42; When `publish push` again; \
-         Then 0 pushed + 42 skipped and instance.records.cids is UNCHANGED (no duplicate \
-         records — PUT /records/:cid idempotent per ADR-062 §1)."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria has 42 signed claims in her local graph, and her instance
+    // already holds ALL 42 of them (a prior complete push).
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cids = local_graph_of(&env, 42);
+    let instance = instance_already_holding(&env, &local_cids);
+    let before = capture_push_universe(&env, &instance, "");
+
+    // When she re-runs the push.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "a re-push must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
     );
+    let after = capture_push_universe(&env, &instance, &push.stdout);
+
+    // Then 0 are pushed and all 42 are skipped; the instance's record set is
+    // UNCHANGED (no duplicate records — content-addressed, idempotent), and so
+    // is her local row count (implicit-unchanged slots: pushed stays 0,
+    // verified stays 0/0).
+    let expected = Delta::new().with_slot("cli.publish.skipped", set_to("42".to_string()));
+    assert_state_delta(&before, &after, &push_universe(), &expected);
 }
 
 /// PP-3: A push was interrupted after 20 of 41 new claims. When Maria re-runs
@@ -111,14 +129,51 @@ fn publish_push_is_idempotent_re_push_creates_no_duplicates() {
 /// duplicated on the instance (additive + idempotent resume). (US-SF-003 · AC 3
 /// · UAT #3 · Domain example 3.)
 ///
+/// The interruption is modelled by its observable aftermath, not by killing a
+/// process mid-push: the instance is preloaded with exactly the 20 records a
+/// push would have committed before dying. There is no client-side resume
+/// marker — the instance's manifest IS the resume state (Q-SF-D3), so this
+/// precondition is indistinguishable, at the port, from a real interruption.
+///
 /// @us-sf-003 @error @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-003 interrupted push resumes without duplicates)"]
 fn publish_push_resumes_after_interruption_without_duplicates() {
-    todo!(
-        "DELIVER: Given a FakeInstance holding 20 of 41 (a mid-push interruption); \
-         When `publish push` again; Then the remaining 21 are pushed, instance.records.cids \
-         ends at 41 distinct CIDs, and NO CID appears twice."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria has 41 signed claims in her local graph, and an earlier push
+    // was interrupted after committing 20 of them to her instance.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cids = local_graph_of(&env, 41);
+    let instance = instance_already_holding(&env, &local_cids[..20]);
+    let before = capture_push_universe(&env, &instance, "");
+
+    // When she re-runs the push.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "a resumed push must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let after = capture_push_universe(&env, &instance, &push.stdout);
+
+    // Then the remaining 21 are pushed (21/21 CID-verified), the 20 already
+    // committed are skipped, and the instance ends holding exactly her 41 CIDs.
+    let mut all_local = local_cids.clone();
+    all_local.sort();
+    let expected = Delta::new()
+        .with_slot("instance.records.cids", set_to(format!("{all_local:?}")))
+        .with_slot("cli.publish.pushed", set_to("21".to_string()))
+        .with_slot("cli.publish.skipped", set_to("20".to_string()))
+        .with_slot("cli.publish.verified", set_to("21/21".to_string()));
+    assert_state_delta(&before, &after, &push_universe(), &expected);
+
+    // And NO CID appears twice in the instance's manifest (commit order).
+    let committed = instance.stored_cids();
+    let distinct: std::collections::BTreeSet<&String> = committed.iter().collect();
+    assert_eq!(
+        (committed.len(), distinct.len()),
+        (41, 41),
+        "the manifest must list 41 distinct CIDs with no duplicate entry; got {committed:?}"
     );
 }
 
