@@ -136,8 +136,11 @@ and every already-published claim. Revisit trigger below.
 and the card read through a READ-ONLY instance surface that exposes NO write method — so a peer's
 instance can never be written to from the pull path (the write-incapable extension of the ADR-023
 signing-incapable boundary). "Wire then probe then use" applies: the publish adapter's `probe()`
-round-trips a canary CID against the configured instance and refuses to start
-(`health.startup.refused`) if the byte round-trip or reachability fails.
+checks reachability plus the `/manifest` openlore opaque-instance marker and refuses to start
+(`health.startup.refused`) if either fails. **Amended 2026-09-25 (DELIVER):** the original
+canary-CID round-trip was dropped — the store is append-only and the card lists every record, so
+a canary would permanently pollute the owner's public card. The CID round-trip is instead
+verified on every real push (read back + recompute) and in the DV-1 CI contract test.
 
 ## Alternatives Considered
 
@@ -195,7 +198,7 @@ opaque transport's load-bearing invariants are enforced at three semantically or
 |---|---|---|
 | **Subtype / type** | Cross-instance pull + the card read through a READ-ONLY instance port (`get_record`/`list_manifest`) that exposes NO `put_record`/write method — the type system makes writing-to-a-peer un-callable from the pull path. The write-capable `PublishPort` is a distinct trait. | Rust trait split (`PublishPort` write vs read-only instance port) |
 | **Structural / arch** | `xtask check-arch` gains `publish_write_capability_isolated`: only the `openlore publish` composition root may wire the write-capable `PublishPort`; the peer-pull/card read surfaces MUST NOT depend on it. No JS IPLD/CBOR/multiformats dependency may appear on the `atproto/` Worker's CID path (a dependency-manifest guard). | `xtask check-arch` (new rule) + `atproto/` dependency lint |
-| **Behavioral / probe** | (a) `adapter-publish-http.probe()` round-trips a CANARY claim at confidence `0.0`/`0.5`/`1.0` against the configured instance and refuses to start (`health.startup.refused{reason: publish.cid_roundtrip_failed}`) on any byte/CID divergence — the SPIKE-00 regression guard as a startup gate; (b) a CI round-trip smoke test (push→pull→assert CID equality, KPI-SF-1) exercises the f16-representable confidence values that would catch a re-encode regression. | composition-root probe (ADR-009 mechanism) + CI round-trip test |
+| **Behavioral / probe** | (a) `adapter-publish-http.probe()` checks reachability + the `/manifest` opaque-instance marker and refuses to start (`health.startup.refused`) otherwise; every `publish push` reads each record back and recomputes its CID, rejecting any divergence (`publish.cid_roundtrip_failed`) — the SPIKE-00 regression guard on the real write path (amended 2026-09-25: no canary write, it would pollute the append-only public card); (b) a CI round-trip smoke test (push→pull→assert CID equality, KPI-SF-1) exercises the f16-representable confidence values that would catch a re-encode regression. | composition-root probe (ADR-009 mechanism) + CI round-trip test |
 
 ## Revisit Trigger
 

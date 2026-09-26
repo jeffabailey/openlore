@@ -1,0 +1,798 @@
+{
+  "roadmap": {
+    "project_id": "serverless-philosophy-federation",
+    "created_at": "2026-09-25T00:00:00Z",
+    "total_steps": 15
+  },
+  "total_steps": 15,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Slice-01 \u2014 Walking skeleton: register my own instance + round-trip one claim, CID-verified (US-SF-001 + US-SF-002)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Thick walking skeleton: publish init \u2192 push \u2192 pull of ONE signed claim through FakeInstance with an identical recomputed CID",
+          "description": "WS-1, the riskiest load-bearing thread (KPI-SF-1, North Star). Force the WHOLE Rust side of the opaque transport (ADR-062) into existence end-to-end, thinnest possible. (a) TEST DOUBLE: materialize `crates/test-support/src/fake_instance.rs` \u2014 `FakeInstance`, an opaque content-addressed HTTP double mirroring ADR-062 \u00a71 (`PUT/GET /records/:cid` verbatim + idempotent, `GET /manifest` carrying the openlore discriminator envelope, `GET /` placeholder), modeled on `FakePeerPds` (tokio listener on 127.0.0.1:0), with the `fresh` posture + `endpoint_url` / `manifest` / `stored_cids` accessors (the remaining postures land in the steps that need them). Extend `tests/acceptance/support/mod.rs` with `run_openlore_publish(env, args, &FakeInstance)` (wires `OPENLORE_PUBLISH_ENDPOINT`), `assert_instance_stores_cid`, `assert_local_claims_unchanged`. (b) PORTS: add to `crates/ports` the write-capable `PublishPort` and the READ-ONLY `InstanceReadPort` (no write method \u2014 DDD-8 capability split) + boundary ADTs (manifest entry display projection, instance kind, round-trip verdict) + probe-refusal reasons `publish.instance_unreachable` / `publish.cid_roundtrip_failed` / `publish.not_an_openlore_instance`. (c) PURE CORE: NEW crate `crates/publish-domain` (Q-SF-D6 resolved = separate crate, per DESIGN recommendation) holding the pure decisions: manifest-marker classification (Q-SF-D5), display projection of a signed claim (Q-SF-D1 manifest v1), and the round-trip verdict (pushed CID vs Rust-recomputed CID). (d) DECODE REUSE: hoist the pure lexicon-JSON \u2192 SignedClaim decode into `crates/lexicon` (Q-SF-D4 resolved = hoist; it is already duplicated in adapter-atproto-pds and adapter-atproto-ingest \u2014 the hoist gives the third consumer ONE path; deduping the two existing copies is optional refactor, not required). (e) EFFECT SHELL: NEW crate `crates/adapter-publish-http` (workspace reqwest/rustls) implementing both ports against the opaque contract, with `probe()` (GET /manifest reachability + marker). (f) COMPOSITION ROOT: `crates/cli` gains the `openlore publish {init,push,pull,status}` clap group (DDD-4) \u2014 init records the target after probe; push PUTs the verbatim lexicon-JSON under the Rust-minted CID then reads it back and recomputes; pull GETs manifest + records, re-parses, recomputes via `claim-domain::compute_cid`, byte-matches, reports `1/1 verified`; status is wired minimally (asserted in 01-04). (g) ARCH: register the 2 new crates in the workspace `Cargo.toml` (21 \u2192 23 members) and in `xtask check-arch` (publish-domain pure-core no-I/O arm; adapter-publish-http is covered by the existing only-cli-depends-on-adapters rule). (h) CM-E: WS-1 asserts via `assert_state_delta(before, after, universe, expected)` over the port-exposed universe `instance.records.cids`, `cli.publish.verified_count`, `local.claims.row_count`. Remove the WS-1 `todo!()` (it is already un-ignored).",
+          "criteria": [
+            "WS-1: with one signed claim in local DuckDB and a FakeInstance registered via `openlore publish init <url>`, `openlore publish push` then `openlore publish pull` exit 0; the instance stores the verbatim record bytes under the Rust-minted CID; the pulled-back claim recomputes (in Rust claim-domain, the SOLE canonicalizer) to the IDENTICAL CID; stdout reports `1/1` verified.",
+            "WS-1 CM-E: state-delta over universe {instance.records.cids, cli.publish.verified_count, local.claims.row_count} \u2014 instance.records.cids gains exactly the one CID, verified_count == 1, local.claims.row_count UNCHANGED (additive, D-6).",
+            "`crates/ports` exposes a write-capable PublishPort and a separate read-only InstanceReadPort with no write method (DDD-8); `crates/publish-domain` is pure and passes `xtask check-arch` (no tokio/reqwest/duckdb/keyring/atrium-*).",
+            "`adapter-publish-http` exposes `probe()`; the publish verbs follow wire-then-probe-then-use (a failed probe refuses with a structured `health.startup.refused` carrying a publish.* reason).",
+            "`cargo build --tests` compiles all six publish test targets; `xtask check-arch` reports OK with 23 workspace members."
+          ],
+          "acceptance_criteria": [
+            "WS-1: with one signed claim in local DuckDB and a FakeInstance registered via `openlore publish init <url>`, `openlore publish push` then `openlore publish pull` exit 0; the instance stores the verbatim record bytes under the Rust-minted CID; the pulled-back claim recomputes (in Rust claim-domain, the SOLE canonicalizer) to the IDENTICAL CID; stdout reports `1/1` verified.",
+            "WS-1 CM-E: state-delta over universe {instance.records.cids, cli.publish.verified_count, local.claims.row_count} \u2014 instance.records.cids gains exactly the one CID, verified_count == 1, local.claims.row_count UNCHANGED (additive, D-6).",
+            "`crates/ports` exposes a write-capable PublishPort and a separate read-only InstanceReadPort with no write method (DDD-8); `crates/publish-domain` is pure and passes `xtask check-arch` (no tokio/reqwest/duckdb/keyring/atrium-*).",
+            "`adapter-publish-http` exposes `probe()`; the publish verbs follow wire-then-probe-then-use (a failed probe refuses with a structured `health.startup.refused` carrying a publish.* reason).",
+            "`cargo build --tests` compiles all six publish test targets; `xtask check-arch` reports OK with 23 workspace members."
+          ],
+          "test_file": "tests/acceptance/publish_roundtrip.rs",
+          "scenario_name": "publish_round_trips_one_signed_claim_through_my_own_instance_with_identical_cid",
+          "scenario_fns": [
+            "publish_round_trips_one_signed_claim_through_my_own_instance_with_identical_cid"
+          ],
+          "n_scenarios": [
+            "WS-1"
+          ],
+          "us_trace": [
+            "US-SF-001",
+            "US-SF-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Functional paradigm (ADR-007): publish-domain is a pure core of total functions over ADTs (no I/O, no clocks, no randomness); all HTTP/DuckDB/FS effects live in adapter-publish-http + cli verb handlers. PBT targets in publish-domain: marker classification is total (every manifest shape classifies to exactly one instance kind); round-trip verdict is Verified iff pushed CID == recomputed CID; display projection preserves author_did/subject/predicate/object/confidence verbatim (no float rounding \u2014 include 0.0/0.5/1.0 in the generator). Hoisted decode in lexicon gets a proptest round-trip (encode\u2192decode identity over generated SignedClaims). adapter-publish-http integration tests run against a REAL local HTTP listener (FakeInstance is a real socket server, not a mock) and cover probe fault injection: connection refused, manifest without marker, readback byte divergence. Q-SF-D1 manifest v1 (recommended): envelope {openlore:{kind:'opaque-instance', contract_version:1}, records:[{cid, author_did, subject, predicate, object, confidence, composed_at}]}; how the CLI delivers the display projection without altering the verbatim body is an OPEN DECISION (recommended: a request header carrying the projection JSON on PUT, so the Worker never parses the record body). BUILD-BEFORE-RUN: the AT spawns the `openlore` bin. Existing `[[test]]` targets for the six files are already registered in crates/cli/Cargo.toml \u2014 only add the new crate dependencies there.",
+          "estimate_hours": 16,
+          "estimated_effort": "16h (thick WS: 2 new crates + 2 ports + test double + 4-verb group)",
+          "depends_on": [],
+          "dependencies": [],
+          "files_to_modify": [
+            "tests/acceptance/publish_roundtrip.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/test-support/src/lib.rs",
+            "crates/ports/src/publish.rs",
+            "crates/ports/src/lib.rs",
+            "crates/publish-domain/Cargo.toml",
+            "crates/publish-domain/src/lib.rs",
+            "crates/adapter-publish-http/Cargo.toml",
+            "crates/adapter-publish-http/src/lib.rs",
+            "crates/lexicon/src/claim.rs",
+            "crates/cli/Cargo.toml",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/render/publish.rs",
+            "Cargo.toml",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "Round-trip verdict (CID equality \u2192 Verified vs Mismatch) and marker classification are the load-bearing pure branches; include publish-domain + the hoisted lexicon decode in per-feature mutation testing (DV-6)."
+        },
+        {
+          "id": "01-02",
+          "name": "Float gold fixture 0.0/0.5/1.0 round-trips CID-identical \u2014 acceptance mirror + the real `atproto/` Worker + publish-contract.yml CI round-trip",
+          "description": "RT-4 (GOLD FIXTURE, the standing guard against the REJECTED re-encode `putRecord` transport, SPIKE-00) proved at BOTH layers in one step, because they guard the same property. (a) ACCEPTANCE: add the `gold_claims_confidence_0_half_1` fixture to support and activate RT-4 \u2014 each of the three f16-representable confidences push\u2192pull through FakeInstance with a byte-identical recomputed CID. (b) REAL WORKER (ADR-062 \u00a71/\u00a72, D-2): create `atproto/` \u2014 a TypeScript Cloudflare Worker + ONE Durable Object per instance: `PUT /records/:cid` stores the body VERBATIM (idempotent re-PUT = no-op success), `GET /records/:cid` returns the exact bytes or 404, `GET /manifest` returns the openlore discriminator envelope + ordered manifest entries (atomic append in the DO), `GET /` a minimal placeholder (real card in 04-01). NO `@ipld/*`, `multiformats`, or any CBOR library; the Worker computes no CID. Pinned `wrangler` + `typescript` devDependencies, `tsconfig.json` with `strict: true`, `wrangler.toml` with the DO binding, lockfile committed. (c) CI CONTRACT (DV-1, DV-2, DV-7, acceptance-review conditions #3/#4): NEW `.github/workflows/publish-contract.yml` modeled on `formula-smoke.yml` \u2014 triggers on push to main scoped to `atproto/**` + publish crates + `workflow_dispatch`; runs `npm ci`, `npx tsc --noEmit --strict`, `npm audit --audit-level=high`, starts `npx wrangler dev` (local workerd ONLY \u2014 never `wrangler deploy`, never CLOUDFLARE_API_TOKEN), builds `openlore`, then runs `publish init` \u2192 `push` \u2192 `pull` against the local URL (via `OPENLORE_PUBLISH_ENDPOINT`) with the 0.0/0.5/1.0 gold claims and asserts every CID matches. (d) EARNED TRUST structural layer: `xtask check-arch` gains the `atproto/` no-IPLD/CBOR dependency guard (reads `atproto/package.json` + lockfile; fails on `@ipld/*`, `multiformats`, `cbor*`).",
+          "criteria": [
+            "RT-4: for each confidence in [0.0, 0.5, 1.0], a claim pushed to FakeInstance and pulled back recomputes to a byte-identical CID; all three verified.",
+            "`atproto/` Worker implements PUT/GET /records/:cid (verbatim, idempotent), GET /manifest (openlore marker envelope), GET / placeholder, backed by a single Durable Object; it contains no IPLD/CBOR/multiformats dependency and computes no CID.",
+            "`publish-contract.yml` runs `tsc --strict` and `npm audit --audit-level=high` before `wrangler dev`, then the real CLI init\u2192push\u2192pull round-trip including the 0.0/0.5/1.0 gold claims, failing the job on any CID mismatch; it never runs `wrangler deploy` nor references CLOUDFLARE_API_TOKEN.",
+            "`xtask check-arch` fails if an IPLD/CBOR/multiformats package appears in `atproto/` dependencies."
+          ],
+          "acceptance_criteria": [
+            "RT-4: for each confidence in [0.0, 0.5, 1.0], a claim pushed to FakeInstance and pulled back recomputes to a byte-identical CID; all three verified.",
+            "`atproto/` Worker implements PUT/GET /records/:cid (verbatim, idempotent), GET /manifest (openlore marker envelope), GET / placeholder, backed by a single Durable Object; it contains no IPLD/CBOR/multiformats dependency and computes no CID.",
+            "`publish-contract.yml` runs `tsc --strict` and `npm audit --audit-level=high` before `wrangler dev`, then the real CLI init\u2192push\u2192pull round-trip including the 0.0/0.5/1.0 gold claims, failing the job on any CID mismatch; it never runs `wrangler deploy` nor references CLOUDFLARE_API_TOKEN.",
+            "`xtask check-arch` fails if an IPLD/CBOR/multiformats package appears in `atproto/` dependencies."
+          ],
+          "test_file": "tests/acceptance/publish_roundtrip.rs",
+          "scenario_name": "publish_round_trips_confidence_zero_half_one_each_cid_identical",
+          "scenario_fns": [
+            "publish_round_trips_confidence_zero_half_one_each_cid_identical"
+          ],
+          "n_scenarios": [
+            "RT-4"
+          ],
+          "us_trace": [
+            "US-SF-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. The Worker is the REAL adapter on the far side of the seam; its integration test IS publish-contract.yml (real workerd via `wrangler dev`) \u2014 no Miniflare mocks, no TS unit-test mocks of the DO. TS Worker mutation testing is OUT OF SCOPE (DV-6). Rust side: no new pure logic expected beyond 01-01 (RT-4 should go green on the WS-1 core; if it does not, the defect is a re-encode on the Rust path \u2014 fix at the source, never special-case floats). Coordination point: the Worker + workflow are not Rust-crafter-native \u2014 the crafter owns them in this step but keeps the Worker DUMB (no domain logic). Add `atproto/node_modules` and `atproto/.dev.vars` to .gitignore. Worker write-auth (DV-4) is deliberately NOT in this step \u2014 it lands with PP-5 (02-03) on both sides at once so the contract job never goes red between steps.",
+          "estimate_hours": 10,
+          "estimated_effort": "10h (TS Worker + DO + CI workflow + xtask dep guard)",
+          "depends_on": [
+            "01-01"
+          ],
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_roundtrip.rs",
+            "tests/acceptance/support/mod.rs",
+            "atproto/package.json",
+            "atproto/package-lock.json",
+            "atproto/tsconfig.json",
+            "atproto/wrangler.toml",
+            "atproto/src/index.ts",
+            "atproto/src/instance.ts",
+            ".github/workflows/publish-contract.yml",
+            ".gitignore",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "No new Rust pure logic; the float guard is enforced behaviorally at two layers (RT-4 acceptance + DV-1 live workerd). Confirm existing claim-domain mutation coverage kills any float-width mutation on the canonicalize path."
+        },
+        {
+          "id": "01-03",
+          "name": "publish init has three distinct outcomes: registered, refused-unreachable, refused-not-an-openlore-instance (Q-SF-D5)",
+          "description": "US-SF-001 registration contract: PI-1 (happy) + PI-2 (unreachable) + PI-4 (Q-SF-D5 discriminator). Add FakeInstance postures `unreachable` and `not_an_openlore_instance` (reachable, `/manifest` lacks the openlore marker). (PI-1) `publish init <url>` against a reachable marker-bearing instance records the target and prints instance_url + the UNCHANGED author_did + the derived card_url + the 'no central authority' confirmation (D-1/D-4). (PI-2) an unreachable URL is refused non-zero with a 'cannot reach instance' message and NOTHING is recorded (offline-first is not speculative-register). (PI-4) a reachable URL whose manifest lacks the marker is refused non-zero with 'not an openlore instance' and nothing is recorded. All three are the probe outcomes of the pure marker classification + adapter reachability, surfaced through the init verb.",
+          "criteria": [
+            "PI-1: `publish init <url>` on a reachable openlore instance exits 0, records config.publish_target, prints instance_url + unchanged author_did + card_url + the no-central-authority confirmation; local.claims.row_count UNCHANGED.",
+            "PI-2: `publish init` on an unreachable URL exits non-zero with a 'cannot reach instance' message; config.publish_target stays UNSET.",
+            "PI-4: `publish init` on a reachable URL whose manifest lacks the openlore marker exits non-zero with a 'not an openlore instance' message; config.publish_target stays UNSET.",
+            "The three outcomes are distinct, greppable, and never partially register a target."
+          ],
+          "acceptance_criteria": [
+            "PI-1: `publish init <url>` on a reachable openlore instance exits 0, records config.publish_target, prints instance_url + unchanged author_did + card_url + the no-central-authority confirmation; local.claims.row_count UNCHANGED.",
+            "PI-2: `publish init` on an unreachable URL exits non-zero with a 'cannot reach instance' message; config.publish_target stays UNSET.",
+            "PI-4: `publish init` on a reachable URL whose manifest lacks the openlore marker exits non-zero with a 'not an openlore instance' message; config.publish_target stays UNSET.",
+            "The three outcomes are distinct, greppable, and never partially register a target."
+          ],
+          "test_file": "tests/acceptance/publish_init.rs",
+          "scenario_name": "publish_init_registers_reachable_instance_and_prints_owned_identity",
+          "scenario_fns": [
+            "publish_init_registers_reachable_instance_and_prints_owned_identity",
+            "publish_init_refuses_to_register_an_unreachable_instance_url",
+            "publish_init_refuses_a_reachable_url_that_is_not_an_openlore_instance"
+          ],
+          "n_scenarios": [
+            "PI-1",
+            "PI-2",
+            "PI-4"
+          ],
+          "us_trace": [
+            "US-SF-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. The refusal ordering (unreachable \u2192 not-openlore \u2192 registered) is a pure decision over the probe observation; extend the publish-domain proptest so arbitrary non-marker JSON / non-JSON bodies never classify as an openlore instance. Target recording is an effect in the cli shell (config write) performed ONLY after a Registered classification \u2014 write-last, so a refusal can never leave a partial target. card_url derivation (instance_url + '/') is a pure function. adapter-publish-http integration test: real listener returning HTML at /manifest \u2192 NotOpenlore; closed port \u2192 Unreachable.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-02"
+          ],
+          "dependencies": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_init.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/publish-domain/src/lib.rs",
+            "crates/adapter-publish-http/src/lib.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/render/publish.rs"
+          ],
+          "mutation_note": "Marker classification + write-last target recording are load-bearing; mutation must kill any change that registers on Unreachable/NotOpenlore."
+        },
+        {
+          "id": "01-04",
+          "name": "Registration never touches identity or local store, and publish status inspects the target read-only",
+          "description": "US-SF-001 guardrails + DDD-4 inspection: PI-3 + PI-5. (PI-3) `publish init` never makes the instance a signing authority: the author DID is unchanged, no signing key (nor seed, nor key material) is sent to the instance (assert over FakeInstance's recorded requests), and the local store is byte-unchanged (D-6/D-7). (PI-5) `openlore publish status` reports the registered instance_url, card_url, and current reachability; re-running `publish init` with a new URL re-points the target; neither touches local claims.",
+          "criteria": [
+            "PI-3: after `publish init`, identity.author_did is unchanged, no request to the instance carries key material, and the local store is byte-unchanged.",
+            "PI-5: `publish status` exits 0 and prints instance_url + card_url + reachability for the registered target; local.claims.row_count UNCHANGED.",
+            "PI-5: re-running `publish init` with a different reachable URL re-points the target (status reflects the new URL) without mutating local claims."
+          ],
+          "acceptance_criteria": [
+            "PI-3: after `publish init`, identity.author_did is unchanged, no request to the instance carries key material, and the local store is byte-unchanged.",
+            "PI-5: `publish status` exits 0 and prints instance_url + card_url + reachability for the registered target; local.claims.row_count UNCHANGED.",
+            "PI-5: re-running `publish init` with a different reachable URL re-points the target (status reflects the new URL) without mutating local claims."
+          ],
+          "test_file": "tests/acceptance/publish_init.rs",
+          "scenario_name": "publish_init_never_changes_the_signing_identity_or_local_store",
+          "scenario_fns": [
+            "publish_init_never_changes_the_signing_identity_or_local_store",
+            "publish_status_reports_the_registered_instance_and_leaves_local_store_untouched"
+          ],
+          "n_scenarios": [
+            "PI-3",
+            "PI-5"
+          ],
+          "us_trace": [
+            "US-SF-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. FakeInstance gains a request log accessor (port-exposed observation of what crossed the seam) so PI-3 asserts on the boundary, not on CLI internals. Status reachability reuses the adapter probe (no new I/O path). The publish verb module must not import the signing adapter at all for init/status \u2014 keep the capability surface minimal.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "01-03"
+          ],
+          "dependencies": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_init.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/render/publish.rs"
+          ],
+          "mutation_note": "Status rendering is thin; mutation focus stays on the no-key-material boundary (any mutation that adds key material to an instance request must be killed by PI-3)."
+        },
+        {
+          "id": "01-05",
+          "name": "A CID that does not survive the boundary is rejected (no silent store), and an unreachable instance never blocks offline authoring",
+          "description": "US-SF-002 sad paths: RT-2 + RT-3. Add FakeInstance postures `with_cid_mismatch` (stored/returned bytes diverge so the Rust recompute differs) and reuse `unreachable`. (RT-2) `publish push` detects the divergence on readback, rejects the claim as a canonicalization mismatch, reports it, exits non-zero, and the instance ends with NO record for that CID (a mismatch is a rejected sync, not a silent accept \u2014 KPI-SF-1). (RT-3) with the registered instance unreachable, `publish push` exits non-zero with 'instance unreachable', local.claims.row_count is UNCHANGED, and a subsequent `openlore graph query` succeeds offline (KPI-SF-5).",
+          "criteria": [
+            "RT-2: against a divergent instance, `publish push` exits non-zero, reports a canonicalization mismatch for the claim, and instance.records.cids does not retain the mismatched record.",
+            "RT-3: against an unreachable instance, `publish push` exits non-zero with 'instance unreachable'; local.claims.row_count UNCHANGED.",
+            "RT-3: a subsequent `openlore graph query` exits 0 offline (authoring/query never depend on the instance)."
+          ],
+          "acceptance_criteria": [
+            "RT-2: against a divergent instance, `publish push` exits non-zero, reports a canonicalization mismatch for the claim, and instance.records.cids does not retain the mismatched record.",
+            "RT-3: against an unreachable instance, `publish push` exits non-zero with 'instance unreachable'; local.claims.row_count UNCHANGED.",
+            "RT-3: a subsequent `openlore graph query` exits 0 offline (authoring/query never depend on the instance)."
+          ],
+          "test_file": "tests/acceptance/publish_roundtrip.rs",
+          "scenario_name": "publish_push_rejects_a_claim_whose_cid_does_not_survive_the_boundary",
+          "scenario_fns": [
+            "publish_push_rejects_a_claim_whose_cid_does_not_survive_the_boundary",
+            "publish_push_exits_nonzero_when_the_instance_is_unreachable_and_leaves_authoring_untouched"
+          ],
+          "n_scenarios": [
+            "RT-2",
+            "RT-3"
+          ],
+          "us_trace": [
+            "US-SF-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. 'Nothing silently stored' on an append-only opaque store: the opaque contract has no DELETE, so the recommended realization is verify-BEFORE-commit \u2014 the CLI recomputes the CID from the exact bytes it is about to PUT and the readback is compared; on mismatch the manifest entry is never appended (manifest append is the commit point). If DELIVER finds the contract needs a compensating route, that is an ADR-062 amendment \u2014 raise it, do not add a route silently (OPEN DECISION). The mismatch verdict is the 01-01 pure round-trip verdict; add a proptest that any single-byte perturbation of the record yields Mismatch.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-04"
+          ],
+          "dependencies": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_roundtrip.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/adapter-publish-http/src/lib.rs",
+            "crates/cli/src/verbs/publish.rs"
+          ],
+          "mutation_note": "The Mismatch \u2192 reject + no-commit branch is KPI-SF-1-critical; mutation must kill any change that commits the manifest entry on Mismatch."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Slice-02 \u2014 Bulk publish push: additive, idempotent, resumable, owner-authed (US-SF-003)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Bulk push sends only new claims, CID-verified, and never mutates the local store",
+          "description": "US-SF-003 happy + local-first guardrail: PP-1 + PP-4. Add `local_graph_of(n)` fixture and the FakeInstance `with_records` posture. (PP-1) with 42 local claims and an instance already holding 1, `publish push` pushes 41 and skips 1, reports `41/41` verified, and instance.records.cids grows by exactly 41. (PP-4) push NEVER mutates the local store: local.claims {row_count, cids, bytes} all unchanged (D-6). The push plan (Q-SF-D3 diff strategy) is a pure function of the local CID set and the instance manifest CID set. CM-E: migrate PP-1 and PP-4 to `assert_state_delta` over universes {instance.records.cids (append 41), cli.publish.{pushed,skipped,verified}, local.claims.row_count (unchanged)} and {local.claims.row_count, local.claims.cids, local.claims.bytes (all unchanged)}.",
+          "criteria": [
+            "PP-1: local_graph_of(42) with 1 already on the instance \u2192 `publish push` exits 0, reports 41 pushed + 1 skipped + 41/41 verified; instance.records.cids grows by exactly 41.",
+            "PP-1 CM-E: state-delta over {instance.records.cids, cli.publish.{pushed,skipped,verified}, local.claims.row_count} matches expected (append 41 / 41,1,41 / unchanged).",
+            "PP-4 CM-E: state-delta over {local.claims.row_count, local.claims.cids, local.claims.bytes} is empty (push is additive-only).",
+            "The push plan is computed from manifest CIDs (one GET /manifest), not by probing each record."
+          ],
+          "acceptance_criteria": [
+            "PP-1: local_graph_of(42) with 1 already on the instance \u2192 `publish push` exits 0, reports 41 pushed + 1 skipped + 41/41 verified; instance.records.cids grows by exactly 41.",
+            "PP-1 CM-E: state-delta over {instance.records.cids, cli.publish.{pushed,skipped,verified}, local.claims.row_count} matches expected (append 41 / 41,1,41 / unchanged).",
+            "PP-4 CM-E: state-delta over {local.claims.row_count, local.claims.cids, local.claims.bytes} is empty (push is additive-only).",
+            "The push plan is computed from manifest CIDs (one GET /manifest), not by probing each record."
+          ],
+          "test_file": "tests/acceptance/publish_push.rs",
+          "scenario_name": "publish_push_sends_only_new_claims_additive_and_cid_verified",
+          "scenario_fns": [
+            "publish_push_sends_only_new_claims_additive_and_cid_verified",
+            "publish_push_never_mutates_the_local_store"
+          ],
+          "n_scenarios": [
+            "PP-1",
+            "PP-4"
+          ],
+          "us_trace": [
+            "US-SF-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Pure push-plan in publish-domain with proptest laws: to_push \u222a skipped == local; to_push \u2229 remote == \u2205; skipped \u2286 remote; plan is deterministic (stable order); applying the plan then re-planning yields to_push == \u2205 (idempotence law, which also pre-proves PP-2/PP-3). The local store is opened READ-ONLY in the push shell (StoreReadPort, not StoragePort) \u2014 the type makes PP-4 structural, the AT makes it behavioral. Universe entries are port-exposed only (FakeInstance accessors, CLI stdout counts, DuckDB row reads via support) \u2014 never internal struct fields.",
+          "estimate_hours": 6,
+          "estimated_effort": "6h",
+          "depends_on": [
+            "01-05"
+          ],
+          "dependencies": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_push.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/publish-domain/src/lib.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/render/publish.rs"
+          ],
+          "mutation_note": "Push-plan set difference is load-bearing (off-by-one \u2192 duplicate or dropped claim); include in per-feature mutation."
+        },
+        {
+          "id": "02-02",
+          "name": "Re-push is idempotent and an interrupted push resumes without duplicates",
+          "description": "US-SF-003 idempotency edges: PP-2 + PP-3. (PP-2) with all 42 already on the instance, `publish push` reports 0 pushed + 42 skipped and instance.records.cids is UNCHANGED. (PP-3) with the instance holding 20 of 41 new claims (a mid-push interruption), re-running `publish push` pushes the remaining 21; the instance ends with 41 distinct CIDs and no CID appears twice in the manifest. Both fall out of the 02-01 pure plan + ADR-062 idempotent PUT; this step confirms them at the CLI contract and hardens the FakeInstance/Worker manifest against duplicate appends on re-PUT.",
+          "criteria": [
+            "PP-2: re-push of an already-complete set reports 0 pushed + 42 skipped; instance.records.cids UNCHANGED.",
+            "PP-3: after a 20-of-41 interruption, re-push pushes 21; instance.records.cids ends at 41 distinct CIDs with no duplicate manifest entry.",
+            "A raw re-PUT of an existing CID is a no-op success on both FakeInstance and the Worker (manifest length unchanged)."
+          ],
+          "acceptance_criteria": [
+            "PP-2: re-push of an already-complete set reports 0 pushed + 42 skipped; instance.records.cids UNCHANGED.",
+            "PP-3: after a 20-of-41 interruption, re-push pushes 21; instance.records.cids ends at 41 distinct CIDs with no duplicate manifest entry.",
+            "A raw re-PUT of an existing CID is a no-op success on both FakeInstance and the Worker (manifest length unchanged)."
+          ],
+          "test_file": "tests/acceptance/publish_push.rs",
+          "scenario_name": "publish_push_is_idempotent_re_push_creates_no_duplicates",
+          "scenario_fns": [
+            "publish_push_is_idempotent_re_push_creates_no_duplicates",
+            "publish_push_resumes_after_interruption_without_duplicates"
+          ],
+          "n_scenarios": [
+            "PP-2",
+            "PP-3"
+          ],
+          "us_trace": [
+            "US-SF-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. No client-side resume marker is needed: the manifest IS the resume state (Q-SF-D3 resolved = manifest-diff). Extend publish-contract.yml with a second push asserting 0 pushed (real DO idempotency under workerd). Keep the Worker's idempotency check inside the DO transaction (atomic check-then-append).",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "02-01"
+          ],
+          "dependencies": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_push.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "atproto/src/instance.ts",
+            ".github/workflows/publish-contract.yml"
+          ],
+          "mutation_note": "Covered by the 02-01 push-plan idempotence law; no new Rust branch."
+        },
+        {
+          "id": "02-03",
+          "name": "The write path requires the owner token; pushes without it are refused and store nothing (DV-4 / Q-SF-D2)",
+          "description": "US-SF-003 write-auth: PP-5, landed on BOTH sides of the seam in one step so the contract job never goes red. Add FakeInstance posture `requiring_write_token(tok)`. (PP-5) `publish push` WITHOUT the token (or with a wrong one) is refused by the instance, the CLI reports 'unauthorized write', exits non-zero, and instance.records.cids is UNCHANGED; WITH the correct owner token the same push stores the records. Worker: `PUT /records/:cid` requires `Authorization: Bearer <secret>` compared against the Worker secret (constant-time compare); all GETs stay public. CI (acceptance-review condition #5): publish-contract.yml generates a git-ignored `atproto/.dev.vars` with a throwaway FIXTURE token, passes the same value to the CLI, and adds a negative check that a token-less push is refused. The token is never in the repo, `wrangler.toml`, or CI secrets.",
+          "criteria": [
+            "PP-5: without (or with a wrong) owner token, `publish push` exits non-zero reporting 'unauthorized write'; instance.records.cids UNCHANGED.",
+            "PP-5: with the correct owner token, the same push stores the records.",
+            "The Worker enforces bearer auth on PUT only; GET /records, GET /manifest, GET / require no token.",
+            "publish-contract.yml uses a generated throwaway fixture token via `.dev.vars` (git-ignored) and asserts a token-less push is refused; no real Cloudflare credential is referenced."
+          ],
+          "acceptance_criteria": [
+            "PP-5: without (or with a wrong) owner token, `publish push` exits non-zero reporting 'unauthorized write'; instance.records.cids UNCHANGED.",
+            "PP-5: with the correct owner token, the same push stores the records.",
+            "The Worker enforces bearer auth on PUT only; GET /records, GET /manifest, GET / require no token.",
+            "publish-contract.yml uses a generated throwaway fixture token via `.dev.vars` (git-ignored) and asserts a token-less push is refused; no real Cloudflare credential is referenced."
+          ],
+          "test_file": "tests/acceptance/publish_push.rs",
+          "scenario_name": "publish_push_requires_the_owner_write_token_and_is_refused_without_it",
+          "scenario_fns": [
+            "publish_push_requires_the_owner_write_token_and_is_refused_without_it"
+          ],
+          "n_scenarios": [
+            "PP-5"
+          ],
+          "us_trace": [
+            "US-SF-002",
+            "US-SF-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. OPEN DECISION (CLI token surface): recommended = the token is supplied via `OPENLORE_PUBLISH_TOKEN` (env; the CI/test seam) and persisted by the owner through the existing OS-keyring mechanism (never a plaintext config file); the token must never be echoed to stdout/stderr or logged. Only the write-capable PublishPort adapter reads the token \u2014 InstanceReadPort never carries it (capability split). adapter-publish-http integration test: real listener returning 401 \u2192 typed Unauthorized outcome (distinct from Unreachable).",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "02-02"
+          ],
+          "dependencies": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_push.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/adapter-publish-http/src/lib.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "atproto/src/index.ts",
+            ".github/workflows/publish-contract.yml"
+          ],
+          "mutation_note": "Unauthorized must map to a non-zero exit with nothing committed; mutation must kill any branch that treats 401 as success or retries into a partial store."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Slice-03 \u2014 Pull reconcile into local: additive, never silently overwrites (US-SF-004)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "In-sync pull is an additive no-op reconcile and every pulled claim recomputes an identical CID",
+          "description": "US-SF-004 happy + integrity: PR-1 + PR-4. (PR-1) instance and local both hold the same 42 claims \u2192 `publish pull` reports 42/42 matched, 0 overwritten, 'in sync'; local.claims.cids UNCHANGED. (PR-4) with the instance holding pushed claims including the 0.0/0.5/1.0 gold values, every recomputed CID byte-matches its stored key. Introduces the pure reconcile core in publish-domain: classifies each pulled record against the local set into Matched / New / Conflict / Rejected (recompute mismatch) and NEVER yields an Overwrite. CM-E: migrate PR-1 to `assert_state_delta` over {local.claims.cids (unchanged), cli.publish_pull.{matched, overwritten}}.",
+          "criteria": [
+            "PR-1: with identical 42-claim sets, `publish pull` exits 0 reporting 42/42 matched, 0 overwritten, 'in sync'.",
+            "PR-1 CM-E: state-delta over {local.claims.cids, cli.publish_pull.{matched,overwritten}} \u2192 cids unchanged, matched 42, overwritten 0.",
+            "PR-4: every pulled record (incl. 0.0/0.5/1.0 confidences) recomputes to a CID byte-identical to its manifest key."
+          ],
+          "acceptance_criteria": [
+            "PR-1: with identical 42-claim sets, `publish pull` exits 0 reporting 42/42 matched, 0 overwritten, 'in sync'.",
+            "PR-1 CM-E: state-delta over {local.claims.cids, cli.publish_pull.{matched,overwritten}} \u2192 cids unchanged, matched 42, overwritten 0.",
+            "PR-4: every pulled record (incl. 0.0/0.5/1.0 confidences) recomputes to a CID byte-identical to its manifest key."
+          ],
+          "test_file": "tests/acceptance/publish_pull_reconcile.rs",
+          "scenario_name": "publish_pull_is_an_additive_reconcile_that_never_overwrites_local_claims",
+          "scenario_fns": [
+            "publish_pull_is_an_additive_reconcile_that_never_overwrites_local_claims",
+            "publish_pull_recomputes_an_identical_cid_for_every_pushed_claim"
+          ],
+          "n_scenarios": [
+            "PR-1",
+            "PR-4"
+          ],
+          "us_trace": [
+            "US-SF-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Reconcile proptest laws: the classification partitions the pulled set (matched + new + conflict + rejected == pulled); there is no Overwrite variant (make it unrepresentable in the ADT); reconcile(local, local) is all-Matched; any record whose recompute differs is Rejected, never New. The pull shell recomputes via claim-domain BEFORE classification (verify-before-trust); only New records are candidates for insert (03-02).",
+          "estimate_hours": 6,
+          "estimated_effort": "6h",
+          "depends_on": [
+            "02-03"
+          ],
+          "dependencies": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_pull_reconcile.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/publish-domain/src/lib.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/render/publish.rs"
+          ],
+          "mutation_note": "Reconcile classification is the core of US-SF-004; include every arm in per-feature mutation (a Matched\u2194New or Rejected\u2194New swap must be killed)."
+        },
+        {
+          "id": "03-02",
+          "name": "Fresh-machine pull rebuilds local DuckDB with attribution intact; an unreachable instance leaves local untouched",
+          "description": "US-SF-004 boundary + offline: PR-2 + PR-5. (PR-2) empty local store + instance holding 42 \u2192 `publish pull` inserts all 42 into local DuckDB (and their `<cid>.json`), each attributed to its author_did, each CID recomputed + verified BEFORE insert; local.claims.row_count 0 \u2192 42. (PR-5) with the instance unreachable, `publish pull` exits non-zero with 'instance unreachable', local.claims UNCHANGED, and a subsequent `graph query` succeeds offline (KPI-SF-5).",
+          "criteria": [
+            "PR-2: fresh local store \u2192 `publish pull` exits 0; local.claims.row_count goes 0 \u2192 42, each row attributed to its author_did, each inserted only after its CID verified.",
+            "PR-5: unreachable instance \u2192 `publish pull` exits non-zero with 'instance unreachable'; local.claims UNCHANGED.",
+            "PR-5: a subsequent `openlore graph query` exits 0 offline."
+          ],
+          "acceptance_criteria": [
+            "PR-2: fresh local store \u2192 `publish pull` exits 0; local.claims.row_count goes 0 \u2192 42, each row attributed to its author_did, each inserted only after its CID verified.",
+            "PR-5: unreachable instance \u2192 `publish pull` exits non-zero with 'instance unreachable'; local.claims UNCHANGED.",
+            "PR-5: a subsequent `openlore graph query` exits 0 offline."
+          ],
+          "test_file": "tests/acceptance/publish_pull_reconcile.rs",
+          "scenario_name": "publish_pull_rebuilds_local_duckdb_on_a_fresh_machine_with_attribution_intact",
+          "scenario_fns": [
+            "publish_pull_rebuilds_local_duckdb_on_a_fresh_machine_with_attribution_intact",
+            "publish_pull_exits_nonzero_when_the_instance_is_unreachable"
+          ],
+          "n_scenarios": [
+            "PR-2",
+            "PR-5"
+          ],
+          "us_trace": [
+            "US-SF-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Insert reuses the existing StoragePort/adapter-duckdb write path for own claims (no new SQL outside adapter-duckdb \u2014 respect the existing check-arch SQL scanners). Pulled records whose author_did is NOT the local identity are an open question for rebuild (own-instance should only hold own claims; the PC-5 two-author fixture shows it can hold others) \u2014 recommended: own-author records go to `claims`, foreign-author records are reported and NOT inserted into `claims` (anti-merging); confirm in this step (OPEN DECISION).",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "03-01"
+          ],
+          "dependencies": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_pull_reconcile.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/cli/src/verbs/publish.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "mutation_note": "Verify-before-insert ordering is load-bearing; mutation must kill any change that inserts before the CID check."
+        },
+        {
+          "id": "03-03",
+          "name": "A conflicting pulled record is surfaced, never silently overwrites the local claim",
+          "description": "US-SF-004 no-silent-overwrite guardrail: PR-3. A pulled record whose CID differs from a local claim's CID for the SAME logical record \u2192 `publish pull` surfaces the conflict (names both CIDs), exits non-zero, the local claim is UNCHANGED, nothing is auto-resolved. Requires the pure reconcile core to identify 'same logical record' across differing CIDs. CM-E: migrate PR-3 to `assert_state_delta` over {local.claims.cids, local.claims.bytes (unchanged), cli.publish_pull.conflicts (1)}.",
+          "criteria": [
+            "PR-3: `publish pull` exits non-zero and reports the conflict naming the local CID and the pulled CID.",
+            "PR-3 CM-E: state-delta over {local.claims.cids, local.claims.bytes, cli.publish_pull.conflicts} \u2192 local unchanged, conflicts == 1.",
+            "No auto-resolution: neither side is overwritten and the conflicting pulled record is not inserted."
+          ],
+          "acceptance_criteria": [
+            "PR-3: `publish pull` exits non-zero and reports the conflict naming the local CID and the pulled CID.",
+            "PR-3 CM-E: state-delta over {local.claims.cids, local.claims.bytes, cli.publish_pull.conflicts} \u2192 local unchanged, conflicts == 1.",
+            "No auto-resolution: neither side is overwritten and the conflicting pulled record is not inserted."
+          ],
+          "test_file": "tests/acceptance/publish_pull_reconcile.rs",
+          "scenario_name": "publish_pull_surfaces_a_conflict_instead_of_silently_overwriting",
+          "scenario_fns": [
+            "publish_pull_surfaces_a_conflict_instead_of_silently_overwriting"
+          ],
+          "n_scenarios": [
+            "PR-3"
+          ],
+          "us_trace": [
+            "US-SF-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. OPEN DECISION (logical-record identity): content-addressed claims have no mutable identity, so 'same logical record, different CID' needs an explicit key. Recommended: (author_did, subject, predicate, object) \u2014 a differing confidence/evidence/composed_at under that key is a Conflict. Encode the key as a pure function in publish-domain with a proptest law: two records with equal key and unequal CID always classify Conflict; equal CID always Matched.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "03-02"
+          ],
+          "dependencies": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/publish_pull_reconcile.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/publish-domain/src/lib.rs",
+            "crates/cli/src/render/publish.rs"
+          ],
+          "mutation_note": "Conflict detection is the D-6 guardrail; mutation must kill any change that downgrades Conflict to New or Matched."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Slice-04 \u2014 Public read-only philosophy card (US-SF-005)",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "The card renders only pushed claims, each attributed to its author DID; an empty instance renders 'no claims published yet'",
+          "description": "US-SF-005 happy + boundary + only-pushed guardrail: PC-1 + PC-2 + PC-3. The REAL card lives in the Worker: `atproto/src/card.ts` renders `GET /` as read-only HTML from the manifest display projection (the data the real CLI wrote on push) \u2014 one row per manifest entry attributed to its author_did, no authoring/edit control, no merged row; an empty manifest renders a 200 'no claims published yet' page. FakeInstance's `card_html` mirrors the same card contract for the acceptance layer. (PC-1) after pushing claims, GET / lists each pushed claim attributed to its author_did with no authoring control and no consensus row. (PC-2) FakeInstance::fresh \u2192 200 'no claims published yet', zero rows, not an error. (PC-3) a local claim authored after the push and NEVER pushed is absent from the card. publish-contract.yml gains card assertions against real workerd (pushed CID rows present, attributed; empty-instance text).",
+          "criteria": [
+            "PC-1: after `publish push`, GET / lists every pushed claim, each attributed to its author_did; no authoring/edit control; merged_count == 0.",
+            "PC-2: on a fresh instance GET / returns 200 with 'no claims published yet' and zero rows.",
+            "PC-3: a local claim that was never pushed does not appear on the card.",
+            "The real Worker `GET /` satisfies the same contract under publish-contract.yml (live workerd)."
+          ],
+          "acceptance_criteria": [
+            "PC-1: after `publish push`, GET / lists every pushed claim, each attributed to its author_did; no authoring/edit control; merged_count == 0.",
+            "PC-2: on a fresh instance GET / returns 200 with 'no claims published yet' and zero rows.",
+            "PC-3: a local claim that was never pushed does not appear on the card.",
+            "The real Worker `GET /` satisfies the same contract under publish-contract.yml (live workerd)."
+          ],
+          "test_file": "tests/acceptance/public_card.rs",
+          "scenario_name": "public_card_renders_only_pushed_claims_each_attributed_to_its_author_did",
+          "scenario_fns": [
+            "public_card_renders_only_pushed_claims_each_attributed_to_its_author_did",
+            "public_card_on_an_empty_instance_renders_no_claims_published_yet_not_an_error",
+            "public_card_omits_a_local_claim_that_was_never_pushed"
+          ],
+          "n_scenarios": [
+            "PC-1",
+            "PC-2",
+            "PC-3"
+          ],
+          "us_trace": [
+            "US-SF-005"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Honest boundary: at the acceptance layer the production code under test is the CLI-written manifest display projection (real push); the FakeInstance card render is a contract mirror, so the REAL render MUST be asserted in publish-contract.yml against workerd in this same step \u2014 otherwise PC-1..3 only test the double. Card HTML must escape every manifest field (the projection is attacker-controllable by anyone who can write \u2014 i.e. the owner \u2014 but viewers are the public; XSS-safe by construction). Card render is TS; no Rust pure logic added (the display projection PBT from 01-01 covers the Rust side).",
+          "estimate_hours": 7,
+          "estimated_effort": "7h",
+          "depends_on": [
+            "03-03"
+          ],
+          "dependencies": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/public_card.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "atproto/src/card.ts",
+            "atproto/src/index.ts",
+            ".github/workflows/publish-contract.yml"
+          ],
+          "mutation_note": "No new Rust logic; the Rust-side guarantee is the display projection (01-01 mutation scope). TS card mutation is out of scope (DV-6)."
+        },
+        {
+          "id": "04-02",
+          "name": "The card is write-incapable, never merges two authors into one row, and reads need no token",
+          "description": "US-SF-005 guardrails: PC-4 + PC-5 + PC-6. (PC-4) the card offers no authoring/write control and the read surface exposes NO write method \u2014 Earned Trust structural layer lands here: `xtask check-arch` gains `publish_write_capability_isolated` (source-scan rule in the pubkey/viewer-seam pattern): only the `openlore publish` verb module may construct/wire the write-capable PublishPort adapter; `verbs/peer_pull.rs` and any card/read path must not reference it. (PC-5) identical claim content pushed under two distinct author_dids (two TestEnv identities, same instance) renders as TWO attributed rows, merged_count == 0 (KPI-SF-3, anti-merging). (PC-6) with `requiring_write_token(tok)`, GET / and GET /manifest WITHOUT a token both return 200 (DV-4 asymmetry \u2014 the PP-5 counterpart).",
+          "criteria": [
+            "PC-4: the card exposes no authoring/write control, and `xtask check-arch` fails if any non-publish verb or read path references the write-capable publish adapter/port.",
+            "PC-5: identical claims from two author DIDs render as two rows, each attributed to its own DID; merged_count == 0.",
+            "PC-6: GET / and GET /manifest succeed without any token on a write-token-protected instance."
+          ],
+          "acceptance_criteria": [
+            "PC-4: the card exposes no authoring/write control, and `xtask check-arch` fails if any non-publish verb or read path references the write-capable publish adapter/port.",
+            "PC-5: identical claims from two author DIDs render as two rows, each attributed to its own DID; merged_count == 0.",
+            "PC-6: GET / and GET /manifest succeed without any token on a write-token-protected instance."
+          ],
+          "test_file": "tests/acceptance/public_card.rs",
+          "scenario_name": "public_card_offers_no_authoring_or_write_control_and_holds_no_signing_key",
+          "scenario_fns": [
+            "public_card_offers_no_authoring_or_write_control_and_holds_no_signing_key",
+            "public_card_shows_two_authors_identical_claim_as_two_attributed_rows_never_one_consensus_row",
+            "public_card_and_manifest_reads_require_no_token"
+          ],
+          "n_scenarios": [
+            "PC-4",
+            "PC-5",
+            "PC-6"
+          ],
+          "us_trace": [
+            "US-SF-005"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. The three ADR-062 Earned-Trust layers are now all present: subtype (PublishPort vs InstanceReadPort, 01-01), structural (this step's check-arch rule + the 01-02 atproto dep guard), behavioral (PC-4/PC-6 + publish-contract.yml). Add an xtask unit test proving the new rule fires on a synthetic violating source (the probe that verifies the probe). Add a PC-5/PC-6 mirror to publish-contract.yml (two-author rows; token-less GETs) against real workerd.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "04-01"
+          ],
+          "dependencies": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/public_card.rs",
+            "tests/acceptance/support/mod.rs",
+            "xtask/src/check_arch.rs",
+            ".github/workflows/publish-contract.yml"
+          ],
+          "mutation_note": "Include the new check-arch rule in xtask mutation: removing the peer_pull.rs guard must fail the synthetic-violation unit test."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "Slice-05 \u2014 Cross-instance federated read: peer pull from another user's instance (US-SF-006, J-003 transport delta)",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "peer pull reads a peer's Cloudflare instance via the opaque read, verifies locally, and stores into peer_claims without merging",
+          "description": "US-SF-006 happy + anti-merging + verify-before-trust: CI-1 + CI-4 + CI-5. The J-003 `peer add` / `peer pull` flow is REUSED verbatim; the ONLY delta is transport: when a peer's resolved serviceEndpoint is an opaque openlore instance, `peer pull` reads `GET /manifest` + `GET /records/:cid` through the READ-ONLY InstanceReadPort, recomputes each CID in Rust from the returned bytes, verifies the signature with the J-003 machinery, and stores into `peer_claims` attributed to the peer \u2014 never into the reader's own claims. Test wiring: a peer FakeInstance for did:plc:rachel-test, resolver seam `OPENLORE_PEER_PDS_ENDPOINT_<did>` pointed at it, subscription via the REAL `peer add`. (CI-1) 7 records, 5 new \u2192 5/5 verified and stored attributed to Rachel. (CI-4) author_claims {row_count, cids} unchanged; no row attributed to a DID other than its true author. (CI-5) each stored record's CID was recomputed from the returned bytes and byte-matched before insert. CM-E: migrate CI-1 and CI-4 to `assert_state_delta` over {peer_storage.claims.row_count_by_author[rachel] (+5), author_claims.row_count (unchanged), author_claims.cids (unchanged)}. Extend the 04-02 `publish_write_capability_isolated` guard to assert peer_pull wires ONLY InstanceReadPort.",
+          "criteria": [
+            "CI-1: `openlore peer pull` against a peer instance with 7 records (5 new) exits 0; 5/5 verified (signature + recomputed CID); 5 rows land in peer_claims attributed to did:plc:rachel-test.",
+            "CI-1/CI-4 CM-E: state-delta over {peer_storage.claims.row_count_by_author[rachel], author_claims.row_count, author_claims.cids} \u2192 +5 / unchanged / unchanged.",
+            "CI-4: no pulled row is attributed to a DID other than its true author; nothing is merged into the reader's own claims.",
+            "CI-5: every stored peer record's CID was recomputed in Rust from the returned bytes and byte-matched its manifest key before insert.",
+            "The peer-pull path holds no write capability toward the peer instance (InstanceReadPort only; check-arch enforced)."
+          ],
+          "acceptance_criteria": [
+            "CI-1: `openlore peer pull` against a peer instance with 7 records (5 new) exits 0; 5/5 verified (signature + recomputed CID); 5 rows land in peer_claims attributed to did:plc:rachel-test.",
+            "CI-1/CI-4 CM-E: state-delta over {peer_storage.claims.row_count_by_author[rachel], author_claims.row_count, author_claims.cids} \u2192 +5 / unchanged / unchanged.",
+            "CI-4: no pulled row is attributed to a DID other than its true author; nothing is merged into the reader's own claims.",
+            "CI-5: every stored peer record's CID was recomputed in Rust from the returned bytes and byte-matched its manifest key before insert.",
+            "The peer-pull path holds no write capability toward the peer instance (InstanceReadPort only; check-arch enforced)."
+          ],
+          "test_file": "tests/acceptance/cross_instance_pull.rs",
+          "scenario_name": "peer_pull_fetches_a_peers_claims_from_their_cloudflare_instance_into_peer_claims_attributed",
+          "scenario_fns": [
+            "peer_pull_fetches_a_peers_claims_from_their_cloudflare_instance_into_peer_claims_attributed",
+            "peer_pull_from_an_instance_never_merges_peer_claims_with_my_own",
+            "peer_pull_recomputes_each_peer_claim_cid_from_the_opaque_read_before_store"
+          ],
+          "n_scenarios": [
+            "CI-1",
+            "CI-4",
+            "CI-5"
+          ],
+          "us_trace": [
+            "US-SF-006"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. OPEN DECISION (transport selection): a peer serviceEndpoint may be a classic PDS (existing XRPC path) or an opaque instance. Recommended: probe `GET /manifest` for the openlore marker (reuse the 01-01/01-03 pure marker classification) \u2014 marker present \u2192 InstanceReadPort path; absent \u2192 existing PdsPort path unchanged (so all shipped peer_pull ATs stay green). The selection is a pure function over the probe observation (proptest: every observation maps to exactly one transport). Reuse the hoisted lexicon decode + J-003 verify/attribution verbatim \u2014 no second verify path. Run the full existing peer_* acceptance suite as a regression gate for this step.",
+          "estimate_hours": 8,
+          "estimated_effort": "8h",
+          "depends_on": [
+            "04-02"
+          ],
+          "dependencies": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/cross_instance_pull.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/publish-domain/src/lib.rs",
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/wiring.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "Transport selection + verify-before-insert on the opaque read are load-bearing; mutation must kill a change that routes a marker-bearing endpoint to the XRPC path or inserts before recompute."
+        },
+        {
+          "id": "05-02",
+          "name": "A tampered peer claim is rejected while valid ones are stored; an unreachable peer instance is skipped while others proceed",
+          "description": "US-SF-006 sad paths: CI-2 + CI-3 \u2014 J-003 fault semantics carried over to the opaque transport. (CI-2) a peer instance whose record set includes one tampered signature \u2192 that record is rejected + reported, the honest records land in peer_claims, exit non-zero (KPI-FED-6 discipline). (CI-3) two subscribed peers, one reachable instance and one `FakeInstance::unreachable()` \u2192 the unreachable peer is skipped + reported, the reachable peer's claims are stored, exit non-zero overall (per-peer fault isolation).",
+          "criteria": [
+            "CI-2: the tampered record is rejected and reported; the valid records are stored in peer_claims; exit non-zero.",
+            "CI-3: the unreachable peer instance is skipped and reported; the reachable peer's claims are stored; exit non-zero overall.",
+            "Neither fault aborts the whole pull nor stores an unverified record."
+          ],
+          "acceptance_criteria": [
+            "CI-2: the tampered record is rejected and reported; the valid records are stored in peer_claims; exit non-zero.",
+            "CI-3: the unreachable peer instance is skipped and reported; the reachable peer's claims are stored; exit non-zero overall.",
+            "Neither fault aborts the whole pull nor stores an unverified record."
+          ],
+          "test_file": "tests/acceptance/cross_instance_pull.rs",
+          "scenario_name": "peer_pull_rejects_a_tampered_peer_claim_and_stores_the_valid_ones",
+          "scenario_fns": [
+            "peer_pull_rejects_a_tampered_peer_claim_and_stores_the_valid_ones",
+            "peer_pull_skips_only_the_unreachable_peer_instance_and_proceeds_with_others"
+          ],
+          "n_scenarios": [
+            "CI-2",
+            "CI-3"
+          ],
+          "us_trace": [
+            "US-SF-006"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Add FakeInstance peer postures for a tampered-signature record (reuse the existing `build_tampered_signature_peer_records` fixture builder) and unreachable. Expect green on the 05-01 wiring + shipped J-003 per-peer isolation; if not, the defect is in the transport delta, not in J-003 \u2014 fix there. After this step: remove every `// SCAFFOLD: true` marker from the six publish test files (all 30 scenarios active) and confirm `grep -r \"SCAFFOLD: true\" tests/acceptance/{publish_*,public_card,cross_instance_pull}.rs` is empty.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "05-01"
+          ],
+          "dependencies": [
+            "05-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/cross_instance_pull.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/test-support/src/fake_instance.rs",
+            "crates/cli/src/verbs/peer_pull.rs"
+          ],
+          "mutation_note": "Per-peer isolation and reject-not-abort are inherited J-003 branches; confirm existing mutation coverage extends to the opaque-transport arm."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/publish-domain/src/",
+      "crates/adapter-publish-http/src/",
+      "crates/lexicon/src/",
+      "crates/cli/src/",
+      "crates/test-support/src/",
+      "xtask/src/",
+      "atproto/src/",
+      ".github/workflows/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk",
+      "atproto/node_modules/**",
+      "atproto/.dev.vars",
+      "atproto/.wrangler/**"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "Pending review \u2014 5 phases / 15 steps / 30 scenarios (WS-1 + 29 un-ignored one step at a time). Carries acceptance-review conditions #1 (CM-E in 01-01, 02-01, 03-01, 03-03, 05-01), #2 (fail-for-right-reason in 01-01), #3/#4 (publish-contract.yml + tsc --strict + npm audit in 01-02), #5 (fixture write token in 02-03).",
+    "verdict": "conditionally_approved",
+    "date": "2026-09-25",
+    "conditions": [
+      "CM-E universe entries port-exposed only (grep for internal fields at GREEN)",
+      "02-03: write token lands on Rust + Worker sides in the same step; contract test asserts 401 without token"
+    ],
+    "decisions": {
+      "probe": "USER 2026-09-25: reachability + /manifest marker only; ADR-062 \u00a76 amended (no canary write)",
+      "Q-SF-D1": "display fields sent as a request header on PUT; record body stored verbatim",
+      "RT-2": "verify before manifest append; manifest append = commit",
+      "write_token": "OPENLORE_PUBLISH_TOKEN env var for tests/CI; OS keyring for users; never logged",
+      "PR-3_identity": "(author_did, subject, predicate, object)",
+      "fresh_rebuild_foreign": "store owner's claims only, report others",
+      "peer_transport": "/manifest openlore marker selects the opaque read path; else existing PDS path"
+    }
+  }
+}
