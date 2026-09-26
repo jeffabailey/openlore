@@ -27,6 +27,12 @@
 //! openlore marker) — step 01-03, Q-SF-D5. The remaining adversarial
 //! postures (`with_cid_mismatch`, `requiring_write_token`, `with_records`)
 //! land with the scenarios that need them.
+//!
+//! Every request that crosses the seam — in any posture — is appended to a
+//! request log ([`FakeInstance::recorded_requests`]): method, path, headers,
+//! and body exactly as received. It is the port-exposed observation of what
+//! the CLI sent the instance (PI-3: no key material ever crosses; PI-5:
+//! `publish status` only reads).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -47,6 +53,26 @@ fn openlore_marker() -> serde_json::Value {
 struct Store {
     blobs: BTreeMap<String, Vec<u8>>,
     manifest: Vec<(String, serde_json::Value)>,
+    requests: Vec<RecordedRequest>,
+}
+
+/// One request exactly as it crossed the CLI↔instance seam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRequest {
+    pub method: String,
+    pub path: String,
+    /// Header `(name, value)` pairs in arrival order; names lowercase.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl RecordedRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 impl Store {
@@ -142,6 +168,11 @@ impl FakeInstance {
         self.lock().blobs.get(cid).cloned()
     }
 
+    /// Every request received so far, in arrival order (any posture).
+    pub fn recorded_requests(&self) -> Vec<RecordedRequest> {
+        self.lock().requests.clone()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Store> {
         self.store
             .lock()
@@ -206,12 +237,7 @@ async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, post
         tokio::spawn(async move {
             let svc = hyper::service::service_fn(move |req| {
                 let store = Arc::clone(&store);
-                async move {
-                    match posture {
-                        Posture::OpenloreInstance => route(store, req).await,
-                        Posture::OrdinaryWebSite => Ok(ordinary_web_page()),
-                    }
-                }
+                async move { Ok::<_, std::convert::Infallible>(answer(&store, posture, req).await) }
             });
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), svc)
@@ -220,62 +246,88 @@ async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, post
     }
 }
 
-async fn route(
-    store: Arc<Mutex<Store>>,
-    req: HttpRequest,
-) -> Result<HttpResponse, std::convert::Infallible> {
+/// Receive → log → answer per posture.
+async fn answer(store: &Mutex<Store>, posture: Posture, req: HttpRequest) -> HttpResponse {
+    let Some(request) = receive(req).await else {
+        return respond(400, "text/plain", b"unreadable body".to_vec());
+    };
+    let mut guard = store.lock().expect("store");
+    guard.requests.push(request.clone());
+    match posture {
+        Posture::OpenloreInstance => route(&mut guard, &request),
+        Posture::OrdinaryWebSite => ordinary_web_page(),
+    }
+}
+
+/// Read the whole request off the wire into a [`RecordedRequest`].
+async fn receive(req: HttpRequest) -> Option<RecordedRequest> {
     use http_body_util::BodyExt;
 
-    let method = req.method().as_str().to_string();
-    let path = req.uri().path().to_string();
-    let record_cid = path.strip_prefix("/records/").map(str::to_string);
-    let manifest_entry = req
-        .headers()
-        .get(MANIFEST_ENTRY_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let (parts, body) = req.into_parts();
+    let body = body.collect().await.ok()?.to_bytes().to_vec();
+    let headers = parts
+        .headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            )
+        })
+        .collect();
+    Some(RecordedRequest {
+        method: parts.method.as_str().to_string(),
+        path: parts.uri.path().to_string(),
+        headers,
+        body,
+    })
+}
 
-    let response = match (method.as_str(), path.as_str(), record_cid) {
-        ("GET", "/manifest", _) => {
-            let manifest = store.lock().expect("store").manifest_json();
-            respond(200, "application/json", manifest.to_string().into_bytes())
-        }
+fn route(store: &mut Store, request: &RecordedRequest) -> HttpResponse {
+    let record_cid = request.path.strip_prefix("/records/");
+    match (request.method.as_str(), request.path.as_str(), record_cid) {
+        ("GET", "/manifest", _) => respond(
+            200,
+            "application/json",
+            store.manifest_json().to_string().into_bytes(),
+        ),
         ("GET", "/", _) => respond(
             200,
             "text/html; charset=utf-8",
             b"<!doctype html><title>openlore instance</title><p>openlore opaque instance</p>"
                 .to_vec(),
         ),
-        ("GET", _, Some(cid)) => match store.lock().expect("store").blobs.get(&cid) {
+        ("GET", _, Some(cid)) => match store.blobs.get(cid) {
             Some(bytes) => respond(200, "application/octet-stream", bytes.clone()),
             None => respond(404, "text/plain", b"record not found".to_vec()),
         },
-        ("PUT", _, Some(cid)) => {
-            let body = match req.into_body().collect().await {
-                Ok(collected) => collected.to_bytes().to_vec(),
-                Err(_) => return Ok(respond(400, "text/plain", b"unreadable body".to_vec())),
-            };
-            let parsed_entry = match manifest_entry.as_deref().map(serde_json::from_str) {
-                None => None,
-                Some(Ok(entry)) => Some(entry),
-                Some(Err(_)) => {
-                    return Ok(respond(
-                        400,
-                        "text/plain",
-                        b"malformed manifest entry header".to_vec(),
-                    ))
-                }
-            };
-            let mut guard = store.lock().expect("store");
-            guard.put_blob(&cid, body);
-            if let Some(entry) = parsed_entry {
-                guard.commit_entry(&cid, entry);
-            }
-            respond(201, "text/plain", Vec::new())
-        }
+        ("PUT", _, Some(cid)) => put_record(store, cid, request),
         _ => respond(404, "text/plain", b"no such route".to_vec()),
+    }
+}
+
+/// `PUT /records/:cid` — store verbatim; commit the manifest entry when the
+/// header carries one.
+fn put_record(store: &mut Store, cid: &str, request: &RecordedRequest) -> HttpResponse {
+    let parsed_entry = match request
+        .header(MANIFEST_ENTRY_HEADER)
+        .map(serde_json::from_str)
+    {
+        None => None,
+        Some(Ok(entry)) => Some(entry),
+        Some(Err(_)) => {
+            return respond(
+                400,
+                "text/plain",
+                b"malformed manifest entry header".to_vec(),
+            )
+        }
     };
-    Ok(response)
+    store.put_blob(cid, request.body.clone());
+    if let Some(entry) = parsed_entry {
+        store.commit_entry(cid, entry);
+    }
+    respond(201, "text/plain", Vec::new())
 }
 
 /// What an ordinary (non-openlore) web site serves on every route: a 200

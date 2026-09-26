@@ -124,7 +124,17 @@ impl TestEnv {
     /// Step 05-01 wires this for WS-1 only; subsequent claim scenarios
     /// will exercise it through the subprocess too.
     pub fn initialized() -> Self {
-        let env = Self::fresh();
+        Self::initialized_as(FakeIdentity::jeff())
+    }
+
+    /// [`TestEnv::initialized`] under a chosen signing identity (its DID +
+    /// seed are what the binary is handed via `OPENLORE_DID` /
+    /// `OPENLORE_KEY_SEED_HEX`).
+    pub fn initialized_as(identity: FakeIdentity) -> Self {
+        let env = Self {
+            identity,
+            ..Self::fresh()
+        };
         let outcome = run_openlore(
             &env,
             &[
@@ -18213,6 +18223,133 @@ pub fn assert_local_claims_unchanged(env: &TestEnv, before: &[String]) {
         after, before,
         "publish must never mutate the local claim store (additive, D-6)"
     );
+}
+
+/// Port-exposed observable `local.store` at the byte level: every file under
+/// the local data directory (`{home}/.local/share/openlore` — the DuckDB
+/// store + the signed-claim files) keyed by its relative path, with its exact
+/// bytes. Two equal snapshots mean the local store is byte-unchanged (D-6).
+pub fn local_store_bytes(env: &TestEnv) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.map(|e| e.expect("read local store dir entry")) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let bytes = std::fs::read(&path)
+                    .unwrap_or_else(|e| panic!("read local store file {}: {e}", path.display()));
+                out.insert(
+                    path.strip_prefix(root).expect("under root").to_path_buf(),
+                    bytes,
+                );
+            }
+        }
+    }
+    let root = env.home.join(".local").join("share").join("openlore");
+    let mut snapshot = std::collections::BTreeMap::new();
+    walk(&root, &root, &mut snapshot);
+    snapshot
+}
+
+/// Every form the signing key could take on the wire: the seed as hex
+/// (both cases) and the raw seed / expanded keypair bytes (+ keypair hex).
+fn key_material_forms(identity: &FakeIdentity) -> Vec<Vec<u8>> {
+    let seed: [u8; 32] = (0..32)
+        .map(|i| u8::from_str_radix(&identity.seed_hex[2 * i..2 * i + 2], 16).expect("seed hex"))
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("32-byte seed");
+    let keypair = ed25519_dalek::SigningKey::from_bytes(&seed).to_keypair_bytes();
+    let keypair_hex: String = keypair.iter().map(|b| format!("{b:02x}")).collect();
+    vec![
+        identity.seed_hex.to_lowercase().into_bytes(),
+        identity.seed_hex.to_uppercase().into_bytes(),
+        seed.to_vec(),
+        keypair.to_vec(),
+        keypair_hex.clone().into_bytes(),
+        keypair_hex.to_uppercase().into_bytes(),
+    ]
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// Universe-bound (D-7, signing-incapable instance): NO request that crossed
+/// the CLI↔instance seam carried `identity`'s signing key in any form — not
+/// in the path, not in any header, not in the body.
+pub fn assert_no_key_material_sent(instance: &FakeInstance, identity: &FakeIdentity) {
+    let forms = key_material_forms(identity);
+    for request in instance.recorded_requests() {
+        let header_bytes: Vec<u8> = request
+            .headers
+            .iter()
+            .flat_map(|(name, value)| format!("{name}: {value}\n").into_bytes())
+            .collect();
+        for (part, bytes) in [
+            ("path", request.path.as_bytes()),
+            ("headers", header_bytes.as_slice()),
+            ("body", request.body.as_slice()),
+        ] {
+            assert!(
+                !forms.iter().any(|form| contains_bytes(bytes, form)),
+                "{} {} carried signing-key material in its {part} — the instance must never \
+                 hold a signing key (D-7)",
+                request.method,
+                request.path
+            );
+        }
+    }
+}
+
+/// Universe-bound: every request the instance received was a READ (`GET`) —
+/// nothing was written to it, and it holds no records.
+pub fn assert_instance_only_read(instance: &FakeInstance) {
+    let requests = instance.recorded_requests();
+    let writes: Vec<String> = requests
+        .iter()
+        .filter(|r| r.method != "GET")
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert!(
+        writes.is_empty(),
+        "the instance must only be read, never written; got {writes:?}"
+    );
+    assert!(
+        instance.stored_cids().is_empty(),
+        "the instance must hold no records; got {:?}",
+        instance.stored_cids()
+    );
+}
+
+/// Universe-bound: `publish status` succeeded and names `instance_url`, its
+/// derived `card_url`, and `reachability` (`reachable` / `unreachable`).
+pub fn assert_status_reports(status: &CliOutcome, instance_url: &str, reachability: &str) {
+    assert_eq!(
+        status.status, 0,
+        "`publish status` must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        status.stdout, status.stderr
+    );
+    for expected in [
+        format!("instance_url: {instance_url}"),
+        format!("card_url: {instance_url}/"),
+        format!("reachability: {reachability}"),
+    ] {
+        assert!(
+            status.stdout.lines().any(|line| line.trim() == expected),
+            "`publish status` stdout must contain the line {expected:?};\n--- stdout ---\n{}",
+            status.stdout
+        );
+    }
 }
 
 /// GOLD FIXTURE (RT-4 float regression guard): the three f16-representable

@@ -125,7 +125,7 @@ pub use fake_ingest_source::FakeIngestSource;
 // (`PUT/GET /records/:cid`, `GET /manifest`, `GET /`). It never computes a
 // CID — the Rust `claim-domain` core is the sole canonicalizer.
 pub mod fake_instance;
-pub use fake_instance::{FakeInstance, MANIFEST_ENTRY_HEADER};
+pub use fake_instance::{FakeInstance, RecordedRequest, MANIFEST_ENTRY_HEADER};
 
 use claim_domain::{Cid, ClaimLookup, Did, SignedClaim};
 use ports::{

@@ -16,8 +16,6 @@
 //! marker is an arbitrary URL, not an openlore instance, and is REFUSED — the
 //! same "wire then probe then use" gate ADR-062 §6 mandates for the publish
 //! adapter's `probe()`.
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -139,12 +137,52 @@ fn publish_init_refuses_to_register_an_unreachable_instance_url() {
 ///
 /// @us-sf-001 @error @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-001 registration never changes signing identity)"]
 fn publish_init_never_changes_the_signing_identity_or_local_store() {
-    todo!(
-        "DELIVER: Given signing identity did:plc:maria-test; When `publish init`; \
-         Then identity.author_did is UNCHANGED, no signing key is sent to or held by the \
-         instance, and local.store is byte-unchanged."
+    // Given Maria's signing identity, her own reachable instance, and a local
+    // store holding one signed claim.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let instance = FakeInstance::fresh();
+    seed_one_signed_local_claim(&env, 0.86);
+    let identity_before = std::fs::read(env.identity_toml_path()).expect("read identity.toml");
+    let store_before = local_store_bytes(&env);
+
+    // When she registers the instance.
+    let url = instance.endpoint_url().to_string();
+    let init = run_openlore_publish(&env, &["init", &url], &instance);
+    assert_eq!(
+        init.status, 0,
+        "`publish init` must register a reachable openlore instance;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
+    );
+
+    // Then her author DID is UNCHANGED — reported as-is, and her persisted
+    // identity is byte-identical.
+    assert!(
+        init.stdout
+            .contains(&format!("author_did: {}", env.identity.author_did())),
+        "`publish init` must report the unchanged author DID;\n--- stdout ---\n{}",
+        init.stdout
+    );
+    assert_eq!(
+        std::fs::read(env.identity_toml_path()).expect("read identity.toml"),
+        identity_before,
+        "`publish init` must never change the signing identity (D-7)"
+    );
+
+    // And the instance was only probed (read) — no signing key, seed, or key
+    // material crossed the seam; the instance holds nothing.
+    assert!(
+        !instance.recorded_requests().is_empty(),
+        "`publish init` must probe the instance before registering it"
+    );
+    assert_no_key_material_sent(&instance, &env.identity);
+    assert_instance_only_read(&instance);
+
+    // And the local store is byte-unchanged (D-6).
+    assert!(
+        local_store_bytes(&env) == store_before,
+        "`publish init` must leave every local store file byte-unchanged (D-6)"
     );
 }
 
@@ -207,11 +245,50 @@ fn publish_init_refuses_a_reachable_url_that_is_not_an_openlore_instance() {
 ///
 /// @us-sf-001 @edge @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-001 publish status inspection)"]
 fn publish_status_reports_the_registered_instance_and_leaves_local_store_untouched() {
-    todo!(
-        "DELIVER: Given a registered FakeInstance; When `openlore publish status`; \
-         Then stdout names the instance_url + card_url + reachability, and \
-         local.claims.row_count is UNCHANGED."
+    // Given Maria registered her first instance, and a local store holding
+    // one signed claim.
+    let env = TestEnv::initialized();
+    let first = FakeInstance::fresh();
+    seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+    let first_url = first.endpoint_url().to_string();
+    let init = run_openlore_publish(&env, &["init", &first_url], &first);
+    assert_eq!(
+        init.status, 0,
+        "precondition: first `publish init` must succeed"
     );
+
+    // When she inspects the publish target.
+    let status = run_openlore_publish(&env, &["status"], &first);
+
+    // Then status names the registered instance, its card URL, and that it
+    // is currently reachable — by reading the instance, never writing it.
+    assert_status_reports(&status, &first_url, "reachable");
+    assert_instance_only_read(&first);
+    assert_local_claims_unchanged(&env, &local_before);
+
+    // When she re-points the target at a second reachable instance.
+    let second = FakeInstance::fresh();
+    let second_url = second.endpoint_url().to_string();
+    let reinit = run_openlore_publish(&env, &["init", &second_url], &second);
+    assert_eq!(
+        reinit.status, 0,
+        "re-running `publish init` with a new reachable URL must succeed;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        reinit.stdout, reinit.stderr
+    );
+
+    // Then status reflects the NEW target (the fallback seam aims at the old
+    // instance, so only the registration can name the new one), and the
+    // local claims are still exactly as before.
+    let status = run_openlore_publish(&env, &["status"], &first);
+    assert_status_reports(&status, &second_url, "reachable");
+    assert!(
+        !status.stdout.contains(&first_url),
+        "status must no longer name the previous target;\n--- stdout ---\n{}",
+        status.stdout
+    );
+    assert_instance_only_read(&second);
+    assert_local_claims_unchanged(&env, &local_before);
 }

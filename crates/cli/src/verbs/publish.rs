@@ -15,7 +15,8 @@
 //!   append; manifest append = commit). The local store is never written.
 //! - `pull` — read the manifest + every record back, re-parse, recompute each
 //!   CID in Rust, byte-match it against the key, report `N/M CIDs verified`.
-//! - `status` — the registered target + its reachability (minimal).
+//! - `status` — READ-ONLY inspection: the registered target, its card URL,
+//!   and its current reachability (the same adapter probe; no write path).
 
 use anyhow::{anyhow, Context};
 use claim_domain::{Cid, SignedClaim};
@@ -168,7 +169,11 @@ fn status(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let reachable = wiring::probe_instance(instance.as_ref()).is_ok();
     Ok(PublishOutcome {
         exit_code: 0,
-        stdout: render_publish_status(&instance_url, reachable),
+        stdout: render_publish_status(
+            &instance_url,
+            &publish_domain::card_url(&instance_url),
+            reachable,
+        ),
     })
 }
 

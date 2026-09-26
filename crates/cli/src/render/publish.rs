@@ -63,12 +63,18 @@ fn render_pull_verdict(verdict: &RoundTripVerdict) -> String {
     }
 }
 
-/// `publish status`: the registered target + its reachability.
-pub fn render_publish_status(instance_url: &str, reachable: bool) -> String {
+/// `publish status`: the registered target, its derived public card URL, and
+/// whether the instance is reachable right now.
+pub fn render_publish_status(instance_url: &str, card_url: &str, reachable: bool) -> String {
     let reachability = if reachable {
         "reachable"
     } else {
         "unreachable"
     };
-    format!("Publish target: {instance_url}\n  status: {reachability}\n")
+    format!(
+        "Publish target {instance_url}\n  \
+         instance_url: {instance_url}\n  \
+         card_url: {card_url}\n  \
+         reachability: {reachability}\n"
+    )
 }
