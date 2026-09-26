@@ -77,7 +77,7 @@ impl Confidence {
 
     /// Inner value accessor (read-only — domain remains immutable).
     pub fn value(&self) -> f64 {
-        panic!("Not yet implemented -- RED scaffold");
+        self.0
     }
 }
 

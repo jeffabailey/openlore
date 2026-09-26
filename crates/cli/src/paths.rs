@@ -63,6 +63,12 @@ impl OpenLorePaths {
         self.config_dir.join("identity.toml")
     }
 
+    /// Path to the registered publish target: `<config>/publish.toml`
+    /// (serverless-philosophy-federation; written by `openlore publish init`).
+    pub fn publish_toml(&self) -> PathBuf {
+        self.config_dir.join("publish.toml")
+    }
+
     /// Path to the DuckDB file: `<data>/openlore.duckdb`.
     pub fn duckdb_file(&self) -> PathBuf {
         self.data_dir.join("openlore.duckdb")

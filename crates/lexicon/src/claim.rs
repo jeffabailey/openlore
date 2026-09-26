@@ -262,6 +262,144 @@ fn validate_reason_length(text: &str) -> Result<(), LexiconError> {
 }
 
 // =============================================================================
+// Signed-claim wire codec: domain `SignedClaim` <-> lexicon JSON
+// =============================================================================
+//
+// Hoisted here (serverless-philosophy-federation step 01-01, Q-SF-D4) so every
+// transport that carries the lexicon-JSON signed record — the PDS peer read,
+// the indexer ingest, and the opaque-instance publish path (ADR-062 §3) —
+// shares ONE pure mapping. Pure: no I/O.
+
+/// The signature algorithm every openlore claim signature uses (ADR-006).
+pub const SIGNATURE_ALG: &str = "EdDSA";
+
+/// Encode a domain `SignedClaim` as its `org.openlore.claim` lexicon JSON:
+/// camelCase keys, lowercase reference types, and the signature block
+/// `{kid, alg, sig}` with `sig` base64url-no-pad (ADR-006).
+pub fn encode_signed_claim(signed: &claim_domain::SignedClaim) -> serde_json::Value {
+    let claim = &signed.unsigned;
+    let wire = Claim {
+        subject: claim.subject.clone(),
+        predicate: claim.predicate.clone(),
+        object: claim.object.clone(),
+        evidence: claim.evidence.clone(),
+        confidence: claim.confidence.value(),
+        author: claim.author_did.0.clone(),
+        composed_at: claim.composed_at.clone(),
+        references: claim.references.iter().map(encode_reference).collect(),
+        reason: claim.reason.clone(),
+        signature: Some(SignatureBlock {
+            kid: signed.signature.verification_method.clone(),
+            alg: SIGNATURE_ALG.to_string(),
+            sig: base64url_no_pad(&signed.signature.signature_bytes),
+        }),
+    };
+    serde_json::to_value(wire).expect("a lexicon Claim always serializes to JSON")
+}
+
+/// Decode `org.openlore.claim` lexicon JSON into a domain `SignedClaim`.
+///
+/// The JSON is first validated against the lexicon (named-field errors).
+/// The returned `signed_cid` is RECOMPUTED locally through `claim-domain`
+/// (the sole canonicalizer) — a CID is never taken from the wire. No trust
+/// decision is made here: callers byte-match the recomputed CID against the
+/// key the record arrived under and verify the signature.
+pub fn decode_signed_claim(
+    value: &serde_json::Value,
+) -> Result<claim_domain::SignedClaim, LexiconError> {
+    let claim = validate_claim_json(value)?;
+    let signature = claim.signature.ok_or_else(|| LexiconError::MissingField {
+        field: "signature".to_string(),
+    })?;
+    let signature_bytes =
+        base64url_no_pad_decode(&signature.sig).ok_or_else(|| LexiconError::InvalidType {
+            field: "signature.sig".to_string(),
+            expected: "base64url-no-pad string".to_string(),
+        })?;
+    let confidence =
+        serde_json::from_value(serde_json::json!(claim.confidence)).map_err(|err| {
+            LexiconError::SchemaMismatch {
+                message: format!("confidence: {err}"),
+            }
+        })?;
+    let references = claim
+        .references
+        .iter()
+        .map(decode_reference)
+        .collect::<Result<Vec<_>, _>>()?;
+    let unsigned = claim_domain::UnsignedClaim {
+        subject: claim.subject,
+        predicate: claim.predicate,
+        object: claim.object,
+        evidence: claim.evidence,
+        confidence,
+        author_did: claim_domain::Did(claim.author),
+        composed_at: claim.composed_at,
+        references,
+        reason: claim.reason,
+    };
+    let canonical =
+        claim_domain::canonicalize(&unsigned).map_err(|err| LexiconError::SchemaMismatch {
+            message: format!("claim does not canonicalize: {err}"),
+        })?;
+    Ok(claim_domain::SignedClaim {
+        signature: claim_domain::SignatureBlock {
+            signed_cid: claim_domain::compute_cid(&canonical),
+            signature_bytes,
+            verification_method: signature.kid,
+        },
+        unsigned,
+    })
+}
+
+fn encode_reference(reference: &claim_domain::ClaimReference) -> ClaimReference {
+    use claim_domain::ReferenceType;
+    let ref_type = match reference.ref_type {
+        ReferenceType::Retracts => "retracts",
+        ReferenceType::Corrects => "corrects",
+        ReferenceType::Counters => "counters",
+        ReferenceType::Supersedes => "supersedes",
+    };
+    ClaimReference {
+        ref_type: ref_type.to_string(),
+        cid: reference.cid.0.clone(),
+    }
+}
+
+fn decode_reference(
+    reference: &ClaimReference,
+) -> Result<claim_domain::ClaimReference, LexiconError> {
+    use claim_domain::ReferenceType;
+    let ref_type = match reference.ref_type.as_str() {
+        "retracts" => ReferenceType::Retracts,
+        "corrects" => ReferenceType::Corrects,
+        "counters" => ReferenceType::Counters,
+        "supersedes" => ReferenceType::Supersedes,
+        other => {
+            return Err(LexiconError::InvalidReferenceType {
+                value: other.to_string(),
+            })
+        }
+    };
+    Ok(claim_domain::ClaimReference {
+        ref_type,
+        cid: claim_domain::Cid(reference.cid.clone()),
+    })
+}
+
+fn base64url_no_pad(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn base64url_no_pad_decode(text: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(text)
+        .ok()
+}
+
+// =============================================================================
 // In-crate unit tests
 // =============================================================================
 //
@@ -555,5 +693,59 @@ mod tests {
         let value = well_formed_claim_value(); // no `reason` key
         let claim = validate_claim_json(&value).expect("an absent reason must validate (-> None)");
         assert_eq!(claim.reason, None);
+    }
+
+    // -------------------------------------------------------------------------
+    // Signed-claim wire codec (step 01-01 hoist): encode -> decode identity.
+    // -------------------------------------------------------------------------
+
+    use claim_domain::proptest_strategies::arb_unsigned_claim;
+    use proptest::prelude::*;
+
+    fn arb_signed_claim() -> impl Strategy<Value = claim_domain::SignedClaim> {
+        (
+            arb_unsigned_claim(),
+            prop_oneof![Just(0.0), Just(0.5), Just(1.0), 0.0_f64..=1.0_f64],
+            proptest::option::of("[A-Za-z .,]{1,40}"),
+            proptest::collection::vec(any::<u8>(), 0..96),
+            "did:plc:[a-z0-9-]{4,16}#org.openlore.application",
+        )
+            .prop_map(|(mut unsigned, confidence, reason, signature_bytes, kid)| {
+                unsigned.confidence =
+                    serde_json::from_value(json!(confidence)).expect("confidence in range");
+                unsigned.reason = reason;
+                let canonical = claim_domain::canonicalize(&unsigned).expect("canonicalize");
+                claim_domain::SignedClaim {
+                    signature: claim_domain::SignatureBlock {
+                        signed_cid: claim_domain::compute_cid(&canonical),
+                        signature_bytes,
+                        verification_method: kid,
+                    },
+                    unsigned,
+                }
+            })
+    }
+
+    proptest! {
+        /// Identity: decoding the lexicon JSON a signed claim encodes to yields
+        /// that exact claim — every field, the signature bytes, the kid, and
+        /// the Rust-recomputed CID (confidence 0.0/0.5/1.0 included).
+        #[test]
+        fn decode_of_encode_is_identity(signed in arb_signed_claim()) {
+            let wire = encode_signed_claim(&signed);
+            prop_assert_eq!(decode_signed_claim(&wire), Ok(signed));
+        }
+    }
+
+    #[test]
+    fn decode_refuses_an_unsigned_record() {
+        let mut value = well_formed_claim_value();
+        value.as_object_mut().expect("object").remove("signature");
+        assert_eq!(
+            decode_signed_claim(&value).map(|_| ()),
+            Err(LexiconError::MissingField {
+                field: "signature".to_string()
+            })
+        );
     }
 }

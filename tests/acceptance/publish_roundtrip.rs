@@ -54,15 +54,57 @@ use support::*;
 /// @walking_skeleton @driving_port @real-io @us-sf-001 @us-sf-002 @j-007 @j-008 @kpi-sf-1
 #[test]
 fn publish_round_trips_one_signed_claim_through_my_own_instance_with_identical_cid() {
-    todo!(
-        "DELIVER (serverless-philosophy-federation slice-01 WALKING SKELETON): \
-         Given a FakeInstance registered via `openlore publish init <url>` and \
-         one signed claim in local DuckDB; When `publish push` then `publish pull`; \
-         Then the instance stores the verbatim bytes under the Rust CID, the pulled-back \
-         claim recomputes to the IDENTICAL CID, the CLI reports 1/1 verified, and the \
-         local claim is unchanged. Universe (port-exposed): \
-         instance.records.cids, cli.publish.verified_count, local.claims.row_count."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria has deployed her own instance and registered it.
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::fresh();
+    let init = run_openlore_publish(&env, &["init", instance.endpoint_url()], &instance);
+    assert_eq!(
+        init.status, 0,
+        "`publish init <url>` must register a reachable openlore instance;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
     );
+
+    // And she has ONE signed claim in her local store.
+    let cid = seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+    let before = capture_publish_universe(&env, &instance, "");
+
+    // When she pushes it to her instance and pulls it back.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        pull.status, 0,
+        "`publish pull` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    let after = capture_publish_universe(&env, &instance, &pull.stdout);
+
+    // Then the instance gains exactly her claim's CID, the pull verifies 1 of
+    // 1, and her local store is unchanged (implicit-unchanged slot).
+    let expected = Delta::new()
+        .with_slot(
+            "instance.records.cids",
+            set_to(format!("{:?}", vec![cid.clone()])),
+        )
+        .with_slot("cli.publish.verified_count", set_to("1".to_string()));
+    assert_state_delta(&before, &after, &publish_universe(), &expected);
+
+    // And the stored bytes recompute (in Rust) to that identical CID.
+    assert_instance_stores_cid(&instance, &cid);
+    assert!(
+        pull.stdout.contains("1/1"),
+        "pull must tell her the claim verified 1 of 1; stdout:\n{}",
+        pull.stdout
+    );
+    assert_local_claims_unchanged(&env, &local_before);
 }
 
 // =============================================================================

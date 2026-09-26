@@ -121,6 +121,31 @@ pub enum Command {
     /// compile-time seed constants; no store, no signer, no network (AC-001.4).
     #[command(subcommand)]
     Philosophy(PhilosophyCommand),
+    /// Publish to your OWN serverless instance — serverless-philosophy-
+    /// federation (ADR-062). The instance is an opaque, content-addressed
+    /// store you deploy and own; the CLI mints every CID and re-verifies every
+    /// record it reads back. Publishing is additive: the local store is never
+    /// modified.
+    #[command(subcommand)]
+    Publish(PublishCommand),
+}
+
+/// Publish verbs (serverless-philosophy-federation; US-SF-001/002; ADR-062).
+#[derive(Debug, Subcommand)]
+pub enum PublishCommand {
+    /// Register your deployed instance as the publish target (after probing
+    /// it answers the openlore opaque-instance contract).
+    Init {
+        /// The instance base URL, e.g. `https://openlore.you.workers.dev`.
+        #[arg(value_name = "INSTANCE_URL")]
+        url: String,
+    },
+    /// Push your signed claims to the instance, verifying each CID round trip.
+    Push,
+    /// Pull the instance's records back and re-verify every CID in Rust.
+    Pull,
+    /// Show the registered publish target and whether it is reachable.
+    Status,
 }
 
 /// Philosophy vocabulary verbs (slice-22; US-PV-001; ADR-059).
@@ -639,6 +664,32 @@ pub fn dispatch(cli: Cli) -> i32 {
                 1
             }
         },
+        Command::Publish(publish_command) => {
+            let verb = match publish_command {
+                PublishCommand::Init { url } => {
+                    verbs::publish::PublishVerb::Init { instance_url: url }
+                }
+                PublishCommand::Push => verbs::publish::PublishVerb::Push,
+                PublishCommand::Pull => verbs::publish::PublishVerb::Pull,
+                PublishCommand::Status => verbs::publish::PublishVerb::Status,
+            };
+            match verbs::publish::run(&wiring, &verb) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                // WIRE-then-PROBE-then-USE (ADR-062 §6): a refused instance
+                // probe is a structured `health.startup.refused` event.
+                Err(verbs::publish::PublishVerbError::Refused(refusal)) => {
+                    emit_health_startup_refused(&refusal);
+                    2
+                }
+                Err(verbs::publish::PublishVerbError::Failed(err)) => {
+                    eprintln!("openlore publish: {err:#}");
+                    1
+                }
+            }
+        }
         // Slice-22/23 (ADR-059): the offline `philosophy list`/`show` verbs are
         // handled EARLY (Steps 1.6/1.7 above) as their own store-independent
         // entry points — they never reach this read-write-wiring dispatch. This

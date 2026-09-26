@@ -1,0 +1,24 @@
+[package]
+name = "adapter-publish-http"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore PublishPort + read-only InstanceReadPort adapter: the opaque content-addressed HTTP transport to a user's own serverless instance (ADR-062). Stores/reads record bytes verbatim; never computes a CID."
+
+[lib]
+path = "src/lib.rs"
+
+# EFFECT SHELL. Linked ONLY by the `cli` composition root (xtask check-arch
+# invariant 5). The ports are SYNC (like IdentityPort), so this uses the
+# workspace reqwest version with the BLOCKING client over rustls (the same
+# posture as `adapter-atproto-did`). Manifest classification + parsing is
+# delegated to the PURE `publish-domain` core.
+[dependencies]
+ports = { path = "../ports" }
+claim-domain = { path = "../claim-domain" }
+publish-domain = { path = "../publish-domain" }
+serde_json = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }

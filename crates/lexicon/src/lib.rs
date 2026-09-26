@@ -43,7 +43,10 @@ pub const PHILOSOPHY_NSID: &str = "org.openlore.philosophy";
 pub mod claim;
 
 /// Re-export of the claim validator for ergonomic call sites.
-pub use claim::{validate_claim_json, Claim, ClaimReference, LexiconError, SignatureBlock};
+pub use claim::{
+    decode_signed_claim, encode_signed_claim, validate_claim_json, Claim, ClaimReference,
+    LexiconError, SignatureBlock,
+};
 
 // Step 02-06: explicit serde helpers + Eq-friendly confidence wrapper
 // for the lexicon wire shape. Consolidates the federation-contract

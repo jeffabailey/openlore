@@ -34,6 +34,19 @@ mod probe;
 pub use probe::{ProbeOutcome, ProbeRefusalReason};
 
 // -----------------------------------------------------------------------------
+// serverless-philosophy-federation (ADR-062) — the opaque-instance transport.
+// The write-capable `PublishPort` and the READ-ONLY `InstanceReadPort` are
+// DISTINCT traits (DDD-8 capability split): the read port has no write method.
+// -----------------------------------------------------------------------------
+
+mod publish;
+pub use publish::{
+    InstanceError, InstanceKind, InstanceManifest, InstanceReadPort, ManifestEntry, PublishPort,
+    RecordBytes, RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED, REASON_INSTANCE_UNREACHABLE,
+    REASON_NOT_AN_OPENLORE_INSTANCE,
+};
+
+// -----------------------------------------------------------------------------
 // Slice-03 (federated read) — peer storage port + cross-store row type
 // -----------------------------------------------------------------------------
 //

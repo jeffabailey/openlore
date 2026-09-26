@@ -14,8 +14,18 @@ path = "src/lib.rs"
 # PURE: serde + thiserror only.
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+# `float_roundtrip`: parse JSON numbers to the EXACT f64 that was printed.
+# The default fast parser can drift by 1 ULP, which changes the canonical
+# CBOR of `confidence` and therefore the CID after a byte round trip
+# (found by the publish-domain round-trip property; KPI-SF-1 / ADR-062 §3).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = { workspace = true }
+# serverless-philosophy-federation 01-01 (Q-SF-D4): the hoisted, PURE
+# lexicon-JSON <-> `SignedClaim` codec maps onto the claim-domain ADTs and
+# recomputes the CID through the sole canonicalizer. `base64` (alloc only) is
+# the same pure encoder claim-domain uses for `signature.sig`.
+claim-domain = { path = "../claim-domain" }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 # Property-based tests for the pure vocabulary core (slice-23 `find` resolver).
 [dev-dependencies]

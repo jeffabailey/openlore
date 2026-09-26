@@ -1,0 +1,25 @@
+[package]
+name = "publish-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore pure publish core (ADR-062): opaque-instance manifest-marker classification, the manifest v1 display projection, record-blob encoding, and the round-trip CID verdict. NO I/O."
+
+[lib]
+path = "src/lib.rs"
+
+# PURE (enforced by `cargo xtask check-arch`'s pure-core arm): no tokio,
+# reqwest, duckdb, keyring, atrium-*. The CID is recomputed ONLY through
+# `claim-domain` (the sole canonicalizer, ADR-062); the lexicon-JSON wire
+# shape is owned by `lexicon`.
+[dependencies]
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+ports = { path = "../ports" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

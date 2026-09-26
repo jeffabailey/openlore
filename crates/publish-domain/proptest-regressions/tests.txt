@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dffa5ad81185a26c7bde942a1e0c7554eb28325848881670cd52bb785e657ea4 # shrinks to signed = SignedClaim { unsigned: UnsignedClaim { subject: "#_A#", predicate: "00-0", object: "aaAA", evidence: [], confidence: Confidence(0.9421622950666733), author_did: Did("did:plc:0a00#org openlore\u{b}application"), composed_at: "2024-01-01T00:00:00Z", references: [], reason: None }, signature: SignatureBlock { signed_cid: Cid("bafyreibm7lxc5miu44kaqh6dkzfgmz3bns6gnuh3crg67jp65el6escrye"), signature_bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], verification_method: "did:plc:0a00#org openlore\u{b}application#org.openlore.application" } }

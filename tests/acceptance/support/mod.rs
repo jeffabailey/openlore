@@ -17970,3 +17970,196 @@ pub fn assert_landing_own_line_untouched(body: &str) {
         "BR-PC-4 / WD-PC-7 — \"12 own claims (3 countered)\" untouched",
     );
 }
+
+// =============================================================================
+// serverless-philosophy-federation (ADR-062) — the opaque-instance publish
+// harness. The ONLY faked boundary is the CLI↔Worker seam (`FakeInstance`);
+// the CLI, claim-domain, lexicon and the local DuckDB store are all REAL.
+// =============================================================================
+
+pub use openlore_test_support::FakeInstance;
+
+/// Run `openlore publish <args>` against `instance`. Mirrors [`run_openlore`]
+/// (clean env + the slice-01 identity/PDS seams) and additionally wires
+/// `OPENLORE_PUBLISH_ENDPOINT` to the double's dynamic URL — the fallback
+/// publish target the CLI uses when no target has been registered via
+/// `publish init` (so sad-path scenarios can aim at a posture without
+/// registering it first).
+pub fn run_openlore_publish(env: &TestEnv, args: &[&str], instance: &FakeInstance) -> CliOutcome {
+    let bin = assert_cmd::cargo::cargo_bin("openlore");
+    let output = Command::new(&bin)
+        .arg("publish")
+        .args(args)
+        .env_clear()
+        .env("OPENLORE_HOME", &env.home)
+        .env("OPENLORE_DID", env.identity.author_did())
+        .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
+        .env("OPENLORE_PDS_ENDPOINT", env.pds.endpoint_url())
+        .env("OPENLORE_PUBLISH_ENDPOINT", instance.endpoint_url())
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("spawn openlore publish at {bin:?}: {e}"));
+    CliOutcome {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// Author ONE signed claim into the local store through the REAL `claim add`
+/// verb (sign confirmed, publish-to-PDS declined) and return its Rust-minted
+/// CID. This is a Given (precondition), never the expected end-state.
+pub fn seed_one_signed_local_claim(env: &TestEnv, confidence: f64) -> String {
+    let confidence_arg = format!("{confidence}");
+    let added = run_openlore_with_stdin(
+        env,
+        &[
+            "claim",
+            "add",
+            "--subject",
+            "github:rust-lang/rust",
+            "--predicate",
+            "embodiesPhilosophy",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+            "--evidence",
+            "https://www.rust-lang.org/",
+            "--confidence",
+            &confidence_arg,
+        ],
+        "\nN\n",
+    );
+    assert_eq!(
+        added.status, 0,
+        "seed_one_signed_local_claim: `claim add` must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    signed_cid_from_stdout(&added.stdout)
+}
+
+/// Port-exposed observable: the CIDs of the user's OWN local claims, sorted
+/// (`local.claims`). Test-support is the only place raw SQL is acceptable.
+pub fn local_claim_cids(env: &TestEnv) -> Vec<String> {
+    let conn = duckdb::Connection::open(env.duckdb_path())
+        .unwrap_or_else(|err| panic!("open DuckDB for local claim cids: {err}"));
+    let mut stmt = conn
+        .prepare("SELECT cid FROM claims ORDER BY cid")
+        .expect("prepare local claim cids");
+    let cids = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query local claim cids")
+        .map(|row| row.expect("decode local claim cid"))
+        .collect();
+    cids
+}
+
+/// Parse the `N/M CIDs verified` line `publish pull` prints and return `N`
+/// (`cli.publish.verified_count`). An absent line (no pull has run) is 0.
+pub fn publish_verified_count(stdout: &str) -> usize {
+    stdout
+        .lines()
+        .find_map(|line| {
+            let (verified, rest) = line.trim().split_once('/')?;
+            rest.contains("verified")
+                .then(|| verified.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0)
+}
+
+/// Capture the WS-1 publish universe over PORT-EXPOSED observables only:
+/// the double's committed record set, the CLI's pull report, and the local
+/// store's row count.
+pub fn capture_publish_universe(
+    env: &TestEnv,
+    instance: &FakeInstance,
+    pull_stdout: &str,
+) -> HashMap<String, String> {
+    HashMap::from([
+        (
+            "instance.records.cids".to_string(),
+            format!("{:?}", instance.stored_cids()),
+        ),
+        (
+            "cli.publish.verified_count".to_string(),
+            publish_verified_count(pull_stdout).to_string(),
+        ),
+        (
+            "local.claims.row_count".to_string(),
+            local_claim_cids(env).len().to_string(),
+        ),
+    ])
+}
+
+/// The WS-1 universe slot names (port-exposed).
+pub fn publish_universe() -> HashSet<String> {
+    [
+        "instance.records.cids",
+        "cli.publish.verified_count",
+        "local.claims.row_count",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// Universe-bound: the instance holds the record VERBATIM under the
+/// Rust-minted `cid` — the stored bytes, parsed by the shipped lexicon
+/// VALIDATOR (independent of the CLI's pull path) and re-canonicalized by the
+/// real `claim-domain`, recompute to exactly `cid`. The double never computed
+/// it; Rust is the sole canonicalizer (ADR-062).
+pub fn assert_instance_stores_cid(instance: &FakeInstance, cid: &str) {
+    assert!(
+        instance.stored_cids().iter().any(|c| c == cid),
+        "instance must list {cid} in its manifest; got {:?}",
+        instance.stored_cids()
+    );
+    let bytes = instance
+        .record_bytes(cid)
+        .unwrap_or_else(|| panic!("instance holds no record bytes under {cid}"));
+    let body: serde_json::Value = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("stored record under {cid} is not JSON: {e}"));
+    let lexicon_claim = lexicon::validate_claim_json(&body)
+        .unwrap_or_else(|e| panic!("stored record under {cid} is not a lexicon claim: {e}"));
+    let unsigned = claim_domain::UnsignedClaim {
+        subject: lexicon_claim.subject,
+        predicate: lexicon_claim.predicate,
+        object: lexicon_claim.object,
+        evidence: lexicon_claim.evidence,
+        confidence: serde_json::from_value(serde_json::json!(lexicon_claim.confidence))
+            .expect("confidence"),
+        author_did: claim_domain::Did(lexicon_claim.author),
+        composed_at: lexicon_claim.composed_at,
+        references: lexicon_claim
+            .references
+            .iter()
+            .map(|r| claim_domain::ClaimReference {
+                ref_type: match r.ref_type.as_str() {
+                    "retracts" => claim_domain::ReferenceType::Retracts,
+                    "corrects" => claim_domain::ReferenceType::Corrects,
+                    "counters" => claim_domain::ReferenceType::Counters,
+                    _ => claim_domain::ReferenceType::Supersedes,
+                },
+                cid: claim_domain::Cid(r.cid.clone()),
+            })
+            .collect(),
+        reason: lexicon_claim.reason,
+    };
+    let canonical = claim_domain::canonicalize(&unsigned).expect("canonicalize stored record");
+    let recomputed = claim_domain::compute_cid(&canonical);
+    assert_eq!(
+        recomputed.0, cid,
+        "the stored record bytes must recompute (in Rust) to the key they are stored under"
+    );
+}
+
+/// Universe-bound: publishing is ADDITIVE — the user's own local claims are
+/// exactly `before` (D-6; `local.claims`).
+pub fn assert_local_claims_unchanged(env: &TestEnv, before: &[String]) {
+    let after = local_claim_cids(env);
+    assert_eq!(
+        after, before,
+        "publish must never mutate the local claim store (additive, D-6)"
+    );
+}

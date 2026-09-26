@@ -44,6 +44,10 @@ pub mod philosophy_show;
 // it needs BOTH the store and the signer, so it is dispatched AFTER
 // `Wiring::production`.
 pub mod philosophy_add;
+// serverless-philosophy-federation (ADR-062): `openlore publish
+// {init,push,pull,status}` — the ONLY verbs that wire the write-capable
+// `PublishPort` (push) to the user's own opaque serverless instance.
+pub mod publish;
 pub mod scrape_github;
 // Slice-05 (appview search; step 01-04): the `openlore search` NETWORK verb
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario

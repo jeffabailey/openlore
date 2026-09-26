@@ -120,6 +120,13 @@ pub use fixtures_ingest::{
 pub mod fake_ingest_source;
 pub use fake_ingest_source::FakeIngestSource;
 
+// serverless-philosophy-federation step 01-01 (ADR-062 §1): the OPAQUE,
+// content-addressed HTTP double for a user's own serverless instance
+// (`PUT/GET /records/:cid`, `GET /manifest`, `GET /`). It never computes a
+// CID — the Rust `claim-domain` core is the sole canonicalizer.
+pub mod fake_instance;
+pub use fake_instance::{FakeInstance, MANIFEST_ENTRY_HEADER};
+
 use claim_domain::{Cid, ClaimLookup, Did, SignedClaim};
 use ports::{
     AttributedClaim, ClockPort, GraphNode, ProbeOutcome, ScoringFilter, StorageError, StoragePort,

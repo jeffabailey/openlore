@@ -22,6 +22,9 @@
 //!    `appview-domain` (slice-05 pure ingest-gate + anti-merging search,
 //!    WD-103/WD-104/ADR-026/I-AV-1/I-AV-2) — same ban list; its only
 //!    non-pure-core deps are `claim-domain` + pure `chrono`/`serde`.
+//!    `publish-domain` (serverless-philosophy-federation pure publish core,
+//!    ADR-062) — same ban list; its only deps are `claim-domain` + `lexicon`
+//!    + `ports` + pure `serde_json`.
 //! 3. `ports` MAY depend on `async-trait` (the `PdsPort` trait is
 //!    inherently async per ADR-004) but MUST NOT depend on a tokio
 //!    runtime or any other I/O crate.
@@ -767,6 +770,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "viewer-domain",
         "viewer-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-029; pure read-only view-model + maud HTML, allowed deps: maud + ports + the pure appview-domain/scoring cores)",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "publish-domain",
+        "publish-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-062; the pure publish core — manifest marker, display projection, round-trip CID verdict)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -1288,6 +1296,25 @@ mod tests {
             v.iter()
                 .any(|x| x.package == "appview-domain" && x.forbidden == "duckdb"),
             "expected appview-domain→duckdb violation, got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn publish_domain_depending_on_reqwest_is_violation() {
+        // ADR-062: the publish core is pure; the HTTP transport belongs to
+        // `adapter-publish-http`, never to `publish-domain`.
+        let w = ws(&[
+            (
+                "publish-domain",
+                &["claim-domain", "lexicon", "ports", "reqwest"],
+            ),
+            ("claim-domain", &["serde"]),
+        ]);
+        let v = check_workspace(&w);
+        assert!(
+            v.iter()
+                .any(|x| x.package == "publish-domain" && x.forbidden == "reqwest"),
+            "expected publish-domain→reqwest violation, got: {v:?}"
         );
     }
 

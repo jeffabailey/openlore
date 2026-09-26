@@ -102,6 +102,18 @@ pub enum ProbeRefusalReason {
     /// `adapter-http-viewer` loopback probe failed — the server bound a
     /// non-loopback address (the viewer is localhost-only, I-VIEW-4).
     ViewerNotLoopback,
+
+    // -------- serverless-philosophy-federation additions (ADR-062 §6) --------
+    /// `adapter-publish-http` probe: the configured instance could not be
+    /// reached. Reason code `publish.instance_unreachable`.
+    PublishInstanceUnreachable,
+    /// A pushed record did not recompute (in Rust) to the CID it was pushed
+    /// under. Reason code `publish.cid_roundtrip_failed` (KPI-SF-1).
+    PublishCidRoundtripFailed,
+    /// `adapter-publish-http` probe: the URL is reachable but its
+    /// `/manifest` lacks the openlore opaque-instance marker (Q-SF-D5).
+    /// Reason code `publish.not_an_openlore_instance`.
+    PublishNotAnOpenloreInstance,
 }
 
 // -----------------------------------------------------------------------------

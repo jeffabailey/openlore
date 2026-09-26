@@ -69,6 +69,12 @@ appview-domain = { path = "../appview-domain" }
 # is the sole linker; the adapter holds no signing/identity/pds surface) is
 # enforced by `xtask check-arch`'s viewer capability rule.
 adapter-http-viewer = { path = "../adapter-http-viewer" }
+# serverless-philosophy-federation (ADR-062): the opaque-instance transport.
+# `adapter-publish-http` (effect shell; linked ONLY here) implements the
+# write-capable `PublishPort` + read-only `InstanceReadPort`; `publish-domain`
+# is the PURE core (manifest marker, display projection, round-trip verdict).
+adapter-publish-http = { path = "../adapter-publish-http" }
+publish-domain = { path = "../publish-domain" }
 clap = { version = "4", features = ["derive"] }
 # Slice-06: the `openlore ui` serve loop binds a hyper listener; the accept loop
 # needs the `net` feature in addition to the existing macros/rt (the viewer reuses

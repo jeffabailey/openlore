@@ -20,6 +20,9 @@ members = [
     "crates/appview-domain",
     # slice-06 (htmx viewer) — the PURE read-only view-model + HTML core (ADR-029).
     "crates/viewer-domain",
+    # serverless-philosophy-federation (ADR-062) — the PURE publish core
+    # (manifest marker, display projection, round-trip CID verdict).
+    "crates/publish-domain",
     "crates/adapter-duckdb",
     "crates/adapter-atproto-did",
     "crates/adapter-atproto-pds",
@@ -33,6 +36,9 @@ members = [
     # slice-06 (htmx viewer) — the hyper EFFECT shell for `openlore ui`
     # (ADR-028/030); linked ONLY by cli (xtask capability invariant).
     "crates/adapter-http-viewer",
+    # serverless-philosophy-federation (ADR-062) — the opaque-instance HTTP
+    # EFFECT shell (PublishPort + read-only InstanceReadPort); linked ONLY by cli.
+    "crates/adapter-publish-http",
     # slice-05 (appview search) the SECOND composition root — step 01-04.
     "crates/openlore-indexer",
     "crates/cli",

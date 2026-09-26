@@ -29,11 +29,12 @@ use adapter_atproto_pds::AtProtoPdsAdapter;
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
 use adapter_index_query::HttpIndexQueryAdapter;
+use adapter_publish_http::HttpPublishAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
-    ClockPort, GithubPort, IdentityPort, IndexQueryPort, PdsPort, PeerStoragePort, ProbeOutcome,
-    StoragePort,
+    ClockPort, GithubPort, IdentityPort, IndexQueryPort, InstanceReadPort, PdsPort,
+    PeerStoragePort, ProbeOutcome, PublishPort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -48,6 +49,10 @@ pub struct Wiring {
     /// constructed via `DuckDbStorageAdapter::peer_adapter()` so no second
     /// handle to the DB file is ever opened.
     pub peer_storage: Box<dyn PeerStoragePort>,
+    /// READ-ONLY own-store surface sharing the SAME DuckDB handle as
+    /// `storage` (no second handle). The `publish push` verb enumerates the
+    /// user's own claims through it.
+    pub store_read: Box<dyn StoreReadPort>,
     pub pds: Box<dyn PdsPort>,
     pub clock: Box<dyn ClockPort>,
     /// Slice-02 GitHub-scraper adapter (ADR-019). Reads `GITHUB_TOKEN` +
@@ -107,6 +112,7 @@ impl Wiring {
         // WD-40 SelfAttribution guard at the storage write boundary (layer 2).
         let peer_storage: Box<dyn PeerStoragePort> =
             Box::new(storage.peer_adapter(identity.author_did()));
+        let store_read: Box<dyn StoreReadPort> = Box::new(storage.read_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
         let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
@@ -159,6 +165,7 @@ impl Wiring {
             identity,
             storage,
             peer_storage,
+            store_read,
             pds,
             clock,
             github,
@@ -255,6 +262,31 @@ impl Wiring {
             structured,
         })
     }
+}
+
+// -----------------------------------------------------------------------------
+// serverless-philosophy-federation (ADR-062 §6): the opaque-instance transport
+// is wired PER VERB, because its target URL is only known once the verb has
+// resolved it. WIRE → PROBE → USE: the verbs call `probe_instance` before any
+// use and surface a refusal as `health.startup.refused`.
+// -----------------------------------------------------------------------------
+
+/// Wire the WRITE-capable `PublishPort` for `instance_url`. The ONLY place in
+/// the workspace that constructs it — called solely by `openlore publish`
+/// verbs that write (`push`).
+pub fn publish_port_for(instance_url: &str) -> Box<dyn PublishPort> {
+    Box::new(HttpPublishAdapter::for_instance(instance_url))
+}
+
+/// Wire the READ-ONLY `InstanceReadPort` for `instance_url` (no write
+/// method — the pull / status paths cannot write to an instance).
+pub fn instance_reader_for(instance_url: &str) -> Box<dyn InstanceReadPort> {
+    Box::new(HttpPublishAdapter::for_instance(instance_url))
+}
+
+/// Probe an instance port; a refusal carries the `publish` adapter name.
+pub fn probe_instance(instance: &dyn InstanceReadPort) -> Result<(), ProbeRefusal> {
+    check_probe("publish", instance.probe())
 }
 
 /// A refusal carried up from the probe gauntlet. Holds the adapter name
