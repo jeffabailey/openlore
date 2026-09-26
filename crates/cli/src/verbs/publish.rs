@@ -181,22 +181,27 @@ fn status(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
 // Steps
 // -----------------------------------------------------------------------------
 
-/// Stage → read back → recompute → commit only on a verified CID.
+/// Stage → read back → recompute → commit only on a verified, verbatim
+/// read-back. A mismatch never reaches the manifest (the store has no
+/// DELETE; manifest append = commit), so nothing is silently stored.
 fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<PushResult> {
     let cid = signed.signature.signed_cid.clone();
     let record = publish_domain::record_bytes_of(signed);
     instance
         .put_record(&cid, &record)
         .with_context(|| format!("storing {} on the instance", cid.0))?;
-    match verify_record(instance, &cid)? {
-        RoundTripVerdict::Verified { .. } => {
+    let returned = instance
+        .get_record(&cid)
+        .with_context(|| format!("reading {} back from the instance", cid.0))?;
+    match publish_domain::judge_readback(&cid, &record, &returned) {
+        Ok(_) => {
             instance
                 .commit_manifest_entry(&cid, &record, &publish_domain::display_projection(signed))
                 .with_context(|| format!("committing {} to the manifest", cid.0))?;
             Ok(PushResult::Committed { cid })
         }
-        RoundTripVerdict::CidMismatch { recomputed, .. } => Ok(PushResult::Rejected {
-            detail: format!("read back as {}", recomputed.0),
+        Err(mismatch) => Ok(PushResult::Rejected {
+            detail: mismatch.describe(),
             cid,
         }),
     }

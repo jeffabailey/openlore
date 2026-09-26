@@ -28,8 +28,6 @@
 //! - The `0.0`/`0.5`/`1.0` f16-representable confidence GOLD FIXTURE — the
 //!   regression guard against the REJECTED re-encode `putRecord` transport
 //!   (ADR-062 Alternatives; DESIGN handoff).
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -108,7 +106,7 @@ fn publish_round_trips_one_signed_claim_through_my_own_instance_with_identical_c
 }
 
 // =============================================================================
-// US-SF-002 — focused scenarios (all #[ignore]: DELIVER unskips one at a time)
+// US-SF-002 — focused scenarios (activated one at a time in DELIVER)
 // =============================================================================
 
 /// RT-2: A boundary bug makes the round-trip recompute a DIFFERENT CID for a
@@ -117,16 +115,72 @@ fn publish_round_trips_one_signed_claim_through_my_own_instance_with_identical_c
 /// stored on the instance (a mismatch is a rejected sync, not a silent accept —
 /// KPI-SF-1). (US-SF-002 · AC CID mismatch rejects + reports · D-6.)
 ///
+/// "Nothing is silently stored" is observed through the instance's PORT-EXPOSED
+/// record set: `instance.records.cids` = the CIDs COMMITTED to its manifest
+/// (`FakeInstance::stored_cids()`). The opaque store has no DELETE (ADR-062),
+/// so push is verify-BEFORE-commit: the blob is staged (`PUT` bytes), read
+/// back, recomputed in Rust, and the manifest entry — the commit — is appended
+/// only on a match. A staged-but-uncommitted blob is invisible to every reader
+/// (pull walks the manifest), so "the instance does not retain the mismatched
+/// record" means its CID never reaches the manifest.
+///
 /// @us-sf-002 @error @kpi-sf-1 @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-002 canonicalization-drift rejection)"]
 fn publish_push_rejects_a_claim_whose_cid_does_not_survive_the_boundary() {
-    todo!(
-        "DELIVER: Given a FakeInstance::with_cid_mismatch (recomputes a divergent CID); \
-         When `publish push`; Then the claim is rejected as a canonicalization mismatch, \
-         reported to the user, exit non-zero, and instance.records.cids stays EMPTY \
-         (no silent store)."
+    use support::state_delta::{assert_state_delta, Delta};
+
+    // Given Maria registered an instance whose boundary re-encodes the
+    // record's confidence lossily (canonicalization drift).
+    let env = TestEnv::initialized();
+    let instance = FakeInstance::with_cid_mismatch();
+    let init = run_openlore_publish(&env, &["init", instance.endpoint_url()], &instance);
+    assert_eq!(
+        init.status, 0,
+        "`publish init <url>` must register the (reachable, marked) instance;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        init.stdout, init.stderr
     );
+
+    // And she holds ONE signed claim whose confidence does not survive that
+    // re-encode.
+    let cid = seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+    let before = capture_publish_universe(&env, &instance, "");
+
+    // When she pushes it.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    let after = capture_publish_universe(&env, &instance, "");
+
+    // Then the push fails loudly: non-zero exit, and the claim is named as
+    // rejected for a canonicalization mismatch.
+    assert_ne!(
+        push.status, 0,
+        "a push whose CID does not survive the boundary must exit non-zero;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    assert!(
+        push.stdout
+            .lines()
+            .any(|line| line.contains(&cid) && line.contains("canonicalization mismatch")),
+        "push must report {cid} as a canonicalization mismatch;\n--- stdout ---\n{}",
+        push.stdout
+    );
+    assert!(
+        push.stdout.contains("0/1 claims pushed"),
+        "push must not count the rejected claim as pushed;\n--- stdout ---\n{}",
+        push.stdout
+    );
+
+    // And NOTHING changed in the universe: the instance committed no record
+    // (instance.records.cids stays EMPTY) and her local store is untouched.
+    assert_state_delta(&before, &after, &publish_universe(), &Delta::new());
+    assert!(
+        instance.stored_cids().is_empty(),
+        "the mismatched record must never be committed; got {:?}",
+        instance.stored_cids()
+    );
+    assert_local_claims_unchanged(&env, &local_before);
 }
 
 /// RT-3: Maria's instance is unreachable. `openlore publish push` reports the
@@ -135,14 +189,73 @@ fn publish_push_rejects_a_claim_whose_cid_does_not_survive_the_boundary() {
 /// by an unreachable instance (KPI-SF-5, local-first preserved). (US-SF-002 ·
 /// AC unreachable exits non-zero, local query unaffected.)
 ///
+/// The unreachable target is resolved through the CLI's documented
+/// publish-target fallback seam (`OPENLORE_PUBLISH_ENDPOINT`, the same
+/// `resolve_target` path a registered target takes) aimed at
+/// `FakeInstance::unreachable()` — a loopback port bound then released, so the
+/// connect is REFUSED deterministically. Registering a live double and then
+/// dropping it was rejected as flaky: the double's runtime shuts down on a
+/// background thread, so a lingering listener could accept-and-stall instead
+/// of refusing. The offline `graph query` runs with EVERY network seam
+/// omitted (`run_openlore_network_disabled` — no PDS, no peer, no instance).
+///
 /// @us-sf-002 @error @kpi-sf-5 @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-002 unreachable-instance / offline-first)"]
 fn publish_push_exits_nonzero_when_the_instance_is_unreachable_and_leaves_authoring_untouched() {
-    todo!(
-        "DELIVER: Given a FakeInstance::unreachable registered target; When `publish push`; \
-         Then exit non-zero with an 'instance unreachable' message, local.claims.row_count \
-         UNCHANGED; And a subsequent `graph query` succeeds offline (KPI-SF-5)."
+    use support::state_delta::{assert_state_delta, Delta};
+
+    // Given Maria has ONE signed claim in her local store.
+    let env = TestEnv::initialized();
+    let cid = seed_one_signed_local_claim(&env, 0.86);
+    let local_before = local_claim_cids(&env);
+
+    // And her publish target is unreachable.
+    let instance = FakeInstance::unreachable();
+    let before = capture_publish_universe(&env, &instance, "");
+
+    // When she pushes.
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    let after = capture_publish_universe(&env, &instance, "");
+
+    // Then the push fails loudly, naming the instance as unreachable.
+    assert_ne!(
+        push.status, 0,
+        "a push to an unreachable instance must exit non-zero;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    assert!(
+        push.stderr.contains("instance unreachable"),
+        "push must say the instance is unreachable;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout,
+        push.stderr
+    );
+
+    // And nothing changed: local.claims.row_count UNCHANGED, no record anywhere.
+    assert_state_delta(&before, &after, &publish_universe(), &Delta::new());
+    assert_local_claims_unchanged(&env, &local_before);
+
+    // And authoring is not blocked: a local `graph query` still succeeds with
+    // the network unavailable and still finds her claim (KPI-SF-5).
+    let query = run_openlore_network_disabled(
+        &env,
+        &[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+        ],
+    );
+    assert_eq!(
+        query.status, 0,
+        "`graph query` must succeed offline after a failed push;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        query.stdout, query.stderr
+    );
+    assert!(
+        query.stdout.contains("github:rust-lang/rust"),
+        "offline `graph query` must still list her claim ({cid});\n--- stdout ---\n{}",
+        query.stdout
     );
 }
 

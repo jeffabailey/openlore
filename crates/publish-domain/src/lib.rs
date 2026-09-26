@@ -14,7 +14,9 @@
 //!    verbatim lexicon-JSON record blob and its manifest display projection.
 //! 4. [`verify_round_trip`] / [`round_trip_verdict`] — KPI-SF-1: recompute
 //!    the CID (via `claim-domain`, the SOLE canonicalizer) from the bytes the
-//!    instance returned and compare it with the CID they were pushed under.
+//!    instance returned and compare it with the CID they were pushed under;
+//!    [`judge_readback`] — the push-side verify-before-commit gate (CID
+//!    recompute AND verbatim bytes).
 //!
 //! NO I/O, NO async, NO clock. The instance never computes a CID; this crate
 //! never talks to the instance.
@@ -193,6 +195,51 @@ pub fn verify_round_trip(
 ) -> Result<RoundTripVerdict, UnreadableRecord> {
     let recomputed = recompute_cid(returned)?;
     Ok(round_trip_verdict(pushed, &recomputed))
+}
+
+/// Why a record staged on the instance must NOT be committed: its read-back
+/// did not survive the boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadbackMismatch {
+    /// The returned bytes are not a signed lexicon claim at all.
+    Unreadable { detail: String },
+    /// The returned bytes recompute (in Rust) to a different CID.
+    CidDrift { recomputed: Cid },
+    /// Same recomputed CID, but the bytes were not stored verbatim (e.g. the
+    /// signature block was altered) — the instance must hold exactly what
+    /// was sent (ADR-062 §3).
+    BytesAltered,
+}
+
+impl ReadbackMismatch {
+    /// A one-line, human-readable reason for the push report.
+    pub fn describe(&self) -> String {
+        match self {
+            ReadbackMismatch::Unreadable { detail } => format!("read back unreadable: {detail}"),
+            ReadbackMismatch::CidDrift { recomputed } => format!("read back as {}", recomputed.0),
+            ReadbackMismatch::BytesAltered => "read back with altered bytes".to_string(),
+        }
+    }
+}
+
+/// Push-side judgement (verify BEFORE commit): the staged record may be
+/// committed under `pushed` only if the bytes the instance returned
+/// recompute to `pushed` AND are exactly the bytes that were `sent`.
+pub fn judge_readback(
+    pushed: &Cid,
+    sent: &RecordBytes,
+    returned: &RecordBytes,
+) -> Result<Cid, ReadbackMismatch> {
+    match verify_round_trip(pushed, returned) {
+        Err(UnreadableRecord { detail }) => Err(ReadbackMismatch::Unreadable { detail }),
+        Ok(RoundTripVerdict::CidMismatch { recomputed, .. }) => {
+            Err(ReadbackMismatch::CidDrift { recomputed })
+        }
+        Ok(RoundTripVerdict::Verified { .. }) if returned != sent => {
+            Err(ReadbackMismatch::BytesAltered)
+        }
+        Ok(RoundTripVerdict::Verified { cid }) => Ok(cid),
+    }
 }
 
 fn recompute_cid(returned: &RecordBytes) -> Result<Cid, UnreadableRecord> {

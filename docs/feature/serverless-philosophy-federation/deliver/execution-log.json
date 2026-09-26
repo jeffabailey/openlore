@@ -3,25 +3,180 @@
   "feature_id": "serverless-philosophy-federation",
   "project_id": "serverless-philosophy-federation",
   "events": [
-    {"sid":"01-01","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-09-26T06:16:02Z"},
-    {"sid":"01-01","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-09-26T06:16:02Z"},
-    {"sid":"01-01","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T06:16:02Z"},
-    {"sid":"01-01","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-09-26T12:57:06Z"},
-    {"sid":"01-01","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T12:57:06Z"},
-    {"sid":"01-02","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-09-26T16:41:27Z"},
-    {"sid":"01-02","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-09-26T16:57:32Z"},
-    {"sid":"01-02","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T16:57:32Z"},
-    {"sid":"01-02","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-09-26T17:39:47Z"},
-    {"sid":"01-02","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T17:39:53Z"},
-    {"sid":"01-03","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-09-26T17:42:47Z"},
-    {"sid":"01-03","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-09-26T17:49:39Z"},
-    {"sid":"01-03","p":"RED_UNIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T17:59:28Z"},
-    {"sid":"01-03","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-09-26T18:42:11Z"},
-    {"sid":"01-03","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T18:42:17Z"},
-    {"sid":"01-04","p":"PREPARE","s":"EXECUTED","d":"PASS","t":"2026-09-26T18:44:38Z"},
-    {"sid":"01-04","p":"RED_ACCEPTANCE","s":"EXECUTED","d":"PASS","t":"2026-09-26T19:00:18Z"},
-    {"sid":"01-04","p":"RED_UNIT","s":"SKIPPED","d":"NOT_APPLICABLE: GREEN is a pure renderer change fully driven by PI-5; PI-3 already green on activation","t":"2026-09-26T19:00:18Z"},
-    {"sid":"01-04","p":"GREEN","s":"EXECUTED","d":"PASS","t":"2026-09-26T19:40:58Z"},
-    {"sid":"01-04","p":"COMMIT","s":"EXECUTED","d":"PASS","t":"2026-09-26T19:41:03Z"}
+    {
+      "sid": "01-01",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T06:16:02Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T06:16:02Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T06:16:02Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T12:57:06Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T12:57:06Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T16:41:27Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T16:57:32Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T16:57:32Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T17:39:47Z"
+    },
+    {
+      "sid": "01-02",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T17:39:53Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T17:42:47Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T17:49:39Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T17:59:28Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T18:42:11Z"
+    },
+    {
+      "sid": "01-03",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T18:42:17Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T18:44:38Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:00:18Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "RED_UNIT",
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: GREEN is a pure renderer change fully driven by PI-5; PI-3 already green on activation",
+      "t": "2026-09-26T19:00:18Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:40:58Z"
+    },
+    {
+      "sid": "01-04",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:41:03Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:42:45Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:58:10Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T19:56:02Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T20:40:03Z"
+    },
+    {
+      "sid": "01-05",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-09-26T20:40:03Z"
+    }
   ]
 }

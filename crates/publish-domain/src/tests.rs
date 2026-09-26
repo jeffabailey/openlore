@@ -243,6 +243,30 @@ proptest! {
             Ok(RoundTripVerdict::CidMismatch { pushed: wrong.clone(), recomputed: pushed })
         );
     }
+
+    /// Verify-before-commit (RT-2, KPI-SF-1): a read-back is accepted iff it
+    /// is byte-identical to what was sent — the verbatim blob is accepted
+    /// under its own CID, and ANY single-byte perturbation of it (anywhere:
+    /// claim fields, JSON structure, the signature block) is refused.
+    #[test]
+    fn a_readback_is_accepted_iff_it_is_the_verbatim_blob(
+        signed in arb_signed_claim(),
+        position in any::<prop::sample::Index>(),
+        flip in 1_u8..=255,
+    ) {
+        let pushed = signed.signature.signed_cid.clone();
+        let sent = record_bytes_of(&signed);
+        prop_assert_eq!(judge_readback(&pushed, &sent, &sent), Ok(pushed.clone()));
+
+        let mut perturbed = sent.0.clone();
+        let at = position.index(perturbed.len());
+        perturbed[at] ^= flip;
+        let verdict = judge_readback(&pushed, &sent, &RecordBytes(perturbed));
+        prop_assert!(
+            verdict.is_err(),
+            "a byte perturbed at {} was accepted: {:?}", at, verdict
+        );
+    }
 }
 
 /// Manifest v1 parse: the marker + records[] entries surface verbatim; a

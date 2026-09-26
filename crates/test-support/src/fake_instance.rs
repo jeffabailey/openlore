@@ -24,9 +24,10 @@
 //! Postures: `fresh` (an empty, well-behaved instance — step 01-01);
 //! `unreachable` (nothing listens at the URL) and `not_an_openlore_instance`
 //! (reachable, but an ordinary web site whose `/manifest` is HTML with no
-//! openlore marker) — step 01-03, Q-SF-D5. The remaining adversarial
-//! postures (`with_cid_mismatch`, `requiring_write_token`, `with_records`)
-//! land with the scenarios that need them.
+//! openlore marker) — step 01-03, Q-SF-D5; `with_cid_mismatch` (stored bytes
+//! drift so the Rust recompute differs) — step 01-05. The remaining
+//! adversarial postures (`requiring_write_token`, `with_records`) land with
+//! the scenarios that need them.
 //!
 //! Every request that crosses the seam — in any posture — is appended to a
 //! request log ([`FakeInstance::recorded_requests`]): method, path, headers,
@@ -104,6 +105,41 @@ enum Posture {
     /// A reachable ordinary web site: every route (incl. `/manifest`) is an
     /// HTML page with no openlore marker.
     OrdinaryWebSite,
+    /// An openlore instance with a boundary bug: it re-encodes the record's
+    /// `confidence` through a lossy `f32` on store, so the bytes it returns
+    /// recompute (in Rust) to a DIFFERENT CID than the key.
+    CidMismatch,
+}
+
+impl Posture {
+    /// What this posture stores for a `PUT /records/:cid` body.
+    fn stored_body(self, body: &[u8]) -> Vec<u8> {
+        match self {
+            Posture::CidMismatch => drift_confidence(body),
+            Posture::OpenloreInstance | Posture::OrdinaryWebSite => body.to_vec(),
+        }
+    }
+}
+
+/// The `with_cid_mismatch` boundary bug: parse the record JSON and re-encode
+/// its `confidence` through `f32` (a lossy float re-encode). Diverges for any
+/// confidence that is not exactly `f32`-representable (e.g. `0.86`); a body
+/// that is not a JSON object with a numeric `confidence` is stored as-is.
+fn drift_confidence(body: &[u8]) -> Vec<u8> {
+    let Ok(mut record) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return body.to_vec();
+    };
+    let drifted = record
+        .get("confidence")
+        .and_then(serde_json::Value::as_f64)
+        .map(|confidence| f64::from(confidence as f32));
+    match (drifted, record.as_object_mut()) {
+        (Some(drifted), Some(fields)) => {
+            fields.insert("confidence".to_string(), serde_json::json!(drifted));
+            serde_json::to_vec(&record).expect("a serde_json::Value always serializes")
+        }
+        _ => body.to_vec(),
+    }
 }
 
 /// Opaque content-addressed instance double. See module docs.
@@ -141,6 +177,16 @@ impl FakeInstance {
     /// marker envelope (PI-4, Q-SF-D5).
     pub fn not_an_openlore_instance() -> Self {
         Self::start(Store::default(), Posture::OrdinaryWebSite)
+    }
+
+    /// A reachable openlore instance with a canonicalization-drift boundary
+    /// bug: it stores (and returns) the record with its `confidence`
+    /// re-encoded through a lossy `f32`, so the Rust recompute of the returned
+    /// bytes yields a CID different from the key it was pushed under (RT-2,
+    /// KPI-SF-1). It still honours the manifest-entry commit header — whether
+    /// anything is committed is entirely the CLI's decision.
+    pub fn with_cid_mismatch() -> Self {
+        Self::start(Store::default(), Posture::CidMismatch)
     }
 
     /// Base URL of the running double (e.g. `http://127.0.0.1:54321`).
@@ -254,7 +300,7 @@ async fn answer(store: &Mutex<Store>, posture: Posture, req: HttpRequest) -> Htt
     let mut guard = store.lock().expect("store");
     guard.requests.push(request.clone());
     match posture {
-        Posture::OpenloreInstance => route(&mut guard, &request),
+        Posture::OpenloreInstance | Posture::CidMismatch => route(&mut guard, posture, &request),
         Posture::OrdinaryWebSite => ordinary_web_page(),
     }
 }
@@ -283,7 +329,7 @@ async fn receive(req: HttpRequest) -> Option<RecordedRequest> {
     })
 }
 
-fn route(store: &mut Store, request: &RecordedRequest) -> HttpResponse {
+fn route(store: &mut Store, posture: Posture, request: &RecordedRequest) -> HttpResponse {
     let record_cid = request.path.strip_prefix("/records/");
     match (request.method.as_str(), request.path.as_str(), record_cid) {
         ("GET", "/manifest", _) => respond(
@@ -301,14 +347,19 @@ fn route(store: &mut Store, request: &RecordedRequest) -> HttpResponse {
             Some(bytes) => respond(200, "application/octet-stream", bytes.clone()),
             None => respond(404, "text/plain", b"record not found".to_vec()),
         },
-        ("PUT", _, Some(cid)) => put_record(store, cid, request),
+        ("PUT", _, Some(cid)) => put_record(store, posture, cid, request),
         _ => respond(404, "text/plain", b"no such route".to_vec()),
     }
 }
 
-/// `PUT /records/:cid` — store verbatim; commit the manifest entry when the
-/// header carries one.
-fn put_record(store: &mut Store, cid: &str, request: &RecordedRequest) -> HttpResponse {
+/// `PUT /records/:cid` — store the body (verbatim, unless the posture has a
+/// boundary bug); commit the manifest entry when the header carries one.
+fn put_record(
+    store: &mut Store,
+    posture: Posture,
+    cid: &str,
+    request: &RecordedRequest,
+) -> HttpResponse {
     let parsed_entry = match request
         .header(MANIFEST_ENTRY_HEADER)
         .map(serde_json::from_str)
@@ -323,7 +374,7 @@ fn put_record(store: &mut Store, cid: &str, request: &RecordedRequest) -> HttpRe
             )
         }
     };
-    store.put_blob(cid, request.body.clone());
+    store.put_blob(cid, posture.stored_body(&request.body));
     if let Some(entry) = parsed_entry {
         store.commit_entry(cid, entry);
     }
