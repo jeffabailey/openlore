@@ -1315,5 +1315,40 @@ name = "viewer_philosophies_invariants"
 path = "../../tests/acceptance/viewer_philosophies_invariants.rs"
 harness = true
 
+# serverless-philosophy-federation subprocess acceptance (J-007/J-008, ADR-062).
+# Drives the real `openlore` binary; the ONLY fake is the CLI<->Worker opaque seam
+# (`FakeInstance`, minted in DELIVER). DISTILL registers + RED gate: WS-1
+# (`publish_roundtrip`) is the one un-ignored RED scenario (`todo!()`); the other
+# 29 are `#[ignore]` for one-at-a-time DELIVER unskip.
+[[test]]
+name = "publish_init"
+path = "../../tests/acceptance/publish_init.rs"
+harness = true
+
+[[test]]
+name = "publish_push"
+path = "../../tests/acceptance/publish_push.rs"
+harness = true
+
+[[test]]
+name = "publish_pull_reconcile"
+path = "../../tests/acceptance/publish_pull_reconcile.rs"
+harness = true
+
+[[test]]
+name = "publish_roundtrip"
+path = "../../tests/acceptance/publish_roundtrip.rs"
+harness = true
+
+[[test]]
+name = "public_card"
+path = "../../tests/acceptance/public_card.rs"
+harness = true
+
+[[test]]
+name = "cross_instance_pull"
+path = "../../tests/acceptance/cross_instance_pull.rs"
+harness = true
+
 [lints]
 workspace = true

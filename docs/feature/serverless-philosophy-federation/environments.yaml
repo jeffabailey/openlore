@@ -77,3 +77,5 @@ deployment_assumptions:
   - "Write-auth secret NEVER lives in the repo, wrangler.toml, or CI — Cloudflare Worker secret + CLI config only"
   - "Observability is owner-only (Cloudflare Workers analytics + `wrangler tail`) + greppable CLI output; NO central telemetry (sovereignty)"
   - "The CLI transport is a generic opaque HTTP contract (ADR-062) — a non-Cloudflare host serving the same contract would satisfy the CLI unchanged"
+  - "OPENLORE_PUBLISH_ENDPOINT (test/CI seam, DISTILL): env var overriding the registered publish target. Acceptance points it at FakeInstance; publish-contract.yml points it at the local `wrangler dev` URL. Never set in a user's real config (they use `publish init <url>`)"
+  - "CI write token = a throwaway FIXTURE bearer value supplied to `wrangler dev` via a git-ignored `.dev.vars` generated in the job + passed to the CLI; it is NOT a secret and never a real Cloudflare credential (DV-2/DV-4 preserved)"
