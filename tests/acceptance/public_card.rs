@@ -19,8 +19,6 @@
 //! projection) is written by the real CLI on push.
 //!
 //! Layer 3; example-only.
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -166,14 +164,36 @@ fn public_card_omits_a_local_claim_that_was_never_pushed() {
 ///
 /// @us-sf-005 @error @d-7 @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 card is write-incapable by construction)"]
 fn public_card_offers_no_authoring_or_write_control_and_holds_no_signing_key() {
-    todo!(
-        "DELIVER: Given a FakeInstance card surface; When inspecting GET / + the read surface; \
-         Then no authoring/write control is present and the read surface exposes NO write \
-         method (the write-capable PublishPort is wired ONLY in the publish composition root — \
-         ADR-062 §6). Complements the xtask `publish_write_capability_isolated` arch guard."
+    // Given Maria has pushed her claims to her instance through the REAL
+    // `publish push`.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    local_graph_of(&env, 2);
+    let instance = FakeInstance::fresh();
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
     );
+
+    // When a visitor opens the card looking for a way to edit or counter.
+    let card = open_public_card(&instance);
+
+    // Then the card offers no authoring/edit control of any kind, and its
+    // content-security-policy forbids it from submitting anywhere — there is
+    // no write affordance reachable from the read surface.
+    assert_card_is_read_only_and_unmerged(&card);
+    assert!(
+        card.content_security_policy.contains("form-action 'none'"),
+        "the card must forbid every form submission (CSP form-action 'none'); got {:?}",
+        card.content_security_policy
+    );
+
+    // And nothing the instance serves to a visitor (card or manifest) holds
+    // the owner's signing key — nor did the push ever send it (D-7).
+    assert_no_key_material_served(&instance, &env.identity);
+    assert_no_key_material_sent(&instance, &env.identity);
 }
 
 // =============================================================================
@@ -186,11 +206,49 @@ fn public_card_offers_no_authoring_or_write_control_and_holds_no_signing_key() {
 ///
 /// @us-sf-005 @anti-merging @kpi-sf-3 @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 identical claim from two authors = two rows)"]
 fn public_card_shows_two_authors_identical_claim_as_two_attributed_rows_never_one_consensus_row() {
-    todo!(
-        "DELIVER: Given identical claim content pushed under two distinct author_dids; \
-         When GET /; Then card.rows contains TWO rows (one per author_did), merged_count == 0."
+    // Given Maria and Jeff each authored the IDENTICAL claim — same subject,
+    // same philosophy (one whose very name says "consensus"), same evidence,
+    // same confidence — under their own DIDs, and both pushed it to the same
+    // instance through the REAL `publish push`.
+    let maria = TestEnv::initialized_as(FakeIdentity::maria());
+    let jeff = TestEnv::initialized_as(FakeIdentity::jeff());
+    let subject = "github:ietf/rfc7282";
+    let object = "org.openlore.philosophy.rough-consensus";
+    let maria_cid = seed_local_claim_about(&maria, subject, object);
+    let jeff_cid = seed_local_claim_about(&jeff, subject, object);
+    let instance = FakeInstance::fresh();
+    for (author, env) in [("maria", &maria), ("jeff", &jeff)] {
+        let push = run_openlore_publish(env, &["push"], &instance);
+        assert_eq!(
+            push.status, 0,
+            "{author}'s `publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            push.stdout, push.stderr
+        );
+    }
+
+    // When anyone opens the card.
+    let card = open_public_card(&instance);
+
+    // Then the identical claim shows as TWO rows, each attributed to its own
+    // author DID — never collapsed into one consensus row (KPI-SF-3).
+    assert_card_is_read_only_and_unmerged(&card);
+    let mut rows = card.rows.clone();
+    rows.sort();
+    let mut expected = [
+        expected_card_rows(&maria, &[maria_cid]),
+        expected_card_rows(&jeff, &[jeff_cid]),
+    ]
+    .concat();
+    expected.sort();
+    assert_eq!(
+        rows, expected,
+        "two authors' identical claim must render as two attributed rows;\n{}",
+        card.body
+    );
+    assert_ne!(
+        rows[0].author_did, rows[1].author_did,
+        "the two rows must carry two distinct author DIDs"
     );
 }
 
@@ -205,11 +263,47 @@ fn public_card_shows_two_authors_identical_claim_as_two_attributed_rows_never_on
 ///
 /// @us-sf-005 @dv-4 @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 reads public, no token)"]
 fn public_card_and_manifest_reads_require_no_token() {
-    todo!(
-        "DELIVER: Given a FakeInstance::requiring_write_token(tok) (writes authed); \
-         When GET / and GET /manifest WITHOUT any token; Then both return 200 (reads public), \
-         confirming the DV-4 asymmetry: public reads, owner-authed writes (PP-5 counterpart)."
+    // Given Maria's instance demands her owner write token on every write,
+    // and she has pushed a claim to it with that token.
+    let owner_token = "maria-owner-write-token-9f3c";
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let pushed_cids = local_graph_of(&env, 1);
+    let instance = FakeInstance::requiring_write_token(owner_token);
+    let push = run_openlore_publish_with_token(&env, &["push"], &instance, Some(owner_token));
+    assert_eq!(
+        push.status, 0,
+        "an owner-authed `publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+
+    // When anyone following her Bluesky link opens the card and the manifest
+    // WITHOUT any token.
+    let card = open_public_card(&instance);
+    let (manifest_status, manifest_body) = anonymous_get(&instance, "/manifest");
+
+    // Then both reads succeed — reads are public — and the card shows her
+    // pushed claim.
+    assert_card_is_read_only_and_unmerged(&card);
+    assert_eq!(
+        card.rows,
+        expected_card_rows(&env, &pushed_cids),
+        "the token-less card must show the pushed claim;\n{}",
+        card.body
+    );
+    assert_eq!(
+        manifest_status, 200,
+        "a token-less GET /manifest must be 200 (reads public, DV-4);\n{manifest_body}"
+    );
+    assert!(
+        manifest_body.contains(&pushed_cids[0]),
+        "the token-less manifest must list the pushed claim;\n{manifest_body}"
+    );
+
+    // And the asymmetry holds: the same token-less visitor cannot write.
+    assert_eq!(
+        anonymous_write_status(&instance, "bafyvisitorwrite"),
+        401,
+        "a token-less write must be refused (writes owner-authed, DV-4)"
     );
 }

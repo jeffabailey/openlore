@@ -30,7 +30,9 @@
 # authoring control (form/button/input/textarea/select/contenteditable/script)
 # nor a merged/consensus row; and a hostile manifest entry (raw committing PUT
 # carrying `<script>` etc. — the CLI cannot author such a claim) renders
-# HTML-escaped.
+# HTML-escaped. Step 04-02: the merged-row check is STRUCTURAL (one DID per
+# row), a second identity's identical claim renders as its own attributed row
+# (PC-5), and token-less GET / + GET /manifest answer 200 (PC-6).
 #
 # Usage: atproto/scripts/contract-roundtrip.sh [path/to/openlore]
 #   OPENLORE_BIN   the openlore binary (default: target/release/openlore)
@@ -63,8 +65,40 @@ card_row_count() {
   grep -oF "${CARD_ROW_PREFIX}" "$1" | wc -l | tr -d ' '
 }
 
+# card_authors <body-file>: every row's data-author value, one per line.
+card_authors() {
+  node -e '
+    const html = require("fs").readFileSync(process.argv[1], "utf8");
+    for (const m of html.matchAll(/<li class="claim" data-cid="[^"]*" data-author="([^"]*)">/g)) {
+      console.log(m[1]);
+    }
+  ' "$1"
+}
+
+# card_merged_row_count <body-file>: STRUCTURAL anti-merging check (04-02,
+# mirrors tests/acceptance/support `is_merged_card_row`): a claim row is merged
+# unless its opening tag carries exactly one data-author holding one DID and
+# it names at most one author. Never a text match — a claim whose own words
+# say "consensus" is still one attributed row.
+card_merged_row_count() {
+  node -e '
+    const html = require("fs").readFileSync(process.argv[1], "utf8");
+    const rows = html.split("<li").slice(1)
+      .map((after) => after.split("</li>")[0])
+      .filter((row) => row.split(">")[0].includes("class=\"claim"));
+    const merged = rows.filter((row) => {
+      const tag = row.split(">")[0];
+      const authors = [...tag.matchAll(/ data-author="([^"]*)"/g)].map((m) => m[1]);
+      const labels = (row.match(/class="author"/g) || []).length;
+      const singleDid = authors.length === 1 && authors[0].startsWith("did:") && !/[ ,]/.test(authors[0]);
+      return !(singleDid && labels <= 1);
+    });
+    console.log(merged.length);
+  ' "$1"
+}
+
 # assert_card_contract <body-file> <headers-file>: 200 HTML + CSP, read-only,
-# no merged/consensus row.
+# no merged row.
 assert_card_contract() {
   local body="$1" headers="$2" marker
   head -n 1 "${headers}" | grep -q " 200" || fail "GET / is not 200: $(head -n 1 "${headers}")"
@@ -75,7 +109,8 @@ assert_card_contract() {
   for marker in '<form' '<button' '<input' '<textarea' '<select' 'contenteditable' '<script'; do
     grep -qiF "${marker}" "${body}" && fail "the card offers an authoring/script control (${marker})"
   done
-  grep -qiE 'consensus|merged' "${body}" && fail "the card shows a merged/consensus row"
+  merged_rows="$(card_merged_row_count "${body}")"
+  [[ "${merged_rows}" == "0" ]] || fail "the card shows ${merged_rows} merged row(s) (not exactly one author DID)"
   return 0
 }
 
@@ -287,6 +322,52 @@ duplicates="$(sort <<<"${manifest_cids}" | uniq -d)"
 [[ -z "${duplicates}" ]] || fail "manifest lists a CID more than once: ${duplicates}"
 echo "contract-roundtrip: re-push pushed 0; re-PUTs (incl. 8 concurrent) left the manifest at ${expected_total} distinct CIDs"
 
+# --- 5c. Two authors, one identical claim -> two attributed rows (04-02 PC-5)
+# A SECOND identity (own OPENLORE_HOME, own DID, different key seed) authors
+# the same subject/predicate/object/evidence/confidence claim and pushes it
+# to the SAME instance with the same fixture owner token. The card must show
+# it as its OWN attributed row beside the first author's — never one
+# consensus row (KPI-SF-3, ADR-016).
+SECOND_DID="did:plc:contract-roundtrip-second"
+second_author() {
+  env OPENLORE_HOME="${WORK_DIR}/home-second" OPENLORE_DID="${SECOND_DID}" \
+    OPENLORE_KEY_SEED_HEX="0202020202020202020202020202020202020202020202020202020202020202" \
+    "${OPENLORE_BIN}" "$@"
+}
+mkdir -p "${WORK_DIR}/home-second"
+second_author init --handle second.test --app-password contract-unused || fail "second author: openlore init"
+second_added="$(printf '\nN\n' | second_author claim add \
+  --subject github:rust-lang/rust \
+  --predicate embodiesPhilosophy \
+  --object org.openlore.philosophy.memory-safety \
+  --evidence https://www.rust-lang.org/ \
+  --confidence 0.5)" || fail "second author: claim add"
+second_cid="$(printf '%s\n' "${second_added}" | sed -n 's/.*Computing claim CID \([^ ]*\).*/\1/p' | head -n 1)"
+[[ -n "${second_cid}" ]] || fail "second author: no CID printed: ${second_added}"
+second_push="$(second_author publish push 2>&1)" || fail "second author: publish push: ${second_push}"
+grep -qF "${FIXTURE_WRITE_TOKEN}" <<<"${second_push}" && fail "the CLI echoed the owner token"
+card_total="$((expected_total + 1))"
+
+fetch_card "${CARD_BODY}" "${CARD_HEADERS}"
+assert_card_contract "${CARD_BODY}" "${CARD_HEADERS}"
+[[ "$(card_row_count "${CARD_BODY}")" == "${card_total}" ]] \
+  || fail "two authors' identical claims did not render as ${card_total} rows: $(cat "${CARD_BODY}")"
+distinct_authors="$(card_authors "${CARD_BODY}" | sort -u)"
+[[ "$(wc -l <<<"${distinct_authors}" | tr -d ' ')" == "2" ]] \
+  || fail "the card does not attribute rows to exactly the 2 distinct authors: ${distinct_authors}"
+second_author_did="$(grep -F "${SECOND_DID}" <<<"${distinct_authors}")" \
+  || fail "no card row is attributed to the second author ${SECOND_DID}: ${distinct_authors}"
+grep -qF "${CARD_ROW_PREFIX}${second_cid}\" data-author=\"${second_author_did}\">" "${CARD_BODY}" \
+  || fail "the second author's claim ${second_cid} is not its own row attributed to ${second_author_did}"
+echo "contract-roundtrip: two authors' identical claim renders as 2 attributed rows (2 distinct data-author values), 0 merged"
+
+# --- 5d. Reads stay public on the token-protected instance (04-02 PC-6) ----
+for path in / /manifest; do
+  read_status="$(curl -s -o /dev/null -w '%{http_code}' "${INSTANCE_URL}${path}")"
+  [[ "${read_status}" == "200" ]] || fail "a token-less GET ${path} returned ${read_status}, expected 200"
+done
+echo "contract-roundtrip: token-less GET / and GET /manifest -> 200 on the write-token-protected Worker"
+
 # --- 6. The card escapes every manifest field (04-01, XSS) ------------------
 # The CLI cannot author a claim whose fields carry markup, so commit a HOSTILE
 # display entry with a raw owner-authed PUT, exactly as a compromised or buggy
@@ -304,7 +385,7 @@ grep -qF 'a&amp;b' "${CARD_BODY}" || fail "'&' in a manifest field is not escape
 grep -qF '&#39;quoted&#39;' "${CARD_BODY}" || fail "\"'\" in a manifest field is not escaped"
 grep -qF "${CARD_ROW_PREFIX}${hostile_cid}\" data-author=\"did:plc:x&quot;&gt;&lt;script&gt;" "${CARD_BODY}" \
   || fail "the hostile author_did did not stay inside its escaped data-author attribute"
-[[ "$(card_row_count "${CARD_BODY}")" == "$((expected_total + 1))" ]] || fail "the hostile entry did not render as exactly one row"
+[[ "$(card_row_count "${CARD_BODY}")" == "$((card_total + 1))" ]] || fail "the hostile entry did not render as exactly one row"
 echo "contract-roundtrip: a hostile manifest entry renders HTML-escaped (no <script>/<img> reaches the card)"
 
-echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent; token-less writes refused, reads public; the card renders only pushed claims, attributed and escaped"
+echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent; token-less writes refused, reads public; the card renders only pushed claims, attributed and escaped, two authors' identical claim as two rows"

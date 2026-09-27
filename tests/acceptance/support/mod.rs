@@ -18429,6 +18429,68 @@ pub fn local_graph_of(env: &TestEnv, count: usize) -> Vec<String> {
 /// records (author, subject, predicate, object) at a different confidence
 /// mint different CIDs — the shape of a genuine pull conflict.
 pub fn local_graph_at_confidence(env: &TestEnv, count: usize, confidence: f64) -> Vec<String> {
+    let storage = open_local_store(env);
+    (0..count)
+        .map(|i| {
+            let unsigned = unsigned_local_claim(
+                env,
+                &format!("github:maria/project-{i:03}"),
+                "org.openlore.philosophy.local-first",
+                &format!("https://github.com/maria/project-{i:03}"),
+                confidence,
+            );
+            sign_and_store_local_claim(env, &storage, unsigned)
+        })
+        .collect()
+}
+
+/// Given: ONE signed claim `subject embodiesPhilosophy object` in the user's
+/// own local store, through the same production pipeline as
+/// [`local_graph_of`]. Two identities seeding the SAME `(subject, object)`
+/// author byte-identical claim CONTENT that differs only in `author_did` —
+/// the anti-merging precondition. Returns the Rust-minted CID.
+pub fn seed_local_claim_about(env: &TestEnv, subject: &str, object: &str) -> String {
+    let unsigned = unsigned_local_claim(env, subject, object, "https://example.org/evidence", 0.86);
+    sign_and_store_local_claim(env, &open_local_store(env), unsigned)
+}
+
+fn open_local_store(env: &TestEnv) -> adapter_duckdb::DuckDbStorageAdapter {
+    adapter_duckdb::DuckDbStorageAdapter::open(&env.duckdb_path())
+        .unwrap_or_else(|err| panic!("open the local store: {err:?}"))
+}
+
+/// The env identity's application key id (`<did>#org.openlore.application`).
+fn application_key_id(env: &TestEnv) -> String {
+    format!("{}#org.openlore.application", env.identity.author_did())
+}
+
+fn unsigned_local_claim(
+    env: &TestEnv,
+    subject: &str,
+    object: &str,
+    evidence: &str,
+    confidence: f64,
+) -> claim_domain::UnsignedClaim {
+    claim_domain::UnsignedClaim {
+        subject: subject.to_string(),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: object.to_string(),
+        evidence: vec![evidence.to_string()],
+        confidence: serde_json::from_value(serde_json::json!(confidence)).expect("confidence"),
+        author_did: claim_domain::Did(application_key_id(env)),
+        composed_at: "2026-05-25T12:00:00Z".to_string(),
+        references: Vec::new(),
+        reason: None,
+    }
+}
+
+/// Canonicalize → CID → sign with the env identity's key → write through the
+/// PRODUCTION `StoragePort`. Returns the CID.
+fn sign_and_store_local_claim(
+    env: &TestEnv,
+    storage: &adapter_duckdb::DuckDbStorageAdapter,
+    unsigned: claim_domain::UnsignedClaim,
+) -> String {
     use ports::StoragePort;
 
     let seed: [u8; 32] = (0..32)
@@ -18441,37 +18503,18 @@ pub fn local_graph_at_confidence(env: &TestEnv, count: usize, confidence: f64) -
             .to_bytes()
             .to_vec(),
     );
-    let key_id = format!("{}#org.openlore.application", env.identity.author_did());
-    let storage = adapter_duckdb::DuckDbStorageAdapter::open(&env.duckdb_path())
-        .unwrap_or_else(|err| panic!("local_graph_of: open the local store: {err:?}"));
-    (0..count)
-        .map(|i| {
-            let unsigned = claim_domain::UnsignedClaim {
-                subject: format!("github:maria/project-{i:03}"),
-                predicate: "embodiesPhilosophy".to_string(),
-                object: "org.openlore.philosophy.local-first".to_string(),
-                evidence: vec![format!("https://github.com/maria/project-{i:03}")],
-                confidence: serde_json::from_value(serde_json::json!(confidence))
-                    .expect("confidence"),
-                author_did: claim_domain::Did(key_id.clone()),
-                composed_at: "2026-05-25T12:00:00Z".to_string(),
-                references: Vec::new(),
-                reason: None,
-            };
-            let canonical = claim_domain::canonicalize(&unsigned).expect("canonicalize");
-            let cid = claim_domain::compute_cid(&canonical);
-            let mut signature = claim_domain::sign(&cid, &signing_key).expect("sign");
-            signature.verification_method = key_id.clone();
-            let signed = claim_domain::SignedClaim {
-                unsigned,
-                signature,
-            };
-            storage
-                .write_signed_claim(&signed)
-                .unwrap_or_else(|err| panic!("local_graph_of: store claim {i}: {err:?}"));
-            cid.0
-        })
-        .collect()
+    let canonical = claim_domain::canonicalize(&unsigned).expect("canonicalize");
+    let cid = claim_domain::compute_cid(&canonical);
+    let mut signature = claim_domain::sign(&cid, &signing_key).expect("sign");
+    signature.verification_method = application_key_id(env);
+    let signed = claim_domain::SignedClaim {
+        unsigned,
+        signature,
+    };
+    storage
+        .write_signed_claim(&signed)
+        .unwrap_or_else(|err| panic!("store local claim {}: {err:?}", cid.0));
+    cid.0
 }
 
 /// Given: a FakeInstance that ALREADY holds `cids` — each one's verbatim
@@ -18760,13 +18803,15 @@ pub struct CardRow {
 pub struct PublicCard {
     pub status: u16,
     pub content_type: String,
+    /// The served `content-security-policy` header (empty when absent).
+    pub content_security_policy: String,
     pub body: String,
     /// `card.rows[*]` in render order.
     pub rows: Vec<CardRow>,
     /// `card.controls.authoring` — every authoring marker found (empty = none).
     pub authoring_controls: Vec<&'static str>,
-    /// `card.rows.merged_count` — rows attributed to anything but exactly
-    /// one author DID, plus any `consensus`/`merged` row marker.
+    /// `card.rows.merged_count` — rows (structurally) attributed to anything
+    /// but exactly one author DID.
     pub merged_count: usize,
     /// The explicit empty-state marker is present.
     pub shows_empty_state: bool,
@@ -18792,21 +18837,53 @@ fn parse_card_row(after_prefix: &str) -> Option<CardRow> {
     })
 }
 
+/// Is one card row (its `<li …>` opening tag + content up to `</li>`) a
+/// MERGED row — i.e. NOT attributed to exactly one author DID? Structural,
+/// never a text match: a claim whose own words say "consensus" is still one
+/// attributed row. Merged = not exactly one `data-author` attribute, an
+/// author value that is not a single DID, or more than one author label.
+fn is_merged_card_row(row_markup: &str) -> bool {
+    let opening_tag = row_markup
+        .split_once('>')
+        .map_or(row_markup, |(tag, _)| tag);
+    let author_attributes: Vec<&str> = opening_tag
+        .split(" data-author=\"")
+        .skip(1)
+        .filter_map(|after| after.split_once('"').map(|(value, _)| value))
+        .collect();
+    let single_did = |value: &str| {
+        let author = html_unescape(value);
+        author.starts_with("did:") && !author.contains([' ', ','])
+    };
+    let author_labels = row_markup.matches("class=\"author\"").count();
+    !(author_attributes.len() == 1 && single_did(author_attributes[0]) && author_labels <= 1)
+}
+
+/// Every claim row's markup: from each `<li` whose opening tag carries the
+/// `claim` class (whatever else it carries) to its `</li>`.
+fn card_row_markups(body: &str) -> Vec<&str> {
+    body.split("<li")
+        .skip(1)
+        .map(|after| after.split_once("</li>").map_or(after, |(row, _)| row))
+        .filter(|row| {
+            let opening_tag = row.split_once('>').map_or(*row, |(tag, _)| tag);
+            opening_tag.contains("class=\"claim")
+        })
+        .collect()
+}
+
 /// Parse a served card body against the card contract.
 pub fn parse_public_card(status: u16, content_type: String, body: String) -> PublicCard {
-    let row_openings: Vec<&str> = body.split(CARD_ROW_PREFIX).skip(1).collect();
-    let rows: Vec<CardRow> = row_openings
-        .iter()
-        .filter_map(|after| parse_card_row(after))
+    let rows: Vec<CardRow> = body
+        .split(CARD_ROW_PREFIX)
+        .skip(1)
+        .filter_map(parse_card_row)
         .collect();
-    let unattributed_rows = row_openings.len() - rows.len()
-        + rows
-            .iter()
-            .filter(|row| !row.author_did.starts_with("did:") || row.author_did.contains(' '))
-            .count();
+    let merged_count = card_row_markups(&body)
+        .into_iter()
+        .filter(|row| is_merged_card_row(row))
+        .count();
     let lowered = body.to_lowercase();
-    let consensus_markers =
-        lowered.matches("consensus").count() + lowered.matches("merged").count();
     let authoring_controls = CARD_AUTHORING_MARKERS
         .into_iter()
         .filter(|marker| lowered.contains(marker))
@@ -18814,11 +18891,12 @@ pub fn parse_public_card(status: u16, content_type: String, body: String) -> Pub
     PublicCard {
         status,
         content_type,
+        content_security_policy: String::new(),
         shows_empty_state: body
             .contains(&format!("<p class=\"empty-state\">{CARD_EMPTY_STATE}</p>")),
         rows,
         authoring_controls,
-        merged_count: unattributed_rows + consensus_markers,
+        merged_count,
         body,
     }
 }
@@ -18833,10 +18911,70 @@ pub fn open_public_card(instance: &FakeInstance) -> PublicCard {
         .unwrap_or_else(|err| panic!("GET {url}: {err}"));
     let status = response.status().as_u16();
     let content_type = content_type_of(&response);
+    let content_security_policy = response
+        .headers()
+        .get("content-security-policy")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let body = response
         .text()
         .unwrap_or_else(|err| panic!("read card body from {url}: {err}"));
-    parse_public_card(status, content_type, body)
+    PublicCard {
+        content_security_policy,
+        ..parse_public_card(status, content_type, body)
+    }
+}
+
+/// An anonymous (no token, no credentials) `GET <path>` against `instance`:
+/// the `(status, body)` any visitor would observe.
+pub fn anonymous_get(instance: &FakeInstance, path: &str) -> (u16, String) {
+    let url = format!("{}{path}", instance.endpoint_url());
+    let response = shared_http_client()
+        .get(&url)
+        .send()
+        .unwrap_or_else(|err| panic!("GET {url}: {err}"));
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .unwrap_or_else(|err| panic!("read body from {url}: {err}"));
+    (status, body)
+}
+
+/// An anonymous (token-less) write attempt — `PUT /records/<cid>` with a
+/// committing manifest-entry header — returning the status the instance
+/// answers with. The DV-4 counterpart of the public reads.
+pub fn anonymous_write_status(instance: &FakeInstance, cid: &str) -> u16 {
+    let url = format!("{}/records/{cid}", instance.endpoint_url());
+    shared_http_client()
+        .put(&url)
+        .header(
+            "x-openlore-manifest-entry",
+            format!("{{\"cid\":\"{cid}\",\"author_did\":\"did:plc:visitor\"}}"),
+        )
+        .body("visitor bytes")
+        .send()
+        .unwrap_or_else(|err| panic!("PUT {url}: {err}"))
+        .status()
+        .as_u16()
+}
+
+/// Universe-bound (D-7, signing-incapable instance, READ side): nothing the
+/// instance SERVES to an anonymous visitor — the card (`GET /`) and the
+/// manifest (`GET /manifest`) — carries `identity`'s signing key in any form.
+pub fn assert_no_key_material_served(instance: &FakeInstance, identity: &FakeIdentity) {
+    let forms = key_material_forms(identity);
+    for path in ["/", "/manifest"] {
+        let (status, body) = anonymous_get(instance, path);
+        assert_eq!(status, 200, "GET {path} must be 200;\n{body}");
+        assert!(
+            !forms
+                .iter()
+                .any(|form| contains_bytes(body.as_bytes(), form)),
+            "GET {path} served signing-key material — the instance must never hold a \
+             signing key (D-7)"
+        );
+    }
 }
 
 /// Universe-bound: the card is a valid, read-only, anti-merging card — `200`

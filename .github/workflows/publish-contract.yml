@@ -16,7 +16,10 @@
 # contract — "no claims published yet" before the first push, then exactly one
 # `<li class="claim" data-cid data-author>` row per pushed claim attributed to
 # its author_did, no authoring control, no merged row, restrictive CSP, and a
-# hostile manifest entry rendered HTML-escaped. The token
+# hostile manifest entry rendered HTML-escaped. Step 04-02: the merged-row
+# check is structural (one DID per row); a SECOND identity pushing an identical
+# claim renders as its own attributed row (2 distinct data-author values, PC-5);
+# token-less GET / and GET /manifest answer 200 (PC-6). The token
 # is not a repo file, not in wrangler.toml, and not a CI secret. The
 # Rust acceptance suite covers the same contract against the FakeInstance
 # double; this job proves the Worker honours it byte-for-byte.

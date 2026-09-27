@@ -36,6 +36,11 @@
 //!    MUST NOT contain any `@ipld/*`, `multiformats` or `cbor*` package — it
 //!    is an opaque byte store; Rust `claim-domain` is the sole canonicalizer
 //!    (ADR-062 §1/§2; [`classify_atproto_npm_manifest`]).
+//! 7. `publish_write_capability_isolated`: only the `openlore publish` verb
+//!    (and the wiring it calls) may reference the write-capable `PublishPort`
+//!    (`publish_port_for`, `for_owner`, `dyn PublishPort`); every other verb
+//!    and read path uses the read-only `InstanceReadPort` (ADR-062 §6, D-7;
+//!    [`classify_publish_write_capability`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1181,6 +1186,108 @@ pub fn scan_atproto_npm_dependencies(workspace_root: &Path) -> anyhow::Result<Ve
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// `publish_write_capability_isolated` (serverless-philosophy-federation,
+// ADR-062 §6 Earned-Trust STRUCTURAL layer, D-7 / DV-4)
+// -----------------------------------------------------------------------------
+//
+// The instance capability is split by SUBTYPE (01-01): the READ-ONLY
+// `InstanceReadPort` (probe / manifest / record reads) and its write-capable
+// extension `PublishPort` (`put_record`). This rule is the structural half:
+// ONLY the `openlore publish` verb module may name / construct / wire the
+// write-capable port (`wiring::publish_port_for`, the owner-authed
+// `HttpPublishAdapter::for_owner`, `dyn PublishPort`), plus the composition
+// root that DEFINES that wiring. `verbs/peer_pull.rs`, the viewer, the card /
+// read paths and every other crate must reach an instance ONLY through the
+// read-only port. The crates that DEFINE the trait (`ports`) and implement it
+// (`adapter-publish-http`) are out of scope.
+
+/// The identifiers that name, construct or wire the write-capable publish
+/// capability.
+const PUBLISH_WRITE_CAPABILITY_TOKENS: &[&str] = &["publish_port_for", "for_owner", "PublishPort"];
+
+/// The ONLY sources (workspace-relative) allowed to reference a
+/// [`PUBLISH_WRITE_CAPABILITY_TOKENS`] entry: the `openlore publish` verb and
+/// the composition-root wiring it calls.
+const PUBLISH_WRITE_CAPABILITY_ALLOWED_SOURCES: &[&str] = &[
+    "crates/cli/src/verbs/publish.rs",
+    "crates/cli/src/wiring.rs",
+];
+
+/// The crates that DEFINE the capability (trait + adapter) — not consumers,
+/// so not scanned.
+const PUBLISH_WRITE_CAPABILITY_DEFINING_CRATES: &[&str] =
+    &["crates/ports/", "crates/adapter-publish-http/"];
+
+/// Pure rule: every reference to the write-capable publish capability in
+/// `source` (workspace-relative `rel_path`) that is NOT in an allowed or
+/// defining source, as `line N: <code>` findings. Comment lines are ignored
+/// (a doc mention is not a wiring).
+pub fn classify_publish_write_capability(rel_path: &str, source: &str) -> Vec<String> {
+    if !publish_write_capability_in_scope(rel_path) {
+        return Vec::new();
+    }
+    source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .filter_map(|(index, line)| {
+            PUBLISH_WRITE_CAPABILITY_TOKENS
+                .iter()
+                .find(|token| contains_word(line, token))
+                .map(|token| format!("line {}: `{token}` in `{}`", index + 1, line.trim()))
+        })
+        .collect()
+}
+
+/// Is `rel_path` a CONSUMER of the instance capability that the rule polices
+/// (i.e. neither an allowed publish source nor a defining crate)?
+fn publish_write_capability_in_scope(rel_path: &str) -> bool {
+    let rel_path = rel_path.replace('\\', "/");
+    !PUBLISH_WRITE_CAPABILITY_ALLOWED_SOURCES.contains(&rel_path.as_str())
+        && !PUBLISH_WRITE_CAPABILITY_DEFINING_CRATES
+            .iter()
+            .any(|prefix| rel_path.starts_with(prefix))
+}
+
+/// Effect shell for `publish_write_capability_isolated`: walk every
+/// `crates/*/src/**/*.rs` under `workspace_root` and report each reference to
+/// the write-capable publish capability outside the `openlore publish` verb.
+pub fn scan_publish_write_capability(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let crates_dir = workspace_root.join("crates");
+    if !crates_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut findings = Vec::new();
+    for entry in walkdir::WalkDir::new(&crates_dir).sort_by_file_name() {
+        let entry = entry?;
+        let path = entry.path();
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let is_crate_source = rel_path.split('/').nth(2) == Some("src");
+        if !entry.file_type().is_file() || !rel_path.ends_with(".rs") || !is_crate_source {
+            continue;
+        }
+        let source = std::fs::read_to_string(path)?;
+        findings.extend(
+            classify_publish_write_capability(&rel_path, &source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{rel_path}: {finding} — only the `openlore publish` verb may wire the \
+                         write-capable PublishPort; every other verb and read path reaches an \
+                         instance through the read-only InstanceReadPort \
+                         (publish_write_capability_isolated, ADR-062 §6 / D-7)"
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -1194,6 +1301,7 @@ pub fn run() -> anyhow::Result<i32> {
     let pubkey_seam_findings = scan_pubkey_seam_guard(&workspace_root)?;
     let viewer_fail_seam_findings = scan_viewer_fail_seam_guard(&workspace_root)?;
     let atproto_npm_findings = scan_atproto_npm_dependencies(&workspace_root)?;
+    let publish_write_findings = scan_publish_write_capability(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1202,6 +1310,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(pubkey_seam_findings);
     rendered.extend(viewer_fail_seam_findings);
     rendered.extend(atproto_npm_findings);
+    rendered.extend(publish_write_findings);
 
     if rendered.is_empty() {
         println!(
@@ -1853,6 +1962,112 @@ mod tests {
             proptest::prop_assert_eq!(clean, Vec::<String>::new());
             proptest::prop_assert_eq!(dirty, vec![banned]);
         }
+    }
+
+    // --- publish_write_capability_isolated (ADR-062 §6, D-7) -------------
+
+    #[test]
+    fn publish_write_guard_fires_on_a_non_publish_verb_or_read_path_wiring_the_write_port() {
+        let pull_wiring_writes = "use crate::wiring;\n\
+             pub fn run(url: &str) {\n\
+                 let instance = wiring::publish_port_for(url).unwrap();\n\
+             }\n";
+        let viewer_holding_writes = "struct Card { instance: Box<dyn ports::PublishPort> }\n";
+        let owner_adapter =
+            "let w = adapter_publish_http::HttpPublishAdapter::for_owner(url, token);\n";
+
+        let pull = classify_publish_write_capability(
+            "crates/cli/src/verbs/peer_pull.rs",
+            pull_wiring_writes,
+        );
+        let viewer = classify_publish_write_capability(
+            "crates/adapter-http-viewer/src/card.rs",
+            viewer_holding_writes,
+        );
+        let other_verb =
+            classify_publish_write_capability("crates/cli/src/verbs/search.rs", owner_adapter);
+
+        assert_eq!(
+            pull.len(),
+            1,
+            "peer_pull wiring the write port must be reported: {pull:?}"
+        );
+        assert!(
+            pull[0].contains("line 3") && pull[0].contains("publish_port_for"),
+            "{pull:?}"
+        );
+        assert_eq!(
+            viewer.len(),
+            1,
+            "a read path holding `dyn PublishPort` must be reported: {viewer:?}"
+        );
+        assert_eq!(
+            other_verb.len(),
+            1,
+            "a non-publish verb constructing the owner adapter: {other_verb:?}"
+        );
+    }
+
+    #[test]
+    fn publish_write_guard_is_quiet_for_the_publish_verb_comments_and_the_read_only_port() {
+        let publish_verb = "let instance = wiring::publish_port_for(&url)?;\n\
+             fn push_one(instance: &dyn PublishPort) {}\n";
+        let read_only_elsewhere = "// the write-capable `PublishPort` is wired only by `publish`\n\
+             /// never `publish_port_for` here\n\
+             let instance: Box<dyn InstanceReadPort> = wiring::instance_reader_for(url);\n";
+
+        assert_eq!(
+            classify_publish_write_capability("crates/cli/src/verbs/publish.rs", publish_verb),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            classify_publish_write_capability("crates/cli/src/wiring.rs", publish_verb),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            classify_publish_write_capability("crates/ports/src/publish.rs", publish_verb),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            classify_publish_write_capability(
+                "crates/cli/src/verbs/peer_pull.rs",
+                read_only_elsewhere
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn publish_write_guard_scan_reports_a_violating_tree_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let verbs = violating.path().join("crates/cli/src/verbs");
+        std::fs::create_dir_all(&verbs).expect("mkdir");
+        std::fs::write(
+            verbs.join("peer_pull.rs"),
+            "let w = wiring::publish_port_for(url);\n",
+        )
+        .expect("write");
+        std::fs::write(
+            verbs.join("publish.rs"),
+            "let w = wiring::publish_port_for(url);\n",
+        )
+        .expect("write");
+        let findings = scan_publish_write_capability(violating.path()).expect("scan");
+        assert_eq!(
+            findings.len(),
+            1,
+            "only peer_pull.rs is a violation: {findings:?}"
+        );
+        assert!(findings[0].contains("peer_pull.rs"), "{findings:?}");
+
+        let real_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        assert_eq!(
+            scan_publish_write_capability(real_root).expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real workspace keeps the write capability inside `openlore publish`"
+        );
     }
 
     #[test]
