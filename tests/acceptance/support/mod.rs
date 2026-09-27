@@ -18118,20 +18118,42 @@ pub fn seed_one_signed_local_claim(env: &TestEnv, confidence: f64) -> String {
     signed_cid_from_stdout(&added.stdout)
 }
 
-/// Port-exposed observable: the CIDs of the user's OWN local claims, sorted
-/// (`local.claims`). Test-support is the only place raw SQL is acceptable.
-pub fn local_claim_cids(env: &TestEnv) -> Vec<String> {
+/// Every row `sql` selects from the local DuckDB store, decoded by `decode`.
+/// `what` names the observable in panic messages. Test-support is the only
+/// place raw SQL is acceptable.
+fn query_local_store<T>(
+    env: &TestEnv,
+    what: &str,
+    sql: &str,
+    decode: impl FnMut(&duckdb::Row<'_>) -> duckdb::Result<T>,
+) -> Vec<T> {
     let conn = duckdb::Connection::open(env.duckdb_path())
-        .unwrap_or_else(|err| panic!("open DuckDB for local claim cids: {err}"));
+        .unwrap_or_else(|err| panic!("open DuckDB for {what}: {err}"));
     let mut stmt = conn
-        .prepare("SELECT cid FROM claims ORDER BY cid")
-        .expect("prepare local claim cids");
-    let cids = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .expect("query local claim cids")
-        .map(|row| row.expect("decode local claim cid"))
+        .prepare(sql)
+        .unwrap_or_else(|err| panic!("prepare {what}: {err}"));
+    let rows = stmt
+        .query_map([], decode)
+        .unwrap_or_else(|err| panic!("query {what}: {err}"))
+        .map(|row| row.unwrap_or_else(|err| panic!("decode {what}: {err}")))
         .collect();
-    cids
+    rows
+}
+
+/// Decode a row's first two columns as a `(String, String)` pair.
+fn string_pair(row: &duckdb::Row<'_>) -> duckdb::Result<(String, String)> {
+    Ok((row.get(0)?, row.get(1)?))
+}
+
+/// Port-exposed observable: the CIDs of the user's OWN local claims, sorted
+/// (`local.claims`).
+pub fn local_claim_cids(env: &TestEnv) -> Vec<String> {
+    query_local_store(
+        env,
+        "local claim cids",
+        "SELECT cid FROM claims ORDER BY cid",
+        |row| row.get(0),
+    )
 }
 
 /// Parse the `N/M CIDs verified` line `publish pull` prints and return `N`
@@ -18277,14 +18299,19 @@ pub fn local_store_bytes(env: &TestEnv) -> std::collections::BTreeMap<PathBuf, V
     snapshot
 }
 
-/// Every form the signing key could take on the wire: the seed as hex
-/// (both cases) and the raw seed / expanded keypair bytes (+ keypair hex).
-fn key_material_forms(identity: &FakeIdentity) -> Vec<Vec<u8>> {
-    let seed: [u8; 32] = (0..32)
+/// The identity's 32-byte Ed25519 seed, decoded from its hex form.
+fn identity_seed(identity: &FakeIdentity) -> [u8; 32] {
+    (0..32)
         .map(|i| u8::from_str_radix(&identity.seed_hex[2 * i..2 * i + 2], 16).expect("seed hex"))
         .collect::<Vec<_>>()
         .try_into()
-        .expect("32-byte seed");
+        .expect("32-byte seed")
+}
+
+/// Every form the signing key could take on the wire: the seed as hex
+/// (both cases) and the raw seed / expanded keypair bytes (+ keypair hex).
+fn key_material_forms(identity: &FakeIdentity) -> Vec<Vec<u8>> {
+    let seed = identity_seed(identity);
     let keypair = ed25519_dalek::SigningKey::from_bytes(&seed).to_keypair_bytes();
     let keypair_hex: String = keypair.iter().map(|b| format!("{b:02x}")).collect();
     vec![
@@ -18358,15 +18385,20 @@ pub fn assert_reads_carry_no_credentials(instance: &FakeInstance) {
     );
 }
 
-/// Universe-bound: every request the instance received was a READ (`GET`) —
-/// nothing was written to it, and it holds no records.
-pub fn assert_instance_only_read(instance: &FakeInstance) {
-    let requests = instance.recorded_requests();
-    let writes: Vec<String> = requests
+/// Every non-`GET` request the instance received, as `METHOD /path`.
+fn write_requests(instance: &FakeInstance) -> Vec<String> {
+    instance
+        .recorded_requests()
         .iter()
         .filter(|r| r.method != "GET")
         .map(|r| format!("{} {}", r.method, r.path))
-        .collect();
+        .collect()
+}
+
+/// Universe-bound: every request the instance received was a READ (`GET`) —
+/// nothing was written to it, and it holds no records.
+pub fn assert_instance_only_read(instance: &FakeInstance) {
+    let writes = write_requests(instance);
     assert!(
         writes.is_empty(),
         "the instance must only be read, never written; got {writes:?}"
@@ -18477,7 +18509,10 @@ fn unsigned_local_claim(
         object: object.to_string(),
         evidence: vec![evidence.to_string()],
         confidence: serde_json::from_value(serde_json::json!(confidence)).expect("confidence"),
-        author_did: claim_domain::Did(application_key_id(env)),
+        // The BARE DID, exactly as `claim add` writes it
+        // (`IdentityPort::author_did`); the `#org.openlore.application` key
+        // id lives only on the signature's verification method.
+        author_did: claim_domain::Did(env.identity.author_did().to_string()),
         composed_at: "2026-05-25T12:00:00Z".to_string(),
         references: Vec::new(),
         reason: None,
@@ -18493,13 +18528,8 @@ fn sign_and_store_local_claim(
 ) -> String {
     use ports::StoragePort;
 
-    let seed: [u8; 32] = (0..32)
-        .map(|i| u8::from_str_radix(&env.identity.seed_hex[2 * i..2 * i + 2], 16).expect("seed"))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("32-byte seed");
     let signing_key = claim_domain::SigningKey(
-        ed25519_dalek::SigningKey::from_bytes(&seed)
+        ed25519_dalek::SigningKey::from_bytes(&identity_seed(&env.identity))
             .to_bytes()
             .to_vec(),
     );
@@ -18558,23 +18588,31 @@ fn local_signed_claim(env: &TestEnv, cid: &str) -> claim_domain::SignedClaim {
 /// (`verified` keeps its `V/T` form). An absent line (no push has run) is
 /// all-zero.
 pub fn publish_push_counts(stdout: &str) -> (String, String, String) {
-    let field = |line: &str, name: &str| -> Option<String> {
-        line.split(',')
-            .find_map(|part| part.trim().strip_prefix(&format!("{name}: ")))
-            .map(str::to_string)
-    };
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("pushed: "))
+    summary_line(stdout, "pushed")
         .and_then(|line| {
             Some((
-                field(line, "pushed")?,
-                field(line, "skipped")?,
-                field(line, "verified")?,
+                summary_field(line, "pushed")?,
+                summary_field(line, "skipped")?,
+                summary_field(line, "verified")?,
             ))
         })
         .unwrap_or_else(|| ("0".to_string(), "0".to_string(), "0/0".to_string()))
+}
+
+/// The first (trimmed) stdout line of a `name: value, name: value, …` summary
+/// whose first field is `first_field`.
+fn summary_line<'a>(stdout: &'a str, first_field: &str) -> Option<&'a str> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(&format!("{first_field}: ")))
+}
+
+/// The value of field `name` on a `name: value, name: value, …` summary line.
+fn summary_field(line: &str, name: &str) -> Option<String> {
+    line.split(',')
+        .find_map(|part| part.trim().strip_prefix(&format!("{name}: ")))
+        .map(str::to_string)
 }
 
 /// Capture the PP-1 bulk-push universe over PORT-EXPOSED observables only:
@@ -18655,16 +18693,13 @@ pub fn local_claims_universe() -> HashSet<String> {
 /// (`cli.publish_pull.{matched,overwritten}`): `matched` keeps its `M/P` form.
 /// An absent line (no pull has run) reads as `("0/0", "0")`.
 pub fn publish_pull_counts(stdout: &str) -> (String, String) {
-    let field = |line: &str, name: &str| -> Option<String> {
-        line.split(',')
-            .find_map(|part| part.trim().strip_prefix(&format!("{name}: ")))
-            .map(str::to_string)
-    };
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("matched: "))
-        .and_then(|line| Some((field(line, "matched")?, field(line, "overwritten")?)))
+    summary_line(stdout, "matched")
+        .and_then(|line| {
+            Some((
+                summary_field(line, "matched")?,
+                summary_field(line, "overwritten")?,
+            ))
+        })
         .unwrap_or_else(|| ("0/0".to_string(), "0".to_string()))
 }
 
@@ -18697,35 +18732,23 @@ pub fn pull_universe() -> HashSet<String> {
 
 /// Port-exposed observable `local.claims.author_by_cid`: every row of the
 /// user's OWN local `claims` table keyed by CID, with the `author_did` it is
-/// attributed to. Test-support is the only place raw SQL is acceptable.
+/// attributed to.
 pub fn local_claim_authors(env: &TestEnv) -> std::collections::BTreeMap<String, String> {
-    let conn = duckdb::Connection::open(env.duckdb_path())
-        .unwrap_or_else(|err| panic!("open DuckDB for local claim authors: {err}"));
-    let mut stmt = conn
-        .prepare("SELECT cid, author_did FROM claims ORDER BY cid")
-        .expect("prepare local claim authors");
-    let authors = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .expect("query local claim authors")
-        .map(|row| row.expect("decode local claim author"))
-        .collect();
-    authors
+    query_local_store(
+        env,
+        "local claim authors",
+        "SELECT cid, author_did FROM claims ORDER BY cid",
+        string_pair,
+    )
+    .into_iter()
+    .collect()
 }
 
 /// Parse the `conflicts: C` field of `publish pull`'s reconcile summary line
 /// (`cli.publish_pull.conflicts`). An absent line (no pull has run) is `0`.
 pub fn publish_pull_conflicts(stdout: &str) -> String {
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("matched: "))
-        .and_then(|line| {
-            line.split(',')
-                .find_map(|part| part.trim().strip_prefix("conflicts: "))
-                .map(str::to_string)
-        })
+    summary_line(stdout, "matched")
+        .and_then(|line| summary_field(line, "conflicts"))
         .unwrap_or_else(|| "0".to_string())
 }
 
@@ -19153,22 +19176,14 @@ pub fn subscribe_to_peer_instance(env: &TestEnv, peer_did: &str, instance: &Fake
 }
 
 /// Port-exposed observable `peer_storage.claims`: every `peer_claims` row as
-/// `(cid, author_did)`, sorted by CID. Test-support is the only place raw SQL
-/// is acceptable.
+/// `(cid, author_did)`, sorted by CID.
 pub fn peer_claim_rows(env: &TestEnv) -> Vec<(String, String)> {
-    let conn = duckdb::Connection::open(env.duckdb_path())
-        .unwrap_or_else(|err| panic!("open DuckDB for peer claim rows: {err}"));
-    let mut stmt = conn
-        .prepare("SELECT cid, author_did FROM peer_claims ORDER BY cid")
-        .expect("prepare peer claim rows");
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .expect("query peer claim rows")
-        .map(|row| row.expect("decode peer claim row"))
-        .collect();
-    rows
+    query_local_store(
+        env,
+        "peer claim rows",
+        "SELECT cid, author_did FROM peer_claims ORDER BY cid",
+        string_pair,
+    )
 }
 
 /// The universe slot naming the peer-claims row count attributed to `did`.
@@ -19242,12 +19257,7 @@ pub fn assert_instance_served_record(instance: &FakeInstance, cid: &str) {
 /// Universe-bound: the peer instance was only ever READ (every request a
 /// `GET`) — the pull holds no write capability toward it.
 pub fn assert_peer_instance_only_read(instance: &FakeInstance) {
-    let writes: Vec<String> = instance
-        .recorded_requests()
-        .iter()
-        .filter(|r| r.method != "GET")
-        .map(|r| format!("{} {}", r.method, r.path))
-        .collect();
+    let writes = write_requests(instance);
     assert!(
         writes.is_empty(),
         "a peer pull must never write to the peer's instance; got {writes:?}"
