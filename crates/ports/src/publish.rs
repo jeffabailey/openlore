@@ -79,6 +79,9 @@ pub const REASON_INSTANCE_UNREACHABLE: &str = "publish.instance_unreachable";
 pub const REASON_CID_ROUNDTRIP_FAILED: &str = "publish.cid_roundtrip_failed";
 /// The URL is reachable but its `/manifest` lacks the openlore marker.
 pub const REASON_NOT_AN_OPENLORE_INSTANCE: &str = "publish.not_an_openlore_instance";
+/// The instance refused a write: the per-instance owner token was missing or
+/// wrong (DV-4 / Q-SF-D2). Reads never need it.
+pub const REASON_UNAUTHORIZED_WRITE: &str = "publish.unauthorized_write";
 
 /// Why an instance operation failed. Railway-style: every adapter failure is
 /// a value, never a panic.
@@ -90,6 +93,13 @@ pub enum InstanceError {
     NotAnOpenloreInstance { detail: String },
     #[error("record {cid} not found on the instance")]
     RecordNotFound { cid: String },
+    /// The instance refused a write (HTTP 401/403): the owner write token was
+    /// missing or wrong. Never carries the token itself.
+    #[error(
+        "unauthorized write ({REASON_UNAUTHORIZED_WRITE}): the instance at {url} refused the \
+         write (HTTP {status}); set the instance owner token in OPENLORE_PUBLISH_TOKEN"
+    )]
+    UnauthorizedWrite { url: String, status: u16 },
     #[error("instance rejected the request (HTTP {status}): {detail}")]
     Rejected { status: u16, detail: String },
 }
@@ -101,6 +111,7 @@ impl InstanceError {
         match self {
             Self::Unreachable { .. } => Some(REASON_INSTANCE_UNREACHABLE),
             Self::NotAnOpenloreInstance { .. } => Some(REASON_NOT_AN_OPENLORE_INSTANCE),
+            Self::UnauthorizedWrite { .. } => Some(REASON_UNAUTHORIZED_WRITE),
             Self::RecordNotFound { .. } | Self::Rejected { .. } => None,
         }
     }

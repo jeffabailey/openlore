@@ -14,8 +14,6 @@
 //!
 //! Only the CLI↔Worker seam is faked (`FakeInstance`). Layer 3; example-only
 //! (Mandate 11 — the interrupted-resume sad path is a named example, not PBT).
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -223,13 +221,66 @@ fn publish_push_never_mutates_the_local_store() {
 ///
 /// @us-sf-003 @error @dv-4 @q-sf-d2 @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-003 write path requires owner token)"]
 fn publish_push_requires_the_owner_write_token_and_is_refused_without_it() {
-    todo!(
-        "DELIVER: Given a FakeInstance::requiring_write_token(tok); \
-         When `publish push` WITHOUT the token; Then exit non-zero, 'unauthorized write' \
-         reported, instance.records.cids UNCHANGED; \
-         And WITH the correct owner token the same push stores the records. Binds Q-SF-D2 \
-         detailed write-auth contract; reads-public counterpart is public_card.rs PC-6."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria's local graph of 5 signed claims, and her EMPTY instance
+    // that accepts writes only with her per-instance owner token.
+    let owner_token = "pp5-owner-write-token-9f3c1e7a";
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cids = local_graph_of(&env, 5);
+    let instance = FakeInstance::requiring_write_token(owner_token);
+    let before = capture_push_universe(&env, &instance, "");
+
+    // When she pushes WITHOUT the token, and again with a WRONG one.
+    for (attempt, token) in [
+        ("no token", None),
+        ("wrong token", Some("not-the-owner-token")),
+    ] {
+        let refused = run_openlore_publish_with_token(&env, &["push"], &instance, token);
+
+        // Then the instance refuses the write: the CLI exits non-zero and
+        // says the write was unauthorized ...
+        assert_ne!(
+            refused.status, 0,
+            "a push with {attempt} must exit non-zero;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            refused.stdout, refused.stderr
+        );
+        assert!(
+            format!("{}{}", refused.stdout, refused.stderr).contains("unauthorized write"),
+            "a push with {attempt} must report 'unauthorized write';\n--- stdout ---\n{}\n\
+             --- stderr ---\n{}",
+            refused.stdout,
+            refused.stderr
+        );
+        assert_token_never_echoed(&refused, owner_token);
+        // ... and NOTHING is stored: every slot of the push universe
+        // (instance.records.cids, the push counts, the local row count) is
+        // unchanged — the empty delta.
+        let after_refusal = capture_push_universe(&env, &instance, &refused.stdout);
+        assert_state_delta(&before, &after_refusal, &push_universe(), &Delta::new());
+    }
+
+    // When she pushes WITH the correct owner token.
+    let accepted = run_openlore_publish_with_token(&env, &["push"], &instance, Some(owner_token));
+    assert_eq!(
+        accepted.status, 0,
+        "a push with the owner token must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        accepted.stdout, accepted.stderr
     );
+    assert_token_never_echoed(&accepted, owner_token);
+    let after = capture_push_universe(&env, &instance, &accepted.stdout);
+
+    // Then the same push stores all 5 records, CID-verified.
+    let mut all_local = local_cids.clone();
+    all_local.sort();
+    let expected = Delta::new()
+        .with_slot("instance.records.cids", set_to(format!("{all_local:?}")))
+        .with_slot("cli.publish.pushed", set_to("5".to_string()))
+        .with_slot("cli.publish.verified", set_to("5/5".to_string()));
+    assert_state_delta(&before, &after, &push_universe(), &expected);
+
+    // And the token only ever travels on writes: no read (GET) that crossed
+    // the seam carried an Authorization header (capability split, ADR-062 §6).
+    assert_reads_carry_no_credentials(&instance);
 }

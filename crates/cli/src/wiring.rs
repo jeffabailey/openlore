@@ -29,7 +29,7 @@ use adapter_atproto_pds::AtProtoPdsAdapter;
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
 use adapter_index_query::HttpIndexQueryAdapter;
-use adapter_publish_http::HttpPublishAdapter;
+use adapter_publish_http::{HttpPublishAdapter, WriteToken};
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
@@ -271,11 +271,35 @@ impl Wiring {
 // use and surface a refusal as `health.startup.refused`.
 // -----------------------------------------------------------------------------
 
-/// Wire the WRITE-capable `PublishPort` for `instance_url`. The ONLY place in
+/// Env seam carrying the per-instance owner write token (DV-4 / Q-SF-D2).
+/// Read ONLY when wiring the write-capable port; never persisted, echoed, or
+/// logged. (Persisting it in the OS keychain is a follow-up.)
+pub const PUBLISH_TOKEN_ENV: &str = "OPENLORE_PUBLISH_TOKEN";
+
+/// Wire the WRITE-capable `PublishPort` for `instance_url`, carrying the
+/// owner write token from [`PUBLISH_TOKEN_ENV`] when set. The ONLY place in
 /// the workspace that constructs it — called solely by `openlore publish`
-/// verbs that write (`push`).
-pub fn publish_port_for(instance_url: &str) -> Box<dyn PublishPort> {
-    Box::new(HttpPublishAdapter::for_instance(instance_url))
+/// verbs that write (`push`). The read-only wiring below never sees the token.
+pub fn publish_port_for(instance_url: &str) -> anyhow::Result<Box<dyn PublishPort>> {
+    let write_token = owner_write_token()?;
+    Ok(Box::new(HttpPublishAdapter::for_owner(
+        instance_url,
+        write_token,
+    )))
+}
+
+/// The owner write token from the env seam: unset/empty is `None` (the
+/// instance will refuse the write); an illegal value is an error that never
+/// echoes it.
+fn owner_write_token() -> anyhow::Result<Option<WriteToken>> {
+    match std::env::var(PUBLISH_TOKEN_ENV) {
+        Ok(raw) if !raw.is_empty() => WriteToken::parse(&raw).map(Some).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{PUBLISH_TOKEN_ENV} is not a legal bearer token (visible ASCII, no whitespace)"
+            )
+        }),
+        _ => Ok(None),
+    }
 }
 
 /// Wire the READ-ONLY `InstanceReadPort` for `instance_url` (no write

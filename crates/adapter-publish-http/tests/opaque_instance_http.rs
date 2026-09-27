@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
-use adapter_publish_http::{HttpPublishAdapter, MANIFEST_ENTRY_HEADER};
+use adapter_publish_http::{HttpPublishAdapter, WriteToken, MANIFEST_ENTRY_HEADER};
 use claim_domain::Cid;
 use ports::{
     InstanceReadPort, ManifestEntry, ProbeOutcome, ProbeRefusalReason, PublishPort, RecordBytes,
@@ -224,4 +224,48 @@ fn read_back_returns_divergent_bytes_verbatim_so_the_core_can_reject_them() {
         missing,
         Err(ports::InstanceError::RecordNotFound { .. })
     ));
+}
+
+#[test]
+fn a_refused_write_is_a_typed_unauthorized_write_and_only_writes_carry_the_owner_token() {
+    let (base_url, seen) = serve(Box::new(|req| {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("GET", "/manifest") => (200, marked_manifest()),
+            _ => (401, b"missing or invalid owner token".to_vec()),
+        }
+    }));
+    let token = WriteToken::parse("owner-token-under-test").expect("a legal bearer token");
+    let adapter = HttpPublishAdapter::for_owner(&base_url, Some(token));
+    let cid = Cid("bafyexample".to_string());
+
+    assert!(matches!(adapter.probe(), ProbeOutcome::Ok));
+    let refused = adapter
+        .put_record(&cid, &RecordBytes(b"{}".to_vec()))
+        .expect_err("a 401 must refuse the write");
+
+    assert!(
+        matches!(refused, ports::InstanceError::UnauthorizedWrite { .. }),
+        "a 401 is an unauthorized write — not unreachable, not 'not an instance'; got {refused:?}"
+    );
+    assert_eq!(refused.reason_code(), Some("publish.unauthorized_write"));
+    assert!(
+        !refused.to_string().contains("owner-token-under-test"),
+        "the token must never appear in the error"
+    );
+    let seen = seen.lock().expect("seen").clone();
+    let authorization_of = |method: &str| -> Vec<Option<String>> {
+        seen.iter()
+            .filter(|r| r.method == method)
+            .map(|r| r.header("authorization").map(str::to_string))
+            .collect()
+    };
+    assert_eq!(
+        authorization_of("PUT"),
+        vec![Some("Bearer owner-token-under-test".to_string())]
+    );
+    assert_eq!(
+        authorization_of("GET"),
+        vec![None],
+        "reads never carry the token"
+    );
 }

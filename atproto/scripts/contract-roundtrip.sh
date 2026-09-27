@@ -11,6 +11,15 @@
 # asserts idempotency (step 02-02): a re-push reports `pushed: 0` and raw
 # re-PUTs (incl. concurrent ones) of a committed CID never grow the manifest.
 #
+# Write auth (step 02-03, DV-4 / Q-SF-D2): the script GENERATES a throwaway
+# fixture owner token into the git-ignored `atproto/.dev.vars`
+# (OPENLORE_WRITE_TOKEN — the Worker secret under `wrangler dev`) and hands
+# the same value to the CLI via OPENLORE_PUBLISH_TOKEN. It first asserts that
+# a token-less (and a wrong-token) push is refused as an `unauthorized write`
+# with nothing stored, and that reads stay public. An existing developer
+# `.dev.vars` is backed up and restored on exit. No real Cloudflare credential
+# is ever involved.
+#
 # Usage: atproto/scripts/contract-roundtrip.sh [path/to/openlore]
 #   OPENLORE_BIN   the openlore binary (default: target/release/openlore)
 #   CONTRACT_PORT  local port for wrangler dev (default: 8787)
@@ -33,6 +42,9 @@ fail() {
 WORK_DIR="$(mktemp -d)"
 WRANGLER_LOG="${WORK_DIR}/wrangler.log"
 WRANGLER_PID=""
+DEV_VARS="${ATPROTO_DIR}/.dev.vars"
+DEV_VARS_BACKUP="${WORK_DIR}/dev.vars.backup"
+AUTH_HEADER_FILE="${WORK_DIR}/owner-auth.header"
 
 cleanup() {
   if [[ -n "${WRANGLER_PID}" ]]; then
@@ -40,9 +52,21 @@ cleanup() {
     kill -TERM -- "-${WRANGLER_PID}" 2>/dev/null || kill -TERM "${WRANGLER_PID}" 2>/dev/null || true
     wait "${WRANGLER_PID}" 2>/dev/null || true
   fi
+  # Restore the developer's own .dev.vars (if any); never leave the fixture.
+  if [[ -f "${DEV_VARS_BACKUP}" ]]; then
+    mv -f "${DEV_VARS_BACKUP}" "${DEV_VARS}"
+  else
+    rm -f "${DEV_VARS}"
+  fi
   rm -rf "${WORK_DIR}"
 }
 trap cleanup EXIT
+
+# --- 0. A throwaway FIXTURE owner write token (never a real credential) -----
+FIXTURE_WRITE_TOKEN="contract-fixture-$(openssl rand -hex 24 2>/dev/null || od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+[[ -f "${DEV_VARS}" ]] && cp -p "${DEV_VARS}" "${DEV_VARS_BACKUP}"
+( umask 077; printf 'OPENLORE_WRITE_TOKEN=%s\n' "${FIXTURE_WRITE_TOKEN}" >"${DEV_VARS}" )
+( umask 077; printf 'authorization: Bearer %s\n' "${FIXTURE_WRITE_TOKEN}" >"${AUTH_HEADER_FILE}" )
 
 # --- 1. The Worker under LOCAL workerd, with fresh Durable Object state -------
 set -m
@@ -98,9 +122,42 @@ for confidence in "${GOLD_CONFIDENCES[@]}"; do
   seeded_cids+=("${cid}")
 done
 
+# --- 2b. Write auth (step 02-03, DV-4): writes need the owner token ----------
+# Reads are public: the card and the manifest answer without any token.
+curl -fsS -o /dev/null "${INSTANCE_URL}/" || fail "GET / must not require a token"
+curl -fsS -o /dev/null "${INSTANCE_URL}/manifest" || fail "GET /manifest must not require a token"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "${INSTANCE_URL}/records/bafynotstored")" == "404" ]] \
+  || fail "GET /records/:cid must not require a token (expected a public 404)"
+
+# A raw token-less PUT is refused with 401 and stores nothing.
+raw_status="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT --data-binary "x" \
+  "${INSTANCE_URL}/records/bafytokenless")"
+[[ "${raw_status}" == "401" ]] || fail "a token-less raw PUT returned ${raw_status}, expected 401"
+
+# A token-less CLI push, and a wrong-token one, are refused as an
+# `unauthorized write`; the manifest stays empty.
+refused_push() {
+  local label="$1" out
+  shift
+  if out="$("$@" 2>&1)"; then
+    fail "a ${label} push was accepted: ${out}"
+  fi
+  grep -q "unauthorized write" <<<"${out}" || fail "a ${label} push did not report 'unauthorized write': ${out}"
+  grep -qF "${FIXTURE_WRITE_TOKEN}" <<<"${out}" && fail "the CLI echoed the owner token"
+  echo "contract-roundtrip: ${label} push refused as unauthorized write"
+}
+refused_push "token-less" env -u OPENLORE_PUBLISH_TOKEN "${OPENLORE_BIN}" publish push
+refused_push "wrong-token" env OPENLORE_PUBLISH_TOKEN=not-the-owner-token "${OPENLORE_BIN}" publish push
+grep -q '"cid"' <<<"$(curl -fsS "${INSTANCE_URL}/manifest")" \
+  && fail "a refused push stored a record"
+
+# From here on the CLI is the owner: the same fixture value the Worker holds.
+export OPENLORE_PUBLISH_TOKEN="${FIXTURE_WRITE_TOKEN}"
+
 # --- 3. The real CLI round trip: init -> push -> pull ------------------------
 "${OPENLORE_BIN}" publish init "${INSTANCE_URL}" || fail "publish init ${INSTANCE_URL}"
-push_out="$("${OPENLORE_BIN}" publish push)" || fail "publish push: ${push_out}"
+push_out="$("${OPENLORE_BIN}" publish push 2>&1)" || fail "publish push: ${push_out}"
+grep -qF "${FIXTURE_WRITE_TOKEN}" <<<"${push_out}" && fail "the CLI echoed the owner token"
 echo "${push_out}"
 pull_out="$("${OPENLORE_BIN}" publish pull)" || fail "publish pull (a CID did not verify): ${pull_out}"
 echo "${pull_out}"
@@ -134,7 +191,7 @@ target_cid="${seeded_cids[0]}"
 original_bytes="$(curl -fsS "${INSTANCE_URL}/records/${target_cid}" | shasum -a 256)"
 reput_entry="{\"cid\":\"${target_cid}\",\"note\":\"re-put\"}"
 reput() {
-  curl -fsS -o /dev/null -X PUT --data-binary "not-the-original-bytes" "$@" \
+  curl -fsS -o /dev/null -X PUT -H "@${AUTH_HEADER_FILE}" --data-binary "not-the-original-bytes" "$@" \
     "${INSTANCE_URL}/records/${target_cid}"
 }
 reput -H "x-openlore-manifest-entry: ${reput_entry}" || fail "committing re-PUT was not a success"
@@ -159,4 +216,4 @@ duplicates="$(sort <<<"${manifest_cids}" | uniq -d)"
 [[ -z "${duplicates}" ]] || fail "manifest lists a CID more than once: ${duplicates}"
 echo "contract-roundtrip: re-push pushed 0; re-PUTs (incl. 8 concurrent) left the manifest at ${expected_total} distinct CIDs"
 
-echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent"
+echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent; token-less writes refused, reads public"

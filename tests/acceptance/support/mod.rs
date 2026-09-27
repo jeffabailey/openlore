@@ -17996,11 +17996,30 @@ pub use openlore_test_support::FakeInstance;
 /// `publish init` (so sad-path scenarios can aim at a posture without
 /// registering it first).
 pub fn run_openlore_publish(env: &TestEnv, args: &[&str], instance: &FakeInstance) -> CliOutcome {
+    run_openlore_publish_with_token(env, args, instance, None)
+}
+
+/// The env seam carrying the per-instance owner write token to the CLI
+/// (DV-4 / Q-SF-D2).
+pub const PUBLISH_TOKEN_ENV: &str = "OPENLORE_PUBLISH_TOKEN";
+
+/// [`run_openlore_publish`] with the owner write token set (`Some`) or
+/// absent (`None`) in the CLI's otherwise clean environment.
+pub fn run_openlore_publish_with_token(
+    env: &TestEnv,
+    args: &[&str],
+    instance: &FakeInstance,
+    write_token: Option<&str>,
+) -> CliOutcome {
     let bin = assert_cmd::cargo::cargo_bin("openlore");
-    let output = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command.env_clear();
+    if let Some(token) = write_token {
+        command.env(PUBLISH_TOKEN_ENV, token);
+    }
+    let output = command
         .arg("publish")
         .args(args)
-        .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_DID", env.identity.author_did())
         .env("OPENLORE_KEY_SEED_HEX", &env.identity.seed_hex)
@@ -18309,6 +18328,34 @@ pub fn assert_no_key_material_sent(instance: &FakeInstance, identity: &FakeIdent
             );
         }
     }
+}
+
+/// Universe-bound (DV-4): the owner write token never appears in the CLI's
+/// stdout or stderr — it is a secret, never echoed or logged.
+pub fn assert_token_never_echoed(outcome: &CliOutcome, token: &str) {
+    for (stream, text) in [("stdout", &outcome.stdout), ("stderr", &outcome.stderr)] {
+        assert!(
+            !text.contains(token),
+            "the owner write token must never be echoed, but it appeared on {stream}"
+        );
+    }
+}
+
+/// Universe-bound (DV-4, ADR-062 §6 capability split): no READ (`GET`) that
+/// crossed the CLI↔instance seam carried an `Authorization` header — the
+/// owner token travels only on writes.
+pub fn assert_reads_carry_no_credentials(instance: &FakeInstance) {
+    let credentialed_reads: Vec<String> = instance
+        .recorded_requests()
+        .iter()
+        .filter(|r| r.method == "GET")
+        .filter(|r| r.headers.iter().any(|(name, _)| name == "authorization"))
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert!(
+        credentialed_reads.is_empty(),
+        "reads are public and must never carry the write token; got {credentialed_reads:?}"
+    );
 }
 
 /// Universe-bound: every request the instance received was a READ (`GET`) —

@@ -12,6 +12,12 @@
 //! | `put_record` | `PUT /records/:cid` — body = the verbatim record bytes (stage) |
 //! | `commit_manifest_entry` | `PUT /records/:cid` + the [`MANIFEST_ENTRY_HEADER`] display projection (commit) |
 //!
+//! Write auth (DV-4 / Q-SF-D2): an adapter built with [`HttpPublishAdapter::for_owner`]
+//! sends `Authorization: Bearer <owner token>` on its `PUT`s ONLY — never on a
+//! `GET`; one built with [`HttpPublishAdapter::for_instance`] (the read-only
+//! wiring) holds no token at all. A `401`/`403` on a write is the typed
+//! [`InstanceError::UnauthorizedWrite`] (`publish.unauthorized_write`).
+//!
 //! The adapter never parses a record blob and never computes a CID — the Rust
 //! `claim-domain` core, called by the composition root, is the sole
 //! canonicalizer.
@@ -34,15 +40,52 @@ pub const MANIFEST_ENTRY_HEADER: &str = "x-openlore-manifest-entry";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// The per-instance owner write token (DV-4): a secret. Its `Debug` is
+/// redacted and it has no `Display`, so it cannot leak into logs or errors.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WriteToken(String);
+
+impl WriteToken {
+    /// A legal bearer token: non-empty visible ASCII with no whitespace (so
+    /// it is always a valid HTTP header value). `None` otherwise.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let legal = !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_graphic());
+        legal.then(|| Self(raw.to_string()))
+    }
+
+    /// The `Authorization` header value, marked sensitive for the client.
+    fn authorization_header(&self) -> reqwest::header::HeaderValue {
+        let mut value = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.0))
+            .expect("a parsed WriteToken is visible ASCII, a legal header value");
+        value.set_sensitive(true);
+        value
+    }
+}
+
+impl std::fmt::Debug for WriteToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WriteToken(<redacted>)")
+    }
+}
+
 /// HTTP adapter bound to ONE instance base URL.
 pub struct HttpPublishAdapter {
     base_url: String,
     client: reqwest::blocking::Client,
+    /// Sent on writes only; `None` for the read-only wiring.
+    write_token: Option<WriteToken>,
 }
 
 impl HttpPublishAdapter {
-    /// Bind the adapter to an instance base URL (trailing `/` tolerated).
+    /// Bind a READ-ONLY-wired adapter to an instance base URL (trailing `/`
+    /// tolerated). It holds no write token.
     pub fn for_instance(base_url: &str) -> Self {
+        Self::for_owner(base_url, None)
+    }
+
+    /// Bind the write-capable adapter: its `PUT`s carry the owner token
+    /// (when one is configured); its `GET`s never do.
+    pub fn for_owner(base_url: &str, write_token: Option<WriteToken>) -> Self {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -51,6 +94,7 @@ impl HttpPublishAdapter {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client,
+            write_token,
         }
     }
 
@@ -102,15 +146,23 @@ impl HttpPublishAdapter {
             Some(entry) => request.header(MANIFEST_ENTRY_HEADER, entry),
             None => request,
         };
+        let request = match &self.write_token {
+            Some(token) => {
+                request.header(reqwest::header::AUTHORIZATION, token.authorization_header())
+            }
+            None => request,
+        };
         let response = request.send().map_err(|e| self.unreachable(&e))?;
-        let status = response.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            Err(InstanceError::Rejected {
-                status: status.as_u16(),
+        match response.status().as_u16() {
+            200..=299 => Ok(()),
+            status @ (401 | 403) => Err(InstanceError::UnauthorizedWrite {
+                url: self.base_url.clone(),
+                status,
+            }),
+            status => Err(InstanceError::Rejected {
+                status,
                 detail: response.text().unwrap_or_default(),
-            })
+            }),
         }
     }
 }

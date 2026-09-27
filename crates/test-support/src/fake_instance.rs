@@ -27,8 +27,9 @@
 //! openlore marker) — step 01-03, Q-SF-D5; `with_cid_mismatch` (stored bytes
 //! drift so the Rust recompute differs) — step 01-05; `with_records` (an
 //! instance that already holds committed records — a prior push) — step
-//! 02-01. The remaining adversarial posture (`requiring_write_token`) lands
-//! with the scenario that needs it.
+//! 02-01; `requiring_write_token` (every write must carry
+//! `Authorization: Bearer <owner token>`, else `401` and nothing is stored;
+//! reads stay public) — step 02-03, DV-4 / Q-SF-D2.
 //!
 //! Every request that crosses the seam — in any posture — is appended to a
 //! request log ([`FakeInstance::recorded_requests`]): method, path, headers,
@@ -153,6 +154,20 @@ fn drift_confidence(body: &[u8]) -> Vec<u8> {
     }
 }
 
+/// The owner write token a gated instance demands on every non-`GET`
+/// request (DV-4). `None` = an ungated instance (every earlier posture).
+type WriteGate = Option<Arc<str>>;
+
+/// Does `request` pass the write gate? Reads are always public; a write
+/// passes only with exactly `Authorization: Bearer <owner token>`.
+fn passes_write_gate(gate: &WriteGate, request: &RecordedRequest) -> bool {
+    match gate {
+        None => true,
+        Some(_) if request.method == "GET" => true,
+        Some(token) => request.header("authorization") == Some(&format!("Bearer {token}")),
+    }
+}
+
 /// Opaque content-addressed instance double. See module docs.
 pub struct FakeInstance {
     store: Arc<Mutex<Store>>,
@@ -214,6 +229,18 @@ impl FakeInstance {
         Self::start(preloaded, Posture::OpenloreInstance)
     }
 
+    /// A reachable, EMPTY, well-behaved openlore instance that accepts writes
+    /// ONLY from its owner: a `PUT` without `Authorization: Bearer
+    /// <owner_token>` (missing or wrong) is refused with `401` and stores
+    /// nothing; every `GET` stays public (PP-5, DV-4 / Q-SF-D2).
+    pub fn requiring_write_token(owner_token: &str) -> Self {
+        Self::start_gated(
+            Store::default(),
+            Posture::OpenloreInstance,
+            Some(Arc::from(owner_token)),
+        )
+    }
+
     /// Base URL of the running double (e.g. `http://127.0.0.1:54321`).
     pub fn endpoint_url(&self) -> &str {
         &self.base_url
@@ -251,6 +278,10 @@ impl FakeInstance {
     }
 
     fn start(initial: Store, posture: Posture) -> Self {
+        Self::start_gated(initial, posture, None)
+    }
+
+    fn start_gated(initial: Store, posture: Posture, write_gate: WriteGate) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_io()
@@ -266,7 +297,7 @@ impl FakeInstance {
             "http://{}",
             listener.local_addr().expect("FakeInstance: local_addr")
         );
-        let server = runtime.spawn(serve(listener, Arc::clone(&store), posture));
+        let server = runtime.spawn(serve(listener, Arc::clone(&store), posture, write_gate));
         Self {
             store,
             base_url,
@@ -296,7 +327,12 @@ impl Drop for FakeInstance {
 type HttpRequest = hyper::Request<hyper::body::Incoming>;
 type HttpResponse = hyper::Response<http_body_util::Full<bytes::Bytes>>;
 
-async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, posture: Posture) {
+async fn serve(
+    listener: tokio::net::TcpListener,
+    store: Arc<Mutex<Store>>,
+    posture: Posture,
+    write_gate: WriteGate,
+) {
     use hyper::server::conn::http1;
     use hyper_util::rt::TokioIo;
 
@@ -305,10 +341,16 @@ async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, post
             return;
         };
         let store = Arc::clone(&store);
+        let write_gate = write_gate.clone();
         tokio::spawn(async move {
             let svc = hyper::service::service_fn(move |req| {
                 let store = Arc::clone(&store);
-                async move { Ok::<_, std::convert::Infallible>(answer(&store, posture, req).await) }
+                let write_gate = write_gate.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(
+                        answer(&store, posture, &write_gate, req).await,
+                    )
+                }
             });
             let _ = http1::Builder::new()
                 .serve_connection(TokioIo::new(stream), svc)
@@ -317,13 +359,25 @@ async fn serve(listener: tokio::net::TcpListener, store: Arc<Mutex<Store>>, post
     }
 }
 
-/// Receive → log → answer per posture.
-async fn answer(store: &Mutex<Store>, posture: Posture, req: HttpRequest) -> HttpResponse {
+/// Receive → log → gate writes → answer per posture.
+async fn answer(
+    store: &Mutex<Store>,
+    posture: Posture,
+    write_gate: &WriteGate,
+    req: HttpRequest,
+) -> HttpResponse {
     let Some(request) = receive(req).await else {
         return respond(400, "text/plain", b"unreadable body".to_vec());
     };
     let mut guard = store.lock().expect("store");
     guard.requests.push(request.clone());
+    if !passes_write_gate(write_gate, &request) {
+        return respond(
+            401,
+            "text/plain",
+            b"missing or invalid owner token".to_vec(),
+        );
+    }
     match posture {
         Posture::OpenloreInstance | Posture::CidMismatch => route(&mut guard, posture, &request),
         Posture::OrdinaryWebSite => ordinary_web_page(),

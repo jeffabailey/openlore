@@ -6,7 +6,13 @@
 # the 0.0 / 0.5 / 1.0 gold-fixture claims, failing on any CID mismatch; then
 # a second `push` must report `pushed: 0` and raw re-PUTs (incl. concurrent
 # identical ones) of a committed CID must leave the manifest's length and
-# distinct-CID set unchanged — real Durable Object idempotency (step 02-02). The
+# distinct-CID set unchanged — real Durable Object idempotency (step 02-02).
+# Write auth (step 02-03, DV-4): the script generates a THROWAWAY fixture owner
+# token into the git-ignored `atproto/.dev.vars` (the Worker secret under
+# `wrangler dev`) and passes the same value to the CLI; it asserts that a
+# token-less (and wrong-token) push is refused as an `unauthorized write` with
+# nothing stored, and that GET /, /manifest and /records stay public. The token
+# is not a repo file, not in wrangler.toml, and not a CI secret. The
 # Rust acceptance suite covers the same contract against the FakeInstance
 # double; this job proves the Worker honours it byte-for-byte.
 #
@@ -41,7 +47,7 @@ env:
 
 jobs:
   contract:
-    name: wrangler dev round trip (0.0/0.5/1.0) + idempotency
+    name: wrangler dev round trip (0.0/0.5/1.0) + idempotency + write auth
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -67,5 +73,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build openlore
         run: cargo build --release -p cli --bin openlore
-      - name: wrangler dev -> publish init/push/pull round trip + idempotent re-push
+      - name: guard — the fixture .dev.vars is git-ignored and never tracked
+        run: |
+          git check-ignore -q atproto/.dev.vars
+          ! git ls-files --error-unmatch atproto/.dev.vars 2>/dev/null
+      - name: wrangler dev -> write-auth refusal + publish init/push/pull round trip + idempotent re-push
         run: bash atproto/scripts/contract-roundtrip.sh target/release/openlore

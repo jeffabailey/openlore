@@ -15,6 +15,9 @@
 //!   under its Rust-minted CID, read it back, recompute the CID in Rust, and
 //!   ONLY on a match commit the manifest entry (verify before manifest
 //!   append; manifest append = commit). The local store is never written.
+//!   The write path is owner-authed (DV-4): the `PUT`s carry the owner token
+//!   from `OPENLORE_PUBLISH_TOKEN`; without it (or with a wrong one) the
+//!   instance refuses and the verb fails with `publish.unauthorized_write`.
 //! - `pull` — read the manifest + every record back, re-parse, recompute each
 //!   CID in Rust, byte-match it against the key, report `N/M CIDs verified`.
 //! - `status` — READ-ONLY inspection: the registered target, its card URL,
@@ -150,7 +153,7 @@ fn init(wiring: &Wiring, instance_url: &str) -> Result<PublishOutcome, PublishVe
 
 fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let instance_url = resolve_target(wiring)?;
-    let instance = wiring::publish_port_for(&instance_url);
+    let instance = wiring::publish_port_for(&instance_url)?;
     wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
     let manifest = instance
         .fetch_manifest()
