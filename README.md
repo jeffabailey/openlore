@@ -15,7 +15,8 @@ viewer. Your claims live in a local store first; federation over
 - **Store**: an embedded DuckDB file + signed `<cid>.json` artifacts under your data home.
 - **Identity & signing**: your ATProto DID + a per-app Ed25519 key; claims are
   content-addressed (CIDv1, dag-cbor).
-- **Federation**: signed records under the `org.openlore.*` Lexicon namespace.
+- **Federation**: signed records under the `org.openlore.*` Lexicon namespace, served
+  from an ATProto PDS or from your own self-hosted serverless instance (`publish`).
 
 ## Requirements
 
@@ -150,6 +151,31 @@ ids like `org.openlore.philosophy.memory-safety`.
 ./cli.sh peer remove <did> [--purge]   # unsubscribe (--purge also deletes the cache)
 ```
 
+`peer pull` reads a peer's claims whether they are hosted on an ATProto PDS or on the
+peer's own `publish` instance (below). Every record is re-verified locally either way.
+
+### `publish` — self-host your claims (serverless)
+
+Publish your signed claims to an instance **you** own: one Cloudflare Worker + Durable
+Object (`atproto/`). The instance is a dumb, content-addressed store. The CLI mints
+every CID and re-verifies every record it reads back, and publishing never modifies
+your local store.
+
+```sh
+# One-time: deploy the Worker to your own Cloudflare account and set its write token.
+cd atproto && npx wrangler deploy && npx wrangler secret put OPENLORE_WRITE_TOKEN && cd ..
+
+./cli.sh publish init https://openlore.you.workers.dev   # probe + register the target
+./cli.sh publish status                                  # show target + reachability
+OPENLORE_PUBLISH_TOKEN=<token> ./cli.sh publish push     # send new claims (idempotent)
+./cli.sh publish pull                                    # read back + re-verify every CID
+```
+
+`push` needs the owner token (`OPENLORE_PUBLISH_TOKEN`, matching the Worker's
+`OPENLORE_WRITE_TOKEN`). Reads need no token, and the instance serves a read-only public
+card of your published claims. An unreachable instance never blocks offline authoring.
+`pull` surfaces conflicts instead of overwriting a local claim.
+
 ### `scrape github` — propose claims from a public source
 
 ```sh
@@ -194,6 +220,7 @@ at `$HOME` to use a persistent personal store.
 | `OPENLORE_HOME` | Data/config root (DuckDB + signed artifacts) | `./.openlore-home` |
 | `OPENLORE_DID` | Signing DID stub for `init` | `did:plc:local-dev` |
 | `OPENLORE_KEY_SEED_HEX` | Ed25519 seed (hex) for local signing | 64 zeros (dev key) |
+| `OPENLORE_PUBLISH_TOKEN` | Owner write token for `publish push` | unset |
 | `PROFILE` | Cargo profile for `cli.sh` (`debug`/`release`) | `debug` |
 
 The dev defaults use a throwaway key — do not publish claims signed with it as if they
