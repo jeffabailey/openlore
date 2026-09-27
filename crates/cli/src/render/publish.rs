@@ -42,15 +42,34 @@ fn render_push_result(result: &PushResult) -> String {
     }
 }
 
-/// `publish pull`: one line per record + the `N/M CIDs verified` tally.
+/// `publish pull`: one line per record, the `N/M CIDs verified` tally, the
+/// reconcile summary `matched: M/P, new: N, conflicts: C, rejected: R,
+/// overwritten: 0`, and — when every pulled record is already held locally —
+/// the in-sync confirmation. `overwritten` is always 0: the reconcile ADT has
+/// no overwrite outcome (D-6).
 pub fn render_publish_pull(report: &PullReport) -> String {
     let lines: String = report.verdicts.iter().map(render_pull_verdict).collect();
+    let pulled = report.reconciled.len();
+    let tally = publish_domain::tally_reconcile(&report.reconciled);
+    let in_sync = if tally.in_sync() {
+        format!(
+            "Local store in sync with {}: nothing new, nothing overwritten\n",
+            report.instance_url
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "Pulled {} record(s) from {}\n{lines}{}/{} CIDs verified\n",
+        "Pulled {} record(s) from {}\n{lines}{}/{} CIDs verified\n\
+         matched: {}/{pulled}, new: {}, conflicts: {}, rejected: {}, overwritten: 0\n{in_sync}",
         report.verdicts.len(),
         report.instance_url,
         report.verified_count(),
-        report.verdicts.len()
+        report.verdicts.len(),
+        tally.matched,
+        tally.new,
+        tally.conflicts,
+        tally.rejected,
     )
 }
 

@@ -31,12 +31,41 @@ use support::*;
 ///
 /// @us-sf-004 @driving_port @real-io @j-008 @happy
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-004 in-sync reconcile is a no-op)"]
 fn publish_pull_is_an_additive_reconcile_that_never_overwrites_local_claims() {
-    todo!(
-        "DELIVER: Given instance and local both holding the same 42 claims; When `publish pull`; \
-         Then 42/42 CIDs match, 0 rows overwritten, 'in sync' reported. \
-         Universe: local.claims.cids (unchanged), cli.publish_pull.{{matched,overwritten}}."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria's local store holds 42 signed claims, and her instance holds
+    // the SAME 42 (everything was pushed).
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cids = local_graph_of(&env, 42);
+    let instance = instance_already_holding(&env, &local_cids);
+    let before = capture_pull_universe(&env, "");
+
+    // When she pulls her instance back.
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        pull.status, 0,
+        "an in-sync `publish pull` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    let after = capture_pull_universe(&env, &pull.stdout);
+
+    // Then all 42 pulled CIDs match local ones and nothing is overwritten;
+    // her local CID set is UNCHANGED (implicit-unchanged slot), as is the
+    // overwritten count (0 before, 0 after).
+    let expected = Delta::new().with_slot("cli.publish_pull.matched", set_to("42/42".to_string()));
+    assert_state_delta(&before, &after, &pull_universe(), &expected);
+    assert_eq!(
+        after["cli.publish_pull.overwritten"], "0",
+        "pull must never overwrite a local claim; stdout:\n{}",
+        pull.stdout
+    );
+
+    // And the CLI tells her the stores are in sync.
+    assert!(
+        pull.stdout.contains("in sync"),
+        "an in-sync pull must say so; stdout:\n{}",
+        pull.stdout
     );
 }
 
@@ -90,11 +119,47 @@ fn publish_pull_surfaces_a_conflict_instead_of_silently_overwriting() {
 ///
 /// @us-sf-004 @kpi-sf-1 @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-004 pull recomputes identical CID)"]
 fn publish_pull_recomputes_an_identical_cid_for_every_pushed_claim() {
-    todo!(
-        "DELIVER: Given a FakeInstance holding pushed claims (incl. the 0.0/0.5/1.0 gold \
-         values); When `publish pull`; Then every recomputed CID byte-matches the stored key."
+    // Given Maria holds one signed claim at EACH gold confidence 0.0 / 0.5 /
+    // 1.0 plus a handful of ordinary claims, and her instance holds all of
+    // them exactly as a push left them (verbatim blob + display entry).
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let mut pushed: Vec<String> = gold_claims_confidence_0_half_1()
+        .into_iter()
+        .map(|confidence| seed_one_signed_local_claim(&env, confidence))
+        .collect();
+    pushed.extend(local_graph_of(&env, 5));
+    let instance = instance_already_holding(&env, &pushed);
+
+    // When she pulls her instance back.
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        pull.status, 0,
+        "`publish pull` must exit 0 (every CID verified);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+
+    // Then EVERY record, gold values included, recomputes (in Rust) to a CID
+    // byte-identical to the key it is stored under.
+    for cid in &pushed {
+        let verified_line = format!("{cid} verified");
+        assert!(
+            pull.stdout.lines().any(|line| line.trim() == verified_line),
+            "pull must report {cid} recomputed to its own key; stdout:\n{}",
+            pull.stdout
+        );
+    }
+    assert_eq!(
+        publish_verified_count(&pull.stdout),
+        pushed.len(),
+        "pull must verify all {} pushed CIDs; stdout:\n{}",
+        pushed.len(),
+        pull.stdout
+    );
+    assert!(
+        !pull.stdout.contains("MISMATCH"),
+        "no pulled record may recompute to a different CID; stdout:\n{}",
+        pull.stdout
     );
 }
 

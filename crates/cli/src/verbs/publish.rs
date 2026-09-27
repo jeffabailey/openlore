@@ -19,13 +19,17 @@
 //!   from `OPENLORE_PUBLISH_TOKEN`; without it (or with a wrong one) the
 //!   instance refuses and the verb fails with `publish.unauthorized_write`.
 //! - `pull` — read the manifest + every record back, re-parse, recompute each
-//!   CID in Rust, byte-match it against the key, report `N/M CIDs verified`.
+//!   CID in Rust, byte-match it against the key, report `N/M CIDs verified`;
+//!   then reconcile the verified records against the local store (Matched /
+//!   New / Conflict / Rejected — never an overwrite, D-6) and report the
+//!   tally. The local store is only read here.
 //! - `status` — READ-ONLY inspection: the registered target, its card URL,
 //!   and its current reachability (the same adapter probe; no write path).
 
 use anyhow::{anyhow, Context};
 use claim_domain::{Cid, SignedClaim};
-use ports::{InstanceReadPort, PageRequest, PublishPort, RoundTripVerdict};
+use ports::{ClaimRow, InstanceReadPort, PageRequest, PublishPort, RoundTripVerdict};
+use publish_domain::{LocalClaim, PulledRecord, Reconciled, RecordIdentity};
 use serde::{Deserialize, Serialize};
 
 use crate::render::{
@@ -101,11 +105,13 @@ impl PushReport {
     }
 }
 
-/// The result of `publish pull`: one verdict per manifest entry.
+/// The result of `publish pull`: one round-trip verdict and one reconcile
+/// outcome per manifest entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullReport {
     pub instance_url: String,
     pub verdicts: Vec<RoundTripVerdict>,
+    pub reconciled: Vec<Reconciled>,
 }
 
 impl PullReport {
@@ -185,13 +191,14 @@ fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let manifest = instance
         .fetch_manifest()
         .with_context(|| format!("reading the manifest of {instance_url}"))?;
-    let verdicts = publish_domain::manifest_cids(&manifest)
+    let pulled = publish_domain::manifest_cids(&manifest)
         .iter()
-        .map(|cid| verify_record(instance.as_ref(), cid))
+        .map(|cid| pull_record(instance.as_ref(), cid))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let report = PullReport {
         instance_url,
-        verdicts,
+        verdicts: pulled.iter().map(PulledRecord::verdict).collect(),
+        reconciled: publish_domain::reconcile(&own_local_claims(wiring)?, &pulled),
     };
     let all_verified = report.verified_count() == report.verdicts.len();
     Ok(PublishOutcome {
@@ -244,25 +251,18 @@ fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<
     }
 }
 
-/// Read one record back and judge its round trip in Rust. Unreadable bytes
-/// are a mismatch against an unrecoverable CID, never a pass.
-fn verify_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<RoundTripVerdict> {
+/// Read one record back and recompute it in Rust (verify-before-trust,
+/// J-003) — before it is ever classified against the local store.
+fn pull_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<PulledRecord> {
     let returned = instance
         .get_record(cid)
         .with_context(|| format!("reading {} back from the instance", cid.0))?;
-    Ok(
-        publish_domain::verify_round_trip(cid, &returned).unwrap_or_else(|unreadable| {
-            RoundTripVerdict::CidMismatch {
-                pushed: cid.clone(),
-                recomputed: Cid(format!("<unreadable: {}>", unreadable.detail)),
-            }
-        }),
-    )
+    Ok(publish_domain::recompute_pulled(cid, &returned))
 }
 
-/// The CIDs of every claim in the user's OWN local store, in the store's
-/// stable listing order (read-only port).
-fn own_claim_cids(wiring: &Wiring) -> anyhow::Result<Vec<Cid>> {
+/// Every claim row in the user's OWN local store, in the store's stable
+/// listing order (read-only port).
+fn own_claim_rows(wiring: &Wiring) -> anyhow::Result<Vec<ClaimRow>> {
     let total = wiring
         .store_read
         .count_claims()
@@ -274,7 +274,36 @@ fn own_claim_cids(wiring: &Wiring) -> anyhow::Result<Vec<Cid>> {
             limit: total as u64,
         })
         .context("listing own claims")?;
-    Ok(page.rows.into_iter().map(|row| Cid(row.cid)).collect())
+    Ok(page.rows)
+}
+
+/// The CIDs of every claim in the user's OWN local store.
+fn own_claim_cids(wiring: &Wiring) -> anyhow::Result<Vec<Cid>> {
+    Ok(own_claim_rows(wiring)?
+        .into_iter()
+        .map(|row| Cid(row.cid))
+        .collect())
+}
+
+/// Every local claim with its logical identity — what a pull reconciles
+/// against.
+fn own_local_claims(wiring: &Wiring) -> anyhow::Result<Vec<LocalClaim>> {
+    Ok(own_claim_rows(wiring)?
+        .into_iter()
+        .map(local_claim_of)
+        .collect())
+}
+
+fn local_claim_of(row: ClaimRow) -> LocalClaim {
+    LocalClaim {
+        cid: Cid(row.cid),
+        identity: RecordIdentity {
+            author_did: row.author_did,
+            subject: row.subject,
+            predicate: row.predicate,
+            object: row.object,
+        },
+    }
 }
 
 /// One of the user's own signed claims, read (never written) from its local

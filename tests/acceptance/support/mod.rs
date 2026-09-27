@@ -18595,3 +18595,51 @@ pub fn local_claims_universe() -> HashSet<String> {
     .map(str::to_string)
     .collect()
 }
+
+// -----------------------------------------------------------------------------
+// serverless-philosophy-federation slice-03 — `publish pull` reconcile (US-SF-004)
+// -----------------------------------------------------------------------------
+
+/// The counts `publish pull` reports on its reconcile summary line
+/// (`cli.publish_pull.{matched,overwritten}`): `matched` keeps its `M/P` form.
+/// An absent line (no pull has run) reads as `("0/0", "0")`.
+pub fn publish_pull_counts(stdout: &str) -> (String, String) {
+    let field = |line: &str, name: &str| -> Option<String> {
+        line.split(',')
+            .find_map(|part| part.trim().strip_prefix(&format!("{name}: ")))
+            .map(str::to_string)
+    };
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("matched: "))
+        .and_then(|line| Some((field(line, "matched")?, field(line, "overwritten")?)))
+        .unwrap_or_else(|| ("0/0".to_string(), "0".to_string()))
+}
+
+/// Capture the PR-1 pull-reconcile universe over PORT-EXPOSED observables
+/// only: the local store's sorted CID set (DuckDB read) and the CLI's
+/// reconcile report counts.
+pub fn capture_pull_universe(env: &TestEnv, pull_stdout: &str) -> HashMap<String, String> {
+    let (matched, overwritten) = publish_pull_counts(pull_stdout);
+    HashMap::from([
+        (
+            "local.claims.cids".to_string(),
+            format!("{:?}", local_claim_cids(env)),
+        ),
+        ("cli.publish_pull.matched".to_string(), matched),
+        ("cli.publish_pull.overwritten".to_string(), overwritten),
+    ])
+}
+
+/// The PR-1 universe slot names (port-exposed).
+pub fn pull_universe() -> HashSet<String> {
+    [
+        "local.claims.cids",
+        "cli.publish_pull.matched",
+        "cli.publish_pull.overwritten",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}

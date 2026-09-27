@@ -20,6 +20,10 @@
 //! 5. [`plan_push`] — Q-SF-D3: the bulk-push plan, a pure diff of the local
 //!    CID set against the instance manifest's CID set (no resume marker; the
 //!    manifest IS the commit log).
+//! 6. [`recompute_pulled`] / [`reconcile`] — US-SF-004: verify each pulled
+//!    record in Rust BEFORE trusting it, then classify it against the local
+//!    set as Matched / New / Conflict / Rejected. There is no Overwrite
+//!    outcome: the local store is the source of truth (D-6).
 //!
 //! NO I/O, NO async, NO clock. The instance never computes a CID; this crate
 //! never talks to the instance.
@@ -248,14 +252,17 @@ pub fn judge_readback(
 }
 
 fn recompute_cid(returned: &RecordBytes) -> Result<Cid, UnreadableRecord> {
+    decode_record(returned).map(|signed| signed.signature.signed_cid)
+}
+
+/// Re-parse returned bytes into a signed claim. The lexicon decode
+/// re-canonicalizes the unsigned claim through `claim-domain` and carries the
+/// RECOMPUTED CID as `signed_cid` — it never trusts a CID from the wire.
+fn decode_record(returned: &RecordBytes) -> Result<SignedClaim, UnreadableRecord> {
     let unreadable = |detail: String| UnreadableRecord { detail };
     let wire: serde_json::Value = serde_json::from_slice(&returned.0)
         .map_err(|err| unreadable(format!("record is not JSON: {err}")))?;
-    // The lexicon decode re-canonicalizes the unsigned claim through
-    // `claim-domain` and carries the RECOMPUTED CID as `signed_cid` — it never
-    // trusts a CID from the wire.
     lexicon::decode_signed_claim(&wire)
-        .map(|signed| signed.signature.signed_cid)
         .map_err(|err| unreadable(format!("record is not a signed lexicon claim: {err}")))
 }
 
@@ -289,6 +296,206 @@ pub fn manifest_cids(manifest: &InstanceManifest) -> Vec<Cid> {
         .iter()
         .map(|entry| Cid(entry.cid.clone()))
         .collect()
+}
+
+// -----------------------------------------------------------------------------
+// 6. Pull reconcile (US-SF-004, D-6: the local store is the source of truth)
+// -----------------------------------------------------------------------------
+
+/// The same LOGICAL record, independent of its CID: two claims with equal
+/// identities but different CIDs are a genuine conflict.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RecordIdentity {
+    pub author_did: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
+/// One claim the local store already holds: its CID and logical identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalClaim {
+    pub cid: Cid,
+    pub identity: RecordIdentity,
+}
+
+/// A pulled record AFTER verify-before-trust (J-003): the CID the instance
+/// lists it under (`key`) and what Rust recomputed from its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PulledRecord {
+    /// Re-parsed and re-canonicalized: the recomputed CID and the record's
+    /// logical identity. Trusted only when `recomputed == key`.
+    Recomputed {
+        key: Cid,
+        recomputed: Cid,
+        identity: RecordIdentity,
+    },
+    /// The bytes are not a signed lexicon claim at all.
+    Unreadable { key: Cid, detail: String },
+}
+
+impl PulledRecord {
+    /// The CID the instance lists this record under.
+    pub fn key(&self) -> &Cid {
+        match self {
+            PulledRecord::Recomputed { key, .. } | PulledRecord::Unreadable { key, .. } => key,
+        }
+    }
+
+    /// The round-trip verdict (KPI-SF-1) for this record. Unreadable bytes
+    /// are a mismatch against an unrecoverable CID, never a pass.
+    pub fn verdict(&self) -> RoundTripVerdict {
+        match self {
+            PulledRecord::Recomputed {
+                key, recomputed, ..
+            } => round_trip_verdict(key, recomputed),
+            PulledRecord::Unreadable { key, detail } => RoundTripVerdict::CidMismatch {
+                pushed: key.clone(),
+                recomputed: Cid(format!("<unreadable: {detail}>")),
+            },
+        }
+    }
+}
+
+/// Re-parse the bytes an instance returned under `key`, recompute their CID
+/// through `claim-domain` (the sole canonicalizer), and read their logical
+/// identity. Total: unreadable bytes are a value, not a panic.
+pub fn recompute_pulled(key: &Cid, returned: &RecordBytes) -> PulledRecord {
+    match decode_record(returned) {
+        Ok(signed) => PulledRecord::Recomputed {
+            key: key.clone(),
+            recomputed: signed.signature.signed_cid.clone(),
+            identity: identity_of(&signed),
+        },
+        Err(UnreadableRecord { detail }) => PulledRecord::Unreadable {
+            key: key.clone(),
+            detail,
+        },
+    }
+}
+
+fn identity_of(signed: &SignedClaim) -> RecordIdentity {
+    let claim = &signed.unsigned;
+    RecordIdentity {
+        author_did: claim.author_did.0.clone(),
+        subject: claim.subject.clone(),
+        predicate: claim.predicate.clone(),
+        object: claim.object.clone(),
+    }
+}
+
+/// How one pulled record reconciles against the local store. There is
+/// deliberately NO overwrite outcome: pull is additive and never replaces a
+/// local claim (D-6) — an overwrite is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reconciled {
+    /// The local store already holds this exact CID — a no-op.
+    Matched { cid: Cid },
+    /// Verified and absent locally — a candidate for insert.
+    New { cid: Cid },
+    /// Verified, but a local claim is the same logical record under a
+    /// different CID — surfaced, never auto-resolved.
+    Conflict { pulled: Cid, local: Cid },
+    /// Its bytes did not recompute to its key — never trusted.
+    Rejected { cid: Cid, verdict: RoundTripVerdict },
+}
+
+impl Reconciled {
+    /// The pulled record's key.
+    pub fn cid(&self) -> &Cid {
+        match self {
+            Reconciled::Matched { cid }
+            | Reconciled::New { cid }
+            | Reconciled::Rejected { cid, .. } => cid,
+            Reconciled::Conflict { pulled, .. } => pulled,
+        }
+    }
+}
+
+/// Classify every pulled record against the local set, in pulled order.
+/// Pure and total; one outcome per pulled record.
+pub fn reconcile(local: &[LocalClaim], pulled: &[PulledRecord]) -> Vec<Reconciled> {
+    let local_cids: HashSet<&Cid> = local.iter().map(|claim| &claim.cid).collect();
+    pulled
+        .iter()
+        .map(|record| classify_pulled(local, &local_cids, record))
+        .collect()
+}
+
+fn classify_pulled(
+    local: &[LocalClaim],
+    local_cids: &HashSet<&Cid>,
+    record: &PulledRecord,
+) -> Reconciled {
+    match record {
+        PulledRecord::Recomputed {
+            key,
+            recomputed,
+            identity,
+        } if key == recomputed => classify_verified(local, local_cids, key, identity),
+        _ => Reconciled::Rejected {
+            cid: record.key().clone(),
+            verdict: record.verdict(),
+        },
+    }
+}
+
+fn classify_verified(
+    local: &[LocalClaim],
+    local_cids: &HashSet<&Cid>,
+    cid: &Cid,
+    identity: &RecordIdentity,
+) -> Reconciled {
+    if local_cids.contains(cid) {
+        return Reconciled::Matched { cid: cid.clone() };
+    }
+    match local.iter().find(|claim| &claim.identity == identity) {
+        Some(same_record) => Reconciled::Conflict {
+            pulled: cid.clone(),
+            local: same_record.cid.clone(),
+        },
+        None => Reconciled::New { cid: cid.clone() },
+    }
+}
+
+/// How many pulled records fell into each reconcile outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReconcileTally {
+    pub matched: usize,
+    pub new: usize,
+    pub conflicts: usize,
+    pub rejected: usize,
+}
+
+impl ReconcileTally {
+    /// Every pulled record is already held locally: nothing to do.
+    pub fn in_sync(&self) -> bool {
+        self.new == 0 && self.conflicts == 0 && self.rejected == 0
+    }
+}
+
+/// Count the reconcile outcomes.
+pub fn tally_reconcile(outcomes: &[Reconciled]) -> ReconcileTally {
+    outcomes
+        .iter()
+        .fold(ReconcileTally::default(), |tally, outcome| match outcome {
+            Reconciled::Matched { .. } => ReconcileTally {
+                matched: tally.matched + 1,
+                ..tally
+            },
+            Reconciled::New { .. } => ReconcileTally {
+                new: tally.new + 1,
+                ..tally
+            },
+            Reconciled::Conflict { .. } => ReconcileTally {
+                conflicts: tally.conflicts + 1,
+                ..tally
+            },
+            Reconciled::Rejected { .. } => ReconcileTally {
+                rejected: tally.rejected + 1,
+                ..tally
+            },
+        })
 }
 
 #[cfg(test)]

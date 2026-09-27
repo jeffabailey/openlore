@@ -390,3 +390,159 @@ fn read_manifest_returns_entries_only_for_a_marked_manifest() {
         Err(InstanceError::NotAnOpenloreInstance { .. })
     ));
 }
+
+// -----------------------------------------------------------------------------
+// Pull reconcile (US-SF-004, D-6): classify every pulled record against the
+// local set — Matched / New / Conflict / Rejected. There is no Overwrite.
+// -----------------------------------------------------------------------------
+
+/// A small identity pool so generated local and pulled sets collide often.
+fn arb_identity() -> impl Strategy<Value = RecordIdentity> {
+    (0_u8..4, 0_u8..3).prop_map(|(subject, object)| RecordIdentity {
+        author_did: "did:plc:maria-test".to_string(),
+        subject: format!("github:maria/project-{subject}"),
+        predicate: "embodiesPhilosophy".to_string(),
+        object: format!("org.openlore.philosophy.p{object}"),
+    })
+}
+
+/// A small CID pool so pulled keys often coincide with local CIDs.
+fn arb_cid() -> impl Strategy<Value = Cid> {
+    (0_u8..8).prop_map(|n| Cid(format!("bafy{n}")))
+}
+
+fn arb_local_claims() -> impl Strategy<Value = Vec<LocalClaim>> {
+    prop::collection::vec(
+        (arb_cid(), arb_identity()).prop_map(|(cid, identity)| LocalClaim { cid, identity }),
+        0..8,
+    )
+}
+
+fn arb_pulled_record() -> impl Strategy<Value = PulledRecord> {
+    prop_oneof![
+        3 => (arb_cid(), arb_identity()).prop_map(|(cid, identity)| PulledRecord::Recomputed {
+            key: cid.clone(),
+            recomputed: cid,
+            identity,
+        }),
+        1 => (arb_cid(), arb_cid(), arb_identity()).prop_map(|(key, recomputed, identity)| {
+            PulledRecord::Recomputed { key, recomputed, identity }
+        }),
+        1 => (arb_cid(), "[a-z ]{0,12}")
+            .prop_map(|(key, detail)| PulledRecord::Unreadable { key, detail }),
+    ]
+}
+
+/// A local claim as it reads back from an instance that holds it verbatim.
+fn as_pulled(local: &LocalClaim) -> PulledRecord {
+    PulledRecord::Recomputed {
+        key: local.cid.clone(),
+        recomputed: local.cid.clone(),
+        identity: local.identity.clone(),
+    }
+}
+
+proptest! {
+    /// Classification PARTITIONS the pulled set: one outcome per pulled
+    /// record, in pulled order, and the tally sums to the pulled count.
+    #[test]
+    fn reconcile_partitions_the_pulled_set(
+        local in arb_local_claims(),
+        pulled in prop::collection::vec(arb_pulled_record(), 0..12),
+    ) {
+        let outcomes = reconcile(&local, &pulled);
+        let keys: Vec<&Cid> = outcomes.iter().map(Reconciled::cid).collect();
+        let pulled_keys: Vec<&Cid> = pulled.iter().map(PulledRecord::key).collect();
+        prop_assert_eq!(keys, pulled_keys);
+        let tally = tally_reconcile(&outcomes);
+        prop_assert_eq!(
+            tally.matched + tally.new + tally.conflicts + tally.rejected,
+            pulled.len()
+        );
+    }
+
+    /// Reconciling a store against its own verbatim copy is a no-op: every
+    /// record is Matched.
+    #[test]
+    fn reconciling_local_against_itself_is_all_matched(local in arb_local_claims()) {
+        let pulled: Vec<PulledRecord> = local.iter().map(as_pulled).collect();
+        let outcomes = reconcile(&local, &pulled);
+        prop_assert!(
+            outcomes.iter().all(|o| matches!(o, Reconciled::Matched { .. })),
+            "{:?}", outcomes
+        );
+        prop_assert_eq!(tally_reconcile(&outcomes).matched, local.len());
+    }
+
+    /// Verify-before-trust: a record whose recomputed CID differs from its
+    /// key (or that cannot be re-parsed) is Rejected — never New, never
+    /// Matched, never a Conflict.
+    #[test]
+    fn a_record_that_does_not_recompute_to_its_key_is_rejected(
+        local in arb_local_claims(),
+        pulled in arb_pulled_record(),
+    ) {
+        let outcome = &reconcile(&local, std::slice::from_ref(&pulled))[0];
+        let verified = matches!(
+            &pulled,
+            PulledRecord::Recomputed { key, recomputed, .. } if key == recomputed
+        );
+        prop_assert_eq!(matches!(outcome, Reconciled::Rejected { .. }), !verified);
+    }
+
+    /// A verified record already held locally (same CID) is Matched; one the
+    /// local store lacks is a Conflict iff a local claim is the same logical
+    /// record (author_did, subject, predicate, object) under another CID, and
+    /// New otherwise.
+    #[test]
+    fn a_verified_record_is_matched_new_or_a_conflict_by_cid_and_identity(
+        local in arb_local_claims(),
+        cid in arb_cid(),
+        identity in arb_identity(),
+    ) {
+        let pulled = PulledRecord::Recomputed {
+            key: cid.clone(),
+            recomputed: cid.clone(),
+            identity: identity.clone(),
+        };
+        let outcome = &reconcile(&local, std::slice::from_ref(&pulled))[0];
+        let held = local.iter().any(|l| l.cid == cid);
+        let same_record = local.iter().any(|l| l.identity == identity);
+        match outcome {
+            Reconciled::Matched { .. } => prop_assert!(held),
+            Reconciled::Conflict { local: local_cid, .. } => {
+                prop_assert!(!held && same_record);
+                prop_assert!(local.iter().any(|l| &l.cid == local_cid && l.identity == identity));
+            }
+            Reconciled::New { .. } => prop_assert!(!held && !same_record),
+            Reconciled::Rejected { .. } => prop_assert!(false, "a verified record was rejected"),
+        }
+    }
+
+    /// KPI-SF-1 on pull: the verbatim blob of ANY signed claim (0.0/0.5/1.0
+    /// confidences included) recomputes to its own CID and carries its
+    /// logical identity; bytes that are not a signed claim are Unreadable.
+    #[test]
+    fn a_pulled_blob_recomputes_to_its_own_cid_with_its_identity(signed in arb_signed_claim()) {
+        let key = signed.signature.signed_cid.clone();
+        let claim = &signed.unsigned;
+        prop_assert_eq!(
+            recompute_pulled(&key, &record_bytes_of(&signed)),
+            PulledRecord::Recomputed {
+                key: key.clone(),
+                recomputed: key.clone(),
+                identity: RecordIdentity {
+                    author_did: claim.author_did.0.clone(),
+                    subject: claim.subject.clone(),
+                    predicate: claim.predicate.clone(),
+                    object: claim.object.clone(),
+                },
+            }
+        );
+        let garbage = recompute_pulled(&key, &RecordBytes(b"not json".to_vec()));
+        prop_assert!(
+            matches!(garbage, PulledRecord::Unreadable { .. }),
+            "non-claim bytes must be Unreadable, got {:?}", garbage
+        );
+    }
+}
