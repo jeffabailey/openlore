@@ -20,8 +20,8 @@
 //! The flow above is unchanged whatever hosts the peer's claims; only the
 //! TRANSPORT differs. One `GET /manifest` probe of the resolved
 //! serviceEndpoint selects it (`publish_domain::select_peer_transport`,
-//! pure): a marker-bearing openlore instance is read through the READ-ONLY
-//! `InstanceReadPort` (`GET /manifest` + `GET /records/:cid`, the bytes
+//! pure): a marker-bearing openlore instance is read from that SAME manifest
+//! read plus `GET /records/:cid` through the READ-ONLY `InstanceReadPort` (the bytes
 //! decoded by the hoisted lexicon decode with the CID recomputed in Rust);
 //! anything else answering is the ATProto PDS path, unchanged. Either way
 //! every record then goes through the SAME `evaluate_record` verify and the
@@ -40,7 +40,9 @@
 
 use anyhow::{anyhow, Result};
 use claim_domain::{canonicalize, compute_cid, verify, Cid, Did, SignedClaim, VerifyingKey};
-use ports::{InstanceReadPort, PdsError, PeerInfo, PeerSubscription, SignedRecord};
+use ports::{
+    InstanceManifest, InstanceReadPort, PdsError, PeerInfo, PeerSubscription, SignedRecord,
+};
 use publish_domain::PeerTransport;
 
 use crate::orientation::{self, OrientationMilestone};
@@ -245,9 +247,16 @@ fn fetch_peer_records(
     peer_info: &PeerInfo,
 ) -> Result<Vec<FetchedRecord>, String> {
     let endpoint = peer_info.pds_endpoint.as_str();
-    match publish_domain::select_peer_transport(&wiring::observe_peer_endpoint(endpoint)) {
+    let observation = wiring::observe_peer_endpoint(endpoint);
+    match publish_domain::select_peer_transport(&observation) {
         PeerTransport::OpaqueInstance => {
-            read_peer_instance(wiring::instance_reader_for(endpoint).as_ref())
+            // The selecting probe already read the manifest — use that ONE read.
+            let manifest = publish_domain::classify_manifest_observation(&observation)
+                .map_err(|err| format!("instance read failed ({err})"))?;
+            Ok(read_peer_instance(
+                wiring::instance_reader_for(endpoint).as_ref(),
+                &manifest,
+            ))
         }
         PeerTransport::AtprotoPds => list_pds_records(wiring, runtime, peer_did, peer_info),
         PeerTransport::Unreachable { detail } => {
@@ -275,18 +284,18 @@ fn list_pds_records(
     }
 }
 
-/// The opaque-instance transport (ADR-062 §4): `GET /manifest`, then the
-/// verbatim bytes of every listed record via `GET /records/:cid`, through the
-/// READ-ONLY port. The manifest's display fields are never trusted — only its
-/// CID keys, which each record's recomputed CID must byte-match.
-fn read_peer_instance(instance: &dyn InstanceReadPort) -> Result<Vec<FetchedRecord>, String> {
-    let manifest = instance
-        .fetch_manifest()
-        .map_err(|err| format!("instance read failed ({err})"))?;
-    Ok(publish_domain::manifest_cids(&manifest)
+/// The opaque-instance transport (ADR-062 §4): the verbatim bytes of every
+/// record the (already-read) manifest lists, via `GET /records/:cid` through
+/// the READ-ONLY port. The manifest's display fields are never trusted — only
+/// its CID keys, which each record's recomputed CID must byte-match.
+fn read_peer_instance(
+    instance: &dyn InstanceReadPort,
+    manifest: &InstanceManifest,
+) -> Vec<FetchedRecord> {
+    publish_domain::manifest_cids(manifest)
         .iter()
         .map(|cid| read_instance_record(instance, cid))
-        .collect())
+        .collect()
 }
 
 /// Read one record's bytes under its manifest key and decode them (the

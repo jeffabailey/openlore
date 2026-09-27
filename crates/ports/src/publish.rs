@@ -6,7 +6,7 @@
 //! Rust-minted CID and computes no CID itself. Two ports model it, split by
 //! CAPABILITY (DDD-8 / ADR-062 §6 Earned Trust):
 //!
-//! - [`InstanceReadPort`] — READ-ONLY (`probe`, `fetch_manifest`,
+//! - [`InstanceReadPort`] — READ-ONLY (`probe_manifest` / `probe`,
 //!   `get_record`). Exposes NO write method, so the pull / card /
 //!   cross-instance paths that hold only this port can never write to an
 //!   instance — the type system makes it un-callable.
@@ -123,13 +123,22 @@ impl InstanceError {
 
 /// READ-ONLY instance surface. Deliberately has NO write method (DDD-8).
 pub trait InstanceReadPort {
-    /// Earned-Trust probe (ADR-062 §6, amended 2026-09-25): reachability +
-    /// the `/manifest` openlore marker ONLY — no canary write.
-    fn probe(&self) -> crate::ProbeOutcome;
+    /// Earned-Trust probe (ADR-062 §6, amended 2026-09-25) AND the verb's
+    /// one manifest read: a single `GET /manifest` checking reachability +
+    /// the openlore marker ONLY — no canary write. A passing probe hands back
+    /// the parsed manifest it observed, so a verb plans from that ONE read
+    /// and never re-reads it. A refusal carries the dotted `publish.*`
+    /// reason code in its `structured` payload.
+    fn probe_manifest(&self) -> Result<InstanceManifest, crate::ProbeRefused>;
 
-    /// `GET /manifest`, parsed; a manifest lacking the openlore marker is
-    /// [`InstanceError::NotAnOpenloreInstance`].
-    fn fetch_manifest(&self) -> Result<InstanceManifest, InstanceError>;
+    /// The Earned-Trust verdict alone — [`Self::probe_manifest`] without the
+    /// manifest, for callers that only need to know the instance is usable.
+    fn probe(&self) -> crate::ProbeOutcome {
+        match self.probe_manifest() {
+            Ok(_) => crate::ProbeOutcome::Ok,
+            Err(refused) => refused.into(),
+        }
+    }
 
     /// `GET /records/:cid` — the exact stored bytes.
     fn get_record(&self, cid: &Cid) -> Result<RecordBytes, InstanceError>;

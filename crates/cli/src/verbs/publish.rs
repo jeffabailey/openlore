@@ -195,10 +195,7 @@ fn init(wiring: &Wiring, instance_url: &str) -> Result<PublishOutcome, PublishVe
 fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let instance_url = resolve_target(wiring)?;
     let instance = wiring::publish_port_for(&instance_url)?;
-    wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
-    let manifest = instance
-        .fetch_manifest()
-        .with_context(|| format!("reading the manifest of {instance_url}"))?;
+    let manifest = wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
     let plan = publish_domain::plan_push(
         &own_claim_cids(wiring)?,
         &publish_domain::manifest_cids(&manifest),
@@ -222,10 +219,7 @@ fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
 fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let instance_url = resolve_target(wiring)?;
     let instance = wiring::instance_reader_for(&instance_url);
-    wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
-    let manifest = instance
-        .fetch_manifest()
-        .with_context(|| format!("reading the manifest of {instance_url}"))?;
+    let manifest = wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
     let fetched = publish_domain::manifest_cids(&manifest)
         .iter()
         .map(|cid| fetch_record(instance.as_ref(), cid))

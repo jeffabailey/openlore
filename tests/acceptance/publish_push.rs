@@ -82,6 +82,17 @@ fn publish_push_sends_only_new_claims_additive_and_cid_verified() {
         "the already-present claim must be skipped from the manifest diff, never probed; \
          got {touched_skipped:?}"
     );
+
+    // And the probe and the plan share ONE manifest read (roadmap 02-01 AC-4).
+    let manifest_reads = instance
+        .recorded_requests()
+        .iter()
+        .filter(|r| r.method == "GET" && r.path == "/manifest")
+        .count();
+    assert_eq!(
+        manifest_reads, 1,
+        "`publish push` must plan from the probe's single GET /manifest"
+    );
 }
 
 // =============================================================================

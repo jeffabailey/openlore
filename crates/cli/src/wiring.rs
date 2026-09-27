@@ -34,7 +34,7 @@ use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
     ClockPort, GithubPort, IdentityPort, IndexQueryPort, InstanceReadPort, PdsPort,
-    PeerStoragePort, ProbeOutcome, PublishPort, StoragePort, StoreReadPort,
+    PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -315,9 +315,15 @@ pub fn observe_peer_endpoint(endpoint_url: &str) -> publish_domain::ManifestObse
     HttpPublishAdapter::for_instance(endpoint_url).observe_manifest()
 }
 
-/// Probe an instance port; a refusal carries the `publish` adapter name.
-pub fn probe_instance(instance: &dyn InstanceReadPort) -> Result<(), ProbeRefusal> {
-    check_probe("publish", instance.probe())
+/// Probe an instance port with its ONE `GET /manifest`: a pass hands back the
+/// manifest that read observed (the verb plans from it — never a second
+/// read); a refusal carries the `publish` adapter name.
+pub fn probe_instance(
+    instance: &dyn InstanceReadPort,
+) -> Result<ports::InstanceManifest, ProbeRefusal> {
+    instance
+        .probe_manifest()
+        .map_err(|refused| ProbeRefusal::of("publish", refused))
 }
 
 /// A refusal carried up from the probe gauntlet. Holds the adapter name
@@ -332,6 +338,17 @@ pub struct ProbeRefusal {
     pub structured: serde_json::Value,
 }
 
+impl ProbeRefusal {
+    fn of(adapter: &'static str, refused: ProbeRefused) -> Self {
+        Self {
+            adapter,
+            reason: refused.reason,
+            detail: refused.detail,
+            structured: refused.structured,
+        }
+    }
+}
+
 fn check_probe(adapter: &'static str, outcome: ProbeOutcome) -> Result<(), ProbeRefusal> {
     match outcome {
         ProbeOutcome::Ok => Ok(()),
@@ -339,12 +356,14 @@ fn check_probe(adapter: &'static str, outcome: ProbeOutcome) -> Result<(), Probe
             reason,
             detail,
             structured,
-        } => Err(ProbeRefusal {
+        } => Err(ProbeRefusal::of(
             adapter,
-            reason,
-            detail,
-            structured,
-        }),
+            ProbeRefused {
+                reason,
+                detail,
+                structured,
+            },
+        )),
     }
 }
 

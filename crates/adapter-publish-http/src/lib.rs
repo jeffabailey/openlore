@@ -6,8 +6,7 @@
 //!
 //! | Port operation | Wire |
 //! |---|---|
-//! | `probe` | `GET /manifest` — reachability + the openlore marker ONLY (no canary write; ADR-062 §6 amended 2026-09-25) |
-//! | `fetch_manifest` | `GET /manifest`, parsed by the pure `publish-domain` |
+//! | `probe_manifest` / `probe` | ONE `GET /manifest` — reachability + the openlore marker ONLY (no canary write; ADR-062 §6 amended 2026-09-25), parsed by the pure `publish-domain`; a pass hands back the manifest |
 //! | `get_record` | `GET /records/:cid` — bytes returned VERBATIM |
 //! | `put_record` | `PUT /records/:cid` — body = the verbatim record bytes (stage) |
 //! | `commit_manifest_entry` | `PUT /records/:cid` + the [`MANIFEST_ENTRY_HEADER`] display projection (commit) |
@@ -28,8 +27,8 @@ use std::time::Duration;
 
 use claim_domain::Cid;
 use ports::{
-    InstanceError, InstanceManifest, InstanceReadPort, ManifestEntry, ProbeOutcome,
-    ProbeRefusalReason, PublishPort, RecordBytes,
+    InstanceError, InstanceManifest, InstanceReadPort, ManifestEntry, ProbeRefusalReason,
+    ProbeRefused, PublishPort, RecordBytes,
 };
 use publish_domain::ManifestObservation;
 
@@ -109,9 +108,10 @@ impl HttpPublishAdapter {
         }
     }
 
-    /// One `GET /manifest` attempt, observed as raw facts for the pure
-    /// classifiers (`classify_manifest_observation`, and the cross-instance
-    /// peer-transport selection `select_peer_transport`). A transport failure
+    /// One `GET /manifest` attempt, observed as raw facts — the single read
+    /// both pure classifiers derive from: the probe
+    /// (`classify_manifest_observation`) and the cross-instance
+    /// peer-transport selection (`select_peer_transport`). A transport failure
     /// (incl. a body cut off mid-read) is `Unreachable`; any HTTP response is
     /// `Responded` with its bytes. A read: it never carries the write token.
     pub fn observe_manifest(&self) -> ManifestObservation {
@@ -170,15 +170,9 @@ impl HttpPublishAdapter {
 }
 
 impl InstanceReadPort for HttpPublishAdapter {
-    fn probe(&self) -> ProbeOutcome {
-        match self.fetch_manifest() {
-            Ok(_) => ProbeOutcome::Ok,
-            Err(err) => refusal_for(&self.base_url, &err),
-        }
-    }
-
-    fn fetch_manifest(&self) -> Result<InstanceManifest, InstanceError> {
+    fn probe_manifest(&self) -> Result<InstanceManifest, ProbeRefused> {
         publish_domain::classify_manifest_observation(&self.observe_manifest())
+            .map_err(|err| refusal_for(&self.base_url, &err))
     }
 
     fn get_record(&self, cid: &Cid) -> Result<RecordBytes, InstanceError> {
@@ -220,7 +214,7 @@ impl PublishPort for HttpPublishAdapter {
 
 /// Map a failed probe into the structured `health.startup.refused` payload,
 /// carrying the dotted `publish.*` reason code.
-fn refusal_for(base_url: &str, err: &InstanceError) -> ProbeOutcome {
+fn refusal_for(base_url: &str, err: &InstanceError) -> ProbeRefused {
     let reason = match err {
         InstanceError::Unreachable { .. } => ProbeRefusalReason::PublishInstanceUnreachable,
         _ => ProbeRefusalReason::PublishNotAnOpenloreInstance,
@@ -228,7 +222,7 @@ fn refusal_for(base_url: &str, err: &InstanceError) -> ProbeOutcome {
     let reason_code = err
         .reason_code()
         .unwrap_or(ports::REASON_NOT_AN_OPENLORE_INSTANCE);
-    ProbeOutcome::Refused {
+    ProbeRefused {
         reason,
         detail: err.to_string(),
         structured: serde_json::json!({

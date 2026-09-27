@@ -31,7 +31,7 @@ use url::Url;
 // `health.startup.refused` event) lives next to its tests.
 
 mod probe;
-pub use probe::{ProbeOutcome, ProbeRefusalReason};
+pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 
 // -----------------------------------------------------------------------------
 // serverless-philosophy-federation (ADR-062) — the opaque-instance transport.

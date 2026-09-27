@@ -29,6 +29,26 @@ pub enum ProbeOutcome {
     },
 }
 
+/// The payload of a refused probe — [`ProbeOutcome::Refused`] as a
+/// standalone value, for probes that hand back what they observed on
+/// success (e.g. the opaque-instance probe returns the manifest it read).
+#[derive(Debug, Clone)]
+pub struct ProbeRefused {
+    pub reason: ProbeRefusalReason,
+    pub detail: String,
+    pub structured: serde_json::Value,
+}
+
+impl From<ProbeRefused> for ProbeOutcome {
+    fn from(refused: ProbeRefused) -> Self {
+        ProbeOutcome::Refused {
+            reason: refused.reason,
+            detail: refused.detail,
+            structured: refused.structured,
+        }
+    }
+}
+
 /// Why an adapter refused to start. `#[non_exhaustive]` so new adapters
 /// can extend the enum without a SemVer break for downstream consumers
 /// that pattern-match on it.
