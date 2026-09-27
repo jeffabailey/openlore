@@ -211,7 +211,7 @@ fn push(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
         skipped: plan.skipped.len(),
     };
     Ok(PublishOutcome {
-        exit_code: if report.all_committed() { 0 } else { 1 },
+        exit_code: exit_code_for(report.all_committed()),
         stdout: render_publish_push(&report),
     })
 }
@@ -220,11 +220,9 @@ fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let instance_url = resolve_target(wiring)?;
     let instance = wiring::instance_reader_for(&instance_url);
     let manifest = wiring::probe_instance(instance.as_ref()).map_err(PublishVerbError::Refused)?;
-    let fetched = publish_domain::manifest_cids(&manifest)
-        .iter()
-        .map(|cid| fetch_record(instance.as_ref(), cid))
-        .collect::<anyhow::Result<HashMap<_, _>>>()?;
-    let pulled = publish_domain::manifest_cids(&manifest)
+    let listed = publish_domain::manifest_cids(&manifest);
+    let fetched = fetch_records(instance.as_ref(), &listed)?;
+    let pulled = listed
         .iter()
         .map(|cid| publish_domain::recompute_pulled(cid, &fetched[cid]))
         .collect::<Vec<_>>();
@@ -244,7 +242,7 @@ fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
         foreign: selection.foreign,
     };
     Ok(PublishOutcome {
-        exit_code: if report.clean() { 0 } else { 1 },
+        exit_code: exit_code_for(report.clean()),
         stdout: render_publish_pull(&report),
     })
 }
@@ -261,6 +259,15 @@ fn status(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
             reachable,
         ),
     })
+}
+
+/// `0` when the verb fully succeeded, else `1` (a partial result was reported).
+fn exit_code_for(success: bool) -> i32 {
+    if success {
+        0
+    } else {
+        1
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -293,14 +300,22 @@ fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<
     }
 }
 
-/// Read one record's bytes back from the instance, keyed by the CID it is
-/// listed under. Nothing is trusted yet: every record is recomputed in Rust
-/// (verify-before-trust, J-003) before it is classified or inserted.
-fn fetch_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<(Cid, RecordBytes)> {
-    let returned = instance
-        .get_record(cid)
-        .with_context(|| format!("reading {} back from the instance", cid.0))?;
-    Ok((cid.clone(), returned))
+/// Read every listed record's bytes back from the instance, keyed by the CID
+/// it is listed under. Nothing is trusted yet: every record is recomputed in
+/// Rust (verify-before-trust, J-003) before it is classified or inserted.
+fn fetch_records(
+    instance: &dyn InstanceReadPort,
+    listed: &[Cid],
+) -> anyhow::Result<HashMap<Cid, RecordBytes>> {
+    listed
+        .iter()
+        .map(|cid| {
+            let returned = instance
+                .get_record(cid)
+                .with_context(|| format!("reading {} back from the instance", cid.0))?;
+            Ok((cid.clone(), returned))
+        })
+        .collect()
 }
 
 /// Insert one selected (verified New, own-author) record into the local

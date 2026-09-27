@@ -1,7 +1,7 @@
 //! Pure renderers for the `openlore publish` verbs (ADR-062). No I/O.
 
 use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
-use publish_domain::Reconciled;
+use publish_domain::{ForeignRecord, Reconciled};
 
 use crate::verbs::publish::{InsertResult, PullReport, PushReport, PushResult};
 
@@ -57,24 +57,11 @@ pub fn render_publish_pull(report: &PullReport) -> String {
     let pulled = report.reconciled.len();
     let tally = publish_domain::tally_reconcile(&report.reconciled);
     let in_sync = if tally.in_sync() {
-        format!(
-            "Local store in sync with {}: nothing new, nothing overwritten\n",
-            report.instance_url
-        )
+        render_in_sync(&report.instance_url)
     } else {
         String::new()
     };
-    let not_inserted: String = report
-        .inserts
-        .iter()
-        .filter_map(render_insert_refusal)
-        .chain(report.foreign.iter().map(|foreign| {
-            format!(
-                "  {} not inserted: foreign author {}\n",
-                foreign.cid.0, foreign.author_did
-            )
-        }))
-        .collect();
+    let not_inserted = render_not_inserted(report);
     let conflicts: String = report
         .reconciled
         .iter()
@@ -95,6 +82,25 @@ pub fn render_publish_pull(report: &PullReport) -> String {
         report.inserted_count(),
         report.inserts.len(),
         report.foreign.len(),
+    )
+}
+
+fn render_in_sync(instance_url: &str) -> String {
+    format!("Local store in sync with {instance_url}: nothing new, nothing overwritten\n")
+}
+
+/// One line per pulled record NOT inserted: selected own-author records whose
+/// signature failed, then foreign-author records (anti-merging).
+fn render_not_inserted(report: &PullReport) -> String {
+    let refused = report.inserts.iter().filter_map(render_insert_refusal);
+    let foreign = report.foreign.iter().map(render_foreign);
+    refused.chain(foreign).collect()
+}
+
+fn render_foreign(foreign: &ForeignRecord) -> String {
+    format!(
+        "  {} not inserted: foreign author {}\n",
+        foreign.cid.0, foreign.author_did
     )
 }
 
