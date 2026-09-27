@@ -374,6 +374,16 @@ pub fn recompute_pulled(key: &Cid, returned: &RecordBytes) -> PulledRecord {
     }
 }
 
+/// The logical-record key two claims are compared by: their identity with
+/// the author named by its bare DID ([`bare_did`]), so a claim signed as
+/// `<did>#<key>` and one signed as `<did>` are the same logical record.
+pub fn logical_key(identity: &RecordIdentity) -> RecordIdentity {
+    RecordIdentity {
+        author_did: bare_did(&identity.author_did).to_string(),
+        ..identity.clone()
+    }
+}
+
 fn identity_of(signed: &SignedClaim) -> RecordIdentity {
     let claim = &signed.unsigned;
     RecordIdentity {
@@ -395,7 +405,11 @@ pub enum Reconciled {
     New { cid: Cid },
     /// Verified, but a local claim is the same logical record under a
     /// different CID — surfaced, never auto-resolved.
-    Conflict { pulled: Cid, local: Cid },
+    Conflict {
+        pulled: Cid,
+        local: Cid,
+        record: RecordIdentity,
+    },
     /// Its bytes did not recompute to its key — never trusted.
     Rejected { cid: Cid, verdict: RoundTripVerdict },
 }
@@ -449,10 +463,15 @@ fn classify_verified(
     if local_cids.contains(cid) {
         return Reconciled::Matched { cid: cid.clone() };
     }
-    match local.iter().find(|claim| &claim.identity == identity) {
+    let key = logical_key(identity);
+    match local
+        .iter()
+        .find(|claim| logical_key(&claim.identity) == key)
+    {
         Some(same_record) => Reconciled::Conflict {
             pulled: cid.clone(),
             local: same_record.cid.clone(),
+            record: identity.clone(),
         },
         None => Reconciled::New { cid: cid.clone() },
     }
@@ -576,10 +595,15 @@ fn new_record_author<'a>(
 /// a DID URL naming one of its keys (`<own_did>#<fragment>`). A DID that
 /// merely shares `own_did` as a prefix is a different author.
 pub fn is_authored_by(author_did: &str, own_did: &str) -> bool {
-    let author = author_did
+    bare_did(author_did) == own_did
+}
+
+/// The DID a DID URL names: `<did>#<fragment>` → `<did>`; a bare DID is
+/// returned as-is.
+pub fn bare_did(author_did: &str) -> &str {
+    author_did
         .split_once('#')
-        .map_or(author_did, |(did, _fragment)| did);
-    author == own_did
+        .map_or(author_did, |(did, _fragment)| did)
 }
 
 /// Re-parse a pulled record's bytes into the signed claim a pull inserts.

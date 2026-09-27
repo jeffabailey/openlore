@@ -11,8 +11,6 @@
 //! Only the CLI↔Worker seam is faked (`FakeInstance`); the real `adapter-duckdb`
 //! local store does the reconcile. Layer 3; example-only (Mandate 11 — the
 //! conflict sad path is a named example).
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -169,12 +167,57 @@ fn publish_pull_rebuilds_local_duckdb_on_a_fresh_machine_with_attribution_intact
 ///
 /// @us-sf-004 @error @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-004 conflict surfaced, not overwritten)"]
 fn publish_pull_surfaces_a_conflict_instead_of_silently_overwriting() {
-    todo!(
-        "DELIVER: Given a pulled record whose CID differs from a local claim's for the same \
-         logical record; When `publish pull`; Then the conflict is surfaced (reported, exit \
-         non-zero), the local claim is UNCHANGED, and nothing is auto-resolved."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria's local store holds ONE signed claim at confidence 0.86.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let local_cid = local_graph_at_confidence(&env, 1, 0.86).remove(0);
+
+    // And her instance holds the SAME logical record (same author, subject,
+    // predicate, object) signed by her identity at confidence 0.5 — a
+    // different CID: a genuine conflict.
+    let other_machine = TestEnv::initialized_as(FakeIdentity::maria());
+    let instance_cids = local_graph_at_confidence(&other_machine, 1, 0.5);
+    let instance_cid = instance_cids[0].clone();
+    assert_ne!(local_cid, instance_cid, "precondition: the CIDs differ");
+    let instance = instance_already_holding(&other_machine, &instance_cids);
+    let before = capture_pull_conflict_universe(&env, "");
+
+    // When she pulls her instance back.
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    let after = capture_pull_conflict_universe(&env, &pull.stdout);
+
+    // Then the pull exits non-zero: a conflict is never a clean pull.
+    assert_ne!(
+        pull.status, 0,
+        "a conflicting `publish pull` must exit non-zero;
+--- stdout ---
+{}
+--- stderr ---
+{}",
+        pull.stdout, pull.stderr
+    );
+
+    // And the conflict is surfaced, naming BOTH the local and pulled CIDs.
+    assert!(
+        pull.stdout.lines().any(|line| line.contains("conflict")
+            && line.contains(&local_cid)
+            && line.contains(&instance_cid)),
+        "pull must report the conflict naming local {local_cid} and pulled {instance_cid};\n\
+         --- stdout ---\n{}",
+        pull.stdout
+    );
+
+    // And nothing is auto-resolved: her local CID set and every local byte
+    // are UNCHANGED (implicit-unchanged slots); exactly one conflict is
+    // reported.
+    let expected = Delta::new().with_slot("cli.publish_pull.conflicts", set_to("1".to_string()));
+    assert_state_delta(&before, &after, &pull_conflict_universe(), &expected);
+    assert_eq!(
+        local_claim_cids(&env),
+        vec![local_cid],
+        "the conflicting pulled record must not be inserted"
     );
 }
 

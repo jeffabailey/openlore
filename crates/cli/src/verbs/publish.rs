@@ -149,8 +149,12 @@ impl PullReport {
             .count()
     }
 
+    /// Every pulled record verified, every selected insert stored, and no
+    /// conflict left for the user to resolve (a conflict is never clean).
     fn clean(&self) -> bool {
-        self.verified_count() == self.verdicts.len() && self.inserted_count() == self.inserts.len()
+        self.verified_count() == self.verdicts.len()
+            && self.inserted_count() == self.inserts.len()
+            && publish_domain::tally_reconcile(&self.reconciled).conflicts == 0
     }
 }
 

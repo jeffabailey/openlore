@@ -1,6 +1,7 @@
 //! Pure renderers for the `openlore publish` verbs (ADR-062). No I/O.
 
 use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
+use publish_domain::Reconciled;
 
 use crate::verbs::publish::{InsertResult, PullReport, PushReport, PushResult};
 
@@ -46,7 +47,9 @@ fn render_push_result(result: &PushResult) -> String {
 /// reconcile summary `matched: M/P, new: N, conflicts: C, rejected: R,
 /// overwritten: 0`, the insert summary `inserted: K/S, foreign (not
 /// inserted): F` (S = own-author New records selected) with a line per record
-/// NOT inserted, and — when every pulled record is already held locally —
+/// NOT inserted, a `conflict:` line per genuine conflict naming the record and
+/// BOTH CIDs (local kept, nothing auto-resolved), and — when every pulled
+/// record is already held locally —
 /// the in-sync confirmation. `overwritten` is always 0: the reconcile ADT has
 /// no overwrite outcome (D-6).
 pub fn render_publish_pull(report: &PullReport) -> String {
@@ -72,10 +75,15 @@ pub fn render_publish_pull(report: &PullReport) -> String {
             )
         }))
         .collect();
+    let conflicts: String = report
+        .reconciled
+        .iter()
+        .filter_map(render_conflict)
+        .collect();
     format!(
         "Pulled {} record(s) from {}\n{lines}{}/{} CIDs verified\n\
          matched: {}/{pulled}, new: {}, conflicts: {}, rejected: {}, overwritten: 0\n\
-         inserted: {}/{}, foreign (not inserted): {}\n{not_inserted}{in_sync}",
+         inserted: {}/{}, foreign (not inserted): {}\n{not_inserted}{conflicts}{in_sync}",
         report.verdicts.len(),
         report.instance_url,
         report.verified_count(),
@@ -88,6 +96,22 @@ pub fn render_publish_pull(report: &PullReport) -> String {
         report.inserts.len(),
         report.foreign.len(),
     )
+}
+
+/// A conflict line naming the logical record and BOTH CIDs — surfaced for
+/// the user, never auto-resolved (D-6).
+fn render_conflict(outcome: &Reconciled) -> Option<String> {
+    match outcome {
+        Reconciled::Conflict {
+            pulled,
+            local,
+            record,
+        } => Some(format!(
+            "  conflict: {} {} {}: local {} vs instance {} (local kept, not overwritten)\n",
+            record.subject, record.predicate, record.object, local.0, pulled.0
+        )),
+        _ => None,
+    }
 }
 
 fn render_insert_refusal(result: &InsertResult) -> Option<String> {

@@ -547,6 +547,86 @@ proptest! {
     }
 }
 
+/// Two distinct authors, each named in either DID form (bare, or a DID URL
+/// naming one of their keys). The person index is the independent oracle
+/// for "same author".
+fn arb_author_in_either_form() -> impl Strategy<Value = (usize, String)> {
+    (
+        prop::sample::select(vec!["did:plc:maria-test", "did:plc:rachel-test"]),
+        any::<bool>(),
+    )
+        .prop_map(|(did, with_fragment)| {
+            let person = usize::from(did.ends_with("rachel-test"));
+            let author = if with_fragment {
+                format!("{did}#org.openlore.application")
+            } else {
+                did.to_string()
+            };
+            (person, author)
+        })
+}
+
+proptest! {
+    /// Logical-record identity law (PR-3): a verified pulled record the
+    /// local store lacks, whose (author, subject, predicate, object) equals a
+    /// local claim's — the author named in EITHER DID form on either side —
+    /// is always a Conflict naming both CIDs and the record; never Matched,
+    /// never New (so never inserted).
+    #[test]
+    fn same_logical_record_under_another_cid_is_always_a_conflict(
+        base in arb_identity(),
+        (local_author, pulled_author) in arb_author_in_either_form().prop_flat_map(|(person, local_author)| {
+            let pulled = arb_author_in_either_form()
+                .prop_filter("same person", move |(other, _)| *other == person)
+                .prop_map(|(_, author)| author);
+            (Just(local_author), pulled)
+        }),
+        local_cid in arb_cid(),
+        pulled_cid in arb_cid(),
+        others in arb_local_claims(),
+    ) {
+        prop_assume!(local_cid != pulled_cid);
+        let local_identity = RecordIdentity { author_did: local_author, ..base.clone() };
+        let pulled_identity = RecordIdentity { author_did: pulled_author, ..base.clone() };
+        let local: Vec<LocalClaim> = others
+            .into_iter()
+            .filter(|other| other.cid != pulled_cid)
+            .filter(|other| (&other.identity.subject, &other.identity.object) != (&base.subject, &base.object))
+            .chain(std::iter::once(LocalClaim { cid: local_cid.clone(), identity: local_identity }))
+            .collect();
+        let pulled = PulledRecord::Recomputed {
+            key: pulled_cid.clone(),
+            recomputed: pulled_cid.clone(),
+            identity: pulled_identity.clone(),
+        };
+        prop_assert_eq!(
+            &reconcile(&local, std::slice::from_ref(&pulled))[0],
+            &Reconciled::Conflict { pulled: pulled_cid, local: local_cid, record: pulled_identity }
+        );
+    }
+
+    /// A verified pulled record whose CID the local store already holds is
+    /// always Matched, whatever its logical identity or author DID form.
+    #[test]
+    fn a_verified_record_under_a_held_cid_is_always_matched(
+        local in arb_local_claims().prop_filter("non-empty", |local| !local.is_empty()),
+        pick in any::<prop::sample::Index>(),
+        base in arb_identity(),
+        (_, author_did) in arb_author_in_either_form(),
+    ) {
+        let held = local[pick.index(local.len())].cid.clone();
+        let pulled = PulledRecord::Recomputed {
+            key: held.clone(),
+            recomputed: held.clone(),
+            identity: RecordIdentity { author_did, ..base },
+        };
+        prop_assert_eq!(
+            &reconcile(&local, std::slice::from_ref(&pulled))[0],
+            &Reconciled::Matched { cid: held }
+        );
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Pull insert selection (US-SF-004 fresh-machine rebuild; anti-merging)
 // -----------------------------------------------------------------------------

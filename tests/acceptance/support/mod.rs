@@ -18422,6 +18422,13 @@ pub use openlore_test_support::PreloadedRecord;
 /// Returns the Rust-minted CIDs in seeding order. A precondition only — never
 /// an expected end-state.
 pub fn local_graph_of(env: &TestEnv, count: usize) -> Vec<String> {
+    local_graph_at_confidence(env, count, 0.86)
+}
+
+/// [`local_graph_of`], every claim signed at `confidence`. The same logical
+/// records (author, subject, predicate, object) at a different confidence
+/// mint different CIDs — the shape of a genuine pull conflict.
+pub fn local_graph_at_confidence(env: &TestEnv, count: usize, confidence: f64) -> Vec<String> {
     use ports::StoragePort;
 
     let seed: [u8; 32] = (0..32)
@@ -18444,7 +18451,8 @@ pub fn local_graph_of(env: &TestEnv, count: usize) -> Vec<String> {
                 predicate: "embodiesPhilosophy".to_string(),
                 object: "org.openlore.philosophy.local-first".to_string(),
                 evidence: vec![format!("https://github.com/maria/project-{i:03}")],
-                confidence: serde_json::from_value(serde_json::json!(0.86)).expect("confidence"),
+                confidence: serde_json::from_value(serde_json::json!(confidence))
+                    .expect("confidence"),
                 author_did: claim_domain::Did(key_id.clone()),
                 composed_at: "2026-05-25T12:00:00Z".to_string(),
                 references: Vec::new(),
@@ -18661,4 +18669,44 @@ pub fn local_claim_authors(env: &TestEnv) -> std::collections::BTreeMap<String, 
         .map(|row| row.expect("decode local claim author"))
         .collect();
     authors
+}
+
+/// Parse the `conflicts: C` field of `publish pull`'s reconcile summary line
+/// (`cli.publish_pull.conflicts`). An absent line (no pull has run) is `0`.
+pub fn publish_pull_conflicts(stdout: &str) -> String {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("matched: "))
+        .and_then(|line| {
+            line.split(',')
+                .find_map(|part| part.trim().strip_prefix("conflicts: "))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "0".to_string())
+}
+
+/// Capture the PR-3 conflict universe over PORT-EXPOSED observables only: the
+/// local store's sorted CID set and byte fingerprint (D-6: pull never
+/// overwrites) and the CLI's reported conflict count.
+pub fn capture_pull_conflict_universe(env: &TestEnv, pull_stdout: &str) -> HashMap<String, String> {
+    let mut universe = capture_local_claims_universe(env);
+    universe.remove("local.claims.row_count");
+    universe.insert(
+        "cli.publish_pull.conflicts".to_string(),
+        publish_pull_conflicts(pull_stdout),
+    );
+    universe
+}
+
+/// The PR-3 universe slot names (port-exposed).
+pub fn pull_conflict_universe() -> HashSet<String> {
+    [
+        "local.claims.cids",
+        "local.claims.bytes",
+        "cli.publish_pull.conflicts",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
