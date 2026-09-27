@@ -1,9 +1,10 @@
 // openlore opaque instance Worker (ADR-062 §1/§2).
 //
-// A DUMB front door: `GET /` serves a placeholder public card (the real card
-// lands in 04-01); every other request is forwarded to the ONE Durable Object
-// that owns this instance's records + manifest. The Worker computes no CID
-// and never parses a record body.
+// A DUMB front door: every request — including `GET /`, the public read-only
+// card (`card.ts`, rendered by the Durable Object from its committed manifest
+// entries) — is forwarded to the ONE Durable Object that owns this instance's
+// records + manifest. The Worker computes no CID and never parses a record
+// body.
 //
 // Write auth (DV-4 / Q-SF-D2): every WRITE (any method other than GET/HEAD —
 // in practice `PUT /records/:cid`) must carry `Authorization: Bearer <token>`
@@ -29,16 +30,6 @@ export interface Env {
 
 /** One instance per deployment: every request reaches the same object. */
 const INSTANCE_OBJECT_NAME = "openlore-instance";
-
-const PLACEHOLDER_CARD =
-  "<!doctype html><title>openlore instance</title><p>openlore opaque instance</p>";
-
-function placeholderCard(): Response {
-  return new Response(PLACEHOLDER_CARD, {
-    status: 200,
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
-}
 
 // -----------------------------------------------------------------------------
 // Write auth — pure decisions + one constant-time comparison.
@@ -82,10 +73,6 @@ function unauthorizedWrite(): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
-    if (request.method === "GET" && pathname === "/") {
-      return placeholderCard();
-    }
     if (
       isWrite(request.method) &&
       !(await isOwnerToken(bearerTokenOf(request.headers.get("authorization")), env.OPENLORE_WRITE_TOKEN))

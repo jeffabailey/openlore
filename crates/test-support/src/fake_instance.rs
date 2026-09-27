@@ -9,7 +9,7 @@
 //! | `PUT /records/:cid` | Store the body VERBATIM under `:cid` (first write wins; a re-PUT is an idempotent no-op on the blob). If the request carries the `x-openlore-manifest-entry` header (the CLI's display projection JSON), the entry is appended to the manifest — the COMMIT. |
 //! | `GET /records/:cid` | Return the exact stored bytes, or 404. |
 //! | `GET /manifest` | The openlore discriminator envelope + committed display entries (manifest v1). |
-//! | `GET /` | Placeholder public card (HTML). |
+//! | `GET /` | The public read-only card (HTML), rendered from the committed manifest entries — see [`render_card`]. |
 //!
 //! The double NEVER computes a CID and NEVER parses the record blob — the
 //! Rust `claim-domain` core is the sole canonicalizer (ADR-062). It parses
@@ -416,12 +416,7 @@ fn route(store: &mut Store, posture: Posture, request: &RecordedRequest) -> Http
             "application/json",
             store.manifest_json().to_string().into_bytes(),
         ),
-        ("GET", "/", _) => respond(
-            200,
-            "text/html; charset=utf-8",
-            b"<!doctype html><title>openlore instance</title><p>openlore opaque instance</p>"
-                .to_vec(),
-        ),
+        ("GET", "/", _) => card_response(&store.manifest),
         ("GET", _, Some(cid)) => match store.blobs.get(cid) {
             Some(bytes) => respond(200, "application/octet-stream", bytes.clone()),
             None => respond(404, "text/plain", b"record not found".to_vec()),
@@ -458,6 +453,105 @@ fn put_record(
         store.commit_entry(cid, entry);
     }
     respond(201, "text/plain", Vec::new())
+}
+
+// -----------------------------------------------------------------------------
+// The public read-only card (ADR-062 §1, US-SF-005) — mirrors
+// `atproto/src/card.ts` byte-for-byte in STRUCTURE:
+//
+// * one `<li class="claim" data-cid="…" data-author="…">` row per committed
+//   manifest entry, in manifest order, attributed to that entry's ONE
+//   `author_did` (anti-merging: no merged/consensus row shape exists);
+// * an empty manifest renders `<p class="empty-state">no claims published
+//   yet</p>` — a valid 200 page, not an error;
+// * no authoring/edit control and no script; every field HTML-escaped;
+// * served as `text/html; charset=utf-8` with a restrictive CSP.
+// -----------------------------------------------------------------------------
+
+/// The card's content-security-policy: it needs no script, no fetch, no form.
+pub const CARD_CONTENT_SECURITY_POLICY: &str =
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/// Escape a manifest field for HTML text and attribute context (`& < > " '`).
+fn escape_html(text: &str) -> String {
+    text.chars()
+        .fold(String::with_capacity(text.len()), |mut escaped, c| {
+            match c {
+                '&' => escaped.push_str("&amp;"),
+                '<' => escaped.push_str("&lt;"),
+                '>' => escaped.push_str("&gt;"),
+                '"' => escaped.push_str("&quot;"),
+                '\'' => escaped.push_str("&#39;"),
+                other => escaped.push(other),
+            }
+            escaped
+        })
+}
+
+/// A manifest entry field as display text: strings verbatim, numbers in
+/// their shortest form (`1`, `0.5` — as JavaScript prints them), anything
+/// else (absent / non-scalar) empty.
+fn display_field(entry: &serde_json::Value, name: &str) -> String {
+    match entry.get(name) {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Number(number)) => number
+            .as_f64()
+            .map_or_else(|| number.to_string(), |value| value.to_string()),
+        _ => String::new(),
+    }
+}
+
+/// One card row: the claim, attributed to its ONE author.
+fn render_card_row(entry: &serde_json::Value) -> String {
+    let field = |name: &str| escape_html(&display_field(entry, name));
+    format!(
+        "<li class=\"claim\" data-cid=\"{cid}\" data-author=\"{author}\">\
+         <span class=\"subject\">{subject}</span> \
+         <span class=\"predicate\">{predicate}</span> \
+         <span class=\"object\">{object}</span> \
+         <span class=\"confidence\">confidence {confidence}</span> \
+         <span class=\"author\">by {author}</span> \
+         <span class=\"cid\">{cid}</span></li>",
+        cid = field("cid"),
+        author = field("author_did"),
+        subject = field("subject"),
+        predicate = field("predicate"),
+        object = field("object"),
+        confidence = field("confidence"),
+    )
+}
+
+/// The card body for the committed manifest entries (in manifest order).
+fn card_body(entries: &[serde_json::Value]) -> String {
+    if entries.is_empty() {
+        return "<p class=\"empty-state\">no claims published yet</p>".to_string();
+    }
+    let rows: String = entries.iter().map(render_card_row).collect();
+    format!("<ul class=\"claims\">{rows}</ul>")
+}
+
+/// Render the public read-only card HTML from committed manifest entries.
+pub fn render_card(entries: &[serde_json::Value]) -> String {
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>openlore — published claims</title></head>\
+         <body><main class=\"openlore-card\"><h1>Published claims</h1>{}</main></body></html>",
+        card_body(entries)
+    )
+}
+
+/// `GET /` — the card as a `200` HTML response with the restrictive CSP.
+fn card_response(manifest: &[(String, serde_json::Value)]) -> HttpResponse {
+    let entries: Vec<serde_json::Value> = manifest.iter().map(|(_, e)| e.clone()).collect();
+    hyper::Response::builder()
+        .status(200)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("content-security-policy", CARD_CONTENT_SECURITY_POLICY)
+        .header("x-content-type-options", "nosniff")
+        .body(http_body_util::Full::new(bytes::Bytes::from(render_card(
+            &entries,
+        ))))
+        .expect("FakeInstance: build card response")
 }
 
 /// What an ordinary (non-openlore) web site serves on every route: a 200

@@ -20,6 +20,18 @@
 # `.dev.vars` is backed up and restored on exit. No real Cloudflare credential
 # is ever involved.
 #
+# Public card (step 04-01, US-SF-005, ADR-062 §1): `GET /` is asserted against
+# the SAME card contract the Rust acceptance suite parses off `FakeInstance`:
+# a 200 `text/html; charset=utf-8` page with a restrictive CSP; before the
+# first push it reads `<p class="empty-state">no claims published yet</p>`
+# with zero rows; after the push it holds exactly one
+# `<li class="claim" data-cid="<cid>" data-author="<author_did>">` row per
+# committed manifest entry, attributed to that entry's author_did; never an
+# authoring control (form/button/input/textarea/select/contenteditable/script)
+# nor a merged/consensus row; and a hostile manifest entry (raw committing PUT
+# carrying `<script>` etc. — the CLI cannot author such a claim) renders
+# HTML-escaped.
+#
 # Usage: atproto/scripts/contract-roundtrip.sh [path/to/openlore]
 #   OPENLORE_BIN   the openlore binary (default: target/release/openlore)
 #   CONTRACT_PORT  local port for wrangler dev (default: 8787)
@@ -37,6 +49,36 @@ fail() {
   exit 1
 }
 
+# --- Card contract helpers (shared structure with tests/acceptance/support) ---
+CARD_ROW_PREFIX='<li class="claim" data-cid="'
+CARD_EMPTY_STATE='<p class="empty-state">no claims published yet</p>'
+
+# fetch_card <out-body-file> <out-headers-file>: an anonymous GET / (no token).
+fetch_card() {
+  curl -fsS -D "$2" -o "$1" "${INSTANCE_URL}/" || fail "GET / (the card) failed"
+}
+
+# card_row_count <body-file>
+card_row_count() {
+  grep -oF "${CARD_ROW_PREFIX}" "$1" | wc -l | tr -d ' '
+}
+
+# assert_card_contract <body-file> <headers-file>: 200 HTML + CSP, read-only,
+# no merged/consensus row.
+assert_card_contract() {
+  local body="$1" headers="$2" marker
+  head -n 1 "${headers}" | grep -q " 200" || fail "GET / is not 200: $(head -n 1 "${headers}")"
+  grep -qi '^content-type: text/html; charset=utf-8' "${headers}" \
+    || fail "GET / is not served as text/html; charset=utf-8"
+  grep -qi "^content-security-policy: default-src 'none'" "${headers}" \
+    || fail "GET / carries no restrictive content-security-policy"
+  for marker in '<form' '<button' '<input' '<textarea' '<select' 'contenteditable' '<script'; do
+    grep -qiF "${marker}" "${body}" && fail "the card offers an authoring/script control (${marker})"
+  done
+  grep -qiE 'consensus|merged' "${body}" && fail "the card shows a merged/consensus row"
+  return 0
+}
+
 [[ -x "${OPENLORE_BIN}" ]] || fail "openlore binary not found at ${OPENLORE_BIN}"
 
 WORK_DIR="$(mktemp -d)"
@@ -45,6 +87,8 @@ WRANGLER_PID=""
 DEV_VARS="${ATPROTO_DIR}/.dev.vars"
 DEV_VARS_BACKUP="${WORK_DIR}/dev.vars.backup"
 AUTH_HEADER_FILE="${WORK_DIR}/owner-auth.header"
+CARD_BODY="${WORK_DIR}/card.html"
+CARD_HEADERS="${WORK_DIR}/card.headers"
 
 cleanup() {
   if [[ -n "${WRANGLER_PID}" ]]; then
@@ -151,6 +195,14 @@ refused_push "wrong-token" env OPENLORE_PUBLISH_TOKEN=not-the-owner-token "${OPE
 grep -q '"cid"' <<<"$(curl -fsS "${INSTANCE_URL}/manifest")" \
   && fail "a refused push stored a record"
 
+# --- 2c. The card on an EMPTY instance (step 04-01, PC-2) -------------------
+fetch_card "${CARD_BODY}" "${CARD_HEADERS}"
+assert_card_contract "${CARD_BODY}" "${CARD_HEADERS}"
+grep -qF "${CARD_EMPTY_STATE}" "${CARD_BODY}" \
+  || fail "an empty instance's card does not read 'no claims published yet': $(cat "${CARD_BODY}")"
+[[ "$(card_row_count "${CARD_BODY}")" == "0" ]] || fail "an empty instance's card renders rows"
+echo "contract-roundtrip: empty-instance card reads 'no claims published yet' (0 rows)"
+
 # From here on the CLI is the owner: the same fixture value the Worker holds.
 export OPENLORE_PUBLISH_TOKEN="${FIXTURE_WRITE_TOKEN}"
 
@@ -176,6 +228,25 @@ done
 manifest_count="$(grep -o '"cid":"[^"]*"' <<<"${manifest}" | wc -l | tr -d ' ')"
 [[ "${manifest_count}" == "${expected_total}" ]] \
   || fail "manifest lists ${manifest_count} records, expected ${expected_total}"
+
+# --- 4b. The card lists exactly the pushed claims, attributed (04-01 PC-1) --
+fetch_card "${CARD_BODY}" "${CARD_HEADERS}"
+assert_card_contract "${CARD_BODY}" "${CARD_HEADERS}"
+grep -qF "${CARD_EMPTY_STATE}" "${CARD_BODY}" && fail "a card with pushed claims reads 'no claims published yet'"
+card_rows="$(card_row_count "${CARD_BODY}")"
+[[ "${card_rows}" == "${expected_total}" ]] \
+  || fail "the card renders ${card_rows} rows, expected ${expected_total}: $(cat "${CARD_BODY}")"
+for cid in "${seeded_cids[@]}"; do
+  author="$(node -e '
+    const [manifest, cid] = process.argv.slice(1);
+    const entry = JSON.parse(manifest).records.find((r) => r.cid === cid);
+    process.stdout.write(entry ? entry.author_did : "");
+  ' "${manifest}" "${cid}")"
+  [[ "${author}" == did:* ]] || fail "manifest entry for ${cid} carries no author_did"
+  grep -qF "${CARD_ROW_PREFIX}${cid}\" data-author=\"${author}\">" "${CARD_BODY}" \
+    || fail "the card has no row for ${cid} attributed to ${author}: $(cat "${CARD_BODY}")"
+done
+echo "contract-roundtrip: card lists all ${expected_total} pushed claims, each attributed to its author_did; no authoring control, no merged row"
 
 # --- 5. Idempotency under real workerd (step 02-02, ADR-062 §1) -------------
 # 5a. Re-push of an already-complete set pushes nothing and adds no entry.
@@ -216,4 +287,24 @@ duplicates="$(sort <<<"${manifest_cids}" | uniq -d)"
 [[ -z "${duplicates}" ]] || fail "manifest lists a CID more than once: ${duplicates}"
 echo "contract-roundtrip: re-push pushed 0; re-PUTs (incl. 8 concurrent) left the manifest at ${expected_total} distinct CIDs"
 
-echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent; token-less writes refused, reads public"
+# --- 6. The card escapes every manifest field (04-01, XSS) ------------------
+# The CLI cannot author a claim whose fields carry markup, so commit a HOSTILE
+# display entry with a raw owner-authed PUT, exactly as a compromised or buggy
+# client could, and require the card to render it inert.
+hostile_cid="bafyhostilecardentry"
+hostile_entry='{"cid":"bafyhostilecardentry","author_did":"did:plc:x\"><script>alert(1)</script>","subject":"<script>alert(\"subject\")</script>","predicate":"a&b","object":"<img src=x onerror=alert(1)> '"'"'quoted'"'"'","confidence":0.5,"composed_at":"2026-01-01T00:00:00Z"}'
+curl -fsS -o /dev/null -X PUT -H "@${AUTH_HEADER_FILE}" -H "x-openlore-manifest-entry: ${hostile_entry}" \
+  --data-binary "hostile" "${INSTANCE_URL}/records/${hostile_cid}" || fail "hostile committing PUT was refused"
+fetch_card "${CARD_BODY}" "${CARD_HEADERS}"
+assert_card_contract "${CARD_BODY}" "${CARD_HEADERS}"
+grep -qiF '<img' "${CARD_BODY}" && fail "the card rendered a hostile <img> unescaped"
+grep -qF '&lt;script&gt;alert(&quot;subject&quot;)&lt;/script&gt;' "${CARD_BODY}" \
+  || fail "the hostile subject is not HTML-escaped: $(cat "${CARD_BODY}")"
+grep -qF 'a&amp;b' "${CARD_BODY}" || fail "'&' in a manifest field is not escaped"
+grep -qF '&#39;quoted&#39;' "${CARD_BODY}" || fail "\"'\" in a manifest field is not escaped"
+grep -qF "${CARD_ROW_PREFIX}${hostile_cid}\" data-author=\"did:plc:x&quot;&gt;&lt;script&gt;" "${CARD_BODY}" \
+  || fail "the hostile author_did did not stay inside its escaped data-author attribute"
+[[ "$(card_row_count "${CARD_BODY}")" == "$((expected_total + 1))" ]] || fail "the hostile entry did not render as exactly one row"
+echo "contract-roundtrip: a hostile manifest entry renders HTML-escaped (no <script>/<img> reaches the card)"
+
+echo "contract-roundtrip: PASS — ${expected_total}/${expected_total} gold-fixture CIDs (0.0/0.5/1.0) round-tripped identically through the real Worker; re-push and re-PUT are idempotent; token-less writes refused, reads public; the card renders only pushed claims, attributed and escaped"

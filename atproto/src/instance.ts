@@ -9,6 +9,9 @@
 //   GET /records/:cid  the exact stored bytes, or 404.
 //   GET /manifest      the manifest v1 envelope + committed entries, in
 //                      append order.
+//   GET /              the public read-only card (`card.ts`), rendered from
+//                      the same committed entries — only pushed claims, each
+//                      attributed to its author_did, every field escaped.
 //
 // It never computes a CID and never parses a record body — the Rust
 // `claim-domain` core is the sole canonicalizer. The only JSON it touches is
@@ -16,6 +19,7 @@
 // Behaviour mirrors `crates/test-support/src/fake_instance.rs` exactly.
 
 import { DurableObject } from "cloudflare:workers";
+import { cardResponse } from "./card";
 
 export const MANIFEST_ENTRY_HEADER = "x-openlore-manifest-entry";
 
@@ -29,6 +33,7 @@ const MANIFEST_ENVELOPE_SUFFIX = "]}";
 // -----------------------------------------------------------------------------
 
 export type InstanceRoute =
+  | { readonly kind: "card" }
   | { readonly kind: "manifest" }
   | { readonly kind: "get-record"; readonly cid: string }
   | { readonly kind: "put-record"; readonly cid: string }
@@ -37,6 +42,9 @@ export type InstanceRoute =
 const RECORDS_PREFIX = "/records/";
 
 export function routeOf(method: string, pathname: string): InstanceRoute {
+  if (method === "GET" && pathname === "/") {
+    return { kind: "card" };
+  }
   if (method === "GET" && pathname === "/manifest") {
     return { kind: "manifest" };
   }
@@ -94,6 +102,8 @@ export class OpenloreInstance extends DurableObject {
   override async fetch(request: Request): Promise<Response> {
     const route = routeOf(request.method, new URL(request.url).pathname);
     switch (route.kind) {
+      case "card":
+        return cardResponse(await this.committedEntries());
       case "manifest":
         return this.serveManifest();
       case "get-record":
@@ -105,9 +115,14 @@ export class OpenloreInstance extends DurableObject {
     }
   }
 
-  private async serveManifest(): Promise<Response> {
+  /** The committed manifest entry strings, verbatim, in append order. */
+  private async committedEntries(): Promise<string[]> {
     const entries = await this.ctx.storage.list<string>({ prefix: MANIFEST_ENTRY_PREFIX });
-    return respond(200, "application/json", manifestJson(entries.values()));
+    return [...entries.values()];
+  }
+
+  private async serveManifest(): Promise<Response> {
+    return respond(200, "application/json", manifestJson(await this.committedEntries()));
   }
 
   private async serveRecord(cid: string): Promise<Response> {

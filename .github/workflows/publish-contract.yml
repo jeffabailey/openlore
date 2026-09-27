@@ -11,7 +11,12 @@
 # token into the git-ignored `atproto/.dev.vars` (the Worker secret under
 # `wrangler dev`) and passes the same value to the CLI; it asserts that a
 # token-less (and wrong-token) push is refused as an `unauthorized write` with
-# nothing stored, and that GET /, /manifest and /records stay public. The token
+# nothing stored, and that GET /, /manifest and /records stay public.
+# Public card (step 04-01, US-SF-005): `GET /` must honour the shared card
+# contract — "no claims published yet" before the first push, then exactly one
+# `<li class="claim" data-cid data-author>` row per pushed claim attributed to
+# its author_did, no authoring control, no merged row, restrictive CSP, and a
+# hostile manifest entry rendered HTML-escaped. The token
 # is not a repo file, not in wrangler.toml, and not a CI secret. The
 # Rust acceptance suite covers the same contract against the FakeInstance
 # double; this job proves the Worker honours it byte-for-byte.
@@ -47,7 +52,7 @@ env:
 
 jobs:
   contract:
-    name: wrangler dev round trip (0.0/0.5/1.0) + idempotency + write auth
+    name: wrangler dev round trip (0.0/0.5/1.0) + idempotency + write auth + card
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -77,5 +82,5 @@ jobs:
         run: |
           git check-ignore -q atproto/.dev.vars
           ! git ls-files --error-unmatch atproto/.dev.vars 2>/dev/null
-      - name: wrangler dev -> write-auth refusal + publish init/push/pull round trip + idempotent re-push
+      - name: wrangler dev -> write-auth refusal + publish init/push/pull round trip + idempotent re-push + public card
         run: bash atproto/scripts/contract-roundtrip.sh target/release/openlore

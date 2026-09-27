@@ -39,13 +39,38 @@ use support::*;
 ///
 /// @us-sf-005 @driving_port @real-io @j-007 @happy
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 card renders attributed pushed claims)"]
 fn public_card_renders_only_pushed_claims_each_attributed_to_its_author_did() {
-    todo!(
-        "DELIVER: Given a FakeInstance holding pushed claims; When GET / (the card); \
-         Then the card lists each pushed claim attributed to its author_did, exposes NO \
-         authoring/edit control, and contains NO consensus/merged row. \
-         Universe: card.rows[*].author_did, card.controls.authoring (absent), card.rows.merged_count (0)."
+    // Given Maria has pushed her 3 local claims to her (fresh) instance
+    // through the REAL `publish push` — the CLI writes the manifest display
+    // projection the card renders from.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let pushed_cids = local_graph_of(&env, 3);
+    let instance = FakeInstance::fresh();
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+
+    // When anyone opens the card (anonymous GET /).
+    let card = open_public_card(&instance);
+
+    // Then it lists exactly her pushed claims, each attributed to the
+    // author_did its claim carries; it offers no authoring/edit control and
+    // shows no merged/consensus row.
+    assert_card_is_read_only_and_unmerged(&card);
+    let mut rows = card.rows.clone();
+    rows.sort();
+    assert_eq!(
+        rows,
+        expected_card_rows(&env, &pushed_cids),
+        "the card must list every pushed claim attributed to its author_did;\n{}",
+        card.body
+    );
+    assert!(
+        !card.shows_empty_state,
+        "a card with published claims must not read '{CARD_EMPTY_STATE}'"
     );
 }
 
@@ -58,11 +83,25 @@ fn public_card_renders_only_pushed_claims_each_attributed_to_its_author_did() {
 ///
 /// @us-sf-005 @edge @j-007
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 empty instance card is valid)"]
 fn public_card_on_an_empty_instance_renders_no_claims_published_yet_not_an_error() {
-    todo!(
-        "DELIVER: Given a FakeInstance::fresh() (empty manifest); When GET /; \
-         Then a 200 card reading 'no claims published yet', card.rows.len == 0, NOT an error page."
+    // Given an instance nothing has been pushed to yet (empty manifest).
+    let instance = FakeInstance::fresh();
+
+    // When anyone opens the card.
+    let card = open_public_card(&instance);
+
+    // Then it is a valid 200 read-only card reading "no claims published yet"
+    // with zero rows — not an error page.
+    assert_card_is_read_only_and_unmerged(&card);
+    assert!(
+        card.shows_empty_state,
+        "an empty instance's card must read '{CARD_EMPTY_STATE}';\n{}",
+        card.body
+    );
+    assert!(
+        card.rows.is_empty(),
+        "an empty instance's card must render zero rows; got {:?}",
+        card.rows
     );
 }
 
@@ -76,11 +115,42 @@ fn public_card_on_an_empty_instance_renders_no_claims_published_yet_not_an_error
 ///
 /// @us-sf-005 @j-007 @guardrail
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-005 card omits unpushed claim)"]
 fn public_card_omits_a_local_claim_that_was_never_pushed() {
-    todo!(
-        "DELIVER: Given a local claim NEVER pushed + others pushed; When GET /; \
-         Then the unpushed claim's CID is ABSENT from card.rows (only explicitly-pushed shown)."
+    // Given Maria pushed her 2 local claims, then authored a third claim
+    // locally that she has NEVER pushed.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let pushed_cids = local_graph_of(&env, 2);
+    let instance = FakeInstance::fresh();
+    let push = run_openlore_publish(&env, &["push"], &instance);
+    assert_eq!(
+        push.status, 0,
+        "`publish push` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        push.stdout, push.stderr
+    );
+    let never_pushed = seed_one_signed_local_claim(&env, 0.5);
+    assert!(
+        local_claim_cids(&env).contains(&never_pushed),
+        "precondition: the unpushed claim exists locally"
+    );
+
+    // When anyone opens her card.
+    let card = open_public_card(&instance);
+
+    // Then the unpushed claim is absent; the card renders ONLY the
+    // explicitly-pushed claims (D-7).
+    assert_card_is_read_only_and_unmerged(&card);
+    assert!(
+        card.rows.iter().all(|row| row.cid != never_pushed),
+        "a never-pushed local claim ({never_pushed}) must not appear on the card;\n{}",
+        card.body
+    );
+    let mut rows = card.rows.clone();
+    rows.sort();
+    assert_eq!(
+        rows,
+        expected_card_rows(&env, &pushed_cids),
+        "the card must render exactly the explicitly-pushed claims;\n{}",
+        card.body
     );
 }
 

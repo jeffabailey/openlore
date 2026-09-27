@@ -18710,3 +18710,171 @@ pub fn pull_conflict_universe() -> HashSet<String> {
     .map(str::to_string)
     .collect()
 }
+
+// -----------------------------------------------------------------------------
+// serverless-philosophy-federation slice-04 — the public read-only card (US-SF-005)
+// -----------------------------------------------------------------------------
+//
+// THE CARD CONTRACT (ADR-062 §1; shared by the `atproto/src/card.ts` Worker
+// render, the `FakeInstance` mirror, and `atproto/scripts/contract-roundtrip.sh`):
+//
+// * `GET /` → `200`, `content-type: text/html; charset=utf-8`, a restrictive
+//   `content-security-policy` (the card needs no script).
+// * One row per committed manifest entry, in manifest order, exactly
+//   `<li class="claim" data-cid="…" data-author="…">` — ONE author per row
+//   (anti-merging: there is no merged/consensus row shape).
+// * An empty manifest renders the explicit empty-state marker
+//   `<p class="empty-state">no claims published yet</p>` and zero rows.
+// * No authoring/edit control: no `<form`, `<button`, `<input`, `<textarea`,
+//   `<select`, `contenteditable`, and no `<script`.
+// * Every manifest field is HTML-escaped (`& < > " '`).
+
+/// The row opening tag every card row starts with (contract, see above).
+pub const CARD_ROW_PREFIX: &str = "<li class=\"claim\" data-cid=\"";
+
+/// The explicit empty-state text of a card with no published claims.
+pub const CARD_EMPTY_STATE: &str = "no claims published yet";
+
+/// Markup that would give a visitor an authoring / editing surface (or run
+/// code) — none may appear on the read-only card (D-7).
+const CARD_AUTHORING_MARKERS: [&str; 7] = [
+    "<form",
+    "<button",
+    "<input",
+    "<textarea",
+    "<select",
+    "contenteditable",
+    "<script",
+];
+
+/// One card row as a visitor sees it: the claim's CID and its ONE author.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CardRow {
+    pub cid: String,
+    pub author_did: String,
+}
+
+/// The public card as served at `GET /` — the port-exposed observable
+/// `card.*` Universe (status, rows, controls, merged rows, empty state).
+#[derive(Debug, Clone)]
+pub struct PublicCard {
+    pub status: u16,
+    pub content_type: String,
+    pub body: String,
+    /// `card.rows[*]` in render order.
+    pub rows: Vec<CardRow>,
+    /// `card.controls.authoring` — every authoring marker found (empty = none).
+    pub authoring_controls: Vec<&'static str>,
+    /// `card.rows.merged_count` — rows attributed to anything but exactly
+    /// one author DID, plus any `consensus`/`merged` row marker.
+    pub merged_count: usize,
+    /// The explicit empty-state marker is present.
+    pub shows_empty_state: bool,
+}
+
+/// Undo the card's HTML attribute escaping (`& < > " '`).
+fn html_unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Parse one row's `data-cid` / `data-author` from the text right after
+/// [`CARD_ROW_PREFIX`].
+fn parse_card_row(after_prefix: &str) -> Option<CardRow> {
+    let (cid, rest) = after_prefix.split_once('"')?;
+    let author = rest.strip_prefix(" data-author=\"")?.split_once('"')?.0;
+    Some(CardRow {
+        cid: html_unescape(cid),
+        author_did: html_unescape(author),
+    })
+}
+
+/// Parse a served card body against the card contract.
+pub fn parse_public_card(status: u16, content_type: String, body: String) -> PublicCard {
+    let row_openings: Vec<&str> = body.split(CARD_ROW_PREFIX).skip(1).collect();
+    let rows: Vec<CardRow> = row_openings
+        .iter()
+        .filter_map(|after| parse_card_row(after))
+        .collect();
+    let unattributed_rows = row_openings.len() - rows.len()
+        + rows
+            .iter()
+            .filter(|row| !row.author_did.starts_with("did:") || row.author_did.contains(' '))
+            .count();
+    let lowered = body.to_lowercase();
+    let consensus_markers =
+        lowered.matches("consensus").count() + lowered.matches("merged").count();
+    let authoring_controls = CARD_AUTHORING_MARKERS
+        .into_iter()
+        .filter(|marker| lowered.contains(marker))
+        .collect();
+    PublicCard {
+        status,
+        content_type,
+        shows_empty_state: body
+            .contains(&format!("<p class=\"empty-state\">{CARD_EMPTY_STATE}</p>")),
+        rows,
+        authoring_controls,
+        merged_count: unattributed_rows + consensus_markers,
+        body,
+    }
+}
+
+/// When anyone opens the card: an anonymous `GET /` (no token, no
+/// credentials) against `instance`, parsed against the card contract.
+pub fn open_public_card(instance: &FakeInstance) -> PublicCard {
+    let url = format!("{}/", instance.endpoint_url());
+    let response = shared_http_client()
+        .get(&url)
+        .send()
+        .unwrap_or_else(|err| panic!("GET {url}: {err}"));
+    let status = response.status().as_u16();
+    let content_type = content_type_of(&response);
+    let body = response
+        .text()
+        .unwrap_or_else(|err| panic!("read card body from {url}: {err}"));
+    parse_public_card(status, content_type, body)
+}
+
+/// Universe-bound: the card is a valid, read-only, anti-merging card — `200`
+/// HTML, no authoring control, no merged/consensus row.
+pub fn assert_card_is_read_only_and_unmerged(card: &PublicCard) {
+    assert_eq!(card.status, 200, "GET / must be 200;\n{}", card.body);
+    assert!(
+        card.content_type.starts_with("text/html"),
+        "the card must be HTML; got {:?}",
+        card.content_type
+    );
+    assert!(
+        card.authoring_controls.is_empty(),
+        "the card must offer no authoring/edit control (D-7); found {:?};\n{}",
+        card.authoring_controls,
+        card.body
+    );
+    assert_eq!(
+        card.merged_count, 0,
+        "the card must show no merged/consensus row (ADR-016, KPI-SF-3);\n{}",
+        card.body
+    );
+}
+
+/// The card rows the user's own pushed `cids` must render as: each attributed
+/// to the `author_did` its local claim carries, sorted.
+pub fn expected_card_rows(env: &TestEnv, cids: &[String]) -> Vec<CardRow> {
+    let authors = local_claim_authors(env);
+    let mut rows: Vec<CardRow> = cids
+        .iter()
+        .map(|cid| CardRow {
+            cid: cid.clone(),
+            author_did: authors
+                .get(cid)
+                .unwrap_or_else(|| panic!("no local claim {cid}"))
+                .clone(),
+        })
+        .collect();
+    rows.sort();
+    rows
+}
