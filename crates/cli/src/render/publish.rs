@@ -2,7 +2,7 @@
 
 use ports::{RoundTripVerdict, REASON_CID_ROUNDTRIP_FAILED};
 
-use crate::verbs::publish::{PullReport, PushReport, PushResult};
+use crate::verbs::publish::{InsertResult, PullReport, PushReport, PushResult};
 
 /// `publish init` success: the registered instance, the UNCHANGED signing
 /// identity, the derived public card URL, and the ownership confirmation —
@@ -44,7 +44,9 @@ fn render_push_result(result: &PushResult) -> String {
 
 /// `publish pull`: one line per record, the `N/M CIDs verified` tally, the
 /// reconcile summary `matched: M/P, new: N, conflicts: C, rejected: R,
-/// overwritten: 0`, and — when every pulled record is already held locally —
+/// overwritten: 0`, the insert summary `inserted: K/S, foreign (not
+/// inserted): F` (S = own-author New records selected) with a line per record
+/// NOT inserted, and — when every pulled record is already held locally —
 /// the in-sync confirmation. `overwritten` is always 0: the reconcile ADT has
 /// no overwrite outcome (D-6).
 pub fn render_publish_pull(report: &PullReport) -> String {
@@ -59,9 +61,21 @@ pub fn render_publish_pull(report: &PullReport) -> String {
     } else {
         String::new()
     };
+    let not_inserted: String = report
+        .inserts
+        .iter()
+        .filter_map(render_insert_refusal)
+        .chain(report.foreign.iter().map(|foreign| {
+            format!(
+                "  {} not inserted: foreign author {}\n",
+                foreign.cid.0, foreign.author_did
+            )
+        }))
+        .collect();
     format!(
         "Pulled {} record(s) from {}\n{lines}{}/{} CIDs verified\n\
-         matched: {}/{pulled}, new: {}, conflicts: {}, rejected: {}, overwritten: 0\n{in_sync}",
+         matched: {}/{pulled}, new: {}, conflicts: {}, rejected: {}, overwritten: 0\n\
+         inserted: {}/{}, foreign (not inserted): {}\n{not_inserted}{in_sync}",
         report.verdicts.len(),
         report.instance_url,
         report.verified_count(),
@@ -70,7 +84,20 @@ pub fn render_publish_pull(report: &PullReport) -> String {
         tally.new,
         tally.conflicts,
         tally.rejected,
+        report.inserted_count(),
+        report.inserts.len(),
+        report.foreign.len(),
     )
+}
+
+fn render_insert_refusal(result: &InsertResult) -> Option<String> {
+    match result {
+        InsertResult::Inserted { .. } => None,
+        InsertResult::SignatureInvalid { cid } => Some(format!(
+            "  {} not inserted: signature does not verify against the local identity\n",
+            cid.0
+        )),
+    }
 }
 
 fn render_pull_verdict(verdict: &RoundTripVerdict) -> String {

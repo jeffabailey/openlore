@@ -546,3 +546,95 @@ proptest! {
         );
     }
 }
+
+// -----------------------------------------------------------------------------
+// Pull insert selection (US-SF-004 fresh-machine rebuild; anti-merging)
+// -----------------------------------------------------------------------------
+
+/// The local identity's bare DID in the insert-selection properties.
+const OWN_DID: &str = "did:plc:maria-test";
+
+/// Author DIDs paired with whether `OWN_DID` authored them (an independent
+/// oracle): the bare DID and a DID URL naming one of its keys are own; a
+/// different DID — including one that merely shares `OWN_DID` as a prefix —
+/// is foreign.
+fn arb_author() -> impl Strategy<Value = (String, bool)> {
+    prop::sample::select(vec![
+        (OWN_DID.to_string(), true),
+        (format!("{OWN_DID}#org.openlore.application"), true),
+        ("did:plc:rachel-test".to_string(), false),
+        (format!("{OWN_DID}-impostor"), false),
+        (format!("{OWN_DID}x#org.openlore.application"), false),
+    ])
+}
+
+fn arb_authored_pulled_record() -> impl Strategy<Value = PulledRecord> {
+    (arb_pulled_record(), arb_author()).prop_map(|(record, (author_did, _))| match record {
+        PulledRecord::Recomputed {
+            key,
+            recomputed,
+            identity,
+        } => PulledRecord::Recomputed {
+            key,
+            recomputed,
+            identity: RecordIdentity {
+                author_did,
+                ..identity
+            },
+        },
+        unreadable => unreadable,
+    })
+}
+
+fn owned_by_oracle(author_did: &str) -> bool {
+    author_did == OWN_DID || author_did == format!("{OWN_DID}#org.openlore.application")
+}
+
+/// Each New outcome with the author of the pulled record it classified
+/// (`reconcile` yields one outcome per pulled record, in pulled order).
+fn new_records_with_authors(
+    reconciled: &[Reconciled],
+    pulled: &[PulledRecord],
+) -> Vec<(Cid, String)> {
+    reconciled
+        .iter()
+        .zip(pulled)
+        .filter_map(|pair| match pair {
+            (Reconciled::New { cid }, PulledRecord::Recomputed { identity, .. }) => {
+                Some((cid.clone(), identity.author_did.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+proptest! {
+    /// A pull inserts ONLY verified New records the local identity authored
+    /// (selected ⊆ New ∧ every selected author == local DID); every other New
+    /// record is reported as foreign with its author, and nothing Matched,
+    /// Conflicting, or Rejected is ever selected or reported.
+    #[test]
+    fn a_pull_inserts_only_new_records_the_local_identity_authored(
+        local in arb_local_claims(),
+        pulled in prop::collection::vec(arb_authored_pulled_record(), 0..12),
+    ) {
+        let reconciled = reconcile(&local, &pulled);
+        let selection = select_inserts(OWN_DID, &reconciled, &pulled);
+        let new_records = new_records_with_authors(&reconciled, &pulled);
+
+        // selected ⊆ New, and every selected author is the local identity.
+        let expected_inserts: Vec<Cid> = new_records
+            .iter()
+            .filter(|(_, author)| owned_by_oracle(author))
+            .map(|(cid, _)| cid.clone())
+            .collect();
+        prop_assert_eq!(&selection.to_insert, &expected_inserts);
+        // Every other New record is reported foreign, with its author.
+        let expected_foreign: Vec<ForeignRecord> = new_records
+            .into_iter()
+            .filter(|(_, author)| !owned_by_oracle(author))
+            .map(|(cid, author_did)| ForeignRecord { cid, author_did })
+            .collect();
+        prop_assert_eq!(&selection.foreign, &expected_foreign);
+    }
+}

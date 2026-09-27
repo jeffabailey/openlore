@@ -498,5 +498,95 @@ pub fn tally_reconcile(outcomes: &[Reconciled]) -> ReconcileTally {
         })
 }
 
+// -----------------------------------------------------------------------------
+// 7. Pull insert selection (US-SF-004 fresh-machine rebuild; anti-merging)
+// -----------------------------------------------------------------------------
+
+/// A verified New record NOT inserted into the user's own store because
+/// another author signed it (anti-merging, ADR-016 / KPI-FED-6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignRecord {
+    pub cid: Cid,
+    pub author_did: String,
+}
+
+/// Which reconciled records a pull may write into the user's OWN store: only
+/// verified New records the local identity authored. Foreign-author New
+/// records are reported, never inserted. Both keep pulled order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InsertSelection {
+    pub to_insert: Vec<Cid>,
+    pub foreign: Vec<ForeignRecord>,
+}
+
+/// Select what a pull inserts. `reconciled` is [`reconcile`]'s output for
+/// `pulled` (one outcome per pulled record, same order). Only New records
+/// qualify — never Matched, Conflict, or Rejected.
+pub fn select_inserts(
+    own_did: &str,
+    reconciled: &[Reconciled],
+    pulled: &[PulledRecord],
+) -> InsertSelection {
+    reconciled
+        .iter()
+        .zip(pulled)
+        .filter_map(|(outcome, record)| new_record_author(outcome, record))
+        .fold(
+            InsertSelection::default(),
+            |selection, (cid, author_did)| {
+                if is_authored_by(author_did, own_did) {
+                    selection.inserting(cid)
+                } else {
+                    selection.reporting_foreign(cid, author_did)
+                }
+            },
+        )
+}
+
+impl InsertSelection {
+    fn inserting(mut self, cid: &Cid) -> Self {
+        self.to_insert.push(cid.clone());
+        self
+    }
+
+    fn reporting_foreign(mut self, cid: &Cid, author_did: &str) -> Self {
+        self.foreign.push(ForeignRecord {
+            cid: cid.clone(),
+            author_did: author_did.to_string(),
+        });
+        self
+    }
+}
+
+/// The CID and author of a record reconciled as New (New implies it was
+/// re-parsed and recomputed to its key); `None` for every other outcome.
+fn new_record_author<'a>(
+    outcome: &'a Reconciled,
+    record: &'a PulledRecord,
+) -> Option<(&'a Cid, &'a str)> {
+    match (outcome, record) {
+        (Reconciled::New { cid }, PulledRecord::Recomputed { identity, .. }) => {
+            Some((cid, identity.author_did.as_str()))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `author_did` names the local identity `own_did`: the bare DID, or
+/// a DID URL naming one of its keys (`<own_did>#<fragment>`). A DID that
+/// merely shares `own_did` as a prefix is a different author.
+pub fn is_authored_by(author_did: &str, own_did: &str) -> bool {
+    let author = author_did
+        .split_once('#')
+        .map_or(author_did, |(did, _fragment)| did);
+    author == own_did
+}
+
+/// Re-parse a pulled record's bytes into the signed claim a pull inserts.
+/// The claim carries the RECOMPUTED CID (never a CID from the wire).
+pub fn decode_pulled(returned: &RecordBytes) -> Result<SignedClaim, UnreadableRecord> {
+    decode_record(returned)
+}
+
 #[cfg(test)]
 mod tests;

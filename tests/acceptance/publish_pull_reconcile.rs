@@ -81,12 +81,79 @@ fn publish_pull_is_an_additive_reconcile_that_never_overwrites_local_claims() {
 ///
 /// @us-sf-004 @real-io @j-008 @boundary
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-004 fresh-machine rebuild)"]
 fn publish_pull_rebuilds_local_duckdb_on_a_fresh_machine_with_attribution_intact() {
-    todo!(
-        "DELIVER: Given an empty local store and a FakeInstance holding 42; When `publish pull`; \
-         Then local.claims.row_count 0 → 42, each attributed to its author_did, and each CID \
-         recomputed + verified BEFORE insert."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria's instance holds the 42 claims she pushed from her old
+    // machine (same identity; each record exactly as a push left it).
+    let old_machine = TestEnv::initialized_as(FakeIdentity::maria());
+    let pushed = local_graph_of(&old_machine, 42);
+    let instance = instance_already_holding(&old_machine, &pushed);
+    let attribution = local_claim_authors(&old_machine);
+
+    // And she is on a fresh machine: same identity, EMPTY local store.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let before = capture_publish_universe(&env, &instance, "");
+    assert_eq!(
+        before["local.claims.row_count"], "0",
+        "precondition: empty local store"
+    );
+
+    // When she pulls her instance back.
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        pull.status, 0,
+        "a fresh-machine `publish pull` must exit 0;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    let after = capture_publish_universe(&env, &instance, &pull.stdout);
+
+    // Then local.claims.row_count goes 0 → 42 and every pulled CID was
+    // recomputed + verified (the instance itself is untouched).
+    let expected = Delta::new()
+        .with_slot("local.claims.row_count", set_to("42".to_string()))
+        .with_slot("cli.publish.verified_count", set_to("42".to_string()));
+    assert_state_delta(&before, &after, &publish_universe(), &expected);
+
+    // And each row is attributed to exactly the author_did it was signed by,
+    // with its signed `<cid>.json` artifact rebuilt beside it.
+    assert_eq!(
+        local_claim_authors(&env),
+        attribution,
+        "every rebuilt row must keep its original author_did attribution"
+    );
+    for cid in &pushed {
+        assert!(
+            env.claims_dir().join(format!("{cid}.json")).is_file(),
+            "the signed artifact {cid}.json must be rebuilt locally"
+        );
+        // Verify-before-insert: the CLI reports each inserted CID verified.
+        assert!(
+            pull.stdout
+                .lines()
+                .any(|line| line.trim() == format!("{cid} verified")),
+            "{cid} must be recomputed + verified before it is stored; stdout:\n{}",
+            pull.stdout
+        );
+    }
+    assert!(
+        pull.stdout.contains("inserted: 42/42"),
+        "pull must report every new own-author record inserted; stdout:\n{}",
+        pull.stdout
+    );
+
+    // And pulling again is idempotent: all 42 now match, nothing duplicates.
+    let again = run_openlore_publish(&env, &["pull"], &instance);
+    assert_eq!(
+        again.status, 0,
+        "a repeat pull must exit 0; stderr:\n{}",
+        again.stderr
+    );
+    assert_eq!(publish_pull_counts(&again.stdout).0, "42/42");
+    assert_eq!(
+        local_claim_cids(&env).len(),
+        42,
+        "a repeat pull must not duplicate rows"
     );
 }
 
@@ -174,11 +241,59 @@ fn publish_pull_recomputes_an_identical_cid_for_every_pushed_claim() {
 ///
 /// @us-sf-004 @error @kpi-sf-5 @j-008
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-004 unreachable instance on pull)"]
 fn publish_pull_exits_nonzero_when_the_instance_is_unreachable() {
-    todo!(
-        "DELIVER: Given a FakeInstance::unreachable() registered target; When `publish pull`; \
-         Then exit non-zero with 'instance unreachable', local.claims UNCHANGED, and a \
-         subsequent `graph query` succeeds offline."
+    use support::state_delta::{assert_state_delta, Delta};
+
+    // Given Maria has ONE signed claim in her local store.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let cid = seed_one_signed_local_claim(&env, 0.86);
+
+    // And her publish target (the `OPENLORE_PUBLISH_ENDPOINT` fallback seam)
+    // is unreachable — a loopback port bound then released, so the connect
+    // is refused deterministically.
+    let instance = FakeInstance::unreachable();
+    let before = capture_local_claims_universe(&env);
+
+    // When she pulls.
+    let pull = run_openlore_publish(&env, &["pull"], &instance);
+    let after = capture_local_claims_universe(&env);
+
+    // Then the pull fails loudly, naming the instance as unreachable.
+    assert_ne!(
+        pull.status, 0,
+        "a pull from an unreachable instance must exit non-zero;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    assert!(
+        pull.stderr.contains("instance unreachable"),
+        "pull must say the instance is unreachable;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout,
+        pull.stderr
+    );
+
+    // And her local store is untouched: row count, CID set, and bytes.
+    assert_state_delta(&before, &after, &local_claims_universe(), &Delta::new());
+
+    // And local query still works offline (KPI-SF-5), finding her claim.
+    let query = run_openlore_network_disabled(
+        &env,
+        &[
+            "graph",
+            "query",
+            "--object",
+            "org.openlore.philosophy.memory-safety",
+        ],
+    );
+    assert_eq!(
+        query.status, 0,
+        "`graph query` must succeed offline after a failed pull;\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        query.stdout, query.stderr
+    );
+    assert!(
+        query.stdout.contains("github:rust-lang/rust"),
+        "offline `graph query` must still list her claim ({cid});\n--- stdout ---\n{}",
+        query.stdout
     );
 }

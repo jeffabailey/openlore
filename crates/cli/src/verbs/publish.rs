@@ -22,14 +22,21 @@
 //!   CID in Rust, byte-match it against the key, report `N/M CIDs verified`;
 //!   then reconcile the verified records against the local store (Matched /
 //!   New / Conflict / Rejected — never an overwrite, D-6) and report the
-//!   tally. The local store is only read here.
+//!   tally. Verified New records the local identity authored are then
+//!   inserted through the SAME `StoragePort` write path `claim add` uses
+//!   (DuckDB row + `<cid>.json`), each only after its signature verifies
+//!   against the local identity; foreign-author records are reported and
+//!   never inserted (anti-merging). Matched / Conflict / Rejected records
+//!   never touch the local store.
 //! - `status` — READ-ONLY inspection: the registered target, its card URL,
 //!   and its current reachability (the same adapter probe; no write path).
 
 use anyhow::{anyhow, Context};
+use std::collections::HashMap;
+
 use claim_domain::{Cid, SignedClaim};
-use ports::{ClaimRow, InstanceReadPort, PageRequest, PublishPort, RoundTripVerdict};
-use publish_domain::{LocalClaim, PulledRecord, Reconciled, RecordIdentity};
+use ports::{ClaimRow, InstanceReadPort, PageRequest, PublishPort, RecordBytes, RoundTripVerdict};
+use publish_domain::{ForeignRecord, LocalClaim, PulledRecord, Reconciled, RecordIdentity};
 use serde::{Deserialize, Serialize};
 
 use crate::render::{
@@ -105,13 +112,26 @@ impl PushReport {
     }
 }
 
+/// The per-record result of inserting a selected pulled record locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertResult {
+    /// Signature verified against the local identity; row + artifact written.
+    Inserted { cid: Cid },
+    /// The signature does not verify against the local identity — NOT
+    /// inserted (verify-before-trust: a matching CID alone is not enough).
+    SignatureInvalid { cid: Cid },
+}
+
 /// The result of `publish pull`: one round-trip verdict and one reconcile
-/// outcome per manifest entry.
+/// outcome per manifest entry, the insert result of every selected New
+/// own-author record, and the New foreign-author records NOT inserted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullReport {
     pub instance_url: String,
     pub verdicts: Vec<RoundTripVerdict>,
     pub reconciled: Vec<Reconciled>,
+    pub inserts: Vec<InsertResult>,
+    pub foreign: Vec<ForeignRecord>,
 }
 
 impl PullReport {
@@ -120,6 +140,17 @@ impl PullReport {
             .iter()
             .filter(|v| matches!(v, RoundTripVerdict::Verified { .. }))
             .count()
+    }
+
+    pub fn inserted_count(&self) -> usize {
+        self.inserts
+            .iter()
+            .filter(|r| matches!(r, InsertResult::Inserted { .. }))
+            .count()
+    }
+
+    fn clean(&self) -> bool {
+        self.verified_count() == self.verdicts.len() && self.inserted_count() == self.inserts.len()
     }
 }
 
@@ -191,18 +222,31 @@ fn pull(wiring: &Wiring) -> Result<PublishOutcome, PublishVerbError> {
     let manifest = instance
         .fetch_manifest()
         .with_context(|| format!("reading the manifest of {instance_url}"))?;
+    let fetched = publish_domain::manifest_cids(&manifest)
+        .iter()
+        .map(|cid| fetch_record(instance.as_ref(), cid))
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
     let pulled = publish_domain::manifest_cids(&manifest)
         .iter()
-        .map(|cid| pull_record(instance.as_ref(), cid))
+        .map(|cid| publish_domain::recompute_pulled(cid, &fetched[cid]))
+        .collect::<Vec<_>>();
+    let reconciled = publish_domain::reconcile(&own_local_claims(wiring)?, &pulled);
+    let selection =
+        publish_domain::select_inserts(&wiring.identity.author_did().0, &reconciled, &pulled);
+    let inserts = selection
+        .to_insert
+        .iter()
+        .map(|cid| insert_pulled(wiring, cid, &fetched[cid]))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let report = PullReport {
         instance_url,
         verdicts: pulled.iter().map(PulledRecord::verdict).collect(),
-        reconciled: publish_domain::reconcile(&own_local_claims(wiring)?, &pulled),
+        reconciled,
+        inserts,
+        foreign: selection.foreign,
     };
-    let all_verified = report.verified_count() == report.verdicts.len();
     Ok(PublishOutcome {
-        exit_code: if all_verified { 0 } else { 1 },
+        exit_code: if report.clean() { 0 } else { 1 },
         stdout: render_publish_pull(&report),
     })
 }
@@ -251,13 +295,31 @@ fn push_one(instance: &dyn PublishPort, signed: &SignedClaim) -> anyhow::Result<
     }
 }
 
-/// Read one record back and recompute it in Rust (verify-before-trust,
-/// J-003) — before it is ever classified against the local store.
-fn pull_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<PulledRecord> {
+/// Read one record's bytes back from the instance, keyed by the CID it is
+/// listed under. Nothing is trusted yet: every record is recomputed in Rust
+/// (verify-before-trust, J-003) before it is classified or inserted.
+fn fetch_record(instance: &dyn InstanceReadPort, cid: &Cid) -> anyhow::Result<(Cid, RecordBytes)> {
     let returned = instance
         .get_record(cid)
         .with_context(|| format!("reading {} back from the instance", cid.0))?;
-    Ok(publish_domain::recompute_pulled(cid, &returned))
+    Ok((cid.clone(), returned))
+}
+
+/// Insert one selected (verified New, own-author) record into the local
+/// store through the `claim add` write path — only once its signature
+/// verifies against the local identity. The decoded claim carries the
+/// Rust-recomputed CID, which `select_inserts` already matched to `cid`.
+fn insert_pulled(wiring: &Wiring, cid: &Cid, bytes: &RecordBytes) -> anyhow::Result<InsertResult> {
+    let signed = publish_domain::decode_pulled(bytes)
+        .map_err(|unreadable| anyhow!("re-parsing {}: {}", cid.0, unreadable.detail))?;
+    if signed.signature.signed_cid != *cid || wiring.identity.verify(&signed).is_err() {
+        return Ok(InsertResult::SignatureInvalid { cid: cid.clone() });
+    }
+    wiring
+        .storage
+        .write_signed_claim(&signed)
+        .with_context(|| format!("storing pulled claim {} locally", cid.0))?;
+    Ok(InsertResult::Inserted { cid: cid.clone() })
 }
 
 /// Every claim row in the user's OWN local store, in the store's stable

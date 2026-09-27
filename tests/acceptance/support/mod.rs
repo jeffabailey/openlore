@@ -18643,3 +18643,22 @@ pub fn pull_universe() -> HashSet<String> {
     .map(str::to_string)
     .collect()
 }
+
+/// Port-exposed observable `local.claims.author_by_cid`: every row of the
+/// user's OWN local `claims` table keyed by CID, with the `author_did` it is
+/// attributed to. Test-support is the only place raw SQL is acceptable.
+pub fn local_claim_authors(env: &TestEnv) -> std::collections::BTreeMap<String, String> {
+    let conn = duckdb::Connection::open(env.duckdb_path())
+        .unwrap_or_else(|err| panic!("open DuckDB for local claim authors: {err}"));
+    let mut stmt = conn
+        .prepare("SELECT cid, author_did FROM claims ORDER BY cid")
+        .expect("prepare local claim authors");
+    let authors = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("query local claim authors")
+        .map(|row| row.expect("decode local claim author"))
+        .collect();
+    authors
+}
