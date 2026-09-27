@@ -16,8 +16,6 @@
 //! Layer 3; example-only (Mandate 11 — tampered/unreachable sad paths are named
 //! examples, never PBT). The J-003 verify machinery itself is already shipped
 //! and unit-tested; these scenarios assert the TRANSPORT DELTA only.
-//
-// SCAFFOLD: true
 
 mod support;
 
@@ -120,13 +118,68 @@ fn peer_pull_fetches_a_peers_claims_from_their_cloudflare_instance_into_peer_cla
 ///
 /// @us-sf-006 @error @j-003
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-006 tampered peer claim rejected)"]
 fn peer_pull_rejects_a_tampered_peer_claim_and_stores_the_valid_ones() {
-    todo!(
-        "DELIVER: Given a peer FakeInstance whose record set includes one tampered signature; \
-         When `openlore peer pull`; Then the tampered record is rejected + reported, the honest \
-         records are stored in peer_claims, and exit is non-zero. Reuses J-003 KPI-FED-6 discipline."
+    // Given Rachel's Cloudflare instance serves 4 honest REAL-signed claims
+    // plus ONE whose signature was tampered after signing. Its CID is still
+    // honest (the CID covers only the unsigned claim), so ONLY the signature
+    // verify can catch it.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let (pds_records, rachel_pubkey_hex, tampered_cid) =
+        build_tampered_signature_peer_records(RACHEL_DID, RACHEL_SEED, 4);
+    let served: Vec<PreloadedRecord> = pds_records.iter().map(instance_record_of).collect();
+    let honest_cids: Vec<String> = served
+        .iter()
+        .map(|record| record.cid.clone())
+        .filter(|cid| cid != &tampered_cid)
+        .collect();
+    assert_eq!(honest_cids.len(), 4, "fixture: 4 honest + 1 tampered");
+    let instance = FakeInstance::for_peer(RACHEL_DID, served);
+
+    // And Maria subscribed to Rachel via the real `peer add`.
+    subscribe_to_peer_instance(&env, RACHEL_DID, &instance);
+
+    // When Maria pulls.
+    let pull = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        RACHEL_DID,
+        instance.endpoint_url(),
+        &rachel_pubkey_hex,
     );
+
+    // Then the tampered record was READ through the opaque transport, then
+    // rejected and reported by its signature failure; the pull exits non-zero.
+    assert_instance_served_record(&instance, &tampered_cid);
+    assert_ne!(
+        pull.status, 0,
+        "a rejected record flags the pull non-zero (KPI-FED-6);\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    assert!(
+        pull.stdout.contains("signature invalid"),
+        "the rejection reason must name the signature failure;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+
+    // And exactly the 4 honest records are stored, attributed to Rachel; the
+    // tampered record is never stored.
+    let mut expected: Vec<(String, String)> = honest_cids
+        .iter()
+        .map(|cid| (cid.clone(), RACHEL_DID.to_string()))
+        .collect();
+    expected.sort();
+    assert_eq!(
+        peer_claim_rows(&env),
+        expected,
+        "exactly the honest records land in peer_claims;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+    assert_peer_claim_cid_absent(&env, &tampered_cid);
+    assert!(
+        local_claim_cids(&env).is_empty(),
+        "a peer pull never writes into Maria's own claims"
+    );
+    assert_peer_instance_only_read(&instance);
 }
 
 // =============================================================================
@@ -141,13 +194,81 @@ fn peer_pull_rejects_a_tampered_peer_claim_and_stores_the_valid_ones() {
 ///
 /// @us-sf-006 @error @j-003
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-006 unreachable peer instance skips only that peer)"]
 fn peer_pull_skips_only_the_unreachable_peer_instance_and_proceeds_with_others() {
-    todo!(
-        "DELIVER: Given two subscribed peers, one reachable and one \
-         FakeInstance::unreachable(); When `openlore peer pull`; Then the unreachable peer is \
-         skipped + reported, the reachable peer's claims are stored, exit is non-zero overall."
+    // Given Maria follows two peers who each moved to their own Cloudflare
+    // instance: Tobias (reachable, 3 REAL-signed claims) and Rachel.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let tobias = build_verifiable_peer_instance_records(TOBIAS_DID, TOBIAS_SEED, 3);
+    let rachel = build_verifiable_peer_instance_records(RACHEL_DID, RACHEL_SEED, 3);
+    let tobias_instance = FakeInstance::for_peer(TOBIAS_DID, tobias.instance_records.clone());
+    subscribe_to_peer_instance(&env, TOBIAS_DID, &tobias_instance);
+    {
+        // Rachel was subscribed (real `peer add`) while her instance was up ...
+        let rachel_while_up = FakeInstance::for_peer(RACHEL_DID, rachel.instance_records.clone());
+        subscribe_to_peer_instance(&env, RACHEL_DID, &rachel_while_up);
+    }
+    // ... and her DID now resolves to an instance that is unreachable.
+    let rachel_down = FakeInstance::unreachable();
+
+    // When Maria pulls both peers in ONE invocation.
+    let pull = run_openlore_pull_multi(
+        &env,
+        &["peer", "pull"],
+        &[
+            PeerSeam {
+                peer_did: TOBIAS_DID,
+                peer_endpoint: tobias_instance.endpoint_url(),
+                peer_pubkey_hex: &tobias.pubkey_hex,
+            },
+            PeerSeam {
+                peer_did: RACHEL_DID,
+                peer_endpoint: rachel_down.endpoint_url(),
+                peer_pubkey_hex: &rachel.pubkey_hex,
+            },
+        ],
     );
+
+    // Then the pull exits non-zero overall and names Rachel as skipped.
+    assert_ne!(
+        pull.status, 0,
+        "an unreachable peer instance flags the pull non-zero;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pull.stdout, pull.stderr
+    );
+    let rachel_block_is_skipped = pull
+        .stdout
+        .lines()
+        .skip_while(|line| !line.contains(RACHEL_DID))
+        .take_while(|line| !line.contains(TOBIAS_DID))
+        .any(|line| line.trim_start().starts_with("skipped"));
+    assert!(
+        rachel_block_is_skipped,
+        "the report must name {RACHEL_DID} and mark it skipped;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+
+    // And Tobias's pull proceeded: every record crossed his opaque read and
+    // exactly his 3 claims are stored, attributed to him; nothing is stored
+    // for Rachel and Maria's own claims are untouched.
+    for record in &tobias.instance_records {
+        assert_instance_served_record(&tobias_instance, &record.cid);
+    }
+    let mut expected: Vec<(String, String)> = tobias
+        .instance_records
+        .iter()
+        .map(|record| (record.cid.clone(), TOBIAS_DID.to_string()))
+        .collect();
+    expected.sort();
+    assert_eq!(
+        peer_claim_rows(&env),
+        expected,
+        "only the reachable peer's claims land in peer_claims;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+    assert!(
+        local_claim_cids(&env).is_empty(),
+        "a peer pull never writes into Maria's own claims"
+    );
+    assert_peer_instance_only_read(&tobias_instance);
 }
 
 // =============================================================================

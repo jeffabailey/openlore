@@ -19029,6 +19029,10 @@ pub fn expected_card_rows(env: &TestEnv, cids: &[String]) -> Vec<CardRow> {
 pub const RACHEL_DID: &str = "did:plc:rachel-test";
 /// Rachel's deterministic Ed25519 seed (same as the slice-03 PP-* scenarios).
 pub const RACHEL_SEED: [u8; 32] = [7u8; 32];
+/// A second peer for the multi-peer fault-isolation scenario (CI-3).
+pub const TOBIAS_DID: &str = "did:plc:tobias-test";
+/// Tobias's deterministic Ed25519 seed (distinct from Rachel's).
+pub const TOBIAS_SEED: [u8; 32] = [9u8; 32];
 
 /// One peer's REAL-signed claims in BOTH transport shapes, index-aligned:
 /// the J-003 PDS record view and the opaque-instance record (verbatim
@@ -19063,7 +19067,7 @@ pub fn build_verifiable_peer_instance_records(
 /// A peer PDS record as the opaque instance holds it after the peer's own
 /// `publish push`: the verbatim lexicon-JSON bytes under the CID + the
 /// manifest v1 display entry.
-fn instance_record_of(record: &FakePeerRecord) -> PreloadedRecord {
+pub fn instance_record_of(record: &FakePeerRecord) -> PreloadedRecord {
     let body = &record.body;
     PreloadedRecord {
         cid: record.rkey.clone(),
