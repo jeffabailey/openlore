@@ -314,6 +314,7 @@ jobs:
     if: ${{ !contains(github.ref_name, '-') }}
     permissions:
       contents: write   # commit the bumped formula back to main
+      actions: write    # dispatch formula-smoke.yml (a GITHUB_TOKEN push fires no workflows)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -343,3 +344,10 @@ jobs:
           git add Formula/openlore.rb
           git commit -m "chore(release): bump homebrew formula to ${GITHUB_REF_NAME#v}"
           git push origin HEAD:main
+      - name: Smoke-test the bumped formula (macOS brew install)
+        # A push made with GITHUB_TOKEN does not trigger `push` workflows, so the
+        # formula-smoke.yml `paths` trigger never sees the bot commit — dispatch it
+        # explicitly. Post-release probe, not a release gate (ADR-061 D-6 amendment).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run formula-smoke.yml --ref main

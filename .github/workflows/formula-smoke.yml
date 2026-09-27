@@ -3,8 +3,12 @@
 # Runs the REAL user-facing `brew tap → trust → install` flow against the live tap +
 # GitHub Release and asserts `openlore --version`, so a broken formula (bad sha256,
 # missing release asset, tap/trust regression) fails CI instead of the user. Triggers
-# whenever the formula (or this test) changes on main — including the release.yml
-# `bump-formula` autobump commit — plus on demand.
+# whenever the formula (or this test) changes on main, plus on demand. The release.yml
+# `bump-formula` autobump pushes with GITHUB_TOKEN, which does NOT fire `push`
+# workflows, so that job dispatches this workflow explicitly after it pushes.
+#
+# macOS only (ADR-061 D-6 amendment, 2026-09-27): the per-triple, release-blocking
+# probe is relaxed to a post-bump macos-14 (aarch64-apple-darwin) smoke test.
 name: Formula smoke test
 
 on:
@@ -30,20 +34,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 = Apple Silicon (aarch64-apple-darwin), ubuntu-latest = x86_64 Linux.
-        # x86_64-apple-darwin + aarch64-linux paths are validated by release.yml's build
-        # matrix; Intel-mac runners are scarce (ADR-011) so they are not smoke-tested here.
-        os: [macos-14, ubuntu-latest]
+        # macos-14 = Apple Silicon (aarch64-apple-darwin). Linux and Intel-mac installs
+        # are deliberately not smoke-tested for now (ADR-061 D-6 amendment).
+        os: [macos-14]
     steps:
       - uses: actions/checkout@v4
-      - name: Put Homebrew on PATH
-        shell: bash
-        # macOS runners ship brew on PATH already; ubuntu runners have Linuxbrew
-        # installed at the standard prefix but do NOT export it — add it so the
-        # smoke script's `brew` resolves. No-op on macOS (the dir is absent).
-        run: |
-          if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
-            echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
-          fi
       - name: brew tap → trust → install → version
         run: bash scripts/release/smoke-test-formula.sh

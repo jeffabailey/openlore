@@ -130,7 +130,7 @@ phone-home. The formula answers this structurally: it defines only `install` (`b
 
 ## Deferred items / open questions
 
-- **Close the smoke-test gap** (Deviations #2/#3): make the install smoke test run after every autobump. Preferably add it as a job in `release.yml` after `bump-formula`, matching DDD-5. Extend it to `x86_64-apple-darwin` (on macos-14 via Rosetta or an Intel runner) and `aarch64-unknown-linux-gnu` (ubuntu-24.04-arm).
+- ~~**Close the smoke-test gap**~~ **Resolved 2026-09-27 by relaxing the requirement** (ADR-061 D-6 amendment): `bump-formula` now dispatches `formula-smoke.yml` after it pushes, and the smoke test runs on macos-14 only. It is still a post-release signal, not a gate. Linux and Intel-mac installs are deliberately not smoke-tested for now.
 - **Branch protection**: `bump-formula` pushes directly to `main` with `GITHUB_TOKEN`. If `main` is ever protected, the job needs a bypass or a different token (noted in `release.yml`).
 - **`brew audit --strict --online` / `brew style` in CI** (Deviations #8).
 - **Record KPI-HB-1..3** in `docs/product/kpi-contracts.yaml` (Deviations #10).

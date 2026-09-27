@@ -114,6 +114,19 @@ feature. See `design/upstream-changes.md` and the Open Questions below.
   eventually-consistent/partially-uploaded asset "lie"). "Wire (bump) → probe
   (smoke test) → use (release proceeds)"; a failed probe refuses to ship.
 
+> **Amendment (2026-09-27) — D-6 relaxed to a macOS-only, post-release probe.**
+> The per-triple, release-blocking requirement above is deliberately broken for now.
+> After a GA autobump, `release.yml`'s `bump-formula` job dispatches
+> `formula-smoke.yml`, which runs `brew tap → trust → install → openlore --version`
+> on **macos-14 only** (`aarch64-apple-darwin`). It runs *after* the formula is on
+> `main`, so it signals a broken bump but does not refuse to ship.
+> `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`
+> installs are not smoke-tested. Explicit dispatch is required because a push made with
+> `GITHUB_TOKEN` does not trigger `push` workflows.
+> **Revisit** when a non-macOS brew user reports a broken install, or when the release
+> needs to be gated again (move the smoke test into `release.yml` as a job after
+> `bump-formula` and restore the matrix).
+
 ## Alternatives Considered
 
 | Option | Rejection rationale |
