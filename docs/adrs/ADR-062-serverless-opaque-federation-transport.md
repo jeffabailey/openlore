@@ -1,6 +1,6 @@
 # ADR-062: Self-Hosted Serverless Instance = Opaque, Content-Addressed HTTP Blob Transport
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-09-27) — implemented and shipped across slices 01-05 (see `docs/evolution/2026-09-27-serverless-philosophy-federation.md`).
 - **Date**: 2026-07-15
 - **Deciders**: Morgan (nw-solution-architect), per D-1..D-9 locks from Luna
   (nw-product-owner) for `serverless-philosophy-federation` (DISCUSS), and SPIKE-00
