@@ -162,3 +162,49 @@ pub trait PublishPort: InstanceReadPort {
         entry: &ManifestEntry,
     ) -> Result<(), InstanceError>;
 }
+
+#[cfg(test)]
+mod tests {
+    //! Pins the dotted `publish.*` reason-code contract: the probe refusal
+    //! payload and the CLI refusal both key on these exact strings.
+
+    use super::*;
+
+    /// Each probe-refusal failure maps to its own dotted reason code; the
+    /// per-record failures (not found, rejected) carry none.
+    #[test]
+    fn each_refusal_failure_carries_its_dotted_reason_code() {
+        let text = || "x".to_string();
+        let cases = [
+            (
+                InstanceError::Unreachable {
+                    url: text(),
+                    detail: text(),
+                },
+                Some(REASON_INSTANCE_UNREACHABLE),
+            ),
+            (
+                InstanceError::NotAnOpenloreInstance { detail: text() },
+                Some(REASON_NOT_AN_OPENLORE_INSTANCE),
+            ),
+            (
+                InstanceError::UnauthorizedWrite {
+                    url: text(),
+                    status: 401,
+                },
+                Some(REASON_UNAUTHORIZED_WRITE),
+            ),
+            (InstanceError::RecordNotFound { cid: text() }, None),
+            (
+                InstanceError::Rejected {
+                    status: 500,
+                    detail: text(),
+                },
+                None,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.reason_code(), expected, "{error:?}");
+        }
+    }
+}

@@ -793,3 +793,68 @@ proptest! {
         prop_assert_eq!(select_peer_transport(&observation), PeerTransport::OpaqueInstance);
     }
 }
+
+// -----------------------------------------------------------------------------
+// Reporting surfaces: the reconcile tally, the readback refusal reason, and
+// the manifest's committed CID set.
+// -----------------------------------------------------------------------------
+
+proptest! {
+    /// The tally counts each outcome kind exactly, and a pull is in sync iff
+    /// every pulled record is already held locally (all Matched) — any New,
+    /// Conflict, or Rejected outcome means there is something to report.
+    #[test]
+    fn the_tally_counts_each_outcome_and_is_in_sync_iff_all_matched(
+        local in arb_local_claims(),
+        pulled in prop::collection::vec(arb_pulled_record(), 0..12),
+    ) {
+        let outcomes = reconcile(&local, &pulled);
+        let count = |kind: fn(&Reconciled) -> bool| outcomes.iter().filter(|o| kind(o)).count();
+        let tally = tally_reconcile(&outcomes);
+        prop_assert_eq!(
+            tally,
+            ReconcileTally {
+                matched: count(|o| matches!(o, Reconciled::Matched { .. })),
+                new: count(|o| matches!(o, Reconciled::New { .. })),
+                conflicts: count(|o| matches!(o, Reconciled::Conflict { .. })),
+                rejected: count(|o| matches!(o, Reconciled::Rejected { .. })),
+            }
+        );
+        prop_assert_eq!(
+            tally.in_sync(),
+            outcomes.iter().all(|o| matches!(o, Reconciled::Matched { .. }))
+        );
+    }
+
+    /// Each readback refusal reads as its own reason, naming what the
+    /// instance returned (the decode detail or the drifted CID).
+    #[test]
+    fn a_readback_refusal_describes_its_reason(
+        detail in "[a-z]{1,12}",
+        recomputed in arb_cid(),
+    ) {
+        let unreadable = ReadbackMismatch::Unreadable { detail: detail.clone() }.describe();
+        let drift = ReadbackMismatch::CidDrift { recomputed: recomputed.clone() }.describe();
+        let altered = ReadbackMismatch::BytesAltered.describe();
+        prop_assert!(unreadable.contains("unreadable") && unreadable.contains(&detail));
+        prop_assert!(drift.contains(&recomputed.0));
+        prop_assert!(altered.contains("altered"));
+        let reasons: BTreeSet<&String> = [&unreadable, &drift, &altered].into_iter().collect();
+        prop_assert_eq!(reasons.len(), 3);
+    }
+
+    /// A manifest's committed CID set is exactly its entries' CIDs, in order —
+    /// so a manifest of pushed projections lists the pushed claims' CIDs.
+    #[test]
+    fn manifest_cids_lists_every_entry_cid_in_order(
+        signed in prop::collection::vec(arb_signed_claim(), 0..4),
+        contract_version in any::<u64>(),
+    ) {
+        let manifest = InstanceManifest {
+            contract_version,
+            entries: signed.iter().map(display_projection).collect(),
+        };
+        let pushed: Vec<Cid> = signed.iter().map(|s| s.signature.signed_cid.clone()).collect();
+        prop_assert_eq!(manifest_cids(&manifest), pushed);
+    }
+}
