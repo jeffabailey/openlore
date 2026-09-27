@@ -1,0 +1,128 @@
+schema_version: 1
+
+journey:
+  name: "Scrape repos, accumulate people, infer and sign person philosophies"
+  goal: >
+    Let every signed repo philosophy claim also inform a picture of the people who
+    build that repo: scraping records top contributors, openlore proposes auditable
+    person->philosophy candidates from SIGNED repo claims, and the human signs the
+    ones they agree with (append-only as evidence grows).
+  persona: "P-001 Senior Engineer Solo Builder (contributor-evaluator hat); P-002 consumes the signed results"
+  job: "J-004 (sub-jobs J-004d accumulate links, J-004e infer + human signs; J-004c human gate carried)"
+  feature: contributor-philosophy-inference
+  extends: scrape-propose-sign.yaml   # steps 1-4 of that journey are unchanged and precede step 1 here
+
+  emotional_arc:
+    start: "Curious (who actually builds this repo?)"
+    middle: "Recognition -> in-control (this person bridges repos I signed; here is exactly why; nothing signed yet)"
+    end: "Confident-authorship (I signed the inference I agree with; new evidence proposes, never rewrites)"
+
+steps:
+  - id: 1
+    name: "Scrape a repo; its contributors are recorded"
+    command: "openlore scrape github <owner/repo> [--contributors N]"
+    tui_mockup: |
+      +-- after the usual candidate list ----------------------------------+
+      | Contributors recorded: 30 (top by commits)                         |
+      |   bots excluded: dependabot[bot], github-actions[bot]              |
+      | Also contributes to repos you scraped:                             |
+      |   BurntSushi -> rust-lang/regex                                    |
+      +--------------------------------------------------------------------+
+    shared_artifacts:
+      - name: "contribution_link"
+        source: "GitHub public /contributors (one page) -> local store; upsert, never deleted"
+        displayed_as: "${person} -> ${repo}"
+        consumers: ["step 2 inference", "step 2 provenance", "step 4 person view"]
+      - name: "person_subject"
+        source: "GitHub login -> subject URI github:<login> (OD-CPI-1)"
+        displayed_as: "${person_subject}"
+        consumers: ["step 2 candidate subject", "step 3 signed claim subject", "step 4"]
+    emotional_state: { entry: "Curious", exit: "Recognition" }
+    integration_checkpoint: |
+      Exactly one extra public request per repo scrape. Bots excluded. A failed
+      harvest records NO partial links and exits non-zero. No claim is written.
+    failure_modes:
+      - "Rate limit / auth / network failure -> cause named, GITHUB_TOKEN hint, no links, exit non-zero"
+      - "--contributors N outside 0..100 -> rejected before any request"
+
+  - id: 2
+    name: "Review inferred adherence candidates"
+    command: "openlore infer people [--person github:<login>]"
+    tui_mockup: |
+      +-- Inferred adherence candidates (NOTHING signed) ------------------+
+      | [1] github:BurntSushi  adheresToPhilosophy  memory-safety          |
+      |     because: contributes to 2 repos whose SIGNED claims embody it  |
+      |       github:BurntSushi/ripgrep  bafy..r1  by you (0.55)  rank #1   |
+      |       github:rust-lang/regex     bafy..x9  by did:plc:rachel-test   |
+      |                                            (0.60)  rank #1         |
+      |     confidence: 0.20 (speculative) = 0.15 + 0.05 x (2-1)           |
+      | 1 scraped repo has no signed philosophy claims: dtolnay/serde      |
+      +--------------------------------------------------------------------+
+    shared_artifacts:
+      - name: "inferred_candidate"
+        source: "pure derivation: contribution_link x signed, non-retracted repo embodiesPhilosophy claims (author U active peers)"
+        displayed_as: "[${n}] ${person_subject} ${predicate} ${philosophy}"
+        consumers: ["step 3 --sign N", "step 4 person view"]
+      - name: "provenance"
+        source: "the supporting repo claims (CID + claim author DID) and contribution sources for a candidate"
+        displayed_as: "because: ..."
+        consumers: ["step 3 signed payload (D-9)"]
+    emotional_state: { entry: "Recognition", exit: "In-control" }
+    integration_checkpoint: |
+      Only SIGNED repo claims feed inference (D-2). Every provenance entry shows its
+      claim author DID (anti-merging). Offline; writes nothing. Deterministic numbering.
+    failure_modes:
+      - "No candidates -> 'No inferred candidates', exit 0"
+
+  - id: 3
+    name: "Sign an inferred adherence"
+    command: "openlore infer people --sign <N[,N...]>"
+    tui_mockup: |
+      +-- compose preview (claim is asserted by you, not as truth) --------+
+      |   subject:    github:BurntSushi                                    |
+      |   object:     memory-safety                                        |
+      |   confidence: 0.45 (weighted)   <- edited by Maria                 |
+      |   derived-from: 2 signed repo claims (bafy..r1, bafy..x9)          |
+      | Signed. CID bafy..p7                                               |
+      +--------------------------------------------------------------------+
+    emotional_state: { entry: "In-control", exit: "Confident-authorship" }
+    integration_checkpoint: |
+      Signing reuses the claim add / scraper --sign pipeline verbatim. Provenance is in
+      the signed payload; CID stable on re-verify. Nothing written without --sign.
+    failure_modes:
+      - "--sign N out of range -> 'candidate N does not exist; valid range 1..M', nothing composed"
+
+  - id: 4
+    name: "Evidence grows (new repo scraped) — append-only"
+    command: "openlore scrape github <another/repo> [--sign N]  then  openlore infer people"
+    tui_mockup: |
+      | 2 new inferred candidates for people you've seen -- run: openlore infer people |
+      | [NEW]      github:BurntSushi  semantic-versioning                               |
+      | [STRONGER] github:BurntSushi  memory-safety  (signed bafy..p7 on 1 repo; now 2)  |
+      |            sign to SUPERSEDE -- your existing claim is unchanged                 |
+    emotional_state: { entry: "Confident-authorship", exit: "Confident-authorship (record intact)" }
+    integration_checkpoint: |
+      No signed claim is ever modified, re-signed, retracted, or deleted by the system.
+      STRONGER signing adds a `supersedes` reference; retracted support is flagged only.
+
+  - id: 5
+    name: "Read a person"
+    command: "openlore scrape github <user> [--sign N]"
+    emotional_state: { entry: "Curious", exit: "In-control" }
+    integration_checkpoint: |
+      One /users/{user} request; the picture comes from the LOCAL store; no crawl of the
+      person's repos. Same candidate numbering/--sign as `infer people --person`.
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "person_subject"
+      must_match_across: [1, 2, 3, 4, 5]
+      failure_message: "A person's subject URI differs between link, candidate and signed claim — attribution corruption."
+    - artifact: "provenance"
+      must_match_across: [2, 3]
+      failure_message: "Signed inferred claim lost or altered its supporting evidence — peers cannot audit it."
+
+changelog:
+  - date: "2026-09-27"
+    feature: "contributor-philosophy-inference"
+    change: "Initial lightweight journey: scrape records people, infer candidates from signed repo claims, human signs, append-only evolution, person view."

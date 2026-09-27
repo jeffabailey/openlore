@@ -408,6 +408,45 @@ jobs:
           Candidates are conservative-confidence (default <0.3 speculative)
           until the human reviews and adjusts.
 
+      # Sub-jobs surfaced during contributor-philosophy-inference DISCUSS
+      # (2026-09-27). They realize the OD-SCR-4 deferral (contributor/user
+      # aggregate) that the scraper slice pushed out and scoring never built.
+      # "Person" = a GitHub code contributor (subject `github:<login>`); NOT the
+      # claim author that `graph query --contributor <did>` means.
+      - id: J-004d
+        name: Accumulate who builds each scraped repo (people-graph as a scrape by-product)
+        story: >
+          When I scrape repos over time, I want openlore to remember who builds
+          each one (top contributors by commits, bots excluded), so the
+          people-graph grows as a free by-product of scraping — no extra command,
+          no per-commit crawl.
+        load_bearing: true
+        rationale: >
+          Without accumulated repo->person links there is nothing to infer from.
+          One public /contributors page per scraped repo (default top 30,
+          `--contributors N`), stored LOCALLY as unsigned observation data that
+          persists and grows across scrapes; never deleted by a re-scrape. Public
+          data only (WD-51); no commit/PR/issue bodies.
+
+      - id: J-004e
+        name: Infer a person's philosophies from SIGNED repo claims; the human signs
+        story: >
+          When a person I've seen across scraped repos builds in repos whose
+          philosophies I (or a peer I subscribe to) have SIGNED, I want openlore
+          to propose that the person adheres to those philosophies — showing
+          exactly which signed repo claims support it — so I can sign the
+          inference I agree with instead of researching each person by hand.
+        load_bearing: true
+        rationale: >
+          Only SIGNED, non-retracted repo claims (author or subscribed peer) feed
+          inference; unsigned scraper candidates never do. Inferences are
+          CANDIDATES with provenance (supporting claim CIDs + claim authors +
+          contribution source) and speculative default confidence; the human
+          signs through the normal pipeline and provenance travels in the signed
+          payload. Append-only: new evidence proposes NEW or superseding
+          candidates and flags weakened support — it never mutates a signed
+          claim. Realized by contributor-philosophy-inference (slices 01-05).
+
     # The signal->predicate default mapping for slice-02. SMALL and auditable by
     # design; the human edits any candidate before signing. DESIGN owns the
     # exact serde shape; this is the product-level default set.
@@ -1132,3 +1171,20 @@ changelog:
       docs/product/journeys/host-and-share-philosophy.yaml. See
       docs/feature/serverless-philosophy-federation/feature-delta.md (Locked Decisions D-1..D-9,
       KPIs KPI-SF-1..5, Changed Assumptions = the ADR-023 reconciliation).
+  - date: "2026-09-27"
+    feature: contributor-philosophy-inference
+    change: >
+      J-004 REUSED (no new primary job); sub-jobs J-004d (accumulate repo->person
+      contribution links as repos are scraped: top-N by commits from GitHub's public
+      /contributors, default 30, `--contributors N`, bots excluded, local unsigned
+      observations that persist and grow) and J-004e (infer person->philosophy
+      CANDIDATES from SIGNED, non-retracted repo `embodiesPhilosophy` claims by the
+      user or a subscribed peer; provenance shown and carried in the signed payload;
+      human signs; append-only supersede/flag on evidence change) ADDED. Realizes the
+      OD-SCR-4 contributor-aggregate deferral. Vocabulary collision resolved: a GitHub
+      code contributor is a "person" (`github:<login>`); `--contributor <did>` keeps
+      meaning claim author. Open decisions OD-CPI-1..7 (identity, predicate names +
+      link-as-observation, confidence formula, trigger, provenance encoding, link
+      lifecycle, N bounds) handed to DESIGN with recommendations. KPIs KPI-CPI-1..5.
+      Companion journey: docs/product/journeys/infer-contributor-philosophy.yaml. See
+      docs/feature/contributor-philosophy-inference/feature-delta.md.
