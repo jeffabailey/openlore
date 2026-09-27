@@ -40,7 +40,10 @@
 //!    (and the wiring it calls) may reference the write-capable `PublishPort`
 //!    (`publish_port_for`, `for_owner`, `dyn PublishPort`); every other verb
 //!    and read path uses the read-only `InstanceReadPort` (ADR-062 §6, D-7;
-//!    [`classify_publish_write_capability`]).
+//!    [`classify_publish_write_capability`]). The cross-instance `peer pull`
+//!    (US-SF-006) is held tighter still: it may reach a peer's instance ONLY
+//!    through `wiring::instance_reader_for` — it names no instance write
+//!    method and never constructs the HTTP adapter itself.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1206,6 +1209,17 @@ pub fn scan_atproto_npm_dependencies(workspace_root: &Path) -> anyhow::Result<Ve
 /// capability.
 const PUBLISH_WRITE_CAPABILITY_TOKENS: &[&str] = &["publish_port_for", "for_owner", "PublishPort"];
 
+/// The cross-instance pull verb (US-SF-006, ADR-062 §4/§6): it reads a PEER's
+/// instance, so beyond the write-port tokens it may name no instance write
+/// method and may not construct the HTTP adapter directly — its instance
+/// transport can only be the read-only port handed out by
+/// `wiring::instance_reader_for`.
+const PEER_PULL_SOURCE: &str = "crates/cli/src/verbs/peer_pull.rs";
+
+/// The extra identifiers forbidden in [`PEER_PULL_SOURCE`].
+const PEER_PULL_INSTANCE_WRITE_TOKENS: &[&str] =
+    &["put_record", "commit_manifest_entry", "HttpPublishAdapter"];
+
 /// The ONLY sources (workspace-relative) allowed to reference a
 /// [`PUBLISH_WRITE_CAPABILITY_TOKENS`] entry: the `openlore publish` verb and
 /// the composition-root wiring it calls.
@@ -1227,16 +1241,33 @@ pub fn classify_publish_write_capability(rel_path: &str, source: &str) -> Vec<St
     if !publish_write_capability_in_scope(rel_path) {
         return Vec::new();
     }
+    let forbidden = forbidden_publish_tokens(rel_path);
     source
         .lines()
         .enumerate()
         .filter(|(_, line)| !line.trim_start().starts_with("//"))
         .filter_map(|(index, line)| {
-            PUBLISH_WRITE_CAPABILITY_TOKENS
+            forbidden
                 .iter()
                 .find(|token| contains_word(line, token))
                 .map(|token| format!("line {}: `{token}` in `{}`", index + 1, line.trim()))
         })
+        .collect()
+}
+
+/// The write-capability tokens forbidden in `rel_path`: the write-port tokens
+/// everywhere, plus the instance write methods / direct adapter construction
+/// in the cross-instance pull verb.
+fn forbidden_publish_tokens(rel_path: &str) -> Vec<&'static str> {
+    let peer_pull_extra: &[&str] = if rel_path.replace('\\', "/") == PEER_PULL_SOURCE {
+        PEER_PULL_INSTANCE_WRITE_TOKENS
+    } else {
+        &[]
+    };
+    PUBLISH_WRITE_CAPABILITY_TOKENS
+        .iter()
+        .chain(peer_pull_extra)
+        .copied()
         .collect()
 }
 
@@ -2005,6 +2036,43 @@ mod tests {
             other_verb.len(),
             1,
             "a non-publish verb constructing the owner adapter: {other_verb:?}"
+        );
+    }
+
+    #[test]
+    fn peer_pull_may_reach_a_peer_instance_only_through_the_read_only_port() {
+        let calls_a_write_method = "fn pull(instance: &dyn InstanceReadPort) {\n\
+             instance.put_record(&cid, &bytes);\n\
+             }\n";
+        let commits = "instance.commit_manifest_entry(&cid, &bytes, &entry);\n";
+        let constructs_adapter =
+            "let instance = adapter_publish_http::HttpPublishAdapter::for_instance(url);\n";
+        let read_only = "// never `put_record` / `HttpPublishAdapter` here\n\
+             let instance: Box<dyn InstanceReadPort> = wiring::instance_reader_for(url);\n\
+             let bytes = instance.get_record(&cid);\n";
+
+        for (source, token) in [
+            (calls_a_write_method, "put_record"),
+            (commits, "commit_manifest_entry"),
+            (constructs_adapter, "HttpPublishAdapter"),
+        ] {
+            let findings = classify_publish_write_capability(PEER_PULL_SOURCE, source);
+            assert_eq!(findings.len(), 1, "{token} must be reported: {findings:?}");
+            assert!(findings[0].contains(token), "{findings:?}");
+        }
+        assert_eq!(
+            classify_publish_write_capability(PEER_PULL_SOURCE, read_only),
+            Vec::<String>::new(),
+            "the read-only port via wiring is the allowed peer-instance transport"
+        );
+        // The tighter peer-pull set applies to peer_pull.rs only (a test
+        // double elsewhere may well name its own `put_record` route).
+        assert_eq!(
+            classify_publish_write_capability(
+                "crates/test-support/src/fake_instance.rs",
+                constructs_adapter
+            ),
+            Vec::<String>::new()
         );
     }
 

@@ -110,9 +110,11 @@ impl HttpPublishAdapter {
     }
 
     /// One `GET /manifest` attempt, observed as raw facts for the pure
-    /// classifier. A transport failure (incl. a body cut off mid-read) is
-    /// `Unreachable`; any HTTP response is `Responded` with its bytes.
-    fn observe_manifest(&self) -> ManifestObservation {
+    /// classifiers (`classify_manifest_observation`, and the cross-instance
+    /// peer-transport selection `select_peer_transport`). A transport failure
+    /// (incl. a body cut off mid-read) is `Unreachable`; any HTTP response is
+    /// `Responded` with its bytes. A read: it never carries the write token.
+    pub fn observe_manifest(&self) -> ManifestObservation {
         let unreachable = |err: reqwest::Error| ManifestObservation::Unreachable {
             url: self.base_url.clone(),
             detail: err.to_string(),

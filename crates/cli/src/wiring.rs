@@ -308,6 +308,13 @@ pub fn instance_reader_for(instance_url: &str) -> Box<dyn InstanceReadPort> {
     Box::new(HttpPublishAdapter::for_instance(instance_url))
 }
 
+/// Observe one `GET /manifest` at a peer's resolved serviceEndpoint (a READ,
+/// never credentialed) — the raw probe the cross-instance `peer pull` selects
+/// its transport from (`publish_domain::select_peer_transport`, US-SF-006).
+pub fn observe_peer_endpoint(endpoint_url: &str) -> publish_domain::ManifestObservation {
+    HttpPublishAdapter::for_instance(endpoint_url).observe_manifest()
+}
+
 /// Probe an instance port; a refusal carries the `publish` adapter name.
 pub fn probe_instance(instance: &dyn InstanceReadPort) -> Result<(), ProbeRefusal> {
     check_probe("publish", instance.probe())

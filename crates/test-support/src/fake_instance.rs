@@ -29,7 +29,12 @@
 //! instance that already holds committed records — a prior push) — step
 //! 02-01; `requiring_write_token` (every write must carry
 //! `Authorization: Bearer <owner token>`, else `401` and nothing is stored;
-//! reads stay public) — step 02-03, DV-4 / Q-SF-D2.
+//! reads stay public) — step 02-03, DV-4 / Q-SF-D2; `for_peer` (ANOTHER
+//! user's instance already holding her records, which ALSO answers the
+//! `com.atproto.identity.resolveDid` resolver route with a DID document whose
+//! `serviceEndpoint` is the instance itself — so the J-003 peer resolver seam
+//! `OPENLORE_PEER_PDS_ENDPOINT_<did>` can point straight at it, exactly like
+//! the slice-03 `FakePeerPds`) — step 05-01, US-SF-006 / OD-SF-3.
 //!
 //! Every request that crosses the seam — in any posture — is appended to a
 //! request log ([`FakeInstance::recorded_requests`]): method, path, headers,
@@ -57,6 +62,12 @@ struct Store {
     blobs: BTreeMap<String, Vec<u8>>,
     manifest: Vec<(String, serde_json::Value)>,
     requests: Vec<RecordedRequest>,
+    /// `Some(did)` ⇔ this instance belongs to a PEER and answers the DID
+    /// resolver route for `did` (the `for_peer` posture).
+    peer_did: Option<String>,
+    /// The instance's own base URL — the `serviceEndpoint` its peer DID
+    /// document advertises. Set once the listener is bound.
+    base_url: String,
 }
 
 /// One request exactly as it crossed the CLI↔instance seam.
@@ -241,6 +252,28 @@ impl FakeInstance {
         )
     }
 
+    /// ANOTHER user's reachable, well-behaved openlore instance that already
+    /// holds `records` (blob + committed manifest entry each) AND answers the
+    /// DID resolver route (`GET /xrpc/com.atproto.identity.resolveDid`) with
+    /// `peer_did`'s DID document, whose `serviceEndpoint` is this instance —
+    /// the peer's DID resolves to her Cloudflare instance (US-SF-006,
+    /// OD-SF-3). The resolver route is read-only; every ADR-062 route behaves
+    /// exactly as [`FakeInstance::with_records`].
+    pub fn for_peer(peer_did: &str, records: impl IntoIterator<Item = PreloadedRecord>) -> Self {
+        let preloaded = records.into_iter().fold(
+            Store {
+                peer_did: Some(peer_did.to_string()),
+                ..Store::default()
+            },
+            |mut store, record| {
+                store.put_blob(&record.cid, record.bytes);
+                store.commit_entry(&record.cid, record.manifest_entry);
+                store
+            },
+        );
+        Self::start(preloaded, Posture::OpenloreInstance)
+    }
+
     /// Base URL of the running double (e.g. `http://127.0.0.1:54321`).
     pub fn endpoint_url(&self) -> &str {
         &self.base_url
@@ -297,6 +330,7 @@ impl FakeInstance {
             "http://{}",
             listener.local_addr().expect("FakeInstance: local_addr")
         );
+        store.lock().expect("FakeInstance store").base_url = base_url.clone();
         let server = runtime.spawn(serve(listener, Arc::clone(&store), posture, write_gate));
         Self {
             store,
@@ -417,6 +451,16 @@ fn route(store: &mut Store, posture: Posture, request: &RecordedRequest) -> Http
             store.manifest_json().to_string().into_bytes(),
         ),
         ("GET", "/", _) => card_response(&store.manifest),
+        ("GET", RESOLVE_DID_PATH, _) => match &store.peer_did {
+            Some(peer_did) => respond(
+                200,
+                "application/json",
+                peer_did_document(peer_did, &store.base_url)
+                    .to_string()
+                    .into_bytes(),
+            ),
+            None => respond(404, "text/plain", b"no such route".to_vec()),
+        },
         ("GET", _, Some(cid)) => match store.blobs.get(cid) {
             Some(bytes) => respond(200, "application/octet-stream", bytes.clone()),
             None => respond(404, "text/plain", b"record not found".to_vec()),
@@ -424,6 +468,33 @@ fn route(store: &mut Store, posture: Posture, request: &RecordedRequest) -> Http
         ("PUT", _, Some(cid)) => put_record(store, posture, cid, request),
         _ => respond(404, "text/plain", b"no such route".to_vec()),
     }
+}
+
+/// The ATProto DID resolver route a `for_peer` instance answers.
+const RESOLVE_DID_PATH: &str = "/xrpc/com.atproto.identity.resolveDid";
+
+/// The peer's DID document: its `serviceEndpoint` is this instance (the
+/// user's Cloudflare instance, not a bsky PDS). The verification method
+/// carries a placeholder key — the acceptance pubkey seam supplies the real
+/// one, exactly as for the slice-03 `FakePeerPds`.
+fn peer_did_document(peer_did: &str, base_url: &str) -> serde_json::Value {
+    let handle = peer_did.rsplit(':').next().unwrap_or("peer");
+    serde_json::json!({
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": peer_did,
+        "alsoKnownAs": [format!("at://{handle}.test")],
+        "verificationMethod": [{
+            "id": format!("{peer_did}#org.openlore.application"),
+            "type": "Multikey",
+            "controller": peer_did,
+            "publicKeyMultibase": "z6MkfakepeerinstancepublickeyMultibase000000000000000000"
+        }],
+        "service": [{
+            "id": "#openlore_instance",
+            "type": "OpenloreInstance",
+            "serviceEndpoint": base_url,
+        }]
+    })
 }
 
 /// `PUT /records/:cid` — store the body (verbatim, unless the posture has a

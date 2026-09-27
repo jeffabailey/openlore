@@ -718,3 +718,78 @@ proptest! {
         prop_assert_eq!(&selection.foreign, &expected_foreign);
     }
 }
+
+// -----------------------------------------------------------------------------
+// 8. Peer transport selection (US-SF-006, OD-SF-3)
+// -----------------------------------------------------------------------------
+
+/// Any `/manifest` probe observation: no response at all, an arbitrary
+/// response, or a marker-bearing JSON body (whatever its records look like)
+/// under an arbitrary status.
+fn arb_probe_observation() -> impl Strategy<Value = ManifestObservation> {
+    prop_oneof![
+        "[a-z ]{0,24}".prop_map(|detail| ManifestObservation::Unreachable {
+            url: "https://openlore.rachel.workers.dev".to_string(),
+            detail,
+        }),
+        (100_u16..600, arb_manifest_body())
+            .prop_map(|(status, body)| ManifestObservation::Responded { status, body }),
+        (100_u16..600, arb_json(), any::<u64>()).prop_map(|(status, json, version)| {
+            ManifestObservation::Responded {
+                status,
+                body: with_marker(json, version).to_string().into_bytes(),
+            }
+        }),
+    ]
+}
+
+/// The transport a probe observation must select (the spec, stated
+/// independently of the implementation's composition).
+fn expected_transport(observation: &ManifestObservation) -> PeerTransport {
+    match observation {
+        ManifestObservation::Unreachable { detail, .. } => PeerTransport::Unreachable {
+            detail: detail.clone(),
+        },
+        ManifestObservation::Responded { status, body } if carries_the_marker(*status, body) => {
+            PeerTransport::OpaqueInstance
+        }
+        ManifestObservation::Responded { .. } => PeerTransport::AtprotoPds,
+    }
+}
+
+proptest! {
+    /// Every probe observation selects exactly one transport, total and
+    /// deterministic: no response ⇒ unreachable (skip the peer); a 2xx JSON
+    /// body with the openlore marker ⇒ the opaque-instance read; any other
+    /// response (404 from a PDS, HTML, marker-less JSON, non-2xx) ⇒ the
+    /// shipped PDS XRPC path, unchanged.
+    #[test]
+    fn every_probe_observation_selects_exactly_one_peer_transport(
+        observation in arb_probe_observation(),
+    ) {
+        let selected = select_peer_transport(&observation);
+        prop_assert_eq!(&selected, &expected_transport(&observation));
+        prop_assert_eq!(select_peer_transport(&observation), selected);
+    }
+
+    /// A marker-bearing 2xx `/manifest` ALWAYS selects the instance path,
+    /// whatever else the manifest carries (even records that do not parse —
+    /// that is the instance path's failure to report, never a PDS fallback).
+    #[test]
+    fn a_marker_bearing_2xx_manifest_always_selects_the_instance_path(
+        status in 200_u16..300,
+        manifest in arb_json(),
+        records in arb_json(),
+        contract_version in any::<u64>(),
+    ) {
+        let mut marked = with_marker(manifest, contract_version);
+        if let Some(object) = marked.as_object_mut() {
+            object.insert("records".to_string(), records);
+        }
+        let observation = ManifestObservation::Responded {
+            status,
+            body: marked.to_string().into_bytes(),
+        };
+        prop_assert_eq!(select_peer_transport(&observation), PeerTransport::OpaqueInstance);
+    }
+}

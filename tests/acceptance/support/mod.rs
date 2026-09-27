@@ -19016,3 +19016,236 @@ pub fn expected_card_rows(env: &TestEnv, cids: &[String]) -> Vec<CardRow> {
     rows.sort();
     rows
 }
+
+// -----------------------------------------------------------------------------
+// serverless-philosophy-federation slice-05 — cross-instance pull (US-SF-006)
+//
+// The J-003 `peer add` / `peer pull` flow reused verbatim; the ONLY delta is
+// the transport: the peer's DID resolves to her Cloudflare instance
+// (`FakeInstance::for_peer`) instead of a bsky PDS (`PeerPds`).
+// -----------------------------------------------------------------------------
+
+/// The peer every cross-instance scenario pulls from.
+pub const RACHEL_DID: &str = "did:plc:rachel-test";
+/// Rachel's deterministic Ed25519 seed (same as the slice-03 PP-* scenarios).
+pub const RACHEL_SEED: [u8; 32] = [7u8; 32];
+
+/// One peer's REAL-signed claims in BOTH transport shapes, index-aligned:
+/// the J-003 PDS record view and the opaque-instance record (verbatim
+/// lexicon-JSON blob keyed by its Rust-minted CID + committed manifest entry).
+pub struct PeerInstanceRecords {
+    pub pds_records: Vec<FakePeerRecord>,
+    pub instance_records: Vec<PreloadedRecord>,
+    pub pubkey_hex: String,
+}
+
+/// Build `count` distinct REAL-signed claims authored by `peer_did` (same
+/// crypto as [`build_verifiable_peer_records_with_objects`]) in both shapes.
+pub fn build_verifiable_peer_instance_records(
+    peer_did: &str,
+    peer_seed: [u8; 32],
+    count: usize,
+) -> PeerInstanceRecords {
+    let objects: Vec<String> = (0..count)
+        .map(|i| format!("org.openlore.philosophy.cross-instance-{i}"))
+        .collect();
+    let object_refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let (pds_records, pubkey_hex) =
+        build_verifiable_peer_records_with_objects(peer_did, peer_seed, &object_refs);
+    let instance_records = pds_records.iter().map(instance_record_of).collect();
+    PeerInstanceRecords {
+        pds_records,
+        instance_records,
+        pubkey_hex,
+    }
+}
+
+/// A peer PDS record as the opaque instance holds it after the peer's own
+/// `publish push`: the verbatim lexicon-JSON bytes under the CID + the
+/// manifest v1 display entry.
+fn instance_record_of(record: &FakePeerRecord) -> PreloadedRecord {
+    let body = &record.body;
+    PreloadedRecord {
+        cid: record.rkey.clone(),
+        bytes: serde_json::to_vec(body).expect("peer record body serializes"),
+        manifest_entry: serde_json::json!({
+            "cid": record.rkey,
+            "author_did": body["author"],
+            "subject": body["subject"],
+            "predicate": body["predicate"],
+            "object": body["object"],
+            "confidence": body["confidence"],
+            "composed_at": body["composedAt"],
+        }),
+    }
+}
+
+/// A byte-DIVERGENT copy of `record`: same key and manifest entry, but the
+/// stored bytes carry a different `confidence` — so a Rust recompute of the
+/// returned bytes yields a CID different from the key it is listed under.
+pub fn byte_divergent(record: &PreloadedRecord) -> PreloadedRecord {
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&record.bytes).expect("instance record is JSON");
+    body["confidence"] = serde_json::json!(0.123);
+    PreloadedRecord {
+        bytes: serde_json::to_vec(&body).expect("divergent body serializes"),
+        ..record.clone()
+    }
+}
+
+/// Given: `env`'s user subscribed to `peer_did` through the REAL `peer add`
+/// and pulled `earlier` of the peer's claims through the shipped J-003 PDS
+/// transport, back when the peer's DID resolved to a bsky PDS. Asserts the
+/// precondition; the PDS double is released afterwards (the peer has since
+/// moved to her own instance).
+pub fn subscribe_and_pull_earlier_from_pds(
+    env: &TestEnv,
+    peer_did: &str,
+    earlier: Vec<FakePeerRecord>,
+    peer_pubkey_hex: &str,
+) {
+    let expected = earlier.len();
+    let pds = PeerPds::for_peer(peer_did, earlier);
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", peer_did],
+        peer_did,
+        pds.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+    let pulled = run_openlore_pull(
+        env,
+        &["peer", "pull"],
+        peer_did,
+        pds.endpoint_url(),
+        peer_pubkey_hex,
+    );
+    assert_eq!(
+        pulled.status, 0,
+        "earlier PDS pull precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        pulled.stdout, pulled.stderr
+    );
+    assert_peer_claims_attributed_to(env, peer_did, expected);
+}
+
+/// Given: `env`'s user subscribed to `peer_did` through the REAL `peer add`,
+/// with the peer's DID resolving to `instance`.
+pub fn subscribe_to_peer_instance(env: &TestEnv, peer_did: &str, instance: &FakeInstance) {
+    let added = run_openlore_with_peer_resolver(
+        env,
+        &["peer", "add", peer_did],
+        peer_did,
+        instance.endpoint_url(),
+    );
+    assert_eq!(
+        added.status, 0,
+        "peer add precondition must succeed;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        added.stdout, added.stderr
+    );
+}
+
+/// Port-exposed observable `peer_storage.claims`: every `peer_claims` row as
+/// `(cid, author_did)`, sorted by CID. Test-support is the only place raw SQL
+/// is acceptable.
+pub fn peer_claim_rows(env: &TestEnv) -> Vec<(String, String)> {
+    let conn = duckdb::Connection::open(env.duckdb_path())
+        .unwrap_or_else(|err| panic!("open DuckDB for peer claim rows: {err}"));
+    let mut stmt = conn
+        .prepare("SELECT cid, author_did FROM peer_claims ORDER BY cid")
+        .expect("prepare peer claim rows");
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("query peer claim rows")
+        .map(|row| row.expect("decode peer claim row"))
+        .collect();
+    rows
+}
+
+/// The universe slot naming the peer-claims row count attributed to `did`.
+pub fn peer_row_count_slot(did: &str) -> String {
+    format!("peer_storage.claims.row_count_by_author[{did}]")
+}
+
+/// Capture the CI-1 / CI-4 universe (CM-E) over port-exposed observables:
+/// the peer-claims rows attributed to `peer_did`, and the user's OWN
+/// `author_claims` row count + CID set.
+pub fn capture_cross_instance_pull_universe(
+    env: &TestEnv,
+    peer_did: &str,
+) -> HashMap<String, String> {
+    let attributed = peer_claim_rows(env)
+        .iter()
+        .filter(|(_, author)| author == peer_did)
+        .count();
+    let own_cids = local_claim_cids(env);
+    HashMap::from([
+        (peer_row_count_slot(peer_did), attributed.to_string()),
+        (
+            "author_claims.row_count".to_string(),
+            own_cids.len().to_string(),
+        ),
+        ("author_claims.cids".to_string(), format!("{own_cids:?}")),
+    ])
+}
+
+/// The CI-1 / CI-4 universe slot names (port-exposed).
+pub fn cross_instance_pull_universe(peer_did: &str) -> HashSet<String> {
+    HashSet::from([
+        peer_row_count_slot(peer_did),
+        "author_claims.row_count".to_string(),
+        "author_claims.cids".to_string(),
+    ])
+}
+
+/// The test-side oracle: the CID Rust recomputes from record bytes an
+/// instance returned (lexicon decode re-canonicalizes through claim-domain),
+/// and the bare DID of the author the bytes were signed as.
+pub fn recompute_record(bytes: &[u8]) -> (String, String) {
+    let wire: serde_json::Value = serde_json::from_slice(bytes).expect("record bytes are JSON");
+    let signed = lexicon::decode_signed_claim(&wire).expect("record bytes are a signed claim");
+    let author = signed.unsigned.author_did.0;
+    let bare = author
+        .split_once('#')
+        .map_or(author.as_str(), |(did, _)| did)
+        .to_string();
+    (signed.signature.signed_cid.0, bare)
+}
+
+/// Universe-bound: the instance served `GET /records/<cid>` for `cid` — the
+/// record's bytes crossed the opaque read.
+pub fn assert_instance_served_record(instance: &FakeInstance, cid: &str) {
+    let path = format!("/records/{cid}");
+    assert!(
+        instance
+            .recorded_requests()
+            .iter()
+            .any(|r| r.method == "GET" && r.path == path),
+        "expected the pull to read {path} through the opaque transport; requests: {:?}",
+        instance
+            .recorded_requests()
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.path))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Universe-bound: the peer instance was only ever READ (every request a
+/// `GET`) — the pull holds no write capability toward it.
+pub fn assert_peer_instance_only_read(instance: &FakeInstance) {
+    let writes: Vec<String> = instance
+        .recorded_requests()
+        .iter()
+        .filter(|r| r.method != "GET")
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert!(
+        writes.is_empty(),
+        "a peer pull must never write to the peer's instance; got {writes:?}"
+    );
+}

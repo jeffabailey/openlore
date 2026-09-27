@@ -38,16 +38,74 @@ use support::*;
 ///
 /// @us-sf-006 @driving_port @real-io @j-003 @happy
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-006 pull from peer Cloudflare instance)"]
 fn peer_pull_fetches_a_peers_claims_from_their_cloudflare_instance_into_peer_claims_attributed() {
-    todo!(
-        "DELIVER: Given a peer FakeInstance for did:plc:rachel-test (DID-doc resolves to it) \
-         holding 7 records, 5 new to Maria, and a subscription created via real `peer add`; \
-         When `openlore peer pull`; Then Rachel's records are read via the opaque transport, \
-         5/5 verified (sig + recomputed CID), stored in peer_claims attributed to Rachel, \
-         author_claims UNCHANGED (anti-merging). \
-         Universe: peer_storage.claims.row_count_by_author[rachel], author_claims.row_count (unchanged)."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Rachel has published 7 REAL-signed claims.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let rachel = build_verifiable_peer_instance_records(RACHEL_DID, RACHEL_SEED, 7);
+
+    // And Maria subscribed (real `peer add`) back when Rachel's DID resolved
+    // to a bsky PDS, and pulled the 2 claims Rachel had published then —
+    // so 2 of the 7 are already in peer_claims and 5 are new to Maria.
+    subscribe_and_pull_earlier_from_pds(
+        &env,
+        RACHEL_DID,
+        rachel.pds_records[..2].to_vec(),
+        &rachel.pubkey_hex,
     );
+
+    // And Rachel's DID now resolves to her Cloudflare instance holding all 7.
+    let instance = FakeInstance::for_peer(RACHEL_DID, rachel.instance_records.clone());
+    let before = capture_cross_instance_pull_universe(&env, RACHEL_DID);
+
+    // When Maria pulls.
+    let pull = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        RACHEL_DID,
+        instance.endpoint_url(),
+        &rachel.pubkey_hex,
+    );
+    let after = capture_cross_instance_pull_universe(&env, RACHEL_DID);
+
+    // Then the pull succeeds: 7 fetched, 5 new, 5/5 verified, none merged.
+    assert_exit_zero_and_stdout_contains(&pull, "None merged with your own claims");
+    for needle in [
+        "fetched   : 7 records",
+        "new       : 5 (2 already in peer_claims, skipped)",
+        "verified  : 5/5",
+    ] {
+        assert!(
+            pull.stdout.contains(needle),
+            "expected `{needle}` in the pull report;\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            pull.stdout,
+            pull.stderr
+        );
+    }
+
+    // And every record crossed the OPAQUE read (GET /records/:cid), with the
+    // peer's instance only ever read.
+    for record in &rachel.instance_records {
+        assert_instance_served_record(&instance, &record.cid);
+    }
+    assert_peer_instance_only_read(&instance);
+
+    // And (CM-E) +5 rows attributed to Rachel; Maria's own claims untouched.
+    let rachel_before: usize = before[&peer_row_count_slot(RACHEL_DID)]
+        .parse()
+        .expect("row count");
+    let expected = Delta::new().with_slot(
+        peer_row_count_slot(RACHEL_DID),
+        set_to((rachel_before + 5).to_string()),
+    );
+    assert_state_delta(
+        &before,
+        &after,
+        &cross_instance_pull_universe(RACHEL_DID),
+        &expected,
+    );
+    assert_peer_claims_attributed_to(&env, RACHEL_DID, 7);
 }
 
 // =============================================================================
@@ -103,13 +161,90 @@ fn peer_pull_skips_only_the_unreachable_peer_instance_and_proceeds_with_others()
 ///
 /// @us-sf-006 @anti-merging @j-003 @guardrail
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-006 peer_claims never merged with own)"]
 fn peer_pull_from_an_instance_never_merges_peer_claims_with_my_own() {
-    todo!(
-        "DELIVER: capture author_claims universe BEFORE; When `openlore peer pull` from a peer \
-         instance; Then peer_storage.claims grows, author_claims.{{row_count, cids}} UNCHANGED, \
-         and no row is attributed to a DID other than its true author (anti-merging)."
+    use support::state_delta::{assert_state_delta, set_to, Delta};
+
+    // Given Maria has her OWN signed claims in her local store.
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let own_cids = [
+        seed_one_signed_local_claim(&env, 0.5),
+        seed_one_signed_local_claim(&env, 0.86),
+    ];
+
+    // And she follows Rachel (real `peer add`; 2 of Rachel's 7 claims pulled
+    // earlier over the PDS), whose DID now resolves to her Cloudflare
+    // instance holding all 7.
+    let rachel = build_verifiable_peer_instance_records(RACHEL_DID, RACHEL_SEED, 7);
+    subscribe_and_pull_earlier_from_pds(
+        &env,
+        RACHEL_DID,
+        rachel.pds_records[..2].to_vec(),
+        &rachel.pubkey_hex,
     );
+    let instance = FakeInstance::for_peer(RACHEL_DID, rachel.instance_records.clone());
+    let before = capture_cross_instance_pull_universe(&env, RACHEL_DID);
+    assert_eq!(
+        before["author_claims.row_count"], "2",
+        "precondition: Maria's two own claims are in her local store"
+    );
+
+    // When Maria pulls from Rachel's instance.
+    let pull = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        RACHEL_DID,
+        instance.endpoint_url(),
+        &rachel.pubkey_hex,
+    );
+    let after = capture_cross_instance_pull_universe(&env, RACHEL_DID);
+    assert_exit_zero_and_stdout_contains(&pull, "None merged with your own claims");
+
+    // Then (CM-E) peer_claims grows by 5 for Rachel while Maria's own
+    // author_claims {row_count, cids} are UNCHANGED (implicit-unchanged slots).
+    let rachel_before: usize = before[&peer_row_count_slot(RACHEL_DID)]
+        .parse()
+        .expect("row count");
+    let expected = Delta::new().with_slot(
+        peer_row_count_slot(RACHEL_DID),
+        set_to((rachel_before + 5).to_string()),
+    );
+    assert_state_delta(
+        &before,
+        &after,
+        &cross_instance_pull_universe(RACHEL_DID),
+        &expected,
+    );
+
+    // And no pulled row is attributed to a DID other than its TRUE author:
+    // each peer_claims row's author is the DID its instance bytes were
+    // signed as, and none is Maria.
+    let rows = peer_claim_rows(&env);
+    assert_eq!(
+        rows.len(),
+        7,
+        "exactly Rachel's 7 claims in peer_claims: {rows:?}"
+    );
+    for (cid, attributed_to) in &rows {
+        let bytes = instance
+            .record_bytes(cid)
+            .unwrap_or_else(|| panic!("peer_claims row {cid} is not one of Rachel's records"));
+        let (_, true_author) = recompute_record(&bytes);
+        assert_eq!(
+            attributed_to, &true_author,
+            "peer_claims row {cid} must be attributed to its true author"
+        );
+        assert_ne!(
+            attributed_to,
+            env.identity.author_did(),
+            "a pulled claim must never be attributed to Maria"
+        );
+    }
+
+    // And nothing was merged INTO Maria's own claims: her store holds
+    // exactly her own CIDs, none of Rachel's.
+    let mut own_sorted = own_cids.to_vec();
+    own_sorted.sort();
+    assert_eq!(local_claim_cids(&env), own_sorted);
 }
 
 // =============================================================================
@@ -124,11 +259,73 @@ fn peer_pull_from_an_instance_never_merges_peer_claims_with_my_own() {
 ///
 /// @us-sf-006 @kpi-sf-1 @j-003
 #[test]
-#[ignore = "DELIVER: unskip one-at-a-time (US-SF-006 recompute + verify CID before store)"]
 fn peer_pull_recomputes_each_peer_claim_cid_from_the_opaque_read_before_store() {
-    todo!(
-        "DELIVER: Given a peer FakeInstance serving byte-verbatim records; When `openlore peer \
-         pull`; Then each stored record's CID was recomputed in Rust from the returned bytes and \
-         byte-matched before insert (opaque byte-preserving read — ADR-062 §4)."
+    // Given Rachel's instance serves 5 claims byte-verbatim, plus ONE record
+    // whose bytes DIVERGED from its key (a byte-divergent read: its listed
+    // CID is honest, its returned bytes are not the ones that were signed).
+    let env = TestEnv::initialized_as(FakeIdentity::maria());
+    let rachel = build_verifiable_peer_instance_records(RACHEL_DID, RACHEL_SEED, 6);
+    let (verbatim, divergent_source) = rachel.instance_records.split_at(5);
+    let divergent = byte_divergent(&divergent_source[0]);
+    assert_ne!(
+        recompute_record(&divergent.bytes).0,
+        divergent.cid,
+        "fixture: the divergent bytes must recompute to a CID other than their key"
     );
+    let served: Vec<PreloadedRecord> = verbatim
+        .iter()
+        .cloned()
+        .chain([divergent.clone()])
+        .collect();
+    let instance = FakeInstance::for_peer(RACHEL_DID, served);
+
+    // And Maria subscribed to Rachel via the real `peer add`.
+    subscribe_to_peer_instance(&env, RACHEL_DID, &instance);
+
+    // When Maria pulls.
+    let pull = run_openlore_pull(
+        &env,
+        &["peer", "pull"],
+        RACHEL_DID,
+        instance.endpoint_url(),
+        &rachel.pubkey_hex,
+    );
+
+    // Then each stored claim is one whose RETURNED bytes Rust recomputed to
+    // exactly its manifest key, read through the opaque transport ...
+    let stored: Vec<String> = peer_claim_rows(&env)
+        .into_iter()
+        .map(|(cid, _)| cid)
+        .collect();
+    let mut expected: Vec<String> = verbatim.iter().map(|r| r.cid.clone()).collect();
+    expected.sort();
+    assert_eq!(
+        stored, expected,
+        "exactly the byte-verbatim records are stored;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+    for cid in &stored {
+        assert_instance_served_record(&instance, cid);
+        let bytes = instance.record_bytes(cid).expect("stored CID is served");
+        assert_eq!(
+            &recompute_record(&bytes).0,
+            cid,
+            "stored CID {cid} must equal the CID recomputed from the returned bytes"
+        );
+    }
+
+    // ... while the byte-divergent record was READ, failed the recompute,
+    // and was rejected before any insert (flagged by a non-zero exit).
+    assert_instance_served_record(&instance, &divergent.cid);
+    assert!(
+        !stored.contains(&divergent.cid),
+        "the byte-divergent record must never be stored"
+    );
+    assert_ne!(pull.status, 0, "a rejected record flags the pull non-zero");
+    assert!(
+        pull.stdout.contains("CID mismatch"),
+        "the rejection names the CID recompute failure;\n--- stdout ---\n{}",
+        pull.stdout
+    );
+    assert_peer_instance_only_read(&instance);
 }

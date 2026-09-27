@@ -15,6 +15,20 @@
 //! (gated via `crate::orientation`), then records
 //! `federation.first_pull_completed_at`.
 //!
+//! ## Transport delta: a peer's own openlore instance (US-SF-006)
+//!
+//! The flow above is unchanged whatever hosts the peer's claims; only the
+//! TRANSPORT differs. One `GET /manifest` probe of the resolved
+//! serviceEndpoint selects it (`publish_domain::select_peer_transport`,
+//! pure): a marker-bearing openlore instance is read through the READ-ONLY
+//! `InstanceReadPort` (`GET /manifest` + `GET /records/:cid`, the bytes
+//! decoded by the hoisted lexicon decode with the CID recomputed in Rust);
+//! anything else answering is the ATProto PDS path, unchanged. Either way
+//! every record then goes through the SAME `evaluate_record` verify and the
+//! SAME `write_peer_claim` store — there is no second verify path, and this
+//! verb holds no write capability toward any instance (ADR-062 §4/§6,
+//! enforced by `xtask check-arch`).
+//!
 //! ## Pure-vs-effect split (ADR-009 / nw-fp-hexagonal-architecture)
 //!
 //! The per-record decision (verify → recompute CID → accept/reject) is
@@ -25,12 +39,13 @@
 //! Rendering is a pure function of the accumulated counts (`render_report`).
 
 use anyhow::{anyhow, Result};
-use claim_domain::{canonicalize, compute_cid, verify, Did, SignedClaim, VerifyingKey};
-use ports::{PdsError, PeerInfo, PeerSubscription, SignedRecord};
+use claim_domain::{canonicalize, compute_cid, verify, Cid, Did, SignedClaim, VerifyingKey};
+use ports::{InstanceReadPort, PdsError, PeerInfo, PeerSubscription, SignedRecord};
+use publish_domain::PeerTransport;
 
 use crate::orientation::{self, OrientationMilestone};
 use crate::verbs::claim_publish::build_tokio_runtime;
-use crate::wiring::Wiring;
+use crate::wiring::{self, Wiring};
 
 /// Argument struct for the `peer pull` verb. It takes no arguments today
 /// (it pulls ALL active subscriptions); the struct exists for uniformity
@@ -169,27 +184,27 @@ fn pull_one_peer(
         }
     };
 
-    // List ALL records, walking every cursor (Q-DELIVER-5). Network failure
-    // ⇒ skip this peer (PP-7).
-    let page = match runtime.block_on(wiring.pds.list_peer_records(
-        &peer_did,
-        &peer_info.pds_endpoint,
-        None,
-    )) {
-        Ok(page) => page,
-        Err(PdsError::Unreachable { message }) => {
-            block.peer_skip_reason = Some(format!("PDS unreachable ({message})"));
-            return block;
-        }
-        Err(err) => {
-            block.peer_skip_reason = Some(format!("PDS read failed ({err})"));
+    // Fetch every record over the transport the peer's endpoint selects. A
+    // peer-level failure (unreachable, unreadable listing) skips this peer.
+    let fetched = match fetch_peer_records(wiring, runtime, &peer_did, &peer_info) {
+        Ok(fetched) => fetched,
+        Err(skip_reason) => {
+            block.peer_skip_reason = Some(skip_reason);
             return block;
         }
     };
 
-    block.fetched = page.records.len();
+    block.fetched = fetched.len();
 
-    for record in &page.records {
+    for fetched_record in &fetched {
+        let record = match fetched_record {
+            Ok(record) => record,
+            // Unreadable before any trust decision ⇒ reject this record only.
+            Err(reason) => {
+                block.reject(reason.clone());
+                continue;
+            }
+        };
         match evaluate_record(record, &verifying_key, local_did) {
             RecordVerdict::Verified => {
                 match wiring.peer_storage.write_peer_claim(
@@ -213,6 +228,80 @@ fn pull_one_peer(
     }
 
     block
+}
+
+/// One record as fetched, BEFORE any trust decision: parsed into the domain
+/// `SignedRecord` (keyed by the CID the peer lists it under), or why it could
+/// not even be read — a per-record rejection reason.
+type FetchedRecord = Result<SignedRecord, String>;
+
+/// Fetch all of one peer's records over the transport its resolved endpoint
+/// selects (US-SF-006): the opaque-instance read, or the shipped PDS XRPC
+/// listing. `Err` is the reason the whole peer is skipped (PP-7).
+fn fetch_peer_records(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    peer_did: &Did,
+    peer_info: &PeerInfo,
+) -> Result<Vec<FetchedRecord>, String> {
+    let endpoint = peer_info.pds_endpoint.as_str();
+    match publish_domain::select_peer_transport(&wiring::observe_peer_endpoint(endpoint)) {
+        PeerTransport::OpaqueInstance => {
+            read_peer_instance(wiring::instance_reader_for(endpoint).as_ref())
+        }
+        PeerTransport::AtprotoPds => list_pds_records(wiring, runtime, peer_did, peer_info),
+        PeerTransport::Unreachable { detail } => {
+            Err(format!("peer endpoint unreachable ({detail})"))
+        }
+    }
+}
+
+/// The shipped J-003 transport: list ALL the peer's records from its PDS,
+/// walking every cursor (Q-DELIVER-5). Network failure ⇒ skip (PP-7).
+fn list_pds_records(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    peer_did: &Did,
+    peer_info: &PeerInfo,
+) -> Result<Vec<FetchedRecord>, String> {
+    match runtime.block_on(
+        wiring
+            .pds
+            .list_peer_records(peer_did, &peer_info.pds_endpoint, None),
+    ) {
+        Ok(page) => Ok(page.records.into_iter().map(Ok).collect()),
+        Err(PdsError::Unreachable { message }) => Err(format!("PDS unreachable ({message})")),
+        Err(err) => Err(format!("PDS read failed ({err})")),
+    }
+}
+
+/// The opaque-instance transport (ADR-062 §4): `GET /manifest`, then the
+/// verbatim bytes of every listed record via `GET /records/:cid`, through the
+/// READ-ONLY port. The manifest's display fields are never trusted — only its
+/// CID keys, which each record's recomputed CID must byte-match.
+fn read_peer_instance(instance: &dyn InstanceReadPort) -> Result<Vec<FetchedRecord>, String> {
+    let manifest = instance
+        .fetch_manifest()
+        .map_err(|err| format!("instance read failed ({err})"))?;
+    Ok(publish_domain::manifest_cids(&manifest)
+        .iter()
+        .map(|cid| read_instance_record(instance, cid))
+        .collect())
+}
+
+/// Read one record's bytes under its manifest key and decode them (the
+/// hoisted lexicon decode; the claim carries the CID RECOMPUTED in Rust from
+/// these bytes, never one from the wire).
+fn read_instance_record(instance: &dyn InstanceReadPort, cid: &Cid) -> FetchedRecord {
+    let bytes = instance
+        .get_record(cid)
+        .map_err(|err| format!("record read failed ({err})"))?;
+    let signed_claim = publish_domain::decode_pulled(&bytes)
+        .map_err(|unreadable| format!("unreadable record ({})", unreadable.detail))?;
+    Ok(SignedRecord {
+        rkey: cid.0.clone(),
+        signed_claim,
+    })
 }
 
 /// Map a `PeerStorageError` from `write_peer_claim` into the user-facing

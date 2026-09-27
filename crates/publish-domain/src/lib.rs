@@ -24,6 +24,11 @@
 //!    record in Rust BEFORE trusting it, then classify it against the local
 //!    set as Matched / New / Conflict / Rejected. There is no Overwrite
 //!    outcome: the local store is the source of truth (D-6).
+//! 7. [`select_inserts`] — which verified pulled records a `publish pull`
+//!    may write into the user's OWN store (anti-merging).
+//! 8. [`select_peer_transport`] — US-SF-006 / OD-SF-3: which transport a
+//!    J-003 `peer pull` reads a peer through, decided from one `/manifest`
+//!    probe of the peer's resolved serviceEndpoint (opaque instance vs PDS).
 //!
 //! NO I/O, NO async, NO clock. The instance never computes a CID; this crate
 //! never talks to the instance.
@@ -610,6 +615,43 @@ pub fn bare_did(author_did: &str) -> &str {
 /// The claim carries the RECOMPUTED CID (never a CID from the wire).
 pub fn decode_pulled(returned: &RecordBytes) -> Result<SignedClaim, UnreadableRecord> {
     decode_record(returned)
+}
+
+// -----------------------------------------------------------------------------
+// 8. Peer transport selection (US-SF-006, OD-SF-3 / ADR-062 §4)
+// -----------------------------------------------------------------------------
+
+/// How a J-003 `peer pull` reads one peer, decided from a `GET /manifest`
+/// probe of the peer's resolved serviceEndpoint. Exactly one per probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerTransport {
+    /// The endpoint is an openlore opaque instance (a 2xx JSON `/manifest`
+    /// carrying the openlore marker): read it through the READ-ONLY
+    /// `InstanceReadPort` (`GET /manifest` + `GET /records/:cid`).
+    OpaqueInstance,
+    /// Anything else answered (non-2xx, non-JSON, marker-less JSON): the
+    /// endpoint is an ATProto PDS — the shipped XRPC path, unchanged.
+    AtprotoPds,
+    /// Nothing answered at all: the peer is skipped (J-003 fault isolation).
+    Unreachable { detail: String },
+}
+
+/// Select the peer transport from one `/manifest` probe observation. Pure
+/// and total. The selection keys on the openlore MARKER alone
+/// ([`classify_instance`]); whether the instance's records then parse is the
+/// instance path's concern, never a reason to fall back to the PDS path.
+pub fn select_peer_transport(observation: &ManifestObservation) -> PeerTransport {
+    match observation {
+        ManifestObservation::Unreachable { detail, .. } => PeerTransport::Unreachable {
+            detail: detail.clone(),
+        },
+        ManifestObservation::Responded { status, body } => {
+            match manifest_json_of(*status, body).map(|manifest| classify_instance(&manifest)) {
+                Ok(InstanceKind::OpaqueInstance { .. }) => PeerTransport::OpaqueInstance,
+                Ok(InstanceKind::NotAnOpenloreInstance) | Err(_) => PeerTransport::AtprotoPds,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
