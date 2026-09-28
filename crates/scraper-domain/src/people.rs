@@ -687,6 +687,33 @@ pub struct InferenceReport {
     pub candidates: Vec<NumberedCandidate>,
     pub already_signed: Vec<AlreadySigned>,
     pub repos_without_signed_claims: Vec<String>,
+    /// My standing INFERRED claims (in scope) some of whose cited support no
+    /// longer holds (DDD-8 / UC-5) — flagged only, never acted on (D-5).
+    pub weakened: Vec<WeakenedClaim>,
+}
+
+/// Why one supporting claim my signed inference cites no longer supports it
+/// (DDD-8 / UC-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WeakenedSupport {
+    /// Its own author retracted it (the shared claim-domain rule).
+    Retracted,
+    /// It is still cached but its author is no longer a subscribed peer (D-2).
+    NoLongerEligible,
+    /// No claim with its CID is in my local store any more.
+    MissingLocally,
+}
+
+/// One of my standing inferred claims whose cited support weakened: the
+/// count of distinct supporting claims it cites and, per reason, how many of
+/// them no longer support it. The claim itself is untouched (D-5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeakenedClaim {
+    pub cid: String,
+    pub person_subject: String,
+    pub philosophy: String,
+    pub cited: usize,
+    pub weakened: BTreeMap<WeakenedSupport, usize>,
 }
 
 /// Infer the report under `filter`, classifying each candidate against my
@@ -750,6 +777,85 @@ pub fn infer_people_report(
         candidates,
         already_signed,
         repos_without_signed_claims: repos_without_signed_claims(&scoped_links, repo_claims),
+        weakened: weakened_claims(&signed, repo_claims, person),
+    }
+}
+
+/// DDD-8 / UC-5: my standing inferred claims in scope whose cited support
+/// weakened, by pair then CID. Read-only — nothing is retracted, countered or
+/// re-signed (D-5).
+fn weakened_claims(
+    standing: &BTreeMap<(String, String), Vec<&OwnClaim>>,
+    repo_claims: &[RepoClaim],
+    person: Option<&str>,
+) -> Vec<WeakenedClaim> {
+    let lineages: Vec<ClaimLineage<'_>> = repo_claims.iter().map(RepoClaim::lineage).collect();
+    let person_key = person.map(subject_key);
+    standing
+        .iter()
+        .filter(|((person_subject, _), _)| person_key.as_ref().is_none_or(|p| p == person_subject))
+        .flat_map(|(_, claims)| {
+            let mut claims = claims.clone();
+            claims.sort_by(|a, b| a.cid.cmp(&b.cid));
+            claims
+        })
+        .filter_map(|claim| weakened_claim(claim, repo_claims, &lineages))
+        .collect()
+}
+
+/// `claim`'s weakened support, counted per reason over its DISTINCT cited
+/// claims — `None` when every cited claim still supports it (or it cites
+/// none, i.e. it was authored by hand).
+fn weakened_claim(
+    claim: &OwnClaim,
+    repo_claims: &[RepoClaim],
+    lineages: &[ClaimLineage<'_>],
+) -> Option<WeakenedClaim> {
+    let cited: BTreeSet<String> = parse_provenance(&claim.evidence)
+        .into_iter()
+        .map(|cited| cited.cid)
+        .collect();
+    let weakened = cited
+        .iter()
+        .filter_map(|cid| weakening_of(cid, repo_claims, lineages))
+        .fold(BTreeMap::new(), |mut by_reason, reason| {
+            *by_reason.entry(reason).or_insert(0) += 1;
+            by_reason
+        });
+    (!weakened.is_empty()).then(|| WeakenedClaim {
+        cid: claim.cid.clone(),
+        person_subject: claim.subject.clone(),
+        philosophy: claim.object.clone(),
+        cited: cited.len(),
+        weakened,
+    })
+}
+
+/// Why the cited claim `cid` no longer supports an inference, resolved by
+/// content address against the read: absent → missing locally; retracted by
+/// its own author (the shared claim-domain rule) → retracted; held only from
+/// authors who are no longer active (DDD-7 eligibility, D-2) → no longer
+/// eligible; otherwise it still supports.
+fn weakening_of(
+    cid: &str,
+    repo_claims: &[RepoClaim],
+    lineages: &[ClaimLineage<'_>],
+) -> Option<WeakenedSupport> {
+    let rows: Vec<&RepoClaim> = repo_claims
+        .iter()
+        .filter(|claim| claim.cid == cid)
+        .collect();
+    if rows.is_empty() {
+        Some(WeakenedSupport::MissingLocally)
+    } else if rows
+        .iter()
+        .any(|row| is_self_retracted(&row.lineage(), lineages))
+    {
+        Some(WeakenedSupport::Retracted)
+    } else if !rows.iter().any(|row| is_by_active_author(row)) {
+        Some(WeakenedSupport::NoLongerEligible)
+    } else {
+        None
     }
 }
 
@@ -1871,6 +1977,106 @@ mod tests {
                 } else {
                     prop_assert_eq!(numbered_status(&report, candidate), None);
                     prop_assert_eq!(listed.len(), 1);
+                }
+            }
+        }
+    }
+
+    // --- SUPPORT WEAKENED (US-CPI-004 AC3/AC4; DDD-8 / UC-5; D-5) ---
+
+    /// UC-5 oracle, straight from the rule's text, for one cited CID over the
+    /// whole read: absent → missing locally; retracted by its own author →
+    /// retracted; only cached from a peer I no longer follow → no longer
+    /// eligible; otherwise it still supports (not weakened).
+    fn expected_weakening(cid: &str, all: &[RepoClaim]) -> Option<WeakenedSupport> {
+        let rows: Vec<&RepoClaim> = all.iter().filter(|c| c.cid == cid).collect();
+        let retracted_by_author = |row: &RepoClaim| {
+            all.iter().any(|other| {
+                other.author_did == row.author_did
+                    && other
+                        .references
+                        .iter()
+                        .any(|r| r.ref_type == ReferenceType::Retracts && r.cid.0 == row.cid)
+            })
+        };
+        let active = |row: &&RepoClaim| {
+            matches!(
+                row.relationship,
+                AuthorRelationship::You | AuthorRelationship::SubscribedPeer
+            )
+        };
+        if rows.is_empty() {
+            Some(WeakenedSupport::MissingLocally)
+        } else if rows.iter().any(|row| retracted_by_author(row)) {
+            Some(WeakenedSupport::Retracted)
+        } else if !rows.iter().any(active) {
+            Some(WeakenedSupport::NoLongerEligible)
+        } else {
+            None
+        }
+    }
+
+    /// My inferred claim `bafymine<k>` citing, per pick, either the read's
+    /// claim at that index or (past the end) a CID no store row has.
+    fn my_claim_citing(claims: &[RepoClaim], picks: &[usize], k: usize) -> OwnClaim {
+        let evidence = picks
+            .iter()
+            .map(|pick| match claims.get(*pick) {
+                Some(claim) => CitedClaim::new(&claim.author_did, &claim.cid).at_uri(),
+                None => CitedClaim::new("did:plc:gone", &format!("bafyabsent{pick}")).at_uri(),
+            })
+            .chain(std::iter::once(
+                "https://github.com/o/r/commits?author=someone".to_string(),
+            ))
+            .collect();
+        OwnClaim {
+            subject: "github:someone".to_string(),
+            predicate: ADHERES_TO_PHILOSOPHY.to_string(),
+            object: "org.openlore.philosophy.memory-safety".to_string(),
+            author_did: "did:plc:me".to_string(),
+            cid: format!("bafymine{k}"),
+            evidence,
+            composed_at: format!("2026-09-{:02}T09:00:00Z", k + 1),
+            references: Vec::new(),
+        }
+    }
+
+    proptest! {
+        /// DDD-8 / UC-5: each of my standing inferred claims is flagged
+        /// exactly when some cited supporting claim is retracted, no longer
+        /// eligible, or missing locally — with the distinct cited count and a
+        /// correct count per reason; a claim whose every cited claim still
+        /// supports it (or that cites none) is never flagged.
+        #[test]
+        fn weakened_support_counts_each_cited_claim_by_its_reason(
+            (links, claims) in arb_inference_inputs(),
+            cites in proptest::collection::vec(proptest::collection::vec(0usize..14, 0..6), 0..4),
+        ) {
+            let own: Vec<OwnClaim> = cites
+                .iter()
+                .enumerate()
+                .map(|(k, picks)| my_claim_citing(&claims, picks, k))
+                .collect();
+            let report = infer_people_report(&links, &claims, &own, &InferenceFilter::default());
+            for mine in &own {
+                let cited: BTreeSet<String> =
+                    parse_provenance(&mine.evidence).into_iter().map(|c| c.cid).collect();
+                let expected: BTreeMap<WeakenedSupport, usize> = cited
+                    .iter()
+                    .filter_map(|cid| expected_weakening(cid, &claims))
+                    .fold(BTreeMap::new(), |mut by_reason, reason| {
+                        *by_reason.entry(reason).or_insert(0) += 1;
+                        by_reason
+                    });
+                let flagged = report.weakened.iter().find(|w| w.cid == mine.cid);
+                if expected.is_empty() {
+                    prop_assert_eq!(flagged, None);
+                } else {
+                    prop_assert!(flagged.is_some(), "weakened claim {} is flagged", mine.cid);
+                    let flagged = flagged.unwrap();
+                    prop_assert_eq!(flagged.cited, cited.len());
+                    prop_assert_eq!(&flagged.weakened, &expected);
+                    prop_assert_eq!(flagged.person_subject.as_str(), mine.subject.as_str());
                 }
             }
         }

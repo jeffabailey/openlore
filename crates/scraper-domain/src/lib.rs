@@ -45,8 +45,8 @@ pub use people::{
     AlreadySigned, CandidateError, CandidateStatus, CitedClaim, ContributorCountError,
     ContributorSelection, Hundredths, InferenceFilter, InferenceReport, NumberedCandidate,
     OwnClaim, PersonCandidate, PersonSubject, PersonSubjectError, RepoClaim, SharedContributor,
-    SupportingClaim, SupportingRepo, ADHERES_TO_PHILOSOPHY, DEFAULT_CONTRIBUTOR_COUNT,
-    MAX_CONTRIBUTOR_COUNT,
+    SupportingClaim, SupportingRepo, WeakenedClaim, WeakenedSupport, ADHERES_TO_PHILOSOPHY,
+    DEFAULT_CONTRIBUTOR_COUNT, MAX_CONTRIBUTOR_COUNT,
 };
 
 pub use ports::{CandidateClaim, RankedContributor, RawContributor, Signal, SignalKind};

@@ -196,7 +196,6 @@ fn signing_stronger_evidence_supersedes_and_never_edits_the_earlier_claim() {
 ///
 /// @us-cpi-004 @driving_port @real-io @kpi-cpi-4 @d-5 @uc-5 @error
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (US-CPI-004 retracted support flagged, never acted on)"]
 fn retracted_support_is_flagged_not_acted_on() {
     // GIVEN p9 cites Rachel's claim, which Rachel then retracts.
     let env = TestEnv::initialized();
@@ -239,7 +238,6 @@ fn retracted_support_is_flagged_not_acted_on() {
 ///
 /// @us-cpi-004 @driving_port @real-io @kpi-cpi-4 @uc-5 @error
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (UC-5 weakened: peer no longer subscribed)"]
 fn support_from_an_unsubscribed_peer_is_flagged_with_its_reason() {
     // GIVEN p9 cites Rachel's claim and Maria soft-removes Rachel.
     let env = TestEnv::initialized();
@@ -271,7 +269,6 @@ fn support_from_an_unsubscribed_peer_is_flagged_with_its_reason() {
 ///
 /// @us-cpi-004 @driving_port @real-io @kpi-cpi-4 @uc-5 @error
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (UC-5 weakened: support not in local store)"]
 fn support_missing_from_the_local_store_is_flagged_with_its_reason() {
     // GIVEN p9 cites Rachel's claim and Maria purges Rachel.
     let env = TestEnv::initialized();
