@@ -707,6 +707,26 @@ pub fn infer_people_report(
     }
 }
 
+/// DDD-14 change summary: how many numbered (unsigned) inferred candidates
+/// the `after` report proposes for a (person, philosophy) pair the `before`
+/// report did not — the scrape hint's count. Candidates present in both runs,
+/// and candidates a run dropped, count nothing; identical reports give 0.
+pub fn new_inferred_candidate_count(before: &InferenceReport, after: &InferenceReport) -> usize {
+    let proposed_before = numbered_pair_keys(before);
+    numbered_pair_keys(after)
+        .difference(&proposed_before)
+        .count()
+}
+
+/// The join keys of a report's numbered candidates.
+fn numbered_pair_keys(report: &InferenceReport) -> BTreeSet<(String, String)> {
+    report
+        .candidates
+        .iter()
+        .map(|candidate| pair_key(candidate.person_subject(), candidate.philosophy()))
+        .collect()
+}
+
 /// The (person key, philosophy) join key of an adherence pair.
 fn pair_key(person_subject: &str, philosophy: &str) -> (String, String) {
     (subject_key(person_subject), philosophy.to_string())
@@ -1539,6 +1559,41 @@ mod tests {
                 .strip_prefix("github:")
                 .is_some_and(|l| !l.is_empty() && !l.starts_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
             prop_assert_eq!(PersonSubject::parse(&other).is_ok(), is_github_login);
+        }
+    }
+
+    // --- the scrape's before/after change summary (US-CPI-004; DDD-14) ---
+
+    fn numbered_pairs(report: &InferenceReport) -> BTreeSet<(String, String)> {
+        report.candidates.iter().map(pair_of).collect()
+    }
+
+    proptest! {
+        /// A scrape that changed no inference input reports nothing new.
+        #[test]
+        fn an_unchanged_inference_reports_no_new_candidates(
+            (links, claims) in arb_inference_inputs(),
+            own in arb_own_claims(),
+        ) {
+            let report = infer_people_report(&links, &claims, &own, &InferenceFilter::default());
+            prop_assert_eq!(new_inferred_candidate_count(&report, &report.clone()), 0);
+        }
+
+        /// The hint counts exactly the numbered pairs the run did not propose
+        /// before — never one it already proposed, never one it dropped.
+        #[test]
+        fn only_candidates_absent_before_are_counted_as_new(
+            (links_before, claims_before) in arb_inference_inputs(),
+            (links_added, claims_added) in arb_inference_inputs(),
+            own in arb_own_claims(),
+        ) {
+            let everything = InferenceFilter::default();
+            let before = infer_people_report(&links_before, &claims_before, &own, &everything);
+            let links_after: Vec<ContributionLink> = links_before.iter().chain(&links_added).cloned().collect();
+            let claims_after: Vec<RepoClaim> = claims_before.iter().chain(&claims_added).cloned().collect();
+            let after = infer_people_report(&links_after, &claims_after, &own, &everything);
+            let expected = numbered_pairs(&after).difference(&numbered_pairs(&before)).count();
+            prop_assert_eq!(new_inferred_candidate_count(&before, &after), expected);
         }
     }
 }

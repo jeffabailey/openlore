@@ -70,7 +70,6 @@ fn given_i_signed_the_inference_citing_rachel(env: &TestEnv) -> (String, Subscri
 ///
 /// @us-cpi-004 @driving_port @real-io @kpi-cpi-4 @happy
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (US-CPI-004 newly signed repo philosophy -> NEW + hint)"]
 fn a_newly_signed_repo_philosophy_proposes_a_new_person_inference() {
     // GIVEN BurntSushi is linked to rust-lang/regex.
     let env = TestEnv::initialized();
@@ -297,7 +296,6 @@ fn support_missing_from_the_local_store_is_flagged_with_its_reason() {
 ///
 /// @us-cpi-004 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (US-CPI-004 hint silent when nothing changed)"]
 fn a_scrape_that_changes_nothing_prints_no_hint() {
     // GIVEN the canonical store (one candidate already exists).
     let env = TestEnv::initialized();
@@ -338,7 +336,6 @@ fn a_scrape_that_changes_nothing_prints_no_hint() {
 ///
 /// @us-cpi-004 @driving_port @real-io @ddd-14 @edge
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (DDD-14 hint counts candidates created by new links)"]
 fn newly_recorded_people_alone_can_create_new_inferences() {
     // GIVEN BurntSushi known from ripgrep; regex semver signed but regex unscraped.
     let env = TestEnv::initialized();

@@ -127,3 +127,18 @@ pub fn render_shared_contributors(shared: &[scraper_domain::SharedContributor]) 
         .collect();
     format!("Also contributes to repos you scraped:\n{lines}")
 }
+
+/// The one-line end-of-scrape hint (US-CPI-004 / DDD-14): how many new
+/// inferred candidates the run's changed inputs produced, pointing at `infer
+/// people`. Silent at zero (no noise). Carries NO `[n] ` marker — numbering
+/// belongs to the candidate list alone.
+pub fn render_new_inferred_candidates_hint(new_candidates: usize) -> String {
+    match new_candidates {
+        0 => String::new(),
+        1 => "1 new inferred candidate for people you've seen — run: openlore infer people\n"
+            .to_string(),
+        count => format!(
+            "{count} new inferred candidates for people you've seen — run: openlore infer people\n"
+        ),
+    }
+}

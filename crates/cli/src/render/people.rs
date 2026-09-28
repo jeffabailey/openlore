@@ -26,7 +26,8 @@ pub fn render_inference_report(report: &InferenceReport) -> String {
 }
 
 /// The numbered inferred-candidate list, or the empty-result line. Each
-/// candidate's block: a `[n] <person> adheres to <philosophy>` headline, one
+/// candidate's block: a `[n] NEW <person> adheres to <philosophy>` headline
+/// (NEW: no standing adherence of mine for the pair — DDD-8), one
 /// provenance line per supporting claim (repo, rank, claim CID, that claim's
 /// OWN author — D-7), and the speculative confidence with its arithmetic
 /// (J-002c).
@@ -46,7 +47,7 @@ pub fn render_person_candidates(candidates: &[PersonCandidate]) -> String {
 
 fn render_person_candidate(number: usize, candidate: &PersonCandidate) -> String {
     let mut block = format!(
-        "  [{number}] {} adheres to {}\n",
+        "  [{number}] NEW {} adheres to {}\n",
         candidate.person_subject(),
         philosophy_short_name(candidate.philosophy())
     );

@@ -19,8 +19,8 @@ use std::collections::BTreeSet;
 use anyhow::{anyhow, Result};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, repo_subjects_to_read, InferenceFilter, OwnClaim,
-    PersonCandidate, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, repo_subjects_to_read, InferenceFilter,
+    InferenceReport, OwnClaim, PersonCandidate, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
 use crate::render::{render_inference_report, render_person_derived_from};
@@ -55,13 +55,7 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             .transpose()?,
         min_repos: args.min_repos.unwrap_or(0),
     };
-    let links = wiring
-        .contribution_links
-        .list_links(&LinkFilter::All)
-        .map_err(|e| anyhow!("reading contribution links: {e}"))?;
-    let repo_claims = read_linked_repo_claims(wiring, &links)?;
-    let own_claims = read_own_adherence_claims(wiring)?;
-    let report = infer_people_report(&links, &repo_claims, &own_claims, &filter);
+    let report = read_inference_report(wiring, &filter)?;
     let rendered = render_inference_report(&report);
 
     let Some(raw_selection) = args.sign.as_deref() else {
@@ -76,6 +70,29 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         exit_code,
         stdout: String::new(),
     })
+}
+
+/// The inference as the store holds it NOW, under `filter`: read the links,
+/// every signed claim about each linked repo (all letter cases) and my own
+/// adherence claims, then hand them to the PURE core. The one read path shared
+/// by `infer people` and the `scrape github` new-candidates hint (DDD-14), so
+/// the hint counts exactly what `infer people` would list. Read-only.
+pub(crate) fn read_inference_report(
+    wiring: &Wiring,
+    filter: &InferenceFilter,
+) -> Result<InferenceReport> {
+    let links = wiring
+        .contribution_links
+        .list_links(&LinkFilter::All)
+        .map_err(|e| anyhow!("reading contribution links: {e}"))?;
+    let repo_claims = read_linked_repo_claims(wiring, &links)?;
+    let own_claims = read_own_adherence_claims(wiring)?;
+    Ok(infer_people_report(
+        &links,
+        &repo_claims,
+        &own_claims,
+        filter,
+    ))
 }
 
 /// Every signed claim (own + peer) about each linked repo, in ANY letter case

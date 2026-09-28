@@ -37,16 +37,18 @@
 use anyhow::{anyhow, Result};
 use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
-    contributor_count_for, derive_candidates, load_mapping, select_contributors,
-    shared_contributors, ContributorSelection, SharedContributor, EMBEDDED_MAPPING_YAML,
+    contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
+    select_contributors, shared_contributors, ContributorSelection, InferenceFilter,
+    InferenceReport, SharedContributor, EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
     render_auth_report, render_candidate_list, render_contributors_block,
-    render_contributors_not_recorded, render_no_contributors_requested, render_public_data_banner,
-    render_shared_contributors,
+    render_contributors_not_recorded, render_new_inferred_candidates_hint,
+    render_no_contributors_requested, render_public_data_banner, render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
+use crate::verbs::infer_people::read_inference_report;
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -146,6 +148,15 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // harvest failure aborts here, BEFORE any link write. Links are unsigned
     // local observations — never claims (the human-gate is untouched).
     let subject = subject_for(&kind);
+    // (3a') The inference BEFORE this run writes anything (DDD-14): the
+    // baseline the end-of-scrape hint diffs against. Repo targets only — a
+    // user target records no links and signs no repo claim.
+    let inference_before = match &kind {
+        TargetKind::Repo { .. } => {
+            Some(read_inference_report(wiring, &InferenceFilter::default())?)
+        }
+        TargetKind::User { .. } => None,
+    };
     // N = 0 is a shell decision taken BEFORE the port: no request, no write.
     let contributors = match &kind {
         TargetKind::Repo { .. } if contributor_count == 0 => ContributorsOutcome::NoneRequested,
@@ -191,19 +202,36 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // (5a) The contributors block (repo targets only), below the candidates.
     out.push_str(&render_contributors_outcome(&contributors));
 
-    // (6) WITHOUT --sign: derive + render only, ZERO writes (the human-gate;
-    // scraper_never_persists_unsigned, I-SCR-1 / WD-49). Return now.
-    let Some(raw_selection) = args.sign.as_deref() else {
-        return Ok(ScrapeGithubOutcome {
-            exit_code: 0,
-            stdout: out,
-        });
-    };
-
+    // (6) WITHOUT --sign: derive + render only, ZERO claim writes (the
+    // human-gate; scraper_never_persists_unsigned, I-SCR-1 / WD-49).
     // (7) --sign N[,N...]: validate + run the batch of individual human-gates.
     // The candidate-list block already accumulated in `out` is handed to the
     // batch, which emits it to stdout BEFORE composing so the user reviews it.
-    sign_selected_candidates(wiring, &candidates, raw_selection, &out)
+    let mut outcome = match args.sign.as_deref() {
+        None => ScrapeGithubOutcome {
+            exit_code: 0,
+            stdout: out,
+        },
+        Some(raw_selection) => sign_selected_candidates(wiring, &candidates, raw_selection, &out)?,
+    };
+
+    // (8) The one-line new-inferred-candidates hint, AFTER `--sign` so repo
+    // claims signed in this run count (DDD-14). Silent when nothing changed.
+    if let Some(before) = inference_before {
+        outcome
+            .stdout
+            .push_str(&new_inferred_candidates_hint(wiring, &before)?);
+    }
+    Ok(outcome)
+}
+
+/// Diff the inference before this run against the store now (PURE change
+/// summary) and render the hint — empty when the run added no candidate.
+fn new_inferred_candidates_hint(wiring: &Wiring, before: &InferenceReport) -> Result<String> {
+    let after = read_inference_report(wiring, &InferenceFilter::default())?;
+    Ok(render_new_inferred_candidates_hint(
+        new_inferred_candidate_count(before, &after),
+    ))
 }
 
 /// What the contributors beat of a scrape came to (DDD-14 / UC-1 / UC-2).

@@ -40,12 +40,12 @@ pub use mapping::{
 // vocabulary through `scraper_domain::` without also importing `ports::`.
 pub use people::{
     confidence_arithmetic, contributor_count_for, encode_provenance, infer_people_report,
-    infer_person_candidates, inferred_confidence, is_bot, parse_provenance, repo_subjects_to_read,
-    select_contributors, shared_contributors, AlreadySigned, CandidateError, CitedClaim,
-    ContributorCountError, ContributorSelection, Hundredths, InferenceFilter, InferenceReport,
-    OwnClaim, PersonCandidate, PersonSubject, PersonSubjectError, RepoClaim, SharedContributor,
-    SupportingClaim, SupportingRepo, ADHERES_TO_PHILOSOPHY, DEFAULT_CONTRIBUTOR_COUNT,
-    MAX_CONTRIBUTOR_COUNT,
+    infer_person_candidates, inferred_confidence, is_bot, new_inferred_candidate_count,
+    parse_provenance, repo_subjects_to_read, select_contributors, shared_contributors,
+    AlreadySigned, CandidateError, CitedClaim, ContributorCountError, ContributorSelection,
+    Hundredths, InferenceFilter, InferenceReport, OwnClaim, PersonCandidate, PersonSubject,
+    PersonSubjectError, RepoClaim, SharedContributor, SupportingClaim, SupportingRepo,
+    ADHERES_TO_PHILOSOPHY, DEFAULT_CONTRIBUTOR_COUNT, MAX_CONTRIBUTOR_COUNT,
 };
 
 pub use ports::{CandidateClaim, RankedContributor, RawContributor, Signal, SignalKind};
