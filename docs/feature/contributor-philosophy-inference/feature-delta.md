@@ -900,3 +900,275 @@ blockers to entering DESIGN.
 - **Open for DESIGN**: OD-CPI-1..7 (headline: OD-CPI-2 predicate + link-as-observation, OD-CPI-5
   provenance encoding).
 - **DoR**: PASSED. **Per-wave review**: skipped (optional; consolidated review at end of DISTILL).
+
+---
+
+## Wave: DESIGN / [REF] Design Decisions (DDD)
+
+> Wave: **DESIGN** (application / component scope) · Mode: **propose** · Owner: Morgan
+> (nw-solution-architect) · Date: 2026-09-27 · ADRs: **ADR-063** (component architecture) +
+> **ADR-064** (person-adherence claim wire contract) · Style unchanged (ADR-009 hexagonal modular
+> monolith + ADR-007 functional Rust). **ZERO new crates. ZERO Lexicon change.**
+
+USER-LOCKED and recorded as locked (not re-litigated): **D-1..D-4** and **OD-CPI-1..7 accepted
+exactly as recommended** (identity `github:<login>` + stored numeric id; `adheresToPhilosophy`;
+links = unsigned local observation; confidence `min(0.29, 0.15+0.05(k−1), max support)`, k ≥ 1,
+`--min-repos`; `infer people` primary, scrape prints a hint, `scrape github <user>` shows the
+person, never auto-sign; provenance in `evidence[]`; upsert-never-delete; N ∈ 0..=100).
+
+| # | Decision | Verdict + one-line rationale |
+|---|---|---|
+| **DDD-1** | Where the pure inference lives | **EXTEND `crates/scraper-domain`** (new `people` area). Same J-004 context + same candidate invariants; already under the check-arch pure-core rule; zero new crate. |
+| **DDD-2** | Contributors harvest | **EXTEND `GithubPort` with `list_contributors(owner, repo)`**: ONE `GET /repos/{o}/{r}/contributors?per_page=100` (anon not requested), raw rows incl. bots; N applied in the pure core ⇒ exactly N humans, exactly 1 request (0 when N = 0). |
+| **DDD-3** | Bot rule + ranking | **Pure**: exclude `type == "Bot"` OR login ending `[bot]` (case-insensitive); re-sort by contributions desc then login asc (API order not trusted); de-dup by user id; rank = 1-based among humans; `bots_excluded` = bots above the Nth human. |
+| **DDD-4** | Link storage port | **NEW `ContributionLinkPort`** (`probe`, `record_snapshot`, `list_links(All \| Person)`), NO delete/update method; adapter `DuckDbContributionLinkAdapter` in `adapter-duckdb` sharing the one connection (PeerStoragePort precedent). |
+| **DDD-5** | Link schema | **Migration v5 `contribution_links`**: PK (`repo_key`, `person_key`) case-folded; display `repo_subject`/`person_subject`; `github_user_id` (indexed); `rank`; `contributions`; `first_observed_at`; `last_observed_at`. One-tx `ON CONFLICT DO UPDATE` never touching `first_observed_at`; never DELETE; "stale" derived. |
+| **DDD-6** | Reading signed claims | **REUSE `StoragePort::query_federated_by_subject`** per linked repo (full SignedClaim + refs + `AuthorRelationship`) and **`query_by_contributor(me)` + `read_signed_claim`** for my adherence claims. No new StoragePort method. |
+| **DDD-7** | Support eligibility | `embodiesPhilosophy` ∧ relationship ∈ {You, SubscribedPeer} ∧ not a marker (no `retracts`/`counters` ref) ∧ not self-retracted (ADR-060 D-RF-D3, **hoisted to a pure `claim-domain` helper**) ∧ not superseded by same author; `github:` subjects join case-insensitively. |
+| **DDD-8** | Classification | `New` \| `Stronger{supersedes}` numbered; already-signed not numbered; hand-authored adherence (cites no at-uri) never STRONGER; signed inferred claims flagged `SupportWeakened{Retracted \| NoLongerEligible \| MissingLocally}`; numbering = sort (person key, object) after `--person`/`--min-repos`. |
+| **DDD-9** | Confidence arithmetic | Integer hundredths: `min(29, 15 + 5·(k−1), floor(100·max))` → no float noise in the signed CBOR; formula text returned for display (J-002c). |
+| **DDD-10** | Provenance encoding (ADR-064) | `evidence[]` = per supporting repo (sorted): each supporting claim's `at://<author-did>/org.openlore.claim/<cid>`, then `https://github.com/<o>/<r>/commits?author=<login>`. Parsed back for STRONGER/WEAKENED. |
+| **DDD-11** | Predicate / subject acceptance | **No validator change needed** — predicate is a free string (no allowlist exists); object is a philosophy NSID so the ADR-059 advisory applies. |
+| **DDD-12** | Signing | **REUSE slice-01 pipeline**: extract scraper `--sign` batch into a shared CLI helper (verb-neutral prefill); **EXTEND `ComposedClaim` with `references`** (default empty ⇒ existing CIDs unchanged); STRONGER adds `supersedes`, validated by `reference_rules_validate`. |
+| **DDD-13** | CLI grammar | NEW `openlore infer people [--person github:<login>] [--min-repos N] [--sign N[,N…]]`; `scrape github <owner/repo> [--contributors N]` (clap 0..=100; rejected on a user target); `scrape github <user>` = person view, `--sign` indexes inferred candidates. No `--json` (no AC; deferred). |
+| **DDD-14** | Scrape sequencing / atomicity | resolve → harvest → `list_contributors` → pure select → `record_snapshot` (one tx) → render → `--sign` → hint (pure before/after diff; silent at 0). Rate-limit/auth/network/shape failure aborts BEFORE any link write, exit ≠ 0. "Too large"/empty → named notice, no links, exit 0. |
+| **DDD-15** | Earned Trust | Link-adapter probe LIVE in the gauntlet: in-tx upsert-twice sentinel, rolled back (DuckDB `ON CONFLICT` lie); GitHub contributor lies = catalogued `FakeGithub` gold fixtures; no extra live startup request. |
+| **DDD-16** | Enforcement | `xtask check-arch` NEW rule `contribution_links_append_only` + `adapter-github` names no storage/identity port; existing `scraper-domain` purity rule covers the new area. |
+
+---
+
+## Wave: DESIGN / [REF] Component Decomposition
+
+Paths are workspace-relative to `/Users/jeffbailey/Projects/foss/leading/openlore/`.
+
+| Component | Path | Change | Responsibility |
+|---|---|---|---|
+| People inference core | `crates/scraper-domain` (new `people` area) | **EXTEND** | Pure: contributor selection (bot rule, re-rank, top-N), overlap, eligibility, grouping, confidence, NEW/STRONGER/WEAKENED classification, provenance codec (ADR-064), before/after change summary. Types: `PersonSubject`, `RepoSubject`, `ContributorSelection`, `PersonCandidate` (non-empty provenance smart ctor), `CandidateStatus`, `SignedAdherence`, `WeakenedSupport`, `InferredConfidence`, `InferenceReport`. |
+| Self-retraction rule | `crates/claim-domain` | **EXTEND** (hoist) | Pure helper for ADR-060 D-RF-D3 over (author, cid, references); `scraper-domain` uses it, `appview-domain` may delegate (ADR-060 tests stay green). |
+| `GithubPort` + `RawContributor` + `GithubError::ContributorsUnavailable` | `crates/ports` | **EXTEND** | One new async read; raw contributor row type; named non-fatal variant. |
+| `ContributionLinkPort` + `ContributionLink` / `LinkFilter` / `RecordSnapshotOutcome` / error | `crates/ports` | **EXTEND** (new trait in existing crate) | Sync, local-DB only, append/upsert-only by type (no delete). |
+| `adapter-github` | `crates/adapter-github` | **EXTEND** | `list_contributors` over the public `/repos/...` allowlist; ADR-019 rate/PAT/no-token-leak reused; response-shape validation → `ApiShape`. |
+| `DuckDbContributionLinkAdapter` + `schema_v5` | `crates/adapter-duckdb` | **EXTEND** | v5 migration (forward-only, idempotent); one-tx upsert; list; live probe; supported schema version → 5. |
+| Shared sign batch | `crates/cli` (extracted from `verbs/scrape_github.rs`) | **EXTEND** (refactor) | Selection parser + per-candidate prefill → preview → skip → sign → single publish path; used by scrape and infer. `ComposedClaim` gains `references`. |
+| `openlore infer people` | `crates/cli/src/verbs/infer_people.rs` + clap | **CREATE NEW** (verb file) | Effect shell: gather links + claims via ports, call the pure core, render, optional `--sign`. A new verb needs its own module (house pattern: one file per verb). |
+| `scrape github` verb | `crates/cli/src/verbs/scrape_github.rs` + clap | **EXTEND** | `--contributors N`; contributors block + overlap; hint; user-target person view. |
+| Renderers | `crates/cli/src/render/` | **EXTEND** | Contributors block, person candidate list with provenance + arithmetic, person view, hint line; help text "claim author" on existing `--contributor`. |
+| Wiring | `crates/cli/src/wiring.rs` | **EXTEND** | Construct + LIVE-probe the link adapter on the shared connection. |
+| `FakeGithub` | `crates/test-support` | **EXTEND** | Default `/contributors` = `[]` (keeps SCR suite green) + the lie catalogue fixtures. |
+| `xtask check-arch` | `xtask/src/check_arch.rs` | **EXTEND** | `contribution_links_append_only`; adapter-github port-reference guard. |
+
+**Crate count unchanged** (no new workspace member).
+
+---
+
+## Wave: DESIGN / [REF] Driving Ports
+
+- **`openlore infer people [--person github:<login>] [--min-repos N] [--sign N[,N…]]`** — NEW
+  (US-CPI-002/003/004). Offline; writes nothing without `--sign`.
+- **`openlore scrape github <owner/repo> [--contributors N] [--sign N[,N…]]`** — EXTENDED
+  (US-CPI-001 contributors block + overlap; US-CPI-004 hint).
+- **`openlore scrape github <user> [--sign N[,N…]]`** — EXTENDED render (US-CPI-005); one
+  `/users/{user}` request; `--sign` ≡ `infer people --person github:<user> --sign`.
+- **Unchanged**: `graph query/search --contributor <did>` (claim author; help-text wording only).
+
+## Wave: DESIGN / [REF] Driven Ports + Adapters
+
+- **`GithubPort::list_contributors`** (EXTEND) → `adapter-github` → GitHub public REST.
+- **`ContributionLinkPort`** (NEW) → `DuckDbContributionLinkAdapter` (`adapter-duckdb`, shared
+  connection, table `contribution_links`).
+- **`StoragePort`** (REUSED unchanged): `query_federated_by_subject`, `query_by_contributor`,
+  `read_signed_claim`, `write_signed_claim` → `DuckDbStorageAdapter`.
+- **`IdentityPort::sign`, `ClockPort::now_utc`, single publish path** (REUSED unchanged).
+
+## Wave: DESIGN / [REF] Technology Choices
+
+No new dependency. Rust workspace toolchain unchanged; `reqwest` (MIT/Apache-2.0) reused in
+`adapter-github`; DuckDB (MIT) via the existing `duckdb` crate — `INSERT … ON CONFLICT DO UPDATE`
+(supported by the pinned DuckDB; guarded by the adapter probe); `proptest` (MIT/Apache-2.0) for
+the pure core.
+
+**External-integration annotation (for platform-architect / DEVOPS)**: GitHub REST
+`GET /repos/{o}/{r}/contributors` is a third-party API we consume but cannot run a provider-side
+consumer-driven contract against. Recommended: a **recorded-fixture contract test** (the
+`FakeGithub` lie catalogue pinned to GitHub's documented response shape) in the CI acceptance
+stage, plus an optional scheduled live smoke (`GITHUB_TOKEN`, one real repo) to detect drift.
+
+---
+
+## Wave: DESIGN / [REF] Decisions Table
+
+| DDD | Decision | Chosen | Alternatives (visible for override — PROPOSE mode) |
+|---|---|---|---|
+| DDD-1 | Pure core home | EXTEND `scraper-domain` | New `people-domain` crate (2nd pure-core registration, same context); fold into `cli` (not checkable pure); `scoring` (muddies ADR-022) |
+| DDD-2 | Harvest request | always `per_page=100`, N in pure core | `per_page=N+slack` (cannot guarantee N humans) |
+| DDD-4 | Link port | NEW `ContributionLinkPort` | Extend `StoragePort` (breaks every fake; mixes observations into the claim port) |
+| DDD-5 | Link key | case-folded (`repo_key`,`person_key`) | (repo, github_user_id) (would rewrite a person's subject on rename — mutation) ; raw-case subjects (duplicate rows on case variants) |
+| DDD-6 | Claim reads | reuse `query_federated_by_subject` + `query_by_contributor` | New batch read `query_inference_inputs` (deferred; perf trigger >2 s) ; `StoreReadPort` (flat DTOs lack references) |
+| DDD-7 | Retraction rule | hoist D-RF-D3 into `claim-domain` | Re-implement in `scraper-domain` (two copies of one rule) ; depend on `appview-domain` (couples to indexer row type) |
+| DDD-10 | Provenance | at-uri + `commits?author=` evidence strings | `derivedFrom` ref type (Lexicon break, locked out) ; `cid:` entries (loses author) |
+| DDD-13 | `--json` | not in this feature | add `--json` now (no AC; later feature) |
+| DDD-14 | "Too large" 403 | named notice, exit 0 | treat as failure, exit ≠ 0 (fails a repo whose signals were fine) |
+
+---
+
+## Wave: DESIGN / [REF] Reuse Analysis (HARD GATE)
+
+| Existing Component | File | Overlap | Decision | Justification |
+|---|---|---|---|---|
+| `derive_candidates` / candidate model | `crates/scraper-domain/src/derive.rs`, `crates/ports/src/github.rs` | pure candidate proposal, non-empty provenance, conservative confidence | **EXTEND** (sibling `people` area) | Same bounded context/invariants; `CandidateClaim` itself NOT reused (its non-empty `Signal` provenance doesn't fit claim-CID provenance) — a sibling smart-constructed type instead. |
+| `GithubPort` / `GithubAdapter` | `crates/ports/src/lib.rs`, `crates/adapter-github/src/lib.rs` | public GitHub reads, rate/PAT/no-leak, error ADT | **EXTEND** | One more `/repos/...` read on the same allowlist + `get_public`/`classify_status`. |
+| `harvest_user` | `crates/adapter-github/src/lib.rs` | user target | **REUSE unchanged** | Still one `/users/{user}` request; person view comes from the local store. |
+| `StoragePort::query_federated_by_subject` | `crates/ports/src/lib.rs`, `crates/adapter-duckdb/src/lib.rs` | own ∪ peer signed claims + relationship + references | **REUSE unchanged** | Exactly the D-2 input shape (full SignedClaim, non-`Option` author, active-peer label). |
+| `StoragePort::query_by_contributor` / `read_signed_claim` | same | my claims | **REUSE unchanged** | Bounded read of my adherence claims + markers. |
+| `StoreReadPort` | `crates/ports/src/store_read.rs` | viewer read-only reads | **NOT USED** | Flat DTOs without the reference graph (DISCUSS note assumed it — see Changed Assumptions). |
+| `partition_retracted` (D-RF-D3) | `crates/appview-domain/src/retraction.rs` | self-retraction rule | **EXTEND** (hoist rule to `claim-domain`) | Typed over indexer rows; the RULE is shared, not the function. |
+| `reference_rules_validate`, `ReferenceType::Supersedes` | `crates/claim-domain/src/references.rs`, `lib.rs` | supersede reference + cycle checks | **REUSE unchanged** | Shipped ADR-008 machinery. |
+| Lexicon claim + codec | `crates/lexicon/src/claim.rs` | predicate / evidence / references | **REUSE unchanged** | Free-string predicate; `evidence: string[]`; `supersedes` allowed. **No Lexicon change.** |
+| Scraper `--sign` batch | `crates/cli/src/verbs/scrape_github.rs` | selection parse, compose, skip, sign, publish | **EXTEND** (extract shared helper) | One sign path for both verbs (single-publish-path invariant). |
+| `ComposedClaim` / `build_unsigned_claim` | `crates/cli/src/verbs/claim_add.rs` | compose shape | **EXTEND** (`references`, default empty) | Required for `supersedes`; empty default keeps every existing CID. |
+| DuckDB migrations | `crates/adapter-duckdb/src/schema_v4.rs` | forward-only idempotent migration | **EXTEND** (`schema_v5`) | Same pattern. |
+| `DuckDbPeerStorageAdapter` (shared conn) | `crates/adapter-duckdb/src/peer_storage.rs` | second adapter on the one connection | **EXTEND pattern** | New `DuckDbContributionLinkAdapter` follows it. |
+| `ContributionLinkPort` | `crates/ports` | — | **CREATE NEW** (trait) | *Challenged*: extending `StoragePort` forces link methods onto every claim-store implementor/fake and puts unsigned observations on the anti-merging claim port. Capability split justified (PeerStoragePort precedent). |
+| `infer_people.rs` verb | `crates/cli/src/verbs/` | — | **CREATE NEW** (file) | *Challenged*: a new driving verb (OD-CPI-4 locked) — one module per verb is the house structure; logic is reuse. |
+| `xtask check-arch` | `xtask/src/check_arch.rs` | invariant enforcement | **EXTEND** | One new structural rule + one guard. |
+| `scoring`, `graph_query.rs` | `crates/scoring`, `crates/cli/src/verbs/graph_query.rs` | read claims by subject/object | **REUSE unchanged** | Read signed adherence claims as ordinary claims. |
+
+**Verdict**: 0 new crates; 2 CREATE NEW (a port trait, a verb file), both challenged and justified;
+everything else EXTEND / REUSE.
+
+**Outcome collision check**: `nwave-ai outcomes check-delta` NOT RUN — shell unavailable in this
+DESIGN session, and `docs/product/outcomes/registry.yaml` does not exist (no registry to collide
+with). Re-run at DISTILL if the registry is introduced.
+
+---
+
+## Wave: DESIGN / [REF] C4 — System Context (L1)
+
+```mermaid
+C4Context
+  title System Context — contributor-philosophy-inference
+  Person(maria, "Maria (P-001)", "Scrapes repos, signs repo + person claims")
+  Person(priya, "Priya (P-002)", "Reads signed person claims via federation")
+  System(cli, "openlore CLI", "Rust single binary; local-first")
+  SystemDb(duckdb, "Local DuckDB", "Claims, peer claims, contribution links")
+  System_Ext(github, "GitHub public REST API", "repos, users, /contributors")
+  System_Ext(peers, "Peer PDS / openlore instances", "Subscribed peers' signed claims (existing)")
+  Rel(maria, cli, "Scrapes, infers and signs with")
+  Rel(cli, github, "Reads repo signals and one contributors page from")
+  Rel(cli, duckdb, "Records links and reads signed claims in")
+  Rel(cli, peers, "Pulls peer repo claims from and publishes signed claims to")
+  Rel(priya, peers, "Reads signed person-adherence claims from")
+```
+
+## Wave: DESIGN / [REF] C4 — Container (L2)
+
+```mermaid
+C4Container
+  title Container Diagram — contributor-philosophy-inference
+  Person(maria, "Maria (P-001)")
+  System_Boundary(cli_b, "openlore CLI (Rust, ADR-009)") {
+    Container(scrape, "scrape github verb", "crates/cli", "Harvest, record contributors, overlap, hint, person view")
+    Container(infer, "infer people verb", "crates/cli (NEW file)", "Gather inputs, render candidates, --sign")
+    Container(signbatch, "shared sign batch", "crates/cli (extracted)", "Selection, compose preview, sign, single publish path")
+    Container(scraperdomain, "scraper-domain", "Rust pure (EXTENDED)", "Contributor selection, inference, classification, provenance codec")
+    Container(claimdomain, "claim-domain", "Rust pure (EXTENDED)", "CID, sign, reference rules, self-retraction rule")
+    Container(ghadapter, "adapter-github", "Rust effect (EXTENDED)", "GithubPort incl. list_contributors")
+    Container(duckadapter, "adapter-duckdb", "Rust effect (EXTENDED)", "StoragePort + NEW ContributionLinkPort, schema v5")
+  }
+  ContainerDb(duckdb, "Local DuckDB file", "DuckDB", "claims, peer_claims, contribution_links")
+  System_Ext(github, "GitHub public REST API")
+  Rel(maria, scrape, "Runs")
+  Rel(maria, infer, "Runs")
+  Rel(scrape, ghadapter, "Fetches signals and contributors via")
+  Rel(ghadapter, github, "GETs /repos/{o}/{r}/contributors from")
+  Rel(scrape, scraperdomain, "Selects people and computes overlap and hint with")
+  Rel(infer, scraperdomain, "Infers and classifies candidates with")
+  Rel(scrape, duckadapter, "Records contribution snapshot through")
+  Rel(infer, duckadapter, "Reads links and signed claims through")
+  Rel(scrape, signbatch, "Signs selected candidates through")
+  Rel(infer, signbatch, "Signs selected candidates through")
+  Rel(signbatch, claimdomain, "Canonicalizes, validates references and signs with")
+  Rel(signbatch, duckadapter, "Persists signed claims through")
+  Rel(scraperdomain, claimdomain, "Applies the self-retraction rule from")
+  Rel(duckadapter, duckdb, "Reads and upserts rows in")
+```
+
+## Wave: DESIGN / [REF] C4 — Component (L3, `scraper-domain` people area)
+
+```mermaid
+C4Component
+  title Component Diagram — scraper-domain people area (pure)
+  Container(verbs, "cli verbs", "effect shell")
+  Container_Boundary(sd, "scraper-domain (pure)") {
+    Component(select, "contributor selection", "pure fn", "Bot rule, re-rank, de-dup, top-N")
+    Component(overlap, "overlap", "pure fn", "People linked to other scraped repos")
+    Component(eligible, "support eligibility", "pure fn", "Signed, active, non-marker, non-retracted, non-superseded")
+    Component(conf, "confidence", "pure fn", "Integer-hundredths formula + arithmetic text")
+    Component(classify, "classification", "pure fn", "NEW / STRONGER / already signed / weakened; numbering")
+    Component(codec, "provenance codec", "pure fn", "Encode at-uri evidence; parse cited claims")
+    Component(delta, "change summary", "pure fn", "Before/after diff for the scrape hint")
+  }
+  Rel(verbs, select, "Passes raw contributors to")
+  Rel(verbs, overlap, "Asks for overlap from")
+  Rel(verbs, classify, "Requests an InferenceReport from")
+  Rel(verbs, delta, "Diffs two reports with")
+  Rel(classify, eligible, "Filters supporting claims with")
+  Rel(classify, conf, "Computes confidence with")
+  Rel(classify, codec, "Reads cited support and builds evidence with")
+```
+
+---
+
+## Wave: DESIGN / [REF] Quality Attributes (priority order)
+
+1. **Integrity / auditability** — append-only (no delete method; check-arch rule; byte-compare
+   test), provenance in the signed payload, non-empty provenance by construction, anti-merging
+   (each supporting claim with its own author).
+2. **Privacy / bounded cost** — public data only, ≤ 1 extra request per repo scrape, links local.
+3. **Testability** — pure core with property tests (determinism, D-2 filter, confidence ≤ 0.29
+   and ≤ max support, codec round-trip, numbering stability).
+4. **Performance** — `infer people` is local; soft target < 2 s at ~200 scraped repos (revisit
+   trigger for a batch read, ADR-063 alt G).
+5. **Maintainability** — zero new crates; one sign path.
+
+---
+
+## Wave: DESIGN / [REF] Open Questions (deferred to DISTILL / DELIVER)
+
+- **Q-CPI-D1 (DISTILL)** — Exact output wording/layout of the contributors block, candidate list,
+  person view and hint (journey mockups are indicative); DISTILL pins the load-bearing substrings.
+- **Q-CPI-D2 (DELIVER)** — Whether `appview-domain::partition_retracted` delegates to the hoisted
+  `claim-domain` rule in this feature or later (ADR-060 tests must stay green either way).
+- **Q-CPI-D3 (DELIVER)** — Author-DID form when comparing FederatedRow authors and building
+  at-uris (bare vs `#org.openlore.application` fragment): use the SAME form `claim publish`
+  mints; pin with a fixture.
+- **Q-CPI-D4 (DISTILL)** — Multiple current adherence claims of mine for one (person, philosophy)
+  (hand-signed twice): supersede the latest `composed_at`; list the others as already signed.
+- **Q-CPI-D5 (DELIVER)** — Whether the shipped `scraper_never_persists_unsigned` gate and any
+  SCR request-count assertions need narrowing to claim tables / +1 request (expected: yes).
+- **Q-CPI-D6 (later feature)** — `--json` output for `infer people`.
+- **Q-CPI-D7 (DISTILL)** — Rename display: when two person keys share one `github_user_id`, show
+  "possible rename" on both; never merge.
+
+---
+
+## Wave: DESIGN / [REF] Changed Assumptions
+
+1. **Read port.** DISCUSS US-CPI-002 Technical Notes: *"Reads via `StoreReadPort` (author_claims ∪
+   peer_claims, retraction-aware — reuse the J-005d/appview soft-retract predicate if it fits)."*
+   (this file, US-CPI-002). NEW: reads go through `StoragePort::query_federated_by_subject` +
+   `query_by_contributor`/`read_signed_claim` — `StoreReadPort` returns flat DTOs without the
+   reference graph the retraction/supersede rules need. The appview predicate does not fit its
+   row type; its RULE (D-RF-D3) is hoisted into `claim-domain` and shared.
+2. **Provenance location vs WD-62.** The shipped scraper rule (WD-62 / I-SCR-7): the
+   `derived-from` line is DISPLAY-ONLY, never a signed field. That still holds for REPO candidates.
+   For PERSON candidates the provenance is ALSO carried in `evidence[]` (D-9 locked); the signed
+   CID is deterministic and stable on re-verify, but it is not byte-identical to a hand-authored
+   claim with empty evidence.
+3. **Scraper request count.** DISCUSS slice-01 AC: *"request count increases by exactly 1 per repo
+   scrape."* NEW: exactly 1 when N ≥ 1; **0 when `--contributors 0`** (no request is made).
+4. **Non-rate-limit contributor failures.** DISCUSS covered rate-limit/auth/network only. NEW:
+   GitHub's "contributor list too large" 403 and the empty-repo 204 are a named notice, no links,
+   exit 0 (see `design/upstream-changes.md`).
+
+See `design/upstream-changes.md` for the story/AC clarifications handed back to the product owner.

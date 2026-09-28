@@ -66,6 +66,36 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **contributor-philosophy-inference: DESIGN 2026-09-27 — IN-PLACE EXTENSION, ZERO new crates,
+  ZERO Lexicon change.** `scrape github owner/repo` also records the repo's top-N human
+  contributors (one public `/contributors` page, bots excluded) as LOCAL, UNSIGNED, append-only
+  contribution links; `openlore infer people` proposes `github:<login> adheresToPhilosophy X`
+  candidates from SIGNED, non-retracted repo `embodiesPhilosophy` claims (own ∪ active peers),
+  labelled NEW / STRONGER (sign ⇒ new claim with `supersedes`) with SUPPORT WEAKENED flags; the
+  human signs through the shipped pipeline (never auto-signed/-retracted).
+  - **`crates/scraper-domain` (PURE, EXTEND)**: `people` area — contributor selection (bot rule,
+    re-rank, de-dup, top-N), overlap, eligibility, integer-hundredths confidence
+    `min(29, 15+5(k−1), floor(100·max))`, classification, provenance codec, scrape-hint diff.
+  - **`crates/claim-domain` (PURE, EXTEND)**: ADR-060 D-RF-D3 self-retraction rule hoisted as a
+    shared pure helper.
+  - **`crates/ports` (EXTEND)**: `GithubPort::list_contributors` + `RawContributor` +
+    `GithubError::ContributorsUnavailable`; NEW sync `ContributionLinkPort` (probe /
+    record_snapshot / list_links — NO delete method).
+  - **`crates/adapter-github` (EXTEND)**: one `GET /repos/{o}/{r}/contributors?per_page=100`.
+  - **`crates/adapter-duckdb` (EXTEND)**: `schema_v5` `contribution_links` (case-folded PK
+    (`repo_key`,`person_key`), `github_user_id`, rank, contributions, first/last observed; one-tx
+    `ON CONFLICT DO UPDATE`, never delete) + `DuckDbContributionLinkAdapter` on the shared
+    connection; LIVE probe (in-tx upsert-twice, rolled back).
+  - **`crates/cli` (EXTEND)**: NEW `infer people` verb; `scrape github --contributors N` (0..=100),
+    contributors/overlap block + hint, `scrape github <user>` person view; scraper `--sign` batch
+    extracted into a shared helper; `ComposedClaim.references` (default empty — existing CIDs
+    unchanged). Signed-claim inputs REUSE `query_federated_by_subject` + `query_by_contributor`.
+  - **`xtask` (EXTEND)**: `contribution_links_append_only` + `adapter-github` names no storage port.
+  - **ADR-063** (component architecture) + **ADR-064** (wire contract: subject `github:<login>`,
+    predicate `adheresToPhilosophy`, provenance = `evidence[]` AT-URIs
+    `at://<did>/org.openlore.claim/<cid>` + `https://github.com/<o>/<r>/commits?author=<login>`).
+    C4 L1/L2/L3 in `docs/feature/contributor-philosophy-inference/feature-delta.md`.
+
 - **serverless-philosophy-federation: DESIGN 2026-07-15 — ADDITIVE. +2 Rust production crates
   (`publish-domain` pure + `adapter-publish-http` effect; workspace 21 → 23 prod / 25 members, or 24
   if `publish-domain` folds into `cli`) + a NEW non-workspace `atproto/` TypeScript/Cloudflare-Workers
@@ -555,6 +585,9 @@ production + 1 test-support + 1 xtask = 21 workspace members.**
 | **`openlore search --object\|--contributor\|--subject\|--show <cid>\|--share`** (NEW network verb; `graph query` stays unambiguously LOCAL) | slice-05 | **ADR-027** |
 | **`openlore search <openlore://search?...>`** (link re-run resolver — re-runs the shared query, current results not a snapshot) | slice-05 | **ADR-027** |
 | **`openlore-indexer serve\|ingest\|stats`** (the SECOND binary; the self-hostable network service; signing-incapable) | slice-05 | **ADR-023 + ADR-024 + ADR-027** |
+| **`openlore scrape github <owner/repo> --contributors N`** (flag; records top-N human contributors as local links) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
+| **`openlore infer people [--person github:<login>] [--min-repos N] [--sign N[,N,...]]`** (NEW verb; person→philosophy candidates from signed repo claims) | contributor-philosophy-inference (DESIGN) | **ADR-063 + ADR-064** |
+| **`openlore scrape github <user>`** (renders the person view from the local store) | contributor-philosophy-inference (DESIGN) | **ADR-063** |
 
 ## C4 reference
 
