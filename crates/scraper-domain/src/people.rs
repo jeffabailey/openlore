@@ -20,6 +20,64 @@ use ports::{
 /// API page's worth, top by commits).
 pub const DEFAULT_CONTRIBUTOR_COUNT: usize = 30;
 
+/// The largest `--contributors N` a scrape accepts: one GitHub page (per_page
+/// max 100), so recording contributors stays ONE request (OD-CPI-7 / DDD-13).
+pub const MAX_CONTRIBUTOR_COUNT: usize = 100;
+
+/// Why a `--contributors N` request is refused — before any GitHub request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContributorCountError {
+    /// N exceeds one page of contributors (OD-CPI-7).
+    AboveOnePage { requested: usize },
+    /// `--contributors` was given for a person target (UC-3): a person scrape
+    /// never crawls contributors.
+    PersonTarget { target: String },
+}
+
+impl std::fmt::Display for ContributorCountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AboveOnePage { requested } => write!(
+                f,
+                "--contributors {requested} is too many: at most \
+                 {MAX_CONTRIBUTOR_COUNT} (one GitHub page) may be recorded"
+            ),
+            Self::PersonTarget { target } => write!(
+                f,
+                "--contributors applies only to owner/repo targets; \
+                 `{target}` is a person, whose scrape records no contributors"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ContributorCountError {}
+
+/// A scrape target names a repo when it has the `owner/repo` form.
+fn is_repo_target(target: &str) -> bool {
+    target.contains('/')
+}
+
+/// The number of HUMAN contributors to record should `target` be a repo:
+/// the `--contributors` override (0..=100) or the default. Refuses an
+/// override above one page, or any override on a person target — pure over
+/// the raw target, so the shell can refuse BEFORE any GitHub request.
+pub fn contributor_count_for(
+    target: &str,
+    requested: Option<usize>,
+) -> Result<usize, ContributorCountError> {
+    match requested {
+        None => Ok(DEFAULT_CONTRIBUTOR_COUNT),
+        Some(_) if !is_repo_target(target) => Err(ContributorCountError::PersonTarget {
+            target: target.to_string(),
+        }),
+        Some(requested) if requested > MAX_CONTRIBUTOR_COUNT => {
+            Err(ContributorCountError::AboveOnePage { requested })
+        }
+        Some(requested) => Ok(requested),
+    }
+}
+
 /// The outcome of selecting a repo's contributors: the ranked humans to
 /// record, and the bots skipped while collecting them (named, never linked).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +615,43 @@ mod tests {
             .map(|r| r.user_id)
             .filter(|id| !bot_ids.contains(id))
             .collect()
+    }
+
+    proptest! {
+        /// On an `owner/repo` target the count is the override when it fits
+        /// one page, a refusal naming the request above it, the default when
+        /// absent.
+        #[test]
+        fn a_repo_target_accepts_counts_up_to_one_page(
+            owner in "[a-z]{1,8}",
+            repo in "[a-z]{1,8}",
+            requested in proptest::option::of(0usize..=250),
+        ) {
+            let target = format!("{owner}/{repo}");
+            let expected = match requested {
+                None => Ok(DEFAULT_CONTRIBUTOR_COUNT),
+                Some(n) if n <= MAX_CONTRIBUTOR_COUNT => Ok(n),
+                Some(n) => Err(ContributorCountError::AboveOnePage { requested: n }),
+            };
+            prop_assert_eq!(contributor_count_for(&target, requested), expected);
+        }
+
+        /// On a person target any override is refused (whatever N), and no
+        /// override is fine.
+        #[test]
+        fn a_person_target_refuses_any_contributor_override(
+            user in "[A-Za-z][A-Za-z0-9-]{0,15}",
+            requested in proptest::option::of(any::<usize>()),
+        ) {
+            let outcome = contributor_count_for(&user, requested);
+            match requested {
+                None => prop_assert_eq!(outcome, Ok(DEFAULT_CONTRIBUTOR_COUNT)),
+                Some(_) => prop_assert_eq!(
+                    outcome,
+                    Err(ContributorCountError::PersonTarget { target: user.clone() })
+                ),
+            }
+        }
     }
 
     proptest! {

@@ -134,7 +134,6 @@ fn people_already_linked_to_other_scraped_repos_are_surfaced() {
 ///
 /// @us-cpi-001 @driving_port @real-io @od-cpi-7 @boundary
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 --contributors N override counts humans)"]
 fn the_contributor_count_can_be_overridden_and_counts_only_humans() {
     // GIVEN Tobias wants only the core maintainers of dtolnay/anyhow.
     let env = TestEnv::initialized();
@@ -172,7 +171,6 @@ fn the_contributor_count_can_be_overridden_and_counts_only_humans() {
 ///
 /// @us-cpi-001 @driving_port @real-io @uc-1 @kpi-cpi-5 @boundary
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (UC-1 --contributors 0 records none, zero extra requests)"]
 fn zero_contributors_records_none_and_asks_github_nothing_extra() {
     // GIVEN a repo with contributors.
     let env = TestEnv::initialized();
@@ -433,7 +431,6 @@ fn an_empty_repository_is_a_notice_not_a_failure() {
 ///
 /// @us-cpi-001 @driving_port @real-io @od-cpi-7 @error
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (OD-CPI-7 --contributors > 100 rejected before any request)"]
 fn more_than_one_hundred_contributors_is_rejected_before_asking_github() {
     // GIVEN any repo.
     let env = TestEnv::initialized();
@@ -471,7 +468,6 @@ fn more_than_one_hundred_contributors_is_rejected_before_asking_github() {
 ///
 /// @us-cpi-001 @us-cpi-005 @driving_port @real-io @uc-3 @error
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (UC-3 --contributors rejected on a person target)"]
 fn asking_for_contributors_of_a_person_is_rejected_before_asking_github() {
     // GIVEN a public GitHub user.
     let env = TestEnv::initialized();
@@ -552,7 +548,6 @@ fn the_recorded_people_are_humans_ranked_by_commits_whatever_order_github_uses()
 ///
 /// @us-cpi-001 @driving_port @real-io @kpi-cpi-5 @d-6 @guardrail
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (KPI-CPI-5 exactly one extra public request)"]
 fn recording_contributors_costs_exactly_one_extra_public_request() {
     // GIVEN two fresh stores and the same repo.
     let with_people = TestEnv::initialized();

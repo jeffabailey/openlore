@@ -348,6 +348,12 @@ pub enum ScrapeCommand {
         /// human-gate, WD-49 / I-SCR-1).
         #[arg(long)]
         sign: Option<String>,
+        /// How many HUMAN contributors to record for an `owner/repo` target
+        /// (0..=100; default 30; bots are skipped, not counted). `0` records
+        /// none and makes no contributors request. Refused on a person
+        /// target (OD-CPI-7 / UC-3) — validated before any GitHub request.
+        #[arg(long, value_name = "N")]
+        contributors: Option<usize>,
     },
 }
 
@@ -603,10 +609,18 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+        Command::Scrape(ScrapeCommand::Github {
+            target,
+            sign,
+            contributors,
+        }) => {
             match verbs::scrape_github::run(
                 &wiring,
-                &verbs::scrape_github::ScrapeGithubArgs { target, sign },
+                &verbs::scrape_github::ScrapeGithubArgs {
+                    target,
+                    sign,
+                    contributors,
+                },
             ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);
@@ -1079,7 +1093,7 @@ mod clap_dispatch_tests {
     fn scrape_github_without_sign_routes_with_target_and_no_selection() {
         let cmd = parse(&["scrape", "github", "rust-lang/cargo"]);
         match cmd {
-            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+            Command::Scrape(ScrapeCommand::Github { target, sign, .. }) => {
                 assert_eq!(target, "rust-lang/cargo");
                 assert!(
                     sign.is_none(),
@@ -1095,7 +1109,7 @@ mod clap_dispatch_tests {
         // US-SCR-003: a bare-user target plus a single `--sign` index.
         let cmd = parse(&["scrape", "github", "torvalds", "--sign", "1"]);
         match cmd {
-            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+            Command::Scrape(ScrapeCommand::Github { target, sign, .. }) => {
                 assert_eq!(target, "torvalds");
                 assert_eq!(
                     sign.as_deref(),
@@ -1111,7 +1125,7 @@ mod clap_dispatch_tests {
     fn scrape_github_with_comma_separated_sign_list_routes_with_raw_selection() {
         let cmd = parse(&["scrape", "github", "rust-lang/cargo", "--sign", "1,3"]);
         match cmd {
-            Command::Scrape(ScrapeCommand::Github { target, sign }) => {
+            Command::Scrape(ScrapeCommand::Github { target, sign, .. }) => {
                 assert_eq!(target, "rust-lang/cargo");
                 assert_eq!(
                     sign.as_deref(),

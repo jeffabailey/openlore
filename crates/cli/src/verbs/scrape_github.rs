@@ -37,12 +37,13 @@
 use anyhow::{anyhow, Result};
 use ports::{CandidateClaim, TargetKind};
 use scraper_domain::{
-    derive_candidates, load_mapping, select_contributors, ContributorSelection,
-    DEFAULT_CONTRIBUTOR_COUNT, EMBEDDED_MAPPING_YAML,
+    contributor_count_for, derive_candidates, load_mapping, select_contributors,
+    ContributorSelection, EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
-    render_auth_report, render_candidate_list, render_contributors_block, render_public_data_banner,
+    render_auth_report, render_candidate_list, render_contributors_block,
+    render_no_contributors_requested, render_public_data_banner,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::sign_batch::{self, SignableCandidate};
@@ -62,6 +63,9 @@ pub struct ScrapeGithubArgs {
     pub target: String,
     /// Optional raw `--sign N[,N...]` selection (1-based indices), unparsed.
     pub sign: Option<String>,
+    /// Optional `--contributors N` override (validated by the pure
+    /// `scraper_domain::contributor_count_for` before any request).
+    pub contributors: Option<usize>,
 }
 
 /// Outcome of one `scrape github` invocation — exit code + stdout chunk.
@@ -89,6 +93,10 @@ pub struct ScrapeGithubOutcome {
 /// WITHOUT `--sign` this verb performs ZERO writes (the human-gate at the
 /// storage layer; `scraper_never_persists_unsigned`, I-SCR-1 / WD-49).
 pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutcome> {
+    // (0) Validate `--contributors N` PURELY over the raw target, BEFORE the
+    // banner or any GitHub request (OD-CPI-7 bound; UC-3 person refusal).
+    let contributor_count = contributor_count_for(&args.target, args.contributors)?;
+
     // (1) Public-data-only banner — printed BEFORE any harvest (WD-51). It
     // goes to stdout NOW (not into the returned chunk) so the user is
     // reassured BEFORE any network beat even when the resolve / harvest
@@ -137,14 +145,16 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // harvest failure aborts here, BEFORE any link write. Links are unsigned
     // local observations — never claims (the human-gate is untouched).
     let subject = subject_for(&kind);
+    // N = 0 is a shell decision taken BEFORE the port: no request, no write.
     let contributors = match &kind {
+        TargetKind::Repo { .. } if contributor_count == 0 => Some(None),
         TargetKind::Repo { owner, repo } => {
             let rows = runtime
                 .block_on(wiring.github.list_contributors(owner, repo))
                 .map_err(anyhow::Error::from)?;
-            let selection = select_contributors(&rows, DEFAULT_CONTRIBUTOR_COUNT);
+            let selection = select_contributors(&rows, contributor_count);
             record_contributors(wiring, &subject, &selection)?;
-            Some(selection)
+            Some(Some(selection))
         }
         TargetKind::User { .. } => None,
     };
@@ -168,8 +178,10 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     }
 
     // (5a) The contributors block (repo targets only), below the candidates.
-    if let Some(selection) = &contributors {
-        out.push_str(&render_contributors_block(selection));
+    match &contributors {
+        Some(Some(selection)) => out.push_str(&render_contributors_block(selection)),
+        Some(None) => out.push_str(&render_no_contributors_requested()),
+        None => {}
     }
 
     // (6) WITHOUT --sign: derive + render only, ZERO writes (the human-gate;

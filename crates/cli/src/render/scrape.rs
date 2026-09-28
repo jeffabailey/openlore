@@ -100,3 +100,9 @@ pub fn render_contributors_block(selection: &scraper_domain::ContributorSelectio
     };
     format!("Contributors recorded: {recorded} (top by commits{bot_note})\n")
 }
+
+/// The contributors line for `--contributors 0`: none recorded, and GitHub
+/// was not asked (UC-1 / KPI-CPI-5).
+pub fn render_no_contributors_requested() -> String {
+    "Contributors recorded: 0 (--contributors 0: none requested)\n".to_string()
+}

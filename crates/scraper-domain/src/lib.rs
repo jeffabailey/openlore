@@ -39,10 +39,11 @@ pub use mapping::{
 // Re-export the shared value types so consumers can reach the whole derivation
 // vocabulary through `scraper_domain::` without also importing `ports::`.
 pub use people::{
-    confidence_arithmetic, encode_provenance, infer_person_candidates, inferred_confidence, is_bot,
-    parse_provenance, select_contributors, CandidateError, CitedClaim, ContributorSelection,
-    Hundredths, PersonCandidate, RepoClaim, SupportingClaim, SupportingRepo, ADHERES_TO_PHILOSOPHY,
-    DEFAULT_CONTRIBUTOR_COUNT,
+    confidence_arithmetic, contributor_count_for, encode_provenance, infer_person_candidates,
+    inferred_confidence, is_bot, parse_provenance, select_contributors, CandidateError, CitedClaim,
+    ContributorCountError, ContributorSelection, Hundredths, PersonCandidate, RepoClaim,
+    SupportingClaim, SupportingRepo, ADHERES_TO_PHILOSOPHY, DEFAULT_CONTRIBUTOR_COUNT,
+    MAX_CONTRIBUTOR_COUNT,
 };
 
 pub use ports::{CandidateClaim, RankedContributor, RawContributor, Signal, SignalKind};
