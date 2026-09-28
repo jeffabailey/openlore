@@ -1172,3 +1172,102 @@ C4Component
    exit 0 (see `design/upstream-changes.md`).
 
 See `design/upstream-changes.md` for the story/AC clarifications handed back to the product owner.
+
+---
+
+## Wave: DISTILL / [REF] Inherited commitments
+
+> Wave: **DISTILL** · Date: 2026-09-27 · Owner: Quinn (nw-acceptance-designer) · `[lang-mode] rust`
+> · `[policy-mode] inherit` · `[port-mode] inherit` · DEVOPS: **not run (⊘)** — no new infra.
+> Reconciliation passed — 0 contradictions (DESIGN's changes are recorded Changed Assumptions / UC-1..UC-8).
+
+| Origin | Commitment | DDD | Impact |
+|--------|------------|-----|--------|
+| DISCUSS#D-1 | Nothing about a person is signed without an explicit `--sign` | DDD-12 | IS-3, IS-4, IP-12 assert the store universe is unchanged without `--sign` |
+| DISCUSS#D-2 | Only signed, active, non-retracted repo claims feed inference | DDD-7 | IP-2/3/5/6/7 cover unsigned, retracted, unsubscribed, counter and superseded inputs |
+| DISCUSS#D-5 | Append-only: never edit, re-sign, retract a signed claim | DDD-8, DDD-12 | EG-3..EG-6 byte-compare every pre-existing claim artifact and forbid system-authored markers |
+| DISCUSS#D-9 | Provenance travels inside the signed payload | DDD-10 (ADR-064) | WS pins the exact ordered `evidence[]`; IS-2 proves CID re-verify and the federated record |
+| DESIGN#UC-1..UC-8 | DESIGN-introduced edge cases | DDD-2/8/13/14 | encoded as CL-4, CL-9/10, CL-12, EG-9, EG-5/6, IP-9, IS-2, IS-6 — PO to ratify |
+
+## Wave: DISTILL / [REF] Scenario list with tags
+
+61 scenarios in 5 files (SSOT = the `.rs` files; full map in `distill/test-scenarios.md`):
+
+| File | IDs | Active | Ignored | Tags carried |
+|---|---|---|---|---|
+| `tests/acceptance/infer_people_sign.rs` | WS-CPI-1, IS-2..IS-10 | 1 (WS) | 9 (1 live) | @walking_skeleton @driving_port @real-io @us-cpi-003 @kpi-cpi-2/3 @uc-7/8 @q-cpi-d3 |
+| `tests/acceptance/contributor_links.rs` | CL-1..CL-15 | 0 | 15 (1 live) | @us-cpi-001 @kpi-cpi-5 @uc-1/2/3 @ddd-3/14/15 @od-cpi-7 |
+| `tests/acceptance/infer_people.rs` | IP-1..IP-16 | 0 | 16 (1 live) | @us-cpi-002 @kpi-cpi-2/3 @kpi-5 @d-2/7/8 @uc-6 @ddd-7/9/13 @property |
+| `tests/acceptance/infer_people_evidence_grows.rs` | EG-1..EG-11 | 0 | 11 (1 live) | @us-cpi-004 @kpi-cpi-4 @d-5 @uc-4/5 @q-cpi-d4 |
+| `tests/acceptance/scrape_person.rs` | SP-1..SP-9 | 0 | 9 (1 live) | @us-cpi-005 @d-4/6 @ddd-13 @q-cpi-d7 |
+
+Mix: happy 10 · error 13 · edge 20 · boundary 5 · guardrail 8 · live 5 → **error+edge+boundary 62%**.
+Every AC of US-CPI-001..005 maps to ≥1 scenario (traceability table in `distill/test-scenarios.md` §4).
+
+## Wave: DISTILL / [REF] WS strategy
+
+Architecture of Reference + project policy (no per-feature A/B/C/D): driving CLI = real subprocess;
+driven-internal (DuckDB claims + `contribution_links`, claim-domain, scraper-domain) = real;
+driven-external (GitHub, peer PDS, own PDS, identity) = fakes. One WS (`@walking_skeleton @real-io`),
+a brownfield thin thread across slices 01→03 — see `distill/walking-skeleton.md`. Current RED:
+`unrecognized subcommand 'infer'` after all GIVENs succeed (MISSING_FUNCTIONALITY).
+
+## Wave: DISTILL / [REF] Adapter coverage
+
+| Adapter | @real-io scenario | Covered by |
+|---|---|---|
+| `DuckDbContributionLinkAdapter` (NEW port) | YES | CL-1, CL-5 (upsert/never-delete), WS |
+| `GithubAdapter::list_contributors` (EXTEND) | YES vs `FakeGithub` gold fixtures; live via CL-15 `@requires_external` | CL-1..CL-14, CL-15 |
+| `DuckDbStorageAdapter` reads (`query_federated_by_subject`, `query_by_contributor`) (REUSED) | YES | IP-1..IP-9, EG-* |
+| sign batch → `claims/<cid>.json` + publish path (REUSED/extracted) | YES | WS, IS-2 (publish), IS-9 |
+
+## Wave: DISTILL / [REF] Scaffolds
+
+No production scaffolds (Mandate 7 N/A in the Rust subprocess harness: tests import no new
+production module — they drive the binary). Test-side materialized: `tests/acceptance/support/people.rs`
+(step vocabulary), `FakeGithub` `/contributors` + `FakeContributor`/`FakeContributorsPosture`
+(`crates/test-support`), 5 `[[test]]` targets in `crates/cli/Cargo.toml`. All compile
+(`cargo test -p cli --no-run`).
+
+## Wave: DISTILL / [REF] Test placement
+
+`tests/acceptance/<feature-area>.rs`, registered as `[[test]]` in `crates/cli/Cargo.toml` (the
+package owning the `openlore` binary) — precedent: `scrape_github.rs`, `scrape_sign.rs`,
+`publish_roundtrip.rs`.
+
+## Wave: DISTILL / [REF] Driving adapter coverage
+
+| Entry point (DESIGN) | Subprocess scenario |
+|---|---|
+| `openlore infer people [--person] [--min-repos] [--sign]` | WS, IP-*, IS-*, EG-2..EG-10 |
+| `openlore scrape github <owner/repo> [--contributors N] [--sign]` (+ hint) | CL-*, EG-1, EG-7, EG-8 |
+| `openlore scrape github <user> [--sign]` (person view) | SP-* |
+| `graph query --contributor` help wording | IP-15 |
+
+## Wave: DISTILL / [REF] Activation order (one at a time, per slice)
+
+1. **WS-CPI-1** (already active) — thin 01+02+03.
+2. **Slice-01**: CL-1 → CL-3 → CL-4 → CL-14 → CL-13 → CL-2 → CL-5 → CL-6 → CL-7 → CL-8 → CL-9 → CL-10 → CL-11 → CL-12.
+3. **Slice-02**: IP-1 → IP-11 → IP-2 → IP-3 → IP-5 → IP-6 → IP-7 → IP-9 → IP-10 → IP-4 → IP-8 → IP-12 → IP-13 → IP-14 → IP-15.
+4. **Slice-03**: IS-2 → IS-3 → IS-4 → IS-5 → IS-6 → IS-7 → IS-8 → IS-9.
+5. **Slice-04**: EG-1 → EG-8 → EG-7 → EG-2 → EG-3 → EG-10 → EG-9 → EG-4 → EG-5 → EG-6.
+6. **Slice-05**: SP-1 → SP-3 (narrow shipped SG-3 here) → SP-7 → SP-5 → SP-2 → SP-8 → SP-6 → SP-4.
+7. Live (`OPENLORE_LIVE_GITHUB=1 … -- --ignored live`) at each slice's dogfood demo: CL-15, IP-16, IS-10, EG-11, SP-9.
+
+## Wave: DISTILL / [REF] Pre-requisites
+
+DESIGN driving ports (DDD-13) and driven ports (DDD-2/4/6); `OPENLORE_TEST_NOW` clock seam
+(shipped); per-peer resolver/pubkey seams (shipped); `FakeGithub` `/contributors` (added this wave).
+No DEVOPS environment matrix (⊘) — runs in the existing CI acceptance stage. Existing tests to
+narrow in DELIVER: see `distill/acceptance-review.md` § "Existing tests DELIVER must narrow".
+
+## Wave: DISTILL / [REF] Consolidated review (DISCUSS + DESIGN + DISTILL)
+
+| Reviewer | Verdict |
+|---|---|
+| nw-product-owner-reviewer | approved after fix — 1 blocker (slice-05 "exactly one request" vs SP-5) fixed by asserting exactly one `/users/{user}` read; UC-1..UC-8 + IP-14 ratified |
+| nw-solution-architect-reviewer | approved — 0 findings |
+| nw-acceptance-designer-reviewer | approved — avg 9.3, 0 findings |
+
+RED gate: 0 BROKEN (`distill/red-classification.md`). Details, self-review fixes and the
+existing tests DELIVER must narrow: `distill/acceptance-review.md`.

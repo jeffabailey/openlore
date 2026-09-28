@@ -49,6 +49,11 @@ use std::process::{Command, Stdio};
 #[path = "../../common/state_delta.rs"]
 pub mod state_delta;
 
+// contributor-philosophy-inference (DISTILL 2026-09-27): the person-inference
+// step vocabulary shared by contributor_links / infer_people / infer_people_sign
+// / infer_people_evidence_grows / scrape_person.
+pub mod people;
+
 use openlore_test_support::fake_pds::FakePdsHttpHandle;
 use openlore_test_support::{FakeIdentity as SharedFakeIdentity, FakePds as SharedFakePds};
 use ports::IdentityPort;
@@ -2194,8 +2199,9 @@ pub fn assert_purge_state_delta(before: &HashMap<String, String>, after: &HashMa
 // Re-export the FakeGithub double + fixtures flat so the scrape_* files name
 // them via `use support::*` (matching how the slice-03 peer doubles surface).
 pub use openlore_test_support::fake_github::{
-    FakeAuthMode, FakeGithub, FakeGithubErrorPosture, FakeGithubHttpHandle, FakeTargetKind,
-    FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
+    FakeAuthMode, FakeContributor, FakeContributorsPosture, FakeGithub, FakeGithubErrorPosture,
+    FakeGithubHttpHandle, FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET,
+    FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
 };
 
 /// A running `FakeGithub` in-process HTTP server, owning its own tokio

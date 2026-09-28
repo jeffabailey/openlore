@@ -189,6 +189,13 @@ struct State {
     /// dir is the SECOND disjunct of `TestRatioOrCiMatrix` — a `tests/` dir ALONE
     /// fires the signal even when there are no CI workflows.
     has_tests_dir: bool,
+    /// What `GET /repos/{o}/{r}/contributors` serves (contributor-philosophy-
+    /// inference, DDD-2/DDD-15). **Default = `Listed([])`** (200 with an empty
+    /// JSON array) for EVERY posture that does not configure it, so the shipped
+    /// SCR/RGSD suites keep their behavior when the harvest grows the one extra
+    /// contributors read. Set via [`FakeGithub::with_contributors`] /
+    /// [`FakeGithub::with_contributors_posture`] (the ADR-063 lie catalogue).
+    contributors: FakeContributorsPosture,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -260,6 +267,85 @@ impl FakeGithubErrorPosture {
     }
 }
 
+/// One RAW row of GitHub's public `GET /repos/{o}/{r}/contributors` list, as
+/// the real API serves it (contributor-philosophy-inference, ADR-063 §2): the
+/// login, the STABLE numeric user id (rename detection, OD-CPI-1), the account
+/// `type` (`"User"` | `"Bot"`), and the commit `contributions` count. The fake
+/// serves rows VERBATIM and in the order given — it never filters bots, never
+/// sorts, never de-duplicates (those are the pure core's job, DDD-3; the fake
+/// must be able to tell the API's lies).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeContributor {
+    pub login: String,
+    pub id: u64,
+    pub account_type: String,
+    pub contributions: u64,
+}
+
+impl FakeContributor {
+    /// A human account (`type: "User"`).
+    pub fn human(login: &str, id: u64, contributions: u64) -> Self {
+        Self {
+            login: login.to_string(),
+            id,
+            account_type: "User".to_string(),
+            contributions,
+        }
+    }
+
+    /// A bot account as GitHub types it (`type: "Bot"`, e.g. `dependabot[bot]`).
+    pub fn bot(login: &str, id: u64, contributions: u64) -> Self {
+        Self {
+            login: login.to_string(),
+            id,
+            account_type: "Bot".to_string(),
+            contributions,
+        }
+    }
+
+    /// The lie: a `…[bot]` login that GitHub nevertheless types `"User"`.
+    pub fn bot_typed_as_user(login: &str, id: u64, contributions: u64) -> Self {
+        Self::human(login, id, contributions)
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "login": self.login,
+            "id": self.id,
+            "type": self.account_type,
+            "contributions": self.contributions,
+            "html_url": format!("https://github.com/{}", self.login),
+        })
+    }
+}
+
+/// What the fake serves on `GET /repos/{o}/{r}/contributors` — the ADR-063
+/// "GitHub contributor lies" gold-fixture catalogue (DDD-15).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FakeContributorsPosture {
+    /// **200** + a JSON array of the rows, verbatim and in the given order.
+    Listed(Vec<FakeContributor>),
+    /// **204 No Content** — GitHub's answer for an empty repository.
+    EmptyRepo,
+    /// **403** "contributor list is too large" — a named, NON-fatal notice
+    /// (DDD-14 / UC-2), distinct from the rate-limit 403.
+    TooLarge,
+    /// **403** rate budget exhausted mid-harvest (`x-ratelimit-remaining: 0`).
+    RateLimited,
+    /// **401** stale / invalid PAT on the contributors read.
+    TokenRejected,
+    /// **200** with an arbitrary body (e.g. a row missing `login`/`id`) — the
+    /// response-shape drift the adapter must refuse as `ApiShape` with NO
+    /// partial link write.
+    Malformed(serde_json::Value),
+}
+
+impl Default for FakeContributorsPosture {
+    fn default() -> Self {
+        Self::Listed(Vec::new())
+    }
+}
+
 /// Deterministic read-only test double for the public GitHub API.
 ///
 /// Construct with a posture (`for_public_repo`, `for_public_user`,
@@ -318,6 +404,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows: false,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -411,6 +498,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows: false,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -452,6 +540,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows: false,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -498,6 +587,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows: false,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -563,6 +653,7 @@ impl FakeGithub {
                 has_docs_dir,
                 has_ci_workflows: false,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -633,6 +724,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows,
                 has_tests_dir,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -697,6 +789,7 @@ impl FakeGithub {
                 has_docs_dir: false,
                 has_ci_workflows: true,
                 has_tests_dir: false,
+                contributors: FakeContributorsPosture::default(),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -724,7 +817,40 @@ impl FakeGithub {
                 has_docs_dir: prev.has_docs_dir,
                 has_ci_workflows: prev.has_ci_workflows,
                 has_tests_dir: prev.has_tests_dir,
+                contributors: prev.contributors.clone(),
                 auth: FakeAuthMode::Authenticated { remaining, limit },
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(prev.offline.load(Ordering::SeqCst)),
+            }),
+        }
+    }
+
+    /// Serve `rows` VERBATIM on `GET /repos/{o}/{r}/contributors` (200, JSON
+    /// array, given order) — contributor-philosophy-inference slice-01. Chains
+    /// onto any repo posture; every other endpoint is unchanged.
+    pub fn with_contributors(self, rows: Vec<FakeContributor>) -> Self {
+        self.with_contributors_posture(FakeContributorsPosture::Listed(rows))
+    }
+
+    /// Serve the supplied contributors posture (the ADR-063 lie catalogue:
+    /// 204 empty, 403 too-large, 403 rate-limit, 401, malformed body).
+    pub fn with_contributors_posture(self, posture: FakeContributorsPosture) -> Self {
+        let prev = self.state;
+        Self {
+            state: Arc::new(State {
+                target: prev.target.clone(),
+                resolution: prev.resolution.clone(),
+                language: prev.language.clone(),
+                has_cargo_lock: prev.has_cargo_lock,
+                tags: prev.tags.clone(),
+                has_changelog: prev.has_changelog,
+                readme_bytes: prev.readme_bytes,
+                has_docs_dir: prev.has_docs_dir,
+                has_ci_workflows: prev.has_ci_workflows,
+                has_tests_dir: prev.has_tests_dir,
+                contributors: posture,
+                auth: prev.auth.clone(),
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(prev.offline.load(Ordering::SeqCst)),
@@ -974,6 +1100,12 @@ async fn github_http_route(
                 // []` → `[]` (no tags), so `SemverAndChangelog` can never fire on
                 // them (no regression).
                 Ok(tags_response(&fake))
+            } else if path.ends_with("/contributors") {
+                // contributor-philosophy-inference (DDD-2): `GET
+                // /repos/{o}/{r}/contributors` is a SEPARATE endpoint from the
+                // repo resolve/harvest body. Default posture = 200 `[]`, so no
+                // existing posture changes behavior.
+                Ok(contributors_response(&fake))
             } else if path.ends_with("/readme") {
                 // RGSD-4: `GET /repos/{o}/{r}/readme` is a SEPARATE endpoint from
                 // the repo resolve/harvest body — route it explicitly so a
@@ -1222,6 +1354,47 @@ fn extract_bearer_token(req: &HttpRequest) -> Option<String> {
         }
     }
     None
+}
+
+/// Serve `GET /repos/{owner}/{repo}/contributors` from the posture's
+/// [`FakeContributorsPosture`] (contributor-philosophy-inference DDD-2/DDD-15).
+fn contributors_response(fake: &FakeGithub) -> HttpResponse {
+    match &fake.state.contributors {
+        FakeContributorsPosture::Listed(rows) => json_response(
+            200,
+            serde_json::Value::Array(rows.iter().map(FakeContributor::to_json).collect()),
+        ),
+        FakeContributorsPosture::EmptyRepo => hyper::Response::builder()
+            .status(204)
+            .body(http_body_util::Full::new(bytes::Bytes::new()))
+            .expect("build 204 response"),
+        FakeContributorsPosture::TooLarge => json_response(
+            403,
+            serde_json::json!({
+                "message": "The history or contributor list is too large to list contributors for this repository via the API.",
+                "documentation_url": "https://docs.github.com/rest/repos/repos#list-repository-contributors",
+            }),
+        ),
+        FakeContributorsPosture::RateLimited => {
+            let body = serde_json::json!({
+                "message": "API rate limit exceeded",
+                "authenticated": false,
+                "documentation_url": "https://docs.github.com/rest/overview/rate-limits",
+            });
+            hyper::Response::builder()
+                .status(403)
+                .header("content-type", "application/json")
+                .header("x-ratelimit-remaining", "0")
+                .body(http_body_util::Full::new(bytes::Bytes::from(
+                    body.to_string(),
+                )))
+                .expect("build rate-limit response")
+        }
+        FakeContributorsPosture::TokenRejected => {
+            json_response(401, serde_json::json!({ "message": "Bad credentials" }))
+        }
+        FakeContributorsPosture::Malformed(body) => json_response(200, body.clone()),
+    }
 }
 
 fn json_response(status: u16, body: serde_json::Value) -> HttpResponse {
@@ -2055,5 +2228,75 @@ mod tests {
             ci_status, 200,
             "CI workflows dir → 200 (TestRatioOrCiMatrix)"
         );
+    }
+
+    /// contributor-philosophy-inference: the DEFAULT contributors posture is
+    /// 200 `[]` for every existing posture (no regression for the SCR suite).
+    #[tokio::test]
+    async fn unconfigured_posture_serves_empty_contributors_array() {
+        let fake = FakeGithub::for_public_repo("rust-lang/cargo");
+        let handle = fake.serve_http().await;
+        let (status, body) = get_json(&format!(
+            "{}/repos/rust-lang/cargo/contributors",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body, serde_json::json!([]));
+    }
+
+    /// contributor-philosophy-inference: configured rows are served VERBATIM
+    /// (order, bots and all) — the fake never filters or sorts.
+    #[tokio::test]
+    async fn contributors_rows_are_served_verbatim_in_given_order() {
+        let fake = FakeGithub::for_public_repo("BurntSushi/ripgrep").with_contributors(vec![
+            FakeContributor::bot("dependabot[bot]", 49699333, 900),
+            FakeContributor::human("BurntSushi", 456674, 2000),
+        ]);
+        let handle = fake.serve_http().await;
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contributors",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body[0]["login"], "dependabot[bot]");
+        assert_eq!(body[0]["type"], "Bot");
+        assert_eq!(body[1]["login"], "BurntSushi");
+        assert_eq!(body[1]["id"], 456674);
+        assert_eq!(
+            fake.seen_paths(),
+            vec!["/repos/BurntSushi/ripgrep/contributors".to_string()]
+        );
+    }
+
+    /// contributor-philosophy-inference: the too-large and rate-limit 403s are
+    /// distinguishable (message + `x-ratelimit-remaining`).
+    #[tokio::test]
+    async fn contributors_too_large_and_rate_limited_are_distinct_403s() {
+        let too_large = FakeGithub::for_public_repo("torvalds/linux")
+            .with_contributors_posture(FakeContributorsPosture::TooLarge);
+        let handle = too_large.serve_http().await;
+        let (status, body) = get_json(&format!(
+            "{}/repos/torvalds/linux/contributors",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(status, 403);
+        assert!(body["message"].as_str().unwrap_or("").contains("too large"));
+
+        let limited = FakeGithub::for_public_repo("BurntSushi/ripgrep")
+            .with_contributors_posture(FakeContributorsPosture::RateLimited);
+        let handle = limited.serve_http().await;
+        let (status, body) = get_json(&format!(
+            "{}/repos/BurntSushi/ripgrep/contributors",
+            handle.base_url()
+        ))
+        .await;
+        assert_eq!(status, 403);
+        assert!(body["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("rate limit"));
     }
 }

@@ -1356,5 +1356,37 @@ name = "cross_instance_pull"
 path = "../../tests/acceptance/cross_instance_pull.rs"
 harness = true
 
+# contributor-philosophy-inference (DISTILL 2026-09-27): subprocess acceptance
+# for recording contributors on scrape (slice-01), `infer people` (slice-02),
+# signing an inferred adherence + the feature WALKING SKELETON (slice-03),
+# append-only evidence growth (slice-04) and the person view (slice-05). Drives
+# the real binary via `FakeGithub` (now serving `/contributors`) + `PeerPds` +
+# `FakePds`/`FakeIdentity`. The WS in `infer_people_sign` is NOT ignored (RED at
+# handoff); every other scenario is `#[ignore]`d for one-at-a-time unskip.
+[[test]]
+name = "contributor_links"
+path = "../../tests/acceptance/contributor_links.rs"
+harness = true
+
+[[test]]
+name = "infer_people"
+path = "../../tests/acceptance/infer_people.rs"
+harness = true
+
+[[test]]
+name = "infer_people_sign"
+path = "../../tests/acceptance/infer_people_sign.rs"
+harness = true
+
+[[test]]
+name = "infer_people_evidence_grows"
+path = "../../tests/acceptance/infer_people_evidence_grows.rs"
+harness = true
+
+[[test]]
+name = "scrape_person"
+path = "../../tests/acceptance/scrape_person.rs"
+harness = true
+
 [lints]
 workspace = true
