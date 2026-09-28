@@ -8,11 +8,18 @@ use ports::{AuthorRelationship, ContributionLink, RankedContributor, RawContribu
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The DDD-3 bot rule straight from its text — independent of `is_bot`, so
+/// the selection oracles below are not circular.
+fn matches_bot_rule(row: &RawContributor) -> bool {
+    row.account_type.eq_ignore_ascii_case("bot")
+        || row.login.to_ascii_lowercase().ends_with("[bot]")
+}
+
 /// Oracle: user ids with NO bot-rule row (the distinct humans).
 fn distinct_human_ids(rows: &[RawContributor]) -> BTreeSet<u64> {
     let bot_ids: BTreeSet<u64> = rows
         .iter()
-        .filter(|r| is_bot(r))
+        .filter(|r| matches_bot_rule(r))
         .map(|r| r.user_id)
         .collect();
     rows.iter()
@@ -949,5 +956,249 @@ proptest! {
                 prop_assert_eq!(flagged.person_subject.as_str(), mine.subject.as_str());
             }
         }
+    }
+}
+
+// --- mutation gate (DELIVER phase 5): behaviours the earlier properties
+//     only observed through their own oracles, or never exercised ---
+
+proptest! {
+    /// DDD-3 de-dup: a recorded person carries their account's BEST row —
+    /// the most contributions any of its rows reports, then the smallest
+    /// login — never a weaker duplicate.
+    #[test]
+    fn each_recorded_person_carries_their_accounts_best_row(
+        rows in arb_raw_contributors(),
+        top_n in 0usize..=40,
+    ) {
+        for person in select_contributors(&rows, top_n).people {
+            let own: Vec<&RawContributor> =
+                rows.iter().filter(|r| r.user_id == person.github_user_id).collect();
+            let most = own.iter().map(|r| r.contributions).max().expect("recorded from a row");
+            prop_assert_eq!(person.contributions, most);
+            let best_login = own
+                .iter()
+                .filter(|r| r.contributions == most)
+                .map(|r| r.login.to_ascii_lowercase())
+                .min();
+            prop_assert_eq!(Some(person.login.to_ascii_lowercase()), best_login);
+        }
+    }
+
+    /// OD-CPI-7 refusals name what was refused: the requested count and
+    /// the one-page limit, or the person target.
+    #[test]
+    fn a_contributor_count_refusal_names_what_it_refused(
+        requested in (MAX_CONTRIBUTOR_COUNT + 1)..1000,
+        user in "[A-Za-z][A-Za-z0-9-]{0,15}",
+    ) {
+        let above = contributor_count_for("o/r", Some(requested)).expect_err("above one page").to_string();
+        prop_assert!(above.contains(&format!("--contributors {requested}")), "{}", above);
+        prop_assert!(above.contains(&format!("at most {MAX_CONTRIBUTOR_COUNT}")), "{}", above);
+        let person = contributor_count_for(&user, Some(1)).expect_err("person target").to_string();
+        prop_assert!(person.contains(&format!("`{user}`")), "{}", person);
+    }
+
+    /// DDD-9 hundredths: `new` clamps to [0, 100]; the decimal is the value
+    /// over 100 and `floor_of` recovers it exactly (binary noise such as
+    /// 0.29 × 100 = 28.999… absorbed) and floors anything in between; the
+    /// display is `d.dd` denoting the same decimal.
+    #[test]
+    fn a_confidence_round_trips_through_its_decimal_and_display(value in 0u32..=250) {
+        let confidence = Hundredths::new(value);
+        let clamped = value.min(100);
+        prop_assert_eq!(confidence.value(), clamped);
+        let decimal = confidence.as_decimal();
+        prop_assert!((0.0..=1.0).contains(&decimal));
+        prop_assert_eq!((decimal * 100.0).round() as u32, clamped);
+        prop_assert_eq!(Hundredths::floor_of(decimal), confidence);
+        if clamped < 100 {
+            prop_assert_eq!(Hundredths::floor_of((f64::from(clamped) + 0.5) / 100.0), confidence);
+        }
+        let shown = confidence.to_string();
+        prop_assert!(shown.len() == 4 && shown.as_bytes()[1] == b'.', "{}", shown);
+        prop_assert_eq!(shown.parse::<f64>().ok(), Some(decimal));
+    }
+
+    /// The login is the person subject without its `github:` scheme, and
+    /// each supporting repo's commits URL (ADR-064 §3) is exactly
+    /// `https://github.com/<owner/repo>/commits?author=<login>`.
+    #[test]
+    fn each_commits_url_names_the_repo_and_the_login(candidate in arb_person_candidate()) {
+        let login = &candidate.person_subject()["github:".len()..];
+        prop_assert_eq!(candidate.login(), login);
+        let commits: Vec<String> = encode_provenance(&candidate)
+            .into_iter()
+            .filter(|entry| entry.starts_with("https://"))
+            .collect();
+        let expected: Vec<String> = candidate
+            .support()
+            .iter()
+            .map(|repo| format!(
+                "https://github.com/{}/commits?author={login}",
+                &repo.repo_subject["github:".len()..]
+            ))
+            .collect();
+        prop_assert_eq!(commits, expected);
+    }
+
+    /// ADR-064 §5: only `at://<did>/org.openlore.claim/<cid>` with a
+    /// non-empty DID and a single non-empty CID segment is cited.
+    #[test]
+    fn only_a_well_formed_claim_at_uri_is_cited(
+        did in "did:plc:[a-z0-9]{4,12}",
+        cid in "bafy[a-z2-7]{8,16}",
+    ) {
+        let well_formed = vec![format!("at://{did}/org.openlore.claim/{cid}")];
+        prop_assert_eq!(parse_provenance(&well_formed), vec![CitedClaim::new(&did, &cid)]);
+        let malformed = vec![
+            format!("at:///org.openlore.claim/{cid}"),
+            format!("at://{did}/org.openlore.claim/"),
+            format!("at://{did}/org.openlore.claim/{cid}/extra"),
+        ];
+        prop_assert_eq!(parse_provenance(&malformed), Vec::<CitedClaim>::new());
+    }
+
+    /// D-8: after the `github:` scheme only a non-empty login of ASCII
+    /// letters, digits and hyphens, not starting with a hyphen, is accepted.
+    #[test]
+    fn only_a_well_formed_login_follows_the_github_scheme(
+        login in prop_oneof!["-?[A-Za-z0-9-]{0,6}", "[A-Za-z0-9_./ -]{0,8}"],
+    ) {
+        let well_formed = !login.is_empty()
+            && !login.starts_with('-')
+            && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        prop_assert_eq!(PersonSubject::parse(&format!("github:{login}")).is_ok(), well_formed);
+    }
+}
+
+/// OD-CPI-7 boundary: exactly one page is accepted; one more is refused.
+#[test]
+fn exactly_one_page_of_contributors_is_accepted_and_one_more_is_refused() {
+    assert_eq!(
+        contributor_count_for("o/r", Some(MAX_CONTRIBUTOR_COUNT)),
+        Ok(MAX_CONTRIBUTOR_COUNT)
+    );
+    assert_eq!(
+        contributor_count_for("o/r", Some(MAX_CONTRIBUTOR_COUNT + 1)),
+        Err(ContributorCountError::AboveOnePage {
+            requested: MAX_CONTRIBUTOR_COUNT + 1
+        })
+    );
+}
+
+/// J-002c: the arithmetic is the DDD-9 formula, reproducible by hand.
+#[test]
+fn the_confidence_arithmetic_reads_as_the_ddd9_formula() {
+    assert_eq!(
+        confidence_arithmetic(2, Hundredths::new(60)),
+        "min(0.29, 0.15 + 0.05 × (2 − 1), 0.60) = 0.20"
+    );
+}
+
+/// `link` as last observed on September `day + 1`.
+fn observed_on(link: ContributionLink, day: u8) -> ContributionLink {
+    ContributionLink {
+        last_observed_at: format!("2026-09-{:02}T09:00:00Z", day + 1)
+            .parse()
+            .expect("RFC3339"),
+        ..link
+    }
+}
+
+/// DDD-10 link collapse from its text: per (repo, person) key the most
+/// recently observed link, then the best rank, then the smallest spelling.
+fn preferred_link<'a>(
+    links: &'a [ContributionLink],
+    repo: &str,
+    person: &str,
+) -> Option<&'a ContributionLink> {
+    links
+        .iter()
+        .filter(|l| subject_key(&l.repo_subject) == subject_key(repo))
+        .filter(|l| subject_key(&l.person_subject) == subject_key(person))
+        .min_by_key(|l| {
+            (
+                std::cmp::Reverse(l.last_observed_at),
+                l.rank,
+                l.repo_subject.clone(),
+                l.person_subject.clone(),
+            )
+        })
+}
+
+/// Links (re-observed across a few days) and repo claims for one run.
+fn arb_observed_inference_inputs() -> impl Strategy<Value = (Vec<ContributionLink>, Vec<RepoClaim>)>
+{
+    arb_inference_inputs()
+        .prop_flat_map(|(links, claims)| {
+            let days = proptest::collection::vec(0u8..3, links.len());
+            (Just(links), Just(claims), days)
+        })
+        .prop_map(|(links, claims, days)| {
+            let links = links
+                .into_iter()
+                .zip(days)
+                .map(|(l, d)| observed_on(l, d))
+                .collect();
+            (links, claims)
+        })
+}
+
+proptest! {
+    /// DDD-10: each supporting repo shows the rank and spelling of the
+    /// preferred link for (repo, person), and the candidate names the
+    /// person by the smallest spelling among those preferred links.
+    #[test]
+    fn a_candidate_shows_its_preferred_links_rank_and_smallest_spelling(
+        (links, claims) in arb_observed_inference_inputs(),
+    ) {
+        for candidate in infer_person_candidates(&links, &claims) {
+            let mut spellings = Vec::new();
+            for repo in candidate.support() {
+                let link = preferred_link(&links, &repo.repo_subject, candidate.person_subject())
+                    .expect("a supporting repo is linked to the person");
+                prop_assert_eq!(repo.rank, link.rank);
+                prop_assert_eq!(&repo.repo_subject, &link.repo_subject);
+                spellings.push(link.person_subject.as_str());
+            }
+            prop_assert_eq!(Some(candidate.person_subject()), spellings.into_iter().min());
+        }
+    }
+
+    /// DDD-13 / UC-5: a person-scoped report flags exactly the weakened
+    /// claims the unscoped report flags for that person, in the same order.
+    #[test]
+    fn a_person_scoped_report_flags_only_that_persons_weakened_claims(
+        (links, claims) in arb_inference_inputs(),
+        cites in proptest::collection::vec(
+            (
+                proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
+                proptest::collection::vec(0usize..14, 0..6),
+            ),
+            0..5,
+        ),
+        person in proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
+    ) {
+        let own: Vec<OwnClaim> = cites
+            .iter()
+            .enumerate()
+            .map(|(k, (who, picks))| OwnClaim {
+                subject: (*who).to_string(),
+                ..my_claim_citing(&claims, picks, k)
+            })
+            .collect();
+        let everyone = infer_people_report(&links, &claims, &own, &InferenceFilter::default());
+        let scope = InferenceFilter {
+            person: Some(PersonSubject::parse(person).expect("pool persons are valid")),
+            min_repos: 0,
+        };
+        let scoped = infer_people_report(&links, &claims, &own, &scope);
+        let expected: Vec<WeakenedClaim> = everyone
+            .weakened
+            .into_iter()
+            .filter(|w| subject_key(&w.person_subject) == subject_key(person))
+            .collect();
+        prop_assert_eq!(scoped.weakened, expected);
     }
 }
