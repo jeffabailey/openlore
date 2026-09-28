@@ -34,9 +34,10 @@
 //! disclosure around this pure decision.
 //!
 //! Implementation shape (DELIVER 01-01): the decision is four small, named pure
-//! predicates over the RAW `references` graph — [`is_own_retraction_marker`] (the
-//! literal D-RF-D3 marker shape), [`is_self_retracted`] (∃ such a same-author
-//! marker for this original), [`self_retraction_events`] (the distinct withdrawn
+//! predicates over the RAW `references` graph — the literal D-RF-D3 marker shape
+//! and "∃ such a same-author marker for this original" now live in `claim-domain`
+//! ([`claim_domain::is_own_retraction_marker`] / [`claim_domain::is_self_retracted`],
+//! shared with person inference — Q-CPI-D2), [`self_retraction_events`] (the distinct withdrawn
 //! originals keyed by `(author_did, cid)` — the `hidden_count` unit, D-RF-D5), and
 //! [`is_withdrawn`] (drop the original AND its same-author marker as ONE event,
 //! D-RF-D4). The public [`partition_retracted`] wires them: identity when
@@ -44,7 +45,7 @@
 
 use std::collections::HashSet;
 
-use claim_domain::{Cid, Did, ReferenceType};
+use claim_domain::{is_self_retracted, Cid, ClaimLineage, Did, ReferenceType};
 use ports::NetworkResultRowRaw;
 
 /// The result of one [`partition_retracted`] pass: the surviving rows (original
@@ -105,36 +106,27 @@ pub fn partition_retracted(
     }
 }
 
-/// True when `marker` is the literal D-RF-D3 self-retraction marker for
-/// `(target_author, target_cid)`: a SAME-author row carrying a `{ Retracts,
-/// target_cid }` reference. A different-author `Retracts` or any `Counters` is NOT
-/// a self-retraction marker (no heckler's veto — I-RF-4).
-fn is_own_retraction_marker(
-    marker: &NetworkResultRowRaw,
-    target_author: &Did,
-    target_cid: &Cid,
-) -> bool {
-    &marker.author_did == target_author
-        && marker.references.iter().any(|reference| {
-            reference.ref_type == ReferenceType::Retracts && &reference.cid == target_cid
-        })
-}
-
-/// True when `original` is author-self-retracted (D-RF-D3): some row in the set is
-/// a same-author `Retracts` marker naming `original`'s OWN cid.
-fn is_self_retracted(original: &NetworkResultRowRaw, rows: &[NetworkResultRowRaw]) -> bool {
-    rows.iter()
-        .any(|marker| is_own_retraction_marker(marker, &original.author_did, &original.cid))
+/// The borrowed reference-graph view of one raw row the shared `claim-domain`
+/// withdrawal rules read (Q-CPI-D2: ONE self-retraction rule, hoisted).
+fn lineage(row: &NetworkResultRowRaw) -> ClaimLineage<'_> {
+    ClaimLineage {
+        author_did: &row.author_did.0,
+        cid: &row.cid.0,
+        references: &row.references,
+    }
 }
 
 /// The set of author-self-retraction EVENTS, keyed by the withdrawn original's
 /// `(author_did, cid)` — one entry per distinct withdrawn original C (D-RF-D5).
 /// `|events|` is the disclosed `hidden_count`; the event's original + marker rows
-/// both drop but count once.
+/// both drop but count once. "Self-retracted" is the shared D-RF-D3 rule
+/// ([`claim_domain::is_self_retracted`]).
 fn self_retraction_events(rows: &[NetworkResultRowRaw]) -> HashSet<(Did, Cid)> {
+    let lineages: Vec<ClaimLineage<'_>> = rows.iter().map(lineage).collect();
     rows.iter()
-        .filter(|original| is_self_retracted(original, rows))
-        .map(|original| (original.author_did.clone(), original.cid.clone()))
+        .zip(&lineages)
+        .filter(|(_, original)| is_self_retracted(original, &lineages))
+        .map(|(original, _)| (original.author_did.clone(), original.cid.clone()))
         .collect()
 }
 

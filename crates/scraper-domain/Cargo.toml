@@ -37,6 +37,11 @@ serde_yaml_ng = "0.10"
 # a PURE crate (no I/O — serde/serde_json only) so it is a safe pure-core edge;
 # no dependency cycle — `lexicon` does not depend on scraper-domain.
 lexicon = { path = "../lexicon" }
+# contributor-philosophy-inference DDD-7 / Q-CPI-D2: the ADR-060 self-retraction
+# rule (and same-author supersession) is SHARED from the pure `claim-domain`
+# (`is_self_retracted` / `is_superseded_by_author`) — one rule, not two copies.
+# `claim-domain` is pure (no I/O) and already reached transitively via `ports`.
+claim-domain = { path = "../claim-domain" }
 
 [dev-dependencies]
 proptest = { workspace = true }

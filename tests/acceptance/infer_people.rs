@@ -114,7 +114,6 @@ fn unsigned_scraper_candidates_never_feed_inference() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-3 @rc-02 @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (US-CPI-002 soft-retracted repo claim stops supporting)"]
 fn a_soft_retracted_repo_claim_stops_supporting_inferences() {
     // GIVEN the canonical two-repo store, then Rachel retracts her regex claim.
     let env = TestEnv::initialized();
@@ -167,7 +166,6 @@ fn no_candidates_is_a_normal_outcome() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-3 @d-2 @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (D-2 unsubscribed peer's claims never support)"]
 fn an_unsubscribed_peers_claims_no_longer_support_inferences() {
     // GIVEN the canonical store, then Maria soft-removes Rachel.
     let env = TestEnv::initialized();
@@ -197,7 +195,6 @@ fn an_unsubscribed_peers_claims_no_longer_support_inferences() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-3 @ddd-7 @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (DDD-7 counter-claims are never support)"]
 fn a_counter_claim_is_never_counted_as_support() {
     // GIVEN the canonical store, then Rachel counters Maria's ripgrep claim.
     let env = TestEnv::initialized();
@@ -239,7 +236,6 @@ fn a_counter_claim_is_never_counted_as_support() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-3 @ddd-7 @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (DDD-7 superseded repo claims never support)"]
 fn a_superseded_repo_claim_is_replaced_by_its_successor_as_support() {
     // GIVEN the canonical store, then Rachel supersedes her regex claim.
     let env = TestEnv::initialized();
@@ -311,7 +307,6 @@ fn an_already_signed_person_philosophy_is_not_proposed_again() {
 ///
 /// @us-cpi-002 @driving_port @real-io @uc-6 @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (UC-6 case-insensitive github: subject join)"]
 fn repos_differing_only_in_letter_case_are_the_same_repo() {
     // GIVEN the repo was scraped in lower case, the claim signed in GitHub's casing.
     let env = TestEnv::initialized();

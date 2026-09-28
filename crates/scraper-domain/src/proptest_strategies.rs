@@ -106,6 +106,7 @@ use crate::people::{
     CitedClaim, Hundredths, PersonCandidate, RepoClaim, SupportingClaim, SupportingRepo,
 };
 use crate::EMBODIES_PHILOSOPHY;
+use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{AuthorRelationship, ContributionLink};
 
 /// A confidence in whole hundredths across the full `[0, 100]` range.
@@ -172,6 +173,8 @@ pub const PERSON_POOL: [&str; 4] = [
     "github:dtolnay",
     "github:alice",
 ];
+/// A small author pool so same-author retractions/supersessions actually occur.
+const AUTHOR_POOL: [&str; 3] = ["did:plc:maria", "did:plc:rachel", "did:plc:sven"];
 const PHILOSOPHY_POOL: [&str; 2] = [
     "org.openlore.philosophy.memory-safety",
     "org.openlore.philosophy.test-driven",
@@ -212,7 +215,7 @@ pub fn arb_repo_claim() -> impl Strategy<Value = RepoClaim> {
         proptest::sample::select(&REPO_POOL[..]),
         prop_oneof![Just(EMBODIES_PHILOSOPHY), Just("usesLanguage")],
         proptest::sample::select(&PHILOSOPHY_POOL[..]),
-        "did:plc:[a-z]{2,4}",
+        proptest::sample::select(&AUTHOR_POOL[..]),
         arb_relationship(),
         "bafy[a-z2-7]{6,12}",
         arb_hundredths(),
@@ -222,18 +225,63 @@ pub fn arb_repo_claim() -> impl Strategy<Value = RepoClaim> {
                 repo_subject: repo.to_string(),
                 predicate: predicate.to_string(),
                 philosophy: philosophy.to_string(),
-                author_did,
+                author_did: author_did.to_string(),
                 relationship,
                 cid,
                 confidence,
+                references: Vec::new(),
             },
         )
 }
 
-/// Links + repo claims for one inference run.
+fn arb_reference_type() -> impl Strategy<Value = ReferenceType> {
+    prop_oneof![
+        Just(ReferenceType::Retracts),
+        Just(ReferenceType::Counters),
+        Just(ReferenceType::Supersedes),
+        Just(ReferenceType::Corrects),
+    ]
+}
+
+/// Links + repo claims for one inference run. Some claims reference another
+/// claim in the run (retracts / counters / supersedes / corrects), by the same
+/// or a different author — the DDD-7 reference graph.
 pub fn arb_inference_inputs() -> impl Strategy<Value = (Vec<ContributionLink>, Vec<RepoClaim>)> {
     (
         proptest::collection::vec(arb_contribution_link(), 0..8),
         proptest::collection::vec(arb_repo_claim(), 0..10),
     )
+        .prop_flat_map(|(links, claims)| {
+            let references = proptest::collection::vec(
+                proptest::option::of((arb_reference_type(), 0..claims.len().max(1))),
+                claims.len(),
+            );
+            (Just(links), Just(claims), references)
+        })
+        .prop_map(|(links, claims, references)| {
+            let cids: Vec<String> = claims.iter().map(|c| c.cid.clone()).collect();
+            let claims = claims
+                .into_iter()
+                .zip(references)
+                .map(|(claim, reference)| with_reference(claim, reference, &cids))
+                .collect();
+            (links, claims)
+        })
+}
+
+/// Attach a reference to another claim of the run (never to itself).
+fn with_reference(
+    mut claim: RepoClaim,
+    reference: Option<(ReferenceType, usize)>,
+    cids: &[String],
+) -> RepoClaim {
+    if let Some((ref_type, target)) = reference {
+        if cids[target] != claim.cid {
+            claim.references.push(ClaimReference {
+                ref_type,
+                cid: Cid(cids[target].clone()),
+            });
+        }
+    }
+    claim
 }

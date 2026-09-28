@@ -28,6 +28,7 @@ mod confidence;
 mod decode;
 mod normalize;
 mod references;
+mod retraction;
 mod sign;
 mod validate_counter_claim;
 mod verify;
@@ -40,6 +41,11 @@ pub use confidence::confidence_bucket;
 pub use decode::{decode_ed25519_multibase, DecodeError, KeyId, VerificationKey};
 pub use normalize::normalize_reason;
 pub use references::reference_rules_validate;
+// ADR-060 D-RF-D3 self-retraction rule, hoisted here so appview search and
+// person inference share ONE rule (contributor-philosophy-inference DDD-7).
+pub use retraction::{
+    is_own_retraction_marker, is_self_retracted, is_superseded_by_author, ClaimLineage,
+};
 pub use sign::sign;
 pub use validate_counter_claim::validate_counter_claim;
 pub use verify::verify;

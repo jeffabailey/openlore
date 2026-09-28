@@ -4,18 +4,20 @@
 //! US-CPI-002/003; ADR-063; DDD-6/12/13).
 //!
 //! Effect shell only: read links (`ContributionLinkPort::list_links`) and
-//! each linked repo's claims (`StoragePort::query_federated_by_subject`,
+//! each linked repo's claims in every stored letter case
+//! (`StoreReadPort` subject listing + `StoragePort::query_federated_by_subject`,
 //! DDD-6 — no new storage method), hand the values to the PURE
 //! `scraper_domain::infer_person_candidates`, render, and — only on `--sign`
 //! — route the selection through the SHARED sign batch (DDD-12). Without
 //! `--sign` nothing is written (D-1 / KPI-CPI-3).
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
-use ports::{ContributionLink, LinkFilter};
+use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, PersonCandidate, RepoClaim, ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, repo_subjects_to_read, PersonCandidate, RepoClaim,
+    ADHERES_TO_PHILOSOPHY,
 };
 
 use crate::render::{render_inference_report, render_person_derived_from};
@@ -62,19 +64,16 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
     })
 }
 
-/// Every signed claim (own + peer) about each distinct linked repo (DDD-6).
+/// Every signed claim (own + peer) about each linked repo, in ANY letter case
+/// (DDD-6 / UC-6). The federated read matches its subject exactly, so the
+/// shell first learns which spellings the store holds (existing read-only
+/// `StoreReadPort` listings — no new storage method), lets the pure core pick
+/// every spelling of a linked repo, then reads each one. Distinct spellings
+/// are disjoint exact-match reads, so no row is read twice.
 fn read_linked_repo_claims(wiring: &Wiring, links: &[ContributionLink]) -> Result<Vec<RepoClaim>> {
-    let repo_subjects: BTreeMap<String, &str> = links
+    let stored = stored_claim_subjects(wiring)?;
+    repo_subjects_to_read(links, stored.iter().map(String::as_str))
         .iter()
-        .map(|link| {
-            (
-                link.repo_subject.to_ascii_lowercase(),
-                link.repo_subject.as_str(),
-            )
-        })
-        .collect();
-    repo_subjects
-        .values()
         .try_fold(Vec::new(), |mut claims, subject| {
             let rows = wiring
                 .storage
@@ -83,6 +82,49 @@ fn read_linked_repo_claims(wiring: &Wiring, links: &[ContributionLink]) -> Resul
             claims.extend(rows.iter().map(RepoClaim::from));
             Ok(claims)
         })
+}
+
+/// Page size for enumerating stored claim subjects.
+const SUBJECT_PAGE: u64 = 500;
+
+/// The distinct subjects of every stored claim, own and peer.
+fn stored_claim_subjects(wiring: &Wiring) -> Result<BTreeSet<String>> {
+    let own = read_all_pages(|request| {
+        let page = wiring.store_read.list_claims(request)?;
+        Ok((
+            page.rows.into_iter().map(|row| row.subject).collect(),
+            page.total,
+        ))
+    })?;
+    let peer = read_all_pages(|request| {
+        let page = wiring.store_read.list_peer_claims(request)?;
+        Ok((
+            page.rows.into_iter().map(|row| row.subject).collect(),
+            page.total,
+        ))
+    })?;
+    Ok(own.into_iter().chain(peer).collect())
+}
+
+/// Walk an offset/limit listing to its end, collecting each page's subjects.
+fn read_all_pages(
+    mut read_page: impl FnMut(PageRequest) -> Result<(Vec<String>, u64), StoreReadError>,
+) -> Result<Vec<String>> {
+    let mut subjects = Vec::new();
+    let mut offset = 0;
+    loop {
+        let (rows, total) = read_page(PageRequest {
+            offset,
+            limit: SUBJECT_PAGE,
+        })
+        .map_err(|e| anyhow!("listing stored claim subjects: {e}"))?;
+        let fetched = rows.len() as u64;
+        subjects.extend(rows);
+        offset += fetched;
+        if fetched == 0 || offset >= total {
+            return Ok(subjects);
+        }
+    }
 }
 
 /// Pre-fill the shared compose editor from one person candidate: ADR-064

@@ -12,6 +12,9 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
+use claim_domain::{
+    is_self_retracted, is_superseded_by_author, ClaimLineage, ClaimReference, ReferenceType,
+};
 use ports::{
     AuthorRelationship, ContributionLink, FederatedRow, RankedContributor, RawContributor,
 };
@@ -326,6 +329,21 @@ pub struct RepoClaim {
     pub relationship: AuthorRelationship,
     pub cid: String,
     pub confidence: Hundredths,
+    /// The claim's typed references (retracts / counters / supersedes /
+    /// corrects) — the reference graph DDD-7 eligibility reads.
+    pub references: Vec<ClaimReference>,
+}
+
+impl RepoClaim {
+    /// The borrowed reference-graph view the shared `claim-domain`
+    /// withdrawal rules read.
+    fn lineage(&self) -> ClaimLineage<'_> {
+        ClaimLineage {
+            author_did: &self.author_did,
+            cid: &self.cid,
+            references: &self.references,
+        }
+    }
 }
 
 impl From<&FederatedRow> for RepoClaim {
@@ -339,6 +357,7 @@ impl From<&FederatedRow> for RepoClaim {
             relationship: row.author_relationship,
             cid: row.signed_claim.signature.signed_cid.0.clone(),
             confidence: Hundredths::floor_of(unsigned.confidence.value()),
+            references: unsigned.references.clone(),
         }
     }
 }
@@ -548,7 +567,7 @@ pub fn infer_person_candidates(
     repo_claims: &[RepoClaim],
 ) -> Vec<PersonCandidate> {
     let links = collapse_links(links);
-    let eligible: Vec<&RepoClaim> = repo_claims.iter().filter(|c| is_eligible(c)).collect();
+    let eligible = supporting_claims(repo_claims);
     group_support(&links, &eligible)
         .into_values()
         .filter_map(|group| {
@@ -602,9 +621,8 @@ fn repos_without_signed_claims(
     links: &[ContributionLink],
     repo_claims: &[RepoClaim],
 ) -> Vec<String> {
-    let supported: BTreeSet<String> = repo_claims
-        .iter()
-        .filter(|claim| is_eligible(claim))
+    let supported: BTreeSet<String> = supporting_claims(repo_claims)
+        .into_iter()
         .map(|claim| subject_key(&claim.repo_subject))
         .collect();
     links
@@ -622,13 +640,73 @@ fn repos_without_signed_claims(
         .collect()
 }
 
-/// DDD-7 (thin): an `embodiesPhilosophy` claim by me or a subscribed peer.
-fn is_eligible(claim: &RepoClaim) -> bool {
+/// UC-6 / DDD-6 read side: every subject spelling the effect shell must read
+/// with the exact-match federated query so the case-insensitive join sees all
+/// claims about each linked repo — the links' own spellings plus every stored
+/// subject that case-folds to a linked repo.
+pub fn repo_subjects_to_read<'a>(
+    links: &[ContributionLink],
+    stored_subjects: impl IntoIterator<Item = &'a str>,
+) -> BTreeSet<String> {
+    let linked: BTreeSet<String> = links
+        .iter()
+        .map(|link| subject_key(&link.repo_subject))
+        .collect();
+    let stored_spellings = stored_subjects
+        .into_iter()
+        .filter(|subject| linked.contains(&subject_key(subject)))
+        .map(str::to_string);
+    links
+        .iter()
+        .map(|link| link.repo_subject.clone())
+        .chain(stored_spellings)
+        .collect()
+}
+
+/// DDD-7: the claims that may support an inference — each judged against the
+/// whole read (retraction markers and successors arrive in the same subject
+/// read, DDD-6).
+fn supporting_claims(repo_claims: &[RepoClaim]) -> Vec<&RepoClaim> {
+    let lineages: Vec<ClaimLineage<'_>> = repo_claims.iter().map(RepoClaim::lineage).collect();
+    repo_claims
+        .iter()
+        .filter(|claim| supports_inference(claim, &lineages))
+        .collect()
+}
+
+/// DDD-7: an `embodiesPhilosophy` claim by me or an ACTIVE peer, that is no
+/// retracts/counters marker, and that its own author has neither retracted
+/// (ADR-060 D-RF-D3, shared rule) nor superseded.
+fn supports_inference(claim: &RepoClaim, lineages: &[ClaimLineage<'_>]) -> bool {
+    let lineage = claim.lineage();
+    is_philosophy_claim(claim)
+        && is_by_active_author(claim)
+        && !is_retraction_or_counter_marker(claim)
+        && !is_self_retracted(&lineage, lineages)
+        && !is_superseded_by_author(&lineage, lineages)
+}
+
+fn is_philosophy_claim(claim: &RepoClaim) -> bool {
     claim.predicate == crate::EMBODIES_PHILOSOPHY
-        && matches!(
-            claim.relationship,
-            AuthorRelationship::You | AuthorRelationship::SubscribedPeer
+}
+
+/// Me, or a peer I am subscribed to NOW (D-2) — never a former peer's cache.
+fn is_by_active_author(claim: &RepoClaim) -> bool {
+    matches!(
+        claim.relationship,
+        AuthorRelationship::You | AuthorRelationship::SubscribedPeer
+    )
+}
+
+/// A marker copies its target's subject/predicate/object but asserts nothing
+/// new — it is never itself support.
+fn is_retraction_or_counter_marker(claim: &RepoClaim) -> bool {
+    claim.references.iter().any(|reference| {
+        matches!(
+            reference.ref_type,
+            ReferenceType::Retracts | ReferenceType::Counters
         )
+    })
 }
 
 /// A `github:` subject's case-folded join key (logins are case-insensitive).
@@ -845,12 +923,33 @@ mod tests {
         arb_hundredths, arb_inference_inputs, arb_person_candidate, arb_supporting_repo,
     };
 
-    fn is_eligible(claim: &RepoClaim) -> bool {
+    /// DDD-7 oracle, straight from the rule's text over the whole claim set:
+    /// an `embodiesPhilosophy` claim by me or an ACTIVE peer that is not a
+    /// retracts/counters marker, and that its OWN author has neither retracted
+    /// nor superseded.
+    fn supports(claim: &RepoClaim, all: &[RepoClaim]) -> bool {
+        let withdrawn_by_author = |ref_type: ReferenceType| {
+            all.iter().any(|other| {
+                other.author_did == claim.author_did
+                    && other
+                        .references
+                        .iter()
+                        .any(|r| r.ref_type == ref_type && r.cid.0 == claim.cid)
+            })
+        };
         claim.predicate == crate::EMBODIES_PHILOSOPHY
             && matches!(
                 claim.relationship,
                 AuthorRelationship::You | AuthorRelationship::SubscribedPeer
             )
+            && !claim.references.iter().any(|r| {
+                matches!(
+                    r.ref_type,
+                    ReferenceType::Retracts | ReferenceType::Counters
+                )
+            })
+            && !withdrawn_by_author(ReferenceType::Retracts)
+            && !withdrawn_by_author(ReferenceType::Supersedes)
     }
 
     proptest! {
@@ -937,8 +1036,11 @@ mod tests {
         }
 
         /// DDD-7 eligibility: every cited claim is an `embodiesPhilosophy`
-        /// claim by me or a subscribed peer on a repo linked to the person;
-        /// every such claim is cited by the matching candidate.
+        /// claim by me or an ACTIVE peer on a repo linked to the person (any
+        /// letter case), is no retracts/counters marker, and is neither
+        /// retracted nor superseded by its own author; every such claim is
+        /// cited by the matching candidate. A third party's counter or
+        /// retract never hides it.
         #[test]
         fn candidates_cite_exactly_the_eligible_linked_claims(
             (links, claims) in arb_inference_inputs(),
@@ -955,7 +1057,7 @@ mod tests {
             let expected: BTreeSet<(String, String, String)> = links
                 .iter()
                 .flat_map(|link| claims.iter()
-                    .filter(|claim| is_eligible(claim) && claim.repo_subject.eq_ignore_ascii_case(&link.repo_subject))
+                    .filter(|claim| supports(claim, &claims) && claim.repo_subject.eq_ignore_ascii_case(&link.repo_subject))
                     .map(move |claim| (
                         link.person_subject.to_ascii_lowercase(),
                         claim.philosophy.clone(),
@@ -981,7 +1083,7 @@ mod tests {
             let expected: BTreeSet<String> = links
                 .iter()
                 .map(|l| subject_key(&l.repo_subject))
-                .filter(|repo| !claims.iter().any(|c| is_eligible(c) && subject_key(&c.repo_subject) == *repo))
+                .filter(|repo| !claims.iter().any(|c| supports(c, &claims) && subject_key(&c.repo_subject) == *repo))
                 .collect();
             let named: Vec<String> = report.repos_without_signed_claims.iter().map(|r| subject_key(r)).collect();
             prop_assert_eq!(named.iter().cloned().collect::<BTreeSet<_>>(), expected);
@@ -1010,7 +1112,7 @@ mod tests {
                 .collect();
             let unsupported: BTreeSet<String> = persons_repos
                 .into_iter()
-                .filter(|repo| !claims.iter().any(|c| is_eligible(c) && subject_key(&c.repo_subject) == *repo))
+                .filter(|repo| !claims.iter().any(|c| supports(c, &claims) && subject_key(&c.repo_subject) == *repo))
                 .collect();
             let named: BTreeSet<String> = scoped.repos_without_signed_claims.iter().map(|r| subject_key(r)).collect();
             prop_assert_eq!(named, unsupported);
@@ -1024,6 +1126,28 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    proptest! {
+        /// UC-6 read side: the subjects to read are every linked spelling
+        /// plus every stored spelling of a linked repo (case-folded join),
+        /// nothing else; re-deriving from its own output changes nothing.
+        #[test]
+        fn repo_subjects_to_read_are_every_spelling_of_a_linked_repo(
+            (links, claims) in arb_inference_inputs(),
+            extra in proptest::collection::vec("github:[a-zA-Z]{1,3}/[a-zA-Z]{1,3}", 0..4),
+        ) {
+            let stored: Vec<String> = claims.iter().map(|c| c.repo_subject.clone()).chain(extra).collect();
+            let to_read = repo_subjects_to_read(&links, stored.iter().map(String::as_str));
+            let linked: BTreeSet<String> = links.iter().map(|l| subject_key(&l.repo_subject)).collect();
+            let expected: BTreeSet<String> = links
+                .iter()
+                .map(|l| l.repo_subject.clone())
+                .chain(stored.iter().filter(|s| linked.contains(&subject_key(s))).cloned())
+                .collect();
+            prop_assert_eq!(&to_read, &expected);
+            prop_assert_eq!(repo_subjects_to_read(&links, to_read.iter().map(String::as_str)), to_read);
         }
     }
 
