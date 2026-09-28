@@ -10,7 +10,7 @@
 //! `collapse_by_user_id |> rank_by_contributions |> take_top_humans`.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ports::{
     AuthorRelationship, ContributionLink, FederatedRow, RankedContributor, RawContributor,
@@ -177,6 +177,70 @@ fn take_top_humans(ranked: &[Account], top_n: usize) -> ContributorSelection {
         people,
         bots_excluded,
     }
+}
+
+// =============================================================================
+// Cross-repo overlap (US-CPI-001 AC4; DDD-5 case-folded keys)
+// =============================================================================
+
+/// One recorded person of the scraped repo who is ALSO linked to another
+/// repo the user scraped earlier — rendered `login → owner/repo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedContributor {
+    /// The person's login as the current selection ranked it.
+    pub login: String,
+    /// The other repo, display form without the `github:` scheme.
+    pub other_repo: String,
+}
+
+/// The people of `current_repo` also linked to OTHER scraped repos, in the
+/// selection's rank order then by other repo — one line per (person, repo).
+/// Subjects are compared case-folded (DDD-5 keys); the scraped repo itself is
+/// never "other", so the result is the same whether `recorded_links` was read
+/// before or after this scrape's snapshot was recorded.
+pub fn shared_contributors(
+    current_repo: &str,
+    people: &[RankedContributor],
+    recorded_links: &[ContributionLink],
+) -> Vec<SharedContributor> {
+    let current_repo_key = subject_key(current_repo);
+    let other_repos_by_person = recorded_links
+        .iter()
+        .filter(|link| subject_key(&link.repo_subject) != current_repo_key)
+        .fold(
+            BTreeMap::<String, BTreeMap<String, String>>::new(),
+            |mut by_person, link| {
+                by_person
+                    .entry(subject_key(&link.person_subject))
+                    .or_default()
+                    .entry(subject_key(&link.repo_subject))
+                    .or_insert_with(|| repo_display(&link.repo_subject));
+                by_person
+            },
+        );
+    let mut people_seen = BTreeSet::new();
+    people
+        .iter()
+        .filter(|person| people_seen.insert(subject_key(&person.person_subject())))
+        .flat_map(|person| {
+            other_repos_by_person
+                .get(&subject_key(&person.person_subject()))
+                .into_iter()
+                .flat_map(BTreeMap::values)
+                .map(|other_repo| SharedContributor {
+                    login: person.login.clone(),
+                    other_repo: other_repo.clone(),
+                })
+        })
+        .collect()
+}
+
+/// A repo subject's display form without the `github:` scheme.
+fn repo_display(repo_subject: &str) -> String {
+    repo_subject
+        .strip_prefix("github:")
+        .unwrap_or(repo_subject)
+        .to_string()
 }
 
 // =============================================================================
@@ -839,6 +903,104 @@ mod tests {
                     )))
                 .collect();
             prop_assert_eq!(cited, expected);
+        }
+    }
+
+    // --- cross-repo overlap (US-CPI-001 AC4) -------------------------------
+
+    /// The people a repo's links record, as a selection would rank them.
+    fn people_of(repo: &str, links: &[ContributionLink]) -> Vec<RankedContributor> {
+        links
+            .iter()
+            .filter(|l| subject_key(&l.repo_subject) == subject_key(repo))
+            .map(|l| RankedContributor {
+                login: l.person_subject.trim_start_matches("github:").to_string(),
+                github_user_id: l.github_user_id,
+                rank: l.rank,
+                contributions: l.contributions,
+            })
+            .collect()
+    }
+
+    /// Overlap as case-folded `(person, other repo)` keys.
+    fn overlap_keys(shared: &[SharedContributor]) -> BTreeSet<(String, String)> {
+        shared
+            .iter()
+            .map(|s| {
+                (
+                    subject_key(&format!("github:{}", s.login)),
+                    subject_key(&format!("github:{}", s.other_repo)),
+                )
+            })
+            .collect()
+    }
+
+    proptest! {
+        /// Every recorded person of the scraped repo who is linked to ANOTHER
+        /// repo (subjects compared case-folded) is surfaced with that repo —
+        /// once — and the scraped repo itself never appears as "other".
+        #[test]
+        fn overlap_surfaces_exactly_the_other_repos_each_person_is_linked_to(
+            links in proptest::collection::vec(crate::proptest_strategies::arb_contribution_link(), 0..10),
+            current in proptest::sample::select(vec![
+                "github:BurntSushi/ripgrep", "github:rust-lang/regex", "github:dtolnay/serde",
+            ]),
+        ) {
+            let people = people_of(current, &links);
+            let person_keys: BTreeSet<String> = people
+                .iter()
+                .map(|p| subject_key(&p.person_subject()))
+                .collect();
+            let expected: BTreeSet<(String, String)> = links
+                .iter()
+                .filter(|l| subject_key(&l.repo_subject) != subject_key(current))
+                .filter(|l| person_keys.contains(&subject_key(&l.person_subject)))
+                .map(|l| (subject_key(&l.person_subject), subject_key(&l.repo_subject)))
+                .collect();
+
+            let shared = shared_contributors(current, &people, &links);
+
+            prop_assert_eq!(overlap_keys(&shared), expected.clone());
+            prop_assert_eq!(shared.len(), expected.len(), "one line per (person, repo)");
+        }
+
+        /// Overlap is symmetric: P is shown under A → B exactly when P is
+        /// shown under B → A.
+        #[test]
+        fn overlap_is_symmetric_between_two_scraped_repos(
+            links in proptest::collection::vec(crate::proptest_strategies::arb_contribution_link(), 0..10),
+        ) {
+            let (repo_a, repo_b) = ("github:BurntSushi/ripgrep", "github:rust-lang/regex");
+            let persons_towards = |from: &str, to: &str| -> BTreeSet<String> {
+                overlap_keys(&shared_contributors(from, &people_of(from, &links), &links))
+                    .into_iter()
+                    .filter(|(_, other)| *other == subject_key(to))
+                    .map(|(person, _)| person)
+                    .collect()
+            };
+            prop_assert_eq!(persons_towards(repo_a, repo_b), persons_towards(repo_b, repo_a));
+        }
+
+        /// Case never matters: re-casing every recorded subject yields the
+        /// same case-folded overlap.
+        #[test]
+        fn overlap_ignores_subject_case(
+            links in proptest::collection::vec(crate::proptest_strategies::arb_contribution_link(), 0..10),
+        ) {
+            let current = "github:BurntSushi/ripgrep";
+            let upper: Vec<ContributionLink> = links
+                .iter()
+                .map(|l| ContributionLink {
+                    repo_subject: l.repo_subject.to_ascii_uppercase().replacen("GITHUB:", "github:", 1),
+                    person_subject: l.person_subject.to_ascii_uppercase().replacen("GITHUB:", "github:", 1),
+                    ..l.clone()
+                })
+                .collect();
+            let people = people_of(current, &links);
+            prop_assert_eq!(
+                overlap_keys(&shared_contributors(current, &people, &links)),
+                overlap_keys(&shared_contributors(current, &people, &upper))
+            );
         }
     }
 }

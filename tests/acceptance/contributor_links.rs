@@ -94,7 +94,6 @@ fn scraping_a_repo_records_its_top_thirty_human_contributors_and_names_the_bots(
 ///
 /// @us-cpi-001 @driving_port @real-io @happy
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 cross-repo overlap shown)"]
 fn people_already_linked_to_other_scraped_repos_are_surfaced() {
     // GIVEN Maria already scraped rust-lang/regex (BurntSushi among its people).
     let env = TestEnv::initialized();
@@ -210,7 +209,6 @@ fn zero_contributors_records_none_and_asks_github_nothing_extra() {
 ///
 /// @us-cpi-001 @driving_port @real-io @d-4 @od-cpi-6 @boundary
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 re-scrape accumulates, never deletes)"]
 fn re_scraping_never_loses_previously_recorded_people() {
     // GIVEN ripgrep's 30 contributors were recorded on T1.
     let env = TestEnv::initialized();
@@ -504,7 +502,6 @@ fn asking_for_contributors_of_a_person_is_rejected_before_asking_github() {
 ///
 /// @us-cpi-001 @driving_port @real-io @ddd-3 @ddd-15 @kpi-cpi-5 @edge
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (DDD-3 bot rule + re-rank + de-dup over the lie catalogue)"]
 fn the_recorded_people_are_humans_ranked_by_commits_whatever_order_github_uses() {
     // GIVEN GitHub serves an unsorted list with disguised bots and a duplicate.
     let env = TestEnv::initialized();

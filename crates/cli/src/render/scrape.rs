@@ -106,3 +106,18 @@ pub fn render_contributors_block(selection: &scraper_domain::ContributorSelectio
 pub fn render_no_contributors_requested() -> String {
     "Contributors recorded: 0 (--contributors 0: none requested)\n".to_string()
 }
+
+/// The cross-repo overlap below the contributors line (US-CPI-001 AC4): each
+/// recorded person also linked to another repo the user scraped, as
+/// `login → owner/repo`. Nothing when there is no overlap. Carries NO `[n] `
+/// marker — numbering belongs to the candidate list alone.
+pub fn render_shared_contributors(shared: &[scraper_domain::SharedContributor]) -> String {
+    if shared.is_empty() {
+        return String::new();
+    }
+    let lines: String = shared
+        .iter()
+        .map(|person| format!("  {} → {}\n", person.login, person.other_repo))
+        .collect();
+    format!("Also contributes to repos you scraped:\n{lines}")
+}

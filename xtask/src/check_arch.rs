@@ -44,6 +44,14 @@
 //!    (US-SF-006) is held tighter still: it may reach a peer's instance ONLY
 //!    through `wiring::instance_reader_for` — it names no instance write
 //!    method and never constructs the HTTP adapter itself.
+//! 8. `contribution_links_append_only`: no production SQL literal in
+//!    `adapter-duckdb` deletes, drops, truncates or bare-`UPDATE`s the
+//!    `contribution_links` table — only the snapshot upsert's `DO UPDATE`
+//!    arm may refresh a row (DDD-5 / DDD-16;
+//!    [`classify_contribution_links_literal`]).
+//! 9. `adapter_github_holds_no_storage_port`: `adapter-github` names no
+//!    storage / identity / publish port (DDD-16 / I-SCR-1;
+//!    [`classify_adapter_github_port_reference`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1319,6 +1327,172 @@ pub fn scan_publish_write_capability(workspace_root: &Path) -> anyhow::Result<Ve
     Ok(findings)
 }
 
+// `contribution_links_append_only` + `adapter_github_holds_no_storage_port`
+// (contributor-philosophy-inference DDD-5 / DDD-16).
+//
+// The `contribution_links` table is append-only: a link is added or refreshed
+// by the snapshot upsert (`INSERT … ON CONFLICT … DO UPDATE`) and never
+// deleted, dropped, truncated or rewritten by a bare `UPDATE`. And the
+// GitHub adapter — the scraper's only network edge — names no storage or
+// identity port, so a scrape can never write or sign on its own.
+
+/// The append-only table the rule guards.
+const CONTRIBUTION_LINKS_TABLE: &str = "contribution_links";
+
+/// Statements that remove link rows or the table itself.
+const DESTRUCTIVE_SQL_KEYWORDS: &[&str] = &["DELETE", "DROP", "TRUNCATE"];
+
+/// Ports that store, sign or publish — none may appear in `adapter-github`.
+const STORAGE_AND_IDENTITY_PORTS: &[&str] = &[
+    "StoragePort",
+    "PeerStoragePort",
+    "StoreReadPort",
+    "IndexStorePort",
+    "ContributionLinkPort",
+    "IdentityPort",
+    "IdentityResolvePort",
+    "PdsPort",
+    "PublishPort",
+];
+
+/// Pure rule: `Some(excerpt)` iff one SQL literal names `contribution_links`
+/// together with a `DELETE` / `DROP` / `TRUNCATE`, or with an `UPDATE` that
+/// is not the upsert's `DO UPDATE` arm.
+pub fn classify_contribution_links_literal(literal: &str) -> Option<String> {
+    if !contains_word(literal, CONTRIBUTION_LINKS_TABLE) {
+        return None;
+    }
+    let words: Vec<String> = literal
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let destructive = words
+        .iter()
+        .any(|word| DESTRUCTIVE_SQL_KEYWORDS.contains(&word.as_str()));
+    let bare_update = words
+        .iter()
+        .enumerate()
+        .any(|(index, word)| word == "UPDATE" && (index == 0 || words[index - 1] != "DO"));
+    (destructive || bare_update).then(|| excerpt_of(literal))
+}
+
+/// `syn` visitor collecting string literals of PRODUCTION code only: items
+/// gated `#[cfg(test)]` (and `#[test]` fns) are skipped, so a test fixture
+/// that resets the table is not a violation.
+struct ProductionLiteralCollector {
+    literals: Vec<String>,
+}
+
+fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Ident>()
+                    .is_ok_and(|ident| ident == "test"))
+    })
+}
+
+impl<'ast> Visit<'ast> for ProductionLiteralCollector {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
+        self.literals.push(lit.value());
+    }
+}
+
+/// Every `.rs` file under `dir` (sorted), or none when `dir` is absent.
+fn rust_sources_under(dir: &Path) -> Vec<PathBuf> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    walkdir::WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(walkdir::DirEntry::into_path)
+        .filter(|path| path.is_file() && path.extension().is_some_and(|e| e == "rs"))
+        .collect()
+}
+
+/// Effect shell for `contribution_links_append_only`: classify every
+/// production SQL literal of `adapter-duckdb`.
+pub fn scan_contribution_links_append_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates/adapter-duckdb/src")) {
+        let source = std::fs::read_to_string(&path)?;
+        let file = syn::parse_file(&source)
+            .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
+        let mut collector = ProductionLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        findings.extend(
+            collector
+                .literals
+                .iter()
+                .filter_map(|literal| classify_contribution_links_literal(literal))
+                .map(|excerpt| {
+                    format!(
+                        "{}: SQL deletes, drops, truncates or bare-updates `contribution_links`, \
+                         which is append-only — only the snapshot upsert may write it \
+                         (contribution_links_append_only, DDD-5 / DDD-16): {excerpt}",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
+/// Pure rule: every non-comment line of an `adapter-github` source naming a
+/// storage / identity port, as `line N: <code>` findings.
+pub fn classify_adapter_github_port_reference(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .filter_map(|(index, line)| {
+            STORAGE_AND_IDENTITY_PORTS
+                .iter()
+                .find(|port| contains_word(line, port))
+                .map(|port| format!("line {}: `{port}` in `{}`", index + 1, line.trim()))
+        })
+        .collect()
+}
+
+/// Effect shell for `adapter_github_holds_no_storage_port`.
+pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&workspace_root.join("crates/adapter-github/src")) {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_adapter_github_port_reference(&source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                        "{}: {finding} — adapter-github may name no storage / identity port; \
+                         a scrape reads GitHub and nothing else \
+                         (adapter_github_holds_no_storage_port, DDD-16 / I-SCR-1)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -1333,6 +1507,8 @@ pub fn run() -> anyhow::Result<i32> {
     let viewer_fail_seam_findings = scan_viewer_fail_seam_guard(&workspace_root)?;
     let atproto_npm_findings = scan_atproto_npm_dependencies(&workspace_root)?;
     let publish_write_findings = scan_publish_write_capability(&workspace_root)?;
+    let contribution_links_findings = scan_contribution_links_append_only(&workspace_root)?;
+    let adapter_github_port_findings = scan_adapter_github_port_references(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1342,6 +1518,8 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(viewer_fail_seam_findings);
     rendered.extend(atproto_npm_findings);
     rendered.extend(publish_write_findings);
+    rendered.extend(contribution_links_findings);
+    rendered.extend(adapter_github_port_findings);
 
     if rendered.is_empty() {
         println!(
@@ -2154,6 +2332,121 @@ mod tests {
         assert_eq!(
             classify_atproto_npm_manifest(&with_codec),
             vec!["@ipld/dag-cbor".to_string()]
+        );
+    }
+
+    // --- contribution_links_append_only (DDD-5 / DDD-16) ------------------
+
+    fn real_workspace_root() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+    }
+
+    #[test]
+    fn append_only_guard_fires_on_every_destructive_statement_against_the_links() {
+        for synthetic in [
+            "DELETE FROM contribution_links WHERE repo_key = ?",
+            "drop table contribution_links",
+            "TRUNCATE contribution_links",
+            "UPDATE contribution_links SET first_observed_at = ?",
+            "update contribution_links\n   set rank = 1",
+        ] {
+            assert!(
+                classify_contribution_links_literal(synthetic).is_some(),
+                "must fire on: {synthetic}"
+            );
+        }
+    }
+
+    #[test]
+    fn append_only_guard_allows_the_upsert_reads_and_other_tables() {
+        for allowed in [
+            "INSERT INTO contribution_links (repo_key) VALUES (?) \
+             ON CONFLICT (repo_key, person_key) DO UPDATE SET rank = excluded.rank",
+            "SELECT rank FROM contribution_links WHERE repo_key = ?",
+            "CREATE TABLE IF NOT EXISTS contribution_links (repo_key VARCHAR)",
+            "DELETE FROM claims WHERE cid = ?",
+            "UPDATE schema_version SET version = 5",
+        ] {
+            assert_eq!(
+                classify_contribution_links_literal(allowed),
+                None,
+                "must allow: {allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn append_only_scan_reports_production_sql_ignores_test_modules_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let src = violating.path().join("crates/adapter-duckdb/src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("links.rs"),
+            "const PRUNE: &str = \"DELETE FROM contribution_links WHERE rank > 30\";\n\
+             #[cfg(test)]\n\
+             mod tests {\n\
+                 const RESET: &str = \"DROP TABLE contribution_links\";\n\
+             }\n",
+        )
+        .expect("write");
+        let findings = scan_contribution_links_append_only(violating.path()).expect("scan");
+        assert_eq!(
+            findings.len(),
+            1,
+            "only the production DELETE: {findings:?}"
+        );
+        assert!(findings[0].contains("links.rs"), "{findings:?}");
+
+        assert_eq!(
+            scan_contribution_links_append_only(real_workspace_root()).expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real adapter only upserts contribution_links"
+        );
+    }
+
+    // --- adapter_github_holds_no_storage_port (DDD-16 / I-SCR-1) ----------
+
+    #[test]
+    fn github_port_guard_fires_on_a_storage_or_identity_port_but_not_on_comments() {
+        let source = "//! holds NO `StoragePort`/`IdentityPort` reference\n\
+             use ports::GithubPort;\n\
+             struct Leaky { links: Box<dyn ports::ContributionLinkPort> }\n\
+             fn sign(id: &dyn IdentityPort) {}\n";
+        let findings = classify_adapter_github_port_reference(source);
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings[0].contains("line 3") && findings[0].contains("ContributionLinkPort"),
+            "{findings:?}"
+        );
+        assert!(
+            findings[1].contains("line 4") && findings[1].contains("IdentityPort"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn github_port_scan_reports_a_violating_tree_and_passes_the_real_tree() {
+        let violating = tempfile::tempdir().expect("tempdir");
+        let src = violating.path().join("crates/adapter-github/src");
+        std::fs::create_dir_all(&src).expect("mkdir");
+        std::fs::write(
+            src.join("client.rs"),
+            "pub struct GithubAdapter { store: Box<dyn ports::StoragePort> }\n",
+        )
+        .expect("write");
+        let findings = scan_adapter_github_port_references(violating.path()).expect("scan");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].contains("client.rs") && findings[0].contains("StoragePort"),
+            "{findings:?}"
+        );
+
+        assert_eq!(
+            scan_adapter_github_port_references(real_workspace_root()).expect("scan real tree"),
+            Vec::<String>::new(),
+            "the real adapter-github names no storage / identity port"
         );
     }
 }

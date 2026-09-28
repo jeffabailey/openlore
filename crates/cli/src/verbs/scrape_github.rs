@@ -35,15 +35,15 @@
 //! slice-01 verb internals).
 
 use anyhow::{anyhow, Result};
-use ports::{CandidateClaim, TargetKind};
+use ports::{CandidateClaim, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, select_contributors,
-    ContributorSelection, EMBEDDED_MAPPING_YAML,
+    shared_contributors, ContributorSelection, SharedContributor, EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
     render_auth_report, render_candidate_list, render_contributors_block,
-    render_no_contributors_requested, render_public_data_banner,
+    render_no_contributors_requested, render_public_data_banner, render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::sign_batch::{self, SignableCandidate};
@@ -154,7 +154,8 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
                 .map_err(anyhow::Error::from)?;
             let selection = select_contributors(&rows, contributor_count);
             record_contributors(wiring, &subject, &selection)?;
-            Some(Some(selection))
+            let shared = contributors_shared_with_other_repos(wiring, &subject, &selection)?;
+            Some(Some((selection, shared)))
         }
         TargetKind::User { .. } => None,
     };
@@ -179,7 +180,10 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
 
     // (5a) The contributors block (repo targets only), below the candidates.
     match &contributors {
-        Some(Some(selection)) => out.push_str(&render_contributors_block(selection)),
+        Some(Some((selection, shared))) => {
+            out.push_str(&render_contributors_block(selection));
+            out.push_str(&render_shared_contributors(shared));
+        }
         Some(None) => out.push_str(&render_no_contributors_requested()),
         None => {}
     }
@@ -259,6 +263,25 @@ fn record_contributors(
         .record_snapshot(repo_subject, wiring.clock.now_utc(), &selection.people)
         .map(|_| ())
         .map_err(|e| anyhow!("recording contributors of {repo_subject}: {e}"))
+}
+
+/// The recorded people of this repo who are also linked to OTHER repos the
+/// user scraped (US-CPI-001 AC4): reads every recorded link through the port
+/// and lets the PURE overlap exclude this repo (case-folded keys, DDD-5).
+fn contributors_shared_with_other_repos(
+    wiring: &Wiring,
+    repo_subject: &str,
+    selection: &ContributorSelection,
+) -> Result<Vec<SharedContributor>> {
+    let recorded_links = wiring
+        .contribution_links
+        .list_links(&LinkFilter::All)
+        .map_err(|e| anyhow!("reading recorded contributors: {e}"))?;
+    Ok(shared_contributors(
+        repo_subject,
+        &selection.people,
+        &recorded_links,
+    ))
 }
 
 /// Harvest the bounded public signal set for the resolved target kind.
