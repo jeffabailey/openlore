@@ -203,50 +203,48 @@ fn scrape_github_prints_public_data_banner_before_any_harvest() {
     );
 }
 
-/// SG-3 (US-SCR-001 Ex 2; WD-64): a USER/contributor target resolves to a
-/// User (not a Repo) and harvests cleanly, but DERIVES NO candidates — the
-/// bounded cross-repo USER aggregate is DEFERRED to slice-04 (WD-64). A real
-/// user scrape today reads zero repo-level signals, so the honest slice-02
-/// outcome is "resolves as a user, harvests, proposes nothing" — never a
-/// synthetic aggregate. This pins the deferral as the observed behavior.
+/// SG-3 (US-SCR-001 Ex 2; WD-64 -> US-CPI-005): a USER/contributor target
+/// resolves to a User (not a Repo) and DERIVES NO repo candidates. Since
+/// slice-05 of contributor-philosophy-inference a user scrape shows the
+/// PERSON view from the local store (no crawl of their repos); with nothing
+/// scraped that links torvalds, the view is guidance — never an error.
 ///
-/// Given the GitHub user torvalds is public; When `scrape github torvalds`;
-/// Then the target resolves as a user, the harvest completes, and NO candidate
-/// claims are derived (user aggregation deferred to slice-04) — exit 0.
+/// Given the GitHub user torvalds is public and no scraped repo links him;
+/// When `scrape github torvalds`; Then the target resolves as a user and the
+/// person-view guidance is shown (scrape their repos first) — exit 0.
 ///
-/// @us-scr-001 @real-io @driving_port @j-004a @wd-64 @edge
+/// @us-scr-001 @us-cpi-005 @real-io @driving_port @j-004a @wd-64 @edge
 #[test]
 fn scrape_github_resolves_user_target_and_derives_no_candidates_aggregation_deferred() {
-    // GIVEN an initialized env + a PUBLIC USER target. The USER-aggregate harvest
-    // is deferred to slice-04 (WD-64), so a real user scrape yields ZERO signals
-    // today — no synthetic aggregate is injected.
+    // GIVEN an initialized env + a PUBLIC USER target that no scraped repo
+    // links (the person view reads the local store only).
     let env = TestEnv::initialized();
     let github = GithubServer::start(FakeGithub::for_public_user("torvalds"));
 
     // WHEN Maria scrapes the bare-user target (no --sign).
     let outcome = run_openlore_scrape(&env, &["scrape", "github", "torvalds"], github.base_url());
 
-    // THEN the run exits ZERO — a user target that resolves but yields no usable
-    // signals is a clean no-op, NOT an error (contrast SG-4's non-zero 404).
+    // THEN the run exits ZERO — an unlinked person is guidance, NOT an error
+    // (contrast SG-4's non-zero 404).
     assert_eq!(
         outcome.status, 0,
         "scrape of a public user must exit 0; \n--- stdout ---\n{}\n--- stderr ---\n{}",
         outcome.stdout, outcome.stderr
     );
 
-    // AND the public-data-only banner precedes the first harvest line
-    // (the user is reassured BEFORE any network beat begins).
+    // AND the public-data-only banner precedes the first network beat (the
+    // resolve line) — the user is reassured BEFORE GitHub is asked.
     let banner_idx = outcome
         .stdout
         .find("PUBLIC")
         .expect("public-data-only banner must be present in stdout");
-    let harvest_idx = outcome
+    let resolve_idx = outcome
         .stdout
-        .find("Harvesting public signals")
-        .expect("the harvest line must be present in stdout");
+        .find("Resolving target torvalds")
+        .expect("the resolve line must be present in stdout");
     assert!(
-        banner_idx < harvest_idx,
-        "the public-data-only banner must precede the harvest line; \n--- stdout ---\n{}",
+        banner_idx < resolve_idx,
+        "the public-data-only banner must precede the resolve line; \n--- stdout ---\n{}",
         outcome.stdout
     );
 
@@ -261,14 +259,13 @@ fn scrape_github_resolves_user_target_and_derives_no_candidates_aggregation_defe
         outcome.stdout
     );
 
-    // AND the no-candidates message is printed (US-SCR-002 Ex 2 shape): the
-    // USER-aggregate derivation is deferred to slice-04, so nothing is proposed.
+    // AND the person-view guidance is printed (US-CPI-005): torvalds is not
+    // linked to any scraped repo, so the user is pointed at scraping repos.
     assert!(
         outcome
             .stdout
-            .contains("No candidate claims could be derived"),
-        "a user scrape must state that no candidate claims could be derived \
-         (aggregation deferred to slice-04); \n--- stdout ---\n{}",
+            .contains("github:torvalds is not linked to any repo you've scraped"),
+        "an unlinked user scrape must show the person-view guidance; \n--- stdout ---\n{}",
         outcome.stdout
     );
 

@@ -7,8 +7,9 @@
 //! SCR-* acceptance scenarios in Phase 03/05:
 //!
 //! 1. print the public-data banner;
-//! 2. `resolve_target` + `harvest_repo`/`harvest_user` via `GithubPort`
-//!    (the effect-shell `adapter-github`);
+//! 2. `resolve_target` + `harvest_repo` via `GithubPort` (the effect-shell
+//!    `adapter-github`); a USER target instead shows the person view from
+//!    the local store after its ONE `/users/{user}` read (US-CPI-005);
 //! 3. `derive_candidates(signals, mapping)` via the PURE `scraper-domain`;
 //! 4. render the candidate list (each candidate names its source signals —
 //!    auditability, KPI-SCR-3);
@@ -39,13 +40,14 @@ use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
     select_contributors, shared_contributors, ContributorSelection, InferenceFilter,
-    InferenceReport, SharedContributor, EMBEDDED_MAPPING_YAML,
+    InferenceReport, PersonSubject, SharedContributor, EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
     render_auth_report, render_candidate_list, render_contributors_block,
     render_contributors_not_recorded, render_new_inferred_candidates_hint,
-    render_no_contributors_requested, render_public_data_banner, render_shared_contributors,
+    render_no_contributors_requested, render_person_view, render_public_data_banner,
+    render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::infer_people::read_inference_report;
@@ -86,8 +88,10 @@ pub struct ScrapeGithubOutcome {
 /// 1. print the public-data-only banner (BEFORE any harvest — WD-51);
 /// 2. resolve the target via `GithubPort::resolve_target` (refusing
 ///    private / non-existent targets);
-/// 3. harvest the bounded public signal set via `GithubPort::harvest_repo`
-///    / `harvest_user`, reporting the count;
+/// 3. a USER target shows the person view (links, signed adherence,
+///    numbered candidates) from the local store — the resolve was its one
+///    GitHub request; a REPO target harvests the bounded public signal set
+///    via `GithubPort::harvest_repo`, reporting the count;
 /// 4. derive candidates via the PURE `scraper-domain::derive_candidates`
 ///    (confidence 0.25 speculative; each candidate names its source signal);
 /// 5. render the numbered candidate list (or "No candidate claims could be
@@ -112,8 +116,8 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // dispatcher (which prints it after a successful run).
     let mut out = String::new();
 
-    // (2) Resolve the target (refuses private / non-existent). The harvest
-    // is the only network step; both run on one tokio runtime.
+    // (2) Resolve the target (refuses private / non-existent). Every
+    // network step runs on one tokio runtime.
     let runtime = build_tokio_runtime();
     let kind = runtime
         .block_on(wiring.github.resolve_target(&args.target))
@@ -124,9 +128,73 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         target_kind_label(&kind)
     ));
 
+    match kind {
+        TargetKind::User { user } => show_person(wiring, &user, args, out),
+        TargetKind::Repo { owner, repo } => {
+            let target = RepoTarget {
+                owner: &owner,
+                repo: &repo,
+                contributor_count,
+            };
+            scrape_repo(wiring, &runtime, &target, args, out)
+        }
+    }
+}
+
+/// The repo a scrape targets, with the validated contributors bound.
+struct RepoTarget<'a> {
+    owner: &'a str,
+    repo: &'a str,
+    contributor_count: usize,
+}
+
+/// The PERSON view of a user target (US-CPI-005 / D-4 / D-6): the resolve
+/// response was the ONE `/users/{user}` read — its auth/rate posture is
+/// reported, and nothing of theirs is crawled. The view is rendered from the
+/// LOCAL store only: their links (repo + rank) and the person-scoped
+/// inference report through the SAME read `infer people --person` uses
+/// (DDD-13) — so the numbering is identical. Nothing is written.
+fn show_person(
+    wiring: &Wiring,
+    user: &str,
+    args: &ScrapeGithubArgs,
+    mut out: String,
+) -> Result<ScrapeGithubOutcome> {
+    out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
+    let person = PersonSubject::parse(&format!("github:{user}"))?;
+    let links = wiring
+        .contribution_links
+        .list_links(&LinkFilter::Person(person.as_str().to_string()))
+        .map_err(|e| anyhow!("reading the links of {}: {e}", person.as_str()))?;
+    let report = read_inference_report(
+        wiring,
+        &InferenceFilter {
+            person: Some(person.clone()),
+            min_repos: 0,
+        },
+    )?;
+    out.push_str(&render_person_view(person.as_str(), &links, &report));
+    match args.sign.as_deref() {
+        None => Ok(ScrapeGithubOutcome {
+            exit_code: 0,
+            stdout: out,
+        }),
+        Some(raw_selection) => sign_selected_candidates(wiring, &[], raw_selection, &out),
+    }
+}
+
+/// Scrape one public repo: harvest -> derive -> contributors -> render ->
+/// optional `--sign`, then the new-inferred-candidates hint (DDD-14).
+fn scrape_repo(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    target: &RepoTarget<'_>,
+    args: &ScrapeGithubArgs,
+    mut out: String,
+) -> Result<ScrapeGithubOutcome> {
     // (3) Harvest the bounded public signal set + report the count.
     let signals = runtime
-        .block_on(harvest(wiring, &kind))
+        .block_on(wiring.github.harvest_repo(target.owner, target.repo))
         .map_err(anyhow::Error::from)?;
     out.push_str(&format!(
         "Harvesting public signals ... {} signal{}\n",
@@ -142,43 +210,34 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // `AuthReport` carries only the budget numbers (no-token-leak).
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
 
-    // (3b) contributor-philosophy-inference (DDD-14): for a repo target, read
-    // the RAW contributors (one request), select the top-N humans PURELY, and
-    // record the snapshot as append-only contribution links in ONE tx. A
-    // harvest failure aborts here, BEFORE any link write. Links are unsigned
-    // local observations — never claims (the human-gate is untouched).
-    let subject = subject_for(&kind);
+    // (3b) contributor-philosophy-inference (DDD-14): read the RAW
+    // contributors (one request), select the top-N humans PURELY, and record
+    // the snapshot as append-only contribution links in ONE tx. A harvest
+    // failure aborts here, BEFORE any link write. Links are unsigned local
+    // observations — never claims (the human-gate is untouched).
+    let subject = format!("github:{}/{}", target.owner, target.repo);
     // (3a') The inference BEFORE this run writes anything (DDD-14): the
-    // baseline the end-of-scrape hint diffs against. Repo targets only — a
-    // user target records no links and signs no repo claim.
-    let inference_before = match &kind {
-        TargetKind::Repo { .. } => {
-            Some(read_inference_report(wiring, &InferenceFilter::default())?)
-        }
-        TargetKind::User { .. } => None,
-    };
+    // baseline the end-of-scrape hint diffs against.
+    let inference_before = read_inference_report(wiring, &InferenceFilter::default())?;
     // N = 0 is a shell decision taken BEFORE the port: no request, no write.
-    let contributors = match &kind {
-        TargetKind::Repo { .. } if contributor_count == 0 => ContributorsOutcome::NoneRequested,
-        TargetKind::Repo { owner, repo } => {
-            match runtime.block_on(wiring.github.list_contributors(owner, repo)) {
-                // UC-2: GitHub will not list them (too large / empty) — a
-                // named notice, nothing recorded, the scrape carries on.
-                Err(GithubError::ContributorsUnavailable { reason, .. }) => {
-                    ContributorsOutcome::Unavailable(reason)
-                }
-                // Any other failure aborts BEFORE any link write (DDD-14).
-                Err(fatal) => return Err(anyhow::Error::from(fatal)),
-                Ok(rows) => {
-                    let selection = select_contributors(&rows, contributor_count);
-                    record_contributors(wiring, &subject, &selection)?;
-                    let shared =
-                        contributors_shared_with_other_repos(wiring, &subject, &selection)?;
-                    ContributorsOutcome::Recorded { selection, shared }
-                }
+    let contributors = if target.contributor_count == 0 {
+        ContributorsOutcome::NoneRequested
+    } else {
+        match runtime.block_on(wiring.github.list_contributors(target.owner, target.repo)) {
+            // UC-2: GitHub will not list them (too large / empty) — a named
+            // notice, nothing recorded, the scrape carries on.
+            Err(GithubError::ContributorsUnavailable { reason, .. }) => {
+                ContributorsOutcome::Unavailable(reason)
+            }
+            // Any other failure aborts BEFORE any link write (DDD-14).
+            Err(fatal) => return Err(anyhow::Error::from(fatal)),
+            Ok(rows) => {
+                let selection = select_contributors(&rows, target.contributor_count);
+                record_contributors(wiring, &subject, &selection)?;
+                let shared = contributors_shared_with_other_repos(wiring, &subject, &selection)?;
+                ContributorsOutcome::Recorded { selection, shared }
             }
         }
-        TargetKind::User { .. } => ContributorsOutcome::NotARepo,
     };
 
     // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
@@ -199,7 +258,7 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         out.push_str(&render_candidate_list(&subject, &candidates));
     }
 
-    // (5a) The contributors block (repo targets only), below the candidates.
+    // (5a) The contributors block, below the candidates.
     out.push_str(&render_contributors_outcome(&contributors));
 
     // (6) WITHOUT --sign: derive + render only, ZERO claim writes (the
@@ -217,11 +276,9 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
 
     // (8) The one-line new-inferred-candidates hint, AFTER `--sign` so repo
     // claims signed in this run count (DDD-14). Silent when nothing changed.
-    if let Some(before) = inference_before {
-        outcome
-            .stdout
-            .push_str(&new_inferred_candidates_hint(wiring, &before)?);
-    }
+    outcome
+        .stdout
+        .push_str(&new_inferred_candidates_hint(wiring, &inference_before)?);
     Ok(outcome)
 }
 
@@ -236,8 +293,6 @@ fn new_inferred_candidates_hint(wiring: &Wiring, before: &InferenceReport) -> Re
 
 /// What the contributors beat of a scrape came to (DDD-14 / UC-1 / UC-2).
 enum ContributorsOutcome {
-    /// A user target — repos alone have contributors.
-    NotARepo,
     /// `--contributors 0`: GitHub was not asked.
     NoneRequested,
     /// GitHub will not list them (too large / empty): a named notice.
@@ -252,7 +307,6 @@ enum ContributorsOutcome {
 /// The contributors block below the candidate list. Pure.
 fn render_contributors_outcome(outcome: &ContributorsOutcome) -> String {
     match outcome {
-        ContributorsOutcome::NotARepo => String::new(),
         ContributorsOutcome::NoneRequested => render_no_contributors_requested(),
         ContributorsOutcome::Unavailable(reason) => render_contributors_not_recorded(reason),
         ContributorsOutcome::Recorded { selection, shared } => {
@@ -340,29 +394,6 @@ fn contributors_shared_with_other_repos(
         &selection.people,
         &recorded_links,
     ))
-}
-
-/// Harvest the bounded public signal set for the resolved target kind.
-/// `Repo` harvests the repo's signals; `User` harvests a bounded cross-repo
-/// aggregate (deep triangulation deferred to slice-04 per WD-64).
-async fn harvest(
-    wiring: &Wiring,
-    kind: &TargetKind,
-) -> Result<Vec<ports::Signal>, ports::GithubError> {
-    match kind {
-        TargetKind::Repo { owner, repo } => wiring.github.harvest_repo(owner, repo).await,
-        TargetKind::User { user } => wiring.github.harvest_user(user).await,
-    }
-}
-
-/// The `github:<owner>/<repo>` or `github:<user>` subject string the
-/// candidate list + any future signed claim carry (the `github_target`
-/// shared artifact).
-fn subject_for(kind: &TargetKind) -> String {
-    match kind {
-        TargetKind::Repo { owner, repo } => format!("github:{owner}/{repo}"),
-        TargetKind::User { user } => format!("github:{user}"),
-    }
 }
 
 /// The human-readable resolution label for the "Resolving target ... ok"

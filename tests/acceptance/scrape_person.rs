@@ -68,7 +68,6 @@ fn given_burntsushi_person_picture(
 ///
 /// @us-cpi-005 @driving_port @real-io @j-004a @happy
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 person view: links + signed + candidates)"]
 fn a_user_scrape_shows_the_persons_accumulated_picture() {
     // GIVEN BurntSushi's picture in Maria's store.
     let env = TestEnv::initialized();
@@ -166,7 +165,6 @@ fn signing_from_the_person_view_is_the_same_as_signing_from_infer_people() {
 ///
 /// @us-cpi-005 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 unknown person -> guidance, exit 0; narrow SG-3)"]
 fn a_person_with_no_links_gets_guidance_not_an_error() {
     // GIVEN no scraped repo is linked to octocat.
     let env = TestEnv::initialized();
@@ -200,7 +198,6 @@ fn a_person_with_no_links_gets_guidance_not_an_error() {
 ///
 /// @us-cpi-005 @driving_port @real-io @error
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 non-existent user still fails clearly)"]
 fn a_non_existent_user_still_fails_clearly() {
     // GIVEN ghost-user-zz9 does not exist on GitHub.
     let env = TestEnv::initialized();
@@ -238,7 +235,6 @@ fn a_non_existent_user_still_fails_clearly() {
 ///
 /// @us-cpi-005 @driving_port @real-io @d-4 @d-6 @guardrail
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (D-4 person view reads only the public profile, exactly once)"]
 fn reading_a_person_asks_github_only_for_their_profile_once() {
     // GIVEN BurntSushi's picture in Maria's store.
     let env = TestEnv::initialized();
@@ -320,7 +316,6 @@ fn a_renamed_login_is_flagged_as_a_possible_rename_never_merged() {
 ///
 /// @us-cpi-005 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 linked person without signed repo claims)"]
 fn a_linked_person_without_signed_repo_claims_shows_links_and_how_to_enable_inference() {
     // GIVEN dtolnay is linked to serde, which carries no signed claims.
     let env = TestEnv::initialized();

@@ -231,8 +231,12 @@ impl GithubPort for GithubAdapter {
                 Ok(TargetKind::Repo { owner, repo })
             }
             ResolvedTarget::User { user } => {
+                // The ONE `/users/{user}` read of a person scrape (US-CPI-005 /
+                // D-6): the auth/rate posture is taken from THIS response, so
+                // the caller needs no second profile read to report it.
                 let path = format!("/users/{user}");
-                self.get_public(&path, target).await?;
+                let body = self.get_public(&path, target).await?;
+                record_auth_report(client::parse_auth_report(&body));
                 Ok(TargetKind::User { user })
             }
         }
@@ -320,7 +324,9 @@ impl GithubPort for GithubAdapter {
     ///
     /// `GET {base}/users/{user}` resolves + records the auth report, then
     /// returns an empty signal set (deep, scored cross-repo triangulation is
-    /// slice-04's concern).
+    /// slice-04's concern). The CLI person view no longer calls this — its
+    /// `resolve_target` read already records the auth report (US-CPI-005
+    /// single fetch); the viewer's scrape route still does.
     async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
         let path = format!("/users/{user}");
         let body = self.get_public(&path, user).await?;
@@ -935,5 +941,64 @@ mod tests {
         )
         .expect("a well-formed list parses");
         assert_eq!(rows.len(), 1);
+    }
+
+    /// A one-route HTTP stub on `127.0.0.1`: answers every request with
+    /// `body` (200, `Connection: close`) and counts the requests it served.
+    fn serve_json_counting_requests(
+        body: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let base = format!("http://{}", listener.local_addr().expect("stub addr"));
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = served.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut stream = stream;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (base, served)
+    }
+
+    /// US-CPI-005 / D-6 single fetch: resolving a USER target is the ONE
+    /// `/users/{user}` read — it resolves the kind AND records the auth/rate
+    /// posture that response carried, so no second profile read is needed.
+    #[tokio::test]
+    async fn resolving_a_user_reports_auth_from_its_single_response() {
+        let (base, served) = serve_json_counting_requests(
+            r#"{"login":"torvalds","auth":{"authenticated":true,"rate_remaining":4982,"rate_limit":5000}}"#,
+        );
+        let adapter = GithubAdapter::for_api_base(base);
+        let _ = take_last_auth_report();
+
+        let kind = adapter.resolve_target("torvalds").await;
+
+        assert_eq!(
+            kind,
+            Ok(TargetKind::User {
+                user: "torvalds".to_string()
+            })
+        );
+        assert_eq!(
+            take_last_auth_report(),
+            AuthReport::Authenticated {
+                remaining: 4982,
+                limit: 5000
+            }
+        );
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

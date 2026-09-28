@@ -2,6 +2,7 @@
 //! Q-CPI-D1 load-bearing substrings pinned by DISTILL). Pure: values in,
 //! strings out.
 
+use ports::ContributionLink;
 use scraper_domain::{
     confidence_arithmetic, AlreadySigned, CandidateStatus, InferenceReport, NumberedCandidate,
     PersonCandidate, WeakenedClaim, WeakenedSupport,
@@ -207,4 +208,125 @@ pub fn render_person_derived_from(candidate: &PersonCandidate) -> String {
 /// `org.openlore.philosophy.memory-safety` → `memory-safety`.
 fn philosophy_short_name(philosophy: &str) -> &str {
     philosophy.rsplit('.').next().unwrap_or(philosophy)
+}
+
+/// The `scrape github <user>` PERSON view (US-CPI-005 / D-4): the person's
+/// recorded links (repo + rank), then the person-scoped inference report —
+/// my signed adherence with its CID, and the numbered candidates exactly as
+/// `infer people --person` numbers them (DDD-13). An unlinked person gets
+/// guidance, never an error. Pure: values in, string out.
+pub fn render_person_view(
+    person_subject: &str,
+    links: &[ContributionLink],
+    report: &InferenceReport,
+) -> String {
+    if links.is_empty() {
+        return render_unlinked_person(person_subject);
+    }
+    let mut out = render_person_links(person_subject, links);
+    out.push_str(&render_inference_report(report));
+    if has_no_inference(report) {
+        out.push_str(HOW_TO_ENABLE_INFERENCE);
+    }
+    out
+}
+
+/// `github:<login> is not linked to any repo you've scraped` + how to link.
+fn render_unlinked_person(person_subject: &str) -> String {
+    format!(
+        "{person_subject} is not linked to any repo you've scraped.\n\
+         Scrape a repo they contribute to first: `openlore scrape github <owner>/<repo>` \
+         records its top contributors, then read {person_subject} again.\n"
+    )
+}
+
+/// The person's links, one repo per line with their rank there, by repo.
+fn render_person_links(person_subject: &str, links: &[ContributionLink]) -> String {
+    let mut ordered: Vec<&ContributionLink> = links.iter().collect();
+    ordered.sort_by(|a, b| a.repo_subject.cmp(&b.repo_subject));
+    let header = format!(
+        "{person_subject} is linked to {} scraped repo{}:\n",
+        ordered.len(),
+        if ordered.len() == 1 { "" } else { "s" }
+    );
+    ordered.iter().fold(header, |out, link| {
+        out + &format!("  {} (#{})\n", link.repo_subject, link.rank)
+    })
+}
+
+/// Nothing inferred, signed or flagged for this person.
+fn has_no_inference(report: &InferenceReport) -> bool {
+    report.candidates.is_empty() && report.already_signed.is_empty() && report.weakened.is_empty()
+}
+
+/// How to get inferred candidates for a linked person (US-CPI-005 SP-7).
+const HOW_TO_ENABLE_INFERENCE: &str = "To enable inference: sign philosophy claims about \
+these repos (`openlore scrape github <owner>/<repo> --sign N`); signed repo claims are \
+what person candidates are inferred from.\n";
+
+#[cfg(test)]
+mod person_view_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use proptest::prelude::*;
+
+    fn empty_report() -> InferenceReport {
+        InferenceReport {
+            candidates: Vec::new(),
+            already_signed: Vec::new(),
+            repos_without_signed_claims: Vec::new(),
+            weakened: Vec::new(),
+        }
+    }
+
+    fn link(person: &str, repo: &str, rank: u32) -> ContributionLink {
+        let observed = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        ContributionLink {
+            repo_subject: format!("github:{repo}"),
+            person_subject: person.to_string(),
+            github_user_id: 1,
+            rank,
+            contributions: 10,
+            first_observed_at: observed,
+            last_observed_at: observed,
+        }
+    }
+
+    proptest! {
+        /// Every recorded link shows on its own line with the person's rank,
+        /// under a header counting the linked repos; no line is numbered like
+        /// a candidate (so `--sign` numbering stays the report's).
+        #[test]
+        fn a_linked_person_view_lists_every_repo_with_its_rank(
+            ranked in prop::collection::btree_map("[a-z]{1,8}/[a-z]{1,8}", 1u32..=30, 1..6)
+        ) {
+            let person = "github:someone";
+            let links: Vec<ContributionLink> =
+                ranked.iter().map(|(repo, rank)| link(person, repo, *rank)).collect();
+            let view = render_person_view(person, &links, &empty_report());
+            let plural = if links.len() == 1 { "" } else { "s" };
+            let header = format!("{person} is linked to {} scraped repo{plural}", links.len());
+            prop_assert!(view.contains(&header), "{view}");
+            for (repo, rank) in &ranked {
+                let shown = view
+                    .lines()
+                    .any(|line| line.contains(&format!("github:{repo} (#{rank})")));
+                prop_assert!(shown, "{repo} #{rank}\n{view}");
+            }
+            prop_assert!(!view.contains("[1]"), "{view}");
+            prop_assert!(!view.contains("not linked to any repo"), "{view}");
+        }
+
+        /// A person with no recorded link gets guidance naming them and how
+        /// to link them — never a candidate list.
+        #[test]
+        fn an_unlinked_person_view_is_guidance(login in "[a-zA-Z][a-zA-Z0-9-]{0,20}") {
+            let person = format!("github:{login}");
+            let view = render_person_view(&person, &[], &empty_report());
+            let guidance = format!("{person} is not linked to any repo you've scraped");
+            prop_assert!(view.contains(&guidance), "{view}");
+            prop_assert!(view.contains("openlore scrape github <owner>/<repo>"), "{view}");
+            prop_assert!(!view.contains("[1]"), "{view}");
+        }
+    }
 }
