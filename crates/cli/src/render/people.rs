@@ -84,15 +84,25 @@ fn render_already_signed(already: &AlreadySigned) -> String {
 }
 
 /// The DISPLAY-ONLY `derived-from` summary for a person candidate's compose
-/// preview (ADR-064 §6). The provenance itself travels in `evidence[]`.
+/// preview (ADR-064 §6; UC-7): the count of supporting claims, then each one
+/// by its AT-URI under its OWN author (D-7). The provenance itself travels in
+/// `evidence[]`.
 pub fn render_person_derived_from(candidate: &PersonCandidate) -> String {
-    let claims: usize = candidate.support().iter().map(|r| r.claims.len()).sum();
+    let cited: Vec<String> = candidate
+        .support()
+        .iter()
+        .flat_map(|repo| repo.claims.iter().map(|claim| claim.cited.at_uri()))
+        .collect();
     let repos = candidate.support().len();
-    format!(
-        "  derived-from: openlore person inference ({claims} signed repo claim{} across {repos} repo{})\n",
-        if claims == 1 { "" } else { "s" },
+    let summary = format!(
+        "  derived-from: {} signed repo claim{} across {repos} repo{}\n",
+        cited.len(),
+        if cited.len() == 1 { "" } else { "s" },
         if repos == 1 { "" } else { "s" }
-    )
+    );
+    cited
+        .iter()
+        .fold(summary, |block, uri| block + "    " + uri + "\n")
 }
 
 /// `org.openlore.philosophy.memory-safety` → `memory-safety`.

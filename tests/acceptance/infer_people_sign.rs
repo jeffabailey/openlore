@@ -131,7 +131,6 @@ fn maria_signs_an_evidence_backed_adherence_for_the_person_who_builds_her_signed
 ///
 /// @us-cpi-003 @driving_port @real-io @kpi-cpi-2 @d-7 @d-9 @uc-7 @q-cpi-d3 @happy
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 peer-attributed provenance survives signing + publishing)"]
 fn signing_an_inference_keeps_each_supporting_claims_own_author_and_re_verifies() {
     // GIVEN BurntSushi builds ripgrep (Maria signed memory-safety 0.55) and
     // regex (subscribed peer Rachel signed memory-safety 0.60).
@@ -206,7 +205,6 @@ fn signing_an_inference_keeps_each_supporting_claims_own_author_and_re_verifies(
 ///
 /// @us-cpi-003 @driving_port @real-io @kpi-cpi-3 @guardrail
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 listing without --sign writes nothing)"]
 fn listing_inferred_candidates_without_sign_writes_nothing() {
     // GIVEN three inferred candidates exist.
     let env = TestEnv::initialized();
@@ -342,7 +340,6 @@ fn sign_numbers_candidates_within_the_same_person_filter_as_the_list() {
 ///
 /// @us-cpi-003 @driving_port @real-io @error
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 confidence editable only within [0.0, 1.0])"]
 fn an_out_of_range_confidence_is_refused_and_re_asked_before_signing() {
     // GIVEN one inferred candidate.
     let env = TestEnv::initialized();
@@ -369,7 +366,6 @@ fn an_out_of_range_confidence_is_refused_and_re_asked_before_signing() {
 ///
 /// @us-cpi-003 @driving_port @real-io @edge @kpi-cpi-3
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 default confidence never auto-raised)"]
 fn accepting_the_proposed_confidence_signs_the_speculative_value_unchanged() {
     // GIVEN BurntSushi's candidate is proposed at 0.20.
     let env = TestEnv::initialized();

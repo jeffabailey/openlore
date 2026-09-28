@@ -13,7 +13,8 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use claim_domain::{
-    is_self_retracted, is_superseded_by_author, ClaimLineage, ClaimReference, ReferenceType,
+    bare_did, is_self_retracted, is_superseded_by_author, ClaimLineage, ClaimReference,
+    ReferenceType,
 };
 use ports::{
     AuthorRelationship, ContributionLink, FederatedRow, RankedContributor, RawContributor,
@@ -370,8 +371,8 @@ pub struct CitedClaim {
 }
 
 impl CitedClaim {
-    /// Cite a claim; the author DID is stored bare (fragment stripped), the
-    /// form `claim publish` mints into at-uris (Q-CPI-D3).
+    /// Cite a claim; the author DID is stored bare (fragment stripped) by the
+    /// SAME rule `claim publish` mints at-uris with (Q-CPI-D3).
     pub fn new(author_did: &str, cid: &str) -> Self {
         Self {
             author_did: bare_did(author_did).to_string(),
@@ -386,10 +387,6 @@ impl CitedClaim {
 }
 
 const CLAIM_COLLECTION: &str = "org.openlore.claim";
-
-fn bare_did(did: &str) -> &str {
-    did.split('#').next().unwrap_or(did)
-}
 
 /// One repo supporting an inference: the person's rank there and the eligible
 /// signed claims (each with its own author) that support the philosophy.

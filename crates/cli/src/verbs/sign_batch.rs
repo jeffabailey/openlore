@@ -347,14 +347,58 @@ fn prompt_confidence<W: Write, R: std::io::Read>(
     loop {
         let prompt = format!("confidence [{default}]: ");
         match prompt_line(writer, reader, &prompt)? {
-            Some(line) if !line.trim().is_empty() => match line.trim().parse::<f64>() {
-                Ok(value) if (0.0..=1.0).contains(&value) => return Ok(value),
-                _ => {
-                    writeln!(writer, "confidence must be between 0.0 and 1.0")?;
+            Some(line) if !line.trim().is_empty() => match parse_confidence(&line) {
+                Ok(value) => return Ok(value),
+                Err(refusal) => {
+                    writeln!(writer, "{refusal}")?;
                     writer.flush()?;
                 }
             },
             _ => return Ok(default),
+        }
+    }
+}
+
+/// Parse a typed confidence override: a number within `[0.0, 1.0]`, or a
+/// refusal naming the rejected text (US-CPI-003 IS-7). Pure — the prompt loop
+/// re-asks on `Err`, so nothing is signed until a valid value is given.
+fn parse_confidence(raw: &str) -> Result<f64, String> {
+    let typed = raw.trim();
+    typed
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (0.0..=1.0).contains(value))
+        .ok_or_else(|| format!("confidence must be between 0.0 and 1.0 (got {typed})"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Exactly the values in [0.0, 1.0] are accepted, unchanged.
+        #[test]
+        fn a_confidence_within_the_unit_interval_is_accepted_unchanged(value in 0.0f64..=1.0) {
+            prop_assert_eq!(parse_confidence(&value.to_string()), Ok(value));
+        }
+
+        /// Any number outside [0.0, 1.0] is refused, the refusal naming what
+        /// was typed and the valid range.
+        #[test]
+        fn a_confidence_outside_the_unit_interval_is_refused_naming_the_value(
+            value in prop_oneof![-1.0e6f64..-f64::EPSILON, (1.0f64 + 1.0e-9)..1.0e6],
+        ) {
+            let typed = value.to_string();
+            let refusal = parse_confidence(&typed).expect_err("out of range must be refused");
+            prop_assert!(refusal.contains(&typed), "refusal {:?} must name {:?}", refusal, typed);
+            prop_assert!(refusal.contains("confidence must be between 0.0 and 1.0"));
+        }
+
+        /// Text that is not a number (including NaN) is refused, never signed.
+        #[test]
+        fn a_non_numeric_confidence_is_refused(typed in "[a-zA-Z]{1,8}") {
+            prop_assert!(parse_confidence(&typed).is_err());
         }
     }
 }

@@ -71,6 +71,16 @@ pub struct Cid(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Did(pub String);
 
+/// The DID a DID URL names: `<did>#<fragment>` → `<did>`; a bare DID is
+/// returned as-is. The ONE normalisation rule for naming an author in an
+/// at-uri — `claim publish` mints record at-uris with it and person-inference
+/// provenance cites supporting claims with it (Q-CPI-D3).
+pub fn bare_did(author_did: &str) -> &str {
+    author_did
+        .split_once('#')
+        .map_or(author_did, |(did, _fragment)| did)
+}
+
 /// Numeric confidence in `[0.0, 1.0]` (validated by smart constructor).
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Confidence(f64);

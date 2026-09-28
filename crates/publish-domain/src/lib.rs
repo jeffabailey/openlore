@@ -603,13 +603,9 @@ pub fn is_authored_by(author_did: &str, own_did: &str) -> bool {
     bare_did(author_did) == own_did
 }
 
-/// The DID a DID URL names: `<did>#<fragment>` → `<did>`; a bare DID is
-/// returned as-is.
-pub fn bare_did(author_did: &str) -> &str {
-    author_did
-        .split_once('#')
-        .map_or(author_did, |(did, _fragment)| did)
-}
+/// The DID a DID URL names — the shared pure rule (Q-CPI-D3), re-exported
+/// so every caller of `publish_domain::bare_did` keeps working.
+pub use claim_domain::bare_did;
 
 /// Re-parse a pulled record's bytes into the signed claim a pull inserts.
 /// The claim carries the RECOMPUTED CID (never a CID from the wire).
