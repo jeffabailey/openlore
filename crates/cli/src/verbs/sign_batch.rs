@@ -12,7 +12,11 @@
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
-use claim_domain::{canonicalize, compute_cid, ClaimReference, SignedClaim};
+use claim_domain::{
+    canonicalize, compute_cid, reference_rules_validate, Cid, ClaimLookup, ClaimReference,
+    SignedClaim,
+};
+use ports::StoragePort;
 
 use crate::io::prompt_line;
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
@@ -177,6 +181,18 @@ fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, Stri
 /// DISPLAY-ONLY (WD-62 / I-SCR-7) — it appears in the preview but is NEVER a
 /// signed-payload field, so the signed CID is byte-identical to a
 /// hand-authored claim's.
+/// `ClaimLookup` over the local store for the reference rules' cycle arm; a
+/// read error or unknown CID is "not known", as the rules expect.
+struct StoredClaimLookup<'a> {
+    storage: &'a dyn StoragePort,
+}
+
+impl ClaimLookup for StoredClaimLookup<'_> {
+    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
+        self.storage.read_signed_claim(cid).ok().flatten()
+    }
+}
+
 fn sign_candidate_via_slice01(
     wiring: &Wiring,
     candidate: &SignableCandidate,
@@ -235,6 +251,14 @@ fn sign_candidate_via_slice01(
     // `claim add` uses; the derived-from line is NOT folded in (display-only),
     // so the CID is byte-identical to a hand-authored claim's.
     let unsigned = build_unsigned_claim(&composed)?;
+    // The shipped reference rules (self-reference / two-hop cycle) gate any
+    // reference a candidate carries — a STRONGER inference's `supersedes` —
+    // BEFORE signing. No references: the rules have nothing to check.
+    let lookup = StoredClaimLookup {
+        storage: wiring.storage.as_ref(),
+    };
+    reference_rules_validate(&unsigned, Some(&lookup as &dyn ClaimLookup))
+        .map_err(|e| anyhow!("reference rules rejected the candidate claim: {e}"))?;
     let canonical_bytes =
         canonicalize(&unsigned).map_err(|e| anyhow!("canonicalizing candidate claim: {e}"))?;
     let unsigned_cid = compute_cid(&canonical_bytes);

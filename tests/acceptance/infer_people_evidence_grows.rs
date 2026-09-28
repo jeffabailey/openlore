@@ -120,7 +120,6 @@ fn a_newly_signed_repo_philosophy_proposes_a_new_person_inference() {
 ///
 /// @us-cpi-004 @driving_port @real-io @ddd-8 @happy
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (US-CPI-004 STRONGER label names the earlier claim)"]
 fn stronger_evidence_is_offered_as_a_superseding_candidate() {
     // GIVEN p7 rests on one repo AND regex now has Maria's memory-safety claim.
     let env = TestEnv::initialized();
@@ -149,7 +148,6 @@ fn stronger_evidence_is_offered_as_a_superseding_candidate() {
 ///
 /// @us-cpi-004 @driving_port @real-io @kpi-cpi-4 @d-5 @ddd-12 @happy
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (US-CPI-004 STRONGER sign supersedes, old claim byte-identical)"]
 fn signing_stronger_evidence_supersedes_and_never_edits_the_earlier_claim() {
     // GIVEN the EG-2 state.
     let env = TestEnv::initialized();
@@ -370,7 +368,6 @@ fn newly_recorded_people_alone_can_create_new_inferences() {
 ///
 /// @us-cpi-004 @driving_port @real-io @uc-4 @edge
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (UC-4 hand-authored adherence never STRONGER)"]
 fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
     // GIVEN Maria hand-signed BurntSushi memory-safety citing a blog post, and
     // two signed repos now support it.
@@ -407,7 +404,6 @@ fn a_hand_authored_adherence_is_already_signed_and_never_superseded() {
 ///
 /// @us-cpi-004 @driving_port @real-io @q-cpi-d4 @edge
 #[test]
-#[ignore = "DELIVER slice-04: unskip one-at-a-time (Q-CPI-D4 supersede the latest of several current claims)"]
 fn with_two_current_inferred_claims_the_latest_is_the_one_superseded() {
     // GIVEN two inferred-shape claims for the pair, at T1 and T2.
     let env = TestEnv::initialized();

@@ -635,7 +635,9 @@ pub struct InferenceFilter {
     pub min_repos: usize,
 }
 
-/// One of MY signed claims, as the already-signed check (DDD-8) sees it.
+/// One of MY signed claims, as the already-signed / STRONGER classification
+/// (DDD-8) sees it: its evidence carries the cited AT-URIs (ADR-064 §5) and
+/// its `composed_at` orders several current claims for one pair (Q-CPI-D4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnClaim {
     pub subject: String,
@@ -643,6 +645,10 @@ pub struct OwnClaim {
     pub object: String,
     pub author_did: String,
     pub cid: String,
+    pub evidence: Vec<String>,
+    /// RFC3339 UTC as the one clock port writes it, so lexical order is
+    /// chronological.
+    pub composed_at: String,
     pub references: Vec<ClaimReference>,
 }
 
@@ -654,20 +660,38 @@ pub struct AlreadySigned {
     pub cid: String,
 }
 
+/// Why a numbered candidate is proposed (DDD-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateStatus {
+    /// No standing adherence of mine for the pair.
+    New,
+    /// My latest standing INFERRED claim for the pair leaves a currently
+    /// supporting repo uncited; signing adds `supersedes <cid>` to a NEW claim
+    /// and leaves that claim unchanged (D-5).
+    Stronger { supersedes: String },
+}
+
+/// A numbered candidate and why it is proposed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberedCandidate {
+    pub candidate: PersonCandidate,
+    pub status: CandidateStatus,
+}
+
 /// One `infer people` run as pure data: the numbered candidates, the
 /// inferred pairs I already signed (unnumbered, DDD-8), plus the linked repos
 /// that contributed nothing because no signed philosophy claim is about them
 /// (D-2 / KPI-CPI-3 footer) — so the render needs no second query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferenceReport {
-    pub candidates: Vec<PersonCandidate>,
+    pub candidates: Vec<NumberedCandidate>,
     pub already_signed: Vec<AlreadySigned>,
     pub repos_without_signed_claims: Vec<String>,
 }
 
-/// Infer the report under `filter`, setting aside the pairs my own standing
-/// adherence claims already sign. Person scoping narrows the links first, so
-/// the footer names only the scoped person's repos.
+/// Infer the report under `filter`, classifying each candidate against my
+/// own standing adherence claims (DDD-8). Person scoping narrows the links
+/// first, so the footer names only the scoped person's repos.
 pub fn infer_people_report(
     links: &[ContributionLink],
     repo_claims: &[RepoClaim],
@@ -681,21 +705,43 @@ pub fn infer_people_report(
         .cloned()
         .collect();
     let signed = standing_adherences(own_claims);
+    let no_standing: Vec<&OwnClaim> = Vec::new();
     let (already_signed, candidates) = infer_person_candidates(&scoped_links, repo_claims)
         .into_iter()
         .filter(|candidate| candidate.support().len() >= filter.min_repos)
         .fold(
             (Vec::new(), Vec::new()),
             |(mut already, mut numbered), candidate| {
-                match signed.get(&pair_key(
-                    candidate.person_subject(),
-                    candidate.philosophy(),
-                )) {
-                    Some(cid) => already.push(AlreadySigned {
-                        cid: (*cid).to_string(),
+                let standing = signed
+                    .get(&pair_key(
+                        candidate.person_subject(),
+                        candidate.philosophy(),
+                    ))
+                    .unwrap_or(&no_standing);
+                match classify(&candidate, standing) {
+                    Classification::New => numbered.push(NumberedCandidate {
+                        candidate,
+                        status: CandidateStatus::New,
+                    }),
+                    Classification::AlreadySigned(cid) => already.push(AlreadySigned {
+                        cid: cid.to_string(),
                         candidate,
                     }),
-                    None => numbered.push(candidate),
+                    Classification::Stronger {
+                        supersedes,
+                        still_signed,
+                    } => {
+                        already.extend(still_signed.iter().map(|cid| AlreadySigned {
+                            cid: (*cid).to_string(),
+                            candidate: candidate.clone(),
+                        }));
+                        numbered.push(NumberedCandidate {
+                            candidate,
+                            status: CandidateStatus::Stronger {
+                                supersedes: supersedes.to_string(),
+                            },
+                        });
+                    }
                 }
                 (already, numbered)
             },
@@ -705,6 +751,69 @@ pub fn infer_people_report(
         already_signed,
         repos_without_signed_claims: repos_without_signed_claims(&scoped_links, repo_claims),
     }
+}
+
+/// How one candidate stands against my standing claims for its pair.
+enum Classification<'a> {
+    New,
+    AlreadySigned(&'a str),
+    Stronger {
+        supersedes: &'a str,
+        still_signed: Vec<&'a str>,
+    },
+}
+
+/// DDD-8 / UC-4 / Q-CPI-D4: no standing claim → NEW; any hand-authored one
+/// (cites no claim AT-URI) → already signed, never STRONGER; otherwise the
+/// latest `composed_at` inferred claim is STRONGER-superseded when a repo
+/// supporting the candidate now is cited by none of its claim AT-URIs — the
+/// others stay listed as already signed.
+fn classify<'a>(candidate: &PersonCandidate, standing: &[&'a OwnClaim]) -> Classification<'a> {
+    let Some(smallest) = standing.iter().map(|claim| claim.cid.as_str()).min() else {
+        return Classification::New;
+    };
+    if standing.iter().any(|claim| is_hand_authored(claim)) {
+        return Classification::AlreadySigned(smallest);
+    }
+    let Some(latest) = standing
+        .iter()
+        .max_by(|a, b| (&a.composed_at, &a.cid).cmp(&(&b.composed_at, &b.cid)))
+    else {
+        return Classification::New;
+    };
+    if !has_uncited_supporting_repo(candidate, latest) {
+        return Classification::AlreadySigned(smallest);
+    }
+    let mut still_signed: Vec<&str> = standing
+        .iter()
+        .filter(|claim| claim.cid != latest.cid)
+        .map(|claim| claim.cid.as_str())
+        .collect();
+    still_signed.sort_unstable();
+    Classification::Stronger {
+        supersedes: latest.cid.as_str(),
+        still_signed,
+    }
+}
+
+/// UC-4: an adherence citing no claim AT-URI was authored by hand.
+fn is_hand_authored(claim: &OwnClaim) -> bool {
+    parse_provenance(&claim.evidence).is_empty()
+}
+
+/// Some repo supporting the candidate NOW has none of its supporting claims
+/// cited by `signed` (claims matched by content address).
+fn has_uncited_supporting_repo(candidate: &PersonCandidate, signed: &OwnClaim) -> bool {
+    let cited: BTreeSet<String> = parse_provenance(&signed.evidence)
+        .into_iter()
+        .map(|cited| cited.cid)
+        .collect();
+    candidate.support().iter().any(|repo| {
+        !repo
+            .claims
+            .iter()
+            .any(|claim| cited.contains(&claim.cited.cid))
+    })
 }
 
 /// DDD-14 change summary: how many numbered (unsigned) inferred candidates
@@ -723,7 +832,12 @@ fn numbered_pair_keys(report: &InferenceReport) -> BTreeSet<(String, String)> {
     report
         .candidates
         .iter()
-        .map(|candidate| pair_key(candidate.person_subject(), candidate.philosophy()))
+        .map(|numbered| {
+            pair_key(
+                numbered.candidate.person_subject(),
+                numbered.candidate.philosophy(),
+            )
+        })
         .collect()
 }
 
@@ -734,9 +848,8 @@ fn pair_key(person_subject: &str, philosophy: &str) -> (String, String) {
 
 /// DDD-8: my STANDING adherence claims by pair — any adherence I signed
 /// (from an inference or by hand) that is no retraction marker and that I have
-/// neither retracted nor superseded (the shared claim-domain rules). The
-/// smallest CID represents a pair signed more than once.
-fn standing_adherences(own_claims: &[OwnClaim]) -> BTreeMap<(String, String), &str> {
+/// neither retracted nor superseded (the shared claim-domain rules).
+fn standing_adherences(own_claims: &[OwnClaim]) -> BTreeMap<(String, String), Vec<&OwnClaim>> {
     let lineages: Vec<ClaimLineage<'_>> = own_claims.iter().map(OwnClaim::lineage).collect();
     own_claims
         .iter()
@@ -749,8 +862,8 @@ fn standing_adherences(own_claims: &[OwnClaim]) -> BTreeMap<(String, String), &s
         .fold(BTreeMap::new(), |mut by_pair, claim| {
             by_pair
                 .entry(pair_key(&claim.subject, &claim.object))
-                .and_modify(|cid: &mut &str| *cid = (*cid).min(claim.cid.as_str()))
-                .or_insert(claim.cid.as_str());
+                .or_insert_with(Vec::new)
+                .push(claim);
             by_pair
         })
 }
@@ -1240,7 +1353,8 @@ mod tests {
             (links, claims) in arb_inference_inputs(),
         ) {
             let report = infer_people_report(&links, &claims, &[], &InferenceFilter::default());
-            prop_assert_eq!(&report.candidates, &infer_person_candidates(&links, &claims));
+            prop_assert_eq!(numbered(&report), infer_person_candidates(&links, &claims));
+            prop_assert!(report.candidates.iter().all(|n| n.status == CandidateStatus::New));
             let expected: BTreeSet<String> = links
                 .iter()
                 .map(|l| subject_key(&l.repo_subject))
@@ -1269,7 +1383,7 @@ mod tests {
                 .into_iter()
                 .filter(|c| subject_key(c.person_subject()) == subject_key(person))
                 .collect();
-            prop_assert_eq!(&scoped.candidates, &expected);
+            prop_assert_eq!(numbered(&scoped), expected);
             let persons_repos: BTreeSet<String> = links
                 .iter()
                 .filter(|l| subject_key(&l.person_subject) == subject_key(person))
@@ -1282,7 +1396,7 @@ mod tests {
             let named: BTreeSet<String> = scoped.repos_without_signed_claims.iter().map(|r| subject_key(r)).collect();
             prop_assert_eq!(named, unsupported);
             let author_of: BTreeSet<(String, String)> = claims.iter().map(|c| (c.cid.clone(), bare_did(&c.author_did).to_string())).collect();
-            for candidate in &scoped.candidates {
+            for candidate in numbered(&scoped).iter() {
                 prop_assert!(!candidate.support().is_empty());
                 for repo in candidate.support() {
                     prop_assert!(!repo.claims.is_empty());
@@ -1458,6 +1572,9 @@ mod tests {
                         predicate: predicate.to_string(),
                         object: philosophy.to_string(),
                         author_did: "did:plc:me".to_string(),
+                        // Hand-authored shape: cites no claim AT-URI (UC-4).
+                        evidence: vec!["https://example.org/why".to_string()],
+                        composed_at: "2026-09-01T09:00:00Z".to_string(),
                         references: reference
                             .filter(|(_, target)| cids[*target] != cid)
                             .map(|(ref_type, target)| ClaimReference {
@@ -1499,6 +1616,15 @@ mod tests {
             .collect()
     }
 
+    /// The numbered candidates of a report, without their status.
+    fn numbered(report: &InferenceReport) -> Vec<PersonCandidate> {
+        report
+            .candidates
+            .iter()
+            .map(|n| n.candidate.clone())
+            .collect()
+    }
+
     fn pair_of(candidate: &PersonCandidate) -> (String, String) {
         (
             subject_key(candidate.person_subject()),
@@ -1534,7 +1660,7 @@ mod tests {
                 .into_iter()
                 .partition(|c| signed.contains(&pair_of(c)));
 
-            prop_assert_eq!(&report.candidates, &expected_numbered);
+            prop_assert_eq!(numbered(&report), expected_numbered);
             let shown: Vec<&PersonCandidate> = report.already_signed.iter().map(|a| &a.candidate).collect();
             prop_assert_eq!(shown, expected_signed.iter().collect::<Vec<_>>());
             for already in &report.already_signed {
@@ -1565,7 +1691,11 @@ mod tests {
     // --- the scrape's before/after change summary (US-CPI-004; DDD-14) ---
 
     fn numbered_pairs(report: &InferenceReport) -> BTreeSet<(String, String)> {
-        report.candidates.iter().map(pair_of).collect()
+        report
+            .candidates
+            .iter()
+            .map(|n| pair_of(&n.candidate))
+            .collect()
     }
 
     proptest! {
@@ -1594,6 +1724,155 @@ mod tests {
             let after = infer_people_report(&links_after, &claims_after, &own, &everything);
             let expected = numbered_pairs(&after).difference(&numbered_pairs(&before)).count();
             prop_assert_eq!(new_inferred_candidate_count(&before, &after), expected);
+        }
+    }
+
+    // --- STRONGER vs already signed (US-CPI-004; DDD-8 / UC-4 / Q-CPI-D4) ---
+
+    /// My adherence claim for `candidate`'s pair, citing the supporting claims
+    /// of the repos `cited_repos` selects (bit i = repo i; 0 cites no claim —
+    /// a hand-authored shape), composed on September `day`.
+    fn my_claim_for(
+        candidate: &PersonCandidate,
+        cited_repos: u8,
+        day: u8,
+        cid: String,
+    ) -> OwnClaim {
+        let evidence = candidate
+            .support()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| cited_repos & (1 << (i % 8)) != 0)
+            .flat_map(|(_, repo)| repo.claims.iter().map(|c| c.cited.at_uri()))
+            .chain(std::iter::once(format!(
+                "https://github.com/o/r/commits?author={}",
+                candidate.login()
+            )))
+            .collect();
+        OwnClaim {
+            subject: candidate.person_subject().to_string(),
+            predicate: ADHERES_TO_PHILOSOPHY.to_string(),
+            object: candidate.philosophy().to_string(),
+            author_did: "did:plc:me".to_string(),
+            cid,
+            evidence,
+            composed_at: format!("2026-09-{day:02}T09:00:00Z"),
+            references: Vec::new(),
+        }
+    }
+
+    /// My claims drawn over the inferred candidates: `(which candidate, which
+    /// repos it cites, which day)`, each with a distinct CID.
+    fn my_claims(candidates: &[PersonCandidate], picks: &[(usize, u8, u8)]) -> Vec<OwnClaim> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        picks
+            .iter()
+            .enumerate()
+            .map(|(k, (which, cited_repos, day))| {
+                my_claim_for(
+                    &candidates[which % candidates.len()],
+                    *cited_repos,
+                    *day,
+                    format!("bafymine{k}"),
+                )
+            })
+            .collect()
+    }
+
+    fn cites_a_claim(claim: &OwnClaim) -> bool {
+        claim.evidence.iter().any(|e| e.starts_with("at://"))
+    }
+
+    fn mine_for<'a>(own: &'a [OwnClaim], candidate: &PersonCandidate) -> Vec<&'a OwnClaim> {
+        own.iter()
+            .filter(|c| (subject_key(&c.subject), c.object.clone()) == pair_of(candidate))
+            .collect()
+    }
+
+    fn numbered_status<'a>(
+        report: &'a InferenceReport,
+        candidate: &PersonCandidate,
+    ) -> Option<&'a CandidateStatus> {
+        report
+            .candidates
+            .iter()
+            .find(|n| pair_of(&n.candidate) == pair_of(candidate))
+            .map(|n| &n.status)
+    }
+
+    proptest! {
+        /// UC-4: a pair I signed by hand (a claim citing no claim AT-URI) is
+        /// already signed and never STRONGER, however support grows; and no
+        /// STRONGER ever supersedes a hand-authored claim.
+        #[test]
+        fn a_claim_citing_no_at_uri_is_never_superseded(
+            (links, claims) in arb_inference_inputs(),
+            picks in proptest::collection::vec((0usize..16, any::<u8>(), 1u8..=28), 0..6),
+        ) {
+            let inferred = infer_person_candidates(&links, &claims);
+            let own = my_claims(&inferred, &picks);
+            let report = infer_people_report(&links, &claims, &own, &InferenceFilter::default());
+            for candidate in &inferred {
+                let mine = mine_for(&own, candidate);
+                if mine.iter().any(|c| !cites_a_claim(c)) {
+                    prop_assert_eq!(numbered_status(&report, candidate), None);
+                    prop_assert!(report.already_signed.iter().any(|a| pair_of(&a.candidate) == pair_of(candidate)));
+                }
+            }
+            for numbered in &report.candidates {
+                if let CandidateStatus::Stronger { supersedes } = &numbered.status {
+                    let superseded = own.iter().find(|c| &c.cid == supersedes);
+                    prop_assert!(superseded.is_some_and(cites_a_claim), "supersedes a claim citing support");
+                }
+            }
+        }
+
+        /// DDD-8 / Q-CPI-D4: with only inferred claims for a pair, the pair is
+        /// STRONGER exactly when a repo supporting it now is cited by none of
+        /// the LATEST (composed_at) claim's AT-URIs; the STRONGER supersedes
+        /// that latest claim and every other one stays listed as already
+        /// signed. Otherwise the pair is already signed, never numbered.
+        #[test]
+        fn stronger_supersedes_the_latest_claim_when_support_has_an_uncited_repo(
+            (links, claims) in arb_inference_inputs(),
+            picks in proptest::collection::vec((0usize..16, any::<u8>(), 1u8..=28), 0..6),
+        ) {
+            let inferred = infer_person_candidates(&links, &claims);
+            // Every claim cites at least its first supporting repo: inferred only.
+            let picks: Vec<(usize, u8, u8)> = picks.into_iter().map(|(w, repos, day)| (w, repos | 1, day)).collect();
+            let own = my_claims(&inferred, &picks);
+            let report = infer_people_report(&links, &claims, &own, &InferenceFilter::default());
+            for candidate in &inferred {
+                let mine = mine_for(&own, candidate);
+                let listed: BTreeSet<&str> = report
+                    .already_signed
+                    .iter()
+                    .filter(|a| pair_of(&a.candidate) == pair_of(candidate))
+                    .map(|a| a.cid.as_str())
+                    .collect();
+                let Some(latest) = mine.iter().max_by_key(|c| (c.composed_at.clone(), c.cid.clone())) else {
+                    prop_assert_eq!(numbered_status(&report, candidate), Some(&CandidateStatus::New));
+                    continue;
+                };
+                let cited: BTreeSet<&str> = latest.evidence.iter().filter_map(|e| e.rsplit('/').next()).collect();
+                let uncited_repo = candidate
+                    .support()
+                    .iter()
+                    .any(|repo| repo.claims.iter().all(|c| !cited.contains(c.cited.cid.as_str())));
+                if uncited_repo {
+                    prop_assert_eq!(
+                        numbered_status(&report, candidate),
+                        Some(&CandidateStatus::Stronger { supersedes: latest.cid.clone() })
+                    );
+                    let others: BTreeSet<&str> = mine.iter().filter(|c| c.cid != latest.cid).map(|c| c.cid.as_str()).collect();
+                    prop_assert_eq!(listed, others);
+                } else {
+                    prop_assert_eq!(numbered_status(&report, candidate), None);
+                    prop_assert_eq!(listed.len(), 1);
+                }
+            }
         }
     }
 }

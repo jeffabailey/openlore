@@ -2,7 +2,10 @@
 //! Q-CPI-D1 load-bearing substrings pinned by DISTILL). Pure: values in,
 //! strings out.
 
-use scraper_domain::{confidence_arithmetic, AlreadySigned, InferenceReport, PersonCandidate};
+use scraper_domain::{
+    confidence_arithmetic, AlreadySigned, CandidateStatus, InferenceReport, NumberedCandidate,
+    PersonCandidate,
+};
 
 /// The whole `infer people` output: the candidate list (or the empty-result
 /// line), the pairs I already signed (unnumbered, with my claim's CID —
@@ -26,12 +29,12 @@ pub fn render_inference_report(report: &InferenceReport) -> String {
 }
 
 /// The numbered inferred-candidate list, or the empty-result line. Each
-/// candidate's block: a `[n] NEW <person> adheres to <philosophy>` headline
-/// (NEW: no standing adherence of mine for the pair — DDD-8), one
-/// provenance line per supporting claim (repo, rank, claim CID, that claim's
-/// OWN author — D-7), and the speculative confidence with its arithmetic
-/// (J-002c).
-pub fn render_person_candidates(candidates: &[PersonCandidate]) -> String {
+/// candidate's block: a `[n] NEW|STRONGER <person> adheres to <philosophy>`
+/// headline (DDD-8), for a STRONGER one the earlier claim it supersedes and
+/// the reassurance that claim stays unchanged (D-5), one provenance line per
+/// supporting claim (repo, rank, claim CID, that claim's OWN author — D-7),
+/// and the speculative confidence with its arithmetic (J-002c).
+pub fn render_person_candidates(candidates: &[NumberedCandidate]) -> String {
     if candidates.is_empty() {
         return "No inferred candidates (no signed repo claims about recorded contributors).\n"
             .to_string();
@@ -45,12 +48,22 @@ pub fn render_person_candidates(candidates: &[PersonCandidate]) -> String {
     out
 }
 
-fn render_person_candidate(number: usize, candidate: &PersonCandidate) -> String {
+fn render_person_candidate(number: usize, numbered: &NumberedCandidate) -> String {
+    let candidate = &numbered.candidate;
     let mut block = format!(
-        "  [{number}] NEW {} adheres to {}\n",
+        "  [{number}] {} {} adheres to {}\n",
+        status_label(&numbered.status),
         candidate.person_subject(),
         philosophy_short_name(candidate.philosophy())
     );
+    if let CandidateStatus::Stronger { supersedes } = &numbered.status {
+        let repos = candidate.support().len();
+        block.push_str(&format!(
+            "        you signed claim {supersedes}; now {repos} repo{} support it — \
+             signing SUPERSEDES it with a new claim (your existing claim is unchanged)\n",
+            if repos == 1 { "" } else { "s" }
+        ));
+    }
     for repo in candidate.support() {
         for claim in &repo.claims {
             block.push_str(&format!(
@@ -72,6 +85,13 @@ fn render_person_candidate(number: usize, candidate: &PersonCandidate) -> String
         )
     ));
     block
+}
+
+fn status_label(status: &CandidateStatus) -> &'static str {
+    match status {
+        CandidateStatus::New => "NEW",
+        CandidateStatus::Stronger { .. } => "STRONGER",
+    }
 }
 
 /// An inferred pair I already signed: never numbered, cited by my claim CID.

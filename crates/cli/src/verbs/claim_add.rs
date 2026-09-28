@@ -34,7 +34,8 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use claim_domain::{
-    canonicalize, compute_cid, ClaimReference, ConfidenceBucket, Did, SignedClaim, UnsignedClaim,
+    canonicalize, compute_cid, ClaimReference, ConfidenceBucket, Did, ReferenceType, SignedClaim,
+    UnsignedClaim,
 };
 
 use lexicon::ObjectAdvisory;
@@ -314,6 +315,17 @@ pub fn render_compose_preview(claim: &ComposedClaim) -> String {
     ));
     out.push_str(&format!("  author:     {}\n", claim.author_did));
     out.push_str(&format!("  composedAt: {}\n", claim.composed_at));
+    // DDD-12: a claim carrying references (a STRONGER inference's
+    // `supersedes`) shows them, read-only; the referenced claim itself is
+    // never touched (D-5). No references → nothing appended, so every
+    // pre-existing preview stays byte-identical.
+    for reference in &claim.references {
+        out.push_str(&format!(
+            "  references: {} {} (that claim stays unchanged)\n",
+            reference_type_name(reference.ref_type),
+            reference.cid.0
+        ));
+    }
 
     // Slice-25 (US-PV-004, AC-004.1/.2): a DISPLAY-ONLY advisory line for a
     // philosophy-namespace `--object`. This shapes the preview STRING only — it
@@ -324,6 +336,16 @@ pub fn render_compose_preview(claim: &ComposedClaim) -> String {
         out.push_str(&advisory_line);
     }
     out
+}
+
+/// The lexicon spelling of a reference type, for the compose preview.
+fn reference_type_name(ref_type: ReferenceType) -> &'static str {
+    match ref_type {
+        ReferenceType::Retracts => "retracts",
+        ReferenceType::Counters => "counters",
+        ReferenceType::Supersedes => "supersedes",
+        ReferenceType::Corrects => "corrects",
+    }
 }
 
 /// Render the display-only compose advisory line for a claim `--object`, or

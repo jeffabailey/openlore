@@ -17,10 +17,12 @@
 use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
+use claim_domain::{Cid, ClaimReference, ReferenceType};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, repo_subjects_to_read, InferenceFilter,
-    InferenceReport, OwnClaim, PersonCandidate, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, repo_subjects_to_read, CandidateStatus,
+    InferenceFilter, InferenceReport, NumberedCandidate, OwnClaim, PersonSubject, RepoClaim,
+    ADHERES_TO_PHILOSOPHY,
 };
 
 use crate::render::{render_inference_report, render_person_derived_from};
@@ -139,6 +141,8 @@ fn read_own_adherence_claims(wiring: &Wiring) -> Result<Vec<OwnClaim>> {
                 object: signed.unsigned.object,
                 author_did: row.author_did.0.clone(),
                 cid: row.cid.0.clone(),
+                evidence: signed.unsigned.evidence,
+                composed_at: signed.unsigned.composed_at,
                 references: signed.unsigned.references,
             })
         })
@@ -188,18 +192,31 @@ fn read_all_pages(
     }
 }
 
-/// Pre-fill the shared compose editor from one person candidate: ADR-064
+/// Pre-fill the shared compose editor from one numbered candidate: ADR-064
 /// subject/predicate/object, the provenance as `evidence[]`, the DDD-9
-/// proposed confidence, and no references (a NEW inference supersedes
-/// nothing).
-fn signable_from(candidate: &PersonCandidate) -> SignableCandidate {
+/// proposed confidence, and its references — none for a NEW inference, one
+/// `supersedes` of my earlier claim for a STRONGER one (DDD-12; D-5: the
+/// earlier claim itself is never touched).
+fn signable_from(numbered: &NumberedCandidate) -> SignableCandidate {
+    let candidate = &numbered.candidate;
     SignableCandidate {
         subject: candidate.person_subject().to_string(),
         predicate: ADHERES_TO_PHILOSOPHY.to_string(),
         object: candidate.philosophy().to_string(),
         evidence: encode_provenance(candidate),
         confidence: candidate.confidence().as_decimal(),
-        references: Vec::new(),
+        references: references_for(&numbered.status),
         derived_from: render_person_derived_from(candidate),
+    }
+}
+
+/// The typed references a candidate's status adds to the signed claim.
+fn references_for(status: &CandidateStatus) -> Vec<ClaimReference> {
+    match status {
+        CandidateStatus::New => Vec::new(),
+        CandidateStatus::Stronger { supersedes } => vec![ClaimReference {
+            ref_type: ReferenceType::Supersedes,
+            cid: Cid(supersedes.clone()),
+        }],
     }
 }
