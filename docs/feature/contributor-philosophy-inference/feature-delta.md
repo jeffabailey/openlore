@@ -1271,3 +1271,64 @@ narrow in DELIVER: see `distill/acceptance-review.md` § "Existing tests DELIVER
 
 RED gate: 0 BROKEN (`distill/red-classification.md`). Details, self-review fixes and the
 existing tests DELIVER must narrow: `distill/acceptance-review.md`.
+
+---
+
+## Wave: DELIVER / [REF] Ratified AC additions (finalize, 2026-09-28)
+
+> PO follow-up from the consolidated DISTILL gate (`distill/acceptance-review.md`): DESIGN's
+> UC-1..UC-8 (`design/upstream-changes.md`) and DISTILL's IP-14 were ratified there and are
+> now explicit ACs on their stories. Appended, not rewritten: the DISCUSS AC lists above keep
+> their original wording; where an addition refines a DISCUSS AC, the addition governs.
+> All are implemented and green (DELIVER 01-01..05-02).
+
+### US-CPI-001: Scraping a repo records who builds it
+
+- [x] **UC-1** — `--contributors 0` records none, says so, and makes no contributors request
+      (refines "one extra request": 1 when N ≥ 1, 0 when N = 0). Scenario CL-4; step 01-03.
+- [x] **UC-2** — When GitHub cannot list contributors for the repo (403 "list too large", 204
+      empty repo), the CLI names the reason, records no links, and exits 0. Scenarios CL-9,
+      CL-10; step 01-05.
+- [x] **UC-3** — `scrape github <user> --contributors N` is rejected with a usage error before any
+      request, saying the flag is for `owner/repo` targets. Scenario CL-12; step 01-03.
+- [x] **UC-6** — Contribution links and repo claims whose `github:` subjects differ only in letter
+      case are treated as the same repo. Scenario IP-9; steps 01-04, 02-02.
+
+### US-CPI-002: See which philosophies a person likely holds, and why
+
+- [x] **UC-4** — A person/philosophy pair I signed without inferred provenance is shown as already
+      signed and never proposed for supersession. Scenario EG-9; step 04-02.
+- [x] **UC-6** — (as US-CPI-001) a repo scraped as `burntsushi/ripgrep` joins a claim on
+      `github:BurntSushi/ripgrep`. Scenario IP-9.
+- [x] **UC-8** — `infer people --sign N` numbers candidates identically to `infer people` run with
+      the same filters (`--person`, `--min-repos`). Scenario IS-6; step 03-02.
+- [x] **IP-14** — `--person` must be `github:<login>`; a person named without the `github:`
+      prefix is refused with the expected form, exit non-zero.
+      Scenario IP-14; step 02-03.
+
+### US-CPI-003: Sign an inferred adherence I agree with
+
+- [x] **UC-7** — The signed claim's evidence names each supporting claim by its AT-URI
+      (`at://<author>/org.openlore.claim/<cid>`) and the person's commits URL
+      (`https://github.com/<o>/<r>/commits?author=<login>`) for each supporting repo; the
+      compose preview shows the same list plus the `derived-from` summary line. Scenarios
+      WS-CPI-1, IS-2; steps 01-02, 03-01.
+- [x] **UC-8** — (as US-CPI-002) `--sign N` selections refer to the list produced with the same
+      filters. Scenario IS-6.
+
+### US-CPI-004: New repos grow the inference without rewriting what I signed
+
+- [x] **UC-4** — A hand-authored `adheresToPhilosophy` claim (evidence cites no supporting claim)
+      counts as already signed and is never labelled STRONGER. Scenario EG-9; step 04-02.
+- [x] **UC-5** — A signed inferred claim is flagged SUPPORT WEAKENED, naming the reason
+      (retracted / peer no longer subscribed / not in local store), and is never modified.
+      Scenarios EG-4, EG-5, EG-6; step 04-03.
+
+### US-CPI-005: Read a person, not just a repo
+
+- [x] **UC-3** — (as US-CPI-001) `--contributors` is refused on a user target before any request.
+      Scenario CL-12.
+- [x] **SP-5 (gate fix)** — "one `/users/{user}` request only" holds literally: the user scrape
+      reads the profile exactly once (`seen_paths == ["/users/<user>"]`). Step 05-01. Known
+      gap: the viewer `/scrape` route still double-fetches (pre-existing surface; follow-up in
+      `docs/evolution/contributor-philosophy-inference-evolution.md`).
