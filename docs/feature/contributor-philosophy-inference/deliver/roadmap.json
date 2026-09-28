@@ -1,0 +1,855 @@
+{
+  "roadmap": {
+    "project_id": "contributor-philosophy-inference",
+    "created_at": "2026-09-27T00:00:00Z",
+    "total_steps": 15
+  },
+  "total_steps": 15,
+  "phases": [
+    {
+      "id": "01",
+      "name": "Slice-01 — Record who builds each scraped repo (US-CPI-001) + the thin walking-skeleton thread through slices 02/03",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Scraping a repo records its top-30 human contributors in an append-only local link table and names the excluded bots",
+          "description": "First vertebra of WS-CPI-1. (a) EXTEND GithubPort with a contributors read + raw contributor row + named ContributorsUnavailable variant (DDD-2); adapter-github issues ONE public GET /repos/{o}/{r}/contributors?per_page=100. (b) PURE selection in a new scraper-domain `people` area: bot rule, re-rank (contributions desc, login asc), de-dup by user id, top-N (default 30), bots_excluded (DDD-3). (c) NEW ContributionLinkPort (no delete/update) + migration v5 `contribution_links` (DDD-5) + DuckDbContributionLinkAdapter on the shared connection with a LIVE probe (upsert-twice sentinel in a rolled-back tx, DDD-15), wired then probed in wiring.rs; supported schema version → 5. (d) `scrape github owner/repo` records the snapshot in one tx and prints the contributors block (no `[n] ` markers). (e) Narrow existing tests (acceptance-review #2).",
+          "criteria": [
+            "CL-1: `scrape github BurntSushi/ripgrep` records 30 humans ranked by commits as links to github:BurntSushi/ripgrep, prints `Contributors recorded: 30` + `bots excluded` naming each bot, writes zero claims.",
+            "Migration v5 is forward-only and idempotent: opening a v4 store upgrades it; re-opening a v5 store is a no-op; the store reports schema version 5.",
+            "A store where the link adapter's probe fails (upsert-twice sentinel does not refresh rank or alters first-observed) refuses to start with a structured `health.startup.refused` event.",
+            "The contributors block carries no `[n] ` markers; the shipped scrape_github / scrape_sign / scrape_candidates / scrape_auth suites and viewer_is_read_only stay green (the viewer records no links).",
+            "`assert_no_claim_persisted` doc and the two `…persists_nothing…` test titles say `persists no claim`; their assertions are unchanged and green."
+          ],
+          "acceptance_criteria": [
+            "CL-1: `scrape github BurntSushi/ripgrep` records 30 humans ranked by commits as links to github:BurntSushi/ripgrep, prints `Contributors recorded: 30` + `bots excluded` naming each bot, writes zero claims.",
+            "Migration v5 is forward-only and idempotent: opening a v4 store upgrades it; re-opening a v5 store is a no-op; the store reports schema version 5.",
+            "A store where the link adapter's probe fails (upsert-twice sentinel does not refresh rank or alters first-observed) refuses to start with a structured `health.startup.refused` event.",
+            "The contributors block carries no `[n] ` markers; the shipped scrape_github / scrape_sign / scrape_candidates / scrape_auth suites and viewer_is_read_only stay green (the viewer records no links).",
+            "`assert_no_claim_persisted` doc and the two `…persists_nothing…` test titles say `persists no claim`; their assertions are unchanged and green."
+          ],
+          "test_file": "tests/acceptance/contributor_links.rs",
+          "scenario_name": "scraping_a_repo_records_its_top_thirty_human_contributors_and_names_the_bots",
+          "scenario_fns": [
+            "scraping_a_repo_records_its_top_thirty_human_contributors_and_names_the_bots"
+          ],
+          "n_scenarios": [
+            "CL-1"
+          ],
+          "us_trace": [
+            "US-CPI-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Functional paradigm (ADR-007): selection is a total pure function over raw rows + N; effects (HTTP, DuckDB) stay in adapter-github / adapter-duckdb / the cli verb. PBT (test-scenarios.md §7 #1): output size = min(N, distinct humans); no bot-rule match; ranks contiguous 1..=k; permutation-invariant; de-dup by id. Adapter integration test on a REAL DuckDB file: record_snapshot never lowers the row set nor touches first_observed_at. Viewer: link recording lives in the cli scrape verb, not behind GithubPort — the viewer's wiring gets no ContributionLinkPort. If DELIVER instead shares a harvest function with the viewer, add `contribution_links` to the viewer_invariants universe in this step (acceptance-review #6). The WS stays RED after this step (no `infer` verb yet).",
+          "estimate_hours": 8,
+          "estimated_effort": "8h (port ext + pure selection + v5 migration + link adapter/probe + scrape wiring)",
+          "depends_on": [],
+          "dependencies": [],
+          "files_to_modify": [
+            "tests/acceptance/contributor_links.rs",
+            "tests/acceptance/scrape_github.rs",
+            "tests/acceptance/support/mod.rs",
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/github.rs",
+            "crates/ports/src/contribution_link.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/scraper-domain/src/lib.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs",
+            "crates/adapter-duckdb/src/schema.rs",
+            "crates/adapter-duckdb/src/schema_v5.rs",
+            "crates/adapter-duckdb/src/contribution_links.rs",
+            "crates/adapter-duckdb/src/lib.rs",
+            "crates/adapter-duckdb/src/probe.rs",
+            "crates/cli/src/wiring.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs"
+          ],
+          "mutation_note": "Bot rule, re-rank and top-N cut are the load-bearing pure branches; include scraper-domain people selection in per-feature mutation. Upsert must never touch first_observed_at (killed by the adapter integration test + probe)."
+        },
+        {
+          "id": "01-02",
+          "name": "Walking skeleton GREEN: `infer people --sign 1` signs an evidence-backed adherence through the shared sign batch",
+          "description": "Thin thread of slices 02+03 over the 01-01 links, just enough for WS-CPI-1. PURE (scraper-domain people): eligibility (embodiesPhilosophy, relationship You|SubscribedPeer), group by (person, philosophy), integer-hundredths confidence (DDD-9), ADR-064 evidence encoding, deterministic numbering. SHELL: NEW `openlore infer people [--sign N[,N…]]` verb reading links via ContributionLinkPort and repo claims via StoragePort::query_federated_by_subject (DDD-6). SIGN: extract the scraper `--sign` batch into a shared verb-neutral helper; ComposedClaim gains `references` (default empty ⇒ every existing CID unchanged) (DDD-12).",
+          "criteria": [
+            "WS-CPI-1: after two scrapes and two signed memory-safety repo claims, `infer people --sign 1` (confidence 0.45, publish declined) exits 0 and signs exactly one claim `github:BurntSushi adheresToPhilosophy memory-safety` by Maria at 0.45 with no references.",
+            "WS-CPI-1: the signed evidence is exactly [ripgrep claim AT-URI, ripgrep commits?author=BurntSushi URL, regex claim AT-URI, regex commits URL] (ADR-064 order).",
+            "WS-CPI-1 CM-E: store-delta universe changes only local.claims.row_count (+1) and local.claim_files; links, peer claims and the PDS are unchanged.",
+            "Scraper `--sign` behaves exactly as before on the extracted helper: the shipped scrape_sign and scrape_candidates suites pass unmodified and pre-existing claim CIDs are unchanged."
+          ],
+          "acceptance_criteria": [
+            "WS-CPI-1: after two scrapes and two signed memory-safety repo claims, `infer people --sign 1` (confidence 0.45, publish declined) exits 0 and signs exactly one claim `github:BurntSushi adheresToPhilosophy memory-safety` by Maria at 0.45 with no references.",
+            "WS-CPI-1: the signed evidence is exactly [ripgrep claim AT-URI, ripgrep commits?author=BurntSushi URL, regex claim AT-URI, regex commits URL] (ADR-064 order).",
+            "WS-CPI-1 CM-E: store-delta universe changes only local.claims.row_count (+1) and local.claim_files; links, peer claims and the PDS are unchanged.",
+            "Scraper `--sign` behaves exactly as before on the extracted helper: the shipped scrape_sign and scrape_candidates suites pass unmodified and pre-existing claim CIDs are unchanged."
+          ],
+          "test_file": "tests/acceptance/infer_people_sign.rs",
+          "scenario_name": "maria_signs_an_evidence_backed_adherence_for_the_person_who_builds_her_signed_repos",
+          "scenario_fns": [
+            "maria_signs_an_evidence_backed_adherence_for_the_person_who_builds_her_signed_repos"
+          ],
+          "n_scenarios": [
+            "WS-CPI-1"
+          ],
+          "us_trace": [
+            "US-CPI-001",
+            "US-CPI-002",
+            "US-CPI-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. WS is already un-ignored (RED: `unrecognized subcommand 'infer'`); no un-ignore needed. Keep each slice's piece THIN: no markers/retraction/supersede eligibility (02-02), no --person/--min-repos (02-03), no STRONGER (04-02). PBT: confidence = min(29, 15+5(k−1), floor(100·max)), ≤29, monotone in k (§7 #2); PersonCandidate smart constructor rejects empty provenance (§7 #5); codec round-trip (§7 #3); numbering permutation-invariant (§7 #6). Q-CPI-D3: build AT-URIs with the same bare-DID form `claim publish` mints. The shared helper is the ONLY sign path for both verbs (single-publish-path invariant).",
+          "estimate_hours": 8,
+          "estimated_effort": "8h (thin inference + new verb + sign-batch extraction)",
+          "depends_on": [
+            "01-01"
+          ],
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_sign.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/mod.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/cli/src/verbs/sign_batch.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/cli/src/render.rs",
+            "crates/cli/src/render/people.rs",
+            "crates/cli/src/wiring.rs"
+          ],
+          "mutation_note": "Confidence arithmetic and evidence ordering are signed-payload-critical (CID changes on any mutation); include people inference + codec in per-feature mutation."
+        },
+        {
+          "id": "01-03",
+          "name": "`--contributors N` overrides the count within 0..=100, costs at most one extra public request, and is refused on a person target",
+          "description": "US-CPI-001 AC3 + KPI-CPI-5 + OD-CPI-7 + UC-1/UC-3. Add clap `--contributors N` to `scrape github` (bounded 0..=100; rejected on a user target with a message naming owner/repo targets — both BEFORE any GitHub request). N counts humans after the bot rule. N = 0 records none, says so, and makes no contributors request.",
+          "criteria": [
+            "CL-3: `--contributors 5` on dtolnay/anyhow records exactly 5 humans, dtolnay ranked #1, even when bots occupy top API slots.",
+            "CL-4: `--contributors 0` records no links, says none were recorded, and the FakeGithub request log contains no /contributors request.",
+            "CL-14: a default repo scrape makes exactly one /contributors request more than before, on the public allowlist.",
+            "CL-11 + CL-12: N > 100, or `--contributors` on a user target, exit non-zero with a message naming the bound / owner-repo form, and no GitHub request is made."
+          ],
+          "acceptance_criteria": [
+            "CL-3: `--contributors 5` on dtolnay/anyhow records exactly 5 humans, dtolnay ranked #1, even when bots occupy top API slots.",
+            "CL-4: `--contributors 0` records no links, says none were recorded, and the FakeGithub request log contains no /contributors request.",
+            "CL-14: a default repo scrape makes exactly one /contributors request more than before, on the public allowlist.",
+            "CL-11 + CL-12: N > 100, or `--contributors` on a user target, exit non-zero with a message naming the bound / owner-repo form, and no GitHub request is made."
+          ],
+          "test_file": "tests/acceptance/contributor_links.rs",
+          "scenario_name": "the_contributor_count_can_be_overridden_and_counts_only_humans",
+          "scenario_fns": [
+            "the_contributor_count_can_be_overridden_and_counts_only_humans",
+            "zero_contributors_records_none_and_asks_github_nothing_extra",
+            "recording_contributors_costs_exactly_one_extra_public_request",
+            "more_than_one_hundred_contributors_is_rejected_before_asking_github",
+            "asking_for_contributors_of_a_person_is_rejected_before_asking_github"
+          ],
+          "n_scenarios": [
+            "CL-3",
+            "CL-4",
+            "CL-14",
+            "CL-11",
+            "CL-12"
+          ],
+          "us_trace": [
+            "US-CPI-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Activate one at a time in DISTILL order (CL-3 → CL-4 → CL-14), then CL-11/CL-12 (pulled forward: same flag surface). CL-12 must fail for the right reason first (refusal text names owner/repo), not clap's generic unknown-argument error. Target-kind check is pure over the parsed target; the request skip at N = 0 is a shell decision taken before calling the port.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-02"
+          ],
+          "dependencies": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/contributor_links.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs",
+            "crates/scraper-domain/src/people.rs"
+          ],
+          "mutation_note": "Mutation must kill an off-by-one on the 0..=100 bound and any change that issues the request at N = 0."
+        },
+        {
+          "id": "01-04",
+          "name": "Recorded people are ranked by commits whatever GitHub's order, overlap with other scraped repos is shown, and re-scrapes never lose anyone — enforced by check-arch",
+          "description": "US-CPI-001 AC2/AC4/AC5 + D-4 + DDD-16. Harden selection against the FakeGithub lie catalogue (out-of-order rows, `type: Bot`, `[bot]` login typed User, case variants, duplicate ids). Pure overlap: people linked to other scraped repos, rendered as `Also contributes to repos you scraped` lines (no `[n] ` markers). Re-scrape refreshes rank/commits/last-observed, never deletes, never touches first-observed. xtask check-arch gains `contribution_links_append_only` and the adapter-github port-reference guard.",
+          "criteria": [
+            "CL-13: whatever order GitHub returns rows in, recorded people are humans ranked by commits desc then login asc, with bots (by type or case-insensitive `[bot]` suffix) excluded and duplicate ids recorded once.",
+            "CL-2: after scraping rust-lang/regex, scraping BurntSushi/ripgrep prints `BurntSushi → rust-lang/regex` under `Also contributes to repos you scraped`.",
+            "CL-5: a re-scrape where one earlier contributor dropped out keeps that link with its original last-observed date; other links show refreshed rank/commits; no first-observed value changes.",
+            "`xtask check-arch` fails on any DELETE/DROP/TRUNCATE/bare UPDATE against contribution_links in adapter-duckdb, and on adapter-github naming a storage or identity port; a synthetic violation unit test proves each rule fires."
+          ],
+          "acceptance_criteria": [
+            "CL-13: whatever order GitHub returns rows in, recorded people are humans ranked by commits desc then login asc, with bots (by type or case-insensitive `[bot]` suffix) excluded and duplicate ids recorded once.",
+            "CL-2: after scraping rust-lang/regex, scraping BurntSushi/ripgrep prints `BurntSushi → rust-lang/regex` under `Also contributes to repos you scraped`.",
+            "CL-5: a re-scrape where one earlier contributor dropped out keeps that link with its original last-observed date; other links show refreshed rank/commits; no first-observed value changes.",
+            "`xtask check-arch` fails on any DELETE/DROP/TRUNCATE/bare UPDATE against contribution_links in adapter-duckdb, and on adapter-github naming a storage or identity port; a synthetic violation unit test proves each rule fires."
+          ],
+          "test_file": "tests/acceptance/contributor_links.rs",
+          "scenario_name": "the_recorded_people_are_humans_ranked_by_commits_whatever_order_github_uses",
+          "scenario_fns": [
+            "the_recorded_people_are_humans_ranked_by_commits_whatever_order_github_uses",
+            "people_already_linked_to_other_scraped_repos_are_surfaced",
+            "re_scraping_never_loses_previously_recorded_people"
+          ],
+          "n_scenarios": [
+            "CL-13",
+            "CL-2",
+            "CL-5"
+          ],
+          "us_trace": [
+            "US-CPI-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Earned Trust now has all three layers: TYPE (no delete on ContributionLinkPort), STRUCTURAL (this step's check-arch rules), BEHAVIORAL (CL-5 + live probe). Overlap PBT: symmetric, excludes the current repo, case-folded `github:` keys (§7 #9). Overlap reads existing links via the port BEFORE recording the new snapshot or excludes the current repo — crafter's choice, observable result identical.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-03"
+          ],
+          "dependencies": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/contributor_links.rs",
+            "crates/test-support/src/fake_github.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "mutation_note": "Include the two new check-arch rules in xtask mutation (removing a rule must fail its synthetic-violation test); overlap exclusion of the current repo is load-bearing."
+        },
+        {
+          "id": "01-05",
+          "name": "A failed contributor harvest records nothing and exits non-zero; a too-large or empty repo is a named notice with exit 0",
+          "description": "US-CPI-001 AC6 + DDD-14 + UC-2. adapter-github classifies /contributors outcomes: 403 rate-limit, 401 stale PAT, malformed rows (→ ApiShape), 403 'too large' and 204 empty (→ ContributorsUnavailable). The scrape aborts on the first three BEFORE any link write (no partial snapshot), naming the cause (GITHUB_TOKEN hint on rate limit; token never echoed); the latter two print `Contributors not recorded` + reason, record nothing, exit 0.",
+          "criteria": [
+            "CL-6: a rate-limited /contributors read reports the rate limit, suggests GITHUB_TOKEN, records zero links, exits non-zero.",
+            "CL-7: a rejected token records zero links, exits non-zero, and the token never appears in stdout or stderr.",
+            "CL-8: a contributor list with a row missing login/id records zero links (no partial snapshot) and exits non-zero naming an unexpected response.",
+            "CL-9 + CL-10: a 'too large' 403 or an empty-repo 204 prints `Contributors not recorded` with `too large` / `empty`, records zero links, still shows the repo candidates, exits 0."
+          ],
+          "acceptance_criteria": [
+            "CL-6: a rate-limited /contributors read reports the rate limit, suggests GITHUB_TOKEN, records zero links, exits non-zero.",
+            "CL-7: a rejected token records zero links, exits non-zero, and the token never appears in stdout or stderr.",
+            "CL-8: a contributor list with a row missing login/id records zero links (no partial snapshot) and exits non-zero naming an unexpected response.",
+            "CL-9 + CL-10: a 'too large' 403 or an empty-repo 204 prints `Contributors not recorded` with `too large` / `empty`, records zero links, still shows the repo candidates, exits 0."
+          ],
+          "test_file": "tests/acceptance/contributor_links.rs",
+          "scenario_name": "a_rate_limited_contributor_harvest_records_nothing_and_says_why",
+          "scenario_fns": [
+            "a_rate_limited_contributor_harvest_records_nothing_and_says_why",
+            "a_rejected_token_on_the_contributor_harvest_records_nothing",
+            "an_unexpected_contributor_list_records_nothing",
+            "a_repo_too_large_to_list_contributors_is_a_notice_not_a_failure",
+            "an_empty_repository_is_a_notice_not_a_failure"
+          ],
+          "n_scenarios": [
+            "CL-6",
+            "CL-7",
+            "CL-8",
+            "CL-9",
+            "CL-10"
+          ],
+          "us_trace": [
+            "US-CPI-001"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Reuse ADR-019 status classification + no-token-leak; distinguish the 'too large' 403 from the rate-limit 403 by GitHub's documented body/headers, pinned in the FakeGithub gold fixtures (DDD-15 lie catalogue — the recorded-fixture contract test for this external API). Atomicity is structural: the snapshot is written only from a complete in-memory selection in one transaction. After this step all 14 non-live contributor_links scenarios are active.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-04"
+          ],
+          "dependencies": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/contributor_links.rs",
+            "crates/test-support/src/fake_github.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs"
+          ],
+          "mutation_note": "Mutation must kill any branch that writes links on an error outcome or treats ContributorsUnavailable as fatal / rate-limit as a notice."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Slice-02 — `openlore infer people`: auditable candidates from signed repo claims only (US-CPI-002)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Candidates list each supporting claim with its own author and rank, at a capped speculative confidence; unsigned repos are noted, not used",
+          "description": "US-CPI-002 AC1-AC4 + AC6 (empty) + KPI-CPI-2/3 + D-7. The list render gains indented provenance lines per supporting claim (repo subject, `#rank`, claim CID, bare author DID — a subscribed peer's claim is never shown as Maria's), `<0.xx> (speculative)` with the `min(` arithmetic, the footer naming scraped repos without signed philosophy claims, and `No inferred candidates` (exit 0) when empty.",
+          "criteria": [
+            "IP-1: with Maria's ripgrep claim and peer Rachel's regex claim, one candidate github:BurntSushi → memory-safety lists both claims by CID, each with its own author DID and BurntSushi's rank; nothing is written.",
+            "IP-11: displayed confidence equals min(0.29, 0.15+0.05(k−1), floor-hundredths of the strongest support) — capped at 0.29, floored by weak support — with the arithmetic shown.",
+            "IP-2: a scraped repo with only unsigned scraper candidates supports no candidate and is named in the `no signed philosophy claims` footer.",
+            "IP-10: every listed candidate has ≥1 supporting repo and each supporting repo ≥1 attributed claim (100% provenance).",
+            "IP-4: a store with no eligible support prints `No inferred candidates` and exits 0."
+          ],
+          "acceptance_criteria": [
+            "IP-1: with Maria's ripgrep claim and peer Rachel's regex claim, one candidate github:BurntSushi → memory-safety lists both claims by CID, each with its own author DID and BurntSushi's rank; nothing is written.",
+            "IP-11: displayed confidence equals min(0.29, 0.15+0.05(k−1), floor-hundredths of the strongest support) — capped at 0.29, floored by weak support — with the arithmetic shown.",
+            "IP-2: a scraped repo with only unsigned scraper candidates supports no candidate and is named in the `no signed philosophy claims` footer.",
+            "IP-10: every listed candidate has ≥1 supporting repo and each supporting repo ≥1 attributed claim (100% provenance).",
+            "IP-4: a store with no eligible support prints `No inferred candidates` and exits 0."
+          ],
+          "test_file": "tests/acceptance/infer_people.rs",
+          "scenario_name": "a_person_is_proposed_for_the_philosophies_of_signed_repos_they_build",
+          "scenario_fns": [
+            "a_person_is_proposed_for_the_philosophies_of_signed_repos_they_build",
+            "proposed_confidence_is_capped_and_never_exceeds_the_strongest_support",
+            "unsigned_scraper_candidates_never_feed_inference",
+            "every_inferred_candidate_carries_complete_provenance",
+            "no_candidates_is_a_normal_outcome"
+          ],
+          "n_scenarios": [
+            "IP-1",
+            "IP-11",
+            "IP-2",
+            "IP-10",
+            "IP-4"
+          ],
+          "us_trace": [
+            "US-CPI-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Activation order IP-1 → IP-11 → IP-2, then IP-10, IP-4. The InferenceReport carries repos-without-signed-claims so the footer is pure data, not a second query. Rank comes from the link, not the claim. Candidate headline keeps the `[n] ` prefix used by `--sign`; provenance lines are indented and unnumbered.",
+          "estimate_hours": 6,
+          "estimated_effort": "6h",
+          "depends_on": [
+            "01-05"
+          ],
+          "dependencies": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Confidence min() arms and the anti-merging author attribution in the render are load-bearing; mutation must kill a swap of claim author for local identity."
+        },
+        {
+          "id": "02-02",
+          "name": "Only active, non-retracted, non-superseded, non-marker repo claims support an inference — self-retraction rule hoisted into claim-domain",
+          "description": "DDD-7 + D-2 + UC-6. HOIST the ADR-060 D-RF-D3 self-retraction rule into a pure claim-domain helper over (author, cid, references); appview-domain delegates to it (Q-CPI-D2 resolved: delegate now — one rule, ADR-060 tests stay green). Eligibility gains: not a retracts/counters marker, not self-retracted, not superseded by the same author, relationship SubscribedPeer only while subscribed. `github:` repo subjects join case-insensitively.",
+          "criteria": [
+            "IP-3: after Rachel soft-retracts her regex claim, the BurntSushi memory-safety candidate cites only ripgrep, at confidence 0.15.",
+            "IP-5: after unsubscribing Rachel, her cached claims support no candidate.",
+            "IP-6 + IP-7: a counter-claim never counts as support (and a third party's counter does not hide the original); a superseded repo claim is replaced by its same-author successor as support.",
+            "IP-9: links and claims whose repo subjects differ only in letter case count as one supporting repo.",
+            "claim-domain exposes the self-retraction rule; appview-domain uses it and the shipped ADR-060 retraction acceptance and unit suites pass unmodified."
+          ],
+          "acceptance_criteria": [
+            "IP-3: after Rachel soft-retracts her regex claim, the BurntSushi memory-safety candidate cites only ripgrep, at confidence 0.15.",
+            "IP-5: after unsubscribing Rachel, her cached claims support no candidate.",
+            "IP-6 + IP-7: a counter-claim never counts as support (and a third party's counter does not hide the original); a superseded repo claim is replaced by its same-author successor as support.",
+            "IP-9: links and claims whose repo subjects differ only in letter case count as one supporting repo.",
+            "claim-domain exposes the self-retraction rule; appview-domain uses it and the shipped ADR-060 retraction acceptance and unit suites pass unmodified."
+          ],
+          "test_file": "tests/acceptance/infer_people.rs",
+          "scenario_name": "a_soft_retracted_repo_claim_stops_supporting_inferences",
+          "scenario_fns": [
+            "a_soft_retracted_repo_claim_stops_supporting_inferences",
+            "an_unsubscribed_peers_claims_no_longer_support_inferences",
+            "a_counter_claim_is_never_counted_as_support",
+            "a_superseded_repo_claim_is_replaced_by_its_successor_as_support",
+            "repos_differing_only_in_letter_case_are_the_same_repo"
+          ],
+          "n_scenarios": [
+            "IP-3",
+            "IP-5",
+            "IP-6",
+            "IP-7",
+            "IP-9"
+          ],
+          "us_trace": [
+            "US-CPI-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Do the hoist FIRST (refactor under green ADR-060 tests), then activate IP-3 → IP-5 → IP-6 → IP-7 → IP-9. PBT (§7 #4): no candidate ever cites an unsigned, marker, self-retracted, same-author-superseded, or non-{You,SubscribedPeer} claim; (§7 #9) case-folding idempotent. Retraction markers arrive in the same query_federated_by_subject read (they copy subject/predicate/object) — no new StoragePort method.",
+          "estimate_hours": 6,
+          "estimated_effort": "6h (rule hoist + eligibility)",
+          "depends_on": [
+            "02-01"
+          ],
+          "dependencies": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people.rs",
+            "crates/claim-domain/src/retraction.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/appview-domain/src/retraction.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/scraper-domain/src/proptest_strategies.rs"
+          ],
+          "mutation_note": "Each eligibility conjunct is a KPI-CPI-3 guardrail; mutation must kill dropping any one of them. The hoisted claim-domain rule joins claim-domain's mutation scope."
+        },
+        {
+          "id": "02-03",
+          "name": "Already-signed pairs are not re-proposed; `--person` and `--min-repos` filter; inference is offline and read-only; the new surface says `person`",
+          "description": "US-CPI-002 AC5/AC6/AC7 + DDD-13 + D-8 + IP-14. Read Maria's own adheresToPhilosophy claims (query_by_contributor + read_signed_claim) so already-signed pairs render `already signed` + CID, unnumbered. Add `--person github:<login>` (refusing other forms, naming the expected form) and `--min-repos N`. `infer people` makes no network call. `infer people --help` says person; existing `--contributor` help says `claim author`.",
+          "criteria": [
+            "IP-8: a (person, philosophy) Maria already signed is shown as `already signed` with its CID and is not numbered.",
+            "IP-12 CM-E: with the network unreachable, `infer people` exits 0 and the store universe is unchanged.",
+            "IP-13: `--min-repos 2` lists only candidates with ≥2 supporting repos.",
+            "IP-14: `--person BurntSushi` (no prefix) exits non-zero naming the `github:<login>` form.",
+            "IP-15: `infer people --help` offers `--person` and never says contributor; `graph query --help` describes `--contributor` as `claim author`."
+          ],
+          "acceptance_criteria": [
+            "IP-8: a (person, philosophy) Maria already signed is shown as `already signed` with its CID and is not numbered.",
+            "IP-12 CM-E: with the network unreachable, `infer people` exits 0 and the store universe is unchanged.",
+            "IP-13: `--min-repos 2` lists only candidates with ≥2 supporting repos.",
+            "IP-14: `--person BurntSushi` (no prefix) exits non-zero naming the `github:<login>` form.",
+            "IP-15: `infer people --help` offers `--person` and never says contributor; `graph query --help` describes `--contributor` as `claim author`."
+          ],
+          "test_file": "tests/acceptance/infer_people.rs",
+          "scenario_name": "an_already_signed_person_philosophy_is_not_proposed_again",
+          "scenario_fns": [
+            "an_already_signed_person_philosophy_is_not_proposed_again",
+            "inference_runs_offline_and_writes_nothing",
+            "a_minimum_number_of_supporting_repos_can_be_required",
+            "a_person_named_without_the_github_prefix_is_refused_with_the_expected_form",
+            "the_new_surface_says_person_and_contributor_still_means_claim_author"
+          ],
+          "n_scenarios": [
+            "IP-8",
+            "IP-12",
+            "IP-13",
+            "IP-14",
+            "IP-15"
+          ],
+          "us_trace": [
+            "US-CPI-002"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Filters apply BEFORE numbering (UC-8 pre-proved here; asserted at sign time in 03-02). PersonSubject is a validated newtype — parsing `--person` is the pure refusal. Help-text change on existing `--contributor` flags is wording only (no behavior). After this step all 15 non-live infer_people scenarios are active; IP-16 runs at the slice-02 dogfood demo with OPENLORE_LIVE_GITHUB=1.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "02-02"
+          ],
+          "dependencies": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/lib.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Already-signed exclusion and filter-before-number ordering are load-bearing (numbering drift signs the wrong claim)."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Slice-03 — Sign an inferred adherence; provenance survives into the signed, published payload (US-CPI-003)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Signing keeps each supporting claim's own author, re-verifies to the same CID, publishes the same evidence, and edits confidence only within [0, 1]",
+          "description": "US-CPI-003 AC2/AC3/AC4 + D-7/D-9 + UC-7 + Q-CPI-D3. The compose preview shows `derived-from: <k> signed repo claims` plus each AT-URI; accepting publish sends the record through the single publish path carrying identical evidence; the signed CID re-verifies. Confidence prompt rejects values outside [0.0, 1.0] and re-asks; accepting the default signs the speculative value unchanged. Listing without `--sign` writes nothing.",
+          "criteria": [
+            "IS-2: signing a candidate supported by Maria's and Rachel's claims yields evidence AT-URIs under each claim's own bare author DID; the preview shows the derived-from line; the CID re-verifies; the published record carries the same evidence.",
+            "IS-3 CM-E: `infer people` without `--sign` leaves the store universe and PDS unchanged.",
+            "IS-7: an out-of-range confidence is refused and re-asked; nothing is signed until a valid value is given.",
+            "IS-8: accepting the proposed confidence signs exactly the speculative value (never auto-raised)."
+          ],
+          "acceptance_criteria": [
+            "IS-2: signing a candidate supported by Maria's and Rachel's claims yields evidence AT-URIs under each claim's own bare author DID; the preview shows the derived-from line; the CID re-verifies; the published record carries the same evidence.",
+            "IS-3 CM-E: `infer people` without `--sign` leaves the store universe and PDS unchanged.",
+            "IS-7: an out-of-range confidence is refused and re-asked; nothing is signed until a valid value is given.",
+            "IS-8: accepting the proposed confidence signs exactly the speculative value (never auto-raised)."
+          ],
+          "test_file": "tests/acceptance/infer_people_sign.rs",
+          "scenario_name": "signing_an_inference_keeps_each_supporting_claims_own_author_and_re_verifies",
+          "scenario_fns": [
+            "signing_an_inference_keeps_each_supporting_claims_own_author_and_re_verifies",
+            "listing_inferred_candidates_without_sign_writes_nothing",
+            "an_out_of_range_confidence_is_refused_and_re_asked_before_signing",
+            "accepting_the_proposed_confidence_signs_the_speculative_value_unchanged"
+          ],
+          "n_scenarios": [
+            "IS-2",
+            "IS-3",
+            "IS-7",
+            "IS-8"
+          ],
+          "us_trace": [
+            "US-CPI-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Q-CPI-D3: the fixture pins the bare DID (fragment stripped) — derive it from the same normalization `claim publish` uses, never a second rule. The derived-from line is display (WD-62 unchanged for repo candidates); for person candidates the provenance ALSO lives in evidence[] (ADR-064 §6). Confidence prompt behaviour is the shared sign batch's — if IS-7/IS-8 go green on the 01-02 extraction, the step still owns the preview change for IS-2.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "02-03"
+          ],
+          "dependencies": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_sign.rs",
+            "crates/cli/src/verbs/sign_batch.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/scraper-domain/src/people.rs"
+          ],
+          "mutation_note": "Author attribution in evidence AT-URIs is the D-7 guardrail; mutation must kill substituting the signer's DID for a supporting claim's author."
+        },
+        {
+          "id": "03-02",
+          "name": "Selections are validated before composing and sign exactly the candidates listed under those numbers, within the same filters, one claim each",
+          "description": "US-CPI-003 AC1/AC4/AC5 + UC-8. `--sign N[,N…]` rejects an out-of-range index before any compose (`candidate 7 does not exist; valid range 1..3`), numbers candidates identically to the list including under `--person`/`--min-repos`, and a batch selection signs one claim per selected candidate.",
+          "criteria": [
+            "IS-4: `--sign 7` with 3 candidates exits non-zero with `candidate 7 does not exist; valid range 1..3`; nothing is composed or signed.",
+            "IS-5: the claim signed by `--sign 2` has the (person, philosophy) listed as `[2]` by a prior `infer people`.",
+            "IS-6: with `--person github:<login>`, `--sign 1` signs that person's first listed candidate, not the unfiltered list's first.",
+            "IS-9: `--sign 1,2` signs exactly two claims, one per selected candidate."
+          ],
+          "acceptance_criteria": [
+            "IS-4: `--sign 7` with 3 candidates exits non-zero with `candidate 7 does not exist; valid range 1..3`; nothing is composed or signed.",
+            "IS-5: the claim signed by `--sign 2` has the (person, philosophy) listed as `[2]` by a prior `infer people`.",
+            "IS-6: with `--person github:<login>`, `--sign 1` signs that person's first listed candidate, not the unfiltered list's first.",
+            "IS-9: `--sign 1,2` signs exactly two claims, one per selected candidate."
+          ],
+          "test_file": "tests/acceptance/infer_people_sign.rs",
+          "scenario_name": "selecting_a_candidate_that_does_not_exist_is_rejected_before_composing",
+          "scenario_fns": [
+            "selecting_a_candidate_that_does_not_exist_is_rejected_before_composing",
+            "the_candidate_signed_is_the_one_listed_under_that_number",
+            "sign_numbers_candidates_within_the_same_person_filter_as_the_list",
+            "signing_two_candidates_in_one_pass_produces_one_claim_each"
+          ],
+          "n_scenarios": [
+            "IS-4",
+            "IS-5",
+            "IS-6",
+            "IS-9"
+          ],
+          "us_trace": [
+            "US-CPI-003"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Selection parsing is the shared sign batch's pure parser (reused, verb-neutral); list and sign MUST derive from the same InferenceReport computed with the same filters. After this step all 9 non-live infer_people_sign scenarios are active; IS-10 runs at the slice-03 dogfood demo.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "03-01"
+          ],
+          "dependencies": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_sign.rs",
+            "crates/cli/src/verbs/sign_batch.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Range check and index→candidate mapping are load-bearing; mutation must kill an off-by-one between list and sign."
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "Slice-04 — Evidence grows append-only: NEW / STRONGER / SUPPORT WEAKENED, never mutating a signed claim (US-CPI-004)",
+      "steps": [
+        {
+          "id": "04-01",
+          "name": "A scrape that changes inference inputs ends with a one-line new-candidates hint; an unchanged scrape stays silent",
+          "description": "US-CPI-004 AC1/AC2 + DDD-14. Pure change summary: diff the InferenceReport before vs after the scrape (new links and/or newly signed repo claims via `--sign`). Non-zero → `<n> new inferred candidate(s) … openlore infer people`; zero → no line. `infer people` labels such candidates `NEW`. The hint carries no `[n] ` marker.",
+          "criteria": [
+            "EG-1: `scrape github rust-lang/regex --sign 2` signing semantic-versioning prints the new-inferred-candidate hint naming `openlore infer people`; `infer people` then lists github:BurntSushi semantic-versioning marked NEW.",
+            "EG-8: a scrape that only records a newly linked person on an already-signed repo still reports the new candidate in the hint.",
+            "EG-7: a re-scrape that changes no inference input prints `Contributors recorded: 1` and no hint line.",
+            "The hint and contributors block contain no `[n] ` marker; the shipped scrape_github/scrape_candidates `[n]` counts stay green."
+          ],
+          "acceptance_criteria": [
+            "EG-1: `scrape github rust-lang/regex --sign 2` signing semantic-versioning prints the new-inferred-candidate hint naming `openlore infer people`; `infer people` then lists github:BurntSushi semantic-versioning marked NEW.",
+            "EG-8: a scrape that only records a newly linked person on an already-signed repo still reports the new candidate in the hint.",
+            "EG-7: a re-scrape that changes no inference input prints `Contributors recorded: 1` and no hint line.",
+            "The hint and contributors block contain no `[n] ` marker; the shipped scrape_github/scrape_candidates `[n]` counts stay green."
+          ],
+          "test_file": "tests/acceptance/infer_people_evidence_grows.rs",
+          "scenario_name": "a_newly_signed_repo_philosophy_proposes_a_new_person_inference",
+          "scenario_fns": [
+            "a_newly_signed_repo_philosophy_proposes_a_new_person_inference",
+            "newly_recorded_people_alone_can_create_new_inferences",
+            "a_scrape_that_changes_nothing_prints_no_hint"
+          ],
+          "n_scenarios": [
+            "EG-1",
+            "EG-8",
+            "EG-7"
+          ],
+          "us_trace": [
+            "US-CPI-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. PBT (§7 #8): identical before/after reports → 0; summary counts only NEW ∪ STRONGER keys absent before. The 'before' report is computed in the shell before record_snapshot/sign; the diff itself is pure. The hint is computed AFTER `--sign` so repo claims signed in the same run count.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "03-02"
+          ],
+          "dependencies": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_evidence_grows.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Mutation must kill a hint printed at zero (noise) and a diff that ignores link-only changes."
+        },
+        {
+          "id": "04-02",
+          "name": "Stronger evidence is offered as a superseding candidate; signing it adds a `supersedes` reference and leaves the earlier claim byte-identical",
+          "description": "US-CPI-004 AC2/AC4 + D-5 + UC-4 + Q-CPI-D4. Pure classification parses my adherence claims' cited AT-URIs (ADR-064 §5): current support includes an uncited repo → STRONGER naming the earlier CID; a claim citing nothing is hand-authored → already signed, never STRONGER; with two current inferred claims, the latest composed_at is superseded. STRONGER prefill adds one `supersedes` reference, validated by the shipped reference rules before signing.",
+          "criteria": [
+            "EG-2: with bafy…p7 signed from ripgrep alone and regex now supporting memory-safety, `infer people` lists STRONGER naming bafy…p7, `2 repos`, and that the existing claim is `unchanged`.",
+            "EG-3 CM-E: signing the STRONGER candidate creates one new claim whose references are exactly [supersedes bafy…p7]; bafy…p7's file and row are byte-identical before/after.",
+            "EG-9: a hand-authored adherence claim with no cited AT-URIs is shown as already signed and never offered as STRONGER.",
+            "EG-10: with two current inferred claims for the pair, the STRONGER candidate supersedes the one with the latest composed_at; the other is listed as already signed."
+          ],
+          "acceptance_criteria": [
+            "EG-2: with bafy…p7 signed from ripgrep alone and regex now supporting memory-safety, `infer people` lists STRONGER naming bafy…p7, `2 repos`, and that the existing claim is `unchanged`.",
+            "EG-3 CM-E: signing the STRONGER candidate creates one new claim whose references are exactly [supersedes bafy…p7]; bafy…p7's file and row are byte-identical before/after.",
+            "EG-9: a hand-authored adherence claim with no cited AT-URIs is shown as already signed and never offered as STRONGER.",
+            "EG-10: with two current inferred claims for the pair, the STRONGER candidate supersedes the one with the latest composed_at; the other is listed as already signed."
+          ],
+          "test_file": "tests/acceptance/infer_people_evidence_grows.rs",
+          "scenario_name": "stronger_evidence_is_offered_as_a_superseding_candidate",
+          "scenario_fns": [
+            "stronger_evidence_is_offered_as_a_superseding_candidate",
+            "signing_stronger_evidence_supersedes_and_never_edits_the_earlier_claim",
+            "with_two_current_inferred_claims_the_latest_is_the_one_superseded",
+            "a_hand_authored_adherence_is_already_signed_and_never_superseded"
+          ],
+          "n_scenarios": [
+            "EG-2",
+            "EG-3",
+            "EG-10",
+            "EG-9"
+          ],
+          "us_trace": [
+            "US-CPI-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. PBT (§7 #7): a claim citing no at-uri is never STRONGER; STRONGER supersedes the latest composed_at. The `supersedes` reference is preview-only (not an editable prompt — architect cross-check). References flow through the ComposedClaim extension from 01-02; empty-references CIDs unchanged. The system never emits retracts/counters.",
+          "estimate_hours": 6,
+          "estimated_effort": "6h",
+          "depends_on": [
+            "04-01"
+          ],
+          "dependencies": [
+            "04-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_evidence_grows.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/sign_batch.rs",
+            "crates/cli/src/verbs/claim_add.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "STRONGER vs already-signed classification and the supersedes target choice are KPI-CPI-4-critical; mutation must kill superseding the wrong CID or offering STRONGER for a hand-authored claim."
+        },
+        {
+          "id": "04-03",
+          "name": "A signed inferred claim whose support was retracted, unsubscribed, or is missing locally is flagged with its reason and never acted on",
+          "description": "US-CPI-004 AC3/AC4 + UC-5. For each of my signed inferred claims, classify each cited supporting claim: retracted, from a no-longer-subscribed peer, or absent from the local store → `support weakened` with count and reason. The claim is never retracted, countered, modified, or re-signed; no marker is authored.",
+          "criteria": [
+            "EG-4: after Rachel retracts her regex claim, `infer people --person github:BurntSushi` shows bafy…p9 with `support weakened` and `1 of 2 supporting claims retracted`.",
+            "EG-5 + EG-6: a cited claim from an unsubscribed peer shows `no longer subscribed`; a cited claim absent locally shows `not in local store`.",
+            "In EG-4..EG-6 every pre-existing claim file is byte-identical before/after and no retracts/counters/supersedes claim is authored."
+          ],
+          "acceptance_criteria": [
+            "EG-4: after Rachel retracts her regex claim, `infer people --person github:BurntSushi` shows bafy…p9 with `support weakened` and `1 of 2 supporting claims retracted`.",
+            "EG-5 + EG-6: a cited claim from an unsubscribed peer shows `no longer subscribed`; a cited claim absent locally shows `not in local store`.",
+            "In EG-4..EG-6 every pre-existing claim file is byte-identical before/after and no retracts/counters/supersedes claim is authored."
+          ],
+          "test_file": "tests/acceptance/infer_people_evidence_grows.rs",
+          "scenario_name": "retracted_support_is_flagged_not_acted_on",
+          "scenario_fns": [
+            "retracted_support_is_flagged_not_acted_on",
+            "support_from_an_unsubscribed_peer_is_flagged_with_its_reason",
+            "support_missing_from_the_local_store_is_flagged_with_its_reason"
+          ],
+          "n_scenarios": [
+            "EG-4",
+            "EG-5",
+            "EG-6"
+          ],
+          "us_trace": [
+            "US-CPI-004"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. WeakenedSupport reasons (Retracted | NoLongerEligible | MissingLocally) are an ADT; reuse the 02-02 eligibility + hoisted retraction rule — no second rule. Cited claims are resolved by CID from the claim reads already gathered; MissingLocally = cited CID not present. After this step all 10 non-live evidence-grows scenarios are active; EG-11 runs at the slice-04 dogfood demo.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "04-02"
+          ],
+          "dependencies": [
+            "04-02"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/infer_people_evidence_grows.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/infer_people.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Mutation must kill a reason swap (retracted ↔ unsubscribed) and any path that authors a marker."
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "Slice-05 — `scrape github <user>` reads a person from the local store with ONE profile request (US-CPI-005)",
+      "steps": [
+        {
+          "id": "05-01",
+          "name": "A user scrape shows the person's links, signed adherence and candidates — or guidance — from exactly one /users/{user} request",
+          "description": "US-CPI-005 AC1/AC3/AC4 + PO blocker. Replace the empty user-target render with the person view from the local store (links + rank, signed adherence claims with CIDs, numbered candidates = `infer people --person github:<user>`). MERGE the shipped resolve + harvest double-fetch so a user target makes exactly one `/users/{user}` request, with the auth/rate report taken from that single response. Rewrite SG-3's Then to the person-view guidance.",
+          "criteria": [
+            "SP-1: for BurntSushi linked to 3 scraped repos, the output lists each repo with his rank, his signed adherence claim with its CID, and his numbered candidates.",
+            "SP-3 + SP-7: an unlinked person gets `github:<login> is not linked to any repo you've scraped` + scrape guidance, exit 0; a linked person without signed repo claims gets links plus how to enable inference.",
+            "SP-5: the FakeGithub request log for a user-target scrape is exactly [`/users/BurntSushi`] — no repo crawl, no second profile read.",
+            "SP-4: a non-existent user still exits non-zero naming the target and not-found cause.",
+            "SG-3 asserts the person-view guidance instead of `No candidate claims could be derived`; scrape_auth user-target scenarios pass unmodified."
+          ],
+          "acceptance_criteria": [
+            "SP-1: for BurntSushi linked to 3 scraped repos, the output lists each repo with his rank, his signed adherence claim with its CID, and his numbered candidates.",
+            "SP-3 + SP-7: an unlinked person gets `github:<login> is not linked to any repo you've scraped` + scrape guidance, exit 0; a linked person without signed repo claims gets links plus how to enable inference.",
+            "SP-5: the FakeGithub request log for a user-target scrape is exactly [`/users/BurntSushi`] — no repo crawl, no second profile read.",
+            "SP-4: a non-existent user still exits non-zero naming the target and not-found cause.",
+            "SG-3 asserts the person-view guidance instead of `No candidate claims could be derived`; scrape_auth user-target scenarios pass unmodified."
+          ],
+          "test_file": "tests/acceptance/scrape_person.rs",
+          "scenario_name": "a_user_scrape_shows_the_persons_accumulated_picture",
+          "scenario_fns": [
+            "a_user_scrape_shows_the_persons_accumulated_picture",
+            "a_person_with_no_links_gets_guidance_not_an_error",
+            "a_linked_person_without_signed_repo_claims_shows_links_and_how_to_enable_inference",
+            "reading_a_person_asks_github_only_for_their_profile_once",
+            "a_non_existent_user_still_fails_clearly"
+          ],
+          "n_scenarios": [
+            "SP-1",
+            "SP-3",
+            "SP-7",
+            "SP-5",
+            "SP-4"
+          ],
+          "us_trace": [
+            "US-CPI-005"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Activation SP-1 → SP-3 (rewrite SG-3 in the same commit) → SP-7 → SP-5 → SP-4 (GREEN-today regression guard; un-ignore to lock it). Single-fetch: the resolved user response IS the harvest input — the crafter decides whether target resolution returns the profile or the user harvest absorbs resolution; either way GithubPort gains no new request. Person view reuses the InferenceReport computed with the person filter — no second inference path.",
+          "estimate_hours": 6,
+          "estimated_effort": "6h",
+          "depends_on": [
+            "04-03"
+          ],
+          "dependencies": [
+            "04-03"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/scrape_person.rs",
+            "tests/acceptance/scrape_github.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/scrape.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Mutation must kill any change reintroducing a second /users request or rendering another person's links."
+        },
+        {
+          "id": "05-02",
+          "name": "Signing from the person view is identical to `infer people --person … --sign`, rejects missing candidates the same way, and flags possible renames without merging",
+          "description": "US-CPI-005 AC2 + Q-CPI-D7. `scrape github <user> --sign N` indexes the person's inferred candidates through the shared sign batch (same CID as the infer surface; same out-of-range refusal). When two person keys share one GitHub user id, both views show `possible rename`; links are never merged.",
+          "criteria": [
+            "SP-2: signing candidate 1 from `scrape github BurntSushi --sign 1` and from `infer people --person github:BurntSushi --sign 1` (fresh equivalent stores) produces the identical CID.",
+            "SP-8: `scrape github BurntSushi --sign 9` exits non-zero with `candidate 9 does not exist; valid range 1..<m>`; nothing is composed.",
+            "SP-6: two logins sharing one GitHub user id are each shown with `possible rename`; each keeps its own links and subject."
+          ],
+          "acceptance_criteria": [
+            "SP-2: signing candidate 1 from `scrape github BurntSushi --sign 1` and from `infer people --person github:BurntSushi --sign 1` (fresh equivalent stores) produces the identical CID.",
+            "SP-8: `scrape github BurntSushi --sign 9` exits non-zero with `candidate 9 does not exist; valid range 1..<m>`; nothing is composed.",
+            "SP-6: two logins sharing one GitHub user id are each shown with `possible rename`; each keeps its own links and subject."
+          ],
+          "test_file": "tests/acceptance/scrape_person.rs",
+          "scenario_name": "signing_from_the_person_view_is_the_same_as_signing_from_infer_people",
+          "scenario_fns": [
+            "signing_from_the_person_view_is_the_same_as_signing_from_infer_people",
+            "selecting_a_missing_candidate_from_the_person_view_is_rejected",
+            "a_renamed_login_is_flagged_as_a_possible_rename_never_merged"
+          ],
+          "n_scenarios": [
+            "SP-2",
+            "SP-8",
+            "SP-6"
+          ],
+          "us_trace": [
+            "US-CPI-005"
+          ],
+          "implementation_notes": "Test paradigm: acceptance = example-based via CLI subprocess driving port; pure domain = property-based (proptest); adapters = real-infrastructure integration tests, never mocked. Rename detection is pure over links (group by github_user_id with >1 person key). Finalize check: all 55 non-live scenarios across the 5 files active; `grep -n '#\\[ignore' tests/acceptance/{contributor_links,infer_people,infer_people_sign,infer_people_evidence_grows,scrape_person}.rs` lists only the 5 `live-github` scenarios (CL-15, IP-16, IS-10, EG-11, SP-9), run at the slice-05 dogfood demo with OPENLORE_LIVE_GITHUB=1.",
+          "estimate_hours": 4,
+          "estimated_effort": "4h",
+          "depends_on": [
+            "05-01"
+          ],
+          "dependencies": [
+            "05-01"
+          ],
+          "files_to_modify": [
+            "tests/acceptance/scrape_person.rs",
+            "crates/scraper-domain/src/people.rs",
+            "crates/cli/src/verbs/scrape_github.rs",
+            "crates/cli/src/render/people.rs"
+          ],
+          "mutation_note": "Mutation must kill any merge of two person keys sharing a user id (anti-merging) and any divergence between the two --sign surfaces."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/ports/src/",
+      "crates/scraper-domain/src/",
+      "crates/claim-domain/src/",
+      "crates/appview-domain/src/",
+      "crates/adapter-github/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/cli/src/",
+      "crates/test-support/src/",
+      "xtask/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "note": "Pending review — 5 phases / 15 steps / 56 scenarios activated (WS-CPI-1 + 55 un-ignored; 5 live-github stay opt-in). WS goes GREEN at 01-02 (thin thread split into two ≤1-day steps: 01-01 link vertebra, 01-02 thin infer+sign). Carries acceptance-review items: #2 in 01-01, #5 in 01-01/04-01, #6 in 01-01, #1 + #3 (single /users fetch, PO blocker) in 05-01; #4 needs no change. DDD-5 v5 + DDD-15 probe in 01-01; DDD-16 check-arch in 01-04; DDD-7 hoist in 02-02 (before IP-3). Steps/production-files = 15/28 = 0.54.",
+    "open_decisions": {
+      "Q-CPI-D2": "Recommended: appview-domain delegates to the hoisted claim-domain rule in 02-02 (one rule).",
+      "Q-CPI-D3": "Bare DID, same normalization as `claim publish`; pinned by the IS-2 fixture (03-01).",
+      "Q-CPI-D5": "Narrow `scraper_never_persists_unsigned` wording only (01-01); no request-count assertion needs changing.",
+      "single_fetch_shape": "Crafter chooses whether resolution returns the profile or harvest absorbs resolution (05-01); GithubPort adds no request."
+    },
+    "approved_at": "2026-09-27",
+    "review_summary": "APPROVED — all 6 roadmap checks pass; every non-live scenario activated by exactly one step; WS GREEN at 01-02."
+  }
+}
