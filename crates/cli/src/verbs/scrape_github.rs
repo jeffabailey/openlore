@@ -35,7 +35,7 @@
 //! slice-01 verb internals).
 
 use anyhow::{anyhow, Result};
-use ports::{CandidateClaim, LinkFilter, TargetKind};
+use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, select_contributors,
     shared_contributors, ContributorSelection, SharedContributor, EMBEDDED_MAPPING_YAML,
@@ -43,7 +43,8 @@ use scraper_domain::{
 
 use crate::render::{
     render_auth_report, render_candidate_list, render_contributors_block,
-    render_no_contributors_requested, render_public_data_banner, render_shared_contributors,
+    render_contributors_not_recorded, render_no_contributors_requested, render_public_data_banner,
+    render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
 use crate::verbs::sign_batch::{self, SignableCandidate};
@@ -147,17 +148,26 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     let subject = subject_for(&kind);
     // N = 0 is a shell decision taken BEFORE the port: no request, no write.
     let contributors = match &kind {
-        TargetKind::Repo { .. } if contributor_count == 0 => Some(None),
+        TargetKind::Repo { .. } if contributor_count == 0 => ContributorsOutcome::NoneRequested,
         TargetKind::Repo { owner, repo } => {
-            let rows = runtime
-                .block_on(wiring.github.list_contributors(owner, repo))
-                .map_err(anyhow::Error::from)?;
-            let selection = select_contributors(&rows, contributor_count);
-            record_contributors(wiring, &subject, &selection)?;
-            let shared = contributors_shared_with_other_repos(wiring, &subject, &selection)?;
-            Some(Some((selection, shared)))
+            match runtime.block_on(wiring.github.list_contributors(owner, repo)) {
+                // UC-2: GitHub will not list them (too large / empty) — a
+                // named notice, nothing recorded, the scrape carries on.
+                Err(GithubError::ContributorsUnavailable { reason, .. }) => {
+                    ContributorsOutcome::Unavailable(reason)
+                }
+                // Any other failure aborts BEFORE any link write (DDD-14).
+                Err(fatal) => return Err(anyhow::Error::from(fatal)),
+                Ok(rows) => {
+                    let selection = select_contributors(&rows, contributor_count);
+                    record_contributors(wiring, &subject, &selection)?;
+                    let shared =
+                        contributors_shared_with_other_repos(wiring, &subject, &selection)?;
+                    ContributorsOutcome::Recorded { selection, shared }
+                }
+            }
         }
-        TargetKind::User { .. } => None,
+        TargetKind::User { .. } => ContributorsOutcome::NotARepo,
     };
 
     // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
@@ -179,14 +189,7 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     }
 
     // (5a) The contributors block (repo targets only), below the candidates.
-    match &contributors {
-        Some(Some((selection, shared))) => {
-            out.push_str(&render_contributors_block(selection));
-            out.push_str(&render_shared_contributors(shared));
-        }
-        Some(None) => out.push_str(&render_no_contributors_requested()),
-        None => {}
-    }
+    out.push_str(&render_contributors_outcome(&contributors));
 
     // (6) WITHOUT --sign: derive + render only, ZERO writes (the human-gate;
     // scraper_never_persists_unsigned, I-SCR-1 / WD-49). Return now.
@@ -201,6 +204,33 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // The candidate-list block already accumulated in `out` is handed to the
     // batch, which emits it to stdout BEFORE composing so the user reviews it.
     sign_selected_candidates(wiring, &candidates, raw_selection, &out)
+}
+
+/// What the contributors beat of a scrape came to (DDD-14 / UC-1 / UC-2).
+enum ContributorsOutcome {
+    /// A user target — repos alone have contributors.
+    NotARepo,
+    /// `--contributors 0`: GitHub was not asked.
+    NoneRequested,
+    /// GitHub will not list them (too large / empty): a named notice.
+    Unavailable(String),
+    /// The snapshot was recorded; `shared` is the cross-repo overlap.
+    Recorded {
+        selection: ContributorSelection,
+        shared: Vec<SharedContributor>,
+    },
+}
+
+/// The contributors block below the candidate list. Pure.
+fn render_contributors_outcome(outcome: &ContributorsOutcome) -> String {
+    match outcome {
+        ContributorsOutcome::NotARepo => String::new(),
+        ContributorsOutcome::NoneRequested => render_no_contributors_requested(),
+        ContributorsOutcome::Unavailable(reason) => render_contributors_not_recorded(reason),
+        ContributorsOutcome::Recorded { selection, shared } => {
+            render_contributors_block(selection) + &render_shared_contributors(shared)
+        }
+    }
 }
 
 /// Run the `--sign N[,N...]` batch over the repo candidates through the

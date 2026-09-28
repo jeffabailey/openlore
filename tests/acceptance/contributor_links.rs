@@ -258,7 +258,6 @@ fn re_scraping_never_loses_previously_recorded_people() {
 ///
 /// @us-cpi-001 @driving_port @real-io @error @ddd-14
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 rate-limited harvest records nothing, exit != 0)"]
 fn a_rate_limited_contributor_harvest_records_nothing_and_says_why() {
     // GIVEN Aanya's unauthenticated budget is exhausted by the contributors read.
     let env = TestEnv::initialized();
@@ -291,7 +290,6 @@ fn a_rate_limited_contributor_harvest_records_nothing_and_says_why() {
 ///
 /// @us-cpi-001 @driving_port @real-io @error
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 rejected token records nothing)"]
 fn a_rejected_token_on_the_contributor_harvest_records_nothing() {
     // GIVEN the configured token is rejected by the contributors read.
     let env = TestEnv::initialized();
@@ -322,7 +320,6 @@ fn a_rejected_token_on_the_contributor_harvest_records_nothing() {
 ///
 /// @us-cpi-001 @driving_port @real-io @error @ddd-15
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (DDD-15 malformed contributors row -> no partial write)"]
 fn an_unexpected_contributor_list_records_nothing() {
     // GIVEN the contributors list contains one valid row and one without login/id.
     let env = TestEnv::initialized();
@@ -358,7 +355,6 @@ fn an_unexpected_contributor_list_records_nothing() {
 ///
 /// @us-cpi-001 @driving_port @real-io @uc-2 @ddd-14 @edge
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (UC-2 too-large contributor list is a notice, exit 0)"]
 fn a_repo_too_large_to_list_contributors_is_a_notice_not_a_failure() {
     // GIVEN a repo whose contributor list GitHub refuses as too large.
     let env = TestEnv::initialized();
@@ -396,7 +392,6 @@ fn a_repo_too_large_to_list_contributors_is_a_notice_not_a_failure() {
 ///
 /// @us-cpi-001 @driving_port @real-io @uc-2 @edge
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (UC-2 empty repo is a notice, exit 0)"]
 fn an_empty_repository_is_a_notice_not_a_failure() {
     // GIVEN a freshly created repo with no commits.
     let env = TestEnv::initialized();

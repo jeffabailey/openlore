@@ -339,8 +339,24 @@ impl GithubPort for GithubAdapter {
     ) -> Result<Vec<RawContributor>, GithubError> {
         let target = format!("{owner}/{repo}");
         let path = format!("/repos/{owner}/{repo}/contributors?per_page=100");
-        let body = self.get_public(&path, &target).await?;
-        client::parse_contributors(&body).map_err(GithubError::ApiShape)
+        let url = format!("{}{}", self.api_base, path);
+        let response = self.send_get(&url).await?;
+        let status = response.status().as_u16();
+        let rate_budget_exhausted = response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .is_some_and(|remaining| remaining.as_bytes() == b"0");
+        let body = response.bytes().await.map_err(|e| {
+            GithubError::Network(format!("reading contributors from GitHub failed: {e}"))
+        })?;
+        classify_contributors(
+            &ContributorsReply {
+                status,
+                rate_budget_exhausted,
+                body: &body,
+            },
+            &target,
+        )
     }
 }
 
@@ -578,6 +594,69 @@ fn classify_status(status: u16, body: &serde_json::Value, target: &str) -> Githu
     }
 }
 
+/// The observed reply to `GET /repos/{o}/{r}/contributors`, read off the wire
+/// BEFORE classification so [`classify_contributors`] stays pure.
+struct ContributorsReply<'a> {
+    status: u16,
+    /// `x-ratelimit-remaining: 0` — GitHub's documented rate-limit marker,
+    /// the ONLY thing separating a rate-limit 403 from a too-large 403.
+    rate_budget_exhausted: bool,
+    body: &'a [u8],
+}
+
+/// Classify a contributors reply (contributor-philosophy-inference DDD-14 /
+/// UC-2 / DDD-15). PURE — status, rate-limit marker and body in; the RAW rows
+/// or the railway [`GithubError`] out:
+///
+/// - **204** => [`GithubError::ContributorsUnavailable`] (`empty`) — GitHub's
+///   documented reply for a repository with no commits yet;
+/// - **2xx** => the strictly parsed rows (a malformed row / non-array body is
+///   [`GithubError::ApiShape`] — no partial list ever leaves the adapter);
+/// - **403 carrying GitHub's "too large" message and NOT the rate-limit
+///   marker** => [`GithubError::ContributorsUnavailable`] (`too large`);
+/// - any other refusal => the shared [`classify_status`] (ADR-019: 403 rate
+///   limit, 401 rejected token — the token never echoed).
+fn classify_contributors(
+    reply: &ContributorsReply<'_>,
+    target: &str,
+) -> Result<Vec<RawContributor>, GithubError> {
+    let unavailable = |reason: &str| GithubError::ContributorsUnavailable {
+        target: target.to_string(),
+        reason: reason.to_string(),
+    };
+    let body = serde_json::from_slice::<serde_json::Value>(reply.body);
+    match reply.status {
+        204 => Err(unavailable(EMPTY_REPOSITORY)),
+        200..=299 => {
+            let body = body
+                .map_err(|e| GithubError::ApiShape(format!("response body was not JSON: {e}")))?;
+            client::parse_contributors(&body).map_err(GithubError::ApiShape)
+        }
+        status => {
+            let body = body.unwrap_or_else(|_| serde_json::json!({}));
+            if status == 403 && !reply.rate_budget_exhausted && is_too_large_refusal(&body) {
+                Err(unavailable(TOO_LARGE_TO_LIST))
+            } else {
+                Err(classify_status(status, &body, target))
+            }
+        }
+    }
+}
+
+/// The named reason for an empty repository (204) — no contributors yet.
+const EMPTY_REPOSITORY: &str = "the repository is empty (no contributors yet)";
+
+/// The named reason for GitHub's "too large to list contributors" 403.
+const TOO_LARGE_TO_LIST: &str = "the contributor list is too large for GitHub to list";
+
+/// Whether a 403 body is GitHub's documented "contributor list is too large"
+/// refusal (not a rate limit). Pure inspection of the `message` field.
+fn is_too_large_refusal(body: &serde_json::Value) -> bool {
+    body.get("message")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|message| message.contains("too large"))
+}
+
 /// Read a non-2xx refusal body, then classify it into the railway-oriented
 /// [`GithubError`]. Shared by [`GithubAdapter::get_public`] and
 /// [`GithubAdapter::content_exists`] so the "read the refusal body, then
@@ -767,5 +846,94 @@ mod tests {
             ),
             "private:false must not be misread as a private refusal"
         );
+    }
+
+    /// The `/contributors` reply classification (DDD-14 / UC-2 / DDD-15):
+    /// the two NON-fatal notices (too-large 403, empty 204) are told apart
+    /// from the FATAL refusals (rate-limit 403, 401, shape drift) that must
+    /// abort the scrape before any link write.
+    fn contributors_reply(
+        status: u16,
+        rate_budget_exhausted: bool,
+        body: &[u8],
+    ) -> ContributorsReply<'_> {
+        ContributorsReply {
+            status,
+            rate_budget_exhausted,
+            body,
+        }
+    }
+
+    const TOO_LARGE_BODY: &[u8] = br#"{"message":"The history or contributor list is too large to list contributors for this repository via the API.","documentation_url":"https://docs.github.com/rest/repos/repos#list-repository-contributors"}"#;
+
+    #[test]
+    fn a_too_large_403_is_a_named_contributors_notice() {
+        match classify_contributors(
+            &contributors_reply(403, false, TOO_LARGE_BODY),
+            "torvalds/linux",
+        ) {
+            Err(GithubError::ContributorsUnavailable { target, reason }) => {
+                assert_eq!(target, "torvalds/linux");
+                assert!(reason.contains("too large"), "{reason}");
+            }
+            other => panic!("a too-large 403 must be ContributorsUnavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_403_stays_a_rate_limit_whatever_its_message() {
+        for body in [
+            &br#"{"message":"API rate limit exceeded"}"#[..],
+            TOO_LARGE_BODY,
+        ] {
+            assert!(matches!(
+                classify_contributors(&contributors_reply(403, true, body), "BurntSushi/ripgrep"),
+                Err(GithubError::RateLimited { .. })
+            ));
+        }
+        // A bare 403 without the too-large message stays the conservative rate limit.
+        assert!(matches!(
+            classify_contributors(&contributors_reply(403, false, b"{}"), "BurntSushi/ripgrep"),
+            Err(GithubError::RateLimited { .. })
+        ));
+    }
+
+    #[test]
+    fn an_empty_repository_204_is_a_named_contributors_notice() {
+        match classify_contributors(&contributors_reply(204, false, b""), "some-org/empty-repo") {
+            Err(GithubError::ContributorsUnavailable { target, reason }) => {
+                assert_eq!(target, "some-org/empty-repo");
+                assert!(reason.contains("empty"), "{reason}");
+            }
+            other => panic!("a 204 must be ContributorsUnavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fatal_contributor_replies_stay_fatal() {
+        assert!(matches!(
+            classify_contributors(
+                &contributors_reply(401, false, br#"{"message":"Bad credentials"}"#),
+                "a/b"
+            ),
+            Err(GithubError::TokenRejected)
+        ));
+        assert!(matches!(
+            classify_contributors(
+                &contributors_reply(200, false, br#"[{"type":"User","contributions":1}]"#),
+                "a/b"
+            ),
+            Err(GithubError::ApiShape(_))
+        ));
+        let rows = classify_contributors(
+            &contributors_reply(
+                200,
+                false,
+                br#"[{"login":"BurntSushi","id":456,"type":"User","contributions":2000}]"#,
+            ),
+            "a/b",
+        )
+        .expect("a well-formed list parses");
+        assert_eq!(rows.len(), 1);
     }
 }

@@ -107,6 +107,12 @@ pub fn render_no_contributors_requested() -> String {
     "Contributors recorded: 0 (--contributors 0: none requested)\n".to_string()
 }
 
+/// The contributors line when GitHub will not list them (UC-2: the list is
+/// too large, or the repository is empty): a named notice, nothing recorded.
+pub fn render_contributors_not_recorded(reason: &str) -> String {
+    format!("Contributors not recorded: {reason}\n")
+}
+
 /// The cross-repo overlap below the contributors line (US-CPI-001 AC4): each
 /// recorded person also linked to another repo the user scraped, as
 /// `login → owner/repo`. Nothing when there is no overlap. Carries NO `[n] `
