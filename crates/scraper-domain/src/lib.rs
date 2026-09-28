@@ -24,6 +24,7 @@
 mod derive;
 mod detect;
 mod mapping;
+mod people;
 
 #[cfg(test)]
 mod proptest_strategies;
@@ -37,7 +38,9 @@ pub use mapping::{
 
 // Re-export the shared value types so consumers can reach the whole derivation
 // vocabulary through `scraper_domain::` without also importing `ports::`.
-pub use ports::{CandidateClaim, Signal, SignalKind};
+pub use people::{is_bot, select_contributors, ContributorSelection, DEFAULT_CONTRIBUTOR_COUNT};
+
+pub use ports::{CandidateClaim, RankedContributor, RawContributor, Signal, SignalKind};
 
 #[cfg(test)]
 mod tests {

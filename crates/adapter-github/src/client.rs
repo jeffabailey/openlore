@@ -291,6 +291,33 @@ pub fn content_html_url(body: &serde_json::Value, owner: &str, repo: &str, path:
         .unwrap_or_else(|| format!("https://github.com/{owner}/{repo}/blob/HEAD/{path}"))
 }
 
+/// Parse GitHub's `GET /repos/{o}/{r}/contributors` body into RAW rows, in
+/// API order, bots included (contributor-philosophy-inference DDD-2). The
+/// shape is validated strictly: a non-array body or a row missing `login` /
+/// `id` / `type` / `contributions` is contract drift, returned as the
+/// offending detail (the adapter lifts it to `GithubError::ApiShape`) so no
+/// partial snapshot can ever be recorded.
+pub fn parse_contributors(body: &serde_json::Value) -> Result<Vec<ports::RawContributor>, String> {
+    let rows = body
+        .as_array()
+        .ok_or_else(|| "contributors body is not a JSON array".to_string())?;
+    rows.iter().enumerate().map(parse_contributor_row).collect()
+}
+
+fn parse_contributor_row(
+    (index, row): (usize, &serde_json::Value),
+) -> Result<ports::RawContributor, String> {
+    let text = |field: &str| row.get(field).and_then(serde_json::Value::as_str);
+    let number = |field: &str| row.get(field).and_then(serde_json::Value::as_u64);
+    let missing = |field: &str| format!("contributors row {index} has no valid `{field}`");
+    Ok(ports::RawContributor {
+        login: text("login").ok_or_else(|| missing("login"))?.to_string(),
+        user_id: number("id").ok_or_else(|| missing("id"))?,
+        account_type: text("type").ok_or_else(|| missing("type"))?.to_string(),
+        contributions: number("contributions").ok_or_else(|| missing("contributions"))?,
+    })
+}
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -501,5 +528,31 @@ mod tests {
             content_html_url(&file_no_url, "o", "r", "Cargo.lock"),
             "https://github.com/o/r/blob/HEAD/Cargo.lock"
         );
+    }
+
+    /// contributor-philosophy-inference DDD-2: the contributors body parses
+    /// into RAW rows in API order (bots kept), and any row missing a field
+    /// is refused whole — no partial list.
+    #[test]
+    fn parse_contributors_keeps_raw_rows_in_order_and_refuses_a_malformed_row() {
+        let body = serde_json::json!([
+            {"login": "dependabot[bot]", "id": 49699333, "type": "Bot", "contributions": 900},
+            {"login": "BurntSushi", "id": 456674, "type": "User", "contributions": 2000},
+        ]);
+        let rows = parse_contributors(&body).expect("well-formed body parses");
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.login.as_str(), r.user_id))
+                .collect::<Vec<_>>(),
+            vec![("dependabot[bot]", 49699333), ("BurntSushi", 456674)]
+        );
+        let malformed = serde_json::json!([
+            {"login": "BurntSushi", "id": 456674, "type": "User", "contributions": 2000},
+            {"id": 1, "type": "User", "contributions": 3},
+        ]);
+        assert!(parse_contributors(&malformed)
+            .unwrap_err()
+            .contains("login"));
+        assert!(parse_contributors(&serde_json::json!({"message": "x"})).is_err());
     }
 }

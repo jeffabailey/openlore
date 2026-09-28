@@ -134,6 +134,12 @@ pub enum ProbeRefusalReason {
     /// `/manifest` lacks the openlore opaque-instance marker (Q-SF-D5).
     /// Reason code `publish.not_an_openlore_instance`.
     PublishNotAnOpenloreInstance,
+
+    // -------- contributor-philosophy-inference additions (DDD-15) --------
+    /// The `contribution_links` upsert-twice sentinel did not refresh the
+    /// rank / last-observed, or altered `first_observed_at` (the DuckDB
+    /// `ON CONFLICT` lie), or the table is unusable.
+    StorageContributionLinkUpsertUnreliable,
 }
 
 // -----------------------------------------------------------------------------

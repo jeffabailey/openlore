@@ -2415,7 +2415,9 @@ pub fn run_openlore_scrape_with_token(
 
 /// Universe-bound (gate `scraper_never_persists_unsigned`, KPI-SCR-2):
 /// assert the human-gate held at the storage layer — running `scrape github`
-/// without `--sign` produced ZERO observable persistence. Port-exposed
+/// without `--sign` persists no claim (contribution links — unsigned local
+/// observations, contributor-philosophy-inference ADR-063 — MAY be recorded;
+/// they are not claims and are not checked here). Port-exposed
 /// universe: `author_claims.row_count == 0`, `pds.records.len == 0`,
 /// `claims_dir.artifact_count == 0`. The load-bearing human-gate proof.
 ///

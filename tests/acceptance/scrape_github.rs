@@ -62,7 +62,7 @@ use support::*;
 /// @us-scr-001 @us-scr-002 @walking_skeleton @driving_port @driving_adapter
 /// @real-io @j-004 @j-004a @kpi-scr-2 @happy
 #[test]
-fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_nothing() {
+fn scrape_github_harvests_public_repo_proposes_candidates_and_persists_no_claim() {
     // GIVEN an initialized env + a public repo serving 5 public signals.
     let env = TestEnv::initialized();
     let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
@@ -674,7 +674,7 @@ fn scrape_github_without_sign_makes_zero_pds_writes() {
 }
 
 /// SG-9: a second identical `scrape github <target>` invocation is a pure
-/// read — it derives the same candidate list and STILL persists nothing
+/// read — it derives the same candidate list and STILL persists no claim
 /// (idempotent on the no-side-effect contract; a scrape is never a mutation
 /// no matter how many times it runs).
 ///
@@ -684,7 +684,7 @@ fn scrape_github_without_sign_makes_zero_pds_writes() {
 ///
 /// @us-scr-001 @real-io @driving_port @j-004 @kpi-scr-2 @edge
 #[test]
-fn scrape_github_is_a_pure_read_persisting_nothing_across_repeated_runs() {
+fn scrape_github_is_a_pure_read_persisting_no_claim_across_repeated_runs() {
     // GIVEN an initialized env + a public repo serving 5 public signals. The
     // SAME server (idempotent target) backs every invocation — a pure read of
     // an unchanged target must yield an unchanged candidate list.

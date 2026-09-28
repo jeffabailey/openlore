@@ -229,6 +229,34 @@ pub enum GithubError {
     /// Unexpected response shape (contract drift against the public API).
     #[error("github api response shape unexpected: {0}")]
     ApiShape(String),
+    /// GitHub will not list this repo's contributors (the "contributor list
+    /// is too large" 403, or the empty-repository 204) — a NAMED, NON-fatal
+    /// notice distinct from a rate-limit (contributor-philosophy-inference
+    /// DDD-2 / DDD-14 / UC-2). The scrape records no links and exits 0.
+    #[error("contributors not recorded for {target}: {reason}")]
+    ContributorsUnavailable { target: String, reason: String },
+}
+
+// -----------------------------------------------------------------------------
+// RawContributor — one RAW row of GitHub's public contributors list
+// -----------------------------------------------------------------------------
+
+/// One RAW row of `GET /repos/{o}/{r}/contributors` exactly as GitHub serves
+/// it (contributor-philosophy-inference DDD-2 / ADR-063 §2). The adapter
+/// filters NOTHING — bots included, API order untrusted; the bot rule, the
+/// re-rank and the top-N cut are the pure core's job
+/// (`scraper_domain::select_contributors`, DDD-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawContributor {
+    /// The GitHub login (display form, e.g. `BurntSushi`).
+    pub login: String,
+    /// The STABLE numeric GitHub user id (rename detection, OD-CPI-1).
+    pub user_id: u64,
+    /// GitHub's account `type` (`"User"` | `"Bot"` | …) — NOT trusted alone:
+    /// the bot rule also checks the `[bot]` login suffix.
+    pub account_type: String,
+    /// Commit contributions GitHub attributes to this account.
+    pub contributions: u64,
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{GithubError, GithubPort, ProbeOutcome, Signal, TargetKind};
+use ports::{GithubError, GithubPort, ProbeOutcome, RawContributor, Signal, TargetKind};
 
 pub mod client;
 pub mod probe;
@@ -328,6 +328,19 @@ impl GithubPort for GithubAdapter {
         // `harvest_repo`. The token is NEVER recorded here.
         record_auth_report(client::parse_auth_report(&body));
         Ok(Vec::new())
+    }
+
+    /// ONE public `GET /repos/{o}/{r}/contributors?per_page=100` (DDD-2) —
+    /// on the `/repos/...` public allowlist; raw rows, nothing filtered.
+    async fn list_contributors(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<RawContributor>, GithubError> {
+        let target = format!("{owner}/{repo}");
+        let path = format!("/repos/{owner}/{repo}/contributors?per_page=100");
+        let body = self.get_public(&path, &target).await?;
+        client::parse_contributors(&body).map_err(GithubError::ApiShape)
     }
 }
 

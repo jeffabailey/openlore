@@ -38,10 +38,15 @@ use std::io::Write;
 
 use anyhow::{anyhow, Result};
 use ports::{CandidateClaim, TargetKind};
-use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+use scraper_domain::{
+    derive_candidates, load_mapping, select_contributors, ContributorSelection,
+    DEFAULT_CONTRIBUTOR_COUNT, EMBEDDED_MAPPING_YAML,
+};
 
 use crate::io::prompt_line;
-use crate::render::{render_auth_report, render_candidate_list, render_public_data_banner};
+use crate::render::{
+    render_auth_report, render_candidate_list, render_contributors_block, render_public_data_banner,
+};
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
 use crate::verbs::claim_publish::{
     build_tokio_runtime, publish_signed_claim, render_publish_success,
@@ -132,13 +137,30 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
     // `AuthReport` carries only the budget numbers (no-token-leak).
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
 
+    // (3b) contributor-philosophy-inference (DDD-14): for a repo target, read
+    // the RAW contributors (one request), select the top-N humans PURELY, and
+    // record the snapshot as append-only contribution links in ONE tx. A
+    // harvest failure aborts here, BEFORE any link write. Links are unsigned
+    // local observations — never claims (the human-gate is untouched).
+    let subject = subject_for(&kind);
+    let contributors = match &kind {
+        TargetKind::Repo { owner, repo } => {
+            let rows = runtime
+                .block_on(wiring.github.list_contributors(owner, repo))
+                .map_err(anyhow::Error::from)?;
+            let selection = select_contributors(&rows, DEFAULT_CONTRIBUTOR_COUNT);
+            record_contributors(wiring, &subject, &selection)?;
+            Some(selection)
+        }
+        TargetKind::User { .. } => None,
+    };
+
     // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
     // each candidate names its source signal). The mapping is the embedded
     // SSOT snapshot — a parse failure is a build-time-verified impossibility,
     // surfaced as an error rather than a panic for railway discipline.
     let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
         .map_err(|e| anyhow::anyhow!("embedded signal->predicate mapping failed to parse: {e}"))?;
-    let subject = subject_for(&kind);
     let candidates = derive_candidates(&subject, &signals, &mapping);
 
     // (5) Render the candidate list (or the no-candidates message).
@@ -149,6 +171,11 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
         );
     } else {
         out.push_str(&render_candidate_list(&subject, &candidates));
+    }
+
+    // (5a) The contributors block (repo targets only), below the candidates.
+    if let Some(selection) = &contributors {
+        out.push_str(&render_contributors_block(selection));
     }
 
     // (6) WITHOUT --sign: derive + render only, ZERO writes (the human-gate;
@@ -500,6 +527,20 @@ fn render_derived_from_line(candidate: &CandidateClaim) -> String {
         .collect::<Vec<_>>()
         .join("; ");
     format!("  derived-from: openlore-github-scraper (signal: {signals})\n")
+}
+
+/// Record a repo's selected contributors as append-only links in ONE
+/// transaction, observed at the clock port's `now` (DDD-5 / DDD-14).
+fn record_contributors(
+    wiring: &Wiring,
+    repo_subject: &str,
+    selection: &ContributorSelection,
+) -> Result<()> {
+    wiring
+        .contribution_links
+        .record_snapshot(repo_subject, wiring.clock.now_utc(), &selection.people)
+        .map(|_| ())
+        .map_err(|e| anyhow!("recording contributors of {repo_subject}: {e}"))
 }
 
 /// Harvest the bounded public signal set for the resolved target kind.

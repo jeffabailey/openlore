@@ -51,14 +51,17 @@ use ports::{
     SignedPhilosophy, SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
 };
 
+mod contribution_links;
 mod graph_query;
 mod peer_storage;
 mod probe;
 mod schema;
 mod schema_v3;
 mod schema_v4;
+mod schema_v5;
 mod store_read;
 
+pub use contribution_links::DuckDbContributionLinkAdapter;
 pub use peer_storage::DuckDbPeerStorageAdapter;
 pub use store_read::DuckDbStoreReadAdapter;
 
@@ -107,6 +110,9 @@ impl DuckDbStorageAdapter {
         // Slice-24 migration v4: minted-philosophy storage (`philosophies`
         // table). Idempotent forward-only follow-on after v3 (ADR-059 §4.5).
         schema_v4::run_migration(&mut conn)?;
+        // contributor-philosophy-inference migration v5: the append-only
+        // `contribution_links` table (DDD-5). Idempotent forward-only.
+        schema_v5::run_migration(&mut conn)?;
 
         // Colocate `claims/` next to the DB file. data-models.md
         // §"DuckDB schema" defines the canonical layout
@@ -184,6 +190,12 @@ impl DuckDbStorageAdapter {
     /// `openlore ui` viewer that holds it is structurally read-only (I-VIEW-1).
     pub fn read_adapter(&self) -> DuckDbStoreReadAdapter {
         DuckDbStoreReadAdapter::from_shared(Arc::clone(&self.conn), self.peer_claims_root.clone())
+    }
+
+    /// Construct a `DuckDbContributionLinkAdapter` SHARING this adapter's
+    /// connection handle (DDD-4; the `peer_adapter` single-writer precedent).
+    pub fn contribution_link_adapter(&self) -> DuckDbContributionLinkAdapter {
+        DuckDbContributionLinkAdapter::from_shared(Arc::clone(&self.conn))
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
@@ -1044,10 +1056,18 @@ mod tests {
     fn migration_v4_registers_schema_version_four() {
         let (_dir, adapter) = open_tmp();
         let conn = adapter.conn.lock().expect("lock conn");
-        let observed = schema::read_version(&conn).expect("read schema version");
+        // The schema head moved on (v5, contribution links); v4 must still
+        // have been applied and recorded on the way.
+        let v4_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_version WHERE version = 4",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read schema_version v4");
         assert_eq!(
-            observed, 4,
-            "open must migrate to schema v4 (ADR-059 §4.5 minted storage)"
+            v4_rows, 1,
+            "open must migrate through schema v4 (ADR-059 §4.5 minted storage)"
         );
         conn.execute_batch("SELECT * FROM philosophies LIMIT 0")
             .expect("philosophies table must exist after migration v4");

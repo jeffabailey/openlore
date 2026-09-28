@@ -85,3 +85,18 @@ pub fn render_auth_report(report: &AuthReport) -> String {
         AuthReport::Anonymous => "unauthenticated\n".to_string(),
     }
 }
+
+/// Render the contributors block of a repo scrape (contributor-philosophy-
+/// inference US-CPI-001 / Q-CPI-D1): how many HUMAN contributors were
+/// recorded as links, and every bot skipped on the way, by name. Carries NO
+/// `[n] ` marker — numbering belongs to the candidate list alone.
+pub fn render_contributors_block(selection: &scraper_domain::ContributorSelection) -> String {
+    let recorded = selection.people.len();
+    let bots = &selection.bots_excluded;
+    let bot_note = match bots.len() {
+        0 => String::new(),
+        1 => format!(" · 1 bot excluded: {}", bots[0]),
+        count => format!(" · {count} bots excluded: {}", bots.join(", ")),
+    };
+    format!("Contributors recorded: {recorded} (top by commits{bot_note})\n")
+}

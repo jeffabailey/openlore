@@ -33,8 +33,8 @@ use adapter_publish_http::{HttpPublishAdapter, WriteToken};
 use adapter_system_clock::SystemClockAdapter;
 use anyhow::{anyhow, Context, Result};
 use ports::{
-    ClockPort, GithubPort, IdentityPort, IndexQueryPort, InstanceReadPort, PdsPort,
-    PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
+    ClockPort, ContributionLinkPort, GithubPort, IdentityPort, IndexQueryPort, InstanceReadPort,
+    PdsPort, PeerStoragePort, ProbeOutcome, ProbeRefused, PublishPort, StoragePort, StoreReadPort,
 };
 
 use crate::paths::OpenLorePaths;
@@ -49,6 +49,11 @@ pub struct Wiring {
     /// constructed via `DuckDbStorageAdapter::peer_adapter()` so no second
     /// handle to the DB file is ever opened.
     pub peer_storage: Box<dyn PeerStoragePort>,
+    /// contributor-philosophy-inference (DDD-4): append-only contribution
+    /// links, sharing the one DuckDB connection. Held by the read-write CLI
+    /// composition root only — the `ui` viewer builds its own read-only root
+    /// and never receives this port.
+    pub contribution_links: Box<dyn ContributionLinkPort>,
     /// READ-ONLY own-store surface sharing the SAME DuckDB handle as
     /// `storage` (no second handle). The `publish push` verb enumerates the
     /// user's own claims through it.
@@ -113,6 +118,8 @@ impl Wiring {
         let peer_storage: Box<dyn PeerStoragePort> =
             Box::new(storage.peer_adapter(identity.author_did()));
         let store_read: Box<dyn StoreReadPort> = Box::new(storage.read_adapter());
+        let contribution_links: Box<dyn ContributionLinkPort> =
+            Box::new(storage.contribution_link_adapter());
         let storage: Box<dyn StoragePort> = Box::new(storage);
 
         let pds_endpoint = std::env::var("OPENLORE_PDS_ENDPOINT").unwrap_or_default();
@@ -165,6 +172,7 @@ impl Wiring {
             identity,
             storage,
             peer_storage,
+            contribution_links,
             store_read,
             pds,
             clock,
@@ -180,6 +188,9 @@ impl Wiring {
     pub fn probe_gauntlet(&self) -> Result<(), ProbeRefusal> {
         check_probe("identity", self.identity.probe())?;
         check_probe("storage", self.storage.probe())?;
+        // DDD-15: LIVE upsert-twice sentinel (rolled back) — a store whose
+        // `ON CONFLICT` upsert lies refuses startup (health.startup.refused).
+        check_probe("contribution_links", self.contribution_links.probe())?;
         // Slice-03 peer-storage probe entry. The adapter binding exists
         // (`self.peer_storage`) and the gauntlet has its slot, but the
         // `DuckDbPeerStorageAdapter::probe()` body is still a RED scaffold

@@ -29,7 +29,6 @@ use support::*;
 ///
 /// @us-cpi-001 @driving_port @real-io @kpi-cpi-5 @d-3 @happy
 #[test]
-#[ignore = "DELIVER slice-01: unskip one-at-a-time (US-CPI-001 top-N humans recorded, bots named)"]
 fn scraping_a_repo_records_its_top_thirty_human_contributors_and_names_the_bots() {
     // GIVEN Maria has not scraped BurntSushi/ripgrep before.
     let env = TestEnv::initialized();

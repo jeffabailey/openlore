@@ -58,6 +58,7 @@ pub use publish::{
 // `peer_storage` declares the new `PeerStoragePort` trait (sync,
 // local-DB only) plus its outcomes + `PeerStorageError`.
 
+mod contribution_link;
 mod federated_row;
 mod github;
 mod graph;
@@ -105,7 +106,16 @@ pub use peer_storage::{
 // pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
 
 pub use github::{
-    CandidateClaim, CandidateClaimError, GithubError, Signal, SignalKind, TargetKind,
+    CandidateClaim, CandidateClaimError, GithubError, RawContributor, Signal, SignalKind,
+    TargetKind,
+};
+
+// contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only
+// `ContributionLinkPort` — local, unsigned observation data (who builds a
+// scraped repo). No delete / update method exists on the trait.
+pub use contribution_link::{
+    ContributionLink, ContributionLinkError, ContributionLinkPort, LinkFilter, RankedContributor,
+    RecordSnapshotOutcome,
 };
 
 // -----------------------------------------------------------------------------
@@ -482,6 +492,17 @@ pub trait GithubPort: Send + Sync {
     /// Harvest a BOUNDED cross-repo aggregate for a user / contributor
     /// target (deep triangulation deferred to slice-04 per WD-64).
     async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError>;
+
+    /// Read a repo's public contributors list: exactly ONE
+    /// `GET /repos/{o}/{r}/contributors?per_page=100` (anonymous contributors
+    /// not requested), returning the RAW rows incl. bots in API order
+    /// (contributor-philosophy-inference DDD-2). Nothing is filtered, sorted
+    /// or cut here — that is the pure core's job (DDD-3).
+    async fn list_contributors(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<RawContributor>, GithubError>;
 }
 
 // -----------------------------------------------------------------------------

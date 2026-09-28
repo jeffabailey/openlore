@@ -59,3 +59,41 @@ fn dedupe_by_kind(signals: Vec<Signal>) -> Vec<Signal> {
     }
     out
 }
+
+// -----------------------------------------------------------------------------
+// contributor-philosophy-inference (DDD-3): raw `/contributors` rows
+// -----------------------------------------------------------------------------
+
+/// A raw contributors row drawn from a SMALL id / login space so duplicates
+/// (the same user id served twice) and contribution ties actually occur, and
+/// from all three bot shapes: typed `Bot`, `[bot]` login typed `User` (the
+/// API lie), and plain humans.
+pub fn arb_raw_contributor() -> impl Strategy<Value = ports::RawContributor> {
+    (
+        0u64..40,
+        prop_oneof![
+            3 => Just("User".to_string()),
+            1 => Just("Bot".to_string()),
+        ],
+        any::<bool>(),
+        0u64..50,
+    )
+        .prop_map(|(user_id, account_type, bracket_bot, contributions)| {
+            let login = if bracket_bot {
+                format!("helper-{user_id}[BOT]")
+            } else {
+                format!("dev-{user_id:02}")
+            };
+            ports::RawContributor {
+                login,
+                user_id,
+                account_type,
+                contributions,
+            }
+        })
+}
+
+/// A raw contributors list (0..60 rows, duplicates and bots included).
+pub fn arb_raw_contributors() -> impl Strategy<Value = Vec<ports::RawContributor>> {
+    proptest::collection::vec(arb_raw_contributor(), 0..60)
+}
