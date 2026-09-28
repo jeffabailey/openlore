@@ -239,6 +239,34 @@ pub fn shared_contributors(
         .collect()
 }
 
+/// The OTHER person subjects recorded with the same numeric GitHub user id as
+/// `person_subject` — a possible rename (OD-CPI-1 / Q-CPI-D7). Subjects are
+/// compared case-folded (DDD-5 keys), so a re-cased login is never its own
+/// rename; each other person appears once, in its smallest recorded spelling,
+/// ordered by key. Only FLAGS: links are read, never merged or rewritten (D-5).
+pub fn possible_renames(person_subject: &str, links: &[ContributionLink]) -> Vec<String> {
+    let person_key = subject_key(person_subject);
+    let own_user_ids: BTreeSet<u64> = links
+        .iter()
+        .filter(|link| subject_key(&link.person_subject) == person_key)
+        .map(|link| link.github_user_id)
+        .collect();
+    links
+        .iter()
+        .filter(|link| own_user_ids.contains(&link.github_user_id))
+        .filter(|link| subject_key(&link.person_subject) != person_key)
+        .fold(BTreeMap::<String, &str>::new(), |mut others, link| {
+            let spelling = others
+                .entry(subject_key(&link.person_subject))
+                .or_insert(&link.person_subject);
+            *spelling = (*spelling).min(link.person_subject.as_str());
+            others
+        })
+        .into_values()
+        .map(str::to_string)
+        .collect()
+}
+
 /// A repo subject's display form without the `github:` scheme.
 fn repo_display(repo_subject: &str) -> String {
     repo_subject
@@ -1631,6 +1659,59 @@ mod tests {
                 overlap_keys(&shared_contributors(current, &people, &links)),
                 overlap_keys(&shared_contributors(current, &people, &upper))
             );
+        }
+    }
+
+    // --- possible renames (Q-CPI-D7 / OD-CPI-1) ---
+
+    /// Oracle: the case-folded keys of every OTHER person whose links share a
+    /// GitHub user id with one of `person`'s links.
+    fn rename_keys_oracle(person: &str, links: &[ContributionLink]) -> BTreeSet<String> {
+        let own_ids: BTreeSet<u64> = links
+            .iter()
+            .filter(|l| l.person_subject.eq_ignore_ascii_case(person))
+            .map(|l| l.github_user_id)
+            .collect();
+        links
+            .iter()
+            .filter(|l| own_ids.contains(&l.github_user_id))
+            .map(|l| l.person_subject.to_ascii_lowercase())
+            .filter(|key| *key != person.to_ascii_lowercase())
+            .collect()
+    }
+
+    proptest! {
+        /// Exactly the other logins sharing a user id are flagged — once
+        /// each, never the person itself in any letter case — and the result
+        /// is ordered by key.
+        #[test]
+        fn possible_renames_flags_exactly_the_logins_sharing_a_user_id(
+            links in proptest::collection::vec(crate::proptest_strategies::arb_contribution_link(), 0..10),
+            person in proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
+        ) {
+            let flagged = possible_renames(person, &links);
+            let keys: Vec<String> = flagged.iter().map(|s| s.to_ascii_lowercase()).collect();
+            let expected: Vec<String> = rename_keys_oracle(person, &links).into_iter().collect();
+            prop_assert_eq!(keys, expected);
+            for subject in &flagged {
+                prop_assert!(links.iter().any(|l| &l.person_subject == subject), "{} was recorded", subject);
+            }
+        }
+
+        /// A rename is mutual: if A flags B then B flags A.
+        #[test]
+        fn possible_renames_are_mutual(
+            links in proptest::collection::vec(crate::proptest_strategies::arb_contribution_link(), 0..10),
+        ) {
+            for a in crate::proptest_strategies::PERSON_POOL {
+                for b in possible_renames(a, &links) {
+                    let back: Vec<String> = possible_renames(&b, &links)
+                        .iter()
+                        .map(|s| s.to_ascii_lowercase())
+                        .collect();
+                    prop_assert!(back.contains(&a.to_ascii_lowercase()), "{} -> {} not mutual", a, b);
+                }
+            }
         }
     }
 

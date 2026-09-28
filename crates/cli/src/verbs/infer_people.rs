@@ -66,8 +66,8 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             stdout: rendered,
         });
     };
-    let signables: Vec<SignableCandidate> = report.candidates.iter().map(signable_from).collect();
-    let exit_code = sign_batch::sign_selected(wiring, &signables, raw_selection, &rendered)?;
+    let exit_code =
+        sign_batch::sign_selected(wiring, &person_signables(&report), raw_selection, &rendered)?;
     Ok(InferPeopleOutcome {
         exit_code,
         stdout: String::new(),
@@ -190,6 +190,14 @@ fn read_all_pages(
             return Ok(subjects);
         }
     }
+}
+
+/// The report's numbered candidates, in order, as the shared sign batch's
+/// input — the ONE builder both `infer people --sign` and the `scrape github
+/// <user> --sign` person view use (DDD-12 / DDD-13), so either surface signs
+/// the identical claim (same CID) for the same number.
+pub(crate) fn person_signables(report: &InferenceReport) -> Vec<SignableCandidate> {
+    report.candidates.iter().map(signable_from).collect()
 }
 
 /// Pre-fill the shared compose editor from one numbered candidate: ADR-064

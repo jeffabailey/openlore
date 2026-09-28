@@ -39,8 +39,8 @@ use anyhow::{anyhow, Result};
 use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
-    select_contributors, shared_contributors, ContributorSelection, InferenceFilter,
-    InferenceReport, PersonSubject, SharedContributor, EMBEDDED_MAPPING_YAML,
+    possible_renames, select_contributors, shared_contributors, ContributorSelection,
+    InferenceFilter, InferenceReport, PersonSubject, SharedContributor, EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
@@ -50,7 +50,7 @@ use crate::render::{
     render_shared_contributors,
 };
 use crate::verbs::claim_publish::build_tokio_runtime;
-use crate::verbs::infer_people::read_inference_report;
+use crate::verbs::infer_people::{person_signables, read_inference_report};
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -166,6 +166,11 @@ fn show_person(
         .contribution_links
         .list_links(&LinkFilter::Person(person.as_str().to_string()))
         .map_err(|e| anyhow!("reading the links of {}: {e}", person.as_str()))?;
+    let all_links = wiring
+        .contribution_links
+        .list_links(&LinkFilter::All)
+        .map_err(|e| anyhow!("reading recorded contributors: {e}"))?;
+    let renames = possible_renames(person.as_str(), &all_links);
     let report = read_inference_report(
         wiring,
         &InferenceFilter {
@@ -173,14 +178,27 @@ fn show_person(
             min_repos: 0,
         },
     )?;
-    out.push_str(&render_person_view(person.as_str(), &links, &report));
-    match args.sign.as_deref() {
-        None => Ok(ScrapeGithubOutcome {
+    out.push_str(&render_person_view(
+        person.as_str(),
+        &links,
+        &renames,
+        &report,
+    ));
+    let Some(raw_selection) = args.sign.as_deref() else {
+        return Ok(ScrapeGithubOutcome {
             exit_code: 0,
             stdout: out,
-        }),
-        Some(raw_selection) => sign_selected_candidates(wiring, &[], raw_selection, &out),
-    }
+        });
+    };
+    // DDD-12 / DDD-13: the SAME builder + sign batch `infer people --person
+    // --sign` uses, over the SAME numbering — so the same number signs the
+    // identical claim (STRONGER candidates carry their `supersedes`).
+    let exit_code =
+        sign_batch::sign_selected(wiring, &person_signables(&report), raw_selection, &out)?;
+    Ok(ScrapeGithubOutcome {
+        exit_code,
+        stdout: String::new(),
+    })
 }
 
 /// Scrape one public repo: harvest -> derive -> contributors -> render ->

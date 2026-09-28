@@ -116,7 +116,6 @@ fn a_user_scrape_shows_the_persons_accumulated_picture() {
 ///
 /// @us-cpi-005 @us-cpi-003 @driving_port @real-io @ddd-13 @guardrail
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 person-view --sign == infer people --person --sign)"]
 fn signing_from_the_person_view_is_the_same_as_signing_from_infer_people() {
     // GIVEN two identically seeded stores (all instants pinned).
     let via_scrape = TestEnv::initialized();
@@ -267,7 +266,6 @@ fn reading_a_person_asks_github_only_for_their_profile_once() {
 ///
 /// @us-cpi-005 @driving_port @real-io @q-cpi-d7 @od-cpi-1 @edge
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (Q-CPI-D7 possible rename shown, never merged)"]
 fn a_renamed_login_is_flagged_as_a_possible_rename_never_merged() {
     // GIVEN old-login (id 42) recorded on acme/old, new-login (id 42) on acme/new.
     let env = TestEnv::initialized();
@@ -357,7 +355,6 @@ fn a_linked_person_without_signed_repo_claims_shows_links_and_how_to_enable_infe
 ///
 /// @us-cpi-005 @driving_port @real-io @error
 #[test]
-#[ignore = "DELIVER slice-05: unskip one-at-a-time (US-CPI-005 out-of-range --sign on the person view)"]
 fn selecting_a_missing_candidate_from_the_person_view_is_rejected() {
     // GIVEN BurntSushi has two inferred candidates.
     let env = TestEnv::initialized();

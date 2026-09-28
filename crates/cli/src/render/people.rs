@@ -214,16 +214,20 @@ fn philosophy_short_name(philosophy: &str) -> &str {
 /// recorded links (repo + rank), then the person-scoped inference report —
 /// my signed adherence with its CID, and the numbered candidates exactly as
 /// `infer people --person` numbers them (DDD-13). An unlinked person gets
-/// guidance, never an error. Pure: values in, string out.
+/// guidance, never an error. Other logins recorded with the same GitHub user
+/// id are flagged `possible rename` under the links — flagged only, never
+/// merged (Q-CPI-D7 / OD-CPI-1). Pure: values in, string out.
 pub fn render_person_view(
     person_subject: &str,
     links: &[ContributionLink],
+    possible_renames: &[String],
     report: &InferenceReport,
 ) -> String {
     if links.is_empty() {
         return render_unlinked_person(person_subject);
     }
     let mut out = render_person_links(person_subject, links);
+    out.push_str(&render_possible_renames(possible_renames));
     out.push_str(&render_inference_report(report));
     if has_no_inference(report) {
         out.push_str(HOW_TO_ENABLE_INFERENCE);
@@ -252,6 +256,20 @@ fn render_person_links(person_subject: &str, links: &[ContributionLink]) -> Stri
     ordered.iter().fold(header, |out, link| {
         out + &format!("  {} (#{})\n", link.repo_subject, link.rank)
     })
+}
+
+/// One `possible rename` line per other login sharing the person's GitHub
+/// user id; empty when there is none.
+fn render_possible_renames(possible_renames: &[String]) -> String {
+    possible_renames
+        .iter()
+        .map(|other| {
+            format!(
+                "  possible rename: {other} has the same GitHub user id \
+                 (kept separate, never merged)\n"
+            )
+        })
+        .collect()
 }
 
 /// Nothing inferred, signed or flagged for this person.
@@ -303,7 +321,7 @@ mod person_view_tests {
             let person = "github:someone";
             let links: Vec<ContributionLink> =
                 ranked.iter().map(|(repo, rank)| link(person, repo, *rank)).collect();
-            let view = render_person_view(person, &links, &empty_report());
+            let view = render_person_view(person, &links, &[], &empty_report());
             let plural = if links.len() == 1 { "" } else { "s" };
             let header = format!("{person} is linked to {} scraped repo{plural}", links.len());
             prop_assert!(view.contains(&header), "{view}");
@@ -322,7 +340,7 @@ mod person_view_tests {
         #[test]
         fn an_unlinked_person_view_is_guidance(login in "[a-zA-Z][a-zA-Z0-9-]{0,20}") {
             let person = format!("github:{login}");
-            let view = render_person_view(&person, &[], &empty_report());
+            let view = render_person_view(&person, &[], &[], &empty_report());
             let guidance = format!("{person} is not linked to any repo you've scraped");
             prop_assert!(view.contains(&guidance), "{view}");
             prop_assert!(view.contains("openlore scrape github <owner>/<repo>"), "{view}");
