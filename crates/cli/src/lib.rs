@@ -59,6 +59,10 @@ pub enum Command {
     /// Scrape a public source for candidate claims — slice-02 (ADR-017).
     #[command(subcommand)]
     Scrape(ScrapeCommand),
+    /// Infer candidate claims from what is already recorded locally —
+    /// contributor-philosophy-inference (ADR-063; DDD-13).
+    #[command(subcommand)]
+    Infer(InferCommand),
     /// Search the NETWORK index — slice-05 (ADR-027). A NEW top-level verb
     /// (WD-113): `graph query` stays unambiguously LOCAL; `search` is the only
     /// NETWORK verb. Queries the self-hosted indexer over HTTP/XRPC along one
@@ -307,6 +311,20 @@ pub enum PeerCommand {
         /// confirmation cannot be answered without a TTY).
         #[arg(long = "no-tty")]
         no_tty: bool,
+    },
+}
+
+/// Inference verbs (contributor-philosophy-inference; DDD-13).
+#[derive(Debug, Subcommand)]
+pub enum InferCommand {
+    /// Propose "person adheres to philosophy" candidates from the recorded
+    /// contribution links and the signed repo claims; optionally sign some.
+    People {
+        /// Optional 1-based candidate indices to sign, comma-separated
+        /// (`--sign 1` or `--sign 1,3`), validated before any compose.
+        /// Absent → list only, ZERO writes (D-1).
+        #[arg(long)]
+        sign: Option<String>,
     },
 }
 
@@ -596,6 +614,19 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore scrape github: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Infer(InferCommand::People { sign }) => {
+            match verbs::infer_people::run(&wiring, &verbs::infer_people::InferPeopleArgs { sign })
+            {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore infer people: {err:#}");
                     1
                 }
             }

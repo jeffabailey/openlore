@@ -25,6 +25,7 @@ pub mod claim_counter;
 pub mod claim_publish;
 pub mod claim_retract;
 pub mod graph_query;
+pub mod infer_people;
 pub mod init;
 pub mod peer_add;
 pub mod peer_pull;
@@ -53,6 +54,7 @@ pub mod scrape_github;
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario
 // in Phase 03/04 (AV-* scenarios register at 01-05).
 pub mod search;
+pub mod sign_batch;
 // Slice-06 (htmx viewer; ADR-028/030): the `openlore ui` read-only viewer verb.
 // A long-running localhost HTTP server over a READ-ONLY `StoreReadPort`; the
 // ONLY verb that links `adapter-http-viewer` (cli is its sole linker).

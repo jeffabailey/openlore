@@ -73,6 +73,10 @@ pub struct ComposedClaim {
     pub author_did: String,
     /// RFC3339 UTC, produced by `ClockPort::now_utc()` at compose time.
     pub composed_at: String,
+    /// Typed references the signed claim carries (DDD-12). Empty for every
+    /// pre-existing compose path, so their canonical bytes — and CIDs — are
+    /// byte-identical to before; a STRONGER inference adds `supersedes`.
+    pub references: Vec<ClaimReference>,
 }
 
 /// Run the `claim add` verb. Returns once the user has either confirmed
@@ -112,6 +116,7 @@ pub fn run(wiring: &Wiring, args: &ClaimAddArgs) -> Result<ClaimAddOutcome> {
         confidence: args.confidence,
         author_did: wiring.identity.author_did().0.clone(),
         composed_at: wiring.clock.now_utc().to_rfc3339(),
+        references: Vec::new(),
     };
 
     // Step 3: render the preview into a String (pure function).
@@ -278,7 +283,7 @@ pub(crate) fn build_unsigned_claim(composed: &ComposedClaim) -> Result<UnsignedC
         confidence,
         author_did: Did(composed.author_did.clone()),
         composed_at: composed.composed_at.clone(),
-        references: Vec::<ClaimReference>::new(),
+        references: composed.references.clone(),
         // Plain `claim add` is never a counter-claim — no reason.
         reason: None,
     })
@@ -400,6 +405,7 @@ mod tests {
             confidence: 0.86,
             author_did: "did:plc:test-jeff".into(),
             composed_at: "2026-05-26T12:00:00+00:00".into(),
+            references: Vec::new(),
         };
         let preview = render_compose_preview(&claim);
         assert!(
@@ -420,6 +426,7 @@ mod tests {
             confidence: 0.86,
             author_did: "did:plc:test-jeff".into(),
             composed_at: "2026-05-26T12:00:00+00:00".into(),
+            references: Vec::new(),
         };
         let preview = render_compose_preview(&claim);
         assert!(
@@ -441,6 +448,7 @@ mod tests {
             confidence: 0.55,
             author_did: "did:plc:test-jeff".into(),
             composed_at: "2026-05-26T12:00:00+00:00".into(),
+            references: Vec::new(),
         };
         let preview = render_compose_preview(&claim);
         assert!(
