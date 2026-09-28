@@ -2,14 +2,20 @@
 //! Q-CPI-D1 load-bearing substrings pinned by DISTILL). Pure: values in,
 //! strings out.
 
-use scraper_domain::{confidence_arithmetic, InferenceReport, PersonCandidate};
+use scraper_domain::{confidence_arithmetic, AlreadySigned, InferenceReport, PersonCandidate};
 
 /// The whole `infer people` output: the candidate list (or the empty-result
-/// line) followed, unindented so it never joins a candidate's block, by the
+/// line), the pairs I already signed (unnumbered, with my claim's CID —
+/// DDD-8), followed, unindented so it never joins a candidate's block, by the
 /// linked repos that fed nothing because no signed philosophy claim is about
 /// them (D-2 / KPI-CPI-3 — unsigned scraper candidates are never support).
 pub fn render_inference_report(report: &InferenceReport) -> String {
-    let mut out = render_person_candidates(&report.candidates);
+    let mut out = if report.candidates.is_empty() && !report.already_signed.is_empty() {
+        "No new inferred candidates (every inference here is already signed).\n".to_string()
+    } else {
+        render_person_candidates(&report.candidates)
+    };
+    out.extend(report.already_signed.iter().map(render_already_signed));
     if !report.repos_without_signed_claims.is_empty() {
         out.push_str(&format!(
             "Not used (no signed philosophy claims): {}\n",
@@ -65,6 +71,16 @@ fn render_person_candidate(number: usize, candidate: &PersonCandidate) -> String
         )
     ));
     block
+}
+
+/// An inferred pair I already signed: never numbered, cited by my claim CID.
+fn render_already_signed(already: &AlreadySigned) -> String {
+    format!(
+        "  - {} adheres to {} — already signed (claim {})\n",
+        already.candidate.person_subject(),
+        philosophy_short_name(already.candidate.philosophy()),
+        already.cid
+    )
 }
 
 /// The DISPLAY-ONLY `derived-from` summary for a person candidate's compose

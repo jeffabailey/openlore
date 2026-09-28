@@ -74,7 +74,8 @@ pub enum Command {
         /// Query by OBJECT (philosophy URI) — the headline dimension (US-AV-002).
         #[arg(long)]
         object: Option<String>,
-        /// Query by CONTRIBUTOR (DID) — one developer's network trail (US-AV-003).
+        /// Query by claim author (DID) — one developer's network trail of
+        /// the claims they signed (US-AV-003).
         #[arg(long)]
         contributor: Option<String>,
         /// Query by SUBJECT (project URI) (US-AV-004).
@@ -258,9 +259,9 @@ pub enum GraphCommand {
         /// row attributed (US-GRAPH-001). Implies federated scope.
         #[arg(long)]
         object: Option<String>,
-        /// Slice-04 (ADR-020): query by CONTRIBUTOR (DID) — one developer's
-        /// full reasoning trail across subjects (US-GRAPH-002). Implies
-        /// federated scope.
+        /// Query by claim author (DID) — one developer's full reasoning
+        /// trail across subjects, the claims they signed (Slice-04, ADR-020,
+        /// US-GRAPH-002). Implies federated scope.
         #[arg(long)]
         contributor: Option<String>,
         /// Slice-04 (ADR-020): traverse contributor↔project↔philosophy edges
@@ -325,10 +326,15 @@ pub enum InferCommand {
         /// Absent → list only, ZERO writes (D-1).
         #[arg(long)]
         sign: Option<String>,
-        /// Optional `github:<login>` person to scope the inference to (the
-        /// contributor the claims are ABOUT, not a claim author).
+        /// Optional person to scope the inference to, named
+        /// `github:<login>` (the person the claims are ABOUT, not a claim
+        /// author). Any other form is refused.
         #[arg(long)]
         person: Option<String>,
+        /// Keep only candidates supported by at least N repos. Applied before
+        /// numbering, so `--sign` numbers the same list.
+        #[arg(long, value_name = "N")]
+        min_repos: Option<usize>,
     },
 }
 
@@ -636,10 +642,18 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Infer(InferCommand::People { sign, person }) => {
+        Command::Infer(InferCommand::People {
+            sign,
+            person,
+            min_repos,
+        }) => {
             match verbs::infer_people::run(
                 &wiring,
-                &verbs::infer_people::InferPeopleArgs { sign, person },
+                &verbs::infer_people::InferPeopleArgs {
+                    sign,
+                    person,
+                    min_repos,
+                },
             ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);

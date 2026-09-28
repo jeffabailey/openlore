@@ -581,32 +581,176 @@ pub fn infer_person_candidates(
         .collect()
 }
 
-/// One `infer people` run as pure data: the numbered candidates plus the
-/// linked repos that contributed nothing because no signed philosophy claim
-/// is about them (D-2 / KPI-CPI-3 footer) — so the render needs no second
-/// query.
+/// A person the inference is ABOUT, named `github:<login>` (D-8) — the only
+/// form a new surface accepts; validated once at the edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonSubject(String);
+
+/// Why a named person was refused (D-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonSubjectError {
+    pub given: String,
+}
+
+impl std::fmt::Display for PersonSubjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "a person is named as github:<login> (e.g. github:BurntSushi), not `{}`",
+            self.given
+        )
+    }
+}
+
+impl std::error::Error for PersonSubjectError {}
+
+impl PersonSubject {
+    /// Accept exactly `github:<login>` (login: ASCII letters, digits and
+    /// hyphens, not starting with a hyphen); refuse anything else.
+    pub fn parse(raw: &str) -> Result<Self, PersonSubjectError> {
+        match raw.strip_prefix("github:") {
+            Some(login) if is_github_login(login) => Ok(Self(raw.to_string())),
+            _ => Err(PersonSubjectError {
+                given: raw.to_string(),
+            }),
+        }
+    }
+
+    /// The `github:<login>` subject.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn is_github_login(login: &str) -> bool {
+    !login.is_empty()
+        && !login.starts_with('-')
+        && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// The DDD-13 filters of one `infer people` run, applied BEFORE numbering
+/// (UC-8) so the list and `--sign` number the same candidates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InferenceFilter {
+    /// Scope to one person (compared case-insensitively).
+    pub person: Option<PersonSubject>,
+    /// Keep only candidates supported by at least this many repos.
+    pub min_repos: usize,
+}
+
+/// One of MY signed claims, as the already-signed check (DDD-8) sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnClaim {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub author_did: String,
+    pub cid: String,
+    pub references: Vec<ClaimReference>,
+}
+
+/// An inferred (person, philosophy) I already signed: shown, never numbered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlreadySigned {
+    pub candidate: PersonCandidate,
+    /// The CID of my standing adherence claim for the pair.
+    pub cid: String,
+}
+
+/// One `infer people` run as pure data: the numbered candidates, the
+/// inferred pairs I already signed (unnumbered, DDD-8), plus the linked repos
+/// that contributed nothing because no signed philosophy claim is about them
+/// (D-2 / KPI-CPI-3 footer) — so the render needs no second query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferenceReport {
     pub candidates: Vec<PersonCandidate>,
+    pub already_signed: Vec<AlreadySigned>,
     pub repos_without_signed_claims: Vec<String>,
 }
 
-/// Infer the report, optionally scoped to one `github:<login>` person
-/// (compared case-insensitively). Scoping narrows the links first, so the
-/// footer names only the scoped person's repos.
+/// Infer the report under `filter`, setting aside the pairs my own standing
+/// adherence claims already sign. Person scoping narrows the links first, so
+/// the footer names only the scoped person's repos.
 pub fn infer_people_report(
     links: &[ContributionLink],
     repo_claims: &[RepoClaim],
-    person: Option<&str>,
+    own_claims: &[OwnClaim],
+    filter: &InferenceFilter,
 ) -> InferenceReport {
+    let person = filter.person.as_ref().map(PersonSubject::as_str);
     let scoped_links: Vec<ContributionLink> = links
         .iter()
         .filter(|link| is_in_scope(link, person))
         .cloned()
         .collect();
+    let signed = standing_adherences(own_claims);
+    let (already_signed, candidates) = infer_person_candidates(&scoped_links, repo_claims)
+        .into_iter()
+        .filter(|candidate| candidate.support().len() >= filter.min_repos)
+        .fold(
+            (Vec::new(), Vec::new()),
+            |(mut already, mut numbered), candidate| {
+                match signed.get(&pair_key(
+                    candidate.person_subject(),
+                    candidate.philosophy(),
+                )) {
+                    Some(cid) => already.push(AlreadySigned {
+                        cid: (*cid).to_string(),
+                        candidate,
+                    }),
+                    None => numbered.push(candidate),
+                }
+                (already, numbered)
+            },
+        );
     InferenceReport {
-        candidates: infer_person_candidates(&scoped_links, repo_claims),
+        candidates,
+        already_signed,
         repos_without_signed_claims: repos_without_signed_claims(&scoped_links, repo_claims),
+    }
+}
+
+/// The (person key, philosophy) join key of an adherence pair.
+fn pair_key(person_subject: &str, philosophy: &str) -> (String, String) {
+    (subject_key(person_subject), philosophy.to_string())
+}
+
+/// DDD-8: my STANDING adherence claims by pair — any adherence I signed
+/// (from an inference or by hand) that is no retraction marker and that I have
+/// neither retracted nor superseded (the shared claim-domain rules). The
+/// smallest CID represents a pair signed more than once.
+fn standing_adherences(own_claims: &[OwnClaim]) -> BTreeMap<(String, String), &str> {
+    let lineages: Vec<ClaimLineage<'_>> = own_claims.iter().map(OwnClaim::lineage).collect();
+    own_claims
+        .iter()
+        .filter(|claim| claim.predicate == ADHERES_TO_PHILOSOPHY)
+        .filter(|claim| !is_retraction_marker(&claim.references))
+        .filter(|claim| {
+            let lineage = claim.lineage();
+            !is_self_retracted(&lineage, &lineages) && !is_superseded_by_author(&lineage, &lineages)
+        })
+        .fold(BTreeMap::new(), |mut by_pair, claim| {
+            by_pair
+                .entry(pair_key(&claim.subject, &claim.object))
+                .and_modify(|cid: &mut &str| *cid = (*cid).min(claim.cid.as_str()))
+                .or_insert(claim.cid.as_str());
+            by_pair
+        })
+}
+
+fn is_retraction_marker(references: &[ClaimReference]) -> bool {
+    references
+        .iter()
+        .any(|reference| reference.ref_type == ReferenceType::Retracts)
+}
+
+impl OwnClaim {
+    fn lineage(&self) -> ClaimLineage<'_> {
+        ClaimLineage {
+            author_did: &self.author_did,
+            cid: &self.cid,
+            references: &self.references,
+        }
     }
 }
 
@@ -1078,7 +1222,7 @@ mod tests {
         fn report_footer_names_exactly_the_linked_repos_without_signed_claims(
             (links, claims) in arb_inference_inputs(),
         ) {
-            let report = infer_people_report(&links, &claims, None);
+            let report = infer_people_report(&links, &claims, &[], &InferenceFilter::default());
             prop_assert_eq!(&report.candidates, &infer_person_candidates(&links, &claims));
             let expected: BTreeSet<String> = links
                 .iter()
@@ -1099,7 +1243,11 @@ mod tests {
             (links, claims) in arb_inference_inputs(),
             person in proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
         ) {
-            let scoped = infer_people_report(&links, &claims, Some(&person.to_ascii_uppercase().replacen("GITHUB:", "github:", 1)));
+            let filter = InferenceFilter {
+                person: Some(PersonSubject::parse(&person.to_ascii_uppercase().replacen("GITHUB:", "github:", 1)).expect("pool persons are valid")),
+                min_repos: 0,
+            };
+            let scoped = infer_people_report(&links, &claims, &[], &filter);
             let expected: Vec<PersonCandidate> = infer_person_candidates(&links, &claims)
                 .into_iter()
                 .filter(|c| subject_key(c.person_subject()) == subject_key(person))
@@ -1246,6 +1394,154 @@ mod tests {
                 overlap_keys(&shared_contributors(current, &people, &links)),
                 overlap_keys(&shared_contributors(current, &people, &upper))
             );
+        }
+    }
+
+    // --- filters, already-signed pairs and the person form (US-CPI-002
+    //     AC5/AC6/AC7; DDD-8 / DDD-13 / D-8 / UC-8) ---
+
+    /// One of my own claims about a person, drawn over the inference pools:
+    /// an adherence (or not), possibly my retraction/supersession of another.
+    fn arb_own_claims() -> impl Strategy<Value = Vec<OwnClaim>> {
+        proptest::collection::vec(
+            (
+                proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
+                prop_oneof![Just(ADHERES_TO_PHILOSOPHY), Just("usesLanguage")],
+                proptest::sample::select(vec![
+                    "org.openlore.philosophy.memory-safety",
+                    "org.openlore.philosophy.test-driven",
+                ]),
+                "bafyown[a-z2-7]{6}",
+            ),
+            0..5,
+        )
+        .prop_flat_map(|rows| {
+            let n = rows.len();
+            (
+                Just(rows),
+                proptest::collection::vec(
+                    proptest::option::of((
+                        prop_oneof![
+                            Just(ReferenceType::Retracts),
+                            Just(ReferenceType::Supersedes)
+                        ],
+                        0..n.max(1),
+                    )),
+                    n,
+                ),
+            )
+        })
+        .prop_map(|(rows, references)| {
+            let cids: Vec<String> = rows.iter().map(|r| r.3.clone()).collect();
+            rows.into_iter()
+                .zip(references)
+                .map(
+                    |((person, predicate, philosophy, cid), reference)| OwnClaim {
+                        subject: person.to_string(),
+                        predicate: predicate.to_string(),
+                        object: philosophy.to_string(),
+                        author_did: "did:plc:me".to_string(),
+                        references: reference
+                            .filter(|(_, target)| cids[*target] != cid)
+                            .map(|(ref_type, target)| ClaimReference {
+                                ref_type,
+                                cid: claim_domain::Cid(cids[target].clone()),
+                            })
+                            .into_iter()
+                            .collect(),
+                        cid,
+                    },
+                )
+                .collect()
+        })
+    }
+
+    /// Oracle: my standing adherence pairs — an adherence claim that is no
+    /// retraction marker and that I have neither retracted nor superseded.
+    fn standing_pairs(own: &[OwnClaim]) -> BTreeSet<(String, String)> {
+        let withdrawn = |claim: &OwnClaim| {
+            own.iter().any(|other| {
+                other.references.iter().any(|r| {
+                    r.cid.0 == claim.cid
+                        && matches!(
+                            r.ref_type,
+                            ReferenceType::Retracts | ReferenceType::Supersedes
+                        )
+                })
+            })
+        };
+        own.iter()
+            .filter(|c| c.predicate == ADHERES_TO_PHILOSOPHY)
+            .filter(|c| {
+                !c.references
+                    .iter()
+                    .any(|r| r.ref_type == ReferenceType::Retracts)
+            })
+            .filter(|c| !withdrawn(c))
+            .map(|c| (subject_key(&c.subject), c.object.clone()))
+            .collect()
+    }
+
+    fn pair_of(candidate: &PersonCandidate) -> (String, String) {
+        (
+            subject_key(candidate.person_subject()),
+            candidate.philosophy().to_string(),
+        )
+    }
+
+    proptest! {
+        /// UC-8 / DDD-8 / DDD-13: filters and the already-signed exclusion
+        /// apply BEFORE numbering — the numbered list is exactly the
+        /// unfiltered inference, in its order, kept when in scope, supported
+        /// by ≥ min-repos repos and not already signed by me; the in-filter
+        /// signed ones are listed apart, each with a CID of mine for that pair.
+        #[test]
+        fn filters_and_signed_pairs_apply_before_numbering(
+            (links, claims) in arb_inference_inputs(),
+            own in arb_own_claims(),
+            person in proptest::option::of(proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..])),
+            min_repos in 0usize..4,
+        ) {
+            let filter = InferenceFilter {
+                person: person.map(|p| PersonSubject::parse(p).expect("pool persons are valid")),
+                min_repos,
+            };
+            let report = infer_people_report(&links, &claims, &own, &filter);
+            let signed = standing_pairs(&own);
+            let in_filter: Vec<PersonCandidate> = infer_person_candidates(&links, &claims)
+                .into_iter()
+                .filter(|c| person.is_none_or(|p| subject_key(c.person_subject()) == subject_key(p)))
+                .filter(|c| c.support().len() >= min_repos)
+                .collect();
+            let (expected_signed, expected_numbered): (Vec<_>, Vec<_>) = in_filter
+                .into_iter()
+                .partition(|c| signed.contains(&pair_of(c)));
+
+            prop_assert_eq!(&report.candidates, &expected_numbered);
+            let shown: Vec<&PersonCandidate> = report.already_signed.iter().map(|a| &a.candidate).collect();
+            prop_assert_eq!(shown, expected_signed.iter().collect::<Vec<_>>());
+            for already in &report.already_signed {
+                prop_assert!(own.iter().any(|c| c.cid == already.cid
+                    && (subject_key(&c.subject), c.object.clone()) == pair_of(&already.candidate)));
+            }
+        }
+
+        /// D-8: `github:<login>` is the only accepted person form; anything
+        /// else is refused with an error naming that form.
+        #[test]
+        fn a_person_is_accepted_only_as_github_login(
+            login in "[A-Za-z0-9][A-Za-z0-9-]{0,20}",
+            other in "[A-Za-z0-9:_./ -]{0,24}",
+        ) {
+            let named = format!("github:{login}");
+            prop_assert_eq!(PersonSubject::parse(&named).map(|p| p.as_str().to_string()), Ok(named));
+            let bare = PersonSubject::parse(&login);
+            prop_assert!(bare.is_err());
+            prop_assert!(bare.unwrap_err().to_string().contains("github:<login>"));
+            let is_github_login = other
+                .strip_prefix("github:")
+                .is_some_and(|l| !l.is_empty() && !l.starts_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+            prop_assert_eq!(PersonSubject::parse(&other).is_ok(), is_github_login);
         }
     }
 }

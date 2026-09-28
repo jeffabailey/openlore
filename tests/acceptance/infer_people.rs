@@ -271,7 +271,6 @@ fn a_superseded_repo_claim_is_replaced_by_its_successor_as_support() {
 ///
 /// @us-cpi-002 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (US-CPI-002 already-signed pairs not re-proposed)"]
 fn an_already_signed_person_philosophy_is_not_proposed_again() {
     // GIVEN Maria already signed BurntSushi memory-safety from the inference.
     let env = TestEnv::initialized();
@@ -406,7 +405,6 @@ fn proposed_confidence_is_capped_and_never_exceeds_the_strongest_support() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-5 @kpi-cpi-3 @guardrail
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (KPI-5 infer people runs offline, writes nothing)"]
 fn inference_runs_offline_and_writes_nothing() {
     // GIVEN the canonical store.
     let env = TestEnv::initialized();
@@ -428,7 +426,6 @@ fn inference_runs_offline_and_writes_nothing() {
 ///
 /// @us-cpi-002 @driving_port @real-io @ddd-13 @boundary
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (DDD-13 --min-repos filter)"]
 fn a_minimum_number_of_supporting_repos_can_be_required() {
     // GIVEN memory-safety has 2 supporting repos, test-driven only 1.
     let env = TestEnv::initialized();
@@ -449,7 +446,6 @@ fn a_minimum_number_of_supporting_repos_can_be_required() {
 ///
 /// @us-cpi-002 @driving_port @real-io @d-8 @error
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (D-8 --person requires github:<login>)"]
 fn a_person_named_without_the_github_prefix_is_refused_with_the_expected_form() {
     // GIVEN any store.
     let env = TestEnv::initialized();
@@ -467,7 +463,6 @@ fn a_person_named_without_the_github_prefix_is_refused_with_the_expected_form() 
 ///
 /// @us-cpi-002 @driving_port @real-io @d-8 @guardrail
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (D-8 person vs claim-author vocabulary in help)"]
 fn the_new_surface_says_person_and_contributor_still_means_claim_author() {
     // GIVEN an initialized store.
     let env = TestEnv::initialized();

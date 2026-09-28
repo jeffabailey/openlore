@@ -9,15 +9,18 @@
 //! DDD-6 — no new storage method), hand the values to the PURE
 //! `scraper_domain::infer_person_candidates`, render, and — only on `--sign`
 //! — route the selection through the SHARED sign batch (DDD-12). Without
-//! `--sign` nothing is written (D-1 / KPI-CPI-3).
+//! `--sign` nothing is written (D-1 / KPI-CPI-3), and no network is touched
+//! (KPI-5): every read is a local store read. My own adherence claims are read
+//! (`StoragePort::query_by_contributor` + `read_signed_claim`) so pairs I
+//! already signed are shown, never re-proposed (DDD-8).
 
 use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
 use ports::{ContributionLink, LinkFilter, PageRequest, StoreReadError};
 use scraper_domain::{
-    encode_provenance, infer_people_report, repo_subjects_to_read, PersonCandidate, RepoClaim,
-    ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, repo_subjects_to_read, InferenceFilter, OwnClaim,
+    PersonCandidate, PersonSubject, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
 use crate::render::{render_inference_report, render_person_derived_from};
@@ -30,8 +33,10 @@ pub struct InferPeopleArgs {
     /// Optional raw `--sign N[,N...]` selection (1-based), validated by the
     /// shared sign batch before any compose begins.
     pub sign: Option<String>,
-    /// Optional `github:<login>` person to scope the inference to.
+    /// Optional raw `--person`; must be `github:<login>` (D-8).
     pub person: Option<String>,
+    /// Optional `--min-repos N` (DDD-13).
+    pub min_repos: Option<usize>,
 }
 
 /// Outcome of one `infer people` run — exit code + stdout chunk.
@@ -42,12 +47,21 @@ pub struct InferPeopleOutcome {
 
 /// Run `infer people`: read -> infer (pure) -> render -> optional sign batch.
 pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome> {
+    let filter = InferenceFilter {
+        person: args
+            .person
+            .as_deref()
+            .map(PersonSubject::parse)
+            .transpose()?,
+        min_repos: args.min_repos.unwrap_or(0),
+    };
     let links = wiring
         .contribution_links
         .list_links(&LinkFilter::All)
         .map_err(|e| anyhow!("reading contribution links: {e}"))?;
     let repo_claims = read_linked_repo_claims(wiring, &links)?;
-    let report = infer_people_report(&links, &repo_claims, args.person.as_deref());
+    let own_claims = read_own_adherence_claims(wiring)?;
+    let report = infer_people_report(&links, &repo_claims, &own_claims, &filter);
     let rendered = render_inference_report(&report);
 
     let Some(raw_selection) = args.sign.as_deref() else {
@@ -82,6 +96,36 @@ fn read_linked_repo_claims(wiring: &Wiring, links: &[ContributionLink]) -> Resul
             claims.extend(rows.iter().map(RepoClaim::from));
             Ok(claims)
         })
+}
+
+/// My own adherence claims, with their references, in the shape the pure
+/// already-signed check reads (DDD-8). Retraction markers and successors copy
+/// the adherence predicate, so they arrive in the same listing; the attributed
+/// listing carries no references, so each is re-read by CID.
+fn read_own_adherence_claims(wiring: &Wiring) -> Result<Vec<OwnClaim>> {
+    let me = wiring.identity.author_did();
+    wiring
+        .storage
+        .query_by_contributor(me)
+        .map_err(|e| anyhow!("reading my own signed claims: {e}"))?
+        .iter()
+        .filter(|row| row.predicate == ADHERES_TO_PHILOSOPHY)
+        .map(|row| {
+            let signed = wiring
+                .storage
+                .read_signed_claim(&row.cid)
+                .map_err(|e| anyhow!("reading my claim {}: {e}", row.cid.0))?
+                .ok_or_else(|| anyhow!("my claim {} is listed but not stored", row.cid.0))?;
+            Ok(OwnClaim {
+                subject: signed.unsigned.subject,
+                predicate: signed.unsigned.predicate,
+                object: signed.unsigned.object,
+                author_did: row.author_did.0.clone(),
+                cid: row.cid.0.clone(),
+                references: signed.unsigned.references,
+            })
+        })
+        .collect()
 }
 
 /// Page size for enumerating stored claim subjects.
