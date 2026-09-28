@@ -2,7 +2,22 @@
 //! Q-CPI-D1 load-bearing substrings pinned by DISTILL). Pure: values in,
 //! strings out.
 
-use scraper_domain::{confidence_arithmetic, PersonCandidate};
+use scraper_domain::{confidence_arithmetic, InferenceReport, PersonCandidate};
+
+/// The whole `infer people` output: the candidate list (or the empty-result
+/// line) followed, unindented so it never joins a candidate's block, by the
+/// linked repos that fed nothing because no signed philosophy claim is about
+/// them (D-2 / KPI-CPI-3 — unsigned scraper candidates are never support).
+pub fn render_inference_report(report: &InferenceReport) -> String {
+    let mut out = render_person_candidates(&report.candidates);
+    if !report.repos_without_signed_claims.is_empty() {
+        out.push_str(&format!(
+            "Not used (no signed philosophy claims): {}\n",
+            report.repos_without_signed_claims.join(", ")
+        ));
+    }
+    out
+}
 
 /// The numbered inferred-candidate list, or the empty-result line. Each
 /// candidate's block: a `[n] <person> adheres to <philosophy>` headline, one

@@ -562,6 +562,66 @@ pub fn infer_person_candidates(
         .collect()
 }
 
+/// One `infer people` run as pure data: the numbered candidates plus the
+/// linked repos that contributed nothing because no signed philosophy claim
+/// is about them (D-2 / KPI-CPI-3 footer) — so the render needs no second
+/// query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InferenceReport {
+    pub candidates: Vec<PersonCandidate>,
+    pub repos_without_signed_claims: Vec<String>,
+}
+
+/// Infer the report, optionally scoped to one `github:<login>` person
+/// (compared case-insensitively). Scoping narrows the links first, so the
+/// footer names only the scoped person's repos.
+pub fn infer_people_report(
+    links: &[ContributionLink],
+    repo_claims: &[RepoClaim],
+    person: Option<&str>,
+) -> InferenceReport {
+    let scoped_links: Vec<ContributionLink> = links
+        .iter()
+        .filter(|link| is_in_scope(link, person))
+        .cloned()
+        .collect();
+    InferenceReport {
+        candidates: infer_person_candidates(&scoped_links, repo_claims),
+        repos_without_signed_claims: repos_without_signed_claims(&scoped_links, repo_claims),
+    }
+}
+
+/// A link is in scope when no person is named, or it names that person.
+fn is_in_scope(link: &ContributionLink, person: Option<&str>) -> bool {
+    person.is_none_or(|p| subject_key(&link.person_subject) == subject_key(p))
+}
+
+/// Linked repos (once per case-folded subject, smallest spelling shown) about
+/// which no eligible signed philosophy claim exists.
+fn repos_without_signed_claims(
+    links: &[ContributionLink],
+    repo_claims: &[RepoClaim],
+) -> Vec<String> {
+    let supported: BTreeSet<String> = repo_claims
+        .iter()
+        .filter(|claim| is_eligible(claim))
+        .map(|claim| subject_key(&claim.repo_subject))
+        .collect();
+    links
+        .iter()
+        .filter(|link| !supported.contains(&subject_key(&link.repo_subject)))
+        .fold(BTreeMap::<String, &str>::new(), |mut by_key, link| {
+            by_key
+                .entry(subject_key(&link.repo_subject))
+                .and_modify(|shown| *shown = (*shown).min(link.repo_subject.as_str()))
+                .or_insert(&link.repo_subject);
+            by_key
+        })
+        .into_values()
+        .map(str::to_string)
+        .collect()
+}
+
 /// DDD-7 (thin): an `embodiesPhilosophy` claim by me or a subscribed peer.
 fn is_eligible(claim: &RepoClaim) -> bool {
     claim.predicate == crate::EMBODIES_PHILOSOPHY
@@ -903,6 +963,67 @@ mod tests {
                     )))
                 .collect();
             prop_assert_eq!(cited, expected);
+        }
+    }
+
+    // --- the inference report (US-CPI-002 AC1-AC4; D-2 / D-7 / KPI-CPI-2) ---
+
+    proptest! {
+        /// Unscoped, the report's candidates ARE the inferred candidates; the
+        /// footer names exactly the linked repos (case-folded, once each) that
+        /// carry zero eligible claims — sorted, never one that supports.
+        #[test]
+        fn report_footer_names_exactly_the_linked_repos_without_signed_claims(
+            (links, claims) in arb_inference_inputs(),
+        ) {
+            let report = infer_people_report(&links, &claims, None);
+            prop_assert_eq!(&report.candidates, &infer_person_candidates(&links, &claims));
+            let expected: BTreeSet<String> = links
+                .iter()
+                .map(|l| subject_key(&l.repo_subject))
+                .filter(|repo| !claims.iter().any(|c| is_eligible(c) && subject_key(&c.repo_subject) == *repo))
+                .collect();
+            let named: Vec<String> = report.repos_without_signed_claims.iter().map(|r| subject_key(r)).collect();
+            prop_assert_eq!(named.iter().cloned().collect::<BTreeSet<_>>(), expected);
+            prop_assert!(named.windows(2).all(|w| w[0] < w[1]), "sorted, once each");
+        }
+
+        /// Scoping to a person keeps exactly that person's candidates (any
+        /// letter case) and names only that person's unsupported repos; every
+        /// candidate keeps complete provenance and each cited claim keeps its
+        /// OWN author (D-7 — a peer's claim is never re-attributed).
+        #[test]
+        fn a_person_scoped_report_keeps_only_that_persons_attributed_candidates(
+            (links, claims) in arb_inference_inputs(),
+            person in proptest::sample::select(&crate::proptest_strategies::PERSON_POOL[..]),
+        ) {
+            let scoped = infer_people_report(&links, &claims, Some(&person.to_ascii_uppercase().replacen("GITHUB:", "github:", 1)));
+            let expected: Vec<PersonCandidate> = infer_person_candidates(&links, &claims)
+                .into_iter()
+                .filter(|c| subject_key(c.person_subject()) == subject_key(person))
+                .collect();
+            prop_assert_eq!(&scoped.candidates, &expected);
+            let persons_repos: BTreeSet<String> = links
+                .iter()
+                .filter(|l| subject_key(&l.person_subject) == subject_key(person))
+                .map(|l| subject_key(&l.repo_subject))
+                .collect();
+            let unsupported: BTreeSet<String> = persons_repos
+                .into_iter()
+                .filter(|repo| !claims.iter().any(|c| is_eligible(c) && subject_key(&c.repo_subject) == *repo))
+                .collect();
+            let named: BTreeSet<String> = scoped.repos_without_signed_claims.iter().map(|r| subject_key(r)).collect();
+            prop_assert_eq!(named, unsupported);
+            let author_of: BTreeSet<(String, String)> = claims.iter().map(|c| (c.cid.clone(), bare_did(&c.author_did).to_string())).collect();
+            for candidate in &scoped.candidates {
+                prop_assert!(!candidate.support().is_empty());
+                for repo in candidate.support() {
+                    prop_assert!(!repo.claims.is_empty());
+                    for claim in &repo.claims {
+                        prop_assert!(author_of.contains(&(claim.cited.cid.clone(), claim.cited.author_did.clone())));
+                    }
+                }
+            }
         }
     }
 

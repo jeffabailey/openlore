@@ -166,7 +166,7 @@ const REPO_POOL: [&str; 4] = [
     "github:rust-lang/regex",
     "github:dtolnay/serde",
 ];
-const PERSON_POOL: [&str; 4] = [
+pub const PERSON_POOL: [&str; 4] = [
     "github:BurntSushi",
     "github:burntsushi",
     "github:dtolnay",

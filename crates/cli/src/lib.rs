@@ -325,6 +325,10 @@ pub enum InferCommand {
         /// Absent → list only, ZERO writes (D-1).
         #[arg(long)]
         sign: Option<String>,
+        /// Optional `github:<login>` person to scope the inference to (the
+        /// contributor the claims are ABOUT, not a claim author).
+        #[arg(long)]
+        person: Option<String>,
     },
 }
 
@@ -632,9 +636,11 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
             }
         }
-        Command::Infer(InferCommand::People { sign }) => {
-            match verbs::infer_people::run(&wiring, &verbs::infer_people::InferPeopleArgs { sign })
-            {
+        Command::Infer(InferCommand::People { sign, person }) => {
+            match verbs::infer_people::run(
+                &wiring,
+                &verbs::infer_people::InferPeopleArgs { sign, person },
+            ) {
                 Ok(outcome) => {
                     print!("{}", outcome.stdout);
                     outcome.exit_code

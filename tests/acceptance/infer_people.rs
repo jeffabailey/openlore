@@ -33,7 +33,6 @@ use support::*;
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-2 @d-7 @d-9 @happy
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (US-CPI-002 person candidate with attributed provenance)"]
 fn a_person_is_proposed_for_the_philosophies_of_signed_repos_they_build() {
     // GIVEN BurntSushi is linked to two repos with signed memory-safety claims.
     let env = TestEnv::initialized();
@@ -81,7 +80,6 @@ fn a_person_is_proposed_for_the_philosophies_of_signed_repos_they_build() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-3 @d-2 @guardrail
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (D-2 unsigned scraper candidates never feed inference)"]
 fn unsigned_scraper_candidates_never_feed_inference() {
     // GIVEN Maria scraped dtolnay/serde (candidates proposed) and signed none.
     let env = TestEnv::initialized();
@@ -152,7 +150,6 @@ fn a_soft_retracted_repo_claim_stops_supporting_inferences() {
 ///
 /// @us-cpi-002 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (US-CPI-002 empty result exits 0)"]
 fn no_candidates_is_a_normal_outcome() {
     // GIVEN one scraped repo, no signed claims.
     let env = TestEnv::initialized();
@@ -336,7 +333,6 @@ fn repos_differing_only_in_letter_case_are_the_same_repo() {
 ///
 /// @us-cpi-002 @driving_port @real-io @kpi-cpi-2 @property @guardrail
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (KPI-CPI-2 100% of candidates carry complete provenance)"]
 fn every_inferred_candidate_carries_complete_provenance() {
     // GIVEN several people, philosophies, and authors.
     let env = TestEnv::initialized();
@@ -374,7 +370,6 @@ fn every_inferred_candidate_carries_complete_provenance() {
 ///
 /// @us-cpi-002 @driving_port @real-io @ddd-9 @property @boundary
 #[test]
-#[ignore = "DELIVER slice-02: unskip one-at-a-time (DDD-9 confidence cap 0.29 and floor-by-max)"]
 fn proposed_confidence_is_capped_and_never_exceeds_the_strongest_support() {
     // GIVEN cap-person builds four repos signed at 0.90 and floor-person two
     // repos signed at 0.179 and 0.10.

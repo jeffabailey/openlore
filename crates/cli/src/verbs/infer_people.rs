@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, Result};
 use ports::{ContributionLink, LinkFilter};
 use scraper_domain::{
-    encode_provenance, infer_person_candidates, PersonCandidate, RepoClaim, ADHERES_TO_PHILOSOPHY,
+    encode_provenance, infer_people_report, PersonCandidate, RepoClaim, ADHERES_TO_PHILOSOPHY,
 };
 
-use crate::render::{render_person_candidates, render_person_derived_from};
+use crate::render::{render_inference_report, render_person_derived_from};
 use crate::verbs::sign_batch::{self, SignableCandidate};
 use crate::wiring::Wiring;
 
@@ -28,6 +28,8 @@ pub struct InferPeopleArgs {
     /// Optional raw `--sign N[,N...]` selection (1-based), validated by the
     /// shared sign batch before any compose begins.
     pub sign: Option<String>,
+    /// Optional `github:<login>` person to scope the inference to.
+    pub person: Option<String>,
 }
 
 /// Outcome of one `infer people` run — exit code + stdout chunk.
@@ -43,8 +45,8 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         .list_links(&LinkFilter::All)
         .map_err(|e| anyhow!("reading contribution links: {e}"))?;
     let repo_claims = read_linked_repo_claims(wiring, &links)?;
-    let candidates = infer_person_candidates(&links, &repo_claims);
-    let rendered = render_person_candidates(&candidates);
+    let report = infer_people_report(&links, &repo_claims, args.person.as_deref());
+    let rendered = render_inference_report(&report);
 
     let Some(raw_selection) = args.sign.as_deref() else {
         return Ok(InferPeopleOutcome {
@@ -52,7 +54,7 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
             stdout: rendered,
         });
     };
-    let signables: Vec<SignableCandidate> = candidates.iter().map(signable_from).collect();
+    let signables: Vec<SignableCandidate> = report.candidates.iter().map(signable_from).collect();
     let exit_code = sign_batch::sign_selected(wiring, &signables, raw_selection, &rendered)?;
     Ok(InferPeopleOutcome {
         exit_code,
