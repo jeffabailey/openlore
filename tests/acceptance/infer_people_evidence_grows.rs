@@ -10,8 +10,9 @@
 //! signed-claim artifacts Maria already holds, plus "the system authored no
 //! marker": the only new claim files are the ones she explicitly signed.
 //!
-//! Layer 3 subprocess — example-only (Mandate 9/11). All scenarios
-//! `#[ignore]`d for one-at-a-time unskip.
+//! Layer 3 subprocess — example-only (Mandate 9/11). Every scenario runs;
+//! only the `live_*` production-data check stays `#[ignore]`d
+//! (network-dependent; run with `OPENLORE_LIVE_GITHUB=1 ... --ignored live`).
 
 mod support;
 

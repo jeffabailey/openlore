@@ -103,3 +103,13 @@ pub(crate) fn pluralize(count: u32, singular: &str) -> String {
         format!("{count} {singular}s")
     }
 }
+
+/// The English `-s` plural suffix for `count` things: `""` for exactly one,
+/// `"s"` otherwise (`1 repo`, `0 repos`, `2 repos`). Pure helper.
+pub(crate) fn plural_suffix(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}

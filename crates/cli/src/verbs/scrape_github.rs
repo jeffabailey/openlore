@@ -2,22 +2,22 @@
 //! a public GitHub target, optionally signing selected candidates through the
 //! slice-01 pipeline (slice-02; US-SCR-001..004; ADR-017 / ADR-019).
 //!
-//! Step 01-04 BOOTSTRAP: this module declares the verb's argument struct +
-//! outcome shape and a `todo!()` handler. The live pipeline lands per the
-//! SCR-* acceptance scenarios in Phase 03/05:
+//! The pipeline:
 //!
 //! 1. print the public-data banner;
-//! 2. `resolve_target` + `harvest_repo` via `GithubPort` (the effect-shell
-//!    `adapter-github`); a USER target instead shows the person view from
-//!    the local store after its ONE `/users/{user}` read (US-CPI-005);
-//! 3. `derive_candidates(signals, mapping)` via the PURE `scraper-domain`;
+//! 2. `resolve_target` via `GithubPort` (the effect-shell `adapter-github`);
+//!    a USER target shows the person view from the local store after that
+//!    ONE `/users/{user}` read (US-CPI-005) — nothing of theirs is crawled;
+//! 3. a REPO target: `harvest_repo`, record its top-N human contributors as
+//!    contribution links (DDD-14), `derive_candidates(signals, mapping)` via
+//!    the PURE `scraper-domain`;
 //! 4. render the candidate list (each candidate names its source signals —
-//!    auditability, KPI-SCR-3);
-//! 5. IF `--sign`: the verb-level `SelectionParser` validates the raw index
-//!    list (reject duplicates / out-of-range BEFORE any compose begins),
-//!    then walks each selected candidate through its OWN compose preview and
-//!    invokes the slice-01 `VerbClaimAdd` + `VerbClaimPublish` internals —
-//!    NO parallel publish path (single-publish-path; ADR-003 + WD-22).
+//!    auditability, KPI-SCR-3) and the contributors block;
+//! 5. IF `--sign`: the SHARED `sign_batch::sign_selected` validates the raw
+//!    index list (duplicates / out-of-range rejected BEFORE any compose),
+//!    then walks each selected candidate through its OWN compose-sign-publish
+//!    gesture — the single sign/publish path (ADR-003 + WD-22 / DDD-12);
+//! 6. the end-of-scrape new-inferred-candidates hint (DDD-14).
 //!
 //! ## The human-gate at the type level (I-SCR-1 / WD-49)
 //!
@@ -44,7 +44,7 @@ use scraper_domain::{
 };
 
 use crate::render::{
-    render_auth_report, render_candidate_list, render_contributors_block,
+    plural_suffix, render_auth_report, render_candidate_list, render_contributors_block,
     render_contributors_not_recorded, render_new_inferred_candidates_hint,
     render_no_contributors_requested, render_person_view, render_public_data_banner,
     render_shared_contributors,
@@ -57,11 +57,11 @@ use crate::wiring::Wiring;
 /// Argument struct for the `scrape github` verb (mirrors the clap subcommand).
 ///
 /// `sign` is the RAW, unparsed `--sign N[,N...]` string (or `None`). The
-/// verb-level `SelectionParser` (Phase 03/05; architecture-design §5.1) turns
-/// it into validated 1-based indices — rejecting duplicates / out-of-range
-/// BEFORE any compose begins. The clap layer deliberately does NOT parse it,
-/// so a malformed list produces a domain-shaped error from the verb (with the
-/// candidate count for context), not a generic clap parse error.
+/// shared sign batch turns it into validated 1-based indices — rejecting
+/// duplicates / out-of-range BEFORE any compose begins. The clap layer
+/// deliberately does NOT parse it, so a malformed list produces a
+/// domain-shaped error from the verb (with the candidate count for context),
+/// not a generic clap parse error.
 #[derive(Debug, Clone)]
 pub struct ScrapeGithubArgs {
     /// The public GitHub target: `owner/repo` or a bare `user`.
@@ -80,25 +80,13 @@ pub struct ScrapeGithubOutcome {
     pub stdout: String,
 }
 
-/// Run the `scrape github` verb (Step 03-01: harvest -> derive -> render;
-/// NO `--sign` path here — that lands in a later step).
+/// Run the `scrape github` verb: validate `--contributors`, print the banner,
+/// resolve the target, then show the person view (USER target) or scrape the
+/// repo (REPO target) — see the module docs for the pipeline.
 ///
-/// The pipeline (architecture-design §5 / journey step 1-2):
-///
-/// 1. print the public-data-only banner (BEFORE any harvest — WD-51);
-/// 2. resolve the target via `GithubPort::resolve_target` (refusing
-///    private / non-existent targets);
-/// 3. a USER target shows the person view (links, signed adherence,
-///    numbered candidates) from the local store — the resolve was its one
-///    GitHub request; a REPO target harvests the bounded public signal set
-///    via `GithubPort::harvest_repo`, reporting the count;
-/// 4. derive candidates via the PURE `scraper-domain::derive_candidates`
-///    (confidence 0.25 speculative; each candidate names its source signal);
-/// 5. render the numbered candidate list (or "No candidate claims could be
-///    derived" when nothing matched the mapping — not an error).
-///
-/// WITHOUT `--sign` this verb performs ZERO writes (the human-gate at the
-/// storage layer; `scraper_never_persists_unsigned`, I-SCR-1 / WD-49).
+/// WITHOUT `--sign` this verb writes NO claim (the human-gate at the storage
+/// layer; `scraper_never_persists_unsigned`, I-SCR-1 / WD-49); a repo scrape
+/// only appends its unsigned contribution-link observations.
 pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutcome> {
     // (0) Validate `--contributors N` PURELY over the raw target, BEFORE the
     // banner or any GitHub request (OD-CPI-7 bound; UC-3 person refusal).
@@ -184,20 +172,18 @@ fn show_person(
         &renames,
         &report,
     ));
-    let Some(raw_selection) = args.sign.as_deref() else {
-        return Ok(ScrapeGithubOutcome {
-            exit_code: 0,
-            stdout: out,
-        });
-    };
     // DDD-12 / DDD-13: the SAME builder + sign batch `infer people --person
     // --sign` uses, over the SAME numbering — so the same number signs the
     // identical claim (STRONGER candidates carry their `supersedes`).
-    let exit_code =
-        sign_batch::sign_selected(wiring, &person_signables(&report), raw_selection, &out)?;
+    let outcome = sign_batch::list_or_sign(
+        wiring,
+        &person_signables(&report),
+        args.sign.as_deref(),
+        out,
+    )?;
     Ok(ScrapeGithubOutcome {
-        exit_code,
-        stdout: String::new(),
+        exit_code: outcome.exit_code,
+        stdout: outcome.stdout,
     })
 }
 
@@ -217,7 +203,7 @@ fn scrape_repo(
     out.push_str(&format!(
         "Harvesting public signals ... {} signal{}\n",
         signals.len(),
-        if signals.len() == 1 { "" } else { "s" }
+        plural_suffix(signals.len())
     ));
 
     // (3a) Report the auth-mode + rate budget the harvest observed (ADR-019
@@ -228,35 +214,12 @@ fn scrape_repo(
     // `AuthReport` carries only the budget numbers (no-token-leak).
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
 
-    // (3b) contributor-philosophy-inference (DDD-14): read the RAW
-    // contributors (one request), select the top-N humans PURELY, and record
-    // the snapshot as append-only contribution links in ONE tx. A harvest
-    // failure aborts here, BEFORE any link write. Links are unsigned local
-    // observations — never claims (the human-gate is untouched).
     let subject = format!("github:{}/{}", target.owner, target.repo);
-    // (3a') The inference BEFORE this run writes anything (DDD-14): the
+    // (3b) The inference BEFORE this run writes anything (DDD-14): the
     // baseline the end-of-scrape hint diffs against.
     let inference_before = read_inference_report(wiring, &InferenceFilter::default())?;
-    // N = 0 is a shell decision taken BEFORE the port: no request, no write.
-    let contributors = if target.contributor_count == 0 {
-        ContributorsOutcome::NoneRequested
-    } else {
-        match runtime.block_on(wiring.github.list_contributors(target.owner, target.repo)) {
-            // UC-2: GitHub will not list them (too large / empty) — a named
-            // notice, nothing recorded, the scrape carries on.
-            Err(GithubError::ContributorsUnavailable { reason, .. }) => {
-                ContributorsOutcome::Unavailable(reason)
-            }
-            // Any other failure aborts BEFORE any link write (DDD-14).
-            Err(fatal) => return Err(anyhow::Error::from(fatal)),
-            Ok(rows) => {
-                let selection = select_contributors(&rows, target.contributor_count);
-                record_contributors(wiring, &subject, &selection)?;
-                let shared = contributors_shared_with_other_repos(wiring, &subject, &selection)?;
-                ContributorsOutcome::Recorded { selection, shared }
-            }
-        }
-    };
+    // (3c) Record the repo's top-N human contributors (DDD-14).
+    let contributors = record_repo_contributors(wiring, runtime, target, &subject)?;
 
     // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
     // each candidate names its source signal). The mapping is the embedded
@@ -284,20 +247,49 @@ fn scrape_repo(
     // (7) --sign N[,N...]: validate + run the batch of individual human-gates.
     // The candidate-list block already accumulated in `out` is handed to the
     // batch, which emits it to stdout BEFORE composing so the user reviews it.
-    let mut outcome = match args.sign.as_deref() {
-        None => ScrapeGithubOutcome {
-            exit_code: 0,
-            stdout: out,
-        },
-        Some(raw_selection) => sign_selected_candidates(wiring, &candidates, raw_selection, &out)?,
-    };
+    let signables: Vec<SignableCandidate> = candidates.iter().map(repo_signable).collect();
+    let mut outcome = sign_batch::list_or_sign(wiring, &signables, args.sign.as_deref(), out)?;
 
     // (8) The one-line new-inferred-candidates hint, AFTER `--sign` so repo
     // claims signed in this run count (DDD-14). Silent when nothing changed.
     outcome
         .stdout
         .push_str(&new_inferred_candidates_hint(wiring, &inference_before)?);
-    Ok(outcome)
+    Ok(ScrapeGithubOutcome {
+        exit_code: outcome.exit_code,
+        stdout: outcome.stdout,
+    })
+}
+
+/// The contributors beat of a repo scrape (contributor-philosophy-inference
+/// DDD-14): read the RAW contributors (one request), select the top-N humans
+/// PURELY, and record the snapshot as append-only contribution links in ONE
+/// tx. `N = 0` is a shell decision taken BEFORE the port: no request, no
+/// write. A fatal listing failure aborts BEFORE any link write. Links are
+/// unsigned local observations — never claims (the human-gate is untouched).
+fn record_repo_contributors(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    target: &RepoTarget<'_>,
+    repo_subject: &str,
+) -> Result<ContributorsOutcome> {
+    if target.contributor_count == 0 {
+        return Ok(ContributorsOutcome::NoneRequested);
+    }
+    match runtime.block_on(wiring.github.list_contributors(target.owner, target.repo)) {
+        // UC-2: GitHub will not list them (too large / empty) — a named
+        // notice, nothing recorded, the scrape carries on.
+        Err(GithubError::ContributorsUnavailable { reason, .. }) => {
+            Ok(ContributorsOutcome::Unavailable(reason))
+        }
+        Err(fatal) => Err(anyhow::Error::from(fatal)),
+        Ok(rows) => {
+            let selection = select_contributors(&rows, target.contributor_count);
+            record_contributors(wiring, repo_subject, &selection)?;
+            let shared = contributors_shared_with_other_repos(wiring, repo_subject, &selection)?;
+            Ok(ContributorsOutcome::Recorded { selection, shared })
+        }
+    }
 }
 
 /// Diff the inference before this run against the store now (PURE change
@@ -333,28 +325,13 @@ fn render_contributors_outcome(outcome: &ContributorsOutcome) -> String {
     }
 }
 
-/// Run the `--sign N[,N...]` batch over the repo candidates through the
-/// SHARED verb-neutral sign batch (DDD-12 — the single sign path both
-/// `scrape github --sign` and `infer people --sign` use). Each candidate's
-/// `derived-from` line stays DISPLAY-ONLY (WD-62 / I-SCR-7) and it carries no
-/// references, so the signed CID is byte-identical to a hand-authored claim's.
-fn sign_selected_candidates(
-    wiring: &Wiring,
-    candidates: &[CandidateClaim],
-    raw_selection: &str,
-    candidate_list_out: &str,
-) -> Result<ScrapeGithubOutcome> {
-    let signables: Vec<SignableCandidate> = candidates.iter().map(signable_from).collect();
-    let exit_code =
-        sign_batch::sign_selected(wiring, &signables, raw_selection, candidate_list_out)?;
-    Ok(ScrapeGithubOutcome {
-        exit_code,
-        stdout: String::new(),
-    })
-}
-
-/// Pre-fill the shared compose editor from one repo candidate.
-fn signable_from(candidate: &CandidateClaim) -> SignableCandidate {
+/// Pre-fill the shared compose editor from one repo candidate. A repo
+/// candidate carries no references, and its `derived-from` line stays
+/// DISPLAY-ONLY (WD-62 / I-SCR-7), so the signed CID is byte-identical to a
+/// hand-authored claim's. (Person candidates have their own builder,
+/// `infer_people::person_signables` — a different shape; both feed the ONE
+/// sign path, `sign_batch::sign_selected`.)
+fn repo_signable(candidate: &CandidateClaim) -> SignableCandidate {
     SignableCandidate {
         subject: candidate.subject.clone(),
         predicate: candidate.predicate.clone(),

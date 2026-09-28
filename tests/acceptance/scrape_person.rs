@@ -7,14 +7,14 @@
 //! inferred candidates); GitHub is asked only for the public profile. Fake
 //! (driven-external only): `FakeGithub`, `FakePds`, `FakeIdentity`.
 //!
-//! Layer 3 subprocess — example-only (Mandate 9/11). All scenarios
-//! `#[ignore]`d for one-at-a-time unskip.
+//! Layer 3 subprocess — example-only (Mandate 9/11). Every scenario runs;
+//! only the `live_*` production-data check stays `#[ignore]`d
+//! (network-dependent; run with `OPENLORE_LIVE_GITHUB=1 ... --ignored live`).
 //!
-//! NOTE for DELIVER: this slice REPLACES the shipped user-target outcome
-//! pinned by `scrape_github.rs` SG-3
-//! (`scrape_github_resolves_user_target_and_derives_no_candidates_aggregation_deferred`,
-//! which asserts "No candidate claims could be derived"); narrow SG-3 when
-//! SP-3 is activated (see `distill/acceptance-review.md`).
+//! This slice REPLACED the user-target outcome `scrape_github.rs` SG-3 used
+//! to pin ("No candidate claims could be derived"); SG-3 was narrowed to the
+//! banner/resolve beats of an unlinked user when SP-3 went green (see
+//! `distill/acceptance-review.md`).
 
 mod support;
 

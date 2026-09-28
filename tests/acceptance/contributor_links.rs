@@ -8,8 +8,10 @@
 //! ADR-063 lie catalogue (`FakeContributorsPosture`).
 //!
 //! Layer 3 subprocess — example-only (Mandate 9); every sad path is a named
-//! example (Mandate 11). All scenarios `#[ignore]`d for one-at-a-time unskip
-//! (the feature WS lives in `infer_people_sign.rs`).
+//! example (Mandate 11). Every scenario runs; only the `live_*`
+//! production-data check stays `#[ignore]`d (network-dependent; run with
+//! `OPENLORE_LIVE_GITHUB=1 ... --ignored live`). The feature WS lives in
+//! `infer_people_sign.rs`.
 //!
 //! Covers: every US-CPI-001 AC; KPI-CPI-5 (≤1 extra request, 0 at
 //! `--contributors 0`, 100% bot exclusion); UC-1/UC-2/UC-3; the DDD-15

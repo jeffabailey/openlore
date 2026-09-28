@@ -58,19 +58,15 @@ pub fn run(wiring: &Wiring, args: &InferPeopleArgs) -> Result<InferPeopleOutcome
         min_repos: args.min_repos.unwrap_or(0),
     };
     let report = read_inference_report(wiring, &filter)?;
-    let rendered = render_inference_report(&report);
-
-    let Some(raw_selection) = args.sign.as_deref() else {
-        return Ok(InferPeopleOutcome {
-            exit_code: 0,
-            stdout: rendered,
-        });
-    };
-    let exit_code =
-        sign_batch::sign_selected(wiring, &person_signables(&report), raw_selection, &rendered)?;
+    let outcome = sign_batch::list_or_sign(
+        wiring,
+        &person_signables(&report),
+        args.sign.as_deref(),
+        render_inference_report(&report),
+    )?;
     Ok(InferPeopleOutcome {
-        exit_code,
-        stdout: String::new(),
+        exit_code: outcome.exit_code,
+        stdout: outcome.stdout,
     })
 }
 

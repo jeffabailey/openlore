@@ -13,14 +13,13 @@ use std::io::Write;
 
 use anyhow::{anyhow, Result};
 use claim_domain::{
-    canonicalize, compute_cid, reference_rules_validate, Cid, ClaimLookup, ClaimReference,
-    SignedClaim,
+    canonicalize, compute_cid, reference_rules_validate, ClaimLookup, ClaimReference, SignedClaim,
 };
-use ports::StoragePort;
 
 use crate::io::prompt_line;
 use crate::verbs::claim_add::{build_unsigned_claim, render_compose_preview, ComposedClaim};
 use crate::verbs::claim_publish::{publish_signed_claim, render_publish_success};
+use crate::verbs::StorageClaimLookup;
 use crate::wiring::Wiring;
 
 /// One candidate as the shared compose editor pre-fills it. Verb-neutral:
@@ -39,6 +38,37 @@ pub struct SignableCandidate {
     /// DISPLAY-ONLY `derived-from` block appended to the compose preview
     /// (already rendered, newline-terminated). Never part of the payload.
     pub derived_from: String,
+}
+
+/// What a listing verb hands back to the dispatcher: its exit code and the
+/// stdout chunk still to print (empty after a `--sign` batch, which prints
+/// the listing itself before the first compose).
+#[derive(Debug)]
+pub struct ListOrSignOutcome {
+    pub exit_code: i32,
+    pub stdout: String,
+}
+
+/// The shared tail of every candidate-listing verb: WITHOUT `--sign` return
+/// the rendered listing untouched (zero writes); WITH `--sign` run the batch
+/// over `candidates` — the SAME numbering the listing shows (UC-8).
+pub fn list_or_sign(
+    wiring: &Wiring,
+    candidates: &[SignableCandidate],
+    raw_selection: Option<&str>,
+    rendered_list: String,
+) -> Result<ListOrSignOutcome> {
+    let Some(raw_selection) = raw_selection else {
+        return Ok(ListOrSignOutcome {
+            exit_code: 0,
+            stdout: rendered_list,
+        });
+    };
+    let exit_code = sign_selected(wiring, candidates, raw_selection, &rendered_list)?;
+    Ok(ListOrSignOutcome {
+        exit_code,
+        stdout: String::new(),
+    })
 }
 
 /// Run the `--sign N[,N...]` batch: validate the selection, then walk each
@@ -181,18 +211,6 @@ fn parse_selection(raw: &str, candidate_count: usize) -> Result<Vec<usize>, Stri
 /// DISPLAY-ONLY (WD-62 / I-SCR-7) — it appears in the preview but is NEVER a
 /// signed-payload field, so the signed CID is byte-identical to a
 /// hand-authored claim's.
-/// `ClaimLookup` over the local store for the reference rules' cycle arm; a
-/// read error or unknown CID is "not known", as the rules expect.
-struct StoredClaimLookup<'a> {
-    storage: &'a dyn StoragePort,
-}
-
-impl ClaimLookup for StoredClaimLookup<'_> {
-    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
-        self.storage.read_signed_claim(cid).ok().flatten()
-    }
-}
-
 fn sign_candidate_via_slice01(
     wiring: &Wiring,
     candidate: &SignableCandidate,
@@ -254,7 +272,7 @@ fn sign_candidate_via_slice01(
     // The shipped reference rules (self-reference / two-hop cycle) gate any
     // reference a candidate carries — a STRONGER inference's `supersedes` —
     // BEFORE signing. No references: the rules have nothing to check.
-    let lookup = StoredClaimLookup {
+    let lookup = StorageClaimLookup {
         storage: wiring.storage.as_ref(),
     };
     reference_rules_validate(&unsigned, Some(&lookup as &dyn ClaimLookup))

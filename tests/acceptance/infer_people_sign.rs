@@ -9,9 +9,10 @@
 //! `PeerPds`, `FakePds`, `FakeIdentity`.
 //!
 //! Layer 3/5 subprocess — example-only (Mandate 9); sad paths are named
-//! examples (Mandate 11). The WS is NOT `#[ignore]`: it is the first scenario
-//! DELIVER turns green (thin thread through slices 01-03); every other
-//! scenario is `#[ignore]`d with the slice/step that activates it.
+//! examples (Mandate 11). The WS was the first scenario DELIVER turned green
+//! (thin thread through slices 01-03). Every scenario runs; only the `live_*`
+//! production-data check stays `#[ignore]`d (network-dependent; run with
+//! `OPENLORE_LIVE_GITHUB=1 ... --ignored live`).
 //!
 //! Covers: US-CPI-003 (all ACs), UC-7 (evidence wording), UC-8 (numbering
 //! tied to filters), Q-CPI-D3 (bare author DID in at-uris), KPI-CPI-2
@@ -26,7 +27,7 @@ use support::people::*;
 use support::*;
 
 // =============================================================================
-// WALKING SKELETON — NOT #[ignore]: RED at handoff, first GREEN in DELIVER
+// WALKING SKELETON — the first scenario DELIVER turned GREEN
 // =============================================================================
 
 /// WS-CPI-1: Maria scraped `BurntSushi/ripgrep` and `rust-lang/regex` (both

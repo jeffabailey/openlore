@@ -60,6 +60,9 @@ pub mod sign_batch;
 // ONLY verb that links `adapter-http-viewer` (cli is its sole linker).
 pub mod ui;
 
+use claim_domain::{Cid, ClaimLookup, SignedClaim};
+use ports::StoragePort;
+
 /// Strip a `#fragment` from a DID, returning the bare DID. A signed
 /// claim's `author` carries the verification-method fragment
 /// (`did:plc:rachel-test#org.openlore.application`); the bare DID is what
@@ -69,4 +72,19 @@ pub mod ui;
 /// fragment-stripping rule lives in exactly one place.
 pub(crate) fn bare_did(did: &str) -> String {
     did.split('#').next().unwrap_or(did).to_string()
+}
+
+/// `ClaimLookup` over the local store for the reference rules' cycle arm.
+/// Shared by [`claim_retract`] and the [`sign_batch`] (a STRONGER inference's
+/// `supersedes`). The cycle check tolerates `None` for "store doesn't know
+/// this CID", so a `read_signed_claim` error also collapses to `None` —
+/// the contract the validator already expects.
+pub(crate) struct StorageClaimLookup<'a> {
+    pub(crate) storage: &'a dyn StoragePort,
+}
+
+impl ClaimLookup for StorageClaimLookup<'_> {
+    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
+        self.storage.read_signed_claim(cid).ok().flatten()
+    }
 }

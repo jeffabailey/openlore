@@ -3,6 +3,8 @@
 //! strings out.
 
 use ports::ContributionLink;
+
+use super::common::plural_suffix;
 use scraper_domain::{
     confidence_arithmetic, AlreadySigned, CandidateStatus, InferenceReport, NumberedCandidate,
     PersonCandidate, WeakenedClaim, WeakenedSupport,
@@ -31,13 +33,7 @@ pub fn render_inference_report(report: &InferenceReport) -> String {
         .iter()
         .filter(|weakened| !is_shown_elsewhere(&weakened.cid, report))
     {
-        out.push_str(&format!(
-            "  - {} adheres to {} — signed (claim {})\n",
-            weakened.person_subject,
-            philosophy_short_name(&weakened.philosophy),
-            weakened.cid
-        ));
-        out.push_str(&render_support_weakened(weakened));
+        out.push_str(&render_weakened_signed(weakened));
     }
     if !report.repos_without_signed_claims.is_empty() {
         out.push_str(&format!(
@@ -90,7 +86,7 @@ fn render_person_candidate(
         block.push_str(&format!(
             "        you signed claim {supersedes}; now {repos} repo{} support it — \
              signing SUPERSEDES it with a new claim (your existing claim is unchanged)\n",
-            if repos == 1 { "" } else { "s" }
+            plural_suffix(repos)
         ));
         block.push_str(&weakened_line_for(supersedes, weakened));
     }
@@ -134,6 +130,18 @@ fn render_already_signed(already: &AlreadySigned) -> String {
     )
 }
 
+/// A weakened signed claim no other line shows: its own line, then its
+/// SUPPORT WEAKENED line.
+fn render_weakened_signed(weakened: &WeakenedClaim) -> String {
+    format!(
+        "  - {} adheres to {} — signed (claim {})\n{}",
+        weakened.person_subject,
+        philosophy_short_name(&weakened.philosophy),
+        weakened.cid,
+        render_support_weakened(weakened)
+    )
+}
+
 /// Is my weakened claim `cid` already shown — as an already-signed line or as
 /// the claim a STRONGER candidate supersedes?
 fn is_shown_elsewhere(cid: &str, report: &InferenceReport) -> bool {
@@ -156,7 +164,7 @@ fn weakened_line_for(cid: &str, weakened: &[WeakenedClaim]) -> String {
 /// `SUPPORT WEAKENED: <n> of <total> supporting claims <reason>[; …]` — the
 /// claim is unchanged; retracting or countering it stays the user's choice.
 fn render_support_weakened(claim: &WeakenedClaim) -> String {
-    let noun = if claim.cited == 1 { "claim" } else { "claims" };
+    let noun = format!("claim{}", plural_suffix(claim.cited));
     let reasons: Vec<String> = claim
         .weakened
         .iter()
@@ -197,8 +205,8 @@ pub fn render_person_derived_from(candidate: &PersonCandidate) -> String {
     let summary = format!(
         "  derived-from: {} signed repo claim{} across {repos} repo{}\n",
         cited.len(),
-        if cited.len() == 1 { "" } else { "s" },
-        if repos == 1 { "" } else { "s" }
+        plural_suffix(cited.len()),
+        plural_suffix(repos)
     );
     cited
         .iter()
@@ -251,7 +259,7 @@ fn render_person_links(person_subject: &str, links: &[ContributionLink]) -> Stri
     let header = format!(
         "{person_subject} is linked to {} scraped repo{}:\n",
         ordered.len(),
-        if ordered.len() == 1 { "" } else { "s" }
+        plural_suffix(ordered.len())
     );
     ordered.iter().fold(header, |out, link| {
         out + &format!("  {} (#{})\n", link.repo_subject, link.rank)

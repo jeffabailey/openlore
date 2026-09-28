@@ -43,8 +43,8 @@ use claim_domain::{
     canonicalize, compute_cid, reference_rules_validate, Cid, ClaimLookup, ClaimReference,
     ReferenceType, SignedClaim, UnsignedClaim,
 };
-use ports::StoragePort;
 
+use crate::verbs::StorageClaimLookup;
 use crate::wiring::Wiring;
 
 /// Argument struct for the `claim retract` verb.
@@ -176,24 +176,4 @@ pub fn run(wiring: &Wiring, args: &ClaimRetractArgs) -> Result<ClaimRetractOutco
         exit_code: 0,
         stdout: String::new(),
     })
-}
-
-/// Tiny adapter bridging `&dyn StoragePort` → `ClaimLookup` for the
-/// reference-rules validator. Kept local to the verb because the cycle
-/// check is the only caller in slice-01; promoting it to a shared
-/// adapter crate would be premature.
-struct StorageClaimLookup<'a> {
-    storage: &'a dyn StoragePort,
-}
-
-impl<'a> ClaimLookup for StorageClaimLookup<'a> {
-    fn signed_by_cid(&self, cid: &Cid) -> Option<SignedClaim> {
-        // The cycle-check arm tolerates `None` for "store doesn't know
-        // this CID" — slice-01 intentionally does not promote that to
-        // a hard error (a slice-04 stricter "dangling reference"
-        // check may revisit this). Therefore a `read_signed_claim`
-        // error here collapses to `None`, matching the contract the
-        // validator already expects.
-        self.storage.read_signed_claim(cid).ok().flatten()
-    }
 }

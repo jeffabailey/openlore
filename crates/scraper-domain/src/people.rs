@@ -675,7 +675,7 @@ pub struct OwnClaim {
     pub cid: String,
     pub evidence: Vec<String>,
     /// RFC3339 UTC as the one clock port writes it, so lexical order is
-    /// chronological.
+    /// chronological (the invariant `latest_composed` relies on).
     pub composed_at: String,
     pub references: Vec<ClaimReference>,
 }
@@ -773,31 +773,9 @@ pub fn infer_people_report(
                         candidate.philosophy(),
                     ))
                     .unwrap_or(&no_standing);
-                match classify(&candidate, standing) {
-                    Classification::New => numbered.push(NumberedCandidate {
-                        candidate,
-                        status: CandidateStatus::New,
-                    }),
-                    Classification::AlreadySigned(cid) => already.push(AlreadySigned {
-                        cid: cid.to_string(),
-                        candidate,
-                    }),
-                    Classification::Stronger {
-                        supersedes,
-                        still_signed,
-                    } => {
-                        already.extend(still_signed.iter().map(|cid| AlreadySigned {
-                            cid: (*cid).to_string(),
-                            candidate: candidate.clone(),
-                        }));
-                        numbered.push(NumberedCandidate {
-                            candidate,
-                            status: CandidateStatus::Stronger {
-                                supersedes: supersedes.to_string(),
-                            },
-                        });
-                    }
-                }
+                let (signed_lines, numbered_entry) = place_candidate(candidate, standing);
+                already.extend(signed_lines);
+                numbered.extend(numbered_entry);
                 (already, numbered)
             },
         );
@@ -806,6 +784,50 @@ pub fn infer_people_report(
         already_signed,
         repos_without_signed_claims: repos_without_signed_claims(&scoped_links, repo_claims),
         weakened: weakened_claims(&signed, repo_claims, person),
+    }
+}
+
+/// Where one candidate lands in the report, given my standing claims for its
+/// pair (DDD-8): the already-signed lines it produces and, unless it is
+/// fully signed, its numbered entry.
+fn place_candidate(
+    candidate: PersonCandidate,
+    standing: &[&OwnClaim],
+) -> (Vec<AlreadySigned>, Option<NumberedCandidate>) {
+    match classify(&candidate, standing) {
+        Classification::New => (
+            Vec::new(),
+            Some(NumberedCandidate {
+                candidate,
+                status: CandidateStatus::New,
+            }),
+        ),
+        Classification::AlreadySigned(cid) => (
+            vec![AlreadySigned {
+                cid: cid.to_string(),
+                candidate,
+            }],
+            None,
+        ),
+        Classification::Stronger {
+            supersedes,
+            still_signed,
+        } => {
+            let still_signed_lines = still_signed
+                .iter()
+                .map(|cid| AlreadySigned {
+                    cid: (*cid).to_string(),
+                    candidate: candidate.clone(),
+                })
+                .collect();
+            let numbered = NumberedCandidate {
+                candidate,
+                status: CandidateStatus::Stronger {
+                    supersedes: supersedes.to_string(),
+                },
+            };
+            (still_signed_lines, Some(numbered))
+        }
     }
 }
 
@@ -839,10 +861,7 @@ fn weakened_claim(
     repo_claims: &[RepoClaim],
     lineages: &[ClaimLineage<'_>],
 ) -> Option<WeakenedClaim> {
-    let cited: BTreeSet<String> = parse_provenance(&claim.evidence)
-        .into_iter()
-        .map(|cited| cited.cid)
-        .collect();
+    let cited = cited_cids(&claim.evidence);
     let weakened = cited
         .iter()
         .filter_map(|cid| weakening_of(cid, repo_claims, lineages))
@@ -909,10 +928,7 @@ fn classify<'a>(candidate: &PersonCandidate, standing: &[&'a OwnClaim]) -> Class
     if standing.iter().any(|claim| is_hand_authored(claim)) {
         return Classification::AlreadySigned(smallest);
     }
-    let Some(latest) = standing
-        .iter()
-        .max_by(|a, b| (&a.composed_at, &a.cid).cmp(&(&b.composed_at, &b.cid)))
-    else {
+    let Some(latest) = latest_composed(standing) else {
         return Classification::New;
     };
     if !has_uncited_supporting_repo(candidate, latest) {
@@ -930,6 +946,29 @@ fn classify<'a>(candidate: &PersonCandidate, standing: &[&'a OwnClaim]) -> Class
     }
 }
 
+/// The distinct CIDs of the claims an `evidence[]` cites (ADR-064 §5).
+fn cited_cids(evidence: &[String]) -> BTreeSet<String> {
+    parse_provenance(evidence)
+        .into_iter()
+        .map(|cited| cited.cid)
+        .collect()
+}
+
+/// Q-CPI-D4: the most recently composed of my standing claims for a pair,
+/// ties broken by the larger CID so the choice is total and order-free.
+///
+/// INVARIANT: every `composed_at` compared here is an RFC3339 UTC timestamp
+/// written by the ONE `ClockPort` (`now_utc().to_rfc3339()`) — same offset,
+/// same precision — so its lexical order IS its chronological order. These
+/// are MY claims only (`OwnClaim`); a peer's clock never reaches this
+/// comparison.
+fn latest_composed<'a>(standing: &[&'a OwnClaim]) -> Option<&'a OwnClaim> {
+    standing
+        .iter()
+        .copied()
+        .max_by(|a, b| (&a.composed_at, &a.cid).cmp(&(&b.composed_at, &b.cid)))
+}
+
 /// UC-4: an adherence citing no claim AT-URI was authored by hand.
 fn is_hand_authored(claim: &OwnClaim) -> bool {
     parse_provenance(&claim.evidence).is_empty()
@@ -938,10 +977,7 @@ fn is_hand_authored(claim: &OwnClaim) -> bool {
 /// Some repo supporting the candidate NOW has none of its supporting claims
 /// cited by `signed` (claims matched by content address).
 fn has_uncited_supporting_repo(candidate: &PersonCandidate, signed: &OwnClaim) -> bool {
-    let cited: BTreeSet<String> = parse_provenance(&signed.evidence)
-        .into_iter()
-        .map(|cited| cited.cid)
-        .collect();
+    let cited = cited_cids(&signed.evidence);
     candidate.support().iter().any(|repo| {
         !repo
             .claims

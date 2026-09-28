@@ -11,8 +11,9 @@
 //! guardrails (KPI-CPI-2 complete provenance, confidence ≤ 0.29 and ≤ the
 //! strongest support) are example-PINNED here; their proptest forms belong to
 //! DELIVER's pure `scraper-domain::people` unit layer (listed in
-//! `distill/test-scenarios.md`). All scenarios `#[ignore]`d for one-at-a-time
-//! unskip.
+//! `distill/test-scenarios.md`). Every scenario runs; only the `live_*`
+//! production-data check stays `#[ignore]`d (network-dependent; run with
+//! `OPENLORE_LIVE_GITHUB=1 ... --ignored live`).
 //!
 //! Covers: every US-CPI-002 AC; KPI-CPI-2, KPI-CPI-3 (signed-only,
 //! non-retracted, non-countered, non-superseded, active-peer support);
