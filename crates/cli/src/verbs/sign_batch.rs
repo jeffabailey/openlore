@@ -63,14 +63,14 @@ pub fn sign_selected(
     raw_selection: &str,
     candidate_list_out: &str,
 ) -> Result<i32> {
-    let selection = parse_selection(raw_selection, candidates.len()).map_err(|e| anyhow!(e))?;
+    let selection = selected_candidates(candidates, raw_selection).map_err(|e| anyhow!(e))?;
     print!("{candidate_list_out}");
     std::io::stdout().flush()?;
 
     let total_selected = selection.len();
     let mut signed_count = 0usize;
     let mut skipped_count = 0usize;
-    for index in selection {
+    for (index, candidate) in selection {
         // After each signed candidate, announce progress BEFORE the next
         // candidate's compose preview: "(1 of 3 signed)" precedes the next
         // preview, "(2 of 3 signed)" the one after, and so on. A skip does NOT
@@ -79,8 +79,6 @@ pub fn sign_selected(
             println!("\n({signed_count} of {total_selected} signed)");
             std::io::stdout().flush()?;
         }
-        // 1-based selection -> 0-based slice access (validated above).
-        let candidate = &candidates[index - 1];
         match sign_candidate_via_slice01(wiring, candidate)? {
             SignOutcome::Signed => signed_count += 1,
             SignOutcome::Skipped => {
@@ -111,6 +109,23 @@ pub fn sign_selected(
 enum SignOutcome {
     Signed,
     Skipped,
+}
+
+/// Resolve the raw `--sign N[,N...]` selection to the candidates it names,
+/// in selection order, each paired with its 1-based number. Pure: selection
+/// `i` is exactly the `i`-th candidate of the SAME list the verb rendered
+/// (US-CPI-003 / UC-8 — list and sign share one numbering), and an invalid
+/// selection is refused here, before any compose begins.
+fn selected_candidates<'a>(
+    candidates: &'a [SignableCandidate],
+    raw_selection: &str,
+) -> Result<Vec<(usize, &'a SignableCandidate)>, String> {
+    let selection = parse_selection(raw_selection, candidates.len())?;
+    // 1-based selection -> 0-based slice access (validated by the parser).
+    Ok(selection
+        .into_iter()
+        .map(|index| (index, &candidates[index - 1]))
+        .collect())
 }
 
 /// Parse + validate the raw `--sign N[,N...]` selection against the derived
@@ -376,7 +391,84 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    fn candidate_numbered(number: usize) -> SignableCandidate {
+        SignableCandidate {
+            subject: format!("github:person{number}"),
+            predicate: "adheres-to-philosophy".to_string(),
+            object: format!("philosophy-{number}"),
+            evidence: Vec::new(),
+            confidence: 0.2,
+            references: Vec::new(),
+            derived_from: String::new(),
+        }
+    }
+
+    fn listed_candidates(count: usize) -> Vec<SignableCandidate> {
+        (1..=count).map(candidate_numbered).collect()
+    }
+
+    /// A list of candidates plus a non-empty selection of DISTINCT in-range
+    /// 1-based numbers, in arbitrary order.
+    fn list_and_valid_selection() -> impl Strategy<Value = (usize, Vec<usize>)> {
+        (1usize..12).prop_flat_map(|count| {
+            (
+                Just(count),
+                Just((1..=count).collect::<Vec<_>>()).prop_shuffle(),
+                1..=count,
+            )
+                .prop_map(|(count, shuffled, take)| (count, shuffled[..take].to_vec()))
+        })
+    }
+
+    fn raw_selection(numbers: &[usize]) -> String {
+        numbers
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     proptest! {
+        /// Selecting number `i` resolves to exactly the `i`-th listed
+        /// candidate, one per selected number, in selection order — the list
+        /// and `--sign` share one numbering (US-CPI-003 IS-5 / IS-9, UC-8).
+        #[test]
+        fn each_selected_number_resolves_to_the_candidate_listed_under_it(
+            (count, numbers) in list_and_valid_selection(),
+        ) {
+            let listed = listed_candidates(count);
+            let resolved = selected_candidates(&listed, &raw_selection(&numbers))
+                .expect("a distinct in-range selection is accepted");
+            let resolved_subjects: Vec<(usize, String)> = resolved
+                .iter()
+                .map(|(number, candidate)| (*number, candidate.subject.clone()))
+                .collect();
+            let expected: Vec<(usize, String)> = numbers
+                .iter()
+                .map(|&number| (number, listed[number - 1].subject.clone()))
+                .collect();
+            prop_assert_eq!(resolved_subjects, expected);
+        }
+
+        /// A selection naming a number outside 1..=count is refused before
+        /// any candidate is resolved, the refusal naming the number and the
+        /// valid range (US-CPI-003 IS-4).
+        #[test]
+        fn a_selection_outside_the_listed_range_is_refused_naming_the_valid_range(
+            (count, numbers) in list_and_valid_selection(),
+            beyond in 1usize..50,
+            position in any::<prop::sample::Index>(),
+        ) {
+            let listed = listed_candidates(count);
+            let missing = count + beyond;
+            let mut selection = numbers.clone();
+            selection.insert(position.index(selection.len() + 1), missing);
+            let refusal = selected_candidates(&listed, &raw_selection(&selection))
+                .expect_err("an out-of-range selection must be refused");
+            let expected = format!("candidate {missing} does not exist; valid range 1..{count}");
+            prop_assert!(refusal.contains(&expected), "{:?} must contain {:?}", refusal, expected);
+        }
+
         /// Exactly the values in [0.0, 1.0] are accepted, unchanged.
         #[test]
         fn a_confidence_within_the_unit_interval_is_accepted_unchanged(value in 0.0f64..=1.0) {

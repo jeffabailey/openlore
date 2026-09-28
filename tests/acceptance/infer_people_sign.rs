@@ -231,7 +231,6 @@ fn listing_inferred_candidates_without_sign_writes_nothing() {
 ///
 /// @us-cpi-003 @driving_port @real-io @error
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 out-of-range selection rejected before compose)"]
 fn selecting_a_candidate_that_does_not_exist_is_rejected_before_composing() {
     // GIVEN three inferred candidates exist.
     let env = TestEnv::initialized();
@@ -268,7 +267,6 @@ fn selecting_a_candidate_that_does_not_exist_is_rejected_before_composing() {
 ///
 /// @us-cpi-003 @driving_port @real-io @edge
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 deterministic numbering list == sign)"]
 fn the_candidate_signed_is_the_one_listed_under_that_number() {
     // GIVEN several candidates exist and Maria has listed them.
     let env = TestEnv::initialized();
@@ -308,7 +306,6 @@ fn the_candidate_signed_is_the_one_listed_under_that_number() {
 ///
 /// @us-cpi-003 @driving_port @real-io @uc-8 @edge
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (UC-8 --sign numbering follows the same filters)"]
 fn sign_numbers_candidates_within_the_same_person_filter_as_the_list() {
     // GIVEN BurntSushi AND dtolnay each have one candidate.
     let env = TestEnv::initialized();
@@ -388,7 +385,6 @@ fn accepting_the_proposed_confidence_signs_the_speculative_value_unchanged() {
 ///
 /// @us-cpi-003 @driving_port @real-io @happy
 #[test]
-#[ignore = "DELIVER slice-03: unskip one-at-a-time (US-CPI-003 batch --sign N,N)"]
 fn signing_two_candidates_in_one_pass_produces_one_claim_each() {
     // GIVEN two candidates for BurntSushi.
     let env = TestEnv::initialized();
