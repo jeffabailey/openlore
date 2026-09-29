@@ -1,0 +1,89 @@
+{
+  "roadmap": {
+    "project_id": "fix-viewer-double-users-fetch",
+    "created_at": "2026-09-28T00:00:00Z",
+    "total_steps": 2
+  },
+  "total_steps": 2,
+  "implementation_scope": {
+    "source_directories": [
+      "crates/adapter-http-viewer/src/",
+      "crates/ports/src/",
+      "crates/adapter-github/src/",
+      "crates/test-support/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Viewer user scrape makes exactly one GitHub request",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Viewer user-target scrape reads /users/{user} once",
+          "description": "Bug fix (RCA 2026-09-28). The viewer's propose_candidates resolves a user target (GET /users/{user}) and then calls GithubPort::harvest_user, which GETs /users/{user} again and returns no signals. Add regression V-S5 to tests/acceptance/viewer_scrape.rs (RED: FakeGithub log is [/users/BurntSushi, /users/BurntSushi]), then make the User arm derive no signals without a second request (GREEN). Update the propose_candidates doc comment.",
+          "criteria": [
+            "V-S5: POST /scrape target=BurntSushi against FakeGithub::for_public_user renders 200 with `No candidate claims could be derived`.",
+            "V-S5: the FakeGithub request log is exactly [\"/users/BurntSushi\"].",
+            "Existing viewer_scrape (V-S1..V-S4) and viewer_invariants scenarios stay green unmodified."
+          ],
+          "acceptance_criteria": [
+            "V-S5: POST /scrape target=BurntSushi against FakeGithub::for_public_user renders 200 with `No candidate claims could be derived`.",
+            "V-S5: the FakeGithub request log is exactly [\"/users/BurntSushi\"].",
+            "Existing viewer_scrape (V-S1..V-S4) and viewer_invariants scenarios stay green unmodified."
+          ],
+          "test_file": "tests/acceptance/viewer_scrape.rs",
+          "scenario_name": "a_viewer_user_scrape_asks_github_only_for_the_profile_once",
+          "implementation_notes": "Acceptance via the viewer HTTP driving port (ViewerServer::start_with_github). Clone github.fake() (Arc-shared state) before moving the server into the viewer, then assert seen_paths() after the POST. Fix: `TargetKind::User { .. } => Vec::new()` in crates/adapter-http-viewer/src/lib.rs propose_candidates (~L1689-1692).",
+          "estimate_hours": 1,
+          "depends_on": [],
+          "dependencies": [],
+          "files_to_modify": [
+            "tests/acceptance/viewer_scrape.rs",
+            "crates/adapter-http-viewer/src/lib.rs"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "Remove the dead GithubPort::harvest_user",
+          "description": "After 01-01 harvest_user has no caller. Its WD-64 purpose (bounded cross-repo user aggregate) is superseded by contributor-philosophy-inference D-4/D-6 (a person scrape crawls none of their repos). Delete the port method, the adapter-github impl and docs, and the FakeGithub doc bullet; note the supersession in the scraper design wave-decisions.",
+          "criteria": [
+            "GithubPort no longer declares harvest_user; the workspace compiles and no reference remains outside historical docs.",
+            "scrape_github, scrape_person, scrape_auth, viewer_scrape (incl. V-S5) and viewer_invariants stay green; check-arch, clippy and fmt clean."
+          ],
+          "acceptance_criteria": [
+            "GithubPort no longer declares harvest_user; the workspace compiles and no reference remains outside historical docs.",
+            "scrape_github, scrape_person, scrape_auth, viewer_scrape (incl. V-S5) and viewer_invariants stay green; check-arch, clippy and fmt clean."
+          ],
+          "test_file": "tests/acceptance/viewer_scrape.rs",
+          "scenario_name": "a_viewer_user_scrape_asks_github_only_for_the_profile_once",
+          "implementation_notes": "Pure removal guarded by the compiler and the existing suites. RED_ACCEPTANCE / RED_UNIT are not applicable to a dead-code removal (no new behaviour); log them SKIPPED with a NOT_APPLICABLE reason.",
+          "estimate_hours": 1,
+          "depends_on": ["01-01"],
+          "dependencies": ["01-01"],
+          "files_to_modify": [
+            "crates/ports/src/lib.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/test-support/src/fake_github.rs",
+            "docs/feature/openlore-github-scraper/design/wave-decisions.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "status": "approved",
+    "reviewer": "orchestrator (bugfix: RCA reviewed and fix direction approved by user 2026-09-28)",
+    "approved_at": "2026-09-28",
+    "review_summary": "Two-step bugfix roadmap per /nw:bugfix; RCA by nw-troubleshooter, user approved 'fix + remove harvest_user'.",
+    "note": "Regression test and fix land in the same step so main CI stays green (trunk-based).",
+    "open_decisions": []
+  }
+}

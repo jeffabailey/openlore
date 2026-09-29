@@ -209,6 +209,8 @@ related repos in one ecosystem.
 - **Viewer `/scrape` still double-fetches `/users/{user}`.** The CLI person scrape now makes
   exactly one request (SP-5), but the viewer route's user path is a pre-existing surface that
   still resolves and harvests separately. Follow-up: route it through the single-fetch path.
+  **Resolved 2026-09-28** by `fix-viewer-double-users-fetch` (`f7b66b4`, `9b700b3`); see
+  [its evolution doc](fix-viewer-double-users-fetch-evolution.md).
 - **`claim_domain::Confidence::try_new` RED-scaffold panic** is pre-existing, off the feature
   path, and untouched. Follow-up: implement or remove the scaffold.
 - **`repo_subjects_to_read` scales with store size.** The case-insensitive join lists subjects
