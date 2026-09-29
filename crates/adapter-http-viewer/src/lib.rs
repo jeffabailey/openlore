@@ -1597,7 +1597,7 @@ fn bare_did(did: &str) -> &str {
 
 /// Handle `POST /scrape` — the LIVE propose step (US-VIEW-005 / AC-005.1). Reads
 /// the `target` form field, then runs the SLICE-02 propose pipeline LIVE through
-/// the reused `GithubPort`: `resolve_target` -> `harvest_repo`/`harvest_user` ->
+/// the reused `GithubPort`: `resolve_target` -> `harvest_repo` (repo targets) ->
 /// the PURE `scraper_domain::derive_candidates`. The derived `CandidateClaim`
 /// values are projected into the pure [`CandidateRowView`] view-model (the ONLY
 /// view-model carrying display-only `derived_from`, WD-62 / I-VIEW-5) and
@@ -1677,8 +1677,11 @@ fn render_scrape(state: &ScrapeState, shape: Shape) -> Response<Full<Bytes>> {
     }
 }
 
-/// Run the live propose step for `target`: resolve, harvest, derive. Returns the
-/// derived candidates (possibly empty) or the `GithubError` from resolve/harvest.
+/// Run the live propose step for `target`: resolve, harvest, derive. Harvest
+/// happens for REPO targets only — a user target stops at the single
+/// `/users/{user}` read `resolve_target` makes (US-CPI-005 / WD-64) and yields
+/// no signals. Returns the derived candidates (possibly empty) or the
+/// `GithubError` from resolve/harvest.
 /// PURE derivation (`derive_candidates`) wrapped around the two effectful port
 /// calls — the effect/pure split (ADR-007/009).
 async fn propose_candidates(
@@ -1688,7 +1691,10 @@ async fn propose_candidates(
     let kind = github.resolve_target(target).await?;
     let signals = match &kind {
         TargetKind::Repo { owner, repo } => github.harvest_repo(owner, repo).await?,
-        TargetKind::User { user } => github.harvest_user(user).await?,
+        // US-CPI-005: `resolve_target` already made the one `/users/{user}` read;
+        // a person scrape crawls nothing further and derives no repo-level
+        // signals (WD-64), so no second request is made.
+        TargetKind::User { .. } => Vec::new(),
     };
     // The embedded SSOT snapshot is build-time-verified to parse; a parse failure
     // degrades to zero candidates rather than panicking (railway discipline).

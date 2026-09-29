@@ -230,3 +230,43 @@ fn network_failure_clarifies_the_store_view_still_works_offline() {
         );
     }
 }
+
+/// V-S5 (US-CPI-005 guardrail; regression for the viewer double `/users` read):
+/// a person target on the Live Scrape view asks GitHub for the public profile
+/// EXACTLY ONCE. `resolve_target` already reads `/users/{user}`; a person scrape
+/// crawls nothing further and derives no repo-level signals (WD-64), so a second
+/// `/users/{user}` request would be wasted rate-limit budget. Mirrors the CLI
+/// fix (contributor-philosophy-inference 05-01).
+///
+/// Given "BurntSushi" is a public GitHub user;
+/// When Maria submits "BurntSushi" on the Live Scrape view;
+/// Then she sees the guided zero-candidates message, and GitHub saw exactly one
+/// request — for the public profile.
+///
+/// @us-cpi-005 @driving_port @real-io @guardrail
+#[test]
+fn a_viewer_user_scrape_asks_github_only_for_the_profile_once() {
+    // GIVEN a public user; the FakeGithub request log is Arc-shared, so a clone
+    // observes the requests after the server moves into the viewer.
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_user("BurntSushi"));
+    let fake = github.fake().clone();
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    // WHEN Maria submits the person target.
+    let page = viewer.post_form("/scrape", &[("target", "BurntSushi")]);
+
+    // THEN the guided zero-candidates page renders ...
+    assert_eq!(page.status, 200, "a person scrape renders a guided page");
+    assert!(
+        page.body_contains("No candidate claims could be derived"),
+        "a person scrape derives no candidates; body was:\n{}",
+        page.body
+    );
+    // ... and GitHub was asked only for the public profile, once.
+    assert_eq!(
+        fake.seen_paths(),
+        vec!["/users/BurntSushi".to_string()],
+        "exactly one GitHub request, for the public profile only"
+    );
+}
