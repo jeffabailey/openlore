@@ -21,6 +21,8 @@
 | WD-67 | **The signal->predicate mapping is EMBEDDED from the `jobs.yaml` SSOT at build time** (`include_str!` + a pure parse), with a `mapping_matches_ssot` build-time test asserting no drift. Read-at-runtime is rejected. | Embedding keeps `scraper-domain` PURE (no filesystem I/O at runtime; I-2 holds). A build-time include + drift test honors WD-53 (single SSOT, no divergent hardcode) without violating the pure-core rule. A generated Rust table via xtask codegen from `jobs.yaml` is an acceptable DELIVER alternative (SSOT still `jobs.yaml`). | LOCKED. | DELIVER embeds the snapshot; `mapping_matches_ssot` MUST pass; runtime filesystem reads from `scraper-domain` are forbidden by `check-arch`. |
 | WD-68 | **The three DESIGN-wave ADRs (017, 018, 019) are accepted with this DESIGN-wave handoff**; no further DESIGN iterations required pending peer review. | Each ADR has 2+ alternatives considered, carries the DISCUSS locks, and includes an Earned Trust section translating to concrete probe contracts. Slice-02 is a straightforward additive extension of slice-01 on the proven technology surface; the only novel risk (GitHub-can-lie-about-access) is addressed by the `adapter-github` probe (architecture-design §6.3). | LOCKED pending Atlas (solution-architect-reviewer) approval. | Reviewer may flag issues for an iteration-2 pass. |
 
+> 2026-09-28: WD-64's user aggregate is superseded by contributor-philosophy-inference D-4/D-6; `GithubPort::harvest_user` removed (fix-viewer-double-users-fetch). Q-DELIVER-4 is moot for the same reason.
+
 ## Decisions DEFERRED to DELIVER
 
 | # | Question | Default for DELIVER | Why deferred |

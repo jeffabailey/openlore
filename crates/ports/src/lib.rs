@@ -489,10 +489,6 @@ pub trait GithubPort: Send + Sync {
     /// already-fetched [`Signal`]s ready for `derive_candidates`.
     async fn harvest_repo(&self, owner: &str, repo: &str) -> Result<Vec<Signal>, GithubError>;
 
-    /// Harvest a BOUNDED cross-repo aggregate for a user / contributor
-    /// target (deep triangulation deferred to slice-04 per WD-64).
-    async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError>;
-
     /// Read a repo's public contributors list: exactly ONE
     /// `GET /repos/{o}/{r}/contributors?per_page=100` (anonymous contributors
     /// not requested), returning the RAW rows incl. bots in API order

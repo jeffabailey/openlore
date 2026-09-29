@@ -13,8 +13,6 @@
 //! - resolve a target (`owner/repo` => Repo, `user` => User; REFUSE
 //!   private / non-existent — WD-51 / I-SCR-2)
 //! - harvest a repo's bounded public signal set (`harvest_repo`)
-//! - harvest a user's BOUNDED cross-repo aggregate (`harvest_user`; deep
-//!   triangulation deferred to slice-04 per WD-64)
 //! - report the optional-PAT auth mode + remaining rate budget (US-SCR-004)
 //!
 //! ## Public-data-only by construction (WD-51 / I-SCR-2)
@@ -443,9 +441,10 @@ impl FakeGithub {
     }
 
     /// A public user/contributor target that resolves to `User` (US-SCR-001
-    /// Ex 2; WD-64). The bounded cross-repo USER aggregate is DEFERRED to
-    /// slice-04, so a user scrape derives no signals — the target resolves and
-    /// the auth posture is reported, but no candidates are proposed.
+    /// Ex 2; US-CPI-005). A person scrape crawls none of the user's repos
+    /// (contributor-philosophy-inference D-4/D-6, superseding WD-64's user
+    /// aggregate), so a user scrape derives no signals — the target resolves
+    /// and the auth posture is reported, but no candidates are proposed.
     pub fn for_public_user(user: &str) -> Self {
         Self::from_state(
             user,
@@ -1660,7 +1659,7 @@ mod tests {
     }
 
     /// `for_public_user` resolves to a User (not a repo) — drives SG-3 /
-    /// SA-1's user-target path (WD-64 bounded aggregate).
+    /// SA-1's user-target path (one `/users/{user}` read, US-CPI-005).
     #[tokio::test]
     async fn for_public_user_resolves_as_user() {
         let fake = FakeGithub::for_public_user("torvalds");

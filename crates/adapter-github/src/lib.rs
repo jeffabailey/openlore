@@ -314,28 +314,6 @@ impl GithubPort for GithubAdapter {
         Ok(scraper_domain::detect_signals(&facts))
     }
 
-    /// Harvest a USER / contributor target (WD-64). The bounded cross-repo
-    /// USER aggregate is DEFERRED to slice-04, so slice-02 derives NO signals
-    /// from a user target — a real user scrape reads zero repo-level signals
-    /// today. The `/users/{user}` body is still fetched so the observed
-    /// auth/rate-budget posture is surfaced (the CLI reports it), but the
-    /// returned signal set is empty (no synthetic aggregate is injected —
-    /// RGSD-6).
-    ///
-    /// `GET {base}/users/{user}` resolves + records the auth report, then
-    /// returns an empty signal set (deep, scored cross-repo triangulation is
-    /// slice-04's concern). The CLI person view no longer calls this — its
-    /// `resolve_target` read already records the auth report (US-CPI-005
-    /// single fetch); the viewer's scrape route still does.
-    async fn harvest_user(&self, user: &str) -> Result<Vec<Signal>, GithubError> {
-        let path = format!("/users/{user}");
-        let body = self.get_public(&path, user).await?;
-        // Surface the observed auth/rate-budget posture (ADR-019 §5); see
-        // `harvest_repo`. The token is NEVER recorded here.
-        record_auth_report(client::parse_auth_report(&body));
-        Ok(Vec::new())
-    }
-
     /// ONE public `GET /repos/{o}/{r}/contributors?per_page=100` (DDD-2) —
     /// on the `/repos/...` public allowlist; raw rows, nothing filtered.
     async fn list_contributors(
