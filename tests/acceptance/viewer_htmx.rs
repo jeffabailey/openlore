@@ -1600,3 +1600,38 @@ fn view_panel_fragment_equals_the_full_page_view_panel_region() {
         );
     }
 }
+
+/// H-3f: a pasted GitHub URL in the Live Scrape form proposes the same
+/// candidates as `owner/repo` — the viewer normalizes the target with the SAME
+/// pure `scraper_domain::normalize_target` the `scrape github` verb uses.
+///
+/// Given rust-lang/cargo is public;
+/// When Maria submits `https://github.com/rust-lang/cargo` WITH `HX-Request`;
+/// Then the results fragment renders candidates for github:rust-lang/cargo.
+///
+/// @us-hx-003 @driving_port @real-io @htmx-fragment @happy
+#[test]
+fn submitting_a_github_url_scrapes_the_repo_it_names() {
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
+    let viewer = ViewerServer::start_with_github(&env, github);
+
+    let frag = viewer.post_form_htmx(
+        "/scrape",
+        &[("target", "https://github.com/rust-lang/cargo")],
+    );
+
+    assert_eq!(frag.status, 200, "the htmx scrape POST returns 200");
+    assert!(
+        frag.body_contains("github:rust-lang/cargo") && frag.body_contains("derived-from"),
+        "a GitHub URL must propose candidates for github:rust-lang/cargo; got:\n{}",
+        frag.body
+    );
+    assert!(
+        !frag.body_contains("github:https:"),
+        "the raw URL must never become the subject; got:\n{}",
+        frag.body
+    );
+}

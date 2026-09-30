@@ -36,7 +36,7 @@ use ports::{
     GithubError, GithubPort, IndexQueryError, IndexQueryPort, IndexedClaim, NetworkResultRowRaw,
     PageRequest, SearchDimension, StoreReadError, StoreReadPort, TargetKind,
 };
-use scraper_domain::{derive_candidates, load_mapping, EMBEDDED_MAPPING_YAML};
+use scraper_domain::{derive_candidates, load_mapping, normalize_target, EMBEDDED_MAPPING_YAML};
 use tokio::net::TcpListener;
 use viewer_domain::{
     group_philosophy, group_project, peers_view, render_claim_detail, render_claim_detail_fragment,
@@ -1621,7 +1621,7 @@ async fn scrape_post(
     shape: Shape,
 ) -> Response<Full<Bytes>> {
     let body = read_request_body(req).await;
-    let target = parse_form_target(&body);
+    let target = normalize_target(&parse_form_target(&body));
 
     // No `GithubPort` wired (a store-only viewer somehow received a POST) — render
     // the guided message; the live propose step is unavailable.

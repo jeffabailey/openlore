@@ -189,7 +189,7 @@ pub fn render_scrape_page(state: &ScrapeState) -> String {
 fn render_scrape_form() -> Markup {
     html! {
         form method="post" action="/scrape" {
-            label for="target" { "GitHub target (owner/repo or user)" }
+            label for="target" { "GitHub target (owner/repo, user, or GitHub URL)" }
             input type="text" id="target" name="target";
             button type="submit" { "Scrape" }
         }

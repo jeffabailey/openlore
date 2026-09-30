@@ -39,8 +39,9 @@ use anyhow::{anyhow, Result};
 use ports::{CandidateClaim, GithubError, LinkFilter, TargetKind};
 use scraper_domain::{
     contributor_count_for, derive_candidates, load_mapping, new_inferred_candidate_count,
-    possible_renames, select_contributors, shared_contributors, ContributorSelection,
-    InferenceFilter, InferenceReport, PersonSubject, SharedContributor, EMBEDDED_MAPPING_YAML,
+    normalize_target, possible_renames, select_contributors, shared_contributors,
+    ContributorSelection, InferenceFilter, InferenceReport, PersonSubject, SharedContributor,
+    EMBEDDED_MAPPING_YAML,
 };
 
 use crate::render::{
@@ -64,7 +65,7 @@ use crate::wiring::Wiring;
 /// not a generic clap parse error.
 #[derive(Debug, Clone)]
 pub struct ScrapeGithubArgs {
-    /// The public GitHub target: `owner/repo` or a bare `user`.
+    /// The public GitHub target: `owner/repo`, a bare `user`, or a GitHub URL.
     pub target: String,
     /// Optional raw `--sign N[,N...]` selection (1-based indices), unparsed.
     pub sign: Option<String>,
@@ -88,6 +89,12 @@ pub struct ScrapeGithubOutcome {
 /// layer; `scraper_never_persists_unsigned`, I-SCR-1 / WD-49); a repo scrape
 /// only appends its unsigned contribution-link observations.
 pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutcome> {
+    // A pasted GitHub URL becomes `owner/repo` / `user` — the SAME pure
+    // normalization the viewer's `POST /scrape` applies.
+    let args = &ScrapeGithubArgs {
+        target: normalize_target(&args.target),
+        ..args.clone()
+    };
     // (0) Validate `--contributors N` PURELY over the raw target, BEFORE the
     // banner or any GitHub request (OD-CPI-7 bound; UC-3 person refusal).
     let contributor_count = contributor_count_for(&args.target, args.contributors)?;

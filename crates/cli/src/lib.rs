@@ -348,7 +348,8 @@ pub enum ScrapeCommand {
     /// Derive candidate claims from a public GitHub target, optionally
     /// signing selected candidates through the slice-01 pipeline.
     Github {
-        /// The public GitHub target: `owner/repo` or a bare `user`.
+        /// The public GitHub target: `owner/repo`, a bare `user`, or a GitHub URL
+        /// (`https://github.com/owner/repo`, `https://github.com/user`).
         target: String,
         /// Optional 1-based candidate indices to sign, comma-separated
         /// (`--sign 1` or `--sign 1,3`). Captured here as the RAW string;

@@ -25,6 +25,7 @@ mod derive;
 mod detect;
 mod mapping;
 mod people;
+mod target;
 
 #[cfg(test)]
 mod proptest_strategies;
@@ -35,6 +36,7 @@ pub use mapping::{
     load_mapping, MappingEntry, MappingError, SignalPredicateMapping, EMBEDDED_MAPPING_YAML,
     EMBODIES_PHILOSOPHY,
 };
+pub use target::normalize_target;
 
 // Re-export the shared value types so consumers can reach the whole derivation
 // vocabulary through `scraper_domain::` without also importing `ports::`.

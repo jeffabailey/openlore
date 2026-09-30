@@ -763,3 +763,83 @@ fn scrape_github_is_a_pure_read_persisting_no_claim_across_repeated_runs() {
     // matter how many times it runs (scraper_never_persists_unsigned, KPI-SCR-2).
     assert_no_claim_persisted(&env);
 }
+
+// =============================================================================
+// GitHub URL targets — the same input the web UI's scrape form accepts
+// =============================================================================
+
+/// SG-URL-1: a pasted repo URL (`https://github.com/rust-lang/cargo/tree/...`)
+/// scrapes exactly as `rust-lang/cargo` does — the URL is normalized to
+/// `owner/repo` before the resolve, so the subject is `github:rust-lang/cargo`.
+///
+/// Given rust-lang/cargo is public; When `scrape github
+/// https://github.com/rust-lang/cargo/tree/master`; Then it resolves as a
+/// repository and proposes the same numbered candidates.
+///
+/// @us-scr-001 @real-io @driving_port @happy
+#[test]
+fn scrape_github_accepts_a_repo_url_as_owner_slash_repo() {
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_repo_with_all_signals(
+        "rust-lang/cargo",
+    ));
+
+    let outcome = run_openlore_scrape(
+        &env,
+        &[
+            "scrape",
+            "github",
+            "https://github.com/rust-lang/cargo/tree/master",
+        ],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "a repo URL must scrape like owner/repo; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("Resolving target rust-lang/cargo ... ok (repository)"),
+        "the URL must resolve as the rust-lang/cargo repository; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("[1]") && outcome.stdout.contains("github:rust-lang/cargo"),
+        "a numbered candidate list for github:rust-lang/cargo must render; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert_no_claim_persisted(&env);
+}
+
+/// SG-URL-2: a pasted profile URL (`https://github.com/torvalds`) is a USER
+/// target — normalized to `torvalds`, it shows the person view.
+///
+/// @us-scr-001 @us-cpi-005 @real-io @driving_port @happy
+#[test]
+fn scrape_github_accepts_a_profile_url_as_a_user() {
+    let env = TestEnv::initialized();
+    let github = GithubServer::start(FakeGithub::for_public_user("torvalds"));
+
+    let outcome = run_openlore_scrape(
+        &env,
+        &["scrape", "github", "https://github.com/torvalds"],
+        github.base_url(),
+    );
+
+    assert_eq!(
+        outcome.status, 0,
+        "a profile URL must scrape like a bare user; \n--- stdout ---\n{}\n--- stderr ---\n{}",
+        outcome.stdout, outcome.stderr
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("Resolving target torvalds ... ok (user)"),
+        "the profile URL must resolve as the torvalds user; \n--- stdout ---\n{}",
+        outcome.stdout
+    );
+    assert_no_claim_persisted(&env);
+}
