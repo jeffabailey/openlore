@@ -6,7 +6,7 @@
 //!
 //! DuckDB is single-writer: two independent `Connection`s to the same
 //! file would race. Per the Q-DELIVER-3 resolution, this adapter SHARES
-//! the very same `Arc<Mutex<Connection>>` handle as the slice-01
+//! the very same `SharedConn` handle as the slice-01
 //! `DuckDbStorageAdapter` (see `DuckDbStorageAdapter::peer_adapter`).
 //! All writes serialize through one mutex; no second open handle exists.
 //!
@@ -33,8 +33,8 @@
 //! non-stub body for the new port (I-FED-3 enforcement activates once the
 //! real probe lands).
 
+use crate::conn::{ConnGuard, SharedConn};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
@@ -47,13 +47,12 @@ use url::Url;
 
 /// Embedded-DuckDB `PeerStoragePort` adapter.
 ///
-/// Shares the underlying `Connection` (behind an `Arc<Mutex<_>>` because
-/// DuckDB's `Connection` is `!Sync` AND we need the SAME handle as
-/// `DuckDbStorageAdapter` to honor the single-writer constraint). The
+/// Shares the SAME `SharedConn` handle as `DuckDbStorageAdapter` to honor
+/// the single-writer constraint. The
 /// `peer_claims_root` is the colocated `peer_claims/` directory where
 /// per-peer artifact subtrees live.
 pub struct DuckDbPeerStorageAdapter {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     peer_claims_root: PathBuf,
     /// The LOCAL user's bare DID (fragment stripped). Held so
     /// `write_peer_claim` can reject `author_did == local_did` with
@@ -78,7 +77,7 @@ impl DuckDbPeerStorageAdapter {
     /// run migrations — migration v3 is run once at
     /// `DuckDbStorageAdapter::open` time (see `schema_v3::run_migration`).
     pub(crate) fn from_shared(
-        conn: Arc<Mutex<Connection>>,
+        conn: SharedConn,
         peer_claims_root: PathBuf,
         local_did: &Did,
     ) -> Self {
@@ -101,17 +100,17 @@ impl DuckDbPeerStorageAdapter {
     /// (later) real method bodies; retained now so the field is read and
     /// the single-writer contract is documented at one call site.
     #[allow(dead_code)]
-    pub(crate) fn shared_connection(&self) -> &Arc<Mutex<Connection>> {
+    pub(crate) fn shared_connection(&self) -> &SharedConn {
         &self.conn
     }
 
-    /// Acquire the shared single-writer lock. A poisoned mutex (a previous
-    /// holder panicked) surfaces as a `DuckDb` error rather than a panic so
-    /// callers compose railway-style.
-    fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, PeerStorageError> {
+    /// Open the shared store (the single-writer handle). A failure (the store
+    /// stayed busy, or DuckDB refused the file) surfaces as a `DuckDb` error
+    /// rather than a panic so callers compose railway-style.
+    fn lock_conn(&self) -> Result<ConnGuard<'_>, PeerStorageError> {
         self.conn
             .lock()
-            .map_err(|_| PeerStorageError::DuckDb("peer-storage connection mutex poisoned".into()))
+            .map_err(|lock_err| PeerStorageError::DuckDb(lock_err.to_string()))
     }
 }
 

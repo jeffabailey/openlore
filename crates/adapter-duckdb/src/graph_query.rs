@@ -32,12 +32,11 @@
 //! traversal acceptance tests. The signatures + the SAFE query shapes above are
 //! the contract these bodies will satisfy.
 
+use crate::conn::SharedConn;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did};
-use duckdb::Connection;
 use ports::{
     AttributedClaim, AuthorRelationship, GraphEdge, GraphNode, ScoringFilter, StorageError,
     TraversalBound, TraversalResult,
@@ -57,7 +56,7 @@ use crate::bare_did;
 /// `xtask check-arch::no_cross_table_join_elides_author` (I-FED-1 / WD-73);
 /// aggregation (the weight) is the pure `scoring` core's job, NEVER SQL.
 pub(crate) fn query_by_object(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &SharedConn,
     object: &str,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
     // Slice-26 (AC-005.1): the object read filters on the pure equivalence CLASS
@@ -152,7 +151,7 @@ struct DimensionProjection {
 /// resolve each Peer row's subscription relationship. Returns one
 /// [`AttributedClaim`] per signed claim (never a SQL aggregate).
 fn query_attributed_dimension(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &SharedConn,
     filter: &DimensionFilter,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
     let (own_where, peer_where) = filter.where_clause();
@@ -187,8 +186,8 @@ fn query_attributed_dimension(
     );
 
     let projections: Vec<DimensionProjection> = {
-        let conn = conn.lock().map_err(|_| StorageError::QueryFailed {
-            message: "connection mutex poisoned".to_string(),
+        let conn = conn.lock().map_err(|lock_err| StorageError::QueryFailed {
+            message: lock_err.to_string(),
         })?;
         let mut stmt = conn
             .prepare(&sql)
@@ -265,11 +264,9 @@ fn attributed_claim_from(
 /// (`removed_at IS NULL`). Mirrors the adapter's own `active_subscription_dids`
 /// (the helper takes the shared connection directly so it can run inside the
 /// `graph_query` effect shell without a `&self`).
-fn active_subscription_dids(
-    conn: &Arc<Mutex<Connection>>,
-) -> Result<HashSet<String>, StorageError> {
-    let conn = conn.lock().map_err(|_| StorageError::QueryFailed {
-        message: "connection mutex poisoned".to_string(),
+fn active_subscription_dids(conn: &SharedConn) -> Result<HashSet<String>, StorageError> {
+    let conn = conn.lock().map_err(|lock_err| StorageError::QueryFailed {
+        message: lock_err.to_string(),
     })?;
     let mut stmt = conn
         .prepare("SELECT peer_did FROM peer_subscriptions WHERE removed_at IS NULL")
@@ -304,7 +301,7 @@ fn active_subscription_dids(
 /// it (I-GRAPH-2 / WD-73). Aggregation (the weight) is the pure `scoring`
 /// core's job later, NEVER SQL.
 pub(crate) fn query_by_contributor(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &SharedConn,
     author_did: &Did,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
     query_attributed_dimension(conn, &DimensionFilter::Contributor(author_did.clone()))
@@ -324,7 +321,7 @@ pub(crate) fn query_by_contributor(
 /// `peer_claims` AND projects `author_did`, so it passes
 /// `xtask check-arch::no_cross_table_join_elides_author`).
 pub(crate) fn query_attributed_for_scoring(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &SharedConn,
     filter: &ScoringFilter,
 ) -> Result<Vec<AttributedClaim>, StorageError> {
     query_attributed_dimension(conn, &scoring_filter_to_dimension(filter))
@@ -378,7 +375,7 @@ fn scoring_filter_to_dimension(filter: &ScoringFilter) -> DimensionFilter {
 /// `max_depth`. DuckDB recursive CTEs do NOT auto-detect cycles, so the visited
 /// guard is what makes a cyclic claim graph terminate (the probe times this).
 pub(crate) fn traverse_graph(
-    conn: &Arc<Mutex<Connection>>,
+    conn: &SharedConn,
     start: &GraphNode,
     bound: &TraversalBound,
 ) -> Result<TraversalResult, StorageError> {
@@ -457,8 +454,8 @@ pub(crate) fn traverse_graph(
     );
     let _ = seed_where_peer; // both stores share the base CTE; seed filters the unioned rows.
 
-    let conn = conn.lock().map_err(|_| StorageError::QueryFailed {
-        message: "connection mutex poisoned".to_string(),
+    let conn = conn.lock().map_err(|lock_err| StorageError::QueryFailed {
+        message: lock_err.to_string(),
     })?;
 
     let edges: Vec<GraphEdge> = {

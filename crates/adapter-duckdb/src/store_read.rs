@@ -2,7 +2,7 @@
 //!
 //! The `openlore ui` viewer reads the operator's OWN `claims` table over a port
 //! that exposes NO write/sign surface (I-VIEW-1). This adapter shares the EXACT
-//! `Arc<Mutex<Connection>>` the CLI's `StoragePort` adapter writes through
+//! `SharedConn` the CLI's `StoragePort` adapter writes through
 //! (BR-VIEW-4) — there is NO second connection, NO second file. Read-only SQL
 //! only: `list_claims` is a paginated ordered SELECT; `count_claims` is a
 //! `COUNT(*)`.
@@ -15,9 +15,9 @@
 //! `viewer-domain` core renders — no `SignedClaim`/artifact read needed for the
 //! list view.
 
+use crate::conn::{ConnGuard, SharedConn};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, Did, SignedClaim};
@@ -35,7 +35,7 @@ use crate::bare_did;
 ///
 /// ## Read-only enforcement boundary (I-VIEW-1 / I-CS-4)
 ///
-/// This struct holds an `Arc<Mutex<Connection>>` — a connection that is, at the
+/// This struct holds a `SharedConn` — a connection that is, at the
 /// type level, fully capable of writing. The read-only guarantee (I-VIEW-1 /
 /// I-CS-4: the viewer NEVER mutates the store) is NOT enforced by this type; it is
 /// enforced at the [`StoreReadPort`] TRAIT boundary, which exposes NO mutation
@@ -53,7 +53,7 @@ use crate::bare_did;
 /// REJECTED as over-engineering: the impl is unreachable except through the
 /// no-mutation trait, so the threat it would guard against is not reachable.
 pub struct DuckDbStoreReadAdapter {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     /// The storage root's `peer_claims` directory — used to resolve a peer
     /// counter's RELATIVE `signed_record_path` (`peer_claims/<encoded_did>/<cid>.json`)
     /// when reading its artifact for the free-text `reason` (the ADR-046 step-B read).
@@ -67,7 +67,7 @@ impl DuckDbStoreReadAdapter {
     /// root's `peer_claims` directory (for resolving peer artifact paths in the
     /// counter-thread step-B read). Private to the crate — only
     /// [`crate::DuckDbStorageAdapter::read_adapter`] builds it.
-    pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>, peer_claims_root: PathBuf) -> Self {
+    pub(crate) fn from_shared(conn: SharedConn, peer_claims_root: PathBuf) -> Self {
         Self {
             conn,
             peer_claims_root,
@@ -104,14 +104,17 @@ impl DuckDbStoreReadAdapter {
         signed.unsigned.reason
     }
 
-    /// Lock the shared connection, mapping a poisoned mutex to a plain-language
-    /// [`StoreReadError::Unreadable`]. The single site for the poison-recovery
-    /// rule — every read method acquires the connection through here so a
-    /// poisoned lock surfaces as a clean refusal (NFR-VIEW-6), never a panic.
-    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreReadError> {
-        self.conn.lock().map_err(|_| StoreReadError::Unreadable {
-            detail: "connection mutex poisoned".to_string(),
-        })
+    /// Open the shared store for one read, mapping a failure (the store stayed
+    /// busy, or DuckDB refused the file) to a plain-language
+    /// [`StoreReadError::Unreadable`]. Every read method acquires the
+    /// connection through here so a failure surfaces as a clean refusal
+    /// (NFR-VIEW-6), never a panic.
+    fn lock_conn(&self) -> Result<ConnGuard<'_>, StoreReadError> {
+        self.conn
+            .lock()
+            .map_err(|lock_err| StoreReadError::Unreadable {
+                detail: lock_err.to_string(),
+            })
     }
 
     /// Shared engine for the two LOCAL attributed survey reads (`/project` +

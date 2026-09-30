@@ -11,7 +11,7 @@
 //! transaction that is always rolled back, and refuses startup if the store
 //! lies (rank / last-observed not refreshed, or first-observed altered).
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use crate::conn::{ConnGuard, SharedConn};
 
 use chrono::{DateTime, TimeZone, Utc};
 use duckdb::{Connection, Transaction};
@@ -41,21 +41,21 @@ const SELECT_LINKS_SQL: &str = "
 
 /// Append-only link storage sharing the one DuckDB connection.
 pub struct DuckDbContributionLinkAdapter {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
 }
 
 impl DuckDbContributionLinkAdapter {
     /// Construct from the SHARED handle (see
     /// `DuckDbStorageAdapter::contribution_link_adapter`). Opens no second
     /// handle and runs no migration (v5 ran at `open`).
-    pub(crate) fn from_shared(conn: Arc<Mutex<Connection>>) -> Self {
+    pub(crate) fn from_shared(conn: SharedConn) -> Self {
         Self { conn }
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>, ContributionLinkError> {
+    fn lock(&self) -> Result<ConnGuard<'_>, ContributionLinkError> {
         self.conn
             .lock()
-            .map_err(|_| ContributionLinkError::Store("connection mutex poisoned".to_string()))
+            .map_err(|lock_err| ContributionLinkError::Store(lock_err.to_string()))
     }
 }
 

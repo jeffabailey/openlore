@@ -1390,3 +1390,8 @@ harness = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "viewer_cli_concurrent"
+path = "../../tests/acceptance/viewer_cli_concurrent.rs"
+harness = true

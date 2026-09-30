@@ -38,19 +38,19 @@
 #![allow(dead_code)]
 #![forbid(unsafe_code)]
 
+use conn::SharedConn;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
-use duckdb::Connection;
 use ports::{
     AttributedClaim, AuthorRelationship, FederatedRow, GraphNode, ProbeOutcome, ScoringFilter,
     SignedPhilosophy, SourceTable, StorageError, StoragePort, TraversalBound, TraversalResult,
 };
 
+mod conn;
 mod contribution_links;
 mod graph_query;
 mod peer_storage;
@@ -67,13 +67,13 @@ pub use store_read::DuckDbStoreReadAdapter;
 
 /// Embedded-DuckDB `StoragePort` adapter.
 ///
-/// Holds the open DB handle (behind an `Arc<Mutex<_>>` because
-/// `Connection` is `!Sync` AND the slice-03 `DuckDbPeerStorageAdapter`
-/// SHARES this exact handle to honor DuckDB's single-writer constraint —
-/// Q-DELIVER-3) plus the path to the colocated `claims/` directory and
+/// Holds the store handle (a `SharedConn`, which opens the file only while
+/// in use so other openlore processes can share it — ADR-065; the slice-03
+/// `DuckDbPeerStorageAdapter` SHARES this exact handle to honor DuckDB's
+/// single-writer constraint — Q-DELIVER-3) plus the path to the colocated `claims/` directory and
 /// the `peer_claims/` root.
 pub struct DuckDbStorageAdapter {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     claims_dir: PathBuf,
     peer_claims_root: PathBuf,
     /// Slice-24: `<root>/philosophies/` — where signed `<cid>.json`
@@ -96,9 +96,13 @@ impl DuckDbStorageAdapter {
             }
         }
 
-        let mut conn =
-            Connection::open(db_path).map_err(|err| StorageError::SchemaMigrationFailed {
-                message: format!("open duckdb at {}: {err}", db_path.display()),
+        // The file is opened per operation (see `conn`), so a running
+        // `openlore ui` and a CLI verb can share the store.
+        let shared = SharedConn::new(db_path);
+        let mut conn = shared
+            .lock()
+            .map_err(|err| StorageError::SchemaMigrationFailed {
+                message: err.to_string(),
             })?;
 
         schema::run_migrations(&mut conn)?;
@@ -113,6 +117,7 @@ impl DuckDbStorageAdapter {
         // contributor-philosophy-inference migration v5: the append-only
         // `contribution_links` table (DDD-5). Idempotent forward-only.
         schema_v5::run_migration(&mut conn)?;
+        drop(conn);
 
         // Colocate `claims/` next to the DB file. data-models.md
         // §"DuckDB schema" defines the canonical layout
@@ -160,7 +165,7 @@ impl DuckDbStorageAdapter {
         })?;
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: shared,
             claims_dir,
             peer_claims_root,
             philosophies_dir,
@@ -177,7 +182,7 @@ impl DuckDbStorageAdapter {
     /// self-attributed to the local user (WD-40 layer-2 storage guard).
     pub fn peer_adapter(&self, local_did: &claim_domain::Did) -> DuckDbPeerStorageAdapter {
         DuckDbPeerStorageAdapter::from_shared(
-            Arc::clone(&self.conn),
+            self.conn.clone(),
             self.peer_claims_root.clone(),
             local_did,
         )
@@ -189,13 +194,13 @@ impl DuckDbStorageAdapter {
     /// read-only `StoreReadPort` surface (no write/sign method), so the
     /// `openlore ui` viewer that holds it is structurally read-only (I-VIEW-1).
     pub fn read_adapter(&self) -> DuckDbStoreReadAdapter {
-        DuckDbStoreReadAdapter::from_shared(Arc::clone(&self.conn), self.peer_claims_root.clone())
+        DuckDbStoreReadAdapter::from_shared(self.conn.clone(), self.peer_claims_root.clone())
     }
 
     /// Construct a `DuckDbContributionLinkAdapter` SHARING this adapter's
     /// connection handle (DDD-4; the `peer_adapter` single-writer precedent).
     pub fn contribution_link_adapter(&self) -> DuckDbContributionLinkAdapter {
-        DuckDbContributionLinkAdapter::from_shared(Arc::clone(&self.conn))
+        DuckDbContributionLinkAdapter::from_shared(self.conn.clone())
     }
 
     /// Construct the artifact path for a CID: `<claims_dir>/<cid>.json`.
@@ -215,9 +220,12 @@ impl DuckDbStorageAdapter {
     /// vs `UnsubscribedCache` (soft-removed residue, DID absent). Reads the
     /// shared connection once per federated query.
     fn active_subscription_dids(&self) -> Result<std::collections::HashSet<String>, StorageError> {
-        let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::QueryFailed {
+                message: lock_err.to_string(),
+            })?;
         let mut stmt = conn
             .prepare("SELECT peer_did FROM peer_subscriptions WHERE removed_at IS NULL")
             .map_err(|err| StorageError::QueryFailed {
@@ -278,10 +286,10 @@ impl StoragePort for DuckDbStorageAdapter {
     fn probe(&self) -> ProbeOutcome {
         let conn = match self.conn.lock() {
             Ok(c) => c,
-            Err(_) => {
+            Err(lock_err) => {
                 return ProbeOutcome::Refused {
                     reason: ports::ProbeRefusalReason::StorageFsyncUnreliable,
-                    detail: "connection mutex poisoned".to_string(),
+                    detail: lock_err.to_string(),
                     structured: serde_json::json!({}),
                 };
             }
@@ -330,10 +338,13 @@ impl StoragePort for DuckDbStorageAdapter {
         })?;
 
         // Step 3: DB transaction — insert claim + evidence + references.
-        let mut conn = self.conn.lock().map_err(|_| StorageError::WriteFailed {
-            cid: cid.clone(),
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: lock_err.to_string(),
+            })?;
 
         let tx = conn
             .transaction()
@@ -457,10 +468,13 @@ impl StoragePort for DuckDbStorageAdapter {
                 message: err,
             })?;
 
-        let mut conn = self.conn.lock().map_err(|_| StorageError::WriteFailed {
-            cid: cid.clone(),
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: lock_err.to_string(),
+            })?;
 
         let tx = conn
             .transaction()
@@ -503,10 +517,13 @@ impl StoragePort for DuckDbStorageAdapter {
         // The on-disk JSON file is the authoritative artifact
         // (data-models.md). Read from it, not from the derived DB
         // index, so byte-equality is guaranteed.
-        let conn = self.conn.lock().map_err(|_| StorageError::ReadFailed {
-            cid: cid.clone(),
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::ReadFailed {
+                cid: cid.clone(),
+                message: lock_err.to_string(),
+            })?;
 
         let artifact_path: Option<String> = conn
             .query_row(
@@ -541,9 +558,12 @@ impl StoragePort for DuckDbStorageAdapter {
     }
 
     fn query_by_subject(&self, subject: &str) -> Result<Vec<SignedClaim>, StorageError> {
-        let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::QueryFailed {
+                message: lock_err.to_string(),
+            })?;
 
         let mut stmt = conn
             .prepare("SELECT cid FROM claims WHERE subject = ? ORDER BY cid")
@@ -581,9 +601,12 @@ impl StoragePort for DuckDbStorageAdapter {
         &self,
         target_cid: &Cid,
     ) -> Result<Vec<(Cid, ReferenceType)>, StorageError> {
-        let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::QueryFailed {
+                message: lock_err.to_string(),
+            })?;
 
         let mut stmt = conn
             .prepare(
@@ -623,10 +646,13 @@ impl StoragePort for DuckDbStorageAdapter {
         at_uri: &str,
         published_at: DateTime<Utc>,
     ) -> Result<(), StorageError> {
-        let conn = self.conn.lock().map_err(|_| StorageError::WriteFailed {
-            cid: cid.clone(),
-            message: "connection mutex poisoned".to_string(),
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|lock_err| StorageError::WriteFailed {
+                cid: cid.clone(),
+                message: lock_err.to_string(),
+            })?;
 
         let published_naive = published_at.naive_utc();
 
@@ -658,9 +684,12 @@ impl StoragePort for DuckDbStorageAdapter {
         // (its CID + signature still round-trip), matching the slice-01
         // `query_by_subject` strategy.
         let projections: Vec<FederatedProjection> = {
-            let conn = self.conn.lock().map_err(|_| StorageError::QueryFailed {
-                message: "connection mutex poisoned".to_string(),
-            })?;
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|lock_err| StorageError::QueryFailed {
+                    message: lock_err.to_string(),
+                })?;
 
             let mut stmt = conn
                 .prepare(
@@ -890,9 +919,9 @@ mod tests {
     use tempfile::tempdir;
     use url::Url;
 
-    /// Open a fresh adapter on a tmp DB file and hand back both the
-    /// adapter (to keep the shared connection alive) and a clone of the
-    /// Arc<Mutex<Connection>> for direct schema introspection.
+    /// Open a fresh adapter on a tmp DB file; hand back the tempdir (to keep
+    /// the file alive) and the adapter, whose handle tests lock directly for
+    /// schema introspection.
     fn open_tmp() -> (tempfile::TempDir, DuckDbStorageAdapter) {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("openlore.duckdb");
