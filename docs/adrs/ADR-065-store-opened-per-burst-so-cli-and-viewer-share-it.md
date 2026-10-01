@@ -31,6 +31,11 @@ instead of a long-lived connection:
 - If another process holds the file, `lock()` retries with backoff (2 ms, then
   doubling to 50 ms) for up to 15 s, then fails with a plain "store stayed busy"
   error that the adapters pass through instead of the old "mutex poisoned" text.
+- Dropping the last `SharedConn` handle closes the connection on the dropping
+  thread, waiting out any close the reaper has started. Otherwise a CLI verb
+  could exit while the reaper was mid-close (DuckDB checkpoints on close) and
+  lose its last writes; CI caught this as a `peer pull` that stored 1 of 7
+  claims.
 
 Within one process there is still exactly one handle per store (Q-DELIVER-3,
 BR-VIEW-4): every adapter clones the same `SharedConn`. The viewer stays

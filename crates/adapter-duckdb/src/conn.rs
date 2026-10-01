@@ -17,6 +17,7 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -37,7 +38,10 @@ const LOCK_CONFLICT_MARKER: &str = "Could not set lock on file";
 
 /// A cloneable handle to one DuckDB file; every adapter over the same store
 /// shares one (the single-writer constraint, Q-DELIVER-3).
-#[derive(Clone)]
+///
+/// Dropping the last handle closes the connection on the dropping thread.
+/// Leaving it to the reaper would let the process exit while the reaper is
+/// still closing (DuckDB checkpoints on close), and lose the last writes.
 pub(crate) struct SharedConn {
     inner: Arc<Inner>,
 }
@@ -46,6 +50,33 @@ struct Inner {
     path: PathBuf,
     busy_timeout: Duration,
     slot: Mutex<Slot>,
+    /// Live `SharedConn` handles. The reaper's temporary upgrades are not
+    /// counted, so this reaches zero exactly when the last handle drops.
+    handles: AtomicUsize,
+}
+
+impl Clone for SharedConn {
+    fn clone(&self) -> Self {
+        self.inner.handles.fetch_add(1, Ordering::SeqCst);
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Drop for SharedConn {
+    fn drop(&mut self) {
+        if self.inner.handles.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // No handle is left, so no guard is either. Taking the slot waits
+            // out a close the reaper already started.
+            let mut slot = self
+                .inner
+                .slot
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            slot.conn = None;
+        }
+    }
 }
 
 /// The open connection (if any) and when a guard last released it.
@@ -96,6 +127,7 @@ impl SharedConn {
                     conn: None,
                     last_used: Instant::now(),
                 }),
+                handles: AtomicUsize::new(1),
             }),
         }
     }
@@ -243,6 +275,29 @@ mod tests {
         assert!(
             !temp_table_visible(&conn),
             "after sitting idle the connection was closed and reopened"
+        );
+    }
+
+    /// The process can exit right after its last handle drops. If closing
+    /// were left to the reaper (which may hold the state at that moment),
+    /// the exit could cut DuckDB's close short and lose the last writes.
+    #[test]
+    fn dropping_the_last_handle_closes_the_connection_even_while_the_reaper_holds_it() {
+        let dir = tempdir().expect("tempdir");
+        let conn = SharedConn::new(&dir.path().join("store.duckdb"));
+        let clone = conn.clone();
+        drop(conn.lock().expect("open"));
+        let reaper_view = Arc::clone(&conn.inner);
+
+        drop(conn);
+        assert!(
+            reaper_view.slot.lock().unwrap().conn.is_some(),
+            "a remaining handle keeps the connection open"
+        );
+        drop(clone);
+        assert!(
+            reaper_view.slot.lock().unwrap().conn.is_none(),
+            "the last handle's drop closed the connection itself"
         );
     }
 
