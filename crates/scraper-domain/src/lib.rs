@@ -25,6 +25,7 @@ mod derive;
 mod detect;
 mod mapping;
 mod people;
+mod person_repos;
 mod target;
 
 #[cfg(test)]
@@ -35,6 +36,10 @@ pub use detect::{detect_signals, pick_semver_tag, RepoFacts, MEMORY_SAFE_LANGUAG
 pub use mapping::{
     load_mapping, MappingEntry, MappingError, SignalPredicateMapping, EMBEDDED_MAPPING_YAML,
     EMBODIES_PHILOSOPHY,
+};
+pub use person_repos::{
+    person_repo_count_for, select_person_repos, PersonRepoCountError, PersonRepoSelection,
+    DEFAULT_PERSON_REPO_COUNT, MAX_PERSON_REPO_COUNT,
 };
 pub use target::normalize_target;
 

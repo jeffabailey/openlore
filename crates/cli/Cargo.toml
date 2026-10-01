@@ -1395,3 +1395,8 @@ workspace = true
 name = "viewer_cli_concurrent"
 path = "../../tests/acceptance/viewer_cli_concurrent.rs"
 harness = true
+
+[[test]]
+name = "scrape_person_command"
+path = "../../tests/acceptance/scrape_person_command.rs"
+harness = true

@@ -74,8 +74,8 @@ pub use fixtures_peer::{
 pub mod fake_github;
 pub use fake_github::{
     FakeAuthMode, FakeContributor, FakeContributorsPosture, FakeGithub, FakeGithubErrorPosture,
-    FakeGithubHttpHandle, FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET,
-    FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
+    FakeGithubHttpHandle, FakeOwnedRepo, FakePerson, FakeTargetKind, FIXTURE_REJECTED_PAT,
+    FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
 };
 
 // Slice-04 step 07-01 (DD-GRAPH): canonical scoring + traversal fixtures.

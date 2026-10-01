@@ -194,6 +194,11 @@ struct State {
     /// contributors read. Set via [`FakeGithub::with_contributors`] /
     /// [`FakeGithub::with_contributors_posture`] (the ADR-063 lie catalogue).
     contributors: FakeContributorsPosture,
+    /// The person served on `GET /users/{u}` (profile) and `GET
+    /// /users/{u}/repos` (owned repos) — `scrape person`. `None` for every
+    /// other posture, which keeps `/users/{u}` on the resolve body and serves
+    /// `/users/{u}/repos` as `[]`.
+    person: Option<FakePerson>,
     /// The auth posture (anonymous vs authenticated + budget).
     auth: FakeAuthMode,
     /// Observation slot: the token value the production code actually sent
@@ -344,6 +349,100 @@ impl Default for FakeContributorsPosture {
     }
 }
 
+/// A public GitHub person for `scrape person`: the `/users/{u}` profile
+/// fields and the repos `/users/{u}/repos` lists. Build with
+/// [`FakePerson::new`] and the chaining setters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakePerson {
+    pub login: String,
+    pub name: Option<String>,
+    pub bio: Option<String>,
+    pub company: Option<String>,
+    pub location: Option<String>,
+    pub followers: u32,
+    pub public_repos: u32,
+    pub created_at: String,
+    pub repos: Vec<FakeOwnedRepo>,
+}
+
+/// One row of `GET /users/{u}/repos`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeOwnedRepo {
+    pub name: String,
+    pub stars: u32,
+    pub language: Option<String>,
+    pub fork: bool,
+    pub archived: bool,
+    pub pushed_at: String,
+}
+
+impl FakePerson {
+    /// A person with only a login; every optional profile field is null.
+    pub fn new(login: &str) -> Self {
+        Self {
+            login: login.to_string(),
+            name: None,
+            bio: None,
+            company: None,
+            location: None,
+            followers: 0,
+            public_repos: 0,
+            created_at: "2010-01-01T00:00:00Z".to_string(),
+            repos: Vec::new(),
+        }
+    }
+
+    pub fn named(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
+        self
+    }
+
+    pub fn with_bio(mut self, bio: &str) -> Self {
+        self.bio = Some(bio.to_string());
+        self
+    }
+
+    pub fn located(mut self, location: &str) -> Self {
+        self.location = Some(location.to_string());
+        self
+    }
+
+    pub fn with_followers(mut self, followers: u32) -> Self {
+        self.followers = followers;
+        self
+    }
+
+    /// Add an owned, non-fork, non-archived repo; `public_repos` follows.
+    pub fn owns(self, name: &str, stars: u32, language: Option<&str>, pushed_at: &str) -> Self {
+        self.with_repo(FakeOwnedRepo {
+            name: name.to_string(),
+            stars,
+            language: language.map(str::to_string),
+            fork: false,
+            archived: false,
+            pushed_at: pushed_at.to_string(),
+        })
+    }
+
+    /// Add a fork (listed by GitHub; `scrape person` skips it).
+    pub fn forked(self, name: &str, stars: u32) -> Self {
+        self.with_repo(FakeOwnedRepo {
+            name: name.to_string(),
+            stars,
+            language: None,
+            fork: true,
+            archived: false,
+            pushed_at: "2020-01-01T00:00:00Z".to_string(),
+        })
+    }
+
+    fn with_repo(mut self, repo: FakeOwnedRepo) -> Self {
+        self.repos.push(repo);
+        self.public_repos = self.repos.len() as u32;
+        self
+    }
+}
+
 /// Deterministic read-only test double for the public GitHub API.
 ///
 /// Construct with a posture (`for_public_repo`, `for_public_user`,
@@ -403,6 +502,7 @@ impl FakeGithub {
                 has_ci_workflows: false,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
                 offline: AtomicBool::new(false),
@@ -498,6 +598,7 @@ impl FakeGithub {
                 has_ci_workflows: false,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -540,6 +641,7 @@ impl FakeGithub {
                 has_ci_workflows: false,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -587,6 +689,7 @@ impl FakeGithub {
                 has_ci_workflows: false,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -653,6 +756,7 @@ impl FakeGithub {
                 has_ci_workflows: false,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -724,6 +828,7 @@ impl FakeGithub {
                 has_ci_workflows,
                 has_tests_dir,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -789,6 +894,38 @@ impl FakeGithub {
                 has_ci_workflows: true,
                 has_tests_dir: false,
                 contributors: FakeContributorsPosture::default(),
+                person: None,
+                auth: FakeAuthMode::Anonymous,
+                seen_token: Mutex::new(None),
+                seen_paths: Mutex::new(Vec::new()),
+                offline: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// A public PERSON for `scrape person`: `/users/{login}` serves the
+    /// profile, `/users/{login}/repos` the owned repos, and EVERY
+    /// `/repos/{login}/{name}` path serves the all-signals repo facts (the
+    /// fake is single-target, so each owned repo reads the same facts). Chain
+    /// `.with_contributors(..)` to have each repo list contributors.
+    pub fn for_public_person(person: FakePerson) -> Self {
+        let base = Self::for_public_repo_with_all_signals(&person.login).state;
+        Self {
+            state: Arc::new(State {
+                target: person.login.clone(),
+                resolution: Ok(FakeTargetKind::User {
+                    user: person.login.clone(),
+                }),
+                language: base.language.clone(),
+                has_cargo_lock: base.has_cargo_lock,
+                tags: base.tags.clone(),
+                has_changelog: base.has_changelog,
+                readme_bytes: base.readme_bytes,
+                has_docs_dir: base.has_docs_dir,
+                has_ci_workflows: base.has_ci_workflows,
+                has_tests_dir: base.has_tests_dir,
+                contributors: FakeContributorsPosture::default(),
+                person: Some(person),
                 auth: FakeAuthMode::Anonymous,
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -817,6 +954,7 @@ impl FakeGithub {
                 has_ci_workflows: prev.has_ci_workflows,
                 has_tests_dir: prev.has_tests_dir,
                 contributors: prev.contributors.clone(),
+                person: prev.person.clone(),
                 auth: FakeAuthMode::Authenticated { remaining, limit },
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -849,6 +987,7 @@ impl FakeGithub {
                 has_ci_workflows: prev.has_ci_workflows,
                 has_tests_dir: prev.has_tests_dir,
                 contributors: posture,
+                person: prev.person.clone(),
                 auth: prev.auth.clone(),
                 seen_token: Mutex::new(None),
                 seen_paths: Mutex::new(Vec::new()),
@@ -1089,7 +1228,9 @@ async fn github_http_route(
             // for every other `contents/*` path AND for Cargo.lock when the
             // posture has none. That default-404 is what keeps all existing
             // postures reading as "no Cargo.lock" (no regression).
-            if path.contains("/contents/") {
+            if let Some(response) = person_response(&fake, &path) {
+                Ok(response)
+            } else if path.contains("/contents/") {
                 Ok(contents_response(&fake, kind, &path))
             } else if path.ends_with("/tags") {
                 // RGSD-3: `GET /repos/{o}/{r}/tags` is a SEPARATE endpoint from
@@ -1120,6 +1261,59 @@ async fn github_http_route(
             }
         }
         Err(posture) => Ok(error_response(posture)),
+    }
+}
+
+/// Serve `GET /users/{u}/repos` (the owned repos, `[]` without a person) and
+/// `GET /users/{u}` (the profile, only when a person is configured — other
+/// postures keep the resolve body there). `None` for every other path.
+fn person_response(fake: &FakeGithub, path: &str) -> Option<HttpResponse> {
+    let rest = path.strip_prefix("/users/")?;
+    let person = fake.state.person.as_ref();
+    match rest.split_once('/') {
+        Some((_, "repos")) => {
+            let rows: Vec<serde_json::Value> = person
+                .map(|p| {
+                    p.repos
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "name": r.name,
+                                "full_name": format!("{}/{}", p.login, r.name),
+                                "description": null,
+                                "language": r.language,
+                                "stargazers_count": r.stars,
+                                "fork": r.fork,
+                                "archived": r.archived,
+                                "pushed_at": r.pushed_at,
+                                "html_url": format!("https://github.com/{}/{}", p.login, r.name),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(json_response(200, serde_json::Value::Array(rows)))
+        }
+        Some(_) => None,
+        None => person.map(|p| {
+            json_response(
+                200,
+                serde_json::json!({
+                    "login": p.login,
+                    "name": p.name,
+                    "bio": p.bio,
+                    "company": p.company,
+                    "location": p.location,
+                    "blog": "",
+                    "followers": p.followers,
+                    "following": 0,
+                    "public_repos": p.public_repos,
+                    "created_at": p.created_at,
+                    "html_url": format!("https://github.com/{}", p.login),
+                    "type": "User",
+                }),
+            )
+        }),
     }
 }
 

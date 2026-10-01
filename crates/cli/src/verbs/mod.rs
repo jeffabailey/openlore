@@ -50,6 +50,7 @@ pub mod philosophy_add;
 // `PublishPort` (push) to the user's own opaque serverless instance.
 pub mod publish;
 pub mod scrape_github;
+pub mod scrape_person;
 // Slice-05 (appview search; step 01-04): the `openlore search` NETWORK verb
 // (WD-113). `todo!()` handler bodies; the live XRPC dispatch lands per-scenario
 // in Phase 03/04 (AV-* scenarios register at 01-05).

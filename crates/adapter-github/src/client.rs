@@ -318,6 +318,70 @@ fn parse_contributor_row(
     })
 }
 
+/// Reshape a `GET /users/{user}` body into a [`ports::PersonProfile`].
+/// Blank strings read as `None`; `login` falls back to the requested user.
+/// PURE.
+pub fn parse_person_profile(body: &serde_json::Value, user: &str) -> ports::PersonProfile {
+    let login = text(body, "login").unwrap_or_else(|| user.to_string());
+    ports::PersonProfile {
+        html_url: text(body, "html_url").unwrap_or_else(|| format!("https://github.com/{login}")),
+        login,
+        name: text(body, "name"),
+        bio: text(body, "bio"),
+        company: text(body, "company"),
+        location: text(body, "location"),
+        blog: text(body, "blog"),
+        followers: count(body, "followers"),
+        following: count(body, "following"),
+        public_repos: count(body, "public_repos"),
+        created_at: text(body, "created_at"),
+    }
+}
+
+/// Reshape a `GET /users/{user}/repos` array into [`ports::OwnedRepo`]s,
+/// skipping any row without a `full_name`. A non-array body is an API-shape
+/// error. PURE.
+pub fn parse_owned_repos(body: &serde_json::Value) -> Result<Vec<ports::OwnedRepo>, String> {
+    let rows = body
+        .as_array()
+        .ok_or_else(|| "the user repos response was not a JSON array".to_string())?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            Some(ports::OwnedRepo {
+                full_name: text(row, "full_name")?,
+                description: text(row, "description"),
+                language: text(row, "language"),
+                stars: count(row, "stargazers_count"),
+                fork: flag(row, "fork"),
+                archived: flag(row, "archived"),
+                pushed_at: text(row, "pushed_at"),
+            })
+        })
+        .collect())
+}
+
+/// A non-blank string field, trimmed.
+fn text(body: &serde_json::Value, key: &str) -> Option<String> {
+    body.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+fn count(body: &serde_json::Value, key: &str) -> u64 {
+    body.get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn flag(body: &serde_json::Value, key: &str) -> bool {
+    body.get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -554,5 +618,45 @@ mod tests {
             .unwrap_err()
             .contains("login"));
         assert!(parse_contributors(&serde_json::json!({"message": "x"})).is_err());
+    }
+
+    #[test]
+    fn person_profile_reads_fields_and_blanks_as_none() {
+        let profile = parse_person_profile(
+            &serde_json::json!({
+                "login": "jeffabailey",
+                "name": "Jeff Bailey",
+                "bio": null,
+                "company": "",
+                "location": " Portland ",
+                "followers": 42,
+                "public_repos": 7,
+                "created_at": "2010-01-01T00:00:00Z",
+                "html_url": "https://github.com/jeffabailey"
+            }),
+            "jeffabailey",
+        );
+        assert_eq!(profile.name.as_deref(), Some("Jeff Bailey"));
+        assert_eq!(profile.bio, None);
+        assert_eq!(profile.company, None);
+        assert_eq!(profile.location.as_deref(), Some("Portland"));
+        assert_eq!((profile.followers, profile.public_repos), (42, 7));
+        assert_eq!(profile.created_at.as_deref(), Some("2010-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn owned_repos_keep_forks_and_archived_and_skip_nameless_rows() {
+        let repos = parse_owned_repos(&serde_json::json!([
+            { "full_name": "o/a", "stargazers_count": 5, "language": "Rust",
+              "fork": false, "archived": false, "pushed_at": "2026-01-01T00:00:00Z" },
+            { "full_name": "o/b", "fork": true, "archived": true },
+            { "name": "nameless" }
+        ]))
+        .expect("array");
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].full_name, "o/a");
+        assert_eq!(repos[0].stars, 5);
+        assert!(repos[1].fork && repos[1].archived);
+        assert!(parse_owned_repos(&serde_json::json!({"message": "x"})).is_err());
     }
 }

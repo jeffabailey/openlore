@@ -42,7 +42,10 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use ports::{GithubError, GithubPort, ProbeOutcome, RawContributor, Signal, TargetKind};
+use ports::{
+    GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome, RawContributor, Signal,
+    TargetKind,
+};
 
 pub mod client;
 pub mod probe;
@@ -341,6 +344,22 @@ impl GithubPort for GithubAdapter {
             },
             &target,
         )
+    }
+
+    /// `GET {base}/users/{user}` — the person's public profile. Records the
+    /// auth/rate posture like the other reads (never the token).
+    async fn read_person(&self, user: &str) -> Result<PersonProfile, GithubError> {
+        let body = self.get_public(&format!("/users/{user}"), user).await?;
+        record_auth_report(client::parse_auth_report(&body));
+        Ok(client::parse_person_profile(&body, user))
+    }
+
+    /// `GET {base}/users/{user}/repos?type=owner&sort=pushed&per_page=100` —
+    /// the RAW owned-repo rows (one page; the pure core picks the top few).
+    async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError> {
+        let path = format!("/users/{user}/repos?type=owner&sort=pushed&per_page=100");
+        let body = self.get_public(&path, user).await?;
+        client::parse_owned_repos(&body).map_err(GithubError::ApiShape)
     }
 }
 

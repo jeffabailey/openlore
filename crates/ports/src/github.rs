@@ -259,6 +259,41 @@ pub struct RawContributor {
     pub contributions: u64,
 }
 
+/// A person's public GitHub profile, as `GET /users/{user}` serves it
+/// (`scrape person`). Optional fields are the ones GitHub serves as `null`
+/// or `""` when the person left them blank.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonProfile {
+    pub login: String,
+    pub name: Option<String>,
+    pub bio: Option<String>,
+    pub company: Option<String>,
+    pub location: Option<String>,
+    pub blog: Option<String>,
+    pub followers: u64,
+    pub following: u64,
+    pub public_repos: u64,
+    /// RFC 3339 account creation time, verbatim.
+    pub created_at: Option<String>,
+    pub html_url: String,
+}
+
+/// One RAW row of `GET /users/{user}/repos` (`scrape person`). Forks and
+/// archived repos are included; choosing which to scrape is the pure core's
+/// job (`scraper_domain::select_person_repos`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedRepo {
+    /// `owner/repo`.
+    pub full_name: String,
+    pub description: Option<String>,
+    pub language: Option<String>,
+    pub stars: u64,
+    pub fork: bool,
+    pub archived: bool,
+    /// RFC 3339 time of the last push, verbatim.
+    pub pushed_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

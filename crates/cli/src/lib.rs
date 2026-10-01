@@ -340,9 +340,9 @@ pub enum InferCommand {
 
 /// Scrape verbs (slice-02; US-SCR-001..004; ADR-017 / ADR-019).
 ///
-/// `scrape` is a new top-level verb; `github` is its only subcommand in
-/// slice-02 (the enum leaves room for future sources). The verb shape is
-/// `openlore scrape github <target> [--sign N[,N...]]`.
+/// `scrape` is a top-level verb with two subcommands: `github <target>`
+/// (a repo, or the person view of a user) and `person <user>` (a person's
+/// profile plus a scrape of their top owned repos).
 #[derive(Debug, Subcommand)]
 pub enum ScrapeCommand {
     /// Derive candidate claims from a public GitHub target, optionally
@@ -365,6 +365,23 @@ pub enum ScrapeCommand {
         /// target (OD-CPI-7 / UC-3) — validated before any GitHub request.
         #[arg(long, value_name = "N")]
         contributors: Option<usize>,
+    },
+    /// Read a GitHub person: their public profile and top owned repos, scrape
+    /// each of those repos (signals, proposed claims, contributors recorded),
+    /// then show the person view.
+    Person {
+        /// A GitHub login or profile URL (`https://github.com/user`).
+        target: String,
+        /// How many of their owned repos to scrape (0..=30; default 5). Forks
+        /// and archived repos are skipped; the rest are ranked by stars, then
+        /// most recent push.
+        #[arg(long, value_name = "N")]
+        repos: Option<usize>,
+        /// Optional 1-based indices of the PERSON candidates (from the person
+        /// view at the end) to sign, comma-separated. Repo candidates are
+        /// signed with `scrape github <owner>/<repo> --sign N`.
+        #[arg(long)]
+        sign: Option<String>,
     },
 }
 
@@ -639,6 +656,29 @@ pub fn dispatch(cli: Cli) -> i32 {
                 }
                 Err(err) => {
                     eprintln!("openlore scrape github: {err:#}");
+                    1
+                }
+            }
+        }
+        Command::Scrape(ScrapeCommand::Person {
+            target,
+            repos,
+            sign,
+        }) => {
+            match verbs::scrape_person::run(
+                &wiring,
+                &verbs::scrape_person::ScrapePersonArgs {
+                    target,
+                    repos,
+                    sign,
+                },
+            ) {
+                Ok(outcome) => {
+                    print!("{}", outcome.stdout);
+                    outcome.exit_code
+                }
+                Err(err) => {
+                    eprintln!("openlore scrape person: {err:#}");
                     1
                 }
             }

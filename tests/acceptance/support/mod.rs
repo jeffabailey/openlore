@@ -2200,8 +2200,8 @@ pub fn assert_purge_state_delta(before: &HashMap<String, String>, after: &HashMa
 // them via `use support::*` (matching how the slice-03 peer doubles surface).
 pub use openlore_test_support::fake_github::{
     FakeAuthMode, FakeContributor, FakeContributorsPosture, FakeGithub, FakeGithubErrorPosture,
-    FakeGithubHttpHandle, FakeTargetKind, FIXTURE_REJECTED_PAT, FIXTURE_REPO_TARGET,
-    FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
+    FakeGithubHttpHandle, FakeOwnedRepo, FakePerson, FakeTargetKind, FIXTURE_REJECTED_PAT,
+    FIXTURE_REPO_TARGET, FIXTURE_USER_TARGET, FIXTURE_VALID_PAT,
 };
 
 /// A running `FakeGithub` in-process HTTP server, owning its own tokio

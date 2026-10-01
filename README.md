@@ -176,15 +176,26 @@ OPENLORE_PUBLISH_TOKEN=<token> ./cli.sh publish push     # send new claims (idem
 card of your published claims. An unreachable instance never blocks offline authoring.
 `pull` surfaces conflicts instead of overwriting a local claim.
 
-### `scrape github` — propose claims from a public source
+### `scrape github` / `scrape person` — read public GitHub repos and people
 
 ```sh
-./cli.sh scrape github <owner/repo | user>          # derive candidates, write nothing
-./cli.sh scrape github <owner/repo> --sign 1,3      # sign selected candidates
+./cli.sh scrape github <owner/repo | user | GitHub URL>   # propose claims, record contributors
+./cli.sh scrape github <owner/repo> --sign 1,3            # sign selected candidates
+./cli.sh scrape person <user | profile URL>               # profile + scrape their top repos
+./cli.sh scrape person <user> --repos 10                  # scrape more (0..=30, default 5)
 ```
 
-Without `--sign`, scrape only *proposes* candidates (a human gate) — no writes. `--sign
-N[,N…]` signs the chosen 1-based candidates through the normal claim pipeline.
+A repo scrape proposes candidate claims and records the repo's top contributors as
+unsigned links. Nothing becomes a claim until you sign it: `--sign N[,N…]` signs the
+chosen 1-based candidates through the normal claim pipeline. `scrape person` shows the
+person's profile, scrapes their top owned repos (forks and archived repos skipped), then
+shows what the store knows about them; sign each repo's candidates with `scrape github`.
+
+GitHub allows 60 unauthenticated requests an hour, and one repo scrape makes about 8. Set
+`GITHUB_TOKEN` (for example `GITHUB_TOKEN=$(gh auth token)`) to raise that to 5,000.
+
+The CLI and a running `./run.sh` viewer share the store, so you can scrape while the viewer
+is open; it shows the new data on its next page load.
 
 ### `search` — query the network index
 

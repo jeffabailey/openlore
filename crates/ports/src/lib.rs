@@ -106,8 +106,8 @@ pub use peer_storage::{
 // pure `scraper-domain` derivation crate (step 01-02) consumes these shapes.
 
 pub use github::{
-    CandidateClaim, CandidateClaimError, GithubError, RawContributor, Signal, SignalKind,
-    TargetKind,
+    CandidateClaim, CandidateClaimError, GithubError, OwnedRepo, PersonProfile, RawContributor,
+    Signal, SignalKind, TargetKind,
 };
 
 // contributor-philosophy-inference (DDD-4 / ADR-063 §3): the NEW append-only
@@ -499,6 +499,16 @@ pub trait GithubPort: Send + Sync {
         owner: &str,
         repo: &str,
     ) -> Result<Vec<RawContributor>, GithubError>;
+
+    /// Read a person's public profile: exactly ONE `GET /users/{user}`
+    /// (`scrape person`). Refuses a missing user with
+    /// [`GithubError::NotFound`].
+    async fn read_person(&self, user: &str) -> Result<PersonProfile, GithubError>;
+
+    /// List the repos a person owns: exactly ONE
+    /// `GET /users/{user}/repos?type=owner&sort=pushed&per_page=100`, the RAW
+    /// rows (forks and archived repos included).
+    async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError>;
 }
 
 // -----------------------------------------------------------------------------

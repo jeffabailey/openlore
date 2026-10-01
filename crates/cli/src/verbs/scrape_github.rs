@@ -137,10 +137,10 @@ pub fn run(wiring: &Wiring, args: &ScrapeGithubArgs) -> Result<ScrapeGithubOutco
 }
 
 /// The repo a scrape targets, with the validated contributors bound.
-struct RepoTarget<'a> {
-    owner: &'a str,
-    repo: &'a str,
-    contributor_count: usize,
+pub(crate) struct RepoTarget<'a> {
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub contributor_count: usize,
 }
 
 /// The PERSON view of a user target (US-CPI-005 / D-4 / D-6): the resolve
@@ -156,6 +156,17 @@ fn show_person(
     mut out: String,
 ) -> Result<ScrapeGithubOutcome> {
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
+    person_view(wiring, user, args.sign.as_deref(), out)
+}
+
+/// The person view itself (shared with `scrape person`): links, possible
+/// renames and the person-scoped inference report, then `--sign`.
+pub(crate) fn person_view(
+    wiring: &Wiring,
+    user: &str,
+    sign: Option<&str>,
+    mut out: String,
+) -> Result<ScrapeGithubOutcome> {
     let person = PersonSubject::parse(&format!("github:{user}"))?;
     let links = wiring
         .contribution_links
@@ -182,12 +193,7 @@ fn show_person(
     // DDD-12 / DDD-13: the SAME builder + sign batch `infer people --person
     // --sign` uses, over the SAME numbering — so the same number signs the
     // identical claim (STRONGER candidates carry their `supersedes`).
-    let outcome = sign_batch::list_or_sign(
-        wiring,
-        &person_signables(&report),
-        args.sign.as_deref(),
-        out,
-    )?;
+    let outcome = sign_batch::list_or_sign(wiring, &person_signables(&report), sign, out)?;
     Ok(ScrapeGithubOutcome {
         exit_code: outcome.exit_code,
         stdout: outcome.stdout,
@@ -203,58 +209,47 @@ fn scrape_repo(
     args: &ScrapeGithubArgs,
     mut out: String,
 ) -> Result<ScrapeGithubOutcome> {
-    // (3) Harvest the bounded public signal set + report the count.
-    let signals = runtime
-        .block_on(wiring.github.harvest_repo(target.owner, target.repo))
-        .map_err(anyhow::Error::from)?;
+    // (3b) The inference BEFORE this run writes anything (DDD-14): the
+    // baseline the end-of-scrape hint diffs against.
+    let inference_before = read_inference_report(wiring, &InferenceFilter::default())?;
+    // (3)-(4) Harvest, record the top-N human contributors, derive.
+    let scraped = scrape_repo_into_store(wiring, runtime, target)?;
     out.push_str(&format!(
         "Harvesting public signals ... {} signal{}\n",
-        signals.len(),
-        plural_suffix(signals.len())
+        scraped.signal_count,
+        plural_suffix(scraped.signal_count)
     ));
 
     // (3a) Report the auth-mode + rate budget the harvest observed (ADR-019
     // §5; US-SCR-004; journey step 1). The adapter parsed the budget from the
     // harvest response and recorded it in its effect-shell slot; we take it
-    // here and render the PURE auth-line ("authenticated (N/M rate budget)" /
-    // "unauthenticated"). The token value is NEVER part of this — an
+    // here and render the PURE auth-line (\"authenticated (N/M rate budget)\" /
+    // \"unauthenticated\"). The token value is NEVER part of this — an
     // `AuthReport` carries only the budget numbers (no-token-leak).
     out.push_str(&render_auth_report(&adapter_github::take_last_auth_report()));
 
-    let subject = format!("github:{}/{}", target.owner, target.repo);
-    // (3b) The inference BEFORE this run writes anything (DDD-14): the
-    // baseline the end-of-scrape hint diffs against.
-    let inference_before = read_inference_report(wiring, &InferenceFilter::default())?;
-    // (3c) Record the repo's top-N human contributors (DDD-14).
-    let contributors = record_repo_contributors(wiring, runtime, target, &subject)?;
-
-    // (4) Derive candidates via the PURE scraper-domain (confidence 0.25;
-    // each candidate names its source signal). The mapping is the embedded
-    // SSOT snapshot — a parse failure is a build-time-verified impossibility,
-    // surfaced as an error rather than a panic for railway discipline.
-    let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
-        .map_err(|e| anyhow::anyhow!("embedded signal->predicate mapping failed to parse: {e}"))?;
-    let candidates = derive_candidates(&subject, &signals, &mapping);
-
     // (5) Render the candidate list (or the no-candidates message).
-    if candidates.is_empty() {
+    if scraped.candidates.is_empty() {
         out.push_str(
             "No candidate claims could be derived from the harvested signals \
              (nothing to propose).\n",
         );
     } else {
-        out.push_str(&render_candidate_list(&subject, &candidates));
+        out.push_str(&render_candidate_list(
+            &scraped.subject,
+            &scraped.candidates,
+        ));
     }
 
     // (5a) The contributors block, below the candidates.
-    out.push_str(&render_contributors_outcome(&contributors));
+    out.push_str(&render_contributors_outcome(&scraped.contributors));
 
     // (6) WITHOUT --sign: derive + render only, ZERO claim writes (the
     // human-gate; scraper_never_persists_unsigned, I-SCR-1 / WD-49).
     // (7) --sign N[,N...]: validate + run the batch of individual human-gates.
     // The candidate-list block already accumulated in `out` is handed to the
     // batch, which emits it to stdout BEFORE composing so the user reviews it.
-    let signables: Vec<SignableCandidate> = candidates.iter().map(repo_signable).collect();
+    let signables: Vec<SignableCandidate> = scraped.candidates.iter().map(repo_signable).collect();
     let mut outcome = sign_batch::list_or_sign(wiring, &signables, args.sign.as_deref(), out)?;
 
     // (8) The one-line new-inferred-candidates hint, AFTER `--sign` so repo
@@ -265,6 +260,44 @@ fn scrape_repo(
     Ok(ScrapeGithubOutcome {
         exit_code: outcome.exit_code,
         stdout: outcome.stdout,
+    })
+}
+
+/// What scraping one repo produced, before any rendering or signing.
+pub(crate) struct RepoScrape {
+    /// `github:<owner>/<repo>`.
+    pub subject: String,
+    pub signal_count: usize,
+    pub candidates: Vec<CandidateClaim>,
+    pub contributors: ContributorsOutcome,
+}
+
+/// The shared per-repo beats of `scrape github` and `scrape person`: harvest
+/// the bounded public signal set, record the top-N human contributors
+/// (DDD-14), and derive candidates via the PURE scraper-domain (confidence
+/// 0.25; each names its source signal). Writes ONLY the unsigned
+/// contribution links — never a claim (I-SCR-1).
+pub(crate) fn scrape_repo_into_store(
+    wiring: &Wiring,
+    runtime: &tokio::runtime::Runtime,
+    target: &RepoTarget<'_>,
+) -> Result<RepoScrape> {
+    let signals = runtime
+        .block_on(wiring.github.harvest_repo(target.owner, target.repo))
+        .map_err(anyhow::Error::from)?;
+    let subject = format!("github:{}/{}", target.owner, target.repo);
+    let contributors = record_repo_contributors(wiring, runtime, target, &subject)?;
+    // The mapping is the embedded SSOT snapshot — a parse failure is a
+    // build-time-verified impossibility, surfaced as an error rather than a
+    // panic for railway discipline.
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
+        .map_err(|e| anyhow::anyhow!("embedded signal->predicate mapping failed to parse: {e}"))?;
+    let candidates = derive_candidates(&subject, &signals, &mapping);
+    Ok(RepoScrape {
+        subject,
+        signal_count: signals.len(),
+        candidates,
+        contributors,
     })
 }
 
@@ -309,7 +342,7 @@ fn new_inferred_candidates_hint(wiring: &Wiring, before: &InferenceReport) -> Re
 }
 
 /// What the contributors beat of a scrape came to (DDD-14 / UC-1 / UC-2).
-enum ContributorsOutcome {
+pub(crate) enum ContributorsOutcome {
     /// `--contributors 0`: GitHub was not asked.
     NoneRequested,
     /// GitHub will not list them (too large / empty): a named notice.
