@@ -17,8 +17,10 @@
 #
 # Environment (optional — same defaults as run.sh, so they share one store):
 #   OPENLORE_HOME           Data/config root (default: ./.openlore-home).
-#   OPENLORE_DID            Signing DID stub (default: did:plc:local-dev).
-#   OPENLORE_KEY_SEED_HEX   Ed25519 seed hex (default: 64 zeros — dev key).
+#   OPENLORE_DID            Signing DID (default: did:plc:local-dev, the dev identity).
+#   OPENLORE_KEY_SEED_HEX   Ed25519 seed hex (default for the dev DID: 64 zeros — dev key).
+#                           Any other DID signs with its keychain key (`./cli.sh key`) and uses
+#                           ./.openlore-home-<did> unless OPENLORE_HOME is set.
 #   PROFILE                 Cargo profile: debug (default) or release.
 
 set -euo pipefail
@@ -38,9 +40,15 @@ command -v cargo >/dev/null 2>&1 || {
 
 # Same data home + dev identity as run.sh, so `./cli.sh claim add …` writes to
 # the store `./run.sh` serves.
-export OPENLORE_HOME="${OPENLORE_HOME:-$REPO_ROOT/.openlore-home}"
 export OPENLORE_DID="${OPENLORE_DID:-did:plc:local-dev}"
-export OPENLORE_KEY_SEED_HEX="${OPENLORE_KEY_SEED_HEX:-$(printf '0%.0s' {1..64})}"
+if [[ "$OPENLORE_DID" == "did:plc:local-dev" ]]; then
+  export OPENLORE_HOME="${OPENLORE_HOME:-$REPO_ROOT/.openlore-home}"
+  export OPENLORE_KEY_SEED_HEX="${OPENLORE_KEY_SEED_HEX:-$(printf '0%.0s' {1..64})}"
+else
+  # A real identity signs with its own key from the OS keychain (`./cli.sh key` creates it and
+  # prints the did:key for its DID document), never the dev seed, and keeps its own store.
+  export OPENLORE_HOME="${OPENLORE_HOME:-$REPO_ROOT/.openlore-home-${OPENLORE_DID//:/-}}"
+fi
 mkdir -p "$OPENLORE_HOME"
 
 PROFILE="${PROFILE:-debug}"

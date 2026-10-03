@@ -394,14 +394,31 @@ impl RecordVerdict {
 /// (`z6Mk…`) decode lands when real PLC resolution ships. Returns `None`
 /// if no method carries a decodable key.
 fn peer_verifying_key(peer_info: &PeerInfo) -> Option<VerifyingKey> {
-    for method in &peer_info.verification_methods {
-        if let Some(hex) = method.public_key_multibase.strip_prefix("hex:") {
-            if let Some(bytes) = decode_hex_32(hex) {
-                return Some(VerifyingKey(bytes));
-            }
-        }
+    // The openlore signing key is the `#org.openlore.application` method; a
+    // real DID document also lists the account's `#atproto` (secp256k1) key,
+    // which never signs claims. Prefer the openlore method, then any method
+    // that decodes as Ed25519.
+    let is_openlore =
+        |id: &str| id.ends_with(adapter_atproto_did::OPENLORE_VERIFICATION_METHOD_FRAGMENT);
+    let (openlore, others): (Vec<_>, Vec<_>) = peer_info
+        .verification_methods
+        .iter()
+        .partition(|method| is_openlore(&method.id));
+    openlore
+        .into_iter()
+        .chain(others)
+        .find_map(|method| ed25519_key_from_multibase(&method.public_key_multibase))
+}
+
+/// An Ed25519 key from a `publicKeyMultibase`: the `z6Mk...` form a real DID
+/// document publishes, or the `hex:` form the test doubles use.
+fn ed25519_key_from_multibase(multibase: &str) -> Option<VerifyingKey> {
+    if let Some(hex) = multibase.strip_prefix("hex:") {
+        return decode_hex_32(hex).map(VerifyingKey);
     }
-    None
+    claim_domain::decode_ed25519_multibase(multibase)
+        .ok()
+        .map(|key| VerifyingKey(key.0))
 }
 
 /// Decode a 64-char lowercase-hex string into 32 bytes; `None` on any
@@ -525,6 +542,36 @@ fn render_report(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn peer_key_is_the_openlore_method_decoded_from_its_z6mk_multibase() {
+        let key = claim_domain::VerificationKey((1u8..=32).collect());
+        let method = |id: &str, multibase: String| ports::VerificationMethod {
+            id: id.to_string(),
+            type_: "Multikey".to_string(),
+            controller: Did("did:plc:jeff".to_string()),
+            public_key_multibase: multibase,
+        };
+        let peer = PeerInfo {
+            did: Did("did:plc:jeff".to_string()),
+            handle: "jeff.example".to_string(),
+            pds_endpoint: "https://pds.example".parse().expect("url"),
+            // A real PLC document lists the account's secp256k1 `#atproto` key
+            // first; it must be skipped, not mis-decoded.
+            verification_methods: vec![
+                method(
+                    "did:plc:jeff#atproto",
+                    "zQ3shXjHeiBuRCKmM36cuYnm7YEMzhGnCmCyW92sRJ9pribSF".to_string(),
+                ),
+                method(
+                    "did:plc:jeff#org.openlore.application",
+                    claim_domain::encode_ed25519_multibase(&key),
+                ),
+            ],
+        };
+        let found = peer_verifying_key(&peer).expect("the openlore key is found");
+        assert_eq!(found.0, key.0);
+    }
+
     use super::*;
 
     /// The `verified : N/N` line in the progress block must report the

@@ -104,6 +104,40 @@ pub fn decode_ed25519_multibase(s: &str) -> Result<VerificationKey, DecodeError>
     Ok(VerificationKey(key_bytes.to_vec()))
 }
 
+/// PURE: encode an Ed25519 public key as the `z6Mk...` base58btc multibase a
+/// DID document publishes (`did:key:` + this is its did:key). The inverse of
+/// [`decode_ed25519_multibase`].
+pub fn encode_ed25519_multibase(public_key: &VerificationKey) -> String {
+    let mut payload = Vec::with_capacity(2 + public_key.0.len());
+    payload.push(ED25519_MULTICODEC_LOW);
+    payload.push(ED25519_MULTICODEC_HIGH);
+    payload.extend_from_slice(&public_key.0);
+    format!("z{}", base58btc_encode(&payload))
+}
+
+/// PURE base58btc encoder (the bitcoin alphabet multibase `z` uses).
+fn base58btc_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let leading_zeros = input.iter().take_while(|&&b| b == 0).count();
+    let mut digits: Vec<u8> = Vec::new();
+    for &byte in input {
+        let mut carry = byte as u32;
+        for digit in digits.iter_mut() {
+            carry += (*digit as u32) << 8;
+            *digit = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let mut out = String::with_capacity(leading_zeros + digits.len());
+    out.extend(std::iter::repeat_n('1', leading_zeros));
+    out.extend(digits.iter().rev().map(|&d| ALPHABET[d as usize] as char));
+    out
+}
+
 /// The Ed25519 multicodec prefix is the unsigned-varint `0xed 0x01` (code `0xed`).
 const ED25519_MULTICODEC_LOW: u8 = 0xed;
 const ED25519_MULTICODEC_HIGH: u8 = 0x01;
@@ -175,34 +209,6 @@ mod tests {
         payload.extend_from_slice(prefix);
         payload.extend_from_slice(body);
         format!("z{}", base58btc_encode(&payload))
-    }
-
-    /// PURE base58btc encoder (the encoder side of the round-trip; identical to
-    /// the test-support fixture encoder).
-    fn base58btc_encode(input: &[u8]) -> String {
-        const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-        let leading_zeros = input.iter().take_while(|&&b| b == 0).count();
-        let mut digits: Vec<u8> = Vec::new();
-        for &byte in input {
-            let mut carry = byte as u32;
-            for digit in digits.iter_mut() {
-                carry += (*digit as u32) << 8;
-                *digit = (carry % 58) as u8;
-                carry /= 58;
-            }
-            while carry > 0 {
-                digits.push((carry % 58) as u8);
-                carry /= 58;
-            }
-        }
-        let mut out = String::with_capacity(leading_zeros + digits.len());
-        for _ in 0..leading_zeros {
-            out.push('1');
-        }
-        for &d in digits.iter().rev() {
-            out.push(ALPHABET[d as usize] as char);
-        }
-        out
     }
 
     /// A deterministic 32-byte key fixture (distinct, non-trivial bytes so the
@@ -321,5 +327,16 @@ mod tests {
             decode_ed25519_multibase(&encoded),
             Err(DecodeError::UnsupportedKeyType)
         );
+    }
+
+    proptest::proptest! {
+        /// encode -> decode is the identity on every 32-byte Ed25519 key.
+        #[test]
+        fn encode_then_decode_is_identity(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 32)) {
+            let key = VerificationKey(bytes);
+            let encoded = encode_ed25519_multibase(&key);
+            proptest::prop_assert!(encoded.starts_with("z6Mk"), "{}", encoded);
+            proptest::prop_assert_eq!(decode_ed25519_multibase(&encoded), Ok(key));
+        }
     }
 }

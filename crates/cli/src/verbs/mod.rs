@@ -33,6 +33,7 @@ pub mod peer_remove;
 // Slice-22 (philosophy vocabulary registry; ADR-059): the `openlore philosophy
 // list` discovery verb. OFFLINE by construction — reads the embedded
 // `lexicon::philosophy::seeds()` constants (no store, no signer, no network).
+pub mod key;
 pub mod philosophy_list;
 // Slice-23 (philosophy vocabulary registry; ADR-059 §5): the `openlore
 // philosophy show <name-or-object>` inspection verb. OFFLINE by construction —

@@ -47,6 +47,9 @@ pub enum Command {
         #[arg(long = "app-password")]
         app_password: String,
     },
+    /// Show the identity's claim-signing key (creating it in the OS keychain
+    /// the first time) and the did:key to publish in its DID document.
+    Key,
     /// Claim operations (add / publish / retract / counter).
     #[command(subcommand)]
     Claim(ClaimCommand),
@@ -422,6 +425,21 @@ pub fn dispatch(cli: Cli) -> i32 {
         return verbs::ui::run(&paths, &verbs::ui::UiArgs { port });
     }
 
+    // `key` creates the signing key the read-write wiring below needs to load,
+    // so it runs before that wiring (and touches no store or network).
+    if let Command::Key = cli.command {
+        return match verbs::key::run() {
+            Ok(report) => {
+                print!("{report}");
+                0
+            }
+            Err(err) => {
+                eprintln!("openlore key: {err:#}");
+                1
+            }
+        };
+    }
+
     // Step 1.6: the `philosophy list` discovery verb is OFFLINE by construction
     // (ADR-059 D3) — it reads the compile-time embedded seed constants, needs NO
     // store handle, NO signer, NO network, and must run even before `init` and
@@ -743,6 +761,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             "the `ui` verb is dispatched as its own read-only composition root \
              before the read-write wiring (see Step 1.5 in `dispatch`)"
         ),
+        Command::Key => unreachable!("the `key` verb is dispatched before the wiring"),
         // Slice-24 (ADR-059 §4.5): the `philosophy add` MINT verb needs BOTH
         // the store and the signer (unlike the offline `list`/`show` reads), so
         // it IS dispatched here, through the read-write wiring, AFTER the probe

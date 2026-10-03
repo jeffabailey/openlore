@@ -38,7 +38,9 @@ pub use cid::compute_cid;
 pub use confidence::confidence_bucket;
 // Slice-05 (ADR-026): the PURE z6Mk publicKeyMultibase decode helper + its
 // value types. `verify`/`compute_cid` are UNCHANGED and reused (no second path).
-pub use decode::{decode_ed25519_multibase, DecodeError, KeyId, VerificationKey};
+pub use decode::{
+    decode_ed25519_multibase, encode_ed25519_multibase, DecodeError, KeyId, VerificationKey,
+};
 pub use normalize::normalize_reason;
 pub use references::reference_rules_validate;
 // ADR-060 D-RF-D3 self-retraction rule, hoisted here so appview search and

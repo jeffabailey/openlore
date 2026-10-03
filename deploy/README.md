@@ -155,6 +155,28 @@ export OPENLORE_PDS_APP_PASSWORD=$(AWS_PROFILE=jeff aws ssm get-parameter --regi
 The step logs to `/var/log/cloud-init-output.log`; re-run it by hand with
 `/usr/local/bin/pds-ensure-account jeff.openlore.jeffbailey.us /openlore/prod us-east-1 /openlore/prod/acme-contact-email`.
 
+## 4b. The claim-signing key (in the DID document)
+
+Claims are signed with an Ed25519 key that peers look up in the account's DID document as
+`#org.openlore.application`. Create it once, on the machine that signs (it stays in the macOS
+keychain, service `openlore`):
+
+```sh
+OPENLORE_DID=did:plc:pnyxfnpkcldxtitsw64ycahw ./cli.sh key
+```
+
+It prints a `did:key:z6Mk...`; put it in `verification_methods` in
+`deploy/tofu/environments/prod/main.tf` (module v1.3.0+). On the next instance replacement the
+host signs a PLC update with its rotation key and the key appears at
+`https://plc.directory/did:plc:pnyxfnpkcldxtitsw64ycahw`. Then sign and publish as that identity
+(`cli.sh` uses the keychain key, and its own store, for any DID but the dev one):
+
+```sh
+export OPENLORE_DID=did:plc:pnyxfnpkcldxtitsw64ycahw   # plus the OPENLORE_PDS_* lines above
+./cli.sh claim add --subject ... --confidence 0.85
+./cli.sh claim publish <cid>
+```
+
 ## 5. Identity backup (R6, do this once the account exists)
 
 The host can write an encrypted archive of `/pds/secrets.env` (the PLC rotation key) to

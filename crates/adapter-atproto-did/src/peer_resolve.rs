@@ -53,8 +53,15 @@ const DEFAULT_RESOLVER_BASE_URL: &str = "https://plc.directory";
 /// the underlying error verbatim for diagnostics (never panics, never
 /// returns a silently-empty `PeerInfo`).
 pub(crate) fn resolve_peer_did(peer_did: &Did) -> Result<PeerInfo, IdentityError> {
-    let base = resolver_base_url(peer_did);
-    let document = fetch_did_document(peer_did, &base)?;
+    let document = match std::env::var(peer_resolver_env_var(&peer_did.0)) {
+        // A per-peer resolver override (the acceptance harness's FakePeerPds)
+        // answers the XRPC `resolveDid` route.
+        Ok(base) => fetch_did_document(peer_did, &base)?,
+        // Production: the DID method's own resolver. plc.directory serves a
+        // did:plc document at `/<did>` (it has no XRPC `resolveDid`), and a
+        // did:web document lives at `https://<host>/.well-known/did.json`.
+        Err(_) => fetch_did_document_url(peer_did, &did_document_url(&peer_did.0)?)?,
+    };
     let mut info = parse_peer_info(peer_did, &document)?;
     // Acceptance-test pubkey seam (DD; mirrors the resolver-endpoint seam):
     // the `FakePeerPds` resolveDid DID-document only carries a PLACEHOLDER
@@ -417,6 +424,48 @@ fn peer_resolver_env_var(did: &str) -> String {
     format!("OPENLORE_PEER_PDS_ENDPOINT_{encoded}")
 }
 
+/// PURE: where a DID's document is published, by DID method.
+fn did_document_url(did: &str) -> Result<String, IdentityError> {
+    if did.starts_with("did:plc:") {
+        Ok(format!("{DEFAULT_RESOLVER_BASE_URL}/{did}"))
+    } else if let Some(host) = did.strip_prefix("did:web:") {
+        Ok(format!(
+            "https://{}/.well-known/did.json",
+            host.replace("%3A", ":")
+        ))
+    } else {
+        Err(fail(
+            &Did(did.to_string()),
+            "only did:plc and did:web peers can be resolved".to_string(),
+        ))
+    }
+}
+
+/// GET a DID document from `url` and parse it as JSON.
+fn fetch_did_document_url(peer_did: &Did, url: &str) -> Result<serde_json::Value, IdentityError> {
+    let response = reqwest::blocking::Client::builder()
+        .build()
+        .map_err(|err| fail(peer_did, format!("build HTTP client: {err}")))?
+        .get(url)
+        .send()
+        .map_err(|err| fail(peer_did, format!("DID document fetch from {url}: {err}")))?;
+    if !response.status().is_success() {
+        return Err(fail(
+            peer_did,
+            format!(
+                "DID document fetch from {url} returned HTTP {}",
+                response.status().as_u16()
+            ),
+        ));
+    }
+    response.json::<serde_json::Value>().map_err(|err| {
+        fail(
+            peer_did,
+            format!("DID document from {url} is not JSON: {err}"),
+        )
+    })
+}
+
 /// Issue the synchronous `resolveDid` HTTP GET and return the parsed JSON
 /// DID document. All transport-layer failures lift to
 /// `PeerResolutionFailed`.
@@ -557,6 +606,19 @@ fn urlencode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn did_documents_are_fetched_from_their_method_resolver() {
+        assert_eq!(
+            did_document_url("did:plc:pnyxfnpkcldxtitsw64ycahw").ok(),
+            Some("https://plc.directory/did:plc:pnyxfnpkcldxtitsw64ycahw".to_string())
+        );
+        assert_eq!(
+            did_document_url("did:web:example.com%3A8443").ok(),
+            Some("https://example.com:8443/.well-known/did.json".to_string())
+        );
+        assert!(did_document_url("did:key:z6Mk").is_err());
+    }
 
     /// The resolver env-var encoding is the single source of truth shared
     /// with the acceptance harness; pin it so a divergence reds here, not

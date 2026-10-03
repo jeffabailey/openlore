@@ -444,6 +444,58 @@ fn load_key_material(kid: &str) -> Result<(Vec<u8>, Option<FallbackKeyState>), I
     }
 }
 
+/// The identity's signing key in the OS keychain, created if absent.
+///
+/// Returns the public key and whether it was just created. Idempotent: an
+/// existing seed for `<did>#org.openlore.application` is never replaced
+/// (a new seed would orphan every claim signed with the old one). The seed
+/// comes from OS randomness and never leaves the keychain.
+pub fn ensure_keychain_key(
+    did: &str,
+) -> Result<(claim_domain::VerificationKey, bool), IdentityError> {
+    let kid = format!("{did}{OPENLORE_VERIFICATION_METHOD_FRAGMENT}");
+    let unreachable = |message: String| IdentityError::KeychainUnreachable { message };
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &kid)
+        .map_err(|e| unreachable(format!("open keychain entry {kid}: {e}")))?;
+    let (seed_hex, created) = match entry.get_password() {
+        Ok(existing) => (existing, false),
+        Err(keyring::Error::NoEntry) => {
+            let mut seed = [0u8; 32];
+            getrandom::getrandom(&mut seed)
+                .map_err(|e| unreachable(format!("OS randomness unavailable: {e}")))?;
+            let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+            entry
+                .set_password(&hex)
+                .map_err(|e| unreachable(format!("store key in keychain at {kid}: {e}")))?;
+            (hex, true)
+        }
+        Err(e) => return Err(unreachable(format!("read keychain entry {kid}: {e}"))),
+    };
+    let seed: [u8; 32] = decode_hex_seed(&seed_hex)
+        .map_err(unreachable)?
+        .try_into()
+        .map_err(|_| unreachable(format!("key material at {kid} is not 32 bytes")))?;
+    let public = DalekSigningKey::from_bytes(&seed).verifying_key();
+    Ok((
+        claim_domain::VerificationKey(public.to_bytes().to_vec()),
+        created,
+    ))
+}
+
+/// The public key for a hex seed (the `OPENLORE_KEY_SEED_HEX` path).
+pub fn public_key_for_seed_hex(
+    seed_hex: &str,
+) -> Result<claim_domain::VerificationKey, IdentityError> {
+    let seed: [u8; 32] = decode_hex_seed(seed_hex)
+        .map_err(|message| IdentityError::KeychainUnreachable { message })?
+        .try_into()
+        .map_err(|_| IdentityError::KeychainUnreachable {
+            message: "seed is not 32 bytes".to_string(),
+        })?;
+    let public = DalekSigningKey::from_bytes(&seed).verifying_key();
+    Ok(claim_domain::VerificationKey(public.to_bytes().to_vec()))
+}
+
 /// Internal error from the keychain layer, normalized to two cases:
 /// "no storage" (triggers WSL2 fallback on Linux) vs everything else.
 #[derive(Debug)]

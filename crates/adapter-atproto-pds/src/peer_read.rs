@@ -224,26 +224,25 @@ fn classify_network_error(err: reqwest::Error) -> PdsError {
 // -----------------------------------------------------------------------------
 
 /// Parse one ATProto record view (`{uri, cid, value}`) into a domain
-/// `SignedRecord`. The peer-published `rkey` is taken from `cid` (the
-/// listRecords view echoes the rkey as `cid`) so the verb can byte-match
-/// it against the locally-recomputed CID per WD-24.
+/// `SignedRecord`. The peer-published `rkey` is the last segment of `uri`
+/// (`at://<did>/<collection>/<rkey>`) so the verb can byte-match it against
+/// the locally-recomputed CID per WD-24. A real PDS's `cid` is the record's
+/// own repo CID, never the openlore claim CID, so it is only a fallback for a
+/// view without a `uri`.
 fn parse_record_view(peer_did: &Did, view: &serde_json::Value) -> Result<SignedRecord, PdsError> {
     // The listRecords view wraps the claim body under `value`; getRecord
     // returns the same shape. Fall back to the top-level object if `value`
     // is absent (defensive — some PDS shapes inline the record).
     let body = view.get("value").unwrap_or(view);
     let rkey = view
-        .get("cid")
-        .and_then(|c| c.as_str())
+        .get("uri")
+        .and_then(|u| u.as_str())
+        .and_then(|u| u.rsplit('/').next())
+        .filter(|rkey| !rkey.is_empty())
+        .or_else(|| view.get("cid").and_then(|c| c.as_str()))
         .map(|s| s.to_string())
-        .or_else(|| {
-            view.get("uri")
-                .and_then(|u| u.as_str())
-                .and_then(|u| u.rsplit('/').next())
-                .map(|s| s.to_string())
-        })
         .ok_or_else(|| PdsError::PeerRecordSchemaInvalid {
-            detail: "record view has neither `cid` nor `uri` to derive the rkey".to_string(),
+            detail: "record view has neither `uri` nor `cid` to derive the rkey".to_string(),
         })?;
 
     let signed_claim = parse_signed_claim(peer_did, body)?;
@@ -448,6 +447,28 @@ mod tests {
     /// A lexicon-shaped claim body parses into a domain SignedClaim whose
     /// unsigned fields map the wire keys (`author` → author_did,
     /// `composedAt` → composed_at) and whose signed_cid is recomputed.
+    #[test]
+    fn rkey_comes_from_the_uri_not_the_pds_record_cid() {
+        // A real PDS's `cid` is the record's own repo CID; the openlore claim
+        // CID is the rkey, the last segment of the at-uri.
+        let peer = Did("did:plc:jeff".to_string());
+        let view = serde_json::json!({
+            "uri": "at://did:plc:jeff/org.openlore.claim/bafyreiclaimcid",
+            "cid": "bafyreirepocid",
+            "value": {
+                "subject": "github:rust-lang/rust",
+                "predicate": "embodiesPhilosophy",
+                "object": "org.openlore.philosophy.memory-safety",
+                "confidence": 8500,
+                "author": "did:plc:jeff",
+                "composedAt": "2026-10-03T18:38:48Z",
+                "signature": {"kid": "did:plc:jeff#org.openlore.application", "alg": "EdDSA", "sig": "TWFu"}
+            }
+        });
+        let record = parse_record_view(&peer, &view).expect("a well-formed view parses");
+        assert_eq!(record.rkey, "bafyreiclaimcid");
+    }
+
     #[test]
     fn parse_signed_claim_maps_lexicon_wire_to_domain() {
         let peer = Did("did:plc:rachel-test".to_string());

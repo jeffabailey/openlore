@@ -36,6 +36,7 @@ docs/feature/*/deliver/.develop-progress.json
 
 # run.sh default data home (self-contained local store)
 .openlore-home/
+.openlore-home-*/
 
 # serverless-philosophy-federation atproto/ Worker (npm + wrangler local state)
 atproto/node_modules/

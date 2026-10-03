@@ -40,7 +40,7 @@ provider "aws" {
 }
 
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.2.1"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.3.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -60,4 +60,11 @@ module "pds" {
   # First boot creates jeff.openlore.jeffbailey.us and a CLI app password; the passwords land
   # in SSM /openlore/prod/{account-password,cli-app-password} (see outputs).
   bootstrap_account = true
+
+  # The account's claim-signing key, from `openlore key` (OPENLORE_DID=did:plc:pnyx...). Published
+  # into the DID document so peers can verify claims this identity signs. The private key stays
+  # in the operator's OS keychain; only this public did:key is here.
+  verification_methods = {
+    "org.openlore.application" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR"
+  }
 }
