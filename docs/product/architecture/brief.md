@@ -717,6 +717,53 @@ is tag-driven and immutable, governed by ADR-011 (matrix + naming) and ADR-012
   names + `.sha256`; a future `bump-formula` job extends `release.yml` via a
   reserved `needs: [publish]` extension point).
 
+## Platform Architecture (PDS hosting)
+
+Feature `shared-pds-module` (DESIGN, 2026-10-02), with decisions in ADR-066 through ADR-069.
+OpenLore gets its own ATProto PDS at `openlore.jeffbailey.us` in AWS account 091153021562
+(profile `jeff`). The deployment is the same OpenTofu module that the-reality-base runs in its
+own account. The module lives in the public repo `jeffabailey/tofu-aws-pds`
+(`modules/pds`, `modules/pds-bootstrap`) and is consumed by semver git tag.
+
+- **Topology** (ADR-067): one EC2 host per project, in that project's own account. The host is
+  cattle. The EBS volume (PLC rotation key, `did:plc`) and the EIP carry `prevent_destroy`. DNS
+  is an A record plus a wildcard A in the existing `jeffbailey.us` zone.
+- **Size** (ADR-068): t4g.micro, 1 GiB swap, 5 GB data volume, EIP, prod only. About $10.84/month.
+- **Operations** (ADR-068): a laptop apply against a saved plan, with a local delete-gate script.
+  CI (`deploy-pds-check.yml`) runs credential-free checks only. No OIDC roles in v1.
+- **Layout**: `deploy/environments/prod.json` (the single source of names),
+  `deploy/tofu/bootstrap`, `deploy/tofu/environments/prod`. State lives in the existing
+  `jeffbaileyterraformstate` bucket under `openlore/pds/`.
+- **Module contract** (ADR-066): `name_prefix`, `project`, and the opt-in
+  `require_namespace_matches_hostname`. OpenLore leaves it off, because `org.openlore` and
+  `openlore.jeffbailey.us` do not reverse-match.
+- **TRB migration** (ADR-069): a source swap that keeps every address, with a no-op plan gate,
+  test then prod.
+- **Known blocker (feature-delta R1):** `org.openlore.claim` cannot yet be written to a stock
+  PDS, for three reasons:
+  - `confidence` is a float, and the ATProto data model has no floats.
+  - A JS PDS re-encodes float16 values as float64, so the CID diverges (ADR-062 / SPIKE-00).
+  - `adapter-atproto-pds` sends `createRecord` without authentication.
+
+  The PDS provides identity and hosting. Claim publishing to it needs separate application work.
+
+```mermaid
+C4Container
+  title OpenLore PDS — Containers
+  Person(op, "Operator")
+  System_Ext(cli, "openlore CLI", "OPENLORE_PDS_ENDPOINT")
+  System_Boundary(aws, "AWS 091153021562") {
+    Container(ec2, "EC2 t4g.micro", "AL2023 arm64", "Caddy + bluesky PDS (compose)")
+    ContainerDb(ebs, "EBS gp3 /pds", "prevent_destroy", "repo, PLC key")
+    Container(eip, "EIP + Route 53 A/wildcard", "", "openlore.jeffbailey.us")
+    ContainerDb(s3, "S3 state + identity backup", "", "")
+  }
+  Rel(op, s3, "tofu apply (saved plan)")
+  Rel(cli, eip, "XRPC (blocked: R1)")
+  Rel(eip, ec2, "")
+  Rel(ec2, ebs, "")
+```
+
 ## SSOT discipline
 
 - This brief is **cross-feature**. Add a row to **Component Inventory** when a
@@ -763,3 +810,4 @@ is tag-driven and immutable, governed by ADR-011 (matrix + naming) and ADR-012
   `docs/feature/github-release-binaries/feature-delta.md`,
   `docs/feature/github-release-binaries/environments.yaml`; ADR-011, ADR-012
 - Supply-chain policy: `deny.toml`
+- PDS hosting (shared module): `docs/feature/shared-pds-module/feature-delta.md`; ADR-066..069
