@@ -189,12 +189,17 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out openlore-backu
 openssl pkey -in openlore-backup-private.pem -pubout -out backup-pubkey.pem
 ```
 
-Use 4096-bit RSA. The host encrypts the small gzipped archive directly with `openssl pkeyutl`,
-so a 2048-bit key may be too small for it.
+Any RSA key of 2048 bits or more works: the archive is hybrid-encrypted (tofu-aws-pds v1.4.0+),
+with only a per-archive AES/HMAC key wrapped by RSA-OAEP.
 
 Copy `backup-pubkey.pem` to `/pds/backup-pubkey.pem` on the host (for example, paste it into
 `sudo tee` in a Session Manager shell). Then run `sudo pds-backup-identity`. It should print
-`archived identity-<stamp>.tar.gz.enc`.
+`archived identity-<stamp>.enc.tar`. To restore, with OpenSSL 3 and the private key:
+
+```sh
+aws s3 cp s3://openlore-identity-backup-091153021562/prod/identity-<stamp>.enc.tar . --profile jeff
+<tofu-aws-pds>/scripts/pds-restore-identity.sh identity-<stamp>.enc.tar openlore-backup-private.pem ./restored
+```
 
 ## DNS: Cloudflare, not Route 53
 

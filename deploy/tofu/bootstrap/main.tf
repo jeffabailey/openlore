@@ -49,7 +49,7 @@ provider "aws" {
 }
 
 module "pds_bootstrap" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.3.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.4.0"
 
   name_prefix         = "openlore"
   project             = "openlore"
