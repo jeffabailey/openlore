@@ -112,6 +112,33 @@ pub struct AtProtoPdsAdapter {
     /// author DID and the PDS's host DID can differ. Stored so
     /// `create_record` can synthesize AT URIs after a 409.
     author_did: Option<String>,
+    /// Account login for a real PDS. When set, `create_record` opens a
+    /// session (`com.atproto.server.createSession`) and writes into the
+    /// session's own repo with its bearer token. `None` keeps the
+    /// unauthenticated path the test doubles use.
+    credentials: Option<PdsCredentials>,
+}
+
+/// An account identifier (handle, DID or email) plus an app password.
+#[derive(Clone)]
+pub struct PdsCredentials {
+    pub identifier: String,
+    pub app_password: String,
+}
+
+impl std::fmt::Debug for PdsCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PdsCredentials")
+            .field("identifier", &self.identifier)
+            .field("app_password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The parts of a `createSession` response the adapter uses.
+struct PdsSession {
+    did: String,
+    access_jwt: String,
 }
 
 impl AtProtoPdsAdapter {
@@ -123,6 +150,7 @@ impl AtProtoPdsAdapter {
             endpoint: normalize_endpoint(endpoint),
             expected_did: None,
             author_did: None,
+            credentials: None,
         }
     }
 
@@ -138,7 +166,14 @@ impl AtProtoPdsAdapter {
             endpoint: normalize_endpoint(endpoint),
             expected_did: Some(expected_did.into()),
             author_did: Some(author_did.into()),
+            credentials: None,
         }
+    }
+
+    /// Log in to the PDS before every write (see [`PdsCredentials`]).
+    pub fn with_credentials(mut self, credentials: PdsCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
     }
 
     /// Endpoint URL the adapter is bound to. Exposed for tests + the
@@ -158,6 +193,44 @@ impl AtProtoPdsAdapter {
         let did = self.author_did.as_deref().unwrap_or("did:plc:unknown");
         format!("at://{did}/{collection}/{rkey}")
     }
+
+    /// Open a session with the configured credentials.
+    async fn create_session(
+        &self,
+        client: &reqwest::Client,
+        credentials: &PdsCredentials,
+    ) -> Result<PdsSession, PdsError> {
+        let url = format!("{}/xrpc/com.atproto.server.createSession", self.endpoint);
+        let response = client
+            .post(&url)
+            .json(&serde_json::json!({
+                "identifier": credentials.identifier,
+                "password": credentials.app_password,
+            }))
+            .send()
+            .await
+            .map_err(classify_network_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(PdsError::RecordRejected {
+                message: format!(
+                    "PDS refused the login for {} (status {status}): {body_text}",
+                    credentials.identifier
+                ),
+            });
+        }
+        let parsed: serde_json::Value =
+            response
+                .json()
+                .await
+                .map_err(|err| PdsError::RecordRejected {
+                    message: format!("decode createSession response: {err}"),
+                })?;
+        session_from_response(&parsed).ok_or_else(|| PdsError::RecordRejected {
+            message: "createSession response has no did/accessJwt".to_string(),
+        })
+    }
 }
 
 /// Strip a trailing `/` so endpoint + path joins don't double-slash.
@@ -167,6 +240,14 @@ fn normalize_endpoint(s: impl Into<String>) -> String {
         s.pop();
     }
     s
+}
+
+/// Pure: pull the repo DID and bearer token out of a `createSession` body.
+fn session_from_response(body: &serde_json::Value) -> Option<PdsSession> {
+    Some(PdsSession {
+        did: body.get("did")?.as_str()?.to_string(),
+        access_jwt: body.get("accessJwt")?.as_str()?.to_string(),
+    })
 }
 
 /// Classify a reqwest network error into a `PdsError` variant. TLS
@@ -269,14 +350,6 @@ impl PdsPort for AtProtoPdsAdapter {
         // Other 4xx/5xx surface as `PdsError::RecordRejected`. Network
         // failures (DNS, refused connection, dropped socket) surface as
         // `PdsError::Unreachable` — the WS-10 path.
-        let url = format!("{}/xrpc/com.atproto.repo.createRecord", self.endpoint);
-        let repo = self.author_did.as_deref().unwrap_or("did:plc:unknown");
-        let request_body = serde_json::json!({
-            "repo": repo,
-            "collection": collection,
-            "rkey": rkey,
-            "record": body,
-        });
 
         // Connect timeout caps how long we wait for a TCP handshake
         // before classifying the host as Unreachable. The cli composition
@@ -293,12 +366,28 @@ impl PdsPort for AtProtoPdsAdapter {
                 message: format!("build reqwest client: {err}"),
             })?;
 
-        let response = client
-            .post(&url)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(classify_network_error)?;
+        // With credentials, write into the logged-in account's repo with
+        // its bearer token; a real PDS refuses an unauthenticated write.
+        let session = match &self.credentials {
+            Some(credentials) => Some(self.create_session(&client, credentials).await?),
+            None => None,
+        };
+        let repo = match &session {
+            Some(session) => session.did.as_str(),
+            None => self.author_did.as_deref().unwrap_or("did:plc:unknown"),
+        };
+        let url = format!("{}/xrpc/com.atproto.repo.createRecord", self.endpoint);
+        let request_body = serde_json::json!({
+            "repo": repo,
+            "collection": collection,
+            "rkey": rkey,
+            "record": body,
+        });
+        let mut request = client.post(&url).json(&request_body);
+        if let Some(session) = &session {
+            request = request.bearer_auth(&session.access_jwt);
+        }
+        let response = request.send().await.map_err(classify_network_error)?;
 
         let status = response.status();
         if status.is_success() {
@@ -318,7 +407,7 @@ impl PdsPort for AtProtoPdsAdapter {
                 .get("uri")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| self.synth_at_uri(collection, rkey));
+                .unwrap_or_else(|| format!("at://{repo}/{collection}/{rkey}"));
             Ok(CreateRecordOutcome {
                 at_uri: AtUri(uri),
                 was_idempotent: false,
@@ -330,7 +419,7 @@ impl PdsPort for AtProtoPdsAdapter {
             // `was_idempotent` bit lets the cli render "already
             // published" instead of acting like a fresh insert (WS-9).
             Ok(CreateRecordOutcome {
-                at_uri: AtUri(self.synth_at_uri(collection, rkey)),
+                at_uri: AtUri(format!("at://{repo}/{collection}/{rkey}")),
                 was_idempotent: true,
             })
         } else {
@@ -422,6 +511,28 @@ impl PdsPort for AtProtoPdsAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_from_response_reads_the_repo_did_and_bearer_token() {
+        let body = serde_json::json!({
+            "did": "did:plc:abc", "accessJwt": "jwt-1", "refreshJwt": "r", "handle": "h"
+        });
+        let session = session_from_response(&body).expect("session");
+        assert_eq!(session.did, "did:plc:abc");
+        assert_eq!(session.access_jwt, "jwt-1");
+        assert!(session_from_response(&serde_json::json!({"did": "did:plc:abc"})).is_none());
+    }
+
+    #[test]
+    fn credentials_debug_never_prints_the_app_password() {
+        let credentials = PdsCredentials {
+            identifier: "jeff.openlore.jeffbailey.us".to_string(),
+            app_password: "abcd-efgh-ijkl-mnop".to_string(),
+        };
+        let shown = format!("{credentials:?}");
+        assert!(shown.contains("jeff.openlore.jeffbailey.us"));
+        assert!(!shown.contains("abcd-efgh"), "{shown}");
+    }
 
     #[test]
     fn normalize_endpoint_strips_trailing_slashes() {

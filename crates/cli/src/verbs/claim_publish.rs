@@ -171,15 +171,11 @@ pub fn publish_signed_claim(
     let cid = signed.signature.signed_cid.clone();
     let cid_str = cid.0.clone();
 
-    // The over-the-wire body is the SignedClaim itself serialized as
-    // JSON. The PDS doesn't care about the canonical-CBOR encoding —
-    // that is the local artifact contract. ATProto records are JSON
-    // shaped per the `org.openlore.claim` Lexicon.
-    let body = serde_json::to_value(signed)
-        .with_context(|| format!("serializing SignedClaim {cid_str} for PDS body"))
-        .map_err(PublishError::Other)?;
-
-    let collection = "org.openlore.claim";
+    // The over-the-wire body is the `org.openlore.claim` lexicon record
+    // (camelCase fields, `{kid, alg, sig}` signature, `$type`) — the same
+    // shape `peer pull` parses back. The canonical CBOR stays local.
+    let body = lexicon::encode_pds_record(signed);
+    let collection = lexicon::CLAIM_COLLECTION;
 
     // PdsPort is async; the cli wires a small tokio runtime here.
     // We use `current_thread` because publish is sequential and we

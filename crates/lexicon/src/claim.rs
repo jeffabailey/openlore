@@ -297,6 +297,23 @@ pub fn encode_signed_claim(signed: &claim_domain::SignedClaim) -> serde_json::Va
     serde_json::to_value(wire).expect("a lexicon Claim always serializes to JSON")
 }
 
+/// The record collection (and `$type`) of an openlore claim on a PDS.
+pub const CLAIM_COLLECTION: &str = "org.openlore.claim";
+
+/// Encode a `SignedClaim` as a PDS record body: the lexicon JSON of
+/// [`encode_signed_claim`] plus the `$type` every ATProto record carries.
+/// Readers ignore `$type`, so the same body decodes on the pull side.
+pub fn encode_pds_record(signed: &claim_domain::SignedClaim) -> serde_json::Value {
+    let mut record = encode_signed_claim(signed);
+    if let serde_json::Value::Object(fields) = &mut record {
+        fields.insert(
+            "$type".to_string(),
+            serde_json::Value::String(CLAIM_COLLECTION.to_string()),
+        );
+    }
+    record
+}
+
 /// Decode `org.openlore.claim` lexicon JSON into a domain `SignedClaim`.
 ///
 /// The JSON is first validated against the lexicon (named-field errors).
@@ -734,6 +751,15 @@ mod tests {
         fn decode_of_encode_is_identity(signed in arb_signed_claim()) {
             let wire = encode_signed_claim(&signed);
             prop_assert_eq!(decode_signed_claim(&wire), Ok(signed));
+        }
+
+        /// The PDS record is the lexicon JSON plus `$type`, and it decodes
+        /// back to the same claim (readers ignore `$type`).
+        #[test]
+        fn pds_record_carries_type_and_decodes_to_the_same_claim(signed in arb_signed_claim()) {
+            let record = encode_pds_record(&signed);
+            prop_assert_eq!(record.get("$type"), Some(&json!(CLAIM_COLLECTION)));
+            prop_assert_eq!(decode_signed_claim(&record), Ok(signed));
         }
     }
 

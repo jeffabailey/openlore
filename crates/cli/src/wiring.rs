@@ -25,7 +25,7 @@
 //! production and the subprocess-driven acceptance suite (DD-2 + DD-5).
 
 use adapter_atproto_did::AtProtoDidAdapter;
-use adapter_atproto_pds::AtProtoPdsAdapter;
+use adapter_atproto_pds::{AtProtoPdsAdapter, PdsCredentials};
 use adapter_duckdb::DuckDbStorageAdapter;
 use adapter_github::GithubAdapter;
 use adapter_index_query::HttpIndexQueryAdapter;
@@ -95,6 +95,8 @@ impl Wiring {
     /// - `OPENLORE_KEY_SEED_HEX` — optional; if set, used directly as
     ///   the Ed25519 seed. Otherwise the adapter loads from OS keychain.
     /// - `OPENLORE_PDS_ENDPOINT` — optional; defaults to empty string.
+    /// - `OPENLORE_PDS_IDENTIFIER` + `OPENLORE_PDS_APP_PASSWORD` — optional
+    ///   login for a real PDS; without them writes are unauthenticated.
     pub fn production(paths: OpenLorePaths) -> Result<Self> {
         let did = std::env::var("OPENLORE_DID").map_err(|_| {
             anyhow!(
@@ -139,11 +141,15 @@ impl Wiring {
                 "https://placeholder.invalid",
             ))
         } else {
-            Box::new(AtProtoPdsAdapter::with_did(
-                pds_endpoint,
-                "did:plc:placeholder-host",
-                &did,
-            ))
+            let adapter =
+                AtProtoPdsAdapter::with_did(pds_endpoint, "did:plc:placeholder-host", &did);
+            // A real PDS needs a login to accept writes: the account's
+            // handle (or DID) and an app password, both from the env so no
+            // credential is ever written to disk by openlore.
+            match pds_credentials_from_env() {
+                Some(credentials) => Box::new(adapter.with_credentials(credentials)),
+                None => Box::new(adapter),
+            }
         };
 
         let clock: Box<dyn ClockPort> = Box::new(SystemClockAdapter::new());
@@ -376,6 +382,17 @@ fn check_probe(adapter: &'static str, outcome: ProbeOutcome) -> Result<(), Probe
             },
         )),
     }
+}
+
+/// `OPENLORE_PDS_IDENTIFIER` + `OPENLORE_PDS_APP_PASSWORD`, when both are
+/// set and non-empty.
+fn pds_credentials_from_env() -> Option<PdsCredentials> {
+    let identifier = std::env::var("OPENLORE_PDS_IDENTIFIER").ok()?;
+    let app_password = std::env::var("OPENLORE_PDS_APP_PASSWORD").ok()?;
+    (!identifier.is_empty() && !app_password.is_empty()).then_some(PdsCredentials {
+        identifier,
+        app_password,
+    })
 }
 
 /// Build the `IdentityPort` adapter. If `OPENLORE_KEY_SEED_HEX` is set,
