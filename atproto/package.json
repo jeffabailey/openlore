@@ -11,8 +11,8 @@
     "contract": "bash scripts/contract-roundtrip.sh"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260926.1",
+    "@cloudflare/workers-types": "5.20261003.1",
     "typescript": "5.9.3",
-    "wrangler": "4.141.0"
+    "wrangler": "4.147.0"
   }
 }
