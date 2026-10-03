@@ -224,7 +224,9 @@ fn check_slice_01_claim_is_byte_stable() -> Result<(), ProbeError> {
         "predicate": "embodiesPhilosophy",
         "object": "org.openlore.philosophy.memory-safety",
         "evidence": ["https://www.rust-lang.org/"],
-        "confidence": 0.86,
+        // Integer basis points since ADR-070 (a PDS refuses a float field);
+        // the CID is computed over claim-domain's canonical CBOR, not this.
+        "confidence": 8600,
         "author": "did:plc:jeff#org.openlore.application",
         "composedAt": "2026-05-25T12:00:00Z",
         "references": [],

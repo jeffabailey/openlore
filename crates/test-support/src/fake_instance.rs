@@ -129,8 +129,8 @@ enum Posture {
     /// HTML page with no openlore marker.
     OrdinaryWebSite,
     /// An openlore instance with a boundary bug: it re-encodes the record's
-    /// `confidence` through a lossy `f32` on store, so the bytes it returns
-    /// recompute (in Rust) to a DIFFERENT CID than the key.
+    /// `confidence` lossily on store (see `drift_confidence`), so the bytes it
+    /// returns recompute (in Rust) to a DIFFERENT CID than the key.
     CidMismatch,
 }
 
@@ -145,20 +145,28 @@ impl Posture {
 }
 
 /// The `with_cid_mismatch` boundary bug: parse the record JSON and re-encode
-/// its `confidence` through `f32` (a lossy float re-encode). Diverges for any
-/// confidence that is not exactly `f32`-representable (e.g. `0.86`); a body
-/// that is not a JSON object with a numeric `confidence` is stored as-is.
+/// its `confidence` lossily. On the wire it is integer basis points
+/// (ADR-070), so the bug is an off-by-one basis point (`8600` -> `8601`); a
+/// legacy float is pushed through `f32`. Either way the bytes it returns
+/// recompute (in Rust) to a different CID than the key. A body that is not
+/// a JSON object with a numeric `confidence` is stored as-is.
 fn drift_confidence(body: &[u8]) -> Vec<u8> {
     let Ok(mut record) = serde_json::from_slice::<serde_json::Value>(body) else {
         return body.to_vec();
     };
-    let drifted = record
-        .get("confidence")
-        .and_then(serde_json::Value::as_f64)
-        .map(|confidence| f64::from(confidence as f32));
+    let drifted = record.get("confidence").and_then(|confidence| {
+        confidence
+            .as_i64()
+            .map(|basis_points| serde_json::json!(basis_points + 1))
+            .or_else(|| {
+                confidence
+                    .as_f64()
+                    .map(|legacy| serde_json::json!(f64::from(legacy as f32)))
+            })
+    });
     match (drifted, record.as_object_mut()) {
         (Some(drifted), Some(fields)) => {
-            fields.insert("confidence".to_string(), serde_json::json!(drifted));
+            fields.insert("confidence".to_string(), drifted);
             serde_json::to_vec(&record).expect("a serde_json::Value always serializes")
         }
         _ => body.to_vec(),

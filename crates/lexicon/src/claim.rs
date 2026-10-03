@@ -93,6 +93,9 @@ pub struct Claim {
     pub object: String,
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// `[0.0, 1.0]` in memory; integer basis points on the wire, because
+    /// ATProto records cannot carry floats (see `confidence_wire`).
+    #[serde(with = "confidence_wire")]
     pub confidence: f64,
     pub author: String,
     #[serde(rename = "composedAt")]
@@ -158,6 +161,29 @@ const ALLOWED_REFERENCE_TYPES: &[&str] = &["retracts", "corrects", "counters", "
 // Validator
 // =============================================================================
 
+/// `confidence` on the wire: integer basis points (`0.85` -> `8500`).
+/// ATProto's data model has no float type, so a PDS refuses a float field.
+/// Reading also accepts a legacy float. Both directions go through
+/// `claim_domain::Confidence` so the value lands on the same basis-point grid
+/// the CID was computed over.
+mod confidence_wire {
+    use claim_domain::Confidence;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        let confidence: Confidence =
+            serde_json::from_value(serde_json::json!(value)).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_i64(confidence.basis_points())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        Confidence::from_wire(&raw)
+            .map(|confidence| confidence.value())
+            .ok_or_else(|| serde::de::Error::custom("confidence must be a number"))
+    }
+}
+
 /// Validate a JSON value against the `org.openlore.claim` Lexicon.
 ///
 /// Returns the parsed `Claim` on success, or a `LexiconError` naming
@@ -178,13 +204,15 @@ pub fn validate_claim_json(value: &serde_json::Value) -> Result<Claim, LexiconEr
         }
     }
 
-    // Gate 2: confidence in [0.0, 1.0] (data-models.md / WD-10).
+    // Gate 2: confidence in [0.0, 1.0] (data-models.md / WD-10). On the
+    // wire it is integer basis points, or a legacy float.
     let confidence_value = object
         .get("confidence")
-        .and_then(serde_json::Value::as_f64)
+        .and_then(claim_domain::Confidence::from_wire)
+        .map(|confidence| confidence.value())
         .ok_or_else(|| LexiconError::InvalidType {
             field: "confidence".to_string(),
-            expected: "number".to_string(),
+            expected: "integer basis points (or a legacy number)".to_string(),
         })?;
     if !(0.0..=1.0).contains(&confidence_value) {
         return Err(LexiconError::OutOfRangeConfidence {

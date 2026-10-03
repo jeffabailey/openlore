@@ -278,14 +278,11 @@ fn parse_signed_claim(peer_did: &Did, body: &serde_json::Value) -> Result<Signed
         })
         .unwrap_or_default();
 
-    let confidence_value = body
+    // Integer basis points (the ATProto-safe form) or a legacy float.
+    let confidence = body
         .get("confidence")
-        .and_then(serde_json::Value::as_f64)
+        .and_then(Confidence::from_wire)
         .ok_or_else(|| invalid("confidence missing or not a number".to_string()))?;
-    // `Confidence`'s inner field is crate-private; route through serde
-    // (the wrapper serializes transparently to its inner number).
-    let confidence: Confidence = serde_json::from_value(serde_json::json!(confidence_value))
-        .map_err(|err| invalid(format!("confidence did not deserialize: {err}")))?;
 
     let references = parse_references(body).map_err(invalid)?;
     let reason = body

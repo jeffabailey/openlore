@@ -81,11 +81,57 @@ pub fn bare_did(author_did: &str) -> &str {
         .map_or(author_did, |(did, _fragment)| did)
 }
 
-/// Numeric confidence in `[0.0, 1.0]` (validated by smart constructor).
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+/// Numeric confidence in `[0.0, 1.0]` (validated by smart constructor),
+/// held at basis-point precision (4 decimal places).
+///
+/// ATProto records cannot carry floats, so the wire form is an integer
+/// count of basis points (`0.85` -> `8500`). Every value is rounded to that
+/// grid when it enters the domain (deserialization is the one entry
+/// point), so `from_basis_points(c.basis_points()) == c` exactly and a
+/// claim's CID survives the publish -> pull round trip. Values that were
+/// already on the grid (0.25, 0.85, ...) are unchanged, and so are their
+/// CIDs.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize)]
 pub struct Confidence(f64);
 
+/// Basis points per 1.0 of confidence.
+pub const CONFIDENCE_BASIS_POINTS: i64 = 10_000;
+
+impl<'de> Deserialize<'de> for Confidence {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        f64::deserialize(deserializer).map(|value| Confidence(on_basis_point_grid(value)))
+    }
+}
+
+/// Round to the nearest basis point. Idempotent.
+fn on_basis_point_grid(value: f64) -> f64 {
+    (value * CONFIDENCE_BASIS_POINTS as f64).round() / CONFIDENCE_BASIS_POINTS as f64
+}
+
 impl Confidence {
+    /// The wire form: whole basis points (`0.85` -> `8500`).
+    pub fn basis_points(&self) -> i64 {
+        (self.0 * CONFIDENCE_BASIS_POINTS as f64).round() as i64
+    }
+
+    /// From the wire form. Range is not checked here (see `try_new`).
+    pub fn from_basis_points(basis_points: i64) -> Self {
+        Confidence(basis_points as f64 / CONFIDENCE_BASIS_POINTS as f64)
+    }
+
+    /// Read a record's `confidence` JSON value: an integer is basis points
+    /// (the ATProto-safe form); a float is the legacy `[0.0, 1.0]` form,
+    /// still accepted from records written before basis points.
+    pub fn from_wire(value: &serde_json::Value) -> Option<Self> {
+        if let Some(basis_points) = value.as_i64() {
+            Some(Self::from_basis_points(basis_points))
+        } else {
+            value
+                .as_f64()
+                .map(|legacy| Confidence(on_basis_point_grid(legacy)))
+        }
+    }
+
     /// Smart constructor: returns `Err(OutOfRangeConfidence)` outside `[0.0, 1.0]`.
     pub fn try_new(_value: f64) -> Result<Self, ClaimError> {
         panic!("Not yet implemented -- RED scaffold");
@@ -250,3 +296,46 @@ pub struct VerifyingKey(pub Vec<u8>);
 // in its own module enforces WD-10: the lexicon crate MUST NOT depend
 // on `confidence_bucket` (architectural rule checked by
 // `cargo xtask check-arch` in phase 06).
+
+#[cfg(test)]
+mod confidence_wire_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn confidence(value: f64) -> Confidence {
+        serde_json::from_value(serde_json::json!(value)).expect("a number deserializes")
+    }
+
+    #[test]
+    fn values_already_on_the_grid_are_unchanged() {
+        for value in [0.0, 0.25, 0.5, 0.7, 0.75, 0.85, 0.42, 1.0] {
+            assert_eq!(confidence(value).value(), value, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_wire_form_is_whole_basis_points() {
+        assert_eq!(confidence(0.85).basis_points(), 8500);
+        assert_eq!(confidence(0.123456).basis_points(), 1235);
+        assert_eq!(
+            Confidence::from_wire(&serde_json::json!(8500)),
+            Some(confidence(0.85))
+        );
+        assert_eq!(
+            Confidence::from_wire(&serde_json::json!(0.85)),
+            Some(confidence(0.85)),
+            "a legacy float record still reads"
+        );
+        assert_eq!(Confidence::from_wire(&serde_json::json!("0.85")), None);
+    }
+
+    proptest! {
+        /// The CID-preserving property: wire out, wire in, same value bit for bit.
+        #[test]
+        fn basis_points_round_trip_is_exact(value in 0.0_f64..=1.0) {
+            let c = confidence(value);
+            prop_assert_eq!(Confidence::from_basis_points(c.basis_points()), c);
+            prop_assert_eq!(confidence(c.value()), c, "the grid is idempotent");
+        }
+    }
+}
