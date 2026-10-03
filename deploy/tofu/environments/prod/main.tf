@@ -40,7 +40,7 @@ provider "aws" {
 }
 
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.1.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.2.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -56,4 +56,8 @@ module "pds" {
   ssh_ingress_cidr      = var.ssh_ingress_cidr
 
   swap_mb = 1024
+
+  # First boot creates jeff.openlore.jeffbailey.us and a CLI app password; the passwords land
+  # in SSM /openlore/prod/{account-password,cli-app-password} (see outputs).
+  bootstrap_account = true
 }

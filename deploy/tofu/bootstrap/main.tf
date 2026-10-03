@@ -49,7 +49,7 @@ provider "aws" {
 }
 
 module "pds_bootstrap" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.1.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.2.0"
 
   name_prefix         = "openlore"
   project             = "openlore"
@@ -65,4 +65,7 @@ module "pds_bootstrap" {
   create_oidc_provider = false
   enable_ci_roles      = false
   create_default_vpc   = true
+
+  # The prod host creates its first account and stores the passwords in SSM (v1.2.0).
+  bootstrap_account = true
 }

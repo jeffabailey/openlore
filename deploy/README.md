@@ -127,26 +127,33 @@ sudo docker compose -f /pds/compose.yaml logs --tail 100 caddy pds
 swapon --show                                                   # -> /swapfile 1024M
 ```
 
-## 4. Create the account (pdsadmin)
+## 4. The account (created by the deployment)
 
-On the host, through Session Manager. The admin password lives in `/pds/secrets.env`, but
-upstream `pdsadmin` reads one env file (default `/pds/pds.env`). Give it a temporary file with
-both, and delete it afterwards:
+`bootstrap_account = true` (module v1.2.0) makes the host create `jeff.openlore.jeffbailey.us`
+on first boot, with the ACME contact as its email, and store two SSM SecureString parameters:
+`/openlore/prod/account-password` and `/openlore/prod/cli-app-password`. It is idempotent: a
+rebuilt instance finds the handle and does nothing. Turning it on for a running host changes
+`user_data`, which only runs on a new instance, so apply it with a replacement (the data volume,
+and the identity on it, survives):
 
 ```sh
-sudo -i
-cat /pds/pds.env /pds/secrets.env > /root/pdsadmin.env && chmod 600 /root/pdsadmin.env
-curl -fsSL -o /usr/local/bin/pdsadmin https://raw.githubusercontent.com/bluesky-social/pds/main/pdsadmin.sh
-chmod +x /usr/local/bin/pdsadmin
-PDS_ENV_FILE=/root/pdsadmin.env pdsadmin account create '<contact address>' jeff.openlore.jeffbailey.us
-rm -f /root/pdsadmin.env
+AWS_PROFILE=jeff tofu plan -replace=module.pds.aws_instance.pds -out=tfplan
+OPENLORE_ALLOW_DELETE=1 ../../../check-plan.sh tfplan   # the instance replace is expected
+AWS_PROFILE=jeff tofu apply tfplan
 ```
 
-`[verify]`: this assumes upstream's `pdsadmin/account.sh` honours `PDS_ENV_FILE`. If it does
-not, call the admin XRPC directly: `com.atproto.server.createInviteCode` with basic auth
-`admin:<PDS_ADMIN_PASSWORD>`, then `com.atproto.server.createAccount` with that invite code.
-Record the DID it prints. The handle resolves through the wildcard record and certificate, so
-no `_atproto` TXT record is needed.
+Then publish with the CLI:
+
+```sh
+export OPENLORE_PDS_ENDPOINT=https://openlore.jeffbailey.us
+export OPENLORE_PDS_IDENTIFIER=jeff.openlore.jeffbailey.us
+export OPENLORE_PDS_APP_PASSWORD=$(AWS_PROFILE=jeff aws ssm get-parameter --region us-east-1 \
+  --with-decryption --name /openlore/prod/cli-app-password --query Parameter.Value --output text)
+./cli.sh claim publish <cid>
+```
+
+The step logs to `/var/log/cloud-init-output.log`; re-run it by hand with
+`/usr/local/bin/pds-ensure-account jeff.openlore.jeffbailey.us /openlore/prod us-east-1 /openlore/prod/acme-contact-email`.
 
 ## 5. Identity backup (R6, do this once the account exists)
 
@@ -166,6 +173,15 @@ so a 2048-bit key may be too small for it.
 Copy `backup-pubkey.pem` to `/pds/backup-pubkey.pem` on the host (for example, paste it into
 `sudo tee` in a Session Manager shell). Then run `sudo pds-backup-identity`. It should print
 `archived identity-<stamp>.tar.gz.enc`.
+
+## DNS: Cloudflare, not Route 53
+
+`jeffbailey.us` is served by Cloudflare (`nova`/`steven.ns.cloudflare.com`); the Route 53 zone
+`Z04289081C40P36K0S8LM` in this account is not delegated, so the A records OpenTofu writes there
+are inert. The live records are in Cloudflare, DNS only (not proxied, so ACME and the firehose
+reach the host): `openlore` and `*.openlore` → the EIP (`public_ip` output). If the EIP ever
+changes, update both. Moving DNS into OpenTofu means delegating `openlore.jeffbailey.us` to a new
+Route 53 zone (~$0.50/mo) with NS records in Cloudflare.
 
 ## Costs
 
