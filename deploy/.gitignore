@@ -1,0 +1,11 @@
+# Provider binaries and the module cache. The .terraform.lock.hcl beside each root IS committed.
+.terraform/
+
+# State and saved plans hold resolved values in the clear. Never commit them.
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+plan.json
+crash.log
+*.tfvars

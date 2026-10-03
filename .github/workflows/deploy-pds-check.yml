@@ -1,0 +1,104 @@
+# deploy-pds-check — credential-free static checks for the OpenLore PDS deployment (deploy/**).
+#
+# There is NO AWS credential in this workflow and no plan or apply: OpenLore's PDS is applied
+# from a laptop against a saved plan (ADR-068). This only proves the code is well-formed:
+#   - tofu fmt, and init -backend=false + validate for the bootstrap and prod roots
+#     (init fetches github.com/jeffabailey/tofu-aws-pds at the pinned tag, so the tag must
+#     exist on GitHub for these steps to pass);
+#   - check-plan.sh parses, is shellcheck-clean, and refuses the deletes it must refuse;
+#   - no workflow can reach a destroy (the module's scripts/check-no-destroy.sh);
+#   - no email address (the ACME contact) is committed under deploy/.
+
+name: deploy-pds-check
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy-pds-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy-pds-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TOFU_VERSION: "1.12.6"
+
+jobs:
+  tofu:
+    name: tofu fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: fmt
+        run: tofu fmt -check -recursive deploy/tofu
+
+      - name: validate bootstrap and prod roots
+        run: |
+          set -euo pipefail
+          for dir in deploy/tofu/bootstrap deploy/tofu/environments/prod; do
+            echo "::group::$dir"
+            tofu -chdir="$dir" init -backend=false -input=false -no-color
+            tofu -chdir="$dir" validate -no-color
+            echo "::endgroup::"
+          done
+
+      # The module ships the structural no-destroy scan; run the copy init just fetched, at the
+      # same pinned tag as the module itself.
+      - name: no workflow may reach a destroy
+        run: deploy/tofu/environments/prod/.terraform/modules/pds/scripts/check-no-destroy.sh .github
+
+  scripts:
+    name: check-plan.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: parse and lint
+        run: |
+          bash -n deploy/check-plan.sh
+          shellcheck deploy/check-plan.sh
+
+      # The gate itself, against plan JSON fixtures: an in-place update passes, a replaced EIP
+      # is refused even with the override, and a replaced instance needs the override.
+      - name: gate behaviour
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          echo '{"resource_changes":[{"address":"module.pds.aws_instance.pds","mode":"managed","type":"aws_instance","change":{"actions":["update"]}}]}' > "$d/update.json"
+          echo '{"resource_changes":[{"address":"module.pds.aws_eip.pds","mode":"managed","type":"aws_eip","change":{"actions":["delete","create"]}}]}' > "$d/eip.json"
+          echo '{"resource_changes":[{"address":"module.pds.aws_instance.pds","mode":"managed","type":"aws_instance","change":{"actions":["create","delete"]}}]}' > "$d/instance.json"
+          deploy/check-plan.sh "$d/update.json"
+          if deploy/check-plan.sh "$d/eip.json"; then echo "::error::EIP replace was allowed"; exit 1; fi
+          if OPENLORE_ALLOW_DELETE=1 deploy/check-plan.sh "$d/eip.json"; then echo "::error::override let an EIP replace through"; exit 1; fi
+          if deploy/check-plan.sh "$d/instance.json"; then echo "::error::instance replace was allowed without the override"; exit 1; fi
+          OPENLORE_ALLOW_DELETE=1 deploy/check-plan.sh "$d/instance.json"
+
+  contact:
+    name: no contact address committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The ACME contact reaches the host by SSM parameter NAME. The address itself must be in
+      # no committed file.
+      - name: grep for email addresses under deploy/
+        run: |
+          set -euo pipefail
+          if git grep -nIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- deploy/ \
+               | grep -vE 'example\.(com|org|invalid)|noreply@'; then
+            echo "::error::an email address is committed under deploy/. Put it in SSM instead."
+            exit 1
+          fi
+          echo "no email address under deploy/"
