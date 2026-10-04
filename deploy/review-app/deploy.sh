@@ -189,7 +189,11 @@ start_digest() { # $1 = digest
   compose up -d --force-recreate review-app
 }
 
-stop_app() { [ -f "$APP/.env" ] && compose stop review-app || true; }
+stop_app() {
+  if [ -f "$APP/.env" ]; then
+    compose stop review-app || true
+  fi
+}
 
 releases_digest() { # $1 = 1 for the current release, 2 for the one before it
   [ -f "$RELEASES" ] || return 0
