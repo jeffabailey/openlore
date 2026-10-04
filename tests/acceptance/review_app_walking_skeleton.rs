@@ -101,7 +101,6 @@ fn priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_re
 ///   And nothing was written to her PDS
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: unskip when the review app ships GitHub ownership proof"]
 fn priya_proves_her_github_account_is_hers_with_her_did_in_her_bio() {
     // GIVEN Priya is signed in (WS-1's Given + When) and her bio holds her DID.
     let world = ReviewWorld::new();

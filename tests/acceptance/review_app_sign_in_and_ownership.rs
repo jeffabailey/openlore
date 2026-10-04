@@ -385,7 +385,6 @@ fn the_session_cookie_is_out_of_reach_of_page_scripts_and_pages_never_carry_toke
 ///   Then she sees her exact DID with a copy action and instructions to add it to her GitHub bio
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 exact DID to copy)"]
 fn priya_gets_the_exact_did_to_copy_and_where_to_put_it() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -406,7 +405,6 @@ fn priya_gets_the_exact_did_to_copy_and_where_to_put_it() {
 ///   And no scan starts, no repo is read and no suggestion is created
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 Sam cannot claim BurntSushi)"]
 fn sam_cannot_claim_someone_elses_github_account() {
     let world = ReviewWorld::new();
     let mut sam = given_signed_in(&world, Persona::Sam);
@@ -435,7 +433,6 @@ fn sam_cannot_claim_someone_elses_github_account() {
 ///   Then he sees that the bio holds a different DID that must match his signed-in account
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 different DID explained)"]
 fn a_different_did_in_the_bio_is_explained() {
     let world = ReviewWorld::new();
     let mut dmitri = given_signed_in(&world, Persona::Dmitri);
@@ -458,7 +455,6 @@ fn a_different_did_in_the_bio_is_explained() {
 ///   And after the wait, pressing Verify again succeeds
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 rate limit then retry)"]
 fn a_github_rate_limit_is_explained_and_retrying_after_the_wait_succeeds() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -484,7 +480,6 @@ fn a_github_rate_limit_is_explained_and_retrying_after_the_wait_succeeds() {
 ///   Then she sees that github.com/priyaramn was not found and can retry
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 GitHub user not found)"]
 fn a_github_username_that_does_not_exist_is_named_in_the_message() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -507,7 +502,6 @@ fn a_github_username_that_does_not_exist_is_named_in_the_message() {
 ///   And Priya's link is unaffected
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-002 link is per DID)"]
 fn a_verified_github_link_belongs_to_one_did_only() {
     let world = ReviewWorld::new();
     let mut priya = given_github_verified(&world, Persona::Priya);
@@ -539,7 +533,6 @@ fn a_verified_github_link_belongs_to_one_did_only() {
 ///     | did:plc:ab12cd34ef56gh78ij90klmn did:plc:7x3kq2mzv5rj4w6hbn2tqclp | verified |
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (ADR-076 exact DID token table)"]
 fn only_the_exact_signed_in_did_token_proves_ownership() {
     let did = Persona::Priya.did();
     let cases: [(String, bool); 7] = [
@@ -577,7 +570,6 @@ fn only_the_exact_signed_in_did_token_proves_ownership() {
 ///   Then it is refused, no repo is read and no suggestion exists
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (no scan while unverified, even by direct request)"]
 fn a_scan_cannot_be_started_before_ownership_is_proven() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -602,7 +594,6 @@ fn a_scan_cannot_be_started_before_ownership_is_proven() {
 ///   Then nothing is scanned and she is asked to verify again
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (ADR-076 IdentityChanged)"]
 fn a_renamed_or_re_registered_github_account_must_be_verified_again() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);

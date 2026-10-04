@@ -13,8 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adapter_atproto_did::IdentityLookup;
 use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter, Upstreams};
+use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, ReviewStore};
-use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, SecretStorePort};
+use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, ScanStatus, SecretStorePort};
 use review_domain::signin::{permission_mode, SignInFailure};
 use serde_json::json;
 
@@ -23,6 +24,7 @@ use crate::config::{
     DEFAULT_OAUTH_SCOPES,
 };
 use crate::http::{self, App, Surface};
+use crate::routes::github::VerifyAttempts;
 
 /// Exit code when the app refuses to start.
 const EXIT_REFUSED: u8 = 2;
@@ -73,6 +75,10 @@ pub(crate) enum LogEvent<'a> {
     /// SPIKE finding 3: the OAuth library panicked in a code exchange and the
     /// panic was contained to that exchange.
     CallbackPanicIsolated,
+    GithubVerified,
+    /// A GitHub ownership check did not pass (the refusal's label only).
+    GithubVerifyRefused(&'static str),
+    ScanFinished(ScanStatus),
 }
 
 /// The operator-facing name of why a sign-in did not complete.
@@ -110,6 +116,21 @@ pub(crate) fn emit(event: LogEvent<'_>) {
             "ts": ts,
             "level": "warn",
             "event": "signin.callback_panic_isolated",
+        }),
+        LogEvent::GithubVerified => {
+            json!({"ts": ts, "level": "info", "event": "github.verified"})
+        }
+        LogEvent::GithubVerifyRefused(reason) => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "github.verify_refused",
+            "reason": reason,
+        }),
+        LogEvent::ScanFinished(status) => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "scan.finished",
+            "status": status.as_str(),
         }),
         LogEvent::StartupRefused(r) => json!({
             "ts": ts,
@@ -335,6 +356,10 @@ async fn bind(
 /// driven ports the pages use.
 fn app(wired: Wired) -> App {
     let mode = permission_mode(&wired.config.oauth_scopes);
+    let github = GithubAdapter::with_token(
+        wired.config.github_api_base.as_str(),
+        wired.github_token.expose(),
+    );
     App {
         surface: Surface {
             landing: review_domain::views::landing_page(mode, None),
@@ -345,6 +370,10 @@ fn app(wired: Wired) -> App {
         permission_mode: mode,
         identity: wired.identity,
         oauth: wired.oauth,
-        sessions: wired.store,
+        sessions: wired.store.clone(),
+        github: Arc::new(github),
+        links: wired.store.clone(),
+        scans: wired.store,
+        verify_attempts: VerifyAttempts::default(),
     }
 }

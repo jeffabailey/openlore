@@ -42,8 +42,14 @@ enum Verdict {
     NoBio,
 }
 
-fn sut_ownership_verdict(_bio: Option<&str>, _session_did: &str) -> Verdict {
-    todo!("SCAFFOLD: bind review_domain ownership verdict (ADR-076 §4)")
+fn sut_ownership_verdict(bio: Option<&str>, session_did: &str) -> Verdict {
+    use review_domain::ownership::{ownership_verdict, OwnershipVerdict};
+    match ownership_verdict(bio, session_did) {
+        OwnershipVerdict::Verified => Verdict::Verified,
+        OwnershipVerdict::DidMissing => Verdict::DidMissing,
+        OwnershipVerdict::DifferentDid(found) => Verdict::DifferentDid(found),
+        OwnershipVerdict::NoBio => Verdict::NoBio,
+    }
 }
 
 /// ADR-071 provenance verdict over (signature present?, author, repo DID, origin, CID match).
@@ -341,7 +347,6 @@ proptest! {
     /// Ownership is Verified iff the signed-in DID appears as an exact,
     /// delimited, byte-equal token; otherwise the verdict names why.
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-1 ownership verdict property)"]
     fn ownership_is_verified_exactly_when_the_signed_in_did_is_an_exact_bio_token(
         (bio, did) in arb_did().prop_flat_map(arb_bio_around)
     ) {
@@ -352,7 +357,6 @@ proptest! {
     /// Several DIDs in a bio are allowed; only the signed-in one counts, and
     /// verifying one DID never verifies another.
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-2 per-DID verdict)"]
     fn several_dids_in_a_bio_only_the_signed_in_one_counts(
         a in arb_did(), b in arb_did(), words in arb_words()
     ) {
@@ -559,7 +563,6 @@ proptest! {
 /// CORE-1b — the ADR-076 key examples, pinned (C1 boundary table; examples @contract-shape:pure-function
 /// are kept alongside the property so a regression names the exact case).
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (CORE-1b ownership key examples)"]
 fn ownership_verdict_key_examples() {
     let did = "did:plc:7x3kq2mzv5rj4w6hbn2tqclp";
     let cases: [(Option<&str>, Verdict); 7] = [

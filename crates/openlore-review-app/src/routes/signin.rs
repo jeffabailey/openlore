@@ -14,6 +14,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
+use crate::routes::{github, scan};
 use crate::wiring::{emit, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
@@ -29,6 +30,10 @@ pub(crate) enum PageRoute {
     PdsReturn,
     Review,
     SignOut,
+    GithubStep,
+    VerifyGithub,
+    StartScan,
+    ScanStatus,
 }
 
 /// Pure routing of the pages.
@@ -38,6 +43,10 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("GET", "/oauth/callback") => Some(PageRoute::PdsReturn),
         ("GET", "/review") => Some(PageRoute::Review),
         ("POST", "/signout") => Some(PageRoute::SignOut),
+        ("GET", "/github") => Some(PageRoute::GithubStep),
+        ("POST", "/github") => Some(PageRoute::VerifyGithub),
+        ("POST", "/scan") => Some(PageRoute::StartScan),
+        ("GET", "/scan/status") => Some(PageRoute::ScanStatus),
         _ => None,
     }
 }
@@ -47,9 +56,15 @@ pub(crate) async fn handle(app: &App, route: PageRoute, request: &PageRequest) -
     match route {
         PageRoute::SignIn if same_origin => begin_sign_in(app, request).await,
         PageRoute::SignOut if same_origin => sign_out(app, request),
-        PageRoute::SignIn | PageRoute::SignOut => forbidden(),
+        PageRoute::VerifyGithub if same_origin => github::verify(app, request).await,
+        PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
+        PageRoute::SignIn | PageRoute::SignOut | PageRoute::VerifyGithub | PageRoute::StartScan => {
+            forbidden()
+        }
         PageRoute::PdsReturn => pds_return(app, request).await,
         PageRoute::Review => review(app, request),
+        PageRoute::GithubStep => github::github_step(app, request),
+        PageRoute::ScanStatus => scan::scan_status(app, request),
     }
 }
 
@@ -147,11 +162,18 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
 
 fn review(app: &App, request: &PageRequest) -> Reply {
     match current_session(app, request) {
-        Some((cookie_value, session)) => Reply::Page {
-            status: StatusCode::OK,
-            html: views::review_page(&session.handle, &csrf_token_for(&cookie_value)),
-            set_cookie: None,
-        },
+        Some((cookie_value, session)) => {
+            let link = app.links.github_link(&session.owner_did).ok().flatten();
+            Reply::Page {
+                status: StatusCode::OK,
+                html: views::review_page(
+                    &session.handle,
+                    &csrf_token_for(&cookie_value),
+                    github::github_step_of(link.as_ref()),
+                ),
+                set_cookie: None,
+            }
+        }
         None => to_landing(),
     }
 }
@@ -160,8 +182,7 @@ fn sign_out(app: &App, request: &PageRequest) -> Reply {
     let Some((cookie_value, session)) = current_session(app, request) else {
         return to_landing();
     };
-    let submitted = field(&request.form, "csrf").unwrap_or_default();
-    if sha256_hex(&submitted) != session.csrf_hash {
+    if !csrf_matches(request, &session) {
         return forbidden();
     }
     match app
@@ -176,8 +197,17 @@ fn sign_out(app: &App, request: &PageRequest) -> Reply {
     }
 }
 
+/// The submitted CSRF token is the session's.
+pub(crate) fn csrf_matches(request: &PageRequest, session: &ports::WebSession) -> bool {
+    let submitted = field(&request.form, "csrf").unwrap_or_default();
+    sha256_hex(&submitted) == session.csrf_hash
+}
+
 /// The live session named by the request's cookie, with the cookie value.
-fn current_session(app: &App, request: &PageRequest) -> Option<(String, ports::WebSession)> {
+pub(crate) fn current_session(
+    app: &App,
+    request: &PageRequest,
+) -> Option<(String, ports::WebSession)> {
     let cookie_value = field(&request.cookies, SESSION_COOKIE)?;
     let session = app
         .sessions
@@ -207,7 +237,7 @@ fn failure_status(failure: SignInFailure) -> StatusCode {
     }
 }
 
-fn forbidden() -> Reply {
+pub(crate) fn forbidden() -> Reply {
     Reply::Page {
         status: StatusCode::FORBIDDEN,
         html: "Forbidden".to_string(),
@@ -215,14 +245,14 @@ fn forbidden() -> Reply {
     }
 }
 
-fn to_landing() -> Reply {
+pub(crate) fn to_landing() -> Reply {
     Reply::Redirect {
         location: "/".to_string(),
         set_cookie: None,
     }
 }
 
-fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
+pub(crate) fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
     pairs
         .iter()
         .find(|(key, _)| key == name)
@@ -230,7 +260,7 @@ fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
 }
 
 /// 256 random bits, hex.
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     hex(&bytes)
@@ -246,7 +276,7 @@ fn sha256_hex(text: &str) -> String {
 
 /// The CSRF token of a session, derived from its cookie value so only its
 /// hash needs storing (the page re-derives it on render).
-fn csrf_token_for(cookie_value: &str) -> String {
+pub(crate) fn csrf_token_for(cookie_value: &str) -> String {
     sha256_hex(&format!("csrf:{cookie_value}"))
 }
 

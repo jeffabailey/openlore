@@ -148,6 +148,18 @@ impl GithubAdapter {
         }
     }
 
+    /// Build the adapter pointed at `api_base` with an explicit server token
+    /// (the review app reads its PAT from a secrets file, not the
+    /// environment; ADR-076). The token leaves only as a request header.
+    pub fn with_token(api_base: impl Into<String>, token: impl Into<String>) -> Self {
+        Self {
+            api_base: client::strip_trailing_slashes(api_base.into()),
+            auth: AuthMode::Authenticated {
+                token: token.into(),
+            },
+        }
+    }
+
     /// The API base the adapter is bound to. Exposed for tests + the
     /// composition root's startup banner.
     pub fn api_base(&self) -> &str {

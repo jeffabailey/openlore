@@ -326,6 +326,7 @@ pub fn parse_person_profile(body: &serde_json::Value, user: &str) -> ports::Pers
     ports::PersonProfile {
         html_url: text(body, "html_url").unwrap_or_else(|| format!("https://github.com/{login}")),
         login,
+        id: count(body, "id"),
         name: text(body, "name"),
         bio: text(body, "bio"),
         company: text(body, "company"),
@@ -618,6 +619,17 @@ mod tests {
             .unwrap_err()
             .contains("login"));
         assert!(parse_contributors(&serde_json::json!({"message": "x"})).is_err());
+    }
+
+    // bypass: a field-mapping example (the adapter has no proptest dev-dep;
+    // the numeric id is copied verbatim, the boundary rule lives in the core).
+    #[test]
+    fn person_profile_carries_the_numeric_github_id() {
+        let profile = parse_person_profile(
+            &serde_json::json!({"login": "priyaraman", "id": 4_210_001_u64}),
+            "priyaraman",
+        );
+        assert_eq!(profile.id, 4_210_001);
     }
 
     #[test]

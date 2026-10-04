@@ -22,6 +22,8 @@ use clap::{Parser, Subcommand};
 mod config;
 mod http;
 mod routes {
+    pub(crate) mod github;
+    pub(crate) mod scan;
     pub(crate) mod signin;
 }
 mod wiring;

@@ -3,6 +3,7 @@
 
 use maud::{html, Markup, DOCTYPE};
 
+use crate::ownership::OwnershipRefusal;
 use crate::signin::{PermissionMode, SignInFailure};
 
 /// The name Bluesky shows when the app asks for permission.
@@ -110,12 +111,50 @@ pub fn landing_page(mode: PermissionMode, failure: Option<SignInFailure>) -> Str
     .into_string()
 }
 
-/// The signed-in review queue (empty until GitHub is linked).
-pub fn review_page(handle: &str, csrf_token: &str) -> String {
+/// Where the signed-in person stands with their GitHub link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GithubStep<'a> {
+    /// No GitHub account linked yet.
+    NotLinked,
+    /// Linked and verified: a scan may start (after a fresh re-check).
+    Verified { login: &'a str },
+    /// Linked once, but the last check failed: verify again.
+    NeedsReverify { login: &'a str },
+}
+
+/// The label of the button that starts a scan.
+pub const SCAN_LABEL: &str = "Scan my repos";
+
+/// The label of the button that checks the bio.
+pub const VERIFY_LABEL: &str = "Verify";
+
+/// The signed-in review queue: the GitHub step until ownership is proven,
+/// then the scan action.
+pub fn review_page(handle: &str, csrf_token: &str, github: GithubStep<'_>) -> String {
     page(
         "Your review queue",
         html! {
             p { "Signed in as @" (handle) }
+            @match github {
+                GithubStep::NotLinked => {
+                    p { "Before anything is scanned, verify that your GitHub account is yours." }
+                    a href="/github" { "Verify GitHub ownership" }
+                }
+                GithubStep::NeedsReverify { login } => {
+                    p role="alert" {
+                        "We could not confirm that github.com/" (login) " is still yours, so nothing \
+                         was scanned. Please verify again."
+                    }
+                    a href="/github" { "Verify GitHub ownership" }
+                }
+                GithubStep::Verified { login } => {
+                    p { "GitHub: github.com/" (login) " (verified)" }
+                    form method="post" action="/scan" {
+                        input type="hidden" name="csrf" value=(csrf_token);
+                        button type="submit" { (SCAN_LABEL) }
+                    }
+                }
+            }
             form method="post" action="/signout" {
                 input type="hidden" name="csrf" value=(csrf_token);
                 button type="submit" { (SIGN_OUT_LABEL) }
@@ -124,3 +163,111 @@ pub fn review_page(handle: &str, csrf_token: &str) -> String {
     )
     .into_string()
 }
+
+/// What happened when the person pressed Verify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnershipOutcome<'a> {
+    Verified,
+    Refused(&'a OwnershipRefusal),
+}
+
+/// The sentence explaining a verify outcome (AC-002.3: each names the fix).
+pub fn ownership_message(
+    outcome: OwnershipOutcome<'_>,
+    login: &str,
+    session_did: &str,
+    handle: &str,
+) -> String {
+    let refusal = match outcome {
+        OwnershipOutcome::Verified => {
+            return format!("Verified: github.com/{login} belongs to @{handle}")
+        }
+        OwnershipOutcome::Refused(refusal) => refusal,
+    };
+    match refusal {
+        OwnershipRefusal::DidMissing => format!(
+            "We couldn't find your DID in the bio of github.com/{login}. Add your DID to the \
+             bio of your own GitHub account, then press Verify again."
+        ),
+        OwnershipRefusal::NoBio => format!(
+            "We couldn't find a public bio on github.com/{login}. Add your DID to the bio of \
+             your own GitHub account, then press Verify again."
+        ),
+        OwnershipRefusal::DifferentDid(found) => format!(
+            "The bio of github.com/{login} holds a different DID ({found}). It must match your \
+             signed-in account ({session_did}): replace it with your DID, then press Verify again."
+        ),
+        OwnershipRefusal::IdentityChanged => format!(
+            "github.com/{login} now belongs to a different GitHub account than the one you \
+             verified. Please verify again."
+        ),
+        OwnershipRefusal::AccountNotFound => format!(
+            "We couldn't find a GitHub account at github.com/{login}. Check the spelling, then \
+             press Verify again."
+        ),
+        OwnershipRefusal::RateLimited => "GitHub is rate-limiting us right now. Please wait a \
+             few minutes, then press Verify again. Nothing was lost."
+            .to_string(),
+        OwnershipRefusal::GithubUnavailable => "GitHub could not be reached. Please wait a few \
+             minutes, then press Verify again. Nothing was lost."
+            .to_string(),
+        OwnershipRefusal::LinkedToAnotherAccount => format!(
+            "github.com/{login} is already verified for another Bluesky account. Each GitHub \
+             account can belong to one Bluesky account only."
+        ),
+        OwnershipRefusal::TooManyAttempts => "Too many verification attempts in the last hour. \
+             Please try again later. Nothing was lost."
+            .to_string(),
+    }
+}
+
+/// The GitHub step: the exact DID to copy, where to put it, and the form
+/// that checks it. `message` explains the last attempt.
+pub fn github_page(session_did: &str, csrf_token: &str, message: Option<&str>) -> String {
+    page(
+        "Prove your GitHub account",
+        html! {
+            h1 { "Prove your GitHub account is yours" }
+            @if let Some(message) = message {
+                p role="status" { (message) }
+            }
+            p { "Your DID:" }
+            p { code id="your-did" { (session_did) } " " a href="#your-did" data-copy=(session_did) { "Copy" } }
+            p {
+                "Add this exact DID anywhere in the bio of your GitHub profile \
+                 (github.com/settings/profile). It shows that you, the person signed in \
+                 here, control that GitHub account. Then enter your GitHub username and \
+                 press Verify."
+            }
+            form method="post" action="/github" {
+                input type="hidden" name="csrf" value=(csrf_token);
+                label for="github_login" { "GitHub username" }
+                input id="github_login" name="github_login" type="text" required;
+                button type="submit" { (VERIFY_LABEL) }
+            }
+            p { a href="/review" { "Back to your review queue" } }
+            script src="/assets/copy.js" {}
+        },
+    )
+    .into_string()
+}
+
+/// The scan-status fragment the queue polls (`data-scan-status`).
+pub fn scan_status_page(status: &str) -> String {
+    page(
+        "Scan status",
+        html! {
+            div data-scan-status=(status) { "Scan status: " (status) }
+            p { a href="/review" { "Back to your review queue" } }
+        },
+    )
+    .into_string()
+}
+
+/// The page script: copy a `data-copy` value to the clipboard.
+pub const COPY_SCRIPT: &str = "document.querySelectorAll('[data-copy]').forEach(function (el) {\n\
+  el.addEventListener('click', function (event) {\n\
+    event.preventDefault();\n\
+    navigator.clipboard.writeText(el.getAttribute('data-copy'));\n\
+  });\n\
+});\n";

@@ -36,9 +36,9 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 // bluesky-claim-review-app ports (ADR-072/073/074).
 pub mod review;
 pub use review::{
-    AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, NewWebSession,
-    OAuthPort, PdsCallback, ReviewStoreError, ReviewStorePort, SecretStorePort, SessionPort,
-    WebSession,
+    AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, GithubLink,
+    GithubLinkPort, LinkRecorded, NewWebSession, OAuthPort, PdsCallback, ReviewStoreError,
+    ReviewStorePort, ScanRunPort, ScanStatus, SecretStorePort, SessionPort, WebSession,
 };
 
 // -----------------------------------------------------------------------------

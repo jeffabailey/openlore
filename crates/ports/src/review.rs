@@ -157,3 +157,87 @@ pub trait SessionPort: Send + Sync {
 
     fn end_session(&self, session_hash: &str, owner_did: &str) -> Result<(), ReviewStoreError>;
 }
+
+/// A person's GitHub link (ADR-076): the numeric id is what was proven; the
+/// login is how it was named at the time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubLink {
+    pub github_login: String,
+    pub github_user_id: u64,
+    /// `false` once a re-check failed: verify again before any scan.
+    pub verified: bool,
+}
+
+/// What recording a verified link did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkRecorded {
+    Linked,
+    /// Another DID already holds a verified link to this GitHub account
+    /// (one owner per GitHub account); nothing changed.
+    HeldByAnotherOwner,
+}
+
+/// Owner-scoped GitHub links (`github_links`, one per DID).
+pub trait GithubLinkPort: Send + Sync {
+    fn github_link(&self, owner_did: &str) -> Result<Option<GithubLink>, ReviewStoreError>;
+
+    /// Record (or replace) the verified link of `owner_did`, unless another
+    /// DID holds a verified link to the same GitHub id.
+    fn record_verified_link(
+        &self,
+        owner_did: &str,
+        github_login: &str,
+        github_user_id: u64,
+    ) -> Result<LinkRecorded, ReviewStoreError>;
+
+    /// A re-check failed: the link stays, marked unverified, with why.
+    fn mark_link_unverified(&self, owner_did: &str, verdict: &str) -> Result<(), ReviewStoreError>;
+}
+
+/// How a scan run ended (or that it is still running), as `scan_runs.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStatus {
+    Running,
+    Completed,
+    RateLimited,
+    Interrupted,
+    OwnershipFailed,
+}
+
+impl ScanStatus {
+    pub const ALL: [ScanStatus; 5] = [
+        Self::Running,
+        Self::Completed,
+        Self::RateLimited,
+        Self::Interrupted,
+        Self::OwnershipFailed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::RateLimited => "rate_limited",
+            Self::Interrupted => "interrupted",
+            Self::OwnershipFailed => "ownership_failed",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str() == stored)
+    }
+}
+
+/// Owner-scoped scan runs (`scan_runs`).
+pub trait ScanRunPort: Send + Sync {
+    /// Record a run that already ended with `status`.
+    fn record_finished_scan(
+        &self,
+        owner_did: &str,
+        run_id: &str,
+        status: ScanStatus,
+    ) -> Result<(), ReviewStoreError>;
+
+    /// The status of the owner's most recent run, if any.
+    fn latest_scan_status(&self, owner_did: &str) -> Result<Option<ScanStatus>, ReviewStoreError>;
+}

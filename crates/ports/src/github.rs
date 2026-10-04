@@ -265,6 +265,9 @@ pub struct RawContributor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersonProfile {
     pub login: String,
+    /// The STABLE numeric GitHub user id (a renamed or re-registered login
+    /// keeps / changes it; ADR-076 `IdentityChanged`).
+    pub id: u64,
     pub name: Option<String>,
     pub bio: Option<String>,
     pub company: Option<String>,

@@ -10,7 +10,9 @@
 #![forbid(unsafe_code)]
 
 mod expiry;
+mod github_links;
 mod probe;
+mod scan_runs;
 pub mod schema;
 mod secrets;
 mod sessions;

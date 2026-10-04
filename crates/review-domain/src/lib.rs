@@ -7,5 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod budget;
+pub mod ownership;
 pub mod signin;
 pub mod views;

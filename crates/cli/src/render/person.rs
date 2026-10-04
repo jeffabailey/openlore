@@ -165,6 +165,7 @@ mod person_tests {
     fn profile() -> PersonProfile {
         PersonProfile {
             login: "jeffabailey".to_string(),
+            id: 1,
             name: Some("Jeff Bailey".to_string()),
             bio: Some("Builds tools".to_string()),
             company: None,

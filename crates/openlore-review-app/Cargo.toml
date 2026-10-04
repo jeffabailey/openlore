@@ -22,6 +22,7 @@ review-domain = { path = "../review-domain" }
 adapter-atproto-oauth = { path = "../adapter-atproto-oauth" }
 adapter-review-store = { path = "../adapter-review-store" }
 adapter-atproto-did = { path = "../adapter-atproto-did" }
+adapter-github = { path = "../adapter-github" }
 rand = "0.8"
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }

@@ -14,10 +14,11 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use ports::{IdentityLookupPort, OAuthPort, SessionPort};
+use ports::{GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, ScanRunPort, SessionPort};
 use review_domain::signin::PermissionMode;
 use tokio::net::TcpListener;
 
+use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
 
 /// Sent on every response (AC-000.2, NFR-BRA-2): HTTPS only, own scripts
@@ -53,6 +54,10 @@ pub(crate) struct App {
     pub(crate) identity: Arc<dyn IdentityLookupPort>,
     pub(crate) oauth: Arc<dyn OAuthPort>,
     pub(crate) sessions: Arc<dyn SessionPort>,
+    pub(crate) github: Arc<dyn GithubPort>,
+    pub(crate) links: Arc<dyn GithubLinkPort>,
+    pub(crate) scans: Arc<dyn ScanRunPort>,
+    pub(crate) verify_attempts: VerifyAttempts,
 }
 
 /// The static public routes.
@@ -63,6 +68,7 @@ pub(crate) enum Route {
     Readyz,
     ClientMetadata,
     Jwks,
+    CopyScript,
     NotFound,
 }
 
@@ -77,6 +83,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         "/readyz" => Route::Readyz,
         "/oauth/client-metadata.json" => Route::ClientMetadata,
         "/oauth/jwks.json" => Route::Jwks,
+        "/assets/copy.js" => Route::CopyScript,
         _ => Route::NotFound,
     }
 }
@@ -130,6 +137,11 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
         Route::Healthz | Route::Readyz => (StatusCode::OK, text, "ok".to_string()),
         Route::ClientMetadata => (StatusCode::OK, json, surface.client_metadata.clone()),
         Route::Jwks => (StatusCode::OK, json, surface.jwks.clone()),
+        Route::CopyScript => (
+            StatusCode::OK,
+            "text/javascript; charset=utf-8",
+            review_domain::views::COPY_SCRIPT.to_string(),
+        ),
         Route::NotFound => (StatusCode::NOT_FOUND, text, "not found".to_string()),
     };
     let mut response = Response::new(Full::new(Bytes::from(body)));
