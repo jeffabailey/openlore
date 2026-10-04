@@ -8010,6 +8010,7 @@ pub fn seed_peer_claim_with_blank_origin(env: &TestEnv) {
              fetched_at          TIMESTAMP NOT NULL,
              fetched_from_pds    VARCHAR NOT NULL,
              signed_record_path  VARCHAR NOT NULL,
+             provenance          VARCHAR DEFAULT 'app-signed',
              CHECK (cid <> '')
          );
          INSERT INTO peer_claims SELECT * FROM peer_claims_check_bypass;
