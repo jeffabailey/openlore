@@ -40,7 +40,7 @@ provider "aws" {
 }
 
 module "pds" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.4.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds?ref=v1.5.0"
 
   name_prefix = "openlore"
   project     = "openlore"
@@ -67,4 +67,7 @@ module "pds" {
   verification_methods = {
     "org.openlore.application" = "did:key:z6MkpwHtDxopasFQ89TVijaSDqyTUvp4auQARnJgQj5LbQgR"
   }
+
+  # Encrypted identity backup to the backup bucket every day (v1.5.0; key: deploy/README.md §5).
+  backup_on_calendar = "daily"
 }
