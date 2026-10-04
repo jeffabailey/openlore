@@ -1400,3 +1400,55 @@ harness = true
 name = "scrape_person_command"
 path = "../../tests/acceptance/scrape_person_command.rs"
 harness = true
+
+# bluesky-claim-review-app (DISTILL 2026-10-04): acceptance suites for the
+# hosted review app — the THIRD composition root `openlore-review-app`
+# (ADR-072). They drive the REAL app binary over HTTP (located with
+# `assert_cmd::cargo::cargo_bin("openlore-review-app")`; until DELIVER
+# bootstraps that crate the harness panics MISSING_FUNCTIONALITY — RED, not
+# BROKEN) with the ATProto network + GitHub faked (`FakeAtprotoNetwork`,
+# `FakeGithubAccounts`). Registered under `cli` because (a) the review-app
+# crate does not exist yet and (b) the WS + reader suites also drive the
+# `openlore` binary's read path (AC-004.3, US-BRA-009). DELIVER decides at
+# bootstrap whether to move the app-only suites into
+# `crates/openlore-review-app/Cargo.toml` (DWD-3 in distill/wave-decisions.md).
+# Only `review_app_walking_skeleton` is un-ignored.
+[[test]]
+name = "review_app_walking_skeleton"
+path = "../../tests/acceptance/review_app_walking_skeleton.rs"
+harness = true
+
+[[test]]
+name = "review_app_sign_in_and_ownership"
+path = "../../tests/acceptance/review_app_sign_in_and_ownership.rs"
+harness = true
+
+[[test]]
+name = "review_app_queue_and_publish"
+path = "../../tests/acceptance/review_app_queue_and_publish.rs"
+harness = true
+
+[[test]]
+name = "review_app_consent_and_share"
+path = "../../tests/acceptance/review_app_consent_and_share.rs"
+harness = true
+
+[[test]]
+name = "review_app_lifecycle"
+path = "../../tests/acceptance/review_app_lifecycle.rs"
+harness = true
+
+[[test]]
+name = "review_app_self_attested_readers"
+path = "../../tests/acceptance/review_app_self_attested_readers.rs"
+harness = true
+
+[[test]]
+name = "review_app_privacy_invariants"
+path = "../../tests/acceptance/review_app_privacy_invariants.rs"
+harness = true
+
+[[test]]
+name = "review_app_core"
+path = "../../tests/acceptance/review_app_core.rs"
+harness = true

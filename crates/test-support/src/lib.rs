@@ -125,6 +125,22 @@ pub use fake_ingest_source::FakeIngestSource;
 // content-addressed HTTP double for a user's own serverless instance
 // (`PUT/GET /records/:cid`, `GET /manifest`, `GET /`). It never computes a
 // CID — the Rust `claim-domain` core is the sole canonicalizer.
+// bluesky-claim-review-app (DISTILL 2026-10-04): the hermetic doubles for the
+// hosted review app's external systems — the ATProto network (PLC + handle
+// resolution + the user's PDS + its OAuth authorization server) and a
+// multi-account, mutable GitHub. `review_http` is their shared plumbing.
+mod review_http;
+pub use review_http::url_encode;
+pub mod fake_atproto;
+pub use fake_atproto::{
+    AuthorizationSeen, BlueskyAccount, ConsentPosture, FakeAtprotoNetwork, RevocationSeen,
+    StoredRecord, TokenPosture, WriteAttempt, WritePosture, CLAIM_COLLECTION, POST_COLLECTION,
+};
+pub mod fake_github_accounts;
+pub use fake_github_accounts::{
+    FakeGithubAccounts, GithubAccount, GithubRepo, GithubRequest, RepoFacts,
+};
+
 pub mod fake_instance;
 pub use fake_instance::{FakeInstance, PreloadedRecord, RecordedRequest, MANIFEST_ENTRY_HEADER};
 

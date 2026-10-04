@@ -48,6 +48,11 @@ hyper = { version = "1", features = ["server", "http1"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 bytes = "1"
+# bluesky-claim-review-app (DISTILL 2026-10-04): the FakeAtprotoNetwork OAuth
+# authorization-server double checks PKCE S256 (sha2) and reads DPoP /
+# client-assertion JWT claims (base64url). Both already in Cargo.lock; pure Rust.
+sha2 = "0.10"
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
