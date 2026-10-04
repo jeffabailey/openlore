@@ -37,6 +37,8 @@ pub(crate) enum PageRoute {
     StartScan,
     ScanStatus,
     ApproveSuggestion,
+    EditSuggestion,
+    PreviewEdit,
     DeclineSuggestion,
     ConfirmPublish,
 }
@@ -53,6 +55,8 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/scan") => Some(PageRoute::StartScan),
         ("GET", "/scan/status") => Some(PageRoute::ScanStatus),
         ("POST", "/review/approve") => Some(PageRoute::ApproveSuggestion),
+        ("POST", "/review/edit") => Some(PageRoute::EditSuggestion),
+        ("POST", "/review/edit/preview") => Some(PageRoute::PreviewEdit),
         ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
         ("POST", "/review/publish") => Some(PageRoute::ConfirmPublish),
         _ => None,
@@ -67,6 +71,8 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::VerifyGithub if same_origin => github::verify(app, request).await,
         PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
         PageRoute::ApproveSuggestion if same_origin => review::approve(app, request),
+        PageRoute::EditSuggestion if same_origin => review::edit(app, request),
+        PageRoute::PreviewEdit if same_origin => review::preview_edit(app, request),
         PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
         PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
         PageRoute::SignIn
@@ -74,6 +80,8 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::VerifyGithub
         | PageRoute::StartScan
         | PageRoute::ApproveSuggestion
+        | PageRoute::EditSuggestion
+        | PageRoute::PreviewEdit
         | PageRoute::DeclineSuggestion
         | PageRoute::ConfirmPublish => forbidden(),
         PageRoute::PdsReturn => pds_return(app, request).await,

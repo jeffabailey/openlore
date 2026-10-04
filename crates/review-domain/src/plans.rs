@@ -13,6 +13,8 @@ use ports::claim_domain::{
 use ports::{StoredPublishPlan, SuggestionKey};
 use serde_json::{json, Value};
 
+use crate::edits::ClaimEdit;
+
 /// The ATProto collection approved claims are written to.
 pub const CLAIM_COLLECTION: &str = "org.openlore.claim";
 
@@ -94,12 +96,29 @@ pub fn publish_plan(
     draft: &ClaimDraft,
     composed_at: &str,
 ) -> Result<PublishPlan, PlanError> {
+    let unedited = ClaimEdit {
+        object: draft.key.object.clone(),
+        confidence_bp: draft.confidence_bp,
+    };
+    publish_edited_plan(owner_did, draft, &unedited, composed_at)
+}
+
+/// Build the publish plan for the owner's `edit` of `draft` (US-BRA-005):
+/// the record carries exactly the edited philosophy and confidence, so its
+/// CID — the record key — is the edited claim's (ADR-071); the plan still
+/// names the suggestion it publishes. Pure: nothing is written.
+pub fn publish_edited_plan(
+    owner_did: &str,
+    draft: &ClaimDraft,
+    edit: &ClaimEdit,
+    composed_at: &str,
+) -> Result<PublishPlan, PlanError> {
     let unsigned = UnsignedClaim {
         subject: draft.key.subject.clone(),
         predicate: draft.key.predicate.clone(),
-        object: draft.key.object.clone(),
+        object: edit.object.clone(),
         evidence: draft.evidence.clone(),
-        confidence: Confidence::from_basis_points(i64::from(draft.confidence_bp)),
+        confidence: Confidence::from_basis_points(i64::from(edit.confidence_bp)),
         author_did: Did(owner_did.to_string()),
         composed_at: composed_at.to_string(),
         references: Vec::new(),
@@ -308,6 +327,36 @@ mod tests {
             let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
             let days = era * 146_097 + doe - 719_468;
             prop_assert_eq!(days * 86_400 + parts[3] * 3600 + parts[4] * 60 + parts[5], secs);
+        }
+    }
+
+    proptest! {
+        /// Universe: the record's lexicon keys. An edited plan differs from
+        /// the unedited one in exactly `object` and `confidence` (set to the
+        /// edit); every other key is unchanged, its key is its recomputed
+        /// CID, and it still names the suggestion it publishes.
+        #[test]
+        fn an_edited_plan_record_is_exactly_the_edit(
+            (did, draft) in arb_draft(),
+            slug in "[a-z-]{3,20}",
+            bp in 0u16..=10_000,
+        ) {
+            let edit = ClaimEdit { object: format!("org.openlore.philosophy.{slug}"), confidence_bp: bp };
+            let composed_at = "2026-10-04T15:02:11Z";
+            let before = publish_plan(&did, &draft, composed_at).expect("plan").record();
+            let plan = publish_edited_plan(&did, &draft, &edit, composed_at).expect("edited plan");
+            let after = plan.record();
+            for (field, value) in after.as_object().expect("object") {
+                match field.as_str() {
+                    "object" => prop_assert_eq!(value, &json!(edit.object)),
+                    "confidence" => prop_assert_eq!(value, &json!(edit.confidence_bp)),
+                    _ => prop_assert_eq!(value, &before[field]),
+                }
+            }
+            prop_assert_eq!(after.as_object().map(|o| o.len()), before.as_object().map(|o| o.len()));
+            prop_assert!(read_back_matches(&after, plan.rkey()));
+            prop_assert_eq!(plan.key(), &draft.key);
+            prop_assert_eq!(&restore_plan(&did, &plan.stored()), &Ok(plan.clone()));
         }
     }
 

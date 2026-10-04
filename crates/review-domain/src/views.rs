@@ -5,6 +5,7 @@ use maud::{html, Markup, DOCTYPE};
 
 use ports::{ScanRun, ScanStatus, Suggestion, SuggestionKey};
 
+use crate::edits::CONFIDENCE_GUIDANCE;
 use crate::ownership::OwnershipRefusal;
 use crate::plans::PublishPlan;
 use crate::signin::{PermissionMode, SignInFailure};
@@ -293,6 +294,11 @@ fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
                 (key_fields(&suggestion.key))
                 button type="submit" data-key="a" { (APPROVE_LABEL) }
             }
+            form method="post" action="/review/edit" {
+                input type="hidden" name="csrf" value=(csrf_token);
+                (key_fields(&suggestion.key))
+                button type="submit" data-key="e" { (EDIT_LABEL) }
+            }
             form method="post" action="/review/decline" {
                 input type="hidden" name="csrf" value=(csrf_token);
                 (key_fields(&suggestion.key))
@@ -300,6 +306,75 @@ fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
             }
         }
     }
+}
+
+/// The card's edit button label (US-BRA-005).
+pub const EDIT_LABEL: &str = "Edit";
+
+/// The edit form's button that previews the edited claim.
+pub const PREVIEW_LABEL: &str = "Preview";
+
+/// The edit form's way back: the suggestion, unchanged.
+pub const CANCEL_LABEL: &str = "Cancel";
+
+/// The edit form of one suggestion: what the owner typed so far and, when
+/// her confidence was refused, the guidance (approval stays blocked).
+pub struct EditView<'a> {
+    pub suggestion: &'a Suggestion,
+    pub csrf_token: &'a str,
+    /// The philosophies offered (the whole vocabulary).
+    pub choices: &'a [String],
+    /// The philosophy currently chosen.
+    pub chosen: &'a str,
+    /// The confidence as typed.
+    pub typed_confidence: &'a str,
+    /// Why the typed confidence was refused, if it was.
+    pub guidance: Option<&'a str>,
+}
+
+/// Edit a suggestion before approving it (AC-005.1–005.5): swap the
+/// philosophy, set the confidence, preview. Nothing is written here; Cancel
+/// returns to the queue with the suggestion unchanged.
+pub fn edit_page(view: &EditView<'_>) -> String {
+    let key = &view.suggestion.key;
+    page(
+        "Edit before approving",
+        html! {
+            h1 { "Edit before approving" }
+            p { (suggestion_headline(key)) }
+            p {
+                "Suggested confidence " (confidence_text(view.suggestion.confidence_bp))
+                ". Your edit stays private until you publish it."
+            }
+            form method="post" action="/review/edit/preview" {
+                input type="hidden" name="csrf" value=(view.csrf_token);
+                input type="hidden" name="subject" value=(key.subject);
+                input type="hidden" name="predicate" value=(key.predicate);
+                input type="hidden" name="suggested_object" value=(key.object);
+                label {
+                    "Philosophy "
+                    select name="object" {
+                        @for object in view.choices {
+                            option value=(object) selected[object == view.chosen] {
+                                (philosophy_slug(object))
+                            }
+                        }
+                    }
+                }
+                label {
+                    "Confidence (0.00 to 1.00) "
+                    input type="text" name="confidence" inputmode="decimal"
+                        value=(view.typed_confidence) title=(CONFIDENCE_GUIDANCE);
+                }
+                @if let Some(guidance) = view.guidance {
+                    p role="alert" { (guidance) }
+                }
+                button type="submit" { (PREVIEW_LABEL) }
+            }
+            p { a href="/review" { (CANCEL_LABEL) } }
+        },
+    )
+    .into_string()
 }
 
 /// The verified owner's queue: privacy statement, scan state, cards.

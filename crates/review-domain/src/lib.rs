@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod edits;
 pub mod lifecycle;
 pub mod ownership;
 pub mod plans;

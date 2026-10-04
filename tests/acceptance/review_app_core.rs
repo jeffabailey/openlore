@@ -118,8 +118,10 @@ fn sut_reconcile(_existing: &[(Key, State)], _derived: &[Key]) -> Reconciled {
 }
 
 /// BR-4: the typed confidence → basis points, or the guidance message.
-fn sut_parse_confidence(_typed: &str) -> Result<i64, String> {
-    todo!("SCAFFOLD: bind review_domain confidence parse (BR-4)")
+fn sut_parse_confidence(typed: &str) -> Result<i64, String> {
+    review_domain::edits::parse_confidence(typed)
+        .map(i64::from)
+        .map_err(|invalid| invalid.to_string())
 }
 
 /// The publish plan as observed: the exact record JSON, its record key, and
@@ -450,7 +452,6 @@ proptest! {
     /// Every hundredth from 0.00 to 1.00 parses to exactly round(v × 10000);
     /// anything else is refused with the field guidance.
     #[test]
-    #[ignore = "DELIVER R1: unskip one-at-a-time (CORE-5 confidence parse)"]
     fn confidence_parses_every_hundredth_and_refuses_everything_else(
         hundredths in 0i64..=100,
         junk in prop_oneof![

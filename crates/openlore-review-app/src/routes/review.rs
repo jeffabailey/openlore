@@ -4,9 +4,13 @@
 
 use hyper::StatusCode;
 use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
+use review_domain::edits::{edit_claim, philosophy_choices};
 use review_domain::lifecycle::decline;
-use review_domain::plans::{plan_expires_at, publish_plan, rfc3339_utc, ClaimDraft};
-use review_domain::views::{self, QueueView, ScanRefused};
+use review_domain::plans::{
+    plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
+    PublishPlan,
+};
+use review_domain::views::{self, EditView, QueueView, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now;
@@ -71,36 +75,126 @@ pub(crate) fn queue_page(
 /// Plan-value: what is shown is what a confirm writes); writes nothing to
 /// any repo.
 pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
-    let csrf_token = field(&request.cookies, crate::routes::signin::SESSION_COOKIE)
-        .map(|cookie| csrf_token_for(&cookie))
-        .unwrap_or_default();
-    with_own_suggestion(app, request, |session, suggestion| {
-        let draft = ClaimDraft {
-            key: suggestion.key,
-            evidence: suggestion.evidence,
-            confidence_bp: suggestion.confidence_bp,
-        };
-        let composed_at = rfc3339_utc(i64::try_from(unix_now()).unwrap_or_default());
-        let kept = publish_plan(&session.owner_did, &draft, &composed_at)
-            .ok()
-            .filter(|plan| {
-                app.plans
-                    .put_publish_plan(
-                        &session.owner_did,
-                        &plan.stored(),
-                        plan_expires_at(i64::try_from(unix_now()).unwrap_or_default()),
-                    )
-                    .is_ok()
-            });
-        match kept {
-            Some(plan) => Reply::Page {
-                status: StatusCode::OK,
-                html: views::approval_preview_page(&plan, &csrf_token),
-                set_cookie: None,
-            },
-            None => not_found(),
+    with_own_suggestion(app, request, "object", |session, suggestion| {
+        let draft = draft_of(suggestion);
+        let plan = publish_plan(&session.owner_did, &draft, &composed_now());
+        keep_and_preview(app, request, session, plan)
+    })
+}
+
+/// `POST /review/edit`: the edit form of one of the owner's visible pending
+/// suggestions, prefilled with the suggestion (US-BRA-005). Writes nothing.
+pub(crate) fn edit(app: &App, request: &PageRequest) -> Reply {
+    with_own_suggestion(app, request, "object", |_, suggestion| {
+        let typed = views::confidence_text(suggestion.confidence_bp);
+        edit_form(
+            request,
+            &suggestion,
+            &suggestion.key.object,
+            &typed,
+            None,
+            StatusCode::OK,
+        )
+    })
+}
+
+/// `POST /review/edit/preview`: the exact-record preview of the owner's
+/// edit. A refused confidence re-shows the form with guidance and no way to
+/// publish; a valid edit becomes a new plan whose record is exactly the
+/// edit (its CID is the record key). Writes nothing to any repo.
+pub(crate) fn preview_edit(app: &App, request: &PageRequest) -> Reply {
+    with_own_suggestion(app, request, "suggested_object", |session, suggestion| {
+        let chosen = field(&request.form, "object");
+        let typed = field(&request.form, "confidence").unwrap_or_default();
+        match edit_claim(&suggestion.key.object, chosen.as_deref(), &typed) {
+            Ok(edit) => {
+                let draft = draft_of(suggestion);
+                let plan = publish_edited_plan(&session.owner_did, &draft, &edit, &composed_now());
+                keep_and_preview(app, request, session, plan)
+            }
+            Err(invalid) => {
+                let chosen = chosen.unwrap_or_else(|| suggestion.key.object.clone());
+                let guidance = invalid.to_string();
+                edit_form(
+                    request,
+                    &suggestion,
+                    &chosen,
+                    &typed,
+                    Some(&guidance),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                )
+            }
         }
     })
+}
+
+fn edit_form(
+    request: &PageRequest,
+    suggestion: &Suggestion,
+    chosen: &str,
+    typed_confidence: &str,
+    guidance: Option<&str>,
+    status: StatusCode,
+) -> Reply {
+    let choices = philosophy_choices(&suggestion.key.object);
+    Reply::Page {
+        status,
+        html: views::edit_page(&EditView {
+            suggestion,
+            csrf_token: &csrf_token_of(request),
+            choices: &choices,
+            chosen,
+            typed_confidence,
+            guidance,
+        }),
+        set_cookie: None,
+    }
+}
+
+fn draft_of(suggestion: Suggestion) -> ClaimDraft {
+    ClaimDraft {
+        key: suggestion.key,
+        evidence: suggestion.evidence,
+        confidence_bp: suggestion.confidence_bp,
+    }
+}
+
+fn composed_now() -> String {
+    rfc3339_utc(i64::try_from(unix_now()).unwrap_or_default())
+}
+
+/// The anti-forgery token of the request's session cookie.
+fn csrf_token_of(request: &PageRequest) -> String {
+    field(&request.cookies, crate::routes::signin::SESSION_COOKIE)
+        .map(|cookie| csrf_token_for(&cookie))
+        .unwrap_or_default()
+}
+
+/// Keep a built plan until its deadline and show its exact-record preview;
+/// a plan that cannot be built or kept is not found.
+fn keep_and_preview(
+    app: &App,
+    request: &PageRequest,
+    session: &WebSession,
+    plan: Result<PublishPlan, PlanError>,
+) -> Reply {
+    let kept = plan.ok().filter(|plan| {
+        app.plans
+            .put_publish_plan(
+                &session.owner_did,
+                &plan.stored(),
+                plan_expires_at(i64::try_from(unix_now()).unwrap_or_default()),
+            )
+            .is_ok()
+    });
+    match kept {
+        Some(plan) => Reply::Page {
+            status: StatusCode::OK,
+            html: views::approval_preview_page(&plan, &csrf_token_of(request)),
+            set_cookie: None,
+        },
+        None => not_found(),
+    }
 }
 
 /// May the owner publish the suggestion `key` right now? Only while it is
@@ -122,7 +216,7 @@ pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey)
 /// `POST /review/decline`: "Not me" — the suggestion leaves the queue,
 /// declined, and is never offered again.
 pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
-    with_own_suggestion(app, request, |session, suggestion| {
+    with_own_suggestion(app, request, "object", |session, suggestion| {
         let declined = decline(SuggestionState::Pending).is_some_and(|to| {
             app.review_write
                 .change_state(
@@ -144,11 +238,13 @@ pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
     })
 }
 
-/// Run `act` on the visible pending suggestion the form names, if it is
-/// the signed-in owner's; anything else is not found.
+/// Run `act` on the visible pending suggestion the form names (its object
+/// in `object_field`), if it is the signed-in owner's; anything else is not
+/// found.
 fn with_own_suggestion(
     app: &App,
     request: &PageRequest,
+    object_field: &str,
     act: impl FnOnce(&WebSession, Suggestion) -> Reply,
 ) -> Reply {
     let Some((_, session)) = current_session(app, request) else {
@@ -163,7 +259,7 @@ fn with_own_suggestion(
         .ok()
         .flatten()
         .is_some_and(|link| link.verified);
-    let named = key_of(request);
+    let named = key_of(request, object_field);
     let found = named.filter(|_| verified).and_then(|key| {
         app.review_read
             .pending_suggestions(&session.owner_did)
@@ -177,12 +273,12 @@ fn with_own_suggestion(
     }
 }
 
-/// The suggestion key a card's form names.
-fn key_of(request: &PageRequest) -> Option<SuggestionKey> {
+/// The suggestion key a form names, its object in `object_field`.
+fn key_of(request: &PageRequest, object_field: &str) -> Option<SuggestionKey> {
     Some(SuggestionKey {
         subject: field(&request.form, "subject")?,
         predicate: field(&request.form, "predicate")?,
-        object: field(&request.form, "object")?,
+        object: field(&request.form, object_field)?,
     })
 }
 

@@ -33,7 +33,6 @@ use review_app::*;
 ///     | (unchanged)   | 0.00  | 0      | speculative    |
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-005 edited claim published)"]
 fn priya_publishes_her_edited_claim() {
     let cases = [
         (
@@ -83,7 +82,6 @@ fn priya_publishes_her_edited_claim() {
 ///   Examples: | 1.5 | -0.1 | abc | 0.555 | (empty) | 1,0 |
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-005 invalid confidence guidance)"]
 fn an_invalid_confidence_is_caught_with_guidance_and_blocks_approval() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -116,7 +114,6 @@ fn an_invalid_confidence_is_caught_with_guidance_and_blocks_approval() {
 ///   Then the card shows the original suggestion unchanged and nothing is written
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-005 cancel edit)"]
 fn cancelling_an_edit_restores_the_suggestion() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -137,7 +134,6 @@ fn cancelling_an_edit_restores_the_suggestion() {
 ///   Then she can choose any philosophy of the OpenLore vocabulary
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-005 vocabulary offered)"]
 fn every_vocabulary_philosophy_is_offered_when_swapping() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
