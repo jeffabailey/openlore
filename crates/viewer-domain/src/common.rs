@@ -551,6 +551,24 @@ pub fn render_claim_not_found_fragment() -> Markup {
     }
 }
 
+/// The ADR-071 label for a claim attested by its author's own repo rather than
+/// an app signature (I-BRA-5: an honest provenance, never "unverified"). Held
+/// in ONE place so the label has exactly one site to pin against mutation.
+pub const SELF_ATTESTED_LABEL: &str = "self-attested";
+
+/// Render a claim's provenance marker (ADR-071 / AC-009.3). PURE total
+/// function: a self-attested claim gets the [`SELF_ATTESTED_LABEL`] marker;
+/// an app-signed claim renders NOTHING, so its markup is byte-identical to
+/// before self-attested claims existed (AC-009.4).
+pub fn render_provenance_marker(provenance: PeerClaimProvenance) -> Markup {
+    match provenance {
+        PeerClaimProvenance::AppSigned => html! {},
+        PeerClaimProvenance::SelfAttested => html! {
+            " " span class="provenance" { "[" (SELF_ATTESTED_LABEL) "]" }
+        },
+    }
+}
+
 /// The neutral "Countered" PRESENCE flag rendered near a claim that has ≥1
 /// counter (CT-8 / I-CT-3): a presence marker ONLY — never a verdict, a score, a
 /// count ("disputed by N"), or a count-based re-rank. Held in ONE place so the

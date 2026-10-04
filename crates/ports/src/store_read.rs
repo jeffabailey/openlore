@@ -119,6 +119,32 @@ pub struct PeerClaimRow {
     /// from. The "distinct from own" / attribution surface (BR-VIEW-5).
     pub origin: PeerOrigin,
     pub composed_at: DateTime<Utc>,
+    /// How the claim's authorship is attested (ADR-071; the
+    /// `peer_claims.provenance` column). Additive: an app-signed row reads
+    /// exactly as before.
+    pub provenance: PeerClaimProvenance,
+}
+
+/// The ADR-071 provenance of a stored peer claim, as carried by the
+/// `peer_claims.provenance` column (`app-signed` | `self-attested`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerClaimProvenance {
+    /// Signed with the author's `#org.openlore.application` key (today's path).
+    AppSigned,
+    /// Unsigned; attested by the author's own repo, fetched from their own PDS.
+    SelfAttested,
+}
+
+impl PeerClaimProvenance {
+    /// Read the stored column value; anything but `self-attested` is the
+    /// pre-v6 / default app-signed mode.
+    pub fn from_column(value: &str) -> Self {
+        if value == "self-attested" {
+            Self::SelfAttested
+        } else {
+            Self::AppSigned
+        }
+    }
 }
 
 /// One row of an entity SURVEY — a single signed claim about the queried entity,

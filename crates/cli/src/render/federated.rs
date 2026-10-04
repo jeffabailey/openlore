@@ -29,6 +29,7 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
     // reference graph so each row's annotation is an O(1) lookup. The
     // annotation is per-row METADATA — it NEVER merges two rows.
     let counters = counter_relationships(rows);
+    let retracted = self_retracted_cids(rows);
 
     let mut out = String::new();
     for (author_did, relationship, author_rows) in &groups {
@@ -42,6 +43,9 @@ pub fn render_federated_query_result(rows: &[FederatedRow]) -> String {
                 out.push('\n');
             }
             out.push_str(&render_one_federated_row(author_did, row, &counters));
+            if retracted.contains(row.claim.cid().0.as_str()) {
+                out.push_str("  retracted by author\n");
+            }
         }
         out.push('\n');
     }
@@ -120,6 +124,29 @@ pub(crate) fn counter_relationships(rows: &[FederatedRow]) -> Vec<CounterRelatio
         }
     }
     relationships
+}
+
+/// Pure projection: the CIDs in `rows` their OWN author has retracted, by the
+/// shipped D-RF-D3 rule ([`claim_domain::is_self_retracted`]).
+/// Provenance-agnostic: a self-attested retraction marker withdraws its
+/// author's self-attested claim exactly as an app-signed one does (AC-011.2).
+/// Authors compare on the row's bare `author_did` (one normal form across
+/// both ADR-071 modes). A retraction is shown, never a deletion (WD-11).
+pub(crate) fn self_retracted_cids(rows: &[FederatedRow]) -> std::collections::HashSet<&str> {
+    use claim_domain::{is_self_retracted, ClaimLineage};
+    let lineages: Vec<ClaimLineage<'_>> = rows
+        .iter()
+        .map(|row| ClaimLineage {
+            author_did: row.author_did.0.as_str(),
+            cid: row.claim.cid().0.as_str(),
+            references: &row.claim.unsigned().references,
+        })
+        .collect();
+    lineages
+        .iter()
+        .filter(|lineage| is_self_retracted(lineage, &lineages))
+        .map(|lineage| lineage.cid)
+        .collect()
 }
 
 /// The annotation lines for one row given the full relationship set. A row

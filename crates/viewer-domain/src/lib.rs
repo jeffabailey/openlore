@@ -26,8 +26,8 @@
 
 pub(crate) use maud::{html, Markup, DOCTYPE};
 pub(crate) use ports::{
-    AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, CounterClaimRow, PeerClaimRow,
-    PeerOrigin, PeerSubscriptionSummary, SurveyRow,
+    AuthorRelationship, CandidateClaim, ClaimDetail, ClaimRow, CounterClaimRow,
+    PeerClaimProvenance, PeerClaimRow, PeerOrigin, PeerSubscriptionSummary, SurveyRow,
 };
 // The PURE slice-04 `scoring` core is REUSED for the `/score` view-model
 // projection (ADR-039): the renderer projects the `WeightedView` (ranked

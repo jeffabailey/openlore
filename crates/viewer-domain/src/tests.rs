@@ -1516,6 +1516,7 @@ fn peer_row(
         confidence,
         origin,
         is_countered: false,
+        provenance: PeerClaimProvenance::AppSigned,
     }
 }
 
@@ -5248,6 +5249,7 @@ fn peer_claim_row(cid: &str, subject: &str, confidence: f64) -> PeerClaimRow {
             fetched_from_pds: "https://pds.example.test".to_string(),
         },
         composed_at: chrono::Utc::now(),
+        provenance: PeerClaimProvenance::AppSigned,
     }
 }
 
@@ -5322,6 +5324,7 @@ fn countered_peer_row_renders_one_hop_link_uncountered_renders_none() {
             fetched_from_pds: "https://pds.example.test".to_string(),
         },
         is_countered: true,
+        provenance: PeerClaimProvenance::AppSigned,
     };
     let plain = PeerClaimRowView {
         is_countered: false,
@@ -5365,6 +5368,7 @@ fn the_peer_flag_is_additive_order_count_origin_confidence_unchanged() {
                 fetched_from_pds: "https://pds.a.test".to_string(),
             },
             is_countered: true,
+            provenance: PeerClaimProvenance::AppSigned,
         },
         PeerClaimRowView {
             cid: "bafyPeerB".to_string(),
@@ -5377,6 +5381,7 @@ fn the_peer_flag_is_additive_order_count_origin_confidence_unchanged() {
                 fetched_from_pds: "https://pds.b.test".to_string(),
             },
             is_countered: false,
+            provenance: PeerClaimProvenance::AppSigned,
         },
     ];
     let rows_plain: Vec<PeerClaimRowView> = rows_flagged
@@ -5427,6 +5432,7 @@ proptest! {
                     fetched_from_pds: "https://pds.example.test".to_string(),
                 },
                 is_countered: countered,
+                provenance: PeerClaimProvenance::AppSigned,
             })
             .collect();
         let html = render_peer_claims_table_fragment(&PageView::new(rows)).into_string();

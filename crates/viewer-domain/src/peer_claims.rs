@@ -56,6 +56,11 @@ pub struct PeerClaimRowView {
     /// function of (page, presence). ADDITIVE: it NEVER changes row order/paging/count,
     /// the peer ORIGIN, or the confidence cell (shown-never-applied, I-CF-2/I-CF-4).
     pub is_countered: bool,
+    /// How the claim's authorship is attested (ADR-071 / AC-009.3): carried
+    /// through from the boundary row so the renderer labels a self-attested
+    /// claim "self-attested" (never "unverified"). ADDITIVE: an app-signed
+    /// row renders byte-identically to before (AC-009.4).
+    pub provenance: PeerClaimProvenance,
 }
 
 impl PeerClaimRowView {
@@ -89,6 +94,7 @@ impl PeerClaimRowView {
             confidence: row.confidence,
             origin: row.origin.clone(),
             is_countered: presence.contains(&row.cid),
+            provenance: row.provenance,
         }
     }
 }
@@ -195,7 +201,7 @@ fn render_peer_claim_row(row: &PeerClaimRowView) -> Markup {
             td { (row.predicate) }
             td { (row.object) }
             td { (render_confidence(row.confidence)) }
-            td { (render_peer_origin(&row.origin)) }
+            td { (render_peer_origin(&row.origin)) (render_provenance_marker(row.provenance)) }
             td { (row.cid) (render_peer_list_presence_flag(row)) }
         }
     }
@@ -244,3 +250,67 @@ fn render_peer_empty_state() -> Markup {
 // =============================================================================
 // Live Scrape view (`GET`/`POST /scrape`, US-VIEW-005 / FR-VIEW-5)
 // =============================================================================
+
+#[cfg(test)]
+mod provenance_label_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_row() -> impl Strategy<Value = PeerClaimRowView> {
+        (
+            "[a-z]{1,8}",
+            0u32..=10_000,
+            any::<bool>(),
+            any::<bool>(),
+            "did:plc:[a-z0-9]{4,12}",
+        )
+            .prop_map(|(name, basis_points, countered, self_attested, did)| {
+                PeerClaimRowView {
+                    cid: format!("bafy{name}"),
+                    subject: format!("github:{name}/{name}"),
+                    predicate: "embodiesPhilosophy".to_string(),
+                    object: "org.openlore.philosophy.memory-safety".to_string(),
+                    confidence: f64::from(basis_points) / 10_000.0,
+                    origin: PeerOrigin::Known {
+                        author_did: did,
+                        fetched_from_pds: "https://pds.example.test".to_string(),
+                    },
+                    is_countered: countered,
+                    provenance: if self_attested {
+                        PeerClaimProvenance::SelfAttested
+                    } else {
+                        PeerClaimProvenance::AppSigned
+                    },
+                }
+            })
+    }
+
+    proptest! {
+        /// AC-009.3 / AC-009.4 state delta over a page of peer rows: the
+        /// "self-attested" label appears exactly once per self-attested row,
+        /// never "unverified"; and flipping a row to app-signed removes ONLY
+        /// its marker (the rest of the markup is unchanged).
+        #[test]
+        fn self_attested_rows_are_labelled_and_app_signed_rows_are_unchanged(
+            rows in proptest::collection::vec(arb_row(), 1..6),
+        ) {
+            let html = render_peer_claims_table_fragment(&PageView::new(rows.clone())).into_string();
+            let self_attested = rows
+                .iter()
+                .filter(|row| row.provenance == PeerClaimProvenance::SelfAttested)
+                .count();
+            prop_assert_eq!(html.matches(SELF_ATTESTED_LABEL).count(), self_attested);
+            prop_assert!(!html.contains("unverified"));
+
+            let all_app_signed: Vec<PeerClaimRowView> = rows
+                .iter()
+                .cloned()
+                .map(|row| PeerClaimRowView { provenance: PeerClaimProvenance::AppSigned, ..row })
+                .collect();
+            let baseline =
+                render_peer_claims_table_fragment(&PageView::new(all_app_signed)).into_string();
+            let marker = render_provenance_marker(PeerClaimProvenance::SelfAttested).into_string();
+            prop_assert_eq!(html.replace(&marker, ""), baseline);
+        }
+    }
+}

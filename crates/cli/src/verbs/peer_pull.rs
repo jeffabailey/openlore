@@ -72,6 +72,10 @@ struct PeerProgress {
     stored: usize,
     skipped_existing: usize,
     rejected: usize,
+    /// Freshly stored records admitted as self-attested (ADR-071): attested
+    /// by the author's own repo, carrying no app signature — so they are
+    /// reported on their own line, never counted as "signatures valid".
+    self_attested: usize,
     /// One human-readable reason per rejected record (WD-37 per-record fault
     /// isolation): e.g. "signature invalid", "CID mismatch (possible
     /// adversarial input)", "self attribution". The render surfaces these so
@@ -92,6 +96,7 @@ impl PeerProgress {
             stored: 0,
             skipped_existing: 0,
             rejected: 0,
+            self_attested: 0,
             rejection_reasons: Vec::new(),
             peer_skip_reason: None,
         }
@@ -108,6 +113,12 @@ impl PeerProgress {
     /// minus the ones already cached). Drives the `verified : N/N` line.
     fn verifiable(&self) -> usize {
         self.fetched.saturating_sub(self.skipped_existing)
+    }
+
+    /// The records presented for APP-SIGNATURE verification: the verifiable
+    /// ones minus those admitted as self-attested (which carry no signature).
+    fn signature_checked(&self) -> usize {
+        self.verifiable().saturating_sub(self.self_attested)
     }
 }
 
@@ -206,7 +217,12 @@ fn pull_one_peer(
         match evaluate_record(record, &peer_did, origin, verifying_key.as_ref(), local_did) {
             RecordVerdict::Verified => {
                 match store_admitted(wiring, &peer_did, &record.record, &peer_info) {
-                    Ok(outcome) if outcome.written => block.stored += 1,
+                    Ok(outcome) if outcome.written => {
+                        block.stored += 1;
+                        if matches!(record.record, ClaimRecord::SelfAttested(_)) {
+                            block.self_attested += 1;
+                        }
+                    }
                     // Idempotent re-pull: the CID was already cached.
                     Ok(_) => block.skipped_existing += 1,
                     // Anti-merging rejection (Self/Cross) or storage error
@@ -371,17 +387,24 @@ fn evaluate_record(
         verifying_key,
     ) {
         Ok(_) => RecordVerdict::Verified,
-        Err(rejection) => RecordVerdict::rejected(&rejection_reason(rejection)),
+        Err(rejection) => RecordVerdict::rejected(&rejection_reason(rejection, &record.record)),
     }
 }
 
-/// The user-facing reason for a refused provenance; the app-signed wording
-/// is unchanged ("CID mismatch (possible adversarial input)", "signature
-/// invalid", "canonicalization failed").
-fn rejection_reason(rejection: ProvenanceRejection) -> String {
-    match rejection {
-        ProvenanceRejection::NoAppKey => "signature invalid (no usable verification key)".into(),
-        other => other.to_string(),
+/// The user-facing reason for a refused provenance (ADR-071 closed ADT). The
+/// app-signed wording is unchanged ("CID mismatch (possible adversarial
+/// input)", "signature invalid", "canonicalization failed"); an unsigned
+/// record whose content does not hash to its record key names the failed
+/// integrity check.
+fn rejection_reason(rejection: ProvenanceRejection, record: &ClaimRecord) -> String {
+    match (rejection, record) {
+        (ProvenanceRejection::NoAppKey, _) => {
+            "signature invalid (no usable verification key)".into()
+        }
+        (ProvenanceRejection::IntegrityFailure, ClaimRecord::SelfAttested(_)) => {
+            "integrity check failed (CID mismatch, possible adversarial input)".into()
+        }
+        (other, _) => other.to_string(),
     }
 }
 
@@ -523,13 +546,24 @@ fn render_report(
                 // Verified = records that passed verify (freshly stored OR
                 // already cached) over the verifiable count (fetched minus
                 // already-cached). Rejected records are the complement.
-                let verified = block.verifiable().saturating_sub(block.rejected);
-                out.push_str(&format!(
-                    "    verified  : {}/{} signatures valid against {}'s DID document\n",
-                    verified,
-                    block.verifiable(),
-                    block.peer_handle,
-                ));
+                // Self-attested records carry no signature: they are excluded
+                // from the signature line (shown only when something was
+                // signature-checked, or nothing self-attested — i.e. exactly
+                // as before for app-signed peers) and reported on their own.
+                let signature_checked = block.signature_checked();
+                if signature_checked > 0 || block.self_attested == 0 {
+                    let verified = signature_checked.saturating_sub(block.rejected);
+                    out.push_str(&format!(
+                        "    verified  : {}/{} signatures valid against {}'s DID document\n",
+                        verified, signature_checked, block.peer_handle,
+                    ));
+                }
+                if block.self_attested > 0 {
+                    out.push_str(&format!(
+                        "    self-attested: {} (no app signature; published by {} in their own repo)\n",
+                        block.self_attested, block.peer_handle,
+                    ));
+                }
                 if block.rejected > 0 {
                     out.push_str(&format!("    rejected  : {}\n", block.rejected));
                     // Surface the per-record reason (WD-37 + ADR-013): the
@@ -600,6 +634,7 @@ mod tests {
             stored: 3,
             skipped_existing: 0,
             rejected: 0,
+            self_attested: 0,
             rejection_reasons: Vec::new(),
             peer_skip_reason: None,
         };
@@ -630,6 +665,7 @@ mod tests {
             stored: 4,
             skipped_existing: 0,
             rejected: 1,
+            self_attested: 0,
             rejection_reasons: vec!["signature invalid".to_string()],
             peer_skip_reason: None,
         };
@@ -658,5 +694,148 @@ mod tests {
         assert!(rendered.contains("did:plc:down-test"));
         assert!(rendered.contains("skipped"));
         assert!(rendered.contains("PDS unreachable"));
+    }
+
+    mod self_attested {
+        use super::super::*;
+        use claim_domain::{
+            Confidence, SelfAttestedClaim, SignatureBlock, SignedClaim, UnsignedClaim,
+        };
+        use proptest::prelude::*;
+
+        fn unsigned(author: &str) -> UnsignedClaim {
+            UnsignedClaim {
+                subject: "github:priyaraman/tidepool".into(),
+                predicate: "embodiesPhilosophy".into(),
+                object: "org.openlore.philosophy.memory-safety".into(),
+                evidence: vec!["https://github.com/priyaraman/tidepool".into()],
+                confidence: Confidence::from_basis_points(2500),
+                author_did: Did(author.into()),
+                composed_at: "2026-10-04T15:02:11Z".into(),
+                references: Vec::new(),
+                reason: None,
+            }
+        }
+
+        /// The universe: one record in each ADR-071 arm.
+        fn record(self_attested: bool) -> ClaimRecord {
+            if self_attested {
+                ClaimRecord::SelfAttested(
+                    SelfAttestedClaim::new(unsigned("did:plc:priya")).expect("canonical"),
+                )
+            } else {
+                ClaimRecord::AppSigned(SignedClaim {
+                    unsigned: unsigned("did:plc:rachel#org.openlore.application"),
+                    signature: SignatureBlock {
+                        signed_cid: Cid("bafyrachel".into()),
+                        signature_bytes: vec![0u8; 64],
+                        verification_method: "did:plc:rachel#org.openlore.application".into(),
+                    },
+                })
+            }
+        }
+
+        fn arb_rejection() -> impl Strategy<Value = ProvenanceRejection> {
+            prop_oneof![
+                Just(ProvenanceRejection::MalformedProvenance),
+                Just(ProvenanceRejection::ForeignRepo),
+                Just(ProvenanceRejection::UnverifiableProvenance),
+                Just(ProvenanceRejection::Uncanonicalizable),
+                Just(ProvenanceRejection::IntegrityFailure),
+                Just(ProvenanceRejection::NoAppKey),
+                Just(ProvenanceRejection::SignatureInvalid),
+            ]
+        }
+
+        /// The named phrases each rejection must surface (RD-4). Every other
+        /// phrase of [`ALL_PHRASES`] must be absent, so a swapped mapping is
+        /// caught in either direction.
+        fn named_phrases(rejection: ProvenanceRejection, self_attested: bool) -> Vec<&'static str> {
+            match rejection {
+                ProvenanceRejection::MalformedProvenance => vec!["malformed provenance"],
+                ProvenanceRejection::ForeignRepo => vec!["foreign repo"],
+                ProvenanceRejection::UnverifiableProvenance => vec!["unverifiable provenance"],
+                ProvenanceRejection::Uncanonicalizable => vec!["canonicalization failed"],
+                ProvenanceRejection::IntegrityFailure if self_attested => {
+                    vec!["integrity check failed", "CID mismatch"]
+                }
+                ProvenanceRejection::IntegrityFailure => vec!["CID mismatch"],
+                ProvenanceRejection::NoAppKey | ProvenanceRejection::SignatureInvalid => {
+                    vec!["signature invalid"]
+                }
+            }
+        }
+
+        const ALL_PHRASES: [&str; 7] = [
+            "malformed provenance",
+            "foreign repo",
+            "unverifiable provenance",
+            "canonicalization failed",
+            "integrity check failed",
+            "CID mismatch",
+            "signature invalid",
+        ];
+
+        proptest! {
+            /// RD-4 / AC-009.4: every rejection names exactly its own reason
+            /// phrases (and no other's), and the app-signed integrity
+            /// wording is unchanged.
+            #[test]
+            fn each_rejection_names_its_own_reason(
+                rejection in arb_rejection(),
+                self_attested in any::<bool>(),
+            ) {
+                let reason = rejection_reason(rejection, &record(self_attested));
+                let expected = named_phrases(rejection, self_attested);
+                for phrase in ALL_PHRASES {
+                    prop_assert_eq!(
+                        reason.contains(phrase),
+                        expected.contains(&phrase),
+                        "{:?} vs phrase {:?}", reason, phrase
+                    );
+                }
+                if !self_attested && rejection == ProvenanceRejection::IntegrityFailure {
+                    prop_assert_eq!(reason, "CID mismatch (possible adversarial input)");
+                }
+            }
+
+            /// AC-009.3 / AC-009.4 state delta over the progress counts: a
+            /// peer block reports its self-attested records on their own
+            /// line (never "unverified", never as "signatures valid"), and a
+            /// block with none renders exactly the app-signed lines.
+            #[test]
+            fn self_attested_records_are_reported_apart_from_signatures(
+                signed in 0usize..5,
+                self_attested in 0usize..5,
+                rejected in 0usize..3,
+                existing in 0usize..3,
+            ) {
+                let block = PeerProgress {
+                    peer_did: "did:plc:priya".into(),
+                    peer_handle: "priya.test".into(),
+                    fetched: signed + self_attested + rejected + existing,
+                    stored: signed + self_attested,
+                    skipped_existing: existing,
+                    rejected,
+                    self_attested,
+                    rejection_reasons: vec!["signature invalid".into(); rejected],
+                    peer_skip_reason: None,
+                };
+                let rendered = render_report(&[block], signed + self_attested, "");
+                prop_assert!(!rendered.contains("unverified"));
+                prop_assert_eq!(rendered.contains("self-attested"), self_attested > 0);
+                let checked = signed + rejected;
+                let signature_line = format!("{signed}/{checked} signatures valid");
+                prop_assert_eq!(
+                    rendered.contains(&signature_line),
+                    checked > 0 || self_attested == 0,
+                    "{}", rendered
+                );
+                if self_attested > 0 {
+                    let marker = format!("self-attested: {self_attested} ");
+                    prop_assert!(rendered.contains(&marker), "{}", rendered);
+                }
+            }
+        }
     }
 }

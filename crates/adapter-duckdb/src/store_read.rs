@@ -24,7 +24,8 @@ use claim_domain::{Cid, Did, SignedClaim};
 use duckdb::Connection;
 use ports::{
     AttributedClaim, AuthorRelationship, ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest,
-    PeerClaimRow, PeerOrigin, PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,
+    PeerClaimProvenance, PeerClaimRow, PeerOrigin, PeerSubscriptionSummary, StoreReadError,
+    StoreReadPort, SurveyRow,
 };
 
 use crate::bare_did;
@@ -433,7 +434,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
         let mut stmt = conn
             .prepare(
                 "SELECT cid, subject, predicate, object, confidence, author_did, \
-                 fetched_from_pds, composed_at \
+                 fetched_from_pds, composed_at, COALESCE(provenance, 'app-signed') \
                  FROM peer_claims ORDER BY composed_at DESC, cid LIMIT ? OFFSET ?",
             )
             .map_err(|err| StoreReadError::QueryFailed {
@@ -461,6 +462,7 @@ impl StoreReadPort for DuckDbStoreReadAdapter {
                         confidence: row.get::<_, f64>(4)?,
                         origin,
                         composed_at: row.get::<_, DateTime<Utc>>(7)?,
+                        provenance: PeerClaimProvenance::from_column(&row.get::<_, String>(8)?),
                     })
                 },
             )

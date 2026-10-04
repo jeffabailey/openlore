@@ -181,8 +181,8 @@ pub use ingest_source::{
     IngestError, IngestSourcePort, RawRecord, RepoListing, RepoListingPort, RepoRecord,
 };
 pub use store_read::{
-    ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin,
-    PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,
+    ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest, PeerClaimProvenance, PeerClaimRow,
+    PeerOrigin, PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,
 };
 
 // -----------------------------------------------------------------------------

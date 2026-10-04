@@ -79,7 +79,6 @@ fn graph_query(env: &TestEnv, subject: &str) -> CliOutcome {
 ///   Then the claim is in Maria's store, attributed to Priya, and shown as "self-attested", never "unverified"
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-009 peer pull accepts self-attested)"]
 fn maria_pulls_priyas_self_attested_claims() {
     let s = priya::TIDEPOOL_MEMORY_SAFETY;
     let net = priya_pds_with(vec![(
@@ -108,7 +107,6 @@ fn maria_pulls_priyas_self_attested_claims() {
 ///   Then Priya's claim is listed, attributed, with the "self-attested" label
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-009 viewer label)"]
 fn the_viewer_labels_self_attested_claims_never_unverified() {
     let net = priya_pds_with(vec![(
         self_attested_claim_value(
@@ -142,7 +140,6 @@ fn the_viewer_labels_self_attested_claims_never_unverified() {
 ///   And Priya's claim is shown as self-attested, each attributed to its own author
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-009 app-signed unchanged)"]
 fn app_signed_claims_read_exactly_as_before_side_by_side_with_self_attested_ones() {
     let rachel = "did:plc:rachel-test";
     let (rachel_records, rachel_key) = support::build_verifiable_peer_records(rachel, [7u8; 32]);
@@ -233,7 +230,6 @@ fn app_signed_claims_read_exactly_as_before_side_by_side_with_self_attested_ones
 ///     | names an application key but carries no signature        | malformed provenance    |
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-009 tampered / foreign / malformed refused)"]
 fn records_that_are_not_honest_self_attestations_are_refused() {
     let s = priya::TIDEPOOL_MEMORY_SAFETY;
     let honest = self_attested_claim_value(Persona::Priya.did(), s, 2500, &[]);
@@ -285,7 +281,6 @@ fn records_that_are_not_honest_self_attestations_are_refused() {
 ///   Then both records are stored and the original is marked retracted, never deleted
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (self-attested retraction read as retracted)"]
 fn a_claim_priya_retracted_through_the_app_reads_as_retracted() {
     let s = priya::TIDEPOOL_TEST_DRIVEN;
     let original = self_attested_claim_value(Persona::Priya.did(), s, 4000, &[]);
