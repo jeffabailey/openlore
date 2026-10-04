@@ -25,7 +25,7 @@ use duckdb::Connection;
 use ports::IndexStoreError;
 
 /// The index-store schema version this binary knows how to read.
-pub const LATEST_VERSION: i32 = 1;
+pub const LATEST_VERSION: i32 = 2;
 
 /// One migration step. Forward-only by construction.
 struct Migration {
@@ -36,10 +36,11 @@ struct Migration {
 
 /// The full migration list. To add a new schema version, append a `Migration`
 /// here; never edit an existing entry.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    description: "slice-05 network index: indexed_claims + evidence + references",
-    sql: r"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "slice-05 network index: indexed_claims + evidence + references",
+        sql: r"
         -- The SEPARATE index store (ADR-023): the indexer NEVER touches the
         -- user's openlore.duckdb. ONE indexed_claims table, non-Option
         -- author_did, NO merged/consensus/aggregate table (WD-103).
@@ -77,7 +78,17 @@ const MIGRATIONS: &[Migration] = &[Migration {
         );
         CREATE INDEX IF NOT EXISTS idx_indexed_refs_referenced ON indexed_claim_references (referenced_cid);
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        description: "ADR-071: indexed_claims.provenance (app-signed | self-attested)",
+        // Additive + idempotent: existing rows take the app-signed default.
+        sql: r"
+        ALTER TABLE indexed_claims
+            ADD COLUMN IF NOT EXISTS provenance VARCHAR DEFAULT 'app-signed';
+    ",
+    },
+];
 
 /// Ensure `index_schema_version` exists and return the current applied version,
 /// or `0` if no migrations have been applied yet.

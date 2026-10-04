@@ -204,6 +204,7 @@ mod tests {
             evidence: Vec::new(),
             references,
             relationship: AuthorRelationship::NetworkUnfollowed,
+            provenance: ports::PeerClaimProvenance::AppSigned,
         }
     }
 

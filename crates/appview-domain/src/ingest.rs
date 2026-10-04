@@ -17,7 +17,11 @@
 // SCAFFOLD: true
 
 use chrono::{DateTime, Utc};
-use claim_domain::{canonicalize, compute_cid, verify, KeyId, VerificationKey, VerifyingKey};
+use claim_domain::{
+    canonicalize, compute_cid, provenance_verdict, verify, Cid, ClaimRecord, Did, KeyId,
+    Provenance, RecordOrigin, SelfAttestedClaim, UnsignedClaim, VerificationKey, VerifyingKey,
+};
+use ports::PeerClaimProvenance;
 
 use crate::{IndexedClaim, IngestOutcome, RawRecord, RejectReason};
 
@@ -76,33 +80,89 @@ pub fn ingest_decision(record: &RawRecord, resolved_key: &VerificationKey) -> In
     IngestOutcome::Index(build_indexed_claim(record))
 }
 
-/// Build the verified, attributed [`IndexedClaim`] from a record that passed all
-/// three gate preconditions. Pure; clock-free — every field is derived from the
-/// signed payload + the verified published CID.
-fn build_indexed_claim(record: &RawRecord) -> IndexedClaim {
-    let payload = &record.raw_payload;
-    let unsigned = &payload.unsigned;
+/// The gate for one record of one repo, as listed from `origin` under
+/// `rkey` (ADR-071). An app-signed record goes through [`ingest_decision`]
+/// unchanged, its published CID being the rkey; with no resolved key it is
+/// refused as a bad signature, exactly as before. A self-attested record is
+/// indexed iff [`provenance_verdict`] accepts it, attributed to the repo DID
+/// and marked self-attested; otherwise it is refused with that verdict.
+pub fn ingest_repo_record(
+    record: &ClaimRecord,
+    rkey: &str,
+    repo_did: &Did,
+    origin: RecordOrigin,
+    resolved_key: Option<&VerificationKey>,
+) -> IngestOutcome {
+    match record {
+        ClaimRecord::AppSigned(signed) => match resolved_key {
+            Some(key) => ingest_decision(
+                &RawRecord {
+                    published_cid: Cid(rkey.to_string()),
+                    raw_payload: signed.clone(),
+                    source_pds: String::new(),
+                },
+                key,
+            ),
+            None => IngestOutcome::Reject(RejectReason::BadSignature),
+        },
+        ClaimRecord::SelfAttested(claim) => {
+            match provenance_verdict(record, rkey, repo_did, origin, None) {
+                Ok(Provenance::SelfAttested { repo_did }) => {
+                    IngestOutcome::Index(self_attested_indexed_claim(claim, repo_did))
+                }
+                Ok(Provenance::AppSigned { .. }) => {
+                    IngestOutcome::Reject(RejectReason::Provenance(
+                        claim_domain::ProvenanceRejection::MalformedProvenance,
+                    ))
+                }
+                Err(rejection) => IngestOutcome::Reject(RejectReason::Provenance(rejection)),
+            }
+        }
+    }
+}
+
+/// A self-attested claim as indexed: attributed to (and verified against)
+/// the bare repo DID it was attested by.
+fn self_attested_indexed_claim(claim: &SelfAttestedClaim, repo_did: Did) -> IndexedClaim {
     IndexedClaim {
-        // DERIVED byte-equal from the signed payload (anti-merging, WD-103).
-        author_did: unsigned.author_did.clone(),
-        // The verified network-published CID.
-        cid: record.published_cid.clone(),
+        cid: claim.cid().clone(),
+        verified_against: KeyId(repo_did.0.clone()),
+        provenance: PeerClaimProvenance::SelfAttested,
+        ..indexed_claim_of(claim.unsigned(), repo_did)
+    }
+}
+
+/// The attributed row content shared by both provenances. Pure; clock-free.
+fn indexed_claim_of(unsigned: &UnsignedClaim, author_did: Did) -> IndexedClaim {
+    IndexedClaim {
+        author_did,
+        cid: Cid(String::new()),
         subject: unsigned.subject.clone(),
         predicate: unsigned.predicate.clone(),
         object: unsigned.object.clone(),
         confidence: confidence_value(&unsigned.confidence),
-        // Clock-free: the timestamp is DERIVED from the signed payload, never
-        // read from a wall clock (AVC-3a determinism precondition).
         composed_at: parse_composed_at(&unsigned.composed_at),
-        // The verified marker — NEVER empty (WD-104). Prefer the signature's
-        // verification-method (the DID-doc key id the signature verified
-        // against); fall back to the author DID (itself the key-id form,
-        // `did:…#org.openlore.application`) so the marker is non-empty by
-        // construction for any verified claim.
-        verified_against: verified_against_key_id(record),
+        verified_against: KeyId(String::new()),
         evidence: unsigned.evidence.clone(),
         references: unsigned.references.clone(),
         relationship: ports::AuthorRelationship::NetworkUnfollowed,
+        provenance: PeerClaimProvenance::AppSigned,
+    }
+}
+
+/// Build the verified, attributed [`IndexedClaim`] from a record that passed all
+/// three gate preconditions. Pure; clock-free — every field is derived from the
+/// signed payload + the verified published CID.
+fn build_indexed_claim(record: &RawRecord) -> IndexedClaim {
+    let unsigned = &record.raw_payload.unsigned;
+    IndexedClaim {
+        // The verified network-published CID.
+        cid: record.published_cid.clone(),
+        // The verified marker — NEVER empty (WD-104): the signature's
+        // verification-method, else the author DID (the key-id form).
+        verified_against: verified_against_key_id(record),
+        // Author DERIVED byte-equal from the signed payload (anti-merging, WD-103).
+        ..indexed_claim_of(unsigned, unsigned.author_did.clone())
     }
 }
 
@@ -316,6 +376,139 @@ mod tests {
             ingest_decision(&cid_mismatch_record(&sk), &vk),
             IngestOutcome::Reject(RejectReason::CidMismatch),
             "a published CID that does not recompute must Reject(CidMismatch)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // ingest_repo_record (ADR-071): one record of one listed repo
+    // -------------------------------------------------------------------------
+
+    use claim_domain::{ClaimRecord, ProvenanceRejection, RecordOrigin, SelfAttestedClaim};
+    use proptest::prelude::*;
+
+    const REPO: &str = "did:plc:priya-test";
+
+    /// Universe of a self-attested record as listed: who it names as author,
+    /// which rkey it is listed under, and where it was fetched from.
+    #[derive(Debug, Clone, Copy)]
+    enum Author {
+        Repo,
+        OtherDid,
+        RepoAppKey,
+    }
+
+    fn arb_author() -> impl Strategy<Value = Author> {
+        prop_oneof![
+            Just(Author::Repo),
+            Just(Author::OtherDid),
+            Just(Author::RepoAppKey)
+        ]
+    }
+
+    fn arb_origin() -> impl Strategy<Value = RecordOrigin> {
+        prop_oneof![Just(RecordOrigin::AuthorPds), Just(RecordOrigin::Relay)]
+    }
+
+    fn self_attested(author: Author, subject: &str, confidence: f64) -> SelfAttestedClaim {
+        let author_did = match author {
+            Author::Repo => REPO.to_string(),
+            Author::OtherDid => "did:plc:sam-test".to_string(),
+            Author::RepoAppKey => format!("{REPO}#org.openlore.application"),
+        };
+        let unsigned = UnsignedClaim {
+            subject: subject.to_string(),
+            author_did: Did(author_did),
+            confidence: serde_json::from_value(serde_json::json!(confidence))
+                .expect("confidence in range"),
+            ..sample_unsigned()
+        };
+        SelfAttestedClaim::new(unsigned).expect("canonicalizes")
+    }
+
+    proptest! {
+        /// The self-attested arm indexes iff the ADR-071 verdict accepts; an
+        /// indexed row is attributed to the repo DID, keyed by its rkey and
+        /// marked self-attested; a refusal carries the verdict's reason. A
+        /// record fetched through a relay is therefore never indexed.
+        #[test]
+        fn a_self_attested_record_is_indexed_iff_its_provenance_verdict_accepts(
+            author in arb_author(),
+            listed_under_own_cid in any::<bool>(),
+            origin in arb_origin(),
+            subject in "github:[a-z]{1,8}/[a-z]{1,8}",
+            confidence in 0.0f64..=1.0,
+        ) {
+            let claim = self_attested(author, &subject, confidence);
+            let rkey = if listed_under_own_cid { claim.cid().0.clone() } else { "bafyother".to_string() };
+            let record = ClaimRecord::SelfAttested(claim.clone());
+            let repo = Did(REPO.to_string());
+            let verdict = claim_domain::provenance_verdict(&record, &rkey, &repo, origin, None);
+
+            match (ingest_repo_record(&record, &rkey, &repo, origin, None), verdict) {
+                (IngestOutcome::Index(indexed), Ok(_)) => {
+                    prop_assert_eq!(&indexed.author_did, &repo);
+                    prop_assert_eq!(&indexed.verified_against.0, REPO);
+                    prop_assert_eq!(&indexed.cid.0, &rkey);
+                    prop_assert_eq!(indexed.provenance, PeerClaimProvenance::SelfAttested);
+                    prop_assert_eq!(&indexed.subject, &subject);
+                    prop_assert_eq!(origin, RecordOrigin::AuthorPds);
+                }
+                (IngestOutcome::Reject(reason), Err(rejection)) => {
+                    prop_assert_eq!(reason, RejectReason::Provenance(rejection));
+                }
+                (outcome, verdict) => prop_assert!(false, "gate {outcome:?} disagrees with verdict {verdict:?}"),
+            }
+        }
+
+        /// An app-signed record decides exactly as the unchanged gate does, with
+        /// its rkey as the published CID, whatever repo or origin it was listed
+        /// from; with no resolved key it is a bad signature, as before.
+        #[test]
+        fn an_app_signed_record_decides_exactly_as_before(
+            posture in 0u8..4,
+            origin in arb_origin(),
+            listed_in_author_repo in any::<bool>(),
+        ) {
+            let (sk, vk) = keypair();
+            let raw = match posture {
+                0 => valid_record(&sk),
+                1 => unsigned_record(),
+                2 => tampered_record(&sk),
+                _ => cid_mismatch_record(&sk),
+            };
+            let repo = Did(if listed_in_author_repo { REPO } else { "did:plc:elsewhere" }.to_string());
+            let record = ClaimRecord::AppSigned(raw.raw_payload.clone());
+            let rkey = raw.published_cid.0.clone();
+            prop_assert_eq!(
+                ingest_repo_record(&record, &rkey, &repo, origin, Some(&vk)),
+                ingest_decision(&raw, &vk)
+            );
+            prop_assert_eq!(
+                ingest_repo_record(&record, &rkey, &repo, origin, None),
+                IngestOutcome::Reject(RejectReason::BadSignature)
+            );
+        }
+    }
+
+    /// The KPI-BRA-6 guard: an honest self-attested claim read through a relay
+    /// is refused as unverifiable provenance, never indexed.
+    // bypass: the single named example the mutation note requires killing.
+    #[test]
+    fn an_honest_self_attested_claim_fetched_through_a_relay_is_refused() {
+        let claim = self_attested(Author::Repo, "github:priyaraman/tidepool", 0.25);
+        let rkey = claim.cid().0.clone();
+        let repo = Did(REPO.to_string());
+        assert_eq!(
+            ingest_repo_record(
+                &ClaimRecord::SelfAttested(claim),
+                &rkey,
+                &repo,
+                RecordOrigin::Relay,
+                None
+            ),
+            IngestOutcome::Reject(RejectReason::Provenance(
+                ProvenanceRejection::UnverifiableProvenance
+            ))
         );
     }
 }

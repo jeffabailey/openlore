@@ -54,7 +54,7 @@ mod suggest;
 pub mod proptest_strategies;
 
 pub use compose::compose_results;
-pub use ingest::ingest_decision;
+pub use ingest::{ingest_decision, ingest_repo_record};
 pub use retraction::{partition_retracted, RetractionPartition};
 pub use suggest::near_match_suggestion;
 
@@ -113,6 +113,10 @@ pub enum RejectReason {
     CidMismatch,
     /// The record does not match the `org.openlore.claim` Lexicon shape.
     SchemaUnknown,
+    /// An unsigned record whose ADR-071 provenance is refused (malformed,
+    /// foreign repo, not fetched from the author's own PDS, or not its rkey).
+    #[serde(skip)]
+    Provenance(claim_domain::ProvenanceRejection),
 }
 
 // -----------------------------------------------------------------------------

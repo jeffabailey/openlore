@@ -39,8 +39,8 @@ use chrono::{DateTime, Utc};
 use claim_domain::{Cid, ClaimReference, Did, KeyId, ReferenceType};
 use duckdb::Connection;
 use ports::{
-    AuthorRelationship, IndexStoreError, IndexStorePort, IndexedClaim, ProbeOutcome,
-    ProbeRefusalReason,
+    AuthorRelationship, IndexStoreError, IndexStorePort, IndexedClaim, PeerClaimProvenance,
+    ProbeOutcome, ProbeRefusalReason,
 };
 
 mod schema;
@@ -161,7 +161,7 @@ impl IndexStoreAdapter {
         let conn = self.lock()?;
         let sql = format!(
             "SELECT author_did, cid, subject, predicate, object, confidence, \
-                    composed_at, verified_against \
+                    composed_at, verified_against, COALESCE(provenance, 'app-signed') \
              FROM indexed_claims WHERE {where_clause}"
         );
         let mut stmt = conn
@@ -321,8 +321,9 @@ impl IndexStorePort for IndexStoreAdapter {
         conn.execute(
             "INSERT INTO indexed_claims (\
                 cid, author_did, subject, predicate, object, confidence, \
-                composed_at, indexed_at, source_pds, signed_record_path, verified_against\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, now(), ?, ?, ?)",
+                composed_at, indexed_at, source_pds, signed_record_path, verified_against, \
+                provenance\
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, now(), ?, ?, ?, ?)",
             duckdb::params![
                 claim.cid.0,
                 claim.author_did.0,
@@ -337,6 +338,7 @@ impl IndexStorePort for IndexStoreAdapter {
                 "network",
                 signed_record_path,
                 claim.verified_against.0,
+                provenance_column(claim.provenance),
             ],
         )
         .map_err(|err| write_failed(claim, format!("insert row: {err}")))?;
@@ -404,13 +406,22 @@ fn row_to_indexed_claim(row: &duckdb::Row<'_>) -> duckdb::Result<IndexedClaim> {
         evidence: Vec::new(),
         references: Vec::new(),
         relationship: AuthorRelationship::NetworkUnfollowed,
+        provenance: PeerClaimProvenance::from_column(&row.get::<_, String>(8)?),
     })
+}
+
+/// The `provenance` column value (the same domain as `peer_claims.provenance`).
+fn provenance_column(provenance: PeerClaimProvenance) -> &'static str {
+    match provenance {
+        PeerClaimProvenance::AppSigned => "app-signed",
+        PeerClaimProvenance::SelfAttested => "self-attested",
+    }
 }
 
 /// The JSON artifact body for an indexed claim (the verified network record, as
 /// stored at `indexed_claims/<did>/<cid>.json`).
 fn artifact_json(claim: &IndexedClaim) -> serde_json::Value {
-    serde_json::json!({
+    let mut artifact = serde_json::json!({
         "cid": claim.cid.0,
         "author_did": claim.author_did.0,
         "subject": claim.subject,
@@ -425,7 +436,12 @@ fn artifact_json(claim: &IndexedClaim) -> serde_json::Value {
             .iter()
             .map(reference_json)
             .collect::<Vec<_>>(),
-    })
+    });
+    // App-signed artifacts stay byte-identical; only a self-attested one says so.
+    if claim.provenance == PeerClaimProvenance::SelfAttested {
+        artifact["provenance"] = serde_json::json!(provenance_column(claim.provenance));
+    }
+    artifact
 }
 
 fn reference_json(reference: &ClaimReference) -> serde_json::Value {
@@ -609,6 +625,7 @@ mod tests {
             evidence: vec!["https://example.test/evidence/bazel".to_string()],
             references: Vec::new(),
             relationship: AuthorRelationship::NetworkUnfollowed,
+            provenance: PeerClaimProvenance::AppSigned,
         }
     }
 
@@ -871,5 +888,69 @@ mod tests {
             .query_by_object("org.openlore.philosophy.reproducible-builds")
             .expect("query by object");
         assert_eq!(rows.len(), 1, "de-dup by CID: a re-upsert leaves one row");
+    }
+
+    /// Each provenance reads back as written; an app-signed row is unchanged.
+    // bypass: real-DuckDB integration over the two-value provenance domain.
+    #[test]
+    fn provenance_reads_back_as_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+        for (cid, provenance) in [
+            ("bafyappsigned", PeerClaimProvenance::AppSigned),
+            ("bafyselfattested", PeerClaimProvenance::SelfAttested),
+        ] {
+            let claim = IndexedClaim {
+                cid: Cid(cid.to_string()),
+                provenance,
+                ..sample_claim()
+            };
+            store.upsert(&claim).expect("upsert");
+            let read = store
+                .get_by_cid(&claim.cid)
+                .expect("read")
+                .expect("row present");
+            assert_eq!(read.provenance, provenance);
+            assert_eq!(read.author_did, claim.author_did);
+            assert_eq!(read.verified_against, claim.verified_against);
+        }
+    }
+
+    /// A v1 index (no provenance column) migrates additively: its rows read as
+    /// app-signed, and reopening is a no-op.
+    // bypass: real-DuckDB migration over one pre-existing v1 file.
+    #[test]
+    fn a_v1_index_gains_provenance_additively_and_idempotently() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("index.duckdb");
+        {
+            let conn = Connection::open(&db_path).expect("open raw v1");
+            conn.execute_batch(
+                "CREATE TABLE index_schema_version (version INTEGER PRIMARY KEY, \
+                     applied_at TIMESTAMP NOT NULL, description VARCHAR NOT NULL);
+                 INSERT INTO index_schema_version VALUES (1, now(), 'v1');
+                 CREATE TABLE indexed_claims (cid VARCHAR PRIMARY KEY, author_did VARCHAR NOT NULL,
+                     subject VARCHAR NOT NULL, predicate VARCHAR NOT NULL, object VARCHAR NOT NULL,
+                     confidence DOUBLE NOT NULL, composed_at TIMESTAMP NOT NULL,
+                     indexed_at TIMESTAMP NOT NULL, source_pds VARCHAR NOT NULL,
+                     signed_record_path VARCHAR NOT NULL, verified_against VARCHAR NOT NULL);
+                 CREATE TABLE indexed_claim_evidence (cid VARCHAR NOT NULL, evidence VARCHAR NOT NULL,
+                     ordinal INTEGER NOT NULL);
+                 CREATE TABLE indexed_claim_references (referencing_cid VARCHAR NOT NULL,
+                     referenced_cid VARCHAR NOT NULL, ref_type VARCHAR NOT NULL);
+                 INSERT INTO indexed_claims VALUES ('bafyv1', 'did:plc:priya-test', 's', 'p', 'o',
+                     0.5, TIMESTAMP '2026-05-26 12:00:00', now(), 'network', 'x.json', 'did:plc:priya-test');",
+            )
+            .expect("seed v1 index");
+        }
+        for _reopen in 0..2 {
+            let store = IndexStoreAdapter::open(&db_path).expect("open migrates");
+            let row = store
+                .get_by_cid(&Cid("bafyv1".to_string()))
+                .expect("read")
+                .expect("v1 row survives");
+            assert_eq!(row.provenance, PeerClaimProvenance::AppSigned);
+            assert_eq!(row.author_did, Did("did:plc:priya-test".to_string()));
+        }
     }
 }

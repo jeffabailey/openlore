@@ -311,6 +311,7 @@ fn indexed_claim_from(cell: &ClaimCell, ordinal: usize) -> IndexedClaim {
         evidence: vec![format!("https://example.test/evidence/{subject}")],
         references: Vec::new(),
         relationship: AuthorRelationship::NetworkUnfollowed,
+        provenance: ports::PeerClaimProvenance::AppSigned,
     }
 }
 

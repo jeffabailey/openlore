@@ -83,58 +83,13 @@ impl IngestSourcePort for AtProtoIngestAdapter {
         ProbeOutcome::Ok
     }
 
-    async fn enumerate(&self, source: &str) -> Result<Vec<RawRecord>, IngestError> {
-        let base = if source.trim().is_empty() {
-            self.source.as_str()
-        } else {
-            source
-        };
-        if base.trim().is_empty() {
-            return Err(IngestError::BadResponse {
-                message: "ingest source URL is empty".to_string(),
-            });
-        }
-
-        let url = format!(
-            "{}/xrpc/com.atproto.repo.listRecords?collection={}",
-            base.trim_end_matches('/'),
-            CLAIM_COLLECTION
-        );
-
-        let response =
-            self.client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|err| IngestError::Unreachable {
-                    message: format!("listRecords transport error: {err}"),
-                })?;
-
-        if !response.status().is_success() {
-            return Err(IngestError::BadResponse {
-                message: format!("listRecords returned HTTP {}", response.status().as_u16()),
-            });
-        }
-
-        let body: serde_json::Value =
-            response
-                .json()
-                .await
-                .map_err(|err| IngestError::BadResponse {
-                    message: format!("listRecords body is not JSON: {err}"),
-                })?;
-
-        let records = body
-            .get("records")
-            .and_then(|r| r.as_array())
-            .ok_or_else(|| IngestError::BadResponse {
-                message: "listRecords response missing `records` array".to_string(),
-            })?;
-
-        records
-            .iter()
-            .map(parse_record_view)
-            .collect::<Result<Vec<_>, _>>()
+    /// Refused: `listRecords` lists ONE repo and a real PDS rejects a call
+    /// without `repo`. The indexer enumerates each configured repo DID through
+    /// [`RepoListingPort::list_repo_claims`] instead (ADR-071 §4, DWD-9).
+    async fn enumerate(&self, _source: &str) -> Result<Vec<RawRecord>, IngestError> {
+        Err(IngestError::BadResponse {
+            message: "listRecords needs repo=<DID>: enumerate per repo DID".to_string(),
+        })
     }
 }
 

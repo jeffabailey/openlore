@@ -90,7 +90,7 @@ fn indexer_ingests_a_verified_attributed_claim_and_it_becomes_searchable() {
     let outcome = run_openlore_indexer_with_source(
         &env,
         &["ingest"],
-        source.source_url(),
+        &source,
         &[(PRIYA_DID, &priya_pubkey_hex)],
     );
 
@@ -180,7 +180,7 @@ fn indexer_stores_two_distinct_author_claims_without_merging_on_same_subject_obj
     let outcome = run_openlore_indexer_with_source(
         &env,
         &["ingest"],
-        source.source_url(),
+        &source,
         &[(PRIYA_DID, &priya_pubkey_hex), (SVEN_DID, &sven_pubkey_hex)],
     );
 
@@ -372,7 +372,7 @@ fn indexer_rejects_unverified_claim() {
     let outcome = run_openlore_indexer_with_source(
         &env,
         &["ingest"],
-        source.source_url(),
+        &source,
         &[(PRIYA_DID, &priya_pubkey_hex)],
     );
     assert_eq!(
@@ -511,12 +511,8 @@ fn indexer_verifies_against_real_decoded_plc_z6mk_key_not_the_test_seam() {
     // fake source + the fixture PLC resolver (seam UNSET). The indexer resolves
     // Priya's z6Mk DID-doc + DECODES it via claim_domain::decode_ed25519_multibase
     // (the REAL ADR-026 path), then runs the SAME pure verify-before-index gate. --
-    let outcome = run_openlore_indexer_with_plc_resolver(
-        &env,
-        &["ingest"],
-        source.source_url(),
-        plc.endpoint_url(),
-    );
+    let outcome =
+        run_openlore_indexer_with_plc_resolver(&env, &["ingest"], &source, plc.endpoint_url());
     assert_eq!(
         outcome.status, 0,
         "openlore-indexer ingest must exit 0. stdout: {} stderr: {}",
@@ -651,7 +647,7 @@ fn indexer_is_signing_incapable_and_touches_no_local_store() {
     let outcome = run_openlore_indexer_with_source(
         &env,
         &["ingest"],
-        source.source_url(),
+        &source,
         &[(PRIYA_DID, &priya_pubkey_hex)],
     );
     assert_eq!(
@@ -799,7 +795,7 @@ fn indexer_ingests_only_public_records_no_private_read() {
     let outcome = run_openlore_indexer_with_source(
         &env,
         &["ingest"],
-        source.source_url(),
+        &source,
         &[(PRIYA_DID, &priya_pubkey_hex)],
     );
     assert_eq!(

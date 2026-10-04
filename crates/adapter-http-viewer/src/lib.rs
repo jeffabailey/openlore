@@ -1579,6 +1579,7 @@ fn to_indexed_claim(
         evidence: row.evidence,
         references: row.references,
         relationship,
+        provenance: ports::PeerClaimProvenance::AppSigned,
     }
 }
 

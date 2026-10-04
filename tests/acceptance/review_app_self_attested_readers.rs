@@ -305,8 +305,7 @@ fn a_claim_priya_retracted_through_the_app_reads_as_retracted() {
 /// Run `openlore-indexer ingest` over Priya's PDS (one repo DID enumerated,
 /// origin computed from the PLC-resolved DID document — ADR-071 §4).
 fn ingest_priya_repo(env: &TestEnv, net: &FakeAtprotoNetwork, source_url: &str) -> CliOutcome {
-    #[allow(deprecated)]
-    let bin = assert_cmd::cargo::cargo_bin("openlore-indexer");
+    let bin = support::resolve_workspace_bin("openlore-indexer");
     let out = Command::new(bin)
         .arg("ingest")
         .env_clear()
@@ -353,7 +352,6 @@ fn indexed_rows(env: &TestEnv) -> Vec<(String, String)> {
 ///   Then the index holds her claim, attributed to did:plc:7x3kq2mzv5rj4w6hbn2tqclp, with provenance self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-009 indexer includes self-attested)"]
 fn the_network_index_includes_self_attested_claims_attributed_and_marked() {
     let net = priya_pds_with(vec![(
         self_attested_claim_value(
@@ -385,7 +383,6 @@ fn the_network_index_includes_self_attested_claims_attributed_and_marked() {
 ///   Then the claim is refused as unverifiable provenance and nothing is indexed
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (relay origin fails closed)"]
 fn a_self_attested_claim_fetched_through_anything_but_the_authors_own_pds_is_not_indexed() {
     let net = priya_pds_with(vec![(
         self_attested_claim_value(

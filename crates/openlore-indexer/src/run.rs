@@ -26,18 +26,22 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adapter_atproto_did::AtProtoDidAdapter;
+use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
 use appview_domain::{
-    compose_results, ingest_decision, IngestOutcome, NetworkSearchResult, RejectReason,
+    compose_results, ingest_repo_record, IngestOutcome, NetworkSearchResult, RejectReason,
 };
+use claim_domain::{decode_claim_record, ClaimRecord, Did, RecordOrigin, VerificationKey};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
 };
-use ports::{ClockPort, IdentityResolvePort, IndexStorePort, IngestSourcePort, SearchDimension};
+use ports::{
+    ClockPort, IdentityLookupPort, IdentityResolvePort, IndexStorePort, IngestSourcePort,
+    RepoListingPort, RepoRecord, SearchDimension,
+};
 
 use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
 use crate::Command;
@@ -49,6 +53,13 @@ use crate::Command;
 pub struct IndexerWiring {
     pub index_store: Box<dyn IndexStorePort>,
     pub ingest_source: Box<dyn IngestSourcePort>,
+    /// Read-only `listRecords` of ONE repo DID, cursor-paged (ADR-071 §4).
+    pub repo_listing: Box<dyn RepoListingPort>,
+    /// DID → its DID document's PDS: the only origin a self-attested record
+    /// may be indexed from (ADR-071).
+    pub pds_lookup: Box<dyn IdentityLookupPort>,
+    /// The repo DIDs one ingest pass enumerates (DWD-9).
+    pub repo_dids: Vec<Did>,
     /// VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
     pub identity_resolve: Box<dyn IdentityResolvePort>,
     /// The query server is bound only for `serve` (Phase 04); the `ingest`
@@ -77,6 +88,21 @@ struct IndexerConfig {
     /// The HTTP/XRPC query surface listen address (ADR-027). `:0` for an
     /// OS-assigned ephemeral port (the parallel-safe test default; DEVOPS open-q 8).
     listen_addr: String,
+    /// The repo DIDs to enumerate (`OPENLORE_INDEXER_REPO_DIDS`, DWD-9).
+    repo_dids: Vec<Did>,
+    /// The PLC directory a repo DID's PDS is resolved from.
+    plc_endpoint: String,
+}
+
+/// The production PLC directory (ADR-026 §"Config + default").
+const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
+
+/// The repo DIDs named in a comma- or whitespace-separated list (pure).
+fn parse_repo_dids(list: &str) -> Vec<Did> {
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|did| !did.is_empty())
+        .map(|did| Did(did.to_string()))
+        .collect()
 }
 
 impl IndexerConfig {
@@ -91,10 +117,16 @@ impl IndexerConfig {
         let source_url = std::env::var("OPENLORE_INDEXER_SOURCE_URL").unwrap_or_default();
         let listen_addr = std::env::var("OPENLORE_INDEXER_LISTEN_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:0".to_string());
+        let repo_dids =
+            parse_repo_dids(&std::env::var("OPENLORE_INDEXER_REPO_DIDS").unwrap_or_default());
+        let plc_endpoint = std::env::var("OPENLORE_INDEXER_PLC_ENDPOINT")
+            .unwrap_or_else(|_| DEFAULT_PLC_ENDPOINT.to_string());
         Self {
             index_path,
             source_url,
             listen_addr,
+            repo_dids,
+            plc_endpoint,
         }
     }
 }
@@ -136,6 +168,9 @@ impl IndexerWiring {
         Ok(Self {
             index_store: Box::new(index_store),
             ingest_source: Box::new(ingest_source),
+            repo_listing: Box::new(AtProtoIngestAdapter::new(&cfg.source_url)),
+            pds_lookup: Box::new(IdentityLookup::new(&cfg.plc_endpoint, &cfg.plc_endpoint)),
+            repo_dids: cfg.repo_dids,
             identity_resolve: Box::new(identity_resolve),
             query_server,
             clock: Box::new(clock),
@@ -396,12 +431,14 @@ fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
 
 /// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024).
 ///
-/// The pipeline (wire → probe → use already ran upstream): bounded `enumerate`
-/// of public `listRecords` → for each record resolve the author's verification
-/// key → run the PURE `appview_domain::ingest_decision` verify-before-index gate
-/// (the SAME pure core; no second verification path, WD-104) → on `Index` upsert
-/// the attributed row + write the JSON artifact + bump `verified`; on `Reject`
-/// bump `rejected{reason}` (the adversarial records NEVER enter the index).
+/// For each configured repo DID (DWD-9): `listRecords` with `repo=<DID>`,
+/// every cursor followed within the page bound → decode each of that repo's
+/// records → resolve the author key for an app-signed record → the PURE
+/// `appview_domain::ingest_repo_record` gate (app-signed records go through
+/// the unchanged verify-before-index gate, WD-104; self-attested ones through
+/// the ADR-071 verdict, whose origin is the listing's base URL compared with
+/// the PDS freshly resolved for the DID) → on `Index` upsert the attributed
+/// row; on `Reject` count the reason (a refused provenance is reported).
 ///
 /// Emits `indexer.ingest.verified` (count) + `indexer.ingest.rejected` (count)
 /// as structured stdout events (the DevOps observability contract — structural
@@ -418,97 +455,160 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
-    // Bounded PULL of the public listRecords surface (read-only, ADR-024).
-    let records = match runtime.block_on(wiring.ingest_source.enumerate(&wiring.source_url)) {
-        Ok(records) => records,
-        Err(err) => {
-            eprintln!("openlore-indexer: ingest source enumerate failed: {err}");
-            return 2;
-        }
-    };
-
-    let mut verified: u64 = 0;
-    let mut rejected_unsigned: u64 = 0;
-    let mut rejected_bad_signature: u64 = 0;
-    let mut rejected_cid_mismatch: u64 = 0;
-    let mut rejected_schema_unknown: u64 = 0;
-
-    for record in &records {
-        // Resolve the author's verification key (ADR-026 resolve-only path). A
-        // resolution failure is a REJECT (we never index a claim we cannot
-        // verify) — classified as BadSignature (the key authority is absent).
-        let author = &record.raw_payload.unsigned.author_did;
-        let resolved_key =
-            match runtime.block_on(wiring.identity_resolve.resolve_verification_key(author)) {
-                Ok(key) => key,
-                Err(_) => {
-                    rejected_bad_signature += 1;
-                    continue;
-                }
-            };
-
-        // The PURE verify-before-index gate (SAME core; no second path, WD-104).
-        match ingest_decision(record, &resolved_key) {
-            IngestOutcome::Index(claim) => {
-                // Upsert the verified, attributed row + write the JSON artifact.
-                if let Err(err) = wiring.index_store.upsert(&claim) {
-                    eprintln!("openlore-indexer: index upsert failed: {err}");
-                    return 2;
-                }
-                verified += 1;
+    let mut tally = IngestTally::default();
+    for repo_did in &wiring.repo_dids {
+        // Bounded, cursor-paged PULL of ONE repo (read-only, ADR-024).
+        let listing = match runtime.block_on(
+            wiring
+                .repo_listing
+                .list_repo_claims(&wiring.source_url, &repo_did.0),
+        ) {
+            Ok(listing) => listing,
+            Err(err) => {
+                eprintln!("openlore-indexer: listing {} failed: {err}", repo_did.0);
+                return 2;
             }
-            IngestOutcome::Reject(reason) => match reason {
-                RejectReason::Unsigned => rejected_unsigned += 1,
-                RejectReason::BadSignature => rejected_bad_signature += 1,
-                RejectReason::CidMismatch => rejected_cid_mismatch += 1,
-                RejectReason::SchemaUnknown => rejected_schema_unknown += 1,
-            },
+        };
+        let records = decoded_records_of(repo_did, &listing.records);
+        let origin = origin_for(wiring, &runtime, repo_did, &listing.fetched_from, &records);
+
+        for (rkey, decoded) in records {
+            let Ok(record) = decoded else {
+                tally.reject(RejectReason::SchemaUnknown);
+                continue;
+            };
+            let key = author_key(wiring, &runtime, &record);
+            match ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref()) {
+                IngestOutcome::Index(claim) => {
+                    if let Err(err) = wiring.index_store.upsert(&claim) {
+                        eprintln!("openlore-indexer: index upsert failed: {err}");
+                        return 2;
+                    }
+                    tally.verified += 1;
+                }
+                IngestOutcome::Reject(reason) => {
+                    if let RejectReason::Provenance(rejection) = reason {
+                        eprintln!(
+                            "openlore-indexer: refused at://{}/org.openlore.claim/{rkey}: {rejection}",
+                            repo_did.0
+                        );
+                    }
+                    tally.reject(reason);
+                }
+            }
         }
     }
 
-    let rejected_total = rejected_unsigned
-        + rejected_bad_signature
-        + rejected_cid_mismatch
-        + rejected_schema_unknown;
-    emit_ingest_counters(
-        verified,
-        rejected_total,
-        rejected_unsigned,
-        rejected_bad_signature,
-        rejected_cid_mismatch,
-        rejected_schema_unknown,
-    );
+    tally.emit();
     0
 }
 
-/// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
-/// events to stdout (the DevOps observability contract). Structural counts +
-/// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
-#[allow(clippy::too_many_arguments)]
-fn emit_ingest_counters(
+/// The records a repo listing holds for `repo_did`, each with its rkey and
+/// decoded through the ONE shared decoder (pure). A listing answers for one
+/// repo; anything it returns from another repo is not this repo's record.
+fn decoded_records_of(
+    repo_did: &Did,
+    listed: &[RepoRecord],
+) -> Vec<(String, Result<ClaimRecord, String>)> {
+    listed
+        .iter()
+        .filter(|record| record.repo_did == repo_did.0)
+        .map(|record| (record.rkey.clone(), decode_claim_record(&record.value, "")))
+        .collect()
+}
+
+/// Where a repo's records were read from (ADR-071): the author's own PDS only
+/// when the listing's base URL is the PDS freshly resolved from the DID's
+/// document. Only self-attested records depend on it, so a listing without
+/// one never triggers a DID lookup; a failed lookup is never the author's PDS.
+fn origin_for(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    repo_did: &Did,
+    fetched_from: &str,
+    records: &[(String, Result<ClaimRecord, String>)],
+) -> RecordOrigin {
+    let holds_self_attested = records
+        .iter()
+        .any(|(_, record)| matches!(record, Ok(ClaimRecord::SelfAttested(_))));
+    if !holds_self_attested {
+        return RecordOrigin::Relay;
+    }
+    runtime
+        .block_on(wiring.pds_lookup.resolve_did(&repo_did.0))
+        .map(|identity| RecordOrigin::of(fetched_from, &identity.pds_endpoint))
+        .unwrap_or(RecordOrigin::Relay)
+}
+
+/// The resolved verification key of an app-signed record's author (ADR-026
+/// resolve-only path); `None` when it cannot be resolved (the gate then
+/// refuses the record). A self-attested record has no key to resolve.
+fn author_key(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    record: &ClaimRecord,
+) -> Option<VerificationKey> {
+    match record {
+        ClaimRecord::AppSigned(signed) => runtime
+            .block_on(
+                wiring
+                    .identity_resolve
+                    .resolve_verification_key(&signed.unsigned.author_did),
+            )
+            .ok(),
+        ClaimRecord::SelfAttested(_) => None,
+    }
+}
+
+/// The counts one ingest pass reports.
+#[derive(Debug, Default)]
+struct IngestTally {
     verified: u64,
-    rejected_total: u64,
-    rejected_unsigned: u64,
-    rejected_bad_signature: u64,
-    rejected_cid_mismatch: u64,
-    rejected_schema_unknown: u64,
-) {
-    let verified_event = serde_json::json!({
-        "event": "indexer.ingest.verified",
-        "count": verified,
-    });
-    let rejected_event = serde_json::json!({
-        "event": "indexer.ingest.rejected",
-        "count": rejected_total,
-        "by_reason": {
-            "unsigned": rejected_unsigned,
-            "bad_signature": rejected_bad_signature,
-            "cid_mismatch": rejected_cid_mismatch,
-            "schema_unknown": rejected_schema_unknown,
-        },
-    });
-    println!("{verified_event}");
-    println!("{rejected_event}");
+    unsigned: u64,
+    bad_signature: u64,
+    cid_mismatch: u64,
+    schema_unknown: u64,
+    provenance: u64,
+}
+
+impl IngestTally {
+    fn reject(&mut self, reason: RejectReason) {
+        match reason {
+            RejectReason::Unsigned => self.unsigned += 1,
+            RejectReason::BadSignature => self.bad_signature += 1,
+            RejectReason::CidMismatch => self.cid_mismatch += 1,
+            RejectReason::SchemaUnknown => self.schema_unknown += 1,
+            RejectReason::Provenance(_) => self.provenance += 1,
+        }
+    }
+
+    /// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
+    /// events to stdout (the DevOps observability contract). Structural counts +
+    /// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
+    fn emit(&self) {
+        let rejected_total = self.unsigned
+            + self.bad_signature
+            + self.cid_mismatch
+            + self.schema_unknown
+            + self.provenance;
+        let verified_event = serde_json::json!({
+            "event": "indexer.ingest.verified",
+            "count": self.verified,
+        });
+        let rejected_event = serde_json::json!({
+            "event": "indexer.ingest.rejected",
+            "count": rejected_total,
+            "by_reason": {
+                "unsigned": self.unsigned,
+                "bad_signature": self.bad_signature,
+                "cid_mismatch": self.cid_mismatch,
+                "schema_unknown": self.schema_unknown,
+                "provenance": self.provenance,
+            },
+        });
+        println!("{verified_event}");
+        println!("{rejected_event}");
+    }
 }
 
 /// `openlore-indexer stats` — report index coverage (claims indexed, distinct

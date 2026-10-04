@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use claim_domain::{Cid, ClaimReference, Did, KeyId, ReferenceType};
 use serde::{Deserialize, Serialize};
 
-use crate::AuthorRelationship;
+use crate::{AuthorRelationship, PeerClaimProvenance};
 
 // -----------------------------------------------------------------------------
 // Search dimension
@@ -71,6 +71,9 @@ pub struct IndexedClaim {
     pub references: Vec<ClaimReference>,
     /// Resolved CLI-side (you/subscribed-peer/unsubscribed-cache/network-unfollowed).
     pub relationship: AuthorRelationship,
+    /// How the claim is attested (ADR-071): app-signed, or self-attested by
+    /// the author's own repo (then `verified_against` is the bare repo DID).
+    pub provenance: PeerClaimProvenance,
 }
 
 // -----------------------------------------------------------------------------

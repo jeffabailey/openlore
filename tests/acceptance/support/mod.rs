@@ -489,7 +489,7 @@ pub struct CliOutcome {
 /// any nextest version — not only when the env var happens to be set. Without
 /// it, `assert_cmd::cargo::cargo_bin("openlore-indexer")` panics
 /// "CARGO_BIN_EXE_openlore-indexer is unset" in CI (I-AV subprocess ATs).
-fn resolve_workspace_bin(name: &str) -> std::path::PathBuf {
+pub fn resolve_workspace_bin(name: &str) -> std::path::PathBuf {
     if let Some(p) = std::env::var_os(format!("CARGO_BIN_EXE_{name}")) {
         return p.into();
     }
@@ -4472,8 +4472,7 @@ pub fn seed_network_index_from_specs(
     // records PLUS new ones) idempotently replaces the originals and ADDS the new —
     // the index ends with exactly the union (AV-28's second ingest grows the set).
     let source = FakeIngestServer::start(specs);
-    let ingest =
-        run_openlore_indexer_with_source(env, &["ingest"], source.source_url(), &seam_refs);
+    let ingest = run_openlore_indexer_with_source(env, &["ingest"], &source, &seam_refs);
     assert_eq!(
         ingest.status, 0,
         "seed_network_index: `openlore-indexer ingest` must exit 0. stdout: {} stderr: {}",
@@ -5553,6 +5552,9 @@ pub struct FakeIngestServer {
     /// the AV-7 public-data-only universe. Shared with the acceptor thread.
     recorded: std::sync::Arc<std::sync::Mutex<Vec<RecordedIngestRequest>>>,
     join: Option<std::thread::JoinHandle<()>>,
+    /// The repo DIDs the public records live in (from their `at://` URIs),
+    /// comma-separated — what the indexer is told to enumerate (DWD-9).
+    repo_dids: String,
 }
 
 impl FakeIngestServer {
@@ -5596,6 +5598,7 @@ impl FakeIngestServer {
         // at construction (deterministic; no per-request work).
         let public_body = list_records_body(public_specs);
         let private_body = list_records_body(private_specs);
+        let repo_dids = repo_dids_of(&public_body);
 
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("FakeIngestServer: bind 127.0.0.1:0");
@@ -5679,7 +5682,13 @@ impl FakeIngestServer {
             shutdown,
             recorded,
             join: Some(join),
+            repo_dids,
         }
+    }
+
+    /// The comma-separated repo DIDs the hosted public records live in.
+    pub fn repo_dids(&self) -> &str {
+        &self.repo_dids
     }
 
     /// The `http://127.0.0.1:<port>` base URL the indexer's ingest adapter PULLs
@@ -5736,6 +5745,25 @@ fn read_http_request_head(stream: &mut std::net::TcpStream) -> String {
         }
     }
     String::from_utf8_lossy(&acc).into_owned()
+}
+
+/// The distinct repo DIDs (first-seen order) of a `listRecords` body's
+/// `at://<did>/<collection>/<rkey>` URIs, comma-separated.
+fn repo_dids_of(list_records_body: &str) -> String {
+    let body: serde_json::Value = serde_json::from_str(list_records_body).unwrap_or_default();
+    let mut dids: Vec<String> = Vec::new();
+    for record in body["records"].as_array().into_iter().flatten() {
+        let repo = record["uri"]
+            .as_str()
+            .and_then(|uri| uri.strip_prefix("at://"))
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or_default()
+            .to_string();
+        if !repo.is_empty() && !dids.contains(&repo) {
+            dids.push(repo);
+        }
+    }
+    dids.join(",")
 }
 
 /// Materialize a `listRecords`-shaped JSON body from `specs` (each run through
@@ -5845,7 +5873,7 @@ pub fn index_duckdb_path(env: &TestEnv) -> PathBuf {
 pub fn run_openlore_indexer_with_source(
     env: &TestEnv,
     args: &[&str],
-    source_url: &str,
+    source: &FakeIngestServer,
     pubkey_seams: &[(&str, &str)],
 ) -> CliOutcome {
     let bin = resolve_workspace_bin("openlore-indexer");
@@ -5854,7 +5882,8 @@ pub fn run_openlore_indexer_with_source(
         .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
-        .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
+        .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
         .env("PATH", std::env::var("PATH").unwrap_or_default());
     for (did, pubkey_hex) in pubkey_seams {
         cmd.env(peer_pubkey_env_var(did), pubkey_hex);
@@ -6184,7 +6213,7 @@ fn percent_decode_path(path: &str) -> String {
 pub fn run_openlore_indexer_with_plc_resolver(
     env: &TestEnv,
     args: &[&str],
-    source_url: &str,
+    source: &FakeIngestServer,
     plc_endpoint: &str,
 ) -> CliOutcome {
     let bin = resolve_workspace_bin("openlore-indexer");
@@ -6195,7 +6224,8 @@ pub fn run_openlore_indexer_with_plc_resolver(
         // (The OPENLORE_PEER_PUBKEY_HEX_<did> seam is deliberately NOT re-set.)
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
-        .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
+        .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
         .env("OPENLORE_INDEXER_PLC_ENDPOINT", plc_endpoint)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .stdin(Stdio::null())
