@@ -82,7 +82,7 @@ jobs:
         run: cargo run -p xtask -- check-arch
       - name: cargo xtask check-probes
         run: cargo run -p xtask -- check-probes
-      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer)
+      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer + openlore-review-app)
         # Several acceptance suites (appview_search, indexer_ingest,
         # viewer_network_search, search_hide_retracted, …) spawn the `openlore`
         # and the CROSS-package `openlore-indexer` executables via the test-support
@@ -90,7 +90,11 @@ jobs:
         # harnesses, NOT these `[[bin]]` targets (openlore-indexer is bin-only, so
         # cli's dev-dependency on it is ignored) — so build them explicitly first.
         # The test files themselves document this "Build-before-run" requirement.
-        run: cargo build --bin openlore --bin openlore-indexer
+        # bluesky-claim-review-app (DWD-3): the cli review_app_walking_skeleton +
+        # review_app_self_attested_readers suites spawn `openlore-review-app` from
+        # target/debug with NO cli dev-dependency on the app (check-arch keeps the
+        # roots disjoint), so it is built here too.
+        run: cargo build --bin openlore --bin openlore-indexer --bin openlore-review-app
       - name: cargo nextest run --workspace
         # --test-threads=1 works around the adapter-system-clock OPENLORE_TEST_NOW
         # env-var race (see ci.yml header). Keep in lock-step with ci.yml.

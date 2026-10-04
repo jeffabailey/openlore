@@ -1,0 +1,31 @@
+[package]
+name = "adapter-atproto-oauth"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore review app atproto OAuth confidential client (ADR-073): client metadata, ES256 client key + public JWKS, create-only user-repo writes. Linked ONLY by openlore-review-app."
+
+# EFFECT shell (ADR-073). `atrium-oauth` is pinned to the spiked 0.1.7 with
+# default features OFF: its `default-client` pulls reqwest's native-tls
+# (openssl, banned). The HTTP transport is the workspace rustls reqwest,
+# adapted to `atrium_xrpc::HttpClient` below (`RustlsHttpClient`).
+# The client key is a P-256 JWK in the same `jose-jwk` shape atrium loads.
+[dependencies]
+ports = { path = "../ports" }
+atrium-oauth = { version = "=0.1.7", default-features = false }
+atrium-xrpc = "0.12"
+jose-jwk = { version = "0.1.2", default-features = false, features = ["p256"] }
+jose-jwa = "0.1.2"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

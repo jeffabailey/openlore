@@ -102,12 +102,16 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer)
+      - name: Build binaries the acceptance tests spawn (openlore + openlore-indexer + openlore-review-app)
         # Acceptance suites spawn the `openlore` and CROSS-package `openlore-indexer`
         # executables via the test-support resolver (target/debug). nextest builds
         # test harnesses, not these `[[bin]]` targets — build them explicitly first
         # (openlore-indexer is bin-only, so cli's dev-dependency on it is ignored).
-        run: cargo build --bin openlore --bin openlore-indexer
+        # bluesky-claim-review-app (DWD-3): the cli review_app_walking_skeleton +
+        # review_app_self_attested_readers suites spawn `openlore-review-app` from
+        # target/debug with NO cli dev-dependency on the app (check-arch keeps the
+        # roots disjoint), so it is built here too.
+        run: cargo build --bin openlore --bin openlore-indexer --bin openlore-review-app
       - name: cargo nextest run --workspace
         # --test-threads=1 works around the OPENLORE_TEST_NOW env-var race in
         # adapter-system-clock tests. See file header comment.

@@ -33,6 +33,10 @@ use url::Url;
 mod probe;
 pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 
+// bluesky-claim-review-app ports (ADR-072/073/074).
+pub mod review;
+pub use review::{OAuthPort, ReviewStorePort};
+
 // -----------------------------------------------------------------------------
 // serverless-philosophy-federation (ADR-062) — the opaque-instance transport.
 // The write-capable `PublishPort` and the READ-ONLY `InstanceReadPort` are

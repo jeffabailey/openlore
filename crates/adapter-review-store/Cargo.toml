@@ -1,0 +1,25 @@
+[package]
+name = "adapter-review-store"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore review app private store (ADR-074): owner-scoped DuckDB `review-app.duckdb`, AEAD-sealed OAuth/session blobs, owner-free KPI counters. Linked ONLY by openlore-review-app."
+
+# EFFECT shell. `duckdb` uses the SAME spec as adapter-duckdb / adapter-index-store
+# so the bundled C++ build is shared. XChaCha20-Poly1305 seals secret blobs
+# with a random 24-byte nonce per write (data-models §3.2).
+[dependencies]
+ports = { path = "../ports" }
+duckdb = { version = "1.3", features = ["bundled", "chrono"] }
+chacha20poly1305 = "0.10"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

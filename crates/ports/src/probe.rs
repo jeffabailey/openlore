@@ -140,6 +140,18 @@ pub enum ProbeRefusalReason {
     /// rank / last-observed, or altered `first_observed_at` (the DuckDB
     /// `ON CONFLICT` lie), or the table is unusable.
     StorageContributionLinkUpsertUnreliable,
+
+    // -------- bluesky-claim-review-app additions (ADR-073/074) --------
+    /// The private store was written by a newer app (schema_version ahead).
+    ReviewStoreSchemaMismatch,
+    /// The data key failed the seal/open canary (or a tampered blob opened).
+    ReviewStoreAeadCanaryFailed,
+    /// An owner-scoped read saw another owner's canary row (I-BRA-1).
+    ReviewStoreCrossOwnerBleed,
+    /// The OAuth client key cannot sign, or its published half does not verify.
+    OAuthClientKeyUnusable,
+    /// The published JWKS is not ES256-only or carries a private part.
+    OAuthJwksMalformed,
 }
 
 // -----------------------------------------------------------------------------

@@ -359,6 +359,26 @@ impl ProbeSite {
     }
 }
 
+/// Adapter crates whose probe the composition root depends on to refuse a
+/// half-wired start (bluesky-claim-review-app): each MUST expose at least one
+/// probe site, so deleting the `impl <Port>` block cannot pass silently.
+const REQUIRED_PROBE_ADAPTERS: &[&str] = &["adapter-atproto-oauth", "adapter-review-store"];
+
+/// Pure: the required adapter crates with no probe site among `sites`.
+pub fn missing_required_probes(sites: &[ProbeSite]) -> Vec<&'static str> {
+    REQUIRED_PROBE_ADAPTERS
+        .iter()
+        .filter(|krate| {
+            !sites.iter().any(|site| {
+                site.file
+                    .components()
+                    .any(|c| c.as_os_str() == std::ffi::OsStr::new(krate))
+            })
+        })
+        .copied()
+        .collect()
+}
+
 /// Top-level entry point invoked from `main.rs`. Returns the process
 /// exit code: 0 = all probes pass; 1 = at least one violation; 2 = an
 /// internal error walking the workspace.
@@ -547,6 +567,17 @@ fn report(sites: &[ProbeSite]) -> Result<u8> {
         );
     }
 
+    let missing = missing_required_probes(sites);
+    for adapter in &missing {
+        eprintln!(
+            "xtask check-probes: {adapter} has no `impl <Port> for <Adapter>` probe site; \
+             its Earned-Trust probe is required (bluesky-claim-review-app, I-4/I-5)"
+        );
+    }
+    if !missing.is_empty() {
+        return Ok(1);
+    }
+
     if hard_violations.is_empty() {
         eprintln!(
             "xtask check-probes: OK ({} probe site{} inspected{})",
@@ -727,5 +758,32 @@ mod tests {
             matches!(c, Classification::RejectTrivialOk { .. }),
             "only SystemClockAdapter gets the exemption; got {c:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod required_probe_tests {
+    use super::*;
+
+    fn site(path: &str) -> ProbeSite {
+        ProbeSite {
+            file: PathBuf::from(path),
+            adapter: "Adapter".into(),
+            classification: Classification::Accept,
+        }
+    }
+
+    #[test]
+    fn a_required_adapter_without_a_probe_site_is_reported() {
+        let sites = [site("crates/adapter-review-store/src/lib.rs")];
+        assert_eq!(
+            missing_required_probes(&sites),
+            vec!["adapter-atproto-oauth"]
+        );
+        let both = [
+            site("crates/adapter-review-store/src/lib.rs"),
+            site("crates/adapter-atproto-oauth/src/lib.rs"),
+        ];
+        assert!(missing_required_probes(&both).is_empty());
     }
 }

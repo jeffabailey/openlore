@@ -1,0 +1,81 @@
+[package]
+name = "openlore-review-app"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore hosted review app — the THIRD composition root (ADR-072): sign in with Bluesky, review private suggestions, publish approved claims to your own PDS. Holds no signing identity and no local claim store."
+
+[[bin]]
+name = "openlore-review-app"
+path = "src/main.rs"
+
+# Composition root (ADR-072). Wires the review adapters, probes them, then
+# serves. Hand-rolled hyper (axum/actix are banned). `xtask check-arch`
+# forbids this crate from reaching the CLI's store/PDS/viewer/publish and the
+# indexer's server/store/query adapters.
+[dependencies]
+ports = { path = "../ports" }
+review-domain = { path = "../review-domain" }
+adapter-atproto-oauth = { path = "../adapter-atproto-oauth" }
+adapter-review-store = { path = "../adapter-review-store" }
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "time"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+serde_json = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# The acceptance suites below drive the REAL binary (CARGO_BIN_EXE_openlore-review-app)
+# against the hermetic ATProto + GitHub doubles (DWD-3: moved from crates/cli).
+openlore-test-support = { path = "../test-support" }
+claim-domain = { path = "../claim-domain" }
+lexicon = { path = "../lexicon" }
+scraper-domain = { path = "../scraper-domain" }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+
+# bluesky-claim-review-app acceptance suites that drive ONLY this binary
+# (DWD-3). `review_app_walking_skeleton` + `review_app_self_attested_readers`
+# stay in crates/cli because they also drive `openlore` / the indexer.
+[[test]]
+name = "review_app_sign_in_and_ownership"
+path = "../../tests/acceptance/review_app_sign_in_and_ownership.rs"
+harness = true
+
+[[test]]
+name = "review_app_queue_and_publish"
+path = "../../tests/acceptance/review_app_queue_and_publish.rs"
+harness = true
+
+[[test]]
+name = "review_app_consent_and_share"
+path = "../../tests/acceptance/review_app_consent_and_share.rs"
+harness = true
+
+[[test]]
+name = "review_app_lifecycle"
+path = "../../tests/acceptance/review_app_lifecycle.rs"
+harness = true
+
+[[test]]
+name = "review_app_privacy_invariants"
+path = "../../tests/acceptance/review_app_privacy_invariants.rs"
+harness = true
+
+[[test]]
+name = "review_app_core"
+path = "../../tests/acceptance/review_app_core.rs"
+harness = true
+
+[lints]
+workspace = true

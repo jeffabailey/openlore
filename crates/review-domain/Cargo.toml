@@ -1,0 +1,17 @@
+[package]
+name = "review-domain"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenLore hosted review app PURE core (bluesky-claim-review-app): ownership verdict, suggestion lifecycle, plans, page views. No I/O, no async, no clock, no randomness."
+
+# PURE core (ADR-007 / ADR-072): `xtask check-arch` forbids tokio, reqwest,
+# hyper, duckdb, atrium-* and every adapter-* in this crate's dep graph.
+[dependencies]
+maud = { workspace = true }
+
+[lints]
+workspace = true

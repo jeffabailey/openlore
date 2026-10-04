@@ -1,0 +1,279 @@
+//! Wire → probe → use (ADR-009 / ADR-072). The root builds every adapter
+//! from the validated configuration, runs every hard probe arm, and only
+//! then serves. Any failure is one `health.startup.refused` event naming the
+//! failing probe, then a non-zero exit — never a half-wired app.
+//!
+//! Log events are a closed catalogue ([`LogEvent`]): the allowlist of event
+//! names and fields is the type, so no token, key or user data can be logged.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter};
+use adapter_review_store::{DataKey, ReviewStore};
+use ports::{OAuthPort, ProbeOutcome, ReviewStorePort};
+use serde_json::json;
+
+use crate::config::{
+    parse_config, parse_secrets, AppConfig, BuildProfile, GithubToken, RawSecrets,
+    DEFAULT_OAUTH_SCOPES,
+};
+use crate::http::{self, Surface};
+
+/// Exit code when the app refuses to start.
+const EXIT_REFUSED: u8 = 2;
+
+/// The startup probes, by the name the operator sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    Config,
+    Secrets,
+    OAuthClient,
+    ReviewStore,
+    GithubToken,
+    Listeners,
+}
+
+impl Probe {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Secrets => "secrets",
+            Self::OAuthClient => "oauth-client",
+            Self::ReviewStore => "review-store",
+            Self::GithubToken => "github-token",
+            Self::Listeners => "listeners",
+        }
+    }
+}
+
+/// Why startup stopped: the probe and an operator-safe explanation.
+#[derive(Debug)]
+struct Refusal {
+    probe: Probe,
+    detail: String,
+}
+
+fn refusal(probe: Probe) -> impl FnOnce(String) -> Refusal {
+    move |detail| Refusal { probe, detail }
+}
+
+/// The closed catalogue of events this module emits.
+enum LogEvent<'a> {
+    AppReady,
+    StartupRefused(&'a Refusal),
+    ProbePassed,
+}
+
+/// Emit one structured JSON event on stdout.
+fn emit(event: LogEvent<'_>) {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let line = match event {
+        LogEvent::AppReady => json!({"ts": ts, "level": "info", "event": "app.ready"}),
+        LogEvent::ProbePassed => json!({"ts": ts, "level": "info", "event": "health.probe.passed"}),
+        LogEvent::StartupRefused(r) => json!({
+            "ts": ts,
+            "level": "error",
+            "event": "health.startup.refused",
+            "probe": r.probe.name(),
+            "reason": r.detail,
+        }),
+    };
+    println!("{line}");
+}
+
+/// Everything the app runs on, wired but not yet trusted.
+struct Wired {
+    config: AppConfig,
+    oauth: OAuthClientAdapter,
+    store: ReviewStore,
+    github_token: GithubToken,
+}
+
+/// Run a future on a single-threaded runtime.
+pub(crate) fn block_on(work: impl std::future::Future<Output = u8>) -> u8 {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(work),
+        Err(e) => refuse(&Refusal {
+            probe: Probe::Listeners,
+            detail: format!("cannot start the async runtime: {e}"),
+        }),
+    }
+}
+
+fn refuse(r: &Refusal) -> u8 {
+    emit(LogEvent::StartupRefused(r));
+    EXIT_REFUSED
+}
+
+/// `serve`: wire, probe, then serve until the listeners fail.
+pub(crate) async fn serve(env: &BTreeMap<String, String>) -> u8 {
+    let ready = match wire(env) {
+        Ok(wired) => probe(&wired).await.map(|()| wired),
+        Err(r) => Err(r),
+    };
+    let wired = match ready {
+        Ok(wired) => wired,
+        Err(r) => return refuse(&r),
+    };
+    let listeners = bind(&wired.config).await;
+    let (public, admin) = match listeners {
+        Ok(pair) => pair,
+        Err(r) => return refuse(&r),
+    };
+    emit(LogEvent::AppReady);
+    let surface = Arc::new(surface(&wired.oauth));
+    match http::serve(public, admin, surface).await {
+        Ok(()) => 0,
+        Err(e) => refuse(&Refusal {
+            probe: Probe::Listeners,
+            detail: format!("a listener failed: {e}"),
+        }),
+    }
+}
+
+/// `probe`: wire and probe the real configuration, then exit.
+pub(crate) async fn probe_only(env: &BTreeMap<String, String>) -> u8 {
+    let outcome = match wire(env) {
+        Ok(wired) => probe(&wired).await,
+        Err(r) => Err(r),
+    };
+    match outcome {
+        Ok(()) => {
+            emit(LogEvent::ProbePassed);
+            0
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
+/// `probe --self-test`: a throwaway client key and data key, an in-memory
+/// store, no network. Proves the image can sign, seal and isolate owners.
+pub(crate) fn self_test() -> u8 {
+    let oauth = OAuthClientAdapter::new(
+        ClientKey::generate("self-test"),
+        "https://self-test.invalid",
+        DEFAULT_OAUTH_SCOPES,
+    );
+    let checked = ReviewStore::open_in_memory(DataKey::generate())
+        .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))
+        .and_then(|store| {
+            arm(Probe::OAuthClient, oauth.probe())?;
+            arm(Probe::ReviewStore, store.probe())
+        });
+    match checked {
+        Ok(()) => {
+            emit(LogEvent::ProbePassed);
+            0
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
+/// `gen-client-jwk`: print a fresh private client JWK.
+pub(crate) fn gen_client_jwk() -> u8 {
+    let issued = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    println!(
+        "{}",
+        ClientKey::generate(&format!("openlore-review-{issued}")).to_private_json()
+    );
+    0
+}
+
+/// Build every adapter from the environment and the secrets directory.
+fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
+    let config = parse_config(env, BuildProfile::of_this_build())
+        .map_err(|e| refusal(Probe::Config)(e.to_string()))?;
+    let secrets = parse_secrets(read_secrets(&config.secrets_dir))
+        .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
+    let key = ClientKey::parse(&secrets.client_jwk)
+        .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
+    let oauth = OAuthClientAdapter::new(key, &config.origin, &config.oauth_scopes);
+    let store = ReviewStore::open(&config.review_db, DataKey::from_bytes(secrets.data_key))
+        .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
+    Ok(Wired {
+        config,
+        oauth,
+        store,
+        github_token: secrets.github_token,
+    })
+}
+
+/// Every hard arm; the first refusal wins.
+async fn probe(wired: &Wired) -> Result<(), Refusal> {
+    arm(Probe::OAuthClient, wired.oauth.probe())?;
+    arm(Probe::ReviewStore, wired.store.probe())?;
+    github_token_arm(&wired.config.github_api_base, &wired.github_token).await
+}
+
+fn arm(probe: Probe, outcome: ProbeOutcome) -> Result<(), Refusal> {
+    match outcome {
+        ProbeOutcome::Ok => Ok(()),
+        ProbeOutcome::Refused { detail, .. } => Err(Refusal { probe, detail }),
+    }
+}
+
+/// The server GitHub token must still be accepted (an expired or revoked
+/// PAT would fail every scan). Unreachable GitHub is not a refusal: scans
+/// report it to the user and retry.
+async fn github_token_arm(api_base: &str, token: &GithubToken) -> Result<(), Refusal> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .user_agent("openlore-review-app")
+        .build()
+        .map_err(|e| refusal(Probe::GithubToken)(e.to_string()))?;
+    let response = client
+        .get(format!("{api_base}/rate_limit"))
+        .bearer_auth(token.expose())
+        .send()
+        .await;
+    match response {
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => Err(Refusal {
+            probe: Probe::GithubToken,
+            detail: "GitHub rejected the server token (HTTP 401): renew the PAT".into(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Read each secrets file; an absent file is `None`.
+fn read_secrets(dir: &Path) -> RawSecrets {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
+    RawSecrets {
+        client_jwk: read("client-jwk"),
+        data_key: read("data-key"),
+        github_token: read("github-token"),
+        log_salt: read("log-salt"),
+    }
+}
+
+async fn bind(
+    config: &AppConfig,
+) -> Result<(tokio::net::TcpListener, tokio::net::TcpListener), Refusal> {
+    let bind = |addr| async move {
+        tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| refusal(Probe::Listeners)(format!("cannot listen on {addr}: {e}")))
+    };
+    Ok((bind(config.listen).await?, bind(config.admin_listen).await?))
+}
+
+/// The pages the public listener serves, rendered once.
+fn surface(oauth: &OAuthClientAdapter) -> Surface {
+    Surface {
+        landing: review_domain::views::landing_page(),
+        client_metadata: oauth.client_metadata().to_string(),
+        jwks: oauth.public_jwks().to_string(),
+    }
+}

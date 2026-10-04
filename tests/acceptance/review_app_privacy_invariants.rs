@@ -286,7 +286,6 @@ fn a_confirmation_without_her_pages_anti_forgery_token_is_refused() {
 ///   Then "/healthz" and "/readyz" both answer 200
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (healthz + readyz)"]
 fn a_healthy_app_reports_live_and_ready() {
     let world = ReviewWorld::new();
     assert_eq!(world.app.get("/healthz").0, 200);
@@ -310,7 +309,6 @@ fn a_healthy_app_reports_live_and_ready() {
 ///     | the client signing key secret is missing       |
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (startup refusal on hard probe failure)"]
 fn the_app_refuses_to_start_rather_than_run_half_wired() {
     type Prepare =
         fn(&openlore_test_support::FakeGithubAccounts, &openlore_test_support::FakeAtprotoNetwork);
@@ -362,7 +360,6 @@ fn the_app_refuses_to_start_rather_than_run_half_wired() {
 ///   Then it exits 0
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (probe --self-test)"]
 fn the_image_self_test_passes_with_throwaway_keys_and_no_network() {
     let (code, output) = ReviewApp::run_subcommand(&["probe", "--self-test"]);
     assert_eq!(code, Some(0), "{output}");

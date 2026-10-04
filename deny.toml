@@ -70,11 +70,27 @@ deny = [
     # serde_cbor: unmaintained (last release 2021); superseded by ciborium
     # which is what claim-domain uses for canonical CBOR.
     { name = "serde_cbor" },
-    # actix-web, axum: HTTP server frameworks. OpenLore is a CLI + adapter
-    # set; we never run an HTTP server in-process. Banning prevents drift.
+    # actix-web, axum: HTTP server frameworks. The servers OpenLore runs (the
+    # `openlore ui` viewer, the indexer's query server, the hosted review app,
+    # ADR-072) are small hand-rolled hyper 1.x shells. Banning prevents drift.
     { name = "actix-web" },
     { name = "axum" },
+    # hickory-* < 0.26: 0.24 hits RUSTSEC-2026-0119 (bluesky-claim-review-app
+    # SPIKE-2). atrium-identity's optional DoH resolver pins 0.24; keep it off.
+    { name = "hickory-proto", version = "<0.26" },
+    { name = "hickory-resolver", version = "<0.26" },
+    { name = "hickory-net", version = "<0.26" },
+    # atrium-oauth is pinned to the spiked 0.1.7 (ADR-073).
+    { name = "atrium-oauth", version = "<0.1.7" },
+    { name = "atrium-oauth", version = ">0.1.7" },
 ]
+
+# atrium-oauth's `default-client` feature pulls reqwest's native-tls (openssl,
+# banned above); the review app adapts the workspace rustls reqwest instead
+# (`adapter_atproto_oauth::RustlsHttpClient`, ADR-073).
+[[bans.features]]
+crate = "atrium-oauth"
+deny = ["default-client"]
 
 [advisories]
 # Pull advisories from the canonical RustSec DB.

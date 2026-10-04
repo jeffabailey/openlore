@@ -41,6 +41,13 @@ members = [
     "crates/adapter-publish-http",
     # slice-05 (appview search) the SECOND composition root — step 01-04.
     "crates/openlore-indexer",
+    # bluesky-claim-review-app (ADR-072) — the PURE review/consent core, the
+    # atproto OAuth confidential-client EFFECT shell, the owner-scoped private
+    # store EFFECT shell, and the THIRD composition root (the hosted review app).
+    "crates/review-domain",
+    "crates/adapter-atproto-oauth",
+    "crates/adapter-review-store",
+    "crates/openlore-review-app",
     "crates/cli",
     "crates/test-support",
     "xtask",

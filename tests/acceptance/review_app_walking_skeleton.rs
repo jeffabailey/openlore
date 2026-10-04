@@ -47,6 +47,7 @@ use review_app::*;
 ///   And nothing was written to any repo
 /// ```
 #[test]
+#[ignore = "DELIVER 01-02: unskip when the review app ships OAuth sign-in"]
 fn priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_review_app() {
     // GIVEN Priya's handle resolves to her DID on bsky.social, and the app is up.
     let world = ReviewWorld::new();
@@ -101,6 +102,7 @@ fn priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_re
 ///   And nothing was written to her PDS
 /// ```
 #[test]
+#[ignore = "DELIVER 01-03: unskip when the review app ships GitHub ownership proof"]
 fn priya_proves_her_github_account_is_hers_with_her_did_in_her_bio() {
     // GIVEN Priya is signed in (WS-1's Given + When) and her bio holds her DID.
     let world = ReviewWorld::new();
@@ -144,6 +146,7 @@ fn priya_proves_her_github_account_is_hers_with_her_did_in_her_bio() {
 ///   And nothing was written to her PDS
 /// ```
 #[test]
+#[ignore = "DELIVER 01-04: unskip when the review app ships private suggestion queue"]
 fn priya_sees_private_evidence_backed_suggestions_from_her_own_repos() {
     // GIVEN Priya has verified github.com/priyaraman (WS-2's Given + When).
     let world = ReviewWorld::new();
@@ -217,6 +220,7 @@ fn priya_sees_private_evidence_backed_suggestions_from_her_own_repos() {
 ///   And when Maria adds Priya as a peer and pulls, OpenLore stores the claim and shows it as "self-attested", never "unverified"
 /// ```
 #[test]
+#[ignore = "DELIVER 01-05: unskip when the review app ships approve + self-attested publish"]
 fn priya_approves_a_suggestion_and_it_lands_in_her_own_pds_accepted_by_openlore_as_self_attested() {
     use review_app::state_delta::{assert_state_delta, Delta};
 

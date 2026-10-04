@@ -105,7 +105,11 @@ const ADAPTER_DEPENDENT_EXEMPT_MEMBERS: &[&str] = &["xtask", "openlore-test-supp
 /// BOTH. The disjointness of the two roots' adapter sets — neither wires the
 /// other's — is enforced separately by
 /// [`check_indexer_capability_boundary`] (I-AV-5 + the I-3 second axis).
-const COMPOSITION_ROOTS: &[&str] = &["cli", "openlore-indexer"];
+///
+/// bluesky-claim-review-app (ADR-072) adds the THIRD root, the hosted
+/// `openlore-review-app`; its adapter set is kept disjoint from the other two
+/// by [`check_review_app_capability_boundary`].
+const COMPOSITION_ROOTS: &[&str] = &["cli", "openlore-indexer", "openlore-review-app"];
 
 /// The user's CLI composition root, per ADR-009. Named separately because the
 /// indexer capability-boundary rule keys on it specifically (the `cli`-side I-3
@@ -275,7 +279,7 @@ fn check_only_cli_depends_on_adapters(workspace: &Workspace) -> Vec<Violation> {
                 violations.push(Violation {
                     package: member.clone(),
                     forbidden: dep,
-                    rule: "only a composition root (`cli` / `openlore-indexer`) may depend on `adapter-*` crates (I-3)",
+                    rule: "only a composition root (`cli` / `openlore-indexer` / `openlore-review-app`) may depend on `adapter-*` crates (I-3)",
                 });
             }
         }
@@ -795,6 +799,11 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
         "publish-domain",
         "publish-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-062; the pure publish core — manifest marker, display projection, round-trip CID verdict)",
     ));
+    violations.extend(check_pure_core_no_io(
+        workspace,
+        "review-domain",
+        "review-domain MUST NOT transitively depend on tokio/reqwest/duckdb/keyring/atrium-* (ADR-072; the pure review/consent core)",
+    ));
     violations.extend(check_ports_async_trait_only(workspace));
     violations.extend(check_no_adapter_depends_on_adapter(workspace));
     violations.extend(check_only_cli_depends_on_adapters(workspace));
@@ -805,6 +814,8 @@ pub fn check_workspace(workspace: &Workspace) -> Vec<Violation> {
     // Slice-06 (I-VIEW-3 / ADR-028/030): the viewer capability boundary —
     // `adapter-http-viewer` holds no signing/PDS surface; only `cli` links it.
     violations.extend(check_viewer_capability_boundary(workspace));
+    // bluesky-claim-review-app (ADR-072): the third root's disjoint adapters.
+    violations.extend(check_review_app_capability_boundary(workspace));
     violations
 }
 
@@ -1493,6 +1504,291 @@ pub fn scan_adapter_github_port_references(workspace_root: &Path) -> anyhow::Res
     Ok(findings)
 }
 
+// -----------------------------------------------------------------------------
+// Review-app rules (bluesky-claim-review-app, component-boundaries §5)
+// -----------------------------------------------------------------------------
+//
+// The hosted review app is the THIRD composition root (ADR-072). It reaches a
+// user's PDS only through the OAuth client (create-only, I-BRA-8) and keeps
+// private state in its own owner-scoped store (ADR-074). Rules:
+//
+// * `review_app_capability_boundary` (dep graph): the app links none of the
+//   CLI's store/PDS/viewer/publish or the indexer's server/store/query
+//   adapters; `cli` / `openlore-indexer` link neither review adapter nor the
+//   app; only the app (and exempt tooling) reaches the two review adapters.
+// * `review_app_holds_no_signing_identity` (source scan of the app).
+// * `user_repo_write_is_create_only` (source scan of the OAuth adapter).
+// * `review_store_owner_scoped_sql` (SQL literals of the review store).
+// * `review_app_log_field_allowlist` (tracing events in the app + adapters).
+
+const REVIEW_APP_ROOT: &str = "openlore-review-app";
+
+/// The two adapters only the review app may link.
+const REVIEW_APP_ADAPTERS: &[&str] = &["adapter-atproto-oauth", "adapter-review-store"];
+
+/// The CLI / indexer capabilities the review app must never reach.
+const REVIEW_APP_FORBIDDEN_DEPS: &[&str] = &[
+    "adapter-duckdb",
+    "adapter-atproto-pds",
+    "adapter-publish-http",
+    "adapter-http-viewer",
+    "adapter-xrpc-query-server",
+    "adapter-index-store",
+    "adapter-index-query",
+];
+
+/// Pure dep-graph check for the third root. A missing crate skips its arm.
+pub fn check_review_app_capability_boundary(workspace: &Workspace) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    if workspace.members.contains(REVIEW_APP_ROOT) {
+        let transitive = workspace.transitive_deps(REVIEW_APP_ROOT);
+        violations.extend(
+            REVIEW_APP_FORBIDDEN_DEPS
+                .iter()
+                .filter(|dep| transitive.contains(**dep))
+                .map(|dep| Violation {
+                    package: REVIEW_APP_ROOT.to_string(),
+                    forbidden: (*dep).to_string(),
+                    rule: "openlore-review-app MUST NOT reach the CLI's store/PDS/viewer/publish \
+                           or the indexer's server/store/query adapters (ADR-072 / I-BRA-7)",
+                }),
+        );
+    }
+    for root in ["cli", INDEXER_ROOT] {
+        if !workspace.members.contains(root) {
+            continue;
+        }
+        let transitive = workspace.transitive_deps(root);
+        violations.extend(
+            REVIEW_APP_ADAPTERS
+                .iter()
+                .chain([REVIEW_APP_ROOT].iter())
+                .filter(|dep| transitive.contains(**dep))
+                .map(|dep| Violation {
+                    package: root.to_string(),
+                    forbidden: (*dep).to_string(),
+                    rule: "cli / openlore-indexer MUST NOT link the review app or its OAuth / \
+                           private-store adapters (ADR-072: disjoint composition roots)",
+                }),
+        );
+    }
+    for member in &workspace.members {
+        let exempt = member == REVIEW_APP_ROOT
+            || ADAPTER_DEPENDENT_EXEMPT_MEMBERS.contains(&member.as_str())
+            || REVIEW_APP_ADAPTERS.contains(&member.as_str());
+        if exempt {
+            continue;
+        }
+        let direct = workspace.deps.get(member).cloned().unwrap_or_default();
+        violations.extend(
+            REVIEW_APP_ADAPTERS
+                .iter()
+                .filter(|dep| direct.contains(**dep))
+                .map(|dep| Violation {
+                    package: member.clone(),
+                    forbidden: (*dep).to_string(),
+                    rule: "only openlore-review-app may depend on adapter-atproto-oauth / \
+                           adapter-review-store (ADR-072)",
+                }),
+        );
+    }
+    violations
+}
+
+/// Names the review app's sources must never contain (ADR-072 / D-5): the
+/// claim-signing identity port, the OS keychain, a signing key type.
+const REVIEW_APP_SIGNING_TOKENS: &[&str] = &["IdentityPort", "keyring", "SigningKey"];
+
+/// XRPC verbs the OAuth adapter must never contain (I-BRA-8): only creates.
+const NON_CREATE_REPO_VERBS: &[&str] = &["deleteRecord", "putRecord", "applyWrites"];
+
+/// Pure: every non-comment line naming one of `tokens`, as findings.
+pub fn classify_forbidden_tokens(source: &str, tokens: &[&str]) -> Vec<String> {
+    source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .flat_map(|(index, line)| {
+            tokens
+                .iter()
+                .filter(move |token| line.contains(**token))
+                .map(move |token| format!("line {}: `{token}` in `{}`", index + 1, line.trim()))
+        })
+        .collect()
+}
+
+/// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
+const REVIEW_OWNER_TABLES: &[&str] = &[
+    "accounts",
+    "github_links",
+    "suggestions",
+    "scan_runs",
+    "plans",
+    "oauth_sessions",
+    "web_sessions",
+];
+
+/// Pure SQL rule for one review-store literal in `file_name`. Owner-table
+/// SQL must name `owner_did`; `kpi_counters` must never name it; `DELETE`
+/// lives only in the purge / expiry modules.
+pub fn classify_review_store_sql_literal(file_name: &str, literal: &str) -> Option<String> {
+    let sql = literal.to_ascii_lowercase();
+    let is_sql = ["select ", "insert ", "update ", "delete ", "create table"]
+        .iter()
+        .any(|k| sql.contains(k));
+    if !is_sql {
+        return None;
+    }
+    if sql.contains("kpi_counters") {
+        return sql
+            .contains("owner_did")
+            .then(|| format!("kpi_counters SQL names an owner: {}", excerpt_of(literal)));
+    }
+    let names_owner_table = REVIEW_OWNER_TABLES.iter().any(|t| sql.contains(t));
+    if names_owner_table && !sql.contains("create table") && !sql.contains("owner_did") {
+        return Some(format!(
+            "owner-table SQL is not scoped by owner_did: {}",
+            excerpt_of(literal)
+        ));
+    }
+    if sql.contains("delete ") && !(file_name.contains("purge") || file_name.contains("expiry")) {
+        return Some(format!(
+            "DELETE outside the purge / expiry modules: {}",
+            excerpt_of(literal)
+        ));
+    }
+    None
+}
+
+/// Field names a tracing event in the review app must never use (DV-BRA-9).
+const FORBIDDEN_LOG_FIELDS: &[&str] = &[
+    "token",
+    "access_token",
+    "refresh_token",
+    "bio",
+    "subject",
+    "object",
+    "evidence",
+    "text",
+    "handle",
+    "did",
+    "cookie",
+    "code",
+    "jwk",
+];
+
+const TRACING_EVENT_MACROS: &[&str] = &[
+    "info!(", "warn!(", "error!(", "debug!(", "trace!(", "event!(",
+];
+
+/// Pure: every tracing-event line that records a forbidden field name.
+pub fn classify_log_fields(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| TRACING_EVENT_MACROS.iter().any(|m| line.contains(m)))
+        .filter_map(|(index, line)| {
+            FORBIDDEN_LOG_FIELDS
+                .iter()
+                .find(|field| {
+                    [
+                        format!("{field} ="),
+                        format!("{field}="),
+                        format!("?{field}"),
+                        format!("%{field}"),
+                    ]
+                    .iter()
+                    .any(|shape| {
+                        [" ", "(", ","]
+                            .iter()
+                            .any(|lead| line.contains(&format!("{lead}{shape}")))
+                    })
+                })
+                .map(|field| {
+                    format!(
+                        "line {}: forbidden log field `{field}` in `{}`",
+                        index + 1,
+                        line.trim()
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Effect shell: every review-app source rule over the real tree.
+pub fn scan_review_app_rules(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    let app = workspace_root.join("crates/openlore-review-app/src");
+    let oauth = workspace_root.join("crates/adapter-atproto-oauth/src");
+    let store = workspace_root.join("crates/adapter-review-store/src");
+    let mut findings = Vec::new();
+    for path in rust_sources_under(&app) {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_forbidden_tokens(&source, REVIEW_APP_SIGNING_TOKENS)
+                .into_iter()
+                .map(|f| {
+                    format!(
+                        "{}: {f} — the review app holds no signing identity \
+                         (review_app_holds_no_signing_identity, ADR-072 / D-5)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    for path in rust_sources_under(&oauth) {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_forbidden_tokens(&source, NON_CREATE_REPO_VERBS)
+                .into_iter()
+                .map(|f| {
+                    format!(
+                        "{}: {f} — user-repo writes are create-only \
+                         (user_repo_write_is_create_only, I-BRA-8)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    for path in rust_sources_under(&store) {
+        let source = std::fs::read_to_string(&path)?;
+        let file = syn::parse_file(&source)
+            .map_err(|e| anyhow::anyhow!("syn parse {}: {e}", path.display()))?;
+        let mut collector = StringLiteralCollector {
+            literals: Vec::new(),
+        };
+        collector.visit_file(&file);
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        findings.extend(
+            collector
+                .literals
+                .iter()
+                .filter_map(|literal| classify_review_store_sql_literal(&file_name, literal))
+                .map(|f| {
+                    format!(
+                        "{}: {f} (review_store_owner_scoped_sql, I-BRA-1 / ADR-074)",
+                        path.display()
+                    )
+                }),
+        );
+    }
+    for path in [&app, &oauth, &store]
+        .into_iter()
+        .flat_map(|dir| rust_sources_under(dir))
+    {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(classify_log_fields(&source).into_iter().map(|f| {
+            format!(
+                "{}: {f} (review_app_log_field_allowlist, DV-BRA-9 / NFR-BRA-2)",
+                path.display()
+            )
+        }));
+    }
+    Ok(findings)
+}
+
 /// Effect shell: composes load + dep-graph check + source-scanning rules +
 /// render. Returns process exit code (0 = healthy, 1 = violations).
 pub fn run() -> anyhow::Result<i32> {
@@ -1509,6 +1805,7 @@ pub fn run() -> anyhow::Result<i32> {
     let publish_write_findings = scan_publish_write_capability(&workspace_root)?;
     let contribution_links_findings = scan_contribution_links_append_only(&workspace_root)?;
     let adapter_github_port_findings = scan_adapter_github_port_references(&workspace_root)?;
+    let review_app_findings = scan_review_app_rules(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1520,6 +1817,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(publish_write_findings);
     rendered.extend(contribution_links_findings);
     rendered.extend(adapter_github_port_findings);
+    rendered.extend(review_app_findings);
 
     if rendered.is_empty() {
         println!(
@@ -2448,5 +2746,199 @@ mod tests {
             Vec::<String>::new(),
             "the real adapter-github names no storage / identity port"
         );
+    }
+}
+
+#[cfg(test)]
+mod review_app_rule_tests {
+    //! Synthetic-violation tests: each review-app rule fires on a hand-built
+    //! violation and stays silent on the compliant shape.
+    use super::*;
+
+    fn ws(rows: &[(&str, &[&str])]) -> Workspace {
+        Workspace {
+            members: rows.iter().map(|(n, _)| (*n).to_string()).collect(),
+            deps: rows
+                .iter()
+                .map(|(n, ds)| {
+                    (
+                        (*n).to_string(),
+                        ds.iter().map(|d| (*d).to_string()).collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn compliant() -> Vec<(&'static str, &'static [&'static str])> {
+        vec![
+            (
+                "openlore-review-app",
+                &[
+                    "review-domain",
+                    "adapter-atproto-oauth",
+                    "adapter-review-store",
+                ],
+            ),
+            ("review-domain", &["maud"]),
+            ("adapter-atproto-oauth", &["ports"]),
+            ("adapter-review-store", &["ports"]),
+            ("cli", &["adapter-duckdb"]),
+            ("openlore-indexer", &["adapter-index-store"]),
+        ]
+    }
+
+    #[test]
+    fn the_compliant_three_root_shape_passes_every_dep_rule() {
+        assert_eq!(check_workspace(&ws(&compliant())), Vec::new());
+    }
+
+    #[test]
+    fn the_review_app_reaching_a_cli_capability_is_a_violation() {
+        for forbidden in REVIEW_APP_FORBIDDEN_DEPS {
+            let mut rows = compliant();
+            let leaked: &'static [&'static str] = Box::leak(Box::new([*forbidden]));
+            rows[0] = ("openlore-review-app", leaked);
+            let v = check_review_app_capability_boundary(&ws(&rows));
+            assert!(
+                v.iter()
+                    .any(|x| x.package == "openlore-review-app" && x.forbidden == *forbidden),
+                "{forbidden}: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_or_indexer_linking_a_review_adapter_is_a_violation() {
+        for root in ["cli", "openlore-indexer"] {
+            for guarded in [
+                "adapter-atproto-oauth",
+                "adapter-review-store",
+                "openlore-review-app",
+            ] {
+                let mut rows = compliant();
+                let leaked: &'static [&'static str] = Box::leak(Box::new([guarded]));
+                rows.retain(|(n, _)| *n != root);
+                rows.push((root, leaked));
+                let v = check_review_app_capability_boundary(&ws(&rows));
+                assert!(
+                    v.iter()
+                        .any(|x| x.package == root && x.forbidden == guarded),
+                    "{root} -> {guarded}: {v:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn another_crate_depending_on_a_review_adapter_is_a_violation() {
+        let mut rows = compliant();
+        rows.push(("viewer-domain", &["adapter-review-store"]));
+        let v = check_review_app_capability_boundary(&ws(&rows));
+        assert!(v
+            .iter()
+            .any(|x| x.package == "viewer-domain" && x.forbidden == "adapter-review-store"));
+    }
+
+    #[test]
+    fn review_domain_reaching_io_is_a_violation() {
+        let mut rows = compliant();
+        rows[1] = ("review-domain", &["tokio"]);
+        let v = check_workspace(&ws(&rows));
+        assert!(v
+            .iter()
+            .any(|x| x.package == "review-domain" && x.forbidden == "tokio"));
+    }
+
+    #[test]
+    fn the_review_app_is_a_composition_root() {
+        assert!(COMPOSITION_ROOTS.contains(&"openlore-review-app"));
+        let mut rows = compliant();
+        rows.push(("adapter-github", &[]));
+        rows[0].1 = &["adapter-github", "adapter-review-store"];
+        assert!(check_only_cli_depends_on_adapters(&ws(&rows)).is_empty());
+    }
+
+    #[test]
+    fn a_signing_identity_in_the_app_is_a_finding() {
+        for token in REVIEW_APP_SIGNING_TOKENS {
+            let source =
+                format!("use ports::Other;\nlet k = {token}::new();\n// {token} in a comment\n");
+            let findings = classify_forbidden_tokens(&source, REVIEW_APP_SIGNING_TOKENS);
+            assert_eq!(findings.len(), 1, "{token}: {findings:?}");
+        }
+        assert!(classify_forbidden_tokens(
+            "let key = ClientKey::generate();",
+            REVIEW_APP_SIGNING_TOKENS
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_non_create_repo_verb_in_the_oauth_adapter_is_a_finding() {
+        for verb in NON_CREATE_REPO_VERBS {
+            let source = format!("let nsid = \"com.atproto.repo.{verb}\";\n");
+            assert_eq!(
+                classify_forbidden_tokens(&source, NON_CREATE_REPO_VERBS).len(),
+                1
+            );
+        }
+        assert!(classify_forbidden_tokens(
+            "let nsid = \"com.atproto.repo.createRecord\";",
+            NON_CREATE_REPO_VERBS
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn owner_table_sql_without_owner_scope_is_a_finding() {
+        for table in REVIEW_OWNER_TABLES {
+            let unscoped = format!("SELECT * FROM {table} WHERE id = ?");
+            let scoped = format!("SELECT * FROM {table} WHERE owner_did = ?");
+            let ddl = format!("CREATE TABLE IF NOT EXISTS {table} (x INT)");
+            assert!(
+                classify_review_store_sql_literal("lib.rs", &unscoped).is_some(),
+                "{table}"
+            );
+            assert!(
+                classify_review_store_sql_literal("lib.rs", &scoped).is_none(),
+                "{table}"
+            );
+            assert!(
+                classify_review_store_sql_literal("schema.rs", &ddl).is_none(),
+                "{table}"
+            );
+        }
+    }
+
+    #[test]
+    fn kpi_counters_naming_an_owner_is_a_finding() {
+        let owned = "CREATE TABLE kpi_counters (day DATE, owner_did VARCHAR)";
+        let anonymous = "INSERT INTO kpi_counters (day, event, count) VALUES (?, ?, 1)";
+        assert!(classify_review_store_sql_literal("schema.rs", owned).is_some());
+        assert!(classify_review_store_sql_literal("kpi.rs", anonymous).is_none());
+    }
+
+    #[test]
+    fn delete_outside_purge_or_expiry_is_a_finding() {
+        let delete = "DELETE FROM plans WHERE owner_did = ?";
+        assert!(classify_review_store_sql_literal("lib.rs", delete).is_some());
+        assert!(classify_review_store_sql_literal("purge.rs", delete).is_none());
+        assert!(classify_review_store_sql_literal("expiry.rs", delete).is_none());
+    }
+
+    #[test]
+    fn a_forbidden_log_field_is_a_finding() {
+        for field in FORBIDDEN_LOG_FIELDS {
+            for shape in [
+                format!("tracing::info!({field} = 1, \"x\");"),
+                format!("warn!(probe = 1, ?{field}, \"x\");"),
+                format!("error!(%{field}, \"x\");"),
+            ] {
+                assert_eq!(classify_log_fields(&shape).len(), 1, "{shape}");
+            }
+        }
+        assert!(classify_log_fields("info!(probe = \"github\", \"app.ready\");").is_empty());
+        assert!(classify_log_fields("let token = 1;").is_empty());
     }
 }

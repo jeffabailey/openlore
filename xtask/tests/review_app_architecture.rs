@@ -78,7 +78,6 @@ const OWNER_TABLES: [&str; 7] = [
 
 /// AR-1 @ADR-072 @component-boundaries-5.1 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the openlore-review-app bootstrap"]
 fn the_review_app_is_a_workspace_member_with_its_own_composition_root() {
     let ws = load_workspace().expect("cargo metadata");
     for member in [
@@ -101,7 +100,6 @@ fn the_review_app_is_a_workspace_member_with_its_own_composition_root() {
 
 /// AR-2 @ADR-072 @I-BRA-7 @component-boundaries-5.3 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the openlore-review-app bootstrap"]
 fn the_review_app_cannot_reach_the_cli_or_indexer_capabilities() {
     let ws = load_workspace().expect("cargo metadata");
     assert!(
@@ -127,7 +125,6 @@ fn the_review_app_cannot_reach_the_cli_or_indexer_capabilities() {
 
 /// AR-3 @ADR-072 @component-boundaries-5.3 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the openlore-review-app bootstrap"]
 fn only_the_review_app_reaches_the_oauth_and_private_store_adapters() {
     let ws = load_workspace().expect("cargo metadata");
     for guarded in ["adapter-atproto-oauth", "adapter-review-store"] {
@@ -160,7 +157,6 @@ fn only_the_review_app_reaches_the_oauth_and_private_store_adapters() {
 
 /// AR-4 @ADR-007 @component-boundaries-5.2 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the review-domain bootstrap"]
 fn review_domain_is_a_pure_core() {
     let ws = load_workspace().expect("cargo metadata");
     assert!(
@@ -186,7 +182,6 @@ fn review_domain_is_a_pure_core() {
 
 /// AR-5 @I-BRA-8 @component-boundaries-5.5 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the adapter-atproto-oauth bootstrap"]
 fn the_oauth_adapter_can_only_create_records() {
     let dir = root().join("crates/adapter-atproto-oauth/src");
     assert!(dir.is_dir(), "adapter-atproto-oauth exists");
@@ -203,7 +198,6 @@ fn the_oauth_adapter_can_only_create_records() {
 
 /// AR-6 @ADR-072 @D-5 @component-boundaries-5.4 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the openlore-review-app bootstrap"]
 fn the_review_app_holds_no_signing_identity() {
     let dir = root().join("crates/openlore-review-app/src");
     assert!(dir.is_dir(), "openlore-review-app exists");
@@ -220,7 +214,6 @@ fn the_review_app_holds_no_signing_identity() {
 
 /// AR-7 @I-BRA-1 @ADR-074 @OD-BRA-11 @component-boundaries-5.6 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the adapter-review-store bootstrap"]
 fn every_owner_table_query_is_owner_scoped_and_kpi_counters_name_no_owner() {
     let dir = root().join("crates/adapter-review-store/src");
     assert!(dir.is_dir(), "adapter-review-store exists");
@@ -336,7 +329,6 @@ fn the_caddy_site_serves_the_app_over_https_only() {
 
 /// AR-10 @DV-BRA-9 @NFR-BRA-2 @observability-design-3 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip at the openlore-review-app bootstrap"]
 fn tracing_events_in_the_app_never_use_a_forbidden_field_name() {
     let forbidden = [
         "token",
