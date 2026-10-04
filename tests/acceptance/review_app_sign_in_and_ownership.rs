@@ -70,7 +70,6 @@ fn bluesky_identifies_the_review_app_from_its_published_client_details() {
 ///   And she holds no session and nothing was written anywhere
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-000 unavailable is explained)"]
 fn an_unreachable_identity_check_is_explained_as_temporarily_unavailable_and_changes_nothing() {
     let world = ReviewWorld::new();
     world
@@ -132,7 +131,6 @@ fn every_page_tells_the_browser_to_use_https_only_and_never_frame_it() {
 ///   And she sees that only public GitHub data is read
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 the three never-commitments)"]
 fn priya_sees_what_the_app_will_never_do_before_she_signs_in() {
     let world = ReviewWorld::new();
     let mut browser = world.browser();
@@ -162,7 +160,6 @@ fn priya_sees_what_the_app_will_never_do_before_she_signs_in() {
 ///   And he returns signed in as @dmitri.volkov.dev
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 self-hosted PDS sign-in)"]
 fn dmitri_signs_in_through_his_self_hosted_pds() {
     let world = ReviewWorld::new();
     let mut browser = world.browser();
@@ -183,7 +180,6 @@ fn dmitri_signs_in_through_his_self_hosted_pds() {
 ///   And no authorization was started anywhere and she holds no session
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 mistyped handle)"]
 fn a_mistyped_handle_gets_a_helpful_message_and_starts_nothing() {
     let world = ReviewWorld::new();
     let mut browser = world.browser();
@@ -213,7 +209,6 @@ fn a_mistyped_handle_gets_a_helpful_message_and_starts_nothing() {
 ///   And she holds no session
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 cancel changes nothing)"]
 fn cancelling_authorization_at_her_pds_changes_nothing() {
     let world = ReviewWorld::new();
     world
@@ -243,7 +238,6 @@ fn cancelling_authorization_at_her_pds_changes_nothing() {
 ///   Then the sign-in is refused and she holds no session
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 session DID must equal resolved DID)"]
 fn a_sign_in_that_returns_a_different_account_than_the_handle_named_is_refused() {
     let world = ReviewWorld::new();
     world.atproto.set_token_posture(
@@ -270,7 +264,6 @@ fn a_sign_in_that_returns_a_different_account_than_the_handle_named_is_refused()
 ///   And the app keeps serving: Dmitri can still sign in
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (SPIKE-2 finding 3: callback exchange error isolated)"]
 fn a_failed_sign_in_exchange_is_explained_and_never_takes_the_app_down() {
     let world = ReviewWorld::new();
     world
@@ -298,7 +291,6 @@ fn a_failed_sign_in_exchange_is_explained_and_never_takes_the_app_down() {
 ///   Then that browser is not signed in and the app keeps serving
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (replayed callback refused, app alive)"]
 fn a_replayed_sign_in_return_link_signs_nobody_in() {
     let world = ReviewWorld::new();
     let _priya = given_signed_in(&world, Persona::Priya);
@@ -340,7 +332,6 @@ fn a_replayed_sign_in_return_link_signs_nobody_in() {
 ///   Then her queue asks her to sign in again
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-001 sign out)"]
 fn signing_out_ends_the_session() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -357,7 +348,6 @@ fn signing_out_ends_the_session() {
 ///   And no page she sees contains any token her PDS issued
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (NFR-BRA-2 cookie + no token in pages)"]
 fn the_session_cookie_is_out_of_reach_of_page_scripts_and_pages_never_carry_tokens() {
     let world = ReviewWorld::new();
     let mut browser = world.browser();
@@ -634,7 +624,7 @@ fn a_renamed_or_re_registered_github_account_must_be_verified_again() {
 ///   And her approved claim still lands in her claims collection and nowhere else
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (ADR-073 transition:generic fallback disclosure)"]
+#[ignore = "BLOCKED_BY_DEPENDENCY 01-03..01-05: sign-in half green in 01-02; chains given_published (verify/scan/publish)"]
 fn with_only_the_broad_permission_the_app_says_why_and_still_writes_only_claims() {
     const FALLBACK: &str = "atproto transition:generic";
     let world =

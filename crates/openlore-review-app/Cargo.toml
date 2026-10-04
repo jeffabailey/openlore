@@ -21,6 +21,9 @@ ports = { path = "../ports" }
 review-domain = { path = "../review-domain" }
 adapter-atproto-oauth = { path = "../adapter-atproto-oauth" }
 adapter-review-store = { path = "../adapter-review-store" }
+adapter-atproto-did = { path = "../adapter-atproto-did" }
+rand = "0.8"
+sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt", "net", "time"] }
 hyper = { version = "1", features = ["server", "http1"] }

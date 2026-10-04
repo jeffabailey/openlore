@@ -67,3 +67,37 @@ pub trait IdentityResolvePort: Send + Sync {
     /// no signing capability is implied or exposed.
     async fn resolve_verification_key(&self, did: &Did) -> Result<VerificationKey, ResolveError>;
 }
+
+// -----------------------------------------------------------------------------
+// IdentityLookupPort — read-only identity resolution (bluesky-claim-review-app)
+// -----------------------------------------------------------------------------
+
+/// A handle resolved to its account: the DID, the handle the DID document
+/// confirms, and the PDS that hosts the repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedIdentity {
+    pub did: String,
+    pub verified_handle: String,
+    pub pds_endpoint: String,
+}
+
+/// Why a handle could not be resolved.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IdentityLookupError {
+    /// No account answers to the handle (or its DID document disowns it).
+    #[error("no account answers to that handle")]
+    NotFound,
+    /// The resolver or the DID directory could not be reached.
+    #[error("identity resolution is unavailable: {detail}")]
+    Unavailable { detail: String },
+}
+
+/// The read-only extension of identity resolution the review app's sign-in
+/// needs (component-boundaries §2): handle → `{did, verified_handle,
+/// pds_endpoint}`. Like [`IdentityResolvePort`] it has no signing or write
+/// capability.
+#[async_trait]
+pub trait IdentityLookupPort: Send + Sync {
+    async fn resolve_identity(&self, handle: &str)
+        -> Result<ResolvedIdentity, IdentityLookupError>;
+}

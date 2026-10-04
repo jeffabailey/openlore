@@ -106,8 +106,54 @@ mod tests {
     fn a_generated_key_survives_its_secret_form_and_passes_the_probe() {
         use ports::OAuthPort;
         let key = ClientKey::parse(&ClientKey::generate("k1").to_private_json()).unwrap();
-        let adapter = crate::OAuthClientAdapter::new(key, "https://app.example", "atproto");
+        let adapter = crate::OAuthClientAdapter::new(
+            key,
+            "https://app.example",
+            "atproto",
+            crate::Upstreams {
+                plc_url: "https://plc.invalid",
+                handle_resolver_url: "https://resolver.invalid",
+            },
+            std::sync::Arc::new(NoSecrets),
+        )
+        .unwrap();
         assert!(matches!(adapter.probe(), ProbeOutcome::Ok));
         assert!(adapter.public_jwks()["keys"][0].get("d").is_none());
+    }
+
+    /// The probe never touches OAuth state: an inert store suffices.
+    struct NoSecrets;
+
+    impl ports::SecretStorePort for NoSecrets {
+        fn put_auth_request(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+            _: &[u8],
+        ) -> Result<(), ports::ReviewStoreError> {
+            Ok(())
+        }
+        fn auth_request(&self, _: &str) -> Result<Option<Vec<u8>>, ports::ReviewStoreError> {
+            Ok(None)
+        }
+        fn remove_auth_request(&self, _: &str) -> Result<(), ports::ReviewStoreError> {
+            Ok(())
+        }
+        fn put_oauth_session(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &[u8],
+        ) -> Result<(), ports::ReviewStoreError> {
+            Ok(())
+        }
+        fn oauth_session(&self, _: &str) -> Result<Option<Vec<u8>>, ports::ReviewStoreError> {
+            Ok(None)
+        }
+        fn remove_oauth_session(&self, _: &str) -> Result<(), ports::ReviewStoreError> {
+            Ok(())
+        }
     }
 }

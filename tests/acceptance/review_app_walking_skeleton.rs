@@ -47,7 +47,6 @@ use review_app::*;
 ///   And nothing was written to any repo
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: unskip when the review app ships OAuth sign-in"]
 fn priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_review_app() {
     // GIVEN Priya's handle resolves to her DID on bsky.social, and the app is up.
     let world = ReviewWorld::new();

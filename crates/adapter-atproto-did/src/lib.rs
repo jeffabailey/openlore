@@ -81,6 +81,9 @@ pub mod probe;
 // implementation lands per the PP-* scenarios in Phase 04.
 mod peer_resolve;
 
+mod identity_lookup;
+pub use identity_lookup::{confirmed_identity, IdentityLookup};
+
 /// The fragment identifying the OpenLore verification method on the
 /// user's DID document. Pinned by ADR-002 §Earned Trust step 1.
 pub const OPENLORE_VERIFICATION_METHOD_FRAGMENT: &str = "#org.openlore.application";

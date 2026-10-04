@@ -13,5 +13,8 @@ description = "OpenLore hosted review app PURE core (bluesky-claim-review-app): 
 [dependencies]
 maud = { workspace = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

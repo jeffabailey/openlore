@@ -17,6 +17,11 @@ description = "OpenLore review app atproto OAuth confidential client (ADR-073): 
 ports = { path = "../ports" }
 atrium-oauth = { version = "=0.1.7", default-features = false }
 atrium-xrpc = "0.12"
+atrium-api = { version = "0.25.8", default-features = false, features = ["agent"] }
+atrium-common = "0.1.4"
+atrium-identity = "0.1.9"
+async-trait = "0.1"
+tokio = { workspace = true, features = ["rt"] }
 jose-jwk = { version = "0.1.2", default-features = false, features = ["p256"] }
 jose-jwa = "0.1.2"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }

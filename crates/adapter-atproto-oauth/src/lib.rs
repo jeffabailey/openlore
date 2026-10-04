@@ -11,12 +11,22 @@
 
 #![forbid(unsafe_code)]
 
+mod client;
 mod probe;
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
 use jose_jwa::{Algorithm, Signing};
 use jose_jwk::{Class, Ec, EcCurves, Jwk, JwkSet, Key, Parameters};
 use p256::SecretKey;
-use ports::{OAuthPort, ProbeOutcome};
+use ports::{
+    AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, OAuthPort,
+    PdsCallback, ProbeOutcome, ResolvedIdentity, SecretStorePort,
+};
+
+pub use client::{OAuthSetupError, Upstreams};
 use serde_json::{json, Value};
 
 /// The name Bluesky shows on its consent screen.
@@ -111,6 +121,10 @@ impl ClientKey {
         public
     }
 
+    pub(crate) fn private_jwk(&self) -> &Jwk {
+        &self.jwk
+    }
+
     pub(crate) fn secret(&self) -> &SecretKey {
         &self.secret
     }
@@ -134,23 +148,34 @@ pub fn client_metadata(origin: &str, scopes: &str) -> Value {
     })
 }
 
-/// The OAuth confidential client for one deployment (origin + scopes + key).
+/// The OAuth confidential client for one deployment (origin + scopes + key),
+/// persisting its state through the given `SecretStorePort`.
 pub struct OAuthClientAdapter {
     key: ClientKey,
     origin: String,
     scopes: String,
+    handshake: client::Handshake,
 }
 
 impl OAuthClientAdapter {
-    pub fn new(key: ClientKey, origin: impl Into<String>, scopes: impl Into<String>) -> Self {
-        Self {
+    pub fn new(
+        key: ClientKey,
+        origin: &str,
+        scopes: &str,
+        upstreams: Upstreams<'_>,
+        secrets: Arc<dyn SecretStorePort>,
+    ) -> Result<Self, OAuthSetupError> {
+        let handshake = client::Handshake::new(&key, origin, scopes, upstreams, secrets)?;
+        Ok(Self {
             key,
-            origin: origin.into(),
-            scopes: scopes.into(),
-        }
+            origin: origin.to_string(),
+            scopes: scopes.to_string(),
+            handshake,
+        })
     }
 }
 
+#[async_trait]
 impl OAuthPort for OAuthClientAdapter {
     fn probe(&self) -> ProbeOutcome {
         probe::run(&self.key, &self.public_jwks())
@@ -166,13 +191,47 @@ impl OAuthPort for OAuthClientAdapter {
         };
         serde_json::to_value(set).expect("a JWK set always serializes")
     }
+
+    async fn begin_authorization(
+        &self,
+        identity: &ResolvedIdentity,
+    ) -> Result<String, BeginAuthorizationError> {
+        self.handshake.begin(identity).await
+    }
+
+    async fn complete_authorization(
+        &self,
+        callback: PdsCallback,
+    ) -> Result<AuthenticatedIdentity, CompleteAuthorizationError> {
+        self.handshake.complete(callback).await
+    }
+
+    fn abandon_authorization(&self, state: &str) {
+        self.handshake.abandon(state);
+    }
+
+    fn forget_session(&self, owner_did: &str) {
+        self.handshake.forget_session(owner_did);
+    }
 }
 
 /// `atrium_xrpc::HttpClient` over the workspace rustls `reqwest` (ADR-073):
 /// atrium-oauth's own default client pulls native-tls, which is banned.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RustlsHttpClient {
     client: reqwest::Client,
+}
+
+impl RustlsHttpClient {
+    /// A client whose every request gives up after `timeout`.
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .unwrap_or_default(),
+        }
+    }
 }
 
 impl atrium_xrpc::HttpClient for RustlsHttpClient {

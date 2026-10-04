@@ -11,16 +11,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter};
+use adapter_atproto_did::IdentityLookup;
+use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter, Upstreams};
 use adapter_review_store::{DataKey, ReviewStore};
-use ports::{OAuthPort, ProbeOutcome, ReviewStorePort};
+use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, SecretStorePort};
+use review_domain::signin::{permission_mode, SignInFailure};
 use serde_json::json;
 
 use crate::config::{
     parse_config, parse_secrets, AppConfig, BuildProfile, GithubToken, RawSecrets,
     DEFAULT_OAUTH_SCOPES,
 };
-use crate::http::{self, Surface};
+use crate::http::{self, App, Surface};
 
 /// Exit code when the app refuses to start.
 const EXIT_REFUSED: u8 = 2;
@@ -51,7 +53,7 @@ impl Probe {
 
 /// Why startup stopped: the probe and an operator-safe explanation.
 #[derive(Debug)]
-struct Refusal {
+pub(crate) struct Refusal {
     probe: Probe,
     detail: String,
 }
@@ -60,15 +62,33 @@ fn refusal(probe: Probe) -> impl FnOnce(String) -> Refusal {
     move |detail| Refusal { probe, detail }
 }
 
-/// The closed catalogue of events this module emits.
-enum LogEvent<'a> {
+/// The closed catalogue of events the app emits.
+pub(crate) enum LogEvent<'a> {
     AppReady,
     StartupRefused(&'a Refusal),
     ProbePassed,
+    SignInStarted,
+    SignInCompleted,
+    SignInRefused(SignInFailure),
+    /// SPIKE finding 3: the OAuth library panicked in a code exchange and the
+    /// panic was contained to that exchange.
+    CallbackPanicIsolated,
+}
+
+/// The operator-facing name of why a sign-in did not complete.
+fn refusal_reason(failure: SignInFailure) -> &'static str {
+    match failure {
+        SignInFailure::HandleNotFound => "handle_not_found",
+        SignInFailure::TemporarilyUnavailable => "unavailable",
+        SignInFailure::Cancelled => "cancelled",
+        SignInFailure::ExchangeFailed => "exchange_failed",
+        SignInFailure::AccountMismatch => "account_mismatch",
+        SignInFailure::ReturnNotRecognised => "return_not_recognised",
+    }
 }
 
 /// Emit one structured JSON event on stdout.
-fn emit(event: LogEvent<'_>) {
+pub(crate) fn emit(event: LogEvent<'_>) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -76,6 +96,21 @@ fn emit(event: LogEvent<'_>) {
     let line = match event {
         LogEvent::AppReady => json!({"ts": ts, "level": "info", "event": "app.ready"}),
         LogEvent::ProbePassed => json!({"ts": ts, "level": "info", "event": "health.probe.passed"}),
+        LogEvent::SignInStarted => json!({"ts": ts, "level": "info", "event": "signin.started"}),
+        LogEvent::SignInCompleted => {
+            json!({"ts": ts, "level": "info", "event": "signin.completed"})
+        }
+        LogEvent::SignInRefused(failure) => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "signin.refused",
+            "reason": refusal_reason(failure),
+        }),
+        LogEvent::CallbackPanicIsolated => json!({
+            "ts": ts,
+            "level": "warn",
+            "event": "signin.callback_panic_isolated",
+        }),
         LogEvent::StartupRefused(r) => json!({
             "ts": ts,
             "level": "error",
@@ -90,8 +125,9 @@ fn emit(event: LogEvent<'_>) {
 /// Everything the app runs on, wired but not yet trusted.
 struct Wired {
     config: AppConfig,
-    oauth: OAuthClientAdapter,
-    store: ReviewStore,
+    oauth: Arc<OAuthClientAdapter>,
+    store: Arc<ReviewStore>,
+    identity: Arc<IdentityLookup>,
     github_token: GithubToken,
 }
 
@@ -130,8 +166,7 @@ pub(crate) async fn serve(env: &BTreeMap<String, String>) -> u8 {
         Err(r) => return refuse(&r),
     };
     emit(LogEvent::AppReady);
-    let surface = Arc::new(surface(&wired.oauth));
-    match http::serve(public, admin, surface).await {
+    match http::serve(public, admin, Arc::new(app(wired))).await {
         Ok(()) => 0,
         Err(e) => refuse(&Refusal {
             probe: Probe::Listeners,
@@ -158,14 +193,22 @@ pub(crate) async fn probe_only(env: &BTreeMap<String, String>) -> u8 {
 /// `probe --self-test`: a throwaway client key and data key, an in-memory
 /// store, no network. Proves the image can sign, seal and isolate owners.
 pub(crate) fn self_test() -> u8 {
-    let oauth = OAuthClientAdapter::new(
-        ClientKey::generate("self-test"),
-        "https://self-test.invalid",
-        DEFAULT_OAUTH_SCOPES,
-    );
+    let offline = Upstreams {
+        plc_url: "https://self-test.invalid",
+        handle_resolver_url: "https://self-test.invalid",
+    };
     let checked = ReviewStore::open_in_memory(DataKey::generate())
         .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))
         .and_then(|store| {
+            let store = Arc::new(store);
+            let oauth = OAuthClientAdapter::new(
+                ClientKey::generate("self-test"),
+                "https://self-test.invalid",
+                DEFAULT_OAUTH_SCOPES,
+                offline,
+                store.clone(),
+            )
+            .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
             arm(Probe::OAuthClient, oauth.probe())?;
             arm(Probe::ReviewStore, store.probe())
         });
@@ -199,13 +242,32 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
     let key = ClientKey::parse(&secrets.client_jwk)
         .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
-    let oauth = OAuthClientAdapter::new(key, &config.origin, &config.oauth_scopes);
     let store = ReviewStore::open(&config.review_db, DataKey::from_bytes(secrets.data_key))
+        .map(Arc::new)
         .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
+    let upstreams = Upstreams {
+        plc_url: &config.plc_url,
+        handle_resolver_url: &config.handle_resolver_url,
+    };
+    let secret_store: Arc<dyn SecretStorePort> = store.clone();
+    let oauth = OAuthClientAdapter::new(
+        key,
+        &config.origin,
+        &config.oauth_scopes,
+        upstreams,
+        secret_store,
+    )
+    .map(Arc::new)
+    .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
+    let identity = Arc::new(IdentityLookup::new(
+        &config.handle_resolver_url,
+        &config.plc_url,
+    ));
     Ok(Wired {
         config,
         oauth,
         store,
+        identity,
         github_token: secrets.github_token,
     })
 }
@@ -269,11 +331,20 @@ async fn bind(
     Ok((bind(config.listen).await?, bind(config.admin_listen).await?))
 }
 
-/// The pages the public listener serves, rendered once.
-fn surface(oauth: &OAuthClientAdapter) -> Surface {
-    Surface {
-        landing: review_domain::views::landing_page(),
-        client_metadata: oauth.client_metadata().to_string(),
-        jwks: oauth.public_jwks().to_string(),
+/// The app the listeners serve: the static surface, rendered once, and the
+/// driven ports the pages use.
+fn app(wired: Wired) -> App {
+    let mode = permission_mode(&wired.config.oauth_scopes);
+    App {
+        surface: Surface {
+            landing: review_domain::views::landing_page(mode, None),
+            client_metadata: wired.oauth.client_metadata().to_string(),
+            jwks: wired.oauth.public_jwks().to_string(),
+        },
+        origin: wired.config.origin,
+        permission_mode: mode,
+        identity: wired.identity,
+        oauth: wired.oauth,
+        sessions: wired.store,
     }
 }

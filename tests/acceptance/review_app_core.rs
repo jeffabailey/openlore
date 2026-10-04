@@ -146,8 +146,8 @@ fn sut_budget_allows(_recent_event_ages_secs: &[u64], _limit: usize, _window_sec
     todo!("SCAFFOLD: bind review_domain budget arithmetic (ADR-076)")
 }
 
-fn sut_sign_in_pin(_token_sub: &str, _resolved_did: &str) -> bool {
-    todo!("SCAFFOLD: bind review_domain sign-in pin (AC-001.6)")
+fn sut_sign_in_pin(token_sub: &str, resolved_did: &str) -> bool {
+    review_domain::signin::sign_in_pin(token_sub, resolved_did).is_accepted()
 }
 
 // =============================================================================
@@ -550,7 +550,6 @@ proptest! {
     /// A sign-in is pinned: accepted iff the token's subject is byte-equal to
     /// the DID the handle resolved to.
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-12 sign-in pin)"]
     fn a_sign_in_is_accepted_only_for_the_did_the_handle_resolved_to(a in arb_did(), b in arb_did()) {
         prop_assert!(sut_sign_in_pin(&a, &a));
         prop_assert_eq!(sut_sign_in_pin(&a, &b), a == b);

@@ -35,7 +35,11 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 
 // bluesky-claim-review-app ports (ADR-072/073/074).
 pub mod review;
-pub use review::{OAuthPort, ReviewStorePort};
+pub use review::{
+    AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, NewWebSession,
+    OAuthPort, PdsCallback, ReviewStoreError, ReviewStorePort, SecretStorePort, SessionPort,
+    WebSession,
+};
 
 // -----------------------------------------------------------------------------
 // serverless-philosophy-federation (ADR-062) — the opaque-instance transport.
@@ -147,7 +151,9 @@ mod index_store;
 mod indexed_claim;
 mod ingest_source;
 
-pub use identity_resolve::{IdentityResolvePort, ResolveError};
+pub use identity_resolve::{
+    IdentityLookupError, IdentityLookupPort, IdentityResolvePort, ResolveError, ResolvedIdentity,
+};
 
 // -----------------------------------------------------------------------------
 // Slice-06 (htmx viewer) — the READ-ONLY store port + boundary ADTs (ADR-030)

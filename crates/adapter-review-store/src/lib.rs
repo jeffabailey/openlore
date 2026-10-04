@@ -9,8 +9,11 @@
 
 #![forbid(unsafe_code)]
 
+mod expiry;
 mod probe;
 pub mod schema;
+mod secrets;
+mod sessions;
 
 use std::path::Path;
 use std::sync::Mutex;
