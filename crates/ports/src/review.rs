@@ -226,6 +226,16 @@ impl ScanStatus {
     pub fn parse(stored: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.as_str() == stored)
     }
+
+    /// What a run's status is once the app has restarted: nothing survives
+    /// a restart still running, so a `running` run was interrupted; every
+    /// finished status stands.
+    pub fn after_restart(self) -> Self {
+        match self {
+            Self::Running => Self::Interrupted,
+            finished => finished,
+        }
+    }
 }
 
 /// A scan run as the owner sees it: how it stands, and when a paused run
@@ -252,6 +262,12 @@ pub trait ScanRunPort: Send + Sync {
 
     /// The owner's most recent run, if any.
     fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError>;
+
+    /// At startup: every run left `running` by a crash or restart becomes
+    /// what [`ScanStatus::after_restart`] says (`interrupted`), so the
+    /// one-running-scan-per-owner limit cannot wedge anyone. Returns how
+    /// many runs changed.
+    fn interrupt_running_scans(&self) -> Result<usize, ReviewStoreError>;
 }
 
 /// A suggestion's identity (BR-1): one per (subject, predicate, object).
@@ -351,19 +367,29 @@ pub struct StoredPublishPlan {
     pub record_json: String,
 }
 
+/// A plan as it left the store: the plan and when it stops being
+/// confirmable (`expires_at`, Unix seconds — ADR-074, +30 min).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TakenPublishPlan {
+    pub plan: StoredPublishPlan,
+    pub expires_at: i64,
+}
+
 /// Owner-scoped publish plans. `take` removes the plan as it returns it, so
-/// a plan is executed at most once.
+/// a plan is executed at most once; whether it is still fresh is the
+/// caller's (pure) decision over the returned `expires_at`.
 pub trait PublishPlanPort: Send + Sync {
     fn put_publish_plan(
         &self,
         owner_did: &str,
         plan: &StoredPublishPlan,
+        expires_at: i64,
     ) -> Result<(), ReviewStoreError>;
     fn take_publish_plan(
         &self,
         owner_did: &str,
         plan_id: &str,
-    ) -> Result<Option<StoredPublishPlan>, ReviewStoreError>;
+    ) -> Result<Option<TakenPublishPlan>, ReviewStoreError>;
 }
 
 /// The record a create landed (or already held, ADR-073 idempotency).
@@ -408,4 +434,30 @@ pub trait UserRepoReadPort: Send + Sync {
         owner_did: &str,
         rkey: &str,
     ) -> Result<serde_json::Value, RepoWriteError>;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Universe: the five `scan_runs.status` values. A restart moves
+    //! exactly `running` (to `interrupted`) and leaves every other status.
+    use super::*;
+    use proptest::prelude::*;
+
+    fn any_status() -> impl Strategy<Value = ScanStatus> {
+        proptest::sample::select(ScanStatus::ALL.to_vec())
+    }
+
+    proptest! {
+        #[test]
+        fn after_a_restart_nothing_is_running_and_finished_runs_stand(status in any_status()) {
+            let after = status.after_restart();
+            prop_assert_ne!(after, ScanStatus::Running);
+            prop_assert_eq!(after.after_restart(), after, "a second restart changes nothing");
+            if status == ScanStatus::Running {
+                prop_assert_eq!(after, ScanStatus::Interrupted);
+            } else {
+                prop_assert_eq!(after, status);
+            }
+        }
+    }
 }

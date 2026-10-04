@@ -41,6 +41,8 @@ ports = { path = "../ports" }
 # depending inward on a pure domain crate.
 scraper-domain = { path = "../scraper-domain" }
 async-trait = "0.1"
+# Reads GitHub's `github-authentication-token-expiration` header (A-8).
+chrono = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

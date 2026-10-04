@@ -1,0 +1,51 @@
+# The review app on the PDS host (ADR-075; devops/infrastructure-integration.md §4.1).
+# Installed to /pds/app/compose.yaml by deploy/review-app/deploy.sh. /pds/app/.env holds only
+# REVIEW_APP_DIGEST=sha256:<64 hex> (not secret), so a reboot restarts the exact pinned digest.
+#
+# Isolation (I-BRA, checked by xtask AR-8 and the deploy-pds-check mount guard):
+#   - exactly two host paths: its data dir and its secrets dir (read-only);
+#   - no host networking, no added capabilities, no container runtime socket, no cloud keys:
+#     IMDS is closed to containers (module v1.7.0 hop limit 1) and nothing injects credentials.
+#     Only the host daemon's log driver uses the instance role.
+#   - no published port: Caddy reaches review-app:8080 over the PDS compose network.
+name: review-app
+
+services:
+  review-app:
+    image: ghcr.io/jeffabailey/openlore-review-app@${REVIEW_APP_DIGEST:?REVIEW_APP_DIGEST must be a sha256 digest}
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 256m
+    memswap_limit: 256m
+    mem_reservation: 96m
+    oom_score_adj: 800
+    cpus: 1.0
+    stop_grace_period: 20s
+    command: ["serve"]
+    environment:
+      APP_ORIGIN: https://app.openlore.jeffbailey.us
+      LISTEN_ADDR: 0.0.0.0:8080
+      REVIEW_DB: /data/review-app.duckdb
+      SECRETS_DIR: /run/secrets
+      LOG_FORMAT: json
+    volumes:
+      - /pds/app/data:/data
+      - /pds/app/secrets:/run/secrets:ro
+    networks: [pds_default]
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /openlore/prod/review-app
+        awslogs-stream: review-app
+        mode: non-blocking
+        max-buffer-size: 4m
+
+networks:
+  pds_default:
+    external: true

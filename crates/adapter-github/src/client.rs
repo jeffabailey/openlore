@@ -383,6 +383,30 @@ fn flag(body: &serde_json::Value, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The response header naming when the authenticating PAT expires.
+pub const TOKEN_EXPIRATION_HEADER: &str = "github-authentication-token-expiration";
+
+/// How many days ahead the operator is warned (monitoring A-8).
+pub const TOKEN_EXPIRY_WARNING_DAYS: i64 = 14;
+
+/// Whole days from `now_unix` until the expiry GitHub reports in its
+/// `github-authentication-token-expiration` header (`2026-10-14 12:00:00
+/// UTC`, or with a numeric offset). Negative once expired; `None` when the
+/// header is unreadable. PURE.
+pub fn token_days_left(header_value: &str, now_unix: i64) -> Option<i64> {
+    let value = header_value.trim();
+    let normalized = value
+        .strip_suffix(" UTC")
+        .map_or_else(|| value.to_string(), |at| format!("{at} +0000"));
+    let expires = chrono::DateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S %z").ok()?;
+    Some((expires.timestamp() - now_unix).div_euclid(86_400))
+}
+
+/// Whether a token `days_left` from expiry warrants the operator warning.
+pub fn token_expiry_needs_warning(days_left: i64) -> bool {
+    days_left <= TOKEN_EXPIRY_WARNING_DAYS
+}
+
 /// Build the shared `reqwest::Client` the adapter uses for every request.
 ///
 /// Step 01-03 BOOTSTRAP: this constructs a client with a connect timeout
@@ -670,5 +694,28 @@ mod tests {
         assert_eq!(repos[0].stars, 5);
         assert!(repos[1].fork && repos[1].archived);
         assert!(parse_owned_repos(&serde_json::json!({"message": "x"})).is_err());
+    }
+
+    proptest::proptest! {
+        /// Universe: (now, seconds until expiry). The header GitHub sends
+        /// reads back as the whole days left, and the warning fires exactly
+        /// within the two-week window (and after expiry).
+        #[test]
+        fn the_token_expiry_header_reads_as_whole_days_left(
+            now in 1_600_000_000i64..2_000_000_000,
+            until in -3_000_000i64..3_000_000,
+        ) {
+            let at = chrono::DateTime::from_timestamp(now + until, 0).expect("in range");
+            let utc = at.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            let offset = at
+                .with_timezone(&chrono::FixedOffset::west_opt(7 * 3600).expect("offset"))
+                .format("%Y-%m-%d %H:%M:%S %z")
+                .to_string();
+            let days = until.div_euclid(86_400);
+            proptest::prop_assert_eq!(token_days_left(&utc, now), Some(days));
+            proptest::prop_assert_eq!(token_days_left(&offset, now), Some(days));
+            proptest::prop_assert_eq!(token_expiry_needs_warning(days), days <= 14);
+            proptest::prop_assert_eq!(token_days_left("never", now), None);
+        }
     }
 }

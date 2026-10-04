@@ -7,7 +7,10 @@
 #     exist on GitHub for these steps to pass);
 #   - check-plan.sh parses, is shellcheck-clean, and refuses the deletes it must refuse;
 #   - no workflow can reach a destroy (the module's scripts/check-no-destroy.sh);
-#   - no email address (the ACME contact) is committed under deploy/.
+#   - no email address (the ACME contact) is committed under deploy/;
+#   - the review app's host files (deploy/review-app/**): scripts lint, compose resolves and keeps
+#     its isolation (mount guard), images are pinned by digest, the Caddy site validates, no
+#     secret material is committed, and every tofu-aws-pds ?ref= is the same tag.
 
 name: deploy-pds-check
 
@@ -15,11 +18,13 @@ on:
   pull_request:
     paths:
       - "deploy/**"
+      - "deploy/review-app/**"
       - ".github/workflows/deploy-pds-check.yml"
   push:
     branches: [main]
     paths:
       - "deploy/**"
+      - "deploy/review-app/**"
       - ".github/workflows/deploy-pds-check.yml"
 
 permissions:
@@ -102,3 +107,125 @@ jobs:
             exit 1
           fi
           echo "no email address under deploy/"
+
+  module-ref:
+    name: tofu-aws-pds ref lockstep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Both roots must pin the same module tag; a half-bumped pair plans against two modules.
+      - name: every tofu-aws-pds ?ref= is identical
+        run: |
+          set -euo pipefail
+          refs=$(git grep -hoE 'tofu-aws-pds\.git//[^"]*\?ref=[^"]+' -- 'deploy/tofu/*.tf' | sed 's/.*?ref=//' | sort -u)
+          echo "refs: $refs"
+          [ -n "$refs" ] || { echo "::error::no tofu-aws-pds ref found"; exit 1; }
+          if [ "$(printf '%s\n' "$refs" | wc -l)" -ne 1 ]; then
+            echo "::error::tofu-aws-pds refs differ across deploy/tofu: $refs"
+            exit 1
+          fi
+
+  secrets-guard:
+    name: no secret material committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # GitHub tokens, private JWK members and PEM blocks belong in SSM, never under deploy/.
+      - name: grep for token prefixes, JWK private members and PEM blocks under deploy/
+        run: |
+          set -euo pipefail
+          if git grep -nIE 'ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|"d"[[:space:]]*:|-----BEGIN ' -- deploy/; then
+            echo "::error::secret-shaped material is committed under deploy/. Put it in SSM."
+            exit 1
+          fi
+          echo "no secret material under deploy/"
+
+  review-app-host:
+    name: review-app host files
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILE_PATH: deploy/review-app/host/compose.yaml
+      # A syntactically valid dummy digest: compose refuses to resolve without one.
+      REVIEW_APP_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: scripts parse and are shellcheck-clean
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find deploy/review-app -type f -name '*.sh' | sort)
+          [ "${#scripts[@]}" -gt 0 ] || { echo "::error::no scripts found"; exit 1; }
+          for f in "${scripts[@]}"; do bash -n "$f"; done
+          shellcheck "${scripts[@]}"
+
+      - name: deploy.sh refuses anything but a full sha or a digest (before any tool runs)
+        run: |
+          set -euo pipefail
+          for ref in latest main v1.0.0 abc1234 "ghcr.io/jeffabailey/openlore-review-app:main" \
+                     "sha256:short" ""; do
+            if out=$(deploy/review-app/deploy.sh deploy "$ref" 2>&1); then
+              echo "::error::deploy.sh accepted '$ref'"; exit 1
+            fi
+            grep -q refusing <<<"$out" || { echo "::error::'$ref' failed for the wrong reason: $out"; exit 1; }
+          done
+          echo "every tag-shaped reference was refused"
+
+      - name: images are pinned by digest only
+        run: |
+          set -euo pipefail
+          if grep -nE ':latest\b' "$COMPOSE_FILE_PATH" deploy/review-app/deploy.sh; then
+            echo "::error::a :latest reference"; exit 1
+          fi
+          # shellcheck disable=SC2016 # the literal ${REVIEW_APP_DIGEST} is what must appear
+          if grep -nE '^[[:space:]]*image:' "$COMPOSE_FILE_PATH" | grep -v '@\${REVIEW_APP_DIGEST'; then
+            echo "::error::every compose image must be <repo>@\${REVIEW_APP_DIGEST}"; exit 1
+          fi
+          docker compose -f "$COMPOSE_FILE_PATH" config --format json \
+            | jq -e '[.services[].image] | all(test("@sha256:[0-9a-f]{64}$"))' >/dev/null
+
+      - name: compose resolves
+        run: docker compose -f "$COMPOSE_FILE_PATH" config -q
+
+      # I-BRA isolation (blocking). The app sees exactly its data dir and its secrets dir
+      # (read-only); never /pds, the PDS secrets, the container runtime socket, the host network
+      # or PID namespace, an added capability, or unbounded memory.
+      - name: mount guard
+        run: |
+          set -euo pipefail
+          if grep -n 'docker\.sock' "$COMPOSE_FILE_PATH"; then echo "::error::runtime socket mount"; exit 1; fi
+          docker compose -f "$COMPOSE_FILE_PATH" config --format json > "$RUNNER_TEMP/compose.json"
+          jq -e '
+            (.services | length) == 1
+            and (.services[] |
+              ([.volumes[] | {s: .source, t: .target, ro: (.read_only // false)}] | sort_by(.t))
+                == [{s: "/pds/app/data", t: "/data", ro: false},
+                    {s: "/pds/app/secrets", t: "/run/secrets", ro: true}]
+              and (.privileged // false) == false
+              and (.network_mode // "") != "host"
+              and (.pid // "") != "host"
+              and (.cap_add // []) == []
+              and (.cap_drop // []) == ["ALL"]
+              and .read_only == true
+              and (.mem_limit // null) != null
+              and (.memswap_limit // null) != null
+              and ((.security_opt // []) | any(startswith("no-new-privileges")))
+              and ((.environment // {}) | keys | all(startswith("AWS_") | not)))
+          ' "$RUNNER_TEMP/compose.json" >/dev/null || {
+            echo "::error::compose isolation violated:"
+            jq '.services' "$RUNNER_TEMP/compose.json"
+            exit 1
+          }
+          echo "mount guard passed: only /pds/app/data and /pds/app/secrets (ro)"
+
+      # The module (v1.7.0) mounts /pds/caddy/sites at /etc/caddy/sites read-only and imports
+      # /etc/caddy/sites/*.caddy; this reproduces that with the module's Caddy image.
+      - name: Caddy site validates
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          mkdir -p "$d/sites"
+          cp deploy/review-app/host/app.caddy "$d/sites/app.caddy"
+          printf '{\n}\n\nimport /etc/caddy/sites/*.caddy\n' > "$d/Caddyfile"
+          docker run --rm -e PDS_HOSTNAME=openlore.jeffbailey.us \
+            -v "$d/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$d/sites:/etc/caddy/sites:ro" \
+            caddy:2.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

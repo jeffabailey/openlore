@@ -350,7 +350,6 @@ fn backing_out_of_the_preview_writes_nothing() {
 ///   Examples: | is unreachable | answers with a server error | has expired her session |
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 failed publish stays pending)"]
 fn a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record() {
     enum Failure {
         Unreachable,
@@ -410,7 +409,6 @@ fn a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record() {
 ///   Then her repo holds exactly one record for the suggestion
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 retry is exactly-once)"]
 fn retrying_after_a_failure_publishes_exactly_once() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -437,7 +435,6 @@ fn retrying_after_a_failure_publishes_exactly_once() {
 ///   Then her repo still holds exactly one record for it
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (plan taken exactly once)"]
 fn confirming_the_same_preview_twice_writes_one_record() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -465,7 +462,6 @@ fn confirming_the_same_preview_twice_writes_one_record() {
 ///   Then it is refused and nothing is written
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (no write without a stored plan)"]
 fn a_confirmation_for_something_never_previewed_is_refused() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -521,7 +517,6 @@ fn dmitris_approval_lands_in_his_self_hosted_pds() {
 ///   Then it lands in her PDS without asking her to sign in again
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (session restore/refresh path)"]
 fn publishing_still_works_after_the_pds_access_has_quietly_expired() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);

@@ -371,7 +371,6 @@ fn the_image_self_test_passes_with_throwaway_keys_and_no_network() {
 ///   Then it logs github.token.expiring with the days left, and keeps serving
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (token-expiry warning A-8)"]
 fn the_operator_is_warned_two_weeks_before_the_github_token_expires() {
     let expires = (chrono::Utc::now() + chrono::Duration::days(10))
         .format("%Y-%m-%d %H:%M:%S UTC")

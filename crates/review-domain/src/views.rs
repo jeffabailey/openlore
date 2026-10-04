@@ -434,15 +434,68 @@ pub fn published_page(at_uri: &str) -> String {
     .into_string()
 }
 
+/// The button that tries a failed publish again.
+pub const RETRY_LABEL: &str = "Retry";
+
+/// What a Retry re-submits: the same plan, under the page's anti-forgery
+/// token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishRetry<'a> {
+    pub plan_id: &'a str,
+    pub csrf_token: &'a str,
+}
+
+/// What the owner can do after a publish did not land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishNextStep<'a> {
+    /// The plan is kept: Retry publishes it (exactly once).
+    Retry(PublishRetry<'a>),
+    /// The PDS session ended: sign in again, then publish from the queue.
+    SignInAgain,
+    /// The plan could not be kept: preview again from the queue.
+    BackToQueue,
+}
+
 /// A publish that did not land (AC-004.6): nothing was written, the
 /// suggestion stays pending, and the owner can try again.
-pub fn publish_failed_page(reason: &str) -> String {
+pub fn publish_failed_page(reason: &str, next_step: PublishNextStep<'_>) -> String {
     page(
         "Nothing was published",
         html! {
             h1 { "Nothing was published" }
             p role="alert" { (reason) }
-            p { "Your suggestion is still pending. " a href="/review" { "Try again from your review queue" } }
+            p { "Your suggestion is still pending." }
+            @match next_step {
+                PublishNextStep::Retry(retry) => {
+                    form method="post" action="/review/publish" {
+                        input type="hidden" name="csrf" value=(retry.csrf_token);
+                        input type="hidden" name="plan" value=(retry.plan_id);
+                        button type="submit" { (RETRY_LABEL) }
+                    }
+                }
+                PublishNextStep::SignInAgain => {
+                    p { a href="/" { (SIGN_IN_LABEL) } }
+                }
+                PublishNextStep::BackToQueue => {}
+            }
+            p { a href="/review" { "Back to your review queue" } }
+        },
+    )
+    .into_string()
+}
+
+/// A confirm that arrived after its preview expired (ADR-074): refused,
+/// nothing written.
+pub fn plan_expired_page() -> String {
+    page(
+        "This preview has expired",
+        html! {
+            h1 { "This preview has expired" }
+            p role="alert" {
+                "Previews can be published for 30 minutes. Nothing was published; \
+                 your suggestion is still pending. Press Approve again to see a fresh preview."
+            }
+            p { a href="/review" { "Back to your review queue" } }
         },
     )
     .into_string()

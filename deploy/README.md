@@ -23,6 +23,7 @@ plan. CI (`.github/workflows/deploy-pds-check.yml`) runs credential-free checks 
 | `environments/prod.json` | The descriptor, the single source of every name |
 | `tofu/bootstrap/` | Root for `modules/pds-bootstrap`: backup bucket, host role + instance profile, default VPC. State key `openlore/pds/bootstrap.tfstate` |
 | `tofu/environments/prod/` | Root for `modules/pds`. State key `openlore/pds/prod.tfstate` |
+| `review-app/` | The hosted review app's deploy tooling and host files (see *Review app*) |
 | `check-plan.sh` | Gate on a saved plan: refuses delete/replace of the volume, EIP, zone or buckets, and any other delete unless `OPENLORE_ALLOW_DELETE=1` |
 
 State lives in the existing bucket `jeffbaileyterraformstate` (us-west-2) with native S3
@@ -203,6 +204,57 @@ AWS_PROFILE=jeff aws s3 cp s3://openlore-identity-backup-091153021562/prod/ident
 
 The first archive, `identity-20261004T002631Z.enc.tar`, was restored this way and matched the
 host's `secrets.env` byte for byte.
+
+## Review app (app.openlore.jeffbailey.us)
+
+The hosted review app (ADR-072..075) runs on this host as a second compose project behind the
+PDS's Caddy. Design: `docs/feature/bluesky-claim-review-app/devops/`. CI (`ci.yml`, main pushes)
+builds the arm64 image, smoke-tests it, gates it on trivy, and pushes it to
+`ghcr.io/jeffabailey/openlore-review-app` (tags `sha-<sha>` and `main`), signed with cosign
+keyless and attested (SBOMs + SLSA provenance). CI never deploys.
+
+| Path | Installed on the host as |
+|---|---|
+| `review-app/deploy.sh` | Laptop entry point; also runs on the host over SSM as `deploy.sh host <mode>` |
+| `review-app/host/compose.yaml` | `/pds/app/compose.yaml`: image by digest only, read-only rootfs, 256 MB, no caps, exactly two mounts (`/pds/app/data`, `/pds/app/secrets` read-only), no cloud credentials |
+| `review-app/host/app.caddy` | `/pds/caddy/sites/app.caddy`: `app.{$PDS_HOSTNAME}` → `review-app:8080` |
+| `review-app/host/render-secrets.sh` | `/pds/app/bin/`: SSM `/openlore/prod/review-app/*` → `/pds/app/secrets`, 0400, uid 65532 |
+| `review-app/host/health-timer.sh` | `/pds/app/bin/` + systemd `review-app-health.timer`: one `host.health` line a minute; restarts a hung app |
+| `tofu/environments/prod/review-app.tf` | Log group (30 days), Route 53 health check, alarms A-1/A-3/A-7/A-8 on the backup-alarm topic |
+| `tofu/bootstrap/review-app-iam.tf` | Inline policy on `openlore-pds-host-prod`: read the app's SSM params, write its log group |
+
+Deploy (laptop, `AWS_PROFILE=jeff`, with `gh`, `cosign`, `jq` and `crane` or `docker buildx`):
+
+```sh
+deploy/review-app/deploy.sh deploy <40-hex git sha>   # CI green + cosign verify, then Recreate by digest
+deploy/review-app/deploy.sh status                    # container, last logs, releases, host.health
+deploy/review-app/deploy.sh rollback [--restore-db]   # previous digest from /pds/app/state/releases
+deploy/review-app/deploy.sh redeploy | stop | install
+```
+
+Tags and short shas are refused. A deploy installs the host files, renders secrets, pulls the
+digest while the old one serves, copies the DuckDB file aside, starts the new digest and waits
+90 s for `/readyz` through Caddy; if it is not ready it rolls back by itself and exits 1.
+
+Operator follow-ups before the first deploy (in order):
+
+1. Release `tofu-aws-pds` **v1.7.0** (Caddy `import /etc/caddy/sites/*.caddy` with
+   `/pds/caddy/sites` mounted read-only, and IMDS hop limit 1). Then bump `?ref=` in **both**
+   roots together (CI fails a mismatched pair) and run the R-REPLACE runbook
+   (`devops/infrastructure-integration.md` §7.1). Until then the Caddy site is installed but
+   not imported, and containers could still reach the instance role.
+2. Apply the bootstrap root (`review-app-iam.tf`), then plan, gate and apply prod
+   (`review-app.tf`; alarms are created with `review_app_alarms_enabled = false`).
+3. Put the SSM SecureStrings without echoing them (`read -rs -p 'value: ' V; echo`, then
+   `aws ssm put-parameter --type SecureString --name ... --value "$V" --overwrite; unset V`): `client-jwk`
+   (`openlore-review-app gen-client-jwk`), `data-key` (64 hex chars: `openssl rand -hex 32`),
+   `github-token` (fine-grained, public repositories read-only, no permissions) and `log-salt`
+   (`openssl rand -base64 32`), all under `/openlore/prod/review-app/`.
+4. After the first CI image push, set the GHCR package `openlore-review-app` to **public** (the
+   host pulls without credentials).
+5. After the first successful deploy: set the repo variable `REVIEW_APP_LIVE=true` (enables the
+   nightly production smoke), run the rollback drill, fire each alarm once, then set
+   `review_app_alarms_enabled = true` and apply.
 
 ## DNS: Cloudflare, not Route 53
 

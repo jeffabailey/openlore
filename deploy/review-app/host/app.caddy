@@ -1,0 +1,20 @@
+# The review app's site (ADR-075; devops/infrastructure-integration.md §4.2).
+# Installed to /pds/caddy/sites/app.caddy; the PDS Caddyfile imports /etc/caddy/sites/*.caddy
+# (module v1.7.0 mounts /pds/caddy/sites there read-only). PDS_HOSTNAME comes from the Caddy
+# container's env (openlore.jeffbailey.us), so this serves app.openlore.jeffbailey.us.
+#
+# An exact host outranks *.{$PDS_HOSTNAME}, so this gets an ordinary HTTP-01 certificate and
+# never consults the on-demand ask. Automatic HTTPS (and its redirect) stays on. Only the
+# public listener is proxied; the app's operator listener is loopback inside its container.
+# Security headers come from the app (one source of truth, asserted by the acceptance tests).
+app.{$PDS_HOSTNAME} {
+	reverse_proxy review-app:8080
+
+	header -Server
+
+	# Only proxy failures (upstream down during a Recreate deploy) land here; the app's own
+	# 4xx/5xx pass through untouched.
+	handle_errors {
+		respond "The OpenLore review app is restarting. Nothing changed. Try again in a minute." 503
+	}
+}

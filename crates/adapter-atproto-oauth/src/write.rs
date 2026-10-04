@@ -3,6 +3,10 @@
 //! atrium-oauth session (DPoP-bound, nonce + refresh handled by atrium), so
 //! a write can only ever target the session's own repo on its own PDS.
 //!
+//! A write the PDS refuses as `invalid_token` is retried ONCE after the
+//! session's recorded expiry is dropped, so restore refreshes (SPIKE
+//! finding 4): the cached access token is never resent as-is.
+//!
 //! Only `com.atproto.repo.createRecord` is ever sent: the port has no
 //! update, put or delete (I-BRA-8 is non-representable here). An existing
 //! record under the same key is success — the key is the content's CID.
@@ -64,6 +68,65 @@ impl OAuthClientAdapter {
             .await
             .map_err(|_| RepoWriteError::NoSession)
     }
+
+    /// Send `request` on the owner's restored session; on a refused access
+    /// token, refresh through restore and send it once more.
+    async fn send_refreshing(
+        &self,
+        owner_did: &str,
+        request: &XrpcRequest<Value, Value>,
+    ) -> Result<OutputDataOrBytes<Value>, SendFailure> {
+        let first = self.send_once(owner_did, request).await;
+        match first {
+            Err(SendFailure::Xrpc(failure)) if access_refused(&failure) => {
+                if let Ok(did) = Did::new(owner_did.to_string()) {
+                    self.handshake.mark_access_stale(&did).await;
+                }
+                self.send_once(owner_did, request).await
+            }
+            other => other,
+        }
+    }
+
+    async fn send_once(
+        &self,
+        owner_did: &str,
+        request: &XrpcRequest<Value, Value>,
+    ) -> Result<OutputDataOrBytes<Value>, SendFailure> {
+        let session = self
+            .session_for(owner_did)
+            .await
+            .map_err(|_| SendFailure::NoSession)?;
+        session
+            .send_xrpc::<Value, Value, Value, Value>(request)
+            .await
+            .map_err(SendFailure::Xrpc)
+    }
+}
+
+/// Why a send did not answer.
+enum SendFailure {
+    /// No stored session for the owner (they must sign in).
+    NoSession,
+    Xrpc(XrpcFailure),
+}
+
+impl SendFailure {
+    fn into_repo_error(self) -> RepoWriteError {
+        match self {
+            Self::NoSession => RepoWriteError::NoSession,
+            Self::Xrpc(failure) => repo_error(failure),
+        }
+    }
+}
+
+/// The PDS refused the access token (expired early or revoked).
+fn access_refused(failure: &XrpcFailure) -> bool {
+    match failure {
+        atrium_xrpc::Error::Authentication(_) => true,
+        atrium_xrpc::Error::XrpcResponse(response) => response.status == StatusCode::UNAUTHORIZED,
+        _ => false,
+    }
 }
 
 #[async_trait]
@@ -74,11 +137,10 @@ impl UserRepoWritePort for OAuthClientAdapter {
         rkey: &str,
         record: &Value,
     ) -> Result<CreatedRecord, RepoWriteError> {
-        let session = self.session_for(owner_did).await?;
         let request = XrpcRequest {
             method: Method::POST,
             nsid: CREATE_RECORD.to_string(),
-            parameters: None::<()>,
+            parameters: None,
             input: Some(InputDataOrBytes::Data(json!({
                 "repo": owner_did,
                 "collection": CLAIM_COLLECTION,
@@ -90,7 +152,7 @@ impl UserRepoWritePort for OAuthClientAdapter {
         let fallback_uri = || CreatedRecord {
             uri: at_uri(owner_did, rkey),
         };
-        match session.send_xrpc::<(), Value, Value, Value>(&request).await {
+        match self.send_refreshing(owner_did, &request).await {
             Ok(OutputDataOrBytes::Data(created)) => Ok(created["uri"]
                 .as_str()
                 .map(|uri| CreatedRecord {
@@ -98,8 +160,8 @@ impl UserRepoWritePort for OAuthClientAdapter {
                 })
                 .unwrap_or_else(fallback_uri)),
             Ok(OutputDataOrBytes::Bytes(_)) => Ok(fallback_uri()),
-            Err(failure) if already_exists(&failure) => Ok(fallback_uri()),
-            Err(failure) => Err(repo_error(failure)),
+            Err(SendFailure::Xrpc(failure)) if already_exists(&failure) => Ok(fallback_uri()),
+            Err(failure) => Err(failure.into_repo_error()),
         }
     }
 }
@@ -111,7 +173,6 @@ impl UserRepoReadPort for OAuthClientAdapter {
         owner_did: &str,
         rkey: &str,
     ) -> Result<Value, RepoWriteError> {
-        let session = self.session_for(owner_did).await?;
         let request = XrpcRequest {
             method: Method::GET,
             nsid: GET_RECORD.to_string(),
@@ -120,16 +181,16 @@ impl UserRepoReadPort for OAuthClientAdapter {
                 "collection": CLAIM_COLLECTION,
                 "rkey": rkey,
             })),
-            input: None::<InputDataOrBytes<()>>,
+            input: None,
             encoding: None,
         };
-        match session.send_xrpc::<Value, (), Value, Value>(&request).await {
+        match self.send_refreshing(owner_did, &request).await {
             Ok(OutputDataOrBytes::Data(view)) => Ok(view["value"].clone()),
             Ok(OutputDataOrBytes::Bytes(_)) => Err(RepoWriteError::Refused {
                 status: 200,
                 detail: "getRecord answered with bytes".to_string(),
             }),
-            Err(failure) => Err(repo_error(failure)),
+            Err(failure) => Err(failure.into_repo_error()),
         }
     }
 }

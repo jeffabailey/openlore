@@ -16,6 +16,14 @@ pub(crate) enum PublishFailure {
 }
 
 impl PublishFailure {
+    /// A failure only a fresh sign-in can cure (a retry would not help).
+    pub(crate) fn needs_sign_in(&self) -> bool {
+        matches!(
+            self,
+            Self::NotWritten(RepoWriteError::SessionExpired | RepoWriteError::NoSession)
+        )
+    }
+
     /// What the owner is told (AC-004.6).
     pub(crate) fn message(&self) -> &'static str {
         match self {

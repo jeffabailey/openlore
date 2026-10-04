@@ -40,8 +40,8 @@ pub use review::{
     GithubLink, GithubLinkPort, LinkRecorded, NewWebSession, OAuthPort, PdsCallback,
     PublishPlanPort, RepoWriteError, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
     ReviewStorePort, ScanRun, ScanRunPort, ScanStatus, SecretStorePort, SessionPort,
-    StoredPublishPlan, Suggestion, SuggestionKey, SuggestionState, UserRepoReadPort,
-    UserRepoWritePort, WebSession,
+    StoredPublishPlan, Suggestion, SuggestionKey, SuggestionState, TakenPublishPlan,
+    UserRepoReadPort, UserRepoWritePort, WebSession,
 };
 
 // -----------------------------------------------------------------------------

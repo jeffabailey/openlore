@@ -227,8 +227,12 @@ impl RustlsHttpClient {
     /// A client whose every request gives up after `timeout`.
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
+            // No idle keep-alive pool: each call to a (possibly self-hosted)
+            // PDS opens a fresh connection, so a host that went away is seen
+            // as unreachable rather than masked by a stale pooled socket.
             client: reqwest::Client::builder()
                 .timeout(timeout)
+                .pool_max_idle_per_host(0)
                 .build()
                 .unwrap_or_default(),
         }

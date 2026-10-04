@@ -13,9 +13,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adapter_atproto_did::IdentityLookup;
 use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter, Upstreams};
+use adapter_github::client::{
+    token_days_left, token_expiry_needs_warning, TOKEN_EXPIRATION_HEADER,
+};
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, ReviewStore};
-use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, ScanStatus, SecretStorePort};
+use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, ScanRunPort, ScanStatus, SecretStorePort};
 use review_domain::signin::{permission_mode, SignInFailure};
 use scraper_domain::{load_mapping, SignalPredicateMapping, EMBEDDED_MAPPING_YAML};
 use serde_json::json;
@@ -81,6 +84,8 @@ pub(crate) enum LogEvent<'a> {
     /// A GitHub ownership check did not pass (the refusal's label only).
     GithubVerifyRefused(&'static str),
     ScanFinished(ScanStatus),
+    /// The server GitHub token expires within the warning window (A-8).
+    GithubTokenExpiring(i64),
 }
 
 /// The operator-facing name of why a sign-in did not complete.
@@ -133,6 +138,12 @@ pub(crate) fn emit(event: LogEvent<'_>) {
             "level": "info",
             "event": "scan.finished",
             "status": status.as_str(),
+        }),
+        LogEvent::GithubTokenExpiring(days_left) => json!({
+            "ts": ts,
+            "level": "warn",
+            "event": "github.token.expiring",
+            "days_left": days_left,
         }),
         LogEvent::StartupRefused(r) => json!({
             "ts": ts,
@@ -189,6 +200,8 @@ pub(crate) async fn serve(env: &BTreeMap<String, String>) -> u8 {
         Ok(pair) => pair,
         Err(r) => return refuse(&r),
     };
+    // Nothing survives a restart still running (data-models `scan_runs`).
+    let _ = wired.store.interrupt_running_scans();
     emit(LogEvent::AppReady);
     match http::serve(public, admin, Arc::new(app(wired))).await {
         Ok(()) => 0,
@@ -332,7 +345,24 @@ async fn github_token_arm(api_base: &str, token: &GithubToken) -> Result<(), Ref
             probe: Probe::GithubToken,
             detail: "GitHub rejected the server token (HTTP 401): renew the PAT".into(),
         }),
-        _ => Ok(()),
+        Ok(r) => {
+            warn_if_token_expiring(r.headers());
+            Ok(())
+        }
+        Err(_) => Ok(()),
+    }
+}
+
+/// A token close to expiry still serves; the operator is warned (A-8).
+fn warn_if_token_expiring(headers: &reqwest::header::HeaderMap) {
+    let now = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+    let days_left = headers
+        .get(TOKEN_EXPIRATION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| token_days_left(value, now))
+        .filter(|days| token_expiry_needs_warning(*days));
+    if let Some(days_left) = days_left {
+        emit(LogEvent::GithubTokenExpiring(days_left));
     }
 }
 

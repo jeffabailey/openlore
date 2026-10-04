@@ -118,3 +118,152 @@ jobs:
         # --no-fail-fast: surface EVERY failing test in one run (dev feedback),
         # rather than stopping at the first — the run still fails if any test does.
         run: cargo nextest run --workspace --test-threads=1 --no-fail-fast
+
+  # ------------------------------------------------------------------------------------------
+  # Review app image (bluesky-claim-review-app; devops/ci-cd-pipeline.md §3). main pushes only,
+  # after the acceptance stage, so an image never exists for a red commit. CI builds, scans,
+  # signs and publishes; it never deploys (deploy/review-app/deploy.sh, laptop-initiated).
+  # ------------------------------------------------------------------------------------------
+
+  review-app-build:
+    name: review-app build (arm64, bookworm)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    runs-on: ubuntu-24.04-arm
+    # Built in a bookworm container so the binary's glibc symbols match distroless
+    # cc-debian12 (2.36); an ubuntu-24.04 build links 2.39 and fails to load there.
+    container:
+      image: rust:1-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: review-app-arm64
+      - name: cargo build --release -p openlore-review-app
+        run: cargo build --release --locked -p openlore-review-app
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      - name: Stage binary + CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          strip target/release/openlore-review-app
+          cp target/release/openlore-review-app out/
+          # cargo-cyclonedx 0.5.x: scope with --manifest-path (see release.yml).
+          cargo cyclonedx --format json --manifest-path crates/openlore-review-app/Cargo.toml --override-filename sbom
+          cp crates/openlore-review-app/sbom.json out/openlore-review-app.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openlore-review-app-aarch64
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  review-app-image:
+    name: review-app image (smoke, scan, push, sign, attest)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [review-app-build]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write       # push to GHCR
+      id-token: write       # GitHub OIDC: cosign keyless + attestations
+      attestations: write   # SLSA build provenance
+    env:
+      IMAGE: ghcr.io/jeffabailey/openlore-review-app
+      LOCAL_TAG: openlore-review-app:ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: openlore-review-app-aarch64
+          path: ${{ runner.temp }}/ctx
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (runtime-only distroless)
+        run: |
+          set -euo pipefail
+          mv "$RUNNER_TEMP/ctx/openlore-review-app.cdx.json" "$RUNNER_TEMP/cargo.cdx.json"
+          docker buildx build --platform linux/arm64 --load \
+            -f crates/openlore-review-app/Dockerfile \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$LOCAL_TAG" "$RUNNER_TEMP/ctx"
+
+      - name: Smoke (dynamic linking + offline probe self-test)
+        run: |
+          set -euo pipefail
+          docker run --rm "$LOCAL_TAG" --version
+          docker run --rm --read-only --tmpfs /tmp:size=16m --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true "$LOCAL_TAG" probe --self-test
+
+      - name: Scan (trivy, HIGH/CRITICAL blocks)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR and record the digest
+        id: push
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_TAG" "$IMAGE:sha-${GITHUB_SHA}"
+          docker tag "$LOCAL_TAG" "$IMAGE:main"
+          docker push "$IMAGE:sha-${GITHUB_SHA}"
+          docker push "$IMAGE:main"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$LOCAL_TAG" \
+            | grep "^${IMAGE}@" | head -n1 | cut -d@ -f2)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no pushed digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign (cosign keyless, by digest)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: SBOM of the image (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/image.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest SBOMs (cargo + image, cosign)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/cargo.cdx.json" "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "$RUNNER_TEMP/image.cdx.json" "$IMAGE@$DIGEST"
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Job summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### openlore-review-app image"
+            echo "- digest: \`$IMAGE@$DIGEST\`"
+            echo "- tags: \`sha-${GITHUB_SHA}\`, \`main\`"
+            echo "- deploy (laptop): \`deploy/review-app/deploy.sh deploy ${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

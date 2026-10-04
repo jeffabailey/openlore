@@ -205,6 +205,34 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// How long a preview stays confirmable (ADR-074: `expires_at` = +30 min).
+pub const PLAN_TTL_SECS: i64 = 30 * 60;
+
+/// When a plan previewed at `previewed_at` (Unix seconds) stops being
+/// confirmable.
+pub fn plan_expires_at(previewed_at: i64) -> i64 {
+    previewed_at.saturating_add(PLAN_TTL_SECS)
+}
+
+/// Whether a taken plan may still be executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanFreshness {
+    /// Confirmed in time: execute it.
+    Fresh,
+    /// Confirmed too late: refuse it, write nothing.
+    Expired,
+}
+
+/// A plan is fresh strictly before its `expires_at`; from then on it is
+/// expired and is never published.
+pub fn plan_freshness(expires_at: i64, now: i64) -> PlanFreshness {
+    if now < expires_at {
+        PlanFreshness::Fresh
+    } else {
+        PlanFreshness::Expired
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Universe: owner DIDs × suggestion keys × evidence × basis points ×
@@ -280,6 +308,22 @@ mod tests {
             let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
             let days = era * 146_097 + doe - 719_468;
             prop_assert_eq!(days * 86_400 + parts[3] * 3600 + parts[4] * 60 + parts[5], secs);
+        }
+    }
+
+    proptest! {
+        /// Universe: (preview time, confirm time). Fresh exactly within the
+        /// TTL after the preview; expired from the deadline on, forever.
+        #[test]
+        fn a_plan_is_confirmable_only_within_thirty_minutes_of_its_preview(
+            previewed_at in 0i64..4_000_000_000,
+            elapsed in -10i64..10_000,
+        ) {
+            let expires_at = plan_expires_at(previewed_at);
+            let freshness = plan_freshness(expires_at, previewed_at + elapsed);
+            let expected = if elapsed < PLAN_TTL_SECS { PlanFreshness::Fresh } else { PlanFreshness::Expired };
+            prop_assert_eq!(freshness, expected);
+            prop_assert_eq!(plan_freshness(expires_at, expires_at), PlanFreshness::Expired);
         }
     }
 }

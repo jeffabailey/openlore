@@ -255,7 +255,6 @@ fn every_owner_table_query_is_owner_scoped_and_kpi_counters_name_no_owner() {
 
 /// AR-8 @DV-BRA-4 @DV-BRA-11 @infrastructure @ci-cd-pipeline-5 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip with the first deploy/review-app/host/compose.yaml"]
 fn the_app_container_mounts_only_its_data_and_secrets_and_has_no_aws_credentials() {
     let compose = std::fs::read_to_string(root().join("deploy/review-app/host/compose.yaml"))
         .expect("deploy/review-app/host/compose.yaml exists");
@@ -308,7 +307,6 @@ fn the_app_container_mounts_only_its_data_and_secrets_and_has_no_aws_credentials
 
 /// AR-9 @AC-000.2 @ADR-075 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER WS: unskip with the first deploy/review-app/host/app.caddy"]
 fn the_caddy_site_serves_the_app_over_https_only() {
     let caddy = std::fs::read_to_string(root().join("deploy/review-app/host/app.caddy"))
         .expect("deploy/review-app/host/app.caddy exists");

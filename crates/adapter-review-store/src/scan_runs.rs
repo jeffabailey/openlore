@@ -14,6 +14,13 @@ const FINISH_SCAN: &str = "UPDATE scan_runs
     SET status = ?, resume_after = to_timestamp(?), finished_at = now()
     WHERE owner_did = ? AND run_id = ?";
 
+// Restart sweep, one owner at a time (every statement owner-scoped).
+const OWNERS_WITH_RUNNING_SCANS: &str =
+    "SELECT DISTINCT owner_did FROM scan_runs WHERE status = 'running'";
+const INTERRUPT_OWNERS_RUNNING_SCANS: &str = "UPDATE scan_runs
+    SET status = ?, finished_at = now()
+    WHERE owner_did = ? AND status = 'running'";
+
 // `resume_after` is read raw: the TIMESTAMPTZ overloads of `epoch` & co.
 // live in the ICU extension, which the app never loads.
 const LATEST_SCAN: &str = "SELECT status, resume_after
@@ -21,7 +28,7 @@ const LATEST_SCAN: &str = "SELECT status, resume_after
     ORDER BY started_at DESC, rowid DESC LIMIT 1";
 
 /// Unix seconds of a stored timestamp (`NULL` → `None`).
-fn unix_secs_of(stored: &Value) -> Option<i64> {
+pub(crate) fn unix_secs_of(stored: &Value) -> Option<i64> {
     let Value::Timestamp(unit, value) = stored else {
         return None;
     };
@@ -58,6 +65,29 @@ impl ScanRunPort for ReviewStore {
             )
             .map(drop)
             .map_err(db_error)
+        })
+        .map_err(port_error)
+    }
+
+    fn interrupt_running_scans(&self) -> Result<usize, ReviewStoreError> {
+        let after_restart = ScanStatus::Running.after_restart().as_str();
+        self.with_connection(|conn| {
+            let owners: Vec<String> = conn
+                .prepare(OWNERS_WITH_RUNNING_SCANS)
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect()
+                })
+                .map_err(db_error)?;
+            owners.iter().try_fold(0usize, |changed, owner_did| {
+                conn.execute(
+                    INTERRUPT_OWNERS_RUNNING_SCANS,
+                    params![after_restart, owner_did],
+                )
+                .map(|rows| changed + rows)
+                .map_err(db_error)
+            })
         })
         .map_err(port_error)
     }
@@ -126,6 +156,32 @@ mod tests {
                 store.latest_scan("did:plc:sam").unwrap(),
                 Some(ScanRun { status: other, resume_after: None })
             );
+        }
+
+        /// Universe: the latest runs of up to five DIDs, any status. The
+        /// startup sweep moves exactly the running ones to interrupted (so
+        /// the one-running-scan limit frees up) and leaves every other run.
+        #[test]
+        fn a_restart_interrupts_exactly_the_runs_left_running(
+            latest in proptest::collection::vec(status(), 1..5),
+        ) {
+            let store = ReviewStore::open_in_memory(DataKey::generate()).unwrap();
+            let did = |i: usize| format!("did:plc:owner{i}");
+            for (i, status) in latest.iter().enumerate() {
+                store.start_scan(&did(i), "run").unwrap();
+                if *status != ScanStatus::Running {
+                    store.finish_scan(&did(i), "run", *status, None).unwrap();
+                }
+            }
+            let running = latest.iter().filter(|s| **s == ScanStatus::Running).count();
+            prop_assert_eq!(store.interrupt_running_scans().unwrap(), running);
+            for (i, status) in latest.iter().enumerate() {
+                prop_assert_eq!(
+                    store.latest_scan(&did(i)).unwrap().map(|r| r.status),
+                    Some(status.after_restart())
+                );
+            }
+            prop_assert_eq!(store.interrupt_running_scans().unwrap(), 0, "a second sweep changes nothing");
         }
     }
 }

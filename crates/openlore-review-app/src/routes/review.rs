@@ -5,7 +5,7 @@
 use hyper::StatusCode;
 use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
 use review_domain::lifecycle::decline;
-use review_domain::plans::{publish_plan, rfc3339_utc, ClaimDraft};
+use review_domain::plans::{plan_expires_at, publish_plan, rfc3339_utc, ClaimDraft};
 use review_domain::views::{self, QueueView, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
@@ -85,7 +85,11 @@ pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
             .ok()
             .filter(|plan| {
                 app.plans
-                    .put_publish_plan(&session.owner_did, &plan.stored())
+                    .put_publish_plan(
+                        &session.owner_did,
+                        &plan.stored(),
+                        plan_expires_at(i64::try_from(unix_now()).unwrap_or_default()),
+                    )
                     .is_ok()
             });
         match kept {

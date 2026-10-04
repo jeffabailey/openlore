@@ -1,4 +1,5 @@
-# Nightly — mutation testing advisory per devops/ci-cd-pipeline.md §6.
+# Nightly — mutation testing advisory per devops/ci-cd-pipeline.md §6, plus the review app's
+# read-only live-contract smoke (bluesky-claim-review-app devops/ci-cd-pipeline.md §6).
 #
 # Runs cargo-mutants against the pure-core claim-domain crate. ADVISORY ONLY:
 # `continue-on-error: true` on the mutants step ensures the workflow never
@@ -43,3 +44,83 @@ jobs:
           name: mutants-report
           path: mutants.out/
           if-no-files-found: ignore
+
+  # Advisory, read-only, no secret beyond GITHUB_TOKEN. The image half runs always; the
+  # production half runs once the operator sets the repo variable REVIEW_APP_LIVE=true after
+  # the first deploy (R-DEPLOY), so an undeployed app does not open an issue every night.
+  live-contract-smoke:
+    name: review-app live-contract smoke (advisory)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+      issues: write
+    env:
+      IMAGE: ghcr.io/jeffabailey/openlore-review-app
+      APP: https://app.openlore.jeffbailey.us
+      TEST_DID: did:plc:ds4bj4ymxzwpisg4qhlislvc
+      TEST_HANDLE: canzantest.bsky.social
+    steps:
+      - uses: sigstore/cosign-installer@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Latest main image is signed by ci.yml on main, and self-tests
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $IMAGE:main"; exit 1; }
+          cosign verify "$IMAGE@$digest" \
+            --certificate-identity-regexp '^https://github.com/jeffabailey/openlore/.github/workflows/ci.yml@refs/heads/main$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          docker run --rm "$IMAGE@$digest" --version
+          docker run --rm --read-only --tmpfs /tmp:size=16m --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true "$IMAGE@$digest" probe --self-test
+
+      - name: Production endpoints (healthz, client metadata, JWKS)
+        if: vars.REVIEW_APP_LIVE == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsS -m 10 -o /dev/null "$APP/healthz"
+          curl -fsS -m 10 "$APP/oauth/client-metadata.json" | jq -e --arg id "$APP/oauth/client-metadata.json" '
+            .client_id == $id and .token_endpoint_auth_method == "private_key_jwt"
+            and .token_endpoint_auth_signing_alg == "ES256" and .dpop_bound_access_tokens == true
+            and (.redirect_uris | length) > 0 and (.jwks_uri | type) == "string"' > /dev/null
+          curl -fsS -m 10 "$APP/oauth/jwks.json" | jq -e '
+            (.keys | length) > 0 and (.keys | all(.alg == "ES256" and (has("d") | not)))' > /dev/null
+
+      - name: Authorization-server contract (bsky.social)
+        run: |
+          set -euo pipefail
+          issuer=$(curl -fsS -m 10 https://bsky.social/.well-known/oauth-protected-resource | jq -r '.authorization_servers[0]')
+          curl -fsS -m 10 "$issuer/.well-known/oauth-authorization-server" | jq -e '
+            (.pushed_authorization_request_endpoint | type) == "string"
+            and (.dpop_signing_alg_values_supported | index("ES256")) != null' > /dev/null
+
+      - name: PLC and handle resolution (test account)
+        run: |
+          set -euo pipefail
+          curl -fsS -m 10 "https://plc.directory/$TEST_DID" | jq -e --arg did "$TEST_DID" '
+            .id == $did and (.service | length) > 0' > /dev/null
+          resolved=$(curl -fsS -m 10 "https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=$TEST_HANDLE" | jq -r .did)
+          [ "$resolved" = "$TEST_DID" ] || { echo "::error::$TEST_HANDLE resolved to $resolved"; exit 1; }
+
+      - name: Open or update the live-smoke issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create live-smoke -R "$GITHUB_REPOSITORY" --color B60205 --force > /dev/null || true
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --label live-smoke --state open --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --label live-smoke \
+              --title "review-app live-contract smoke failing" --body "Nightly smoke failed: $RUN_URL"
+          fi

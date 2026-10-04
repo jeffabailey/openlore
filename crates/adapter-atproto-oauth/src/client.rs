@@ -297,6 +297,18 @@ impl Handshake {
     pub(crate) fn forget_session(&self, owner_did: &str) {
         let _ = self.secrets.remove_oauth_session(owner_did);
     }
+
+    /// SPIKE finding 4: the PDS refused the access token before the expiry
+    /// the session recorded. Drop that recorded expiry so the next restore
+    /// refreshes (atrium only refreshes a session it believes expired),
+    /// rather than resending the cached token.
+    pub(crate) async fn mark_access_stale(&self, owner_did: &Did) {
+        let sessions = SessionBridge(Arc::clone(&self.secrets));
+        if let Ok(Some(mut session)) = sessions.get(owner_did).await {
+            session.token_set.expires_at = None;
+            let _ = sessions.set(owner_did.clone(), session).await;
+        }
+    }
 }
 
 #[cfg(test)]
