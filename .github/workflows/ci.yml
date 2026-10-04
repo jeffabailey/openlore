@@ -142,7 +142,8 @@ jobs:
         with:
           key: review-app-arm64
       - name: cargo build --release -p openlore-review-app
-        run: cargo build --release --locked -p openlore-review-app
+        # No --locked: Cargo.lock is gitignored in this workspace (same as release.yml).
+        run: cargo build --release -p openlore-review-app
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-cyclonedx
