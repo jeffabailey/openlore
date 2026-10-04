@@ -1,5 +1,27 @@
 {
-  "schema_version": "5.0",
+  "schema_version": "3.0",
   "feature_id": "bluesky-claim-review-app",
-  "events": []
+  "events": [
+    {
+      "sid": "01-01",
+      "p": "RED",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-04T18:40:32Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-04T19:02:40Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-10-04T19:02:49Z"
+    }
+  ]
 }
