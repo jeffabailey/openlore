@@ -12,6 +12,9 @@ description = "OpenLore hosted review app PURE core (bluesky-claim-review-app): 
 # hyper, duckdb, atrium-* and every adapter-* in this crate's dep graph.
 [dependencies]
 maud = { workspace = true }
+# Pure shared value types (Suggestion, ScanStatus, CandidateClaim) and, through
+# its re-export, claim-domain's display-only confidence bucket.
+ports = { path = "../ports" }
 
 [dev-dependencies]
 proptest = { workspace = true }

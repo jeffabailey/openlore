@@ -148,8 +148,8 @@ fn sut_visible_and_approvable(_state: State, _link_verified: bool) -> bool {
     todo!("SCAFFOLD: bind review_domain derived visibility (D-12)")
 }
 
-fn sut_budget_allows(_recent_event_ages_secs: &[u64], _limit: usize, _window_secs: u64) -> bool {
-    todo!("SCAFFOLD: bind review_domain budget arithmetic (ADR-076)")
+fn sut_budget_allows(recent_event_ages_secs: &[u64], limit: usize, window_secs: u64) -> bool {
+    review_domain::budget::budget_allows(recent_event_ages_secs, limit, window_secs)
 }
 
 fn sut_sign_in_pin(token_sub: &str, resolved_did: &str) -> bool {
@@ -516,7 +516,6 @@ proptest! {
     /// A budget allows an action iff fewer than `limit` actions happened
     /// inside the window; actions older than the window never count.
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-10 budget arithmetic)"]
     fn a_budget_allows_exactly_while_under_its_limit_within_the_window(
         ages in prop::collection::vec(0u64..200_000, 0..15), limit in 1usize..10, window in 1u64..100_000
     ) {
@@ -528,7 +527,6 @@ proptest! {
     /// Repo selection never picks a fork or an archived repo and never more
     /// than asked (the SHIPPED `scraper_domain::select_person_repos`).
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-11 BR-3 regression guard, green today)"]
     fn repo_selection_never_picks_a_fork_or_an_archived_repo(
         repos in prop::collection::vec(("[a-z]{1,8}", 0u64..500, any::<bool>(), any::<bool>()), 0..15),
         n in 1usize..10

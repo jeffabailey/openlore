@@ -33,7 +33,6 @@ use review_app::*;
 ///   And her fork of serde produced no card
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-003 evidence-backed cards)"]
 fn every_suggestion_card_carries_its_signal_and_evidence() {
     let world = ReviewWorld::new();
     let browser = given_pending_suggestions(&world, Persona::Priya);
@@ -75,7 +74,6 @@ fn every_suggestion_card_carries_its_signal_and_evidence() {
 ///   And she sees how to restore her DID and verify again
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-003 re-check before the first scan)"]
 fn ownership_is_re_checked_right_before_the_first_scan() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -100,7 +98,6 @@ fn ownership_is_re_checked_right_before_the_first_scan() {
 ///   Then she sees that no suggestions were found and that forks and archived repos are skipped
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-003 empty result guidance)"]
 fn an_empty_scan_explains_that_forks_and_archived_repos_are_skipped() {
     let world = ReviewWorld::new();
     let mut aisha = given_github_verified(&world, Persona::Aisha);
@@ -124,7 +121,6 @@ fn an_empty_scan_explains_that_forks_and_archived_repos_are_skipped() {
 ///   And when the budget recovers and she resumes, the rest arrive without duplicates
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-003 rate-limit floor keeps partial results)"]
 fn when_github_is_busy_partial_results_are_kept_and_the_scan_resumes() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -162,7 +158,6 @@ fn when_github_is_busy_partial_results_are_kept_and_the_scan_resumes() {
 ///   And the queue documents the A/E/N/J/K triage keys
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (NFR-BRA-6 keyboard + labels)"]
 fn every_review_page_is_navigable_by_keyboard_with_labelled_controls() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -556,7 +551,6 @@ fn publishing_still_works_after_the_pds_access_has_quietly_expired() {
 ///   Then she sees the same 4 pending suggestions and the decline still holds
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (pending + declined survive sign-out and restart)"]
 fn her_queue_survives_signing_out_and_the_app_restarting() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -578,7 +572,6 @@ fn her_queue_survives_signing_out_and_the_app_restarting() {
 ///   Then she is told to come back tomorrow, and no repo is read
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (ADR-076 per-DID daily scan budget boundary)"]
 fn the_seventh_scan_in_a_day_is_politely_refused() {
     let world = ReviewWorld::new();
     let mut browser = given_github_verified(&world, Persona::Priya);
@@ -601,7 +594,6 @@ fn the_seventh_scan_in_a_day_is_politely_refused() {
 ///   Then Priya sees only her repos' suggestions and Dmitri only his
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (concurrent scans stay owner-scoped)"]
 fn two_people_scanning_at_the_same_time_each_get_only_their_own_suggestions() {
     let world = ReviewWorld::new();
     let mut priya_browser = given_github_verified(&world, Persona::Priya);

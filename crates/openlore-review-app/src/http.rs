@@ -14,10 +14,15 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use ports::{GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, ScanRunPort, SessionPort};
+use ports::{
+    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, ReviewStateRead, ReviewStateWrite,
+    ScanRunPort, SessionPort,
+};
 use review_domain::signin::PermissionMode;
+use scraper_domain::SignalPredicateMapping;
 use tokio::net::TcpListener;
 
+use crate::limiter::ScanLimiter;
 use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
 
@@ -57,7 +62,11 @@ pub(crate) struct App {
     pub(crate) github: Arc<dyn GithubPort>,
     pub(crate) links: Arc<dyn GithubLinkPort>,
     pub(crate) scans: Arc<dyn ScanRunPort>,
+    pub(crate) review_read: Arc<dyn ReviewStateRead>,
+    pub(crate) review_write: Arc<dyn ReviewStateWrite>,
+    pub(crate) mapping: SignalPredicateMapping,
     pub(crate) verify_attempts: VerifyAttempts,
+    pub(crate) scan_limiter: ScanLimiter,
 }
 
 /// The static public routes.
@@ -69,6 +78,7 @@ pub(crate) enum Route {
     ClientMetadata,
     Jwks,
     CopyScript,
+    TriageScript,
     NotFound,
 }
 
@@ -84,6 +94,7 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         "/oauth/client-metadata.json" => Route::ClientMetadata,
         "/oauth/jwks.json" => Route::Jwks,
         "/assets/copy.js" => Route::CopyScript,
+        "/assets/triage.js" => Route::TriageScript,
         _ => Route::NotFound,
     }
 }
@@ -141,6 +152,11 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
             StatusCode::OK,
             "text/javascript; charset=utf-8",
             review_domain::views::COPY_SCRIPT.to_string(),
+        ),
+        Route::TriageScript => (
+            StatusCode::OK,
+            "text/javascript; charset=utf-8",
+            review_domain::views::TRIAGE_SCRIPT.to_string(),
         ),
         Route::NotFound => (StatusCode::NOT_FOUND, text, "not found".to_string()),
     };
@@ -223,7 +239,11 @@ async fn accept_loop(listener: TcpListener, app: Arc<App>, kind: Listener) -> st
     }
 }
 
-async fn answer(app: &App, kind: Listener, request: Request<Incoming>) -> Response<Full<Bytes>> {
+async fn answer(
+    app: &Arc<App>,
+    kind: Listener,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
     let (parts, body) = request.into_parts();
     let path = parts.uri.path();
     let page = match kind {

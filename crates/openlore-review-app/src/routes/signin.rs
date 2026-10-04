@@ -3,6 +3,8 @@
 //! business decision is a `review_domain::signin` function. A sign-in that
 //! does not complete changes nothing and holds no session.
 
+use std::sync::Arc;
+
 use hyper::{Method, StatusCode};
 use ports::{CompleteAuthorizationError, IdentityLookupError, NewWebSession, PdsCallback};
 use rand::rngs::OsRng;
@@ -14,7 +16,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::{github, scan};
+use crate::routes::{github, review, scan};
 use crate::wiring::{emit, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
@@ -34,6 +36,8 @@ pub(crate) enum PageRoute {
     VerifyGithub,
     StartScan,
     ScanStatus,
+    ApproveSuggestion,
+    DeclineSuggestion,
 }
 
 /// Pure routing of the pages.
@@ -47,22 +51,29 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/github") => Some(PageRoute::VerifyGithub),
         ("POST", "/scan") => Some(PageRoute::StartScan),
         ("GET", "/scan/status") => Some(PageRoute::ScanStatus),
+        ("POST", "/review/approve") => Some(PageRoute::ApproveSuggestion),
+        ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
         _ => None,
     }
 }
 
-pub(crate) async fn handle(app: &App, route: PageRoute, request: &PageRequest) -> Reply {
+pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageRequest) -> Reply {
     let same_origin = request.origin.as_deref() == Some(app.origin.as_str());
     match route {
         PageRoute::SignIn if same_origin => begin_sign_in(app, request).await,
         PageRoute::SignOut if same_origin => sign_out(app, request),
         PageRoute::VerifyGithub if same_origin => github::verify(app, request).await,
         PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
-        PageRoute::SignIn | PageRoute::SignOut | PageRoute::VerifyGithub | PageRoute::StartScan => {
-            forbidden()
-        }
+        PageRoute::ApproveSuggestion if same_origin => review::approve(app, request),
+        PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
+        PageRoute::SignIn
+        | PageRoute::SignOut
+        | PageRoute::VerifyGithub
+        | PageRoute::StartScan
+        | PageRoute::ApproveSuggestion
+        | PageRoute::DeclineSuggestion => forbidden(),
         PageRoute::PdsReturn => pds_return(app, request).await,
-        PageRoute::Review => review(app, request),
+        PageRoute::Review => review::review(app, request),
         PageRoute::GithubStep => github::github_step(app, request),
         PageRoute::ScanStatus => scan::scan_status(app, request),
     }
@@ -157,24 +168,6 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
             app.oauth.forget_session(&identity.did);
             failed(app, SignInFailure::TemporarilyUnavailable)
         }
-    }
-}
-
-fn review(app: &App, request: &PageRequest) -> Reply {
-    match current_session(app, request) {
-        Some((cookie_value, session)) => {
-            let link = app.links.github_link(&session.owner_did).ok().flatten();
-            Reply::Page {
-                status: StatusCode::OK,
-                html: views::review_page(
-                    &session.handle,
-                    &csrf_token_for(&cookie_value),
-                    github::github_step_of(link.as_ref()),
-                ),
-                set_cookie: None,
-            }
-        }
-        None => to_landing(),
     }
 }
 

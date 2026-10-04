@@ -3,6 +3,8 @@
 
 use maud::{html, Markup, DOCTYPE};
 
+use ports::{ScanRun, ScanStatus, Suggestion, SuggestionKey};
+
 use crate::ownership::OwnershipRefusal;
 use crate::signin::{PermissionMode, SignInFailure};
 
@@ -122,43 +124,267 @@ pub enum GithubStep<'a> {
     NeedsReverify { login: &'a str },
 }
 
-/// The label of the button that starts a scan.
+/// The label of the button that starts a first scan.
 pub const SCAN_LABEL: &str = "Scan my repos";
+
+/// The label of the button that scans again after a finished scan.
+pub const SCAN_AGAIN_LABEL: &str = "Scan again";
+
+/// The label of the button that resumes a paused or interrupted scan.
+pub const RESUME_SCAN_LABEL: &str = "Resume scan";
 
 /// The label of the button that checks the bio.
 pub const VERIFY_LABEL: &str = "Verify";
 
+/// The label of the button that opens the exact-record preview.
+pub const APPROVE_LABEL: &str = "Approve";
+
+/// The label of the button that declines a suggestion.
+pub const DECLINE_LABEL: &str = "Not me";
+
+/// The queue's privacy statement (AC-003.3), always shown above the cards.
+pub const PRIVATE_NOTICE: &str = "Private: only you can see these.";
+
+/// What an empty scan says (AC-003.6).
+pub const EMPTY_SCAN_NOTICE: &str = "We didn't find suggestions in your owned, public repos. \
+     Forks and archived repos are skipped.";
+
+/// Why a scan did not start (ADR-076 §2 budget).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanRefused {
+    AlreadyScanning,
+    DailyLimitReached,
+    AppBusy,
+}
+
+/// The sentence explaining a refused scan.
+pub fn scan_refused_message(refused: ScanRefused) -> &'static str {
+    match refused {
+        ScanRefused::AlreadyScanning => "Your scan is already running.",
+        ScanRefused::DailyLimitReached => {
+            "You have scanned 6 times today, the most a day allows. Please come back \
+             tomorrow. Nothing was lost."
+        }
+        ScanRefused::AppBusy => {
+            "OpenLore is busy scanning for other people right now. Please try again in a \
+             few minutes. Nothing was lost."
+        }
+    }
+}
+
+/// Everything the signed-in queue shows.
+#[derive(Debug, Clone, Copy)]
+pub struct QueueView<'a> {
+    pub handle: &'a str,
+    pub csrf_token: &'a str,
+    pub github: GithubStep<'a>,
+    pub latest_scan: Option<ScanRun>,
+    /// The owner's pending suggestions (shown only while the link is verified).
+    pub pending: &'a [Suggestion],
+    pub refused: Option<ScanRefused>,
+}
+
+/// `HH:MM` UTC of a Unix time.
+pub fn utc_clock(unix_secs: i64) -> String {
+    let of_day = unix_secs.rem_euclid(24 * 60 * 60);
+    format!("{:02}:{:02}", of_day / 3600, (of_day % 3600) / 60)
+}
+
+/// The scan action the queue offers after `latest`.
+fn scan_action(latest: Option<ScanRun>) -> Option<&'static str> {
+    match latest.map(|run| run.status) {
+        None => Some(SCAN_LABEL),
+        Some(ScanStatus::Running) => None,
+        Some(ScanStatus::RateLimited | ScanStatus::Interrupted) => Some(RESUME_SCAN_LABEL),
+        Some(ScanStatus::Completed | ScanStatus::OwnershipFailed) => Some(SCAN_AGAIN_LABEL),
+    }
+}
+
+/// What the latest scan says above the cards, if anything.
+fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion]) -> Option<String> {
+    let run = latest?;
+    match run.status {
+        ScanStatus::Running => Some("Scanning your repos…".to_string()),
+        ScanStatus::Completed if pending.is_empty() => Some(EMPTY_SCAN_NOTICE.to_string()),
+        ScanStatus::RateLimited => Some(format!(
+            "GitHub is busy, resuming at {} UTC. The suggestions found so far are kept; \
+             press Resume scan then.",
+            run.resume_after
+                .map_or_else(|| "a later time".to_string(), utc_clock)
+        )),
+        ScanStatus::Interrupted => Some(
+            "Your last scan was interrupted. The suggestions found so far are kept; press \
+             Resume scan to finish it."
+                .to_string(),
+        ),
+        ScanStatus::Completed | ScanStatus::OwnershipFailed => None,
+    }
+}
+
+/// `priyaraman/tidepool` of `github:priyaraman/tidepool`.
+fn repo_path(subject: &str) -> &str {
+    subject.strip_prefix("github:").unwrap_or(subject)
+}
+
+/// `dependency-pinning` of `org.openlore.philosophy.dependency-pinning`.
+fn philosophy_slug(object: &str) -> &str {
+    object.rsplit('.').next().unwrap_or(object)
+}
+
+/// `0.25` of 2500 basis points.
+pub fn confidence_text(basis_points: u16) -> String {
+    format!(
+        "{}.{:02}",
+        basis_points / 10_000,
+        (basis_points % 10_000) / 100
+    )
+}
+
+/// The display-only bucket label of a confidence (WD-10).
+pub fn bucket_label(basis_points: u16) -> &'static str {
+    use ports::claim_domain::{confidence_bucket, ConfidenceBucket};
+    match confidence_bucket(f64::from(basis_points) / 10_000.0) {
+        ConfidenceBucket::Speculative => "speculative",
+        ConfidenceBucket::Weighted => "weighted",
+        ConfidenceBucket::WellEvidenced => "well-evidenced",
+        ConfidenceBucket::Triangulated => "triangulated",
+    }
+}
+
+/// The hidden fields naming a suggestion in its card's forms.
+fn key_fields(key: &SuggestionKey) -> Markup {
+    html! {
+        input type="hidden" name="subject" value=(key.subject);
+        input type="hidden" name="predicate" value=(key.predicate);
+        input type="hidden" name="object" value=(key.object);
+    }
+}
+
+/// The suggestion's headline: "<repo> embodies <philosophy>".
+fn suggestion_headline(key: &SuggestionKey) -> Markup {
+    let repo = repo_path(&key.subject);
+    html! {
+        a href=(format!("https://github.com/{repo}/")) { (repo) }
+        " embodies " (philosophy_slug(&key.object))
+    }
+}
+
+/// One evidence-backed card (AC-003.2): confidence, why, evidence, actions.
+fn suggestion_card(suggestion: &Suggestion, csrf_token: &str) -> Markup {
+    html! {
+        article {
+            h2 { (suggestion_headline(&suggestion.key)) }
+            p {
+                "Confidence " (confidence_text(suggestion.confidence_bp))
+                " (" (bucket_label(suggestion.confidence_bp)) ")"
+            }
+            p { "Why: " (suggestion.why.join("; ")) }
+            p {
+                "Evidence: "
+                @for url in &suggestion.evidence {
+                    a href=(url) { (url) } " "
+                }
+            }
+            form method="post" action="/review/approve" {
+                input type="hidden" name="csrf" value=(csrf_token);
+                (key_fields(&suggestion.key))
+                button type="submit" data-key="a" { (APPROVE_LABEL) }
+            }
+            form method="post" action="/review/decline" {
+                input type="hidden" name="csrf" value=(csrf_token);
+                (key_fields(&suggestion.key))
+                button type="submit" data-key="n" { (DECLINE_LABEL) }
+            }
+        }
+    }
+}
+
+/// The verified owner's queue: privacy statement, scan state, cards.
+fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
+    html! {
+        p { "GitHub: github.com/" (login) " (verified)" }
+        h1 { "Your suggestions" }
+        p { strong { (PRIVATE_NOTICE) } }
+        @if let Some(refused) = view.refused {
+            p role="alert" { (scan_refused_message(refused)) }
+        }
+        @if let Some(notice) = scan_notice(view.latest_scan, view.pending) {
+            p role="status" { (notice) }
+        }
+        @if let Some(label) = scan_action(view.latest_scan) {
+            form method="post" action="/scan" {
+                input type="hidden" name="csrf" value=(view.csrf_token);
+                button type="submit" { (label) }
+            }
+        }
+        @for suggestion in view.pending {
+            (suggestion_card(suggestion, view.csrf_token))
+        }
+        p data-triage-keys="a e n j k" {
+            "Keyboard: A approve · E edit · N not me · J/K next/previous suggestion"
+        }
+        script src="/assets/triage.js" {}
+    }
+}
+
 /// The signed-in review queue: the GitHub step until ownership is proven,
-/// then the scan action.
-pub fn review_page(handle: &str, csrf_token: &str, github: GithubStep<'_>) -> String {
+/// then the private queue.
+pub fn review_page(view: &QueueView<'_>) -> String {
     page(
         "Your review queue",
         html! {
-            p { "Signed in as @" (handle) }
-            @match github {
+            p { "Signed in as @" (view.handle) }
+            @match view.github {
                 GithubStep::NotLinked => {
                     p { "Before anything is scanned, verify that your GitHub account is yours." }
                     a href="/github" { "Verify GitHub ownership" }
                 }
                 GithubStep::NeedsReverify { login } => {
                     p role="alert" {
-                        "We could not confirm that github.com/" (login) " is still yours, so nothing \
-                         was scanned. Please verify again."
+                        "Your DID is no longer in github.com/" (login) "'s bio, or that account \
+                         changed hands, so nothing was scanned. Your pending suggestions are \
+                         hidden until you verify again: put your DID back in the bio, then verify."
                     }
                     a href="/github" { "Verify GitHub ownership" }
                 }
                 GithubStep::Verified { login } => {
-                    p { "GitHub: github.com/" (login) " (verified)" }
-                    form method="post" action="/scan" {
-                        input type="hidden" name="csrf" value=(csrf_token);
-                        button type="submit" { (SCAN_LABEL) }
-                    }
+                    (verified_queue(login, view))
                 }
             }
             form method="post" action="/signout" {
-                input type="hidden" name="csrf" value=(csrf_token);
+                input type="hidden" name="csrf" value=(view.csrf_token);
                 button type="submit" { (SIGN_OUT_LABEL) }
             }
+        },
+    )
+    .into_string()
+}
+
+/// The exact-record preview opened by Approve. Nothing is written here.
+pub fn approval_preview_page(suggestion: &Suggestion) -> String {
+    page(
+        "Preview before publishing",
+        html! {
+            h1 { "Preview before publishing" }
+            p { (suggestion_headline(&suggestion.key)) }
+            p {
+                "Confidence " (confidence_text(suggestion.confidence_bp))
+                " (" (bucket_label(suggestion.confidence_bp)) ")"
+            }
+            p { "Nothing has been published yet." }
+            p { a href="/review" { "Back to your review queue" } }
+        },
+    )
+    .into_string()
+}
+
+/// A page that does not exist for this person (never says whose it is).
+pub fn not_found_page() -> String {
+    page(
+        "Not found",
+        html! {
+            h1 { "Not found" }
+            p { a href="/review" { "Back to your review queue" } }
         },
     )
     .into_string()
@@ -271,3 +497,17 @@ pub const COPY_SCRIPT: &str = "document.querySelectorAll('[data-copy]').forEach(
     navigator.clipboard.writeText(el.getAttribute('data-copy'));\n\
   });\n\
 });\n";
+
+/// The queue's keyboard triage (A approve, E edit, N not me, J/K move).
+pub const TRIAGE_SCRIPT: &str = "(function () {\n\
+  var cards = function () { return Array.prototype.slice.call(document.querySelectorAll('article')); };\n\
+  var current = 0;\n\
+  var focus = function (i) { var c = cards(); if (!c.length) return; current = Math.max(0, Math.min(i, c.length - 1)); var b = c[current].querySelector('button'); if (b) b.focus(); };\n\
+  document.addEventListener('keydown', function (event) {\n\
+    if (event.target && event.target.tagName === 'INPUT') return;\n\
+    var key = event.key.toLowerCase();\n\
+    if (key === 'j') focus(current + 1);\n\
+    else if (key === 'k') focus(current - 1);\n\
+    else { var c = cards()[current]; var b = c && c.querySelector('[data-key=\"' + key + '\"]'); if (b) b.click(); }\n\
+  });\n\
+})();\n";

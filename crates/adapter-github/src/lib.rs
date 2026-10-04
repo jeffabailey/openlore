@@ -43,8 +43,8 @@
 
 use async_trait::async_trait;
 use ports::{
-    GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome, RawContributor, Signal,
-    TargetKind,
+    GithubError, GithubPort, OwnedRepo, PersonProfile, ProbeOutcome, RateBudget, RawContributor,
+    Signal, TargetKind,
 };
 
 pub mod client;
@@ -108,6 +108,15 @@ pub fn take_last_auth_report() -> AuthReport {
         .unwrap_or(AuthReport::Anonymous)
 }
 
+/// The rate budget named by the `x-ratelimit-remaining` / `x-ratelimit-reset`
+/// header values, when both parse (pure).
+pub fn rate_budget_of(remaining: Option<&str>, reset_at: Option<&str>) -> Option<RateBudget> {
+    Some(RateBudget {
+        remaining: remaining?.trim().parse().ok()?,
+        reset_at: reset_at?.trim().parse().ok()?,
+    })
+}
+
 /// `GithubPort` adapter over the public GitHub API. One value per process;
 /// immutable after construction. Binds the resolved API base (real public API,
 /// or the `OPENLORE_GITHUB_API_BASE` test seam) and the auth posture derived
@@ -124,6 +133,9 @@ pub struct GithubAdapter {
     /// Auth posture from the optional `GITHUB_TOKEN`. The token bytes (if any)
     /// live here and leave ONLY as a request header — never logged or echoed.
     auth: AuthMode,
+    /// The rate budget GitHub reported on the most recent response (ADR-076
+    /// §2). Interior mutability only for this observation.
+    last_rate_budget: std::sync::Mutex<Option<RateBudget>>,
 }
 
 impl GithubAdapter {
@@ -134,6 +146,7 @@ impl GithubAdapter {
         Self {
             api_base: client::resolve_api_base(),
             auth: client::read_auth_mode(),
+            last_rate_budget: std::sync::Mutex::new(None),
         }
     }
 
@@ -145,6 +158,7 @@ impl GithubAdapter {
         Self {
             api_base: client::strip_trailing_slashes(api_base.into()),
             auth: client::read_auth_mode(),
+            last_rate_budget: std::sync::Mutex::new(None),
         }
     }
 
@@ -157,6 +171,7 @@ impl GithubAdapter {
             auth: AuthMode::Authenticated {
                 token: token.into(),
             },
+            last_rate_budget: std::sync::Mutex::new(None),
         }
     }
 
@@ -373,6 +388,10 @@ impl GithubPort for GithubAdapter {
         let body = self.get_public(&path, user).await?;
         client::parse_owned_repos(&body).map_err(GithubError::ApiShape)
     }
+
+    fn last_rate_budget(&self) -> Option<RateBudget> {
+        self.last_rate_budget.lock().ok().and_then(|slot| *slot)
+    }
 }
 
 impl GithubAdapter {
@@ -418,10 +437,27 @@ impl GithubAdapter {
         if let Some(header) = self.auth.authorization_header() {
             request = request.header(reqwest::header::AUTHORIZATION, header);
         }
-        request
+        let response = request
             .send()
             .await
-            .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))
+            .map_err(|e| GithubError::Network(format!("request to GitHub failed: {e}")))?;
+        self.observe_rate_budget(response.headers());
+        Ok(response)
+    }
+
+    /// Remember the rate budget a response reported, when it reported one.
+    fn observe_rate_budget(&self, headers: &reqwest::header::HeaderMap) {
+        let observed = rate_budget_of(
+            headers
+                .get("x-ratelimit-remaining")
+                .and_then(|v| v.to_str().ok()),
+            headers
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok()),
+        );
+        if let (Some(budget), Ok(mut slot)) = (observed, self.last_rate_budget.lock()) {
+            *slot = Some(budget);
+        }
     }
 
     /// Probe whether a public repo commits a file at `path` (RGSD-2). Issues
@@ -1009,5 +1045,36 @@ mod tests {
             }
         );
         assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    mod rate_budget {
+        use super::super::{rate_budget_of, RateBudget};
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Universe: every (remaining, reset) header pair, valid or not. A
+            /// budget is observed iff both values parse, and then verbatim.
+            #[test]
+            fn a_rate_budget_is_observed_exactly_when_both_headers_parse(
+                remaining in proptest::option::of(prop_oneof![
+                    any::<u64>().prop_map(|n| n.to_string()),
+                    "[a-z ]{0,6}",
+                ]),
+                reset in proptest::option::of(prop_oneof![
+                    any::<i64>().prop_map(|n| n.to_string()),
+                    "[a-z ]{0,6}",
+                ]),
+            ) {
+                let parsed = (
+                    remaining.as_deref().and_then(|r| r.trim().parse::<u64>().ok()),
+                    reset.as_deref().and_then(|r| r.trim().parse::<i64>().ok()),
+                );
+                let expected = match parsed {
+                    (Some(remaining), Some(reset_at)) => Some(RateBudget { remaining, reset_at }),
+                    _ => None,
+                };
+                prop_assert_eq!(rate_budget_of(remaining.as_deref(), reset.as_deref()), expected);
+            }
+        }
     }
 }

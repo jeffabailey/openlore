@@ -51,7 +51,6 @@ fn priyas_full_journey(world: &ReviewWorld, confirms: &mut usize) -> Browser {
 ///   And nothing is written to any PDS and her queue is unchanged
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (I-BRA-1 cross-user queue privacy)"]
 fn only_priya_can_see_her_queue_not_dmitri_not_an_anonymous_visitor() {
     let world = ReviewWorld::new();
     let mut priya_browser = given_pending_suggestions(&world, Persona::Priya);
@@ -111,7 +110,6 @@ fn only_priya_can_see_her_queue_not_dmitri_not_an_anonymous_visitor() {
 ///   And no share preview can be opened for them
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (I-BRA-1 pending never public)"]
 fn pending_suggestions_are_never_exposed_anywhere_public() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);

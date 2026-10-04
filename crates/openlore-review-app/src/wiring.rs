@@ -17,6 +17,7 @@ use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, ReviewStore};
 use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, ScanStatus, SecretStorePort};
 use review_domain::signin::{permission_mode, SignInFailure};
+use scraper_domain::{load_mapping, SignalPredicateMapping, EMBEDDED_MAPPING_YAML};
 use serde_json::json;
 
 use crate::config::{
@@ -24,6 +25,7 @@ use crate::config::{
     DEFAULT_OAUTH_SCOPES,
 };
 use crate::http::{self, App, Surface};
+use crate::limiter::ScanLimiter;
 use crate::routes::github::VerifyAttempts;
 
 /// Exit code when the app refuses to start.
@@ -150,6 +152,7 @@ struct Wired {
     store: Arc<ReviewStore>,
     identity: Arc<IdentityLookup>,
     github_token: GithubToken,
+    mapping: SignalPredicateMapping,
 }
 
 /// Run a future on a single-threaded runtime.
@@ -259,6 +262,8 @@ pub(crate) fn gen_client_jwk() -> u8 {
 fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
     let config = parse_config(env, BuildProfile::of_this_build())
         .map_err(|e| refusal(Probe::Config)(e.to_string()))?;
+    let mapping = load_mapping(EMBEDDED_MAPPING_YAML)
+        .map_err(|e| refusal(Probe::Config)(format!("signal mapping: {e}")))?;
     let secrets = parse_secrets(read_secrets(&config.secrets_dir))
         .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
     let key = ClientKey::parse(&secrets.client_jwk)
@@ -290,6 +295,7 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         store,
         identity,
         github_token: secrets.github_token,
+        mapping,
     })
 }
 
@@ -373,7 +379,11 @@ fn app(wired: Wired) -> App {
         sessions: wired.store.clone(),
         github: Arc::new(github),
         links: wired.store.clone(),
-        scans: wired.store,
+        scans: wired.store.clone(),
+        review_read: wired.store.clone(),
+        review_write: wired.store,
+        mapping: wired.mapping,
         verify_attempts: VerifyAttempts::default(),
+        scan_limiter: ScanLimiter::default(),
     }
 }

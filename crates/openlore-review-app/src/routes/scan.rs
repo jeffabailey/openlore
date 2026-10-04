@@ -1,21 +1,24 @@
-//! Starting a scan (I-BRA-4, ADR-076 §5). A scan re-checks ownership first:
-//! only a fresh [`VerifiedOwnership`] lets it go on; any other verdict marks
-//! the link unverified and reads no repo.
+//! Starting a scan (I-BRA-4, ADR-076 §2/§5). A scan starts only with a
+//! verified link and the budget's admission; it then runs in the background
+//! (`crate::scan`), and the queue polls its status.
+
+use std::sync::Arc;
 
 use hyper::StatusCode;
-use ports::{GithubLink, ScanStatus, WebSession};
-use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
-use review_domain::views;
+use ports::ScanStatus;
+use review_domain::budget::ScanAdmission;
+use review_domain::views::{self, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::github::{account_of, refusal_of};
+use crate::routes::review::queue_page;
 use crate::routes::signin::{csrf_matches, current_session, forbidden, random_token, to_landing};
-use crate::wiring::{emit, LogEvent};
+use crate::scan::run_scan;
 
 /// `POST /scan`: refused (sent to the GitHub step) unless a verified link
-/// exists; otherwise re-verify, then scan.
-pub(crate) async fn start_scan(app: &App, request: &PageRequest) -> Reply {
-    let Some((_, session)) = current_session(app, request) else {
+/// exists; refused with the reason when the budget says no; otherwise the
+/// scan starts in the background and the queue shows its progress.
+pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
+    let Some((cookie_value, session)) = current_session(app, request) else {
         return to_landing();
     };
     if !csrf_matches(request, &session) {
@@ -25,47 +28,39 @@ pub(crate) async fn start_scan(app: &App, request: &PageRequest) -> Reply {
     let Some(link) = link.filter(|link| link.verified) else {
         return redirect("/github");
     };
-    let status = match reverify(app, &session, &link).await {
-        Ok(ownership) => scan_repos(&ownership),
-        Err(refusal) if refusal.disproves_ownership() => {
-            let _ = app
-                .links
-                .mark_link_unverified(&session.owner_did, refusal.label());
-            ScanStatus::OwnershipFailed
-        }
-        Err(OwnershipRefusal::RateLimited) => ScanStatus::RateLimited,
-        Err(_) => ScanStatus::Interrupted,
+    let refused = match app.scan_limiter.admit(&session.owner_did) {
+        ScanAdmission::Admitted => None,
+        ScanAdmission::AlreadyScanning => return redirect("/review"),
+        ScanAdmission::DailyLimitReached => Some(ScanRefused::DailyLimitReached),
+        ScanAdmission::AppBusy => Some(ScanRefused::AppBusy),
     };
-    emit(LogEvent::ScanFinished(status));
-    let _ = app
-        .scans
-        .record_finished_scan(&session.owner_did, &random_token(), status);
+    if let Some(refused) = refused {
+        return queue_page(
+            app,
+            &cookie_value,
+            &session,
+            StatusCode::TOO_MANY_REQUESTS,
+            Some(refused),
+        );
+    }
+    let run_id = random_token();
+    if app.scans.start_scan(&session.owner_did, &run_id).is_err() {
+        app.scan_limiter.release(&session.owner_did);
+        return queue_page(
+            app,
+            &cookie_value,
+            &session,
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some(ScanRefused::AppBusy),
+        );
+    }
+    tokio::spawn(run_scan(
+        app.clone(),
+        session.owner_did.clone(),
+        run_id,
+        link,
+    ));
     redirect("/review")
-}
-
-/// Read the linked profile now and prove ownership again, pinned to the
-/// numeric id that was verified.
-async fn reverify(
-    app: &App,
-    session: &WebSession,
-    link: &GithubLink,
-) -> Result<VerifiedOwnership, OwnershipRefusal> {
-    let profile = app
-        .github
-        .read_person(&link.github_login)
-        .await
-        .map_err(|error| refusal_of(&error))?;
-    prove_ownership(
-        &session.owner_did,
-        &account_of(&profile),
-        Some(link.github_user_id),
-    )
-}
-
-/// The repo stages of a scan; they can only run with proof in hand. The
-/// repo listing, signal harvest and suggestions land with US-BRA-003.
-fn scan_repos(_ownership: &VerifiedOwnership) -> ScanStatus {
-    ScanStatus::Completed
 }
 
 /// `GET /scan/status`: the status of the person's latest scan.
@@ -75,10 +70,10 @@ pub(crate) fn scan_status(app: &App, request: &PageRequest) -> Reply {
     };
     let status = app
         .scans
-        .latest_scan_status(&session.owner_did)
+        .latest_scan(&session.owner_did)
         .ok()
         .flatten()
-        .map_or("none", ScanStatus::as_str);
+        .map_or("none", |run| ScanStatus::as_str(run.status));
     Reply::Page {
         status: StatusCode::OK,
         html: views::scan_status_page(status),

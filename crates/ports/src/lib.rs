@@ -37,8 +37,9 @@ pub use probe::{ProbeOutcome, ProbeRefusalReason, ProbeRefused};
 pub mod review;
 pub use review::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, GithubLink,
-    GithubLinkPort, LinkRecorded, NewWebSession, OAuthPort, PdsCallback, ReviewStoreError,
-    ReviewStorePort, ScanRunPort, ScanStatus, SecretStorePort, SessionPort, WebSession,
+    GithubLinkPort, LinkRecorded, NewWebSession, OAuthPort, PdsCallback, ReviewStateRead,
+    ReviewStateWrite, ReviewStoreError, ReviewStorePort, ScanRun, ScanRunPort, ScanStatus,
+    SecretStorePort, SessionPort, Suggestion, SuggestionKey, SuggestionState, WebSession,
 };
 
 // -----------------------------------------------------------------------------
@@ -519,6 +520,20 @@ pub trait GithubPort: Send + Sync {
     /// `GET /users/{user}/repos?type=owner&sort=pushed&per_page=100`, the RAW
     /// rows (forks and archived repos included).
     async fn list_owned_repos(&self, user: &str) -> Result<Vec<OwnedRepo>, GithubError>;
+
+    /// The rate budget GitHub reported on the most recent response, if any
+    /// (ADR-076 §2: a scan reads it before each repo).
+    fn last_rate_budget(&self) -> Option<RateBudget> {
+        None
+    }
+}
+
+/// GitHub's `x-ratelimit-remaining` / `x-ratelimit-reset` on one response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateBudget {
+    pub remaining: u64,
+    /// Unix seconds when the budget refills.
+    pub reset_at: i64,
 }
 
 // -----------------------------------------------------------------------------

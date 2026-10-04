@@ -16,6 +16,7 @@ mod scan_runs;
 pub mod schema;
 mod secrets;
 mod sessions;
+mod suggestions;
 
 use std::path::Path;
 use std::sync::Mutex;

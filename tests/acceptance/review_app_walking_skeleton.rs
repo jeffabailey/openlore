@@ -144,7 +144,6 @@ fn priya_proves_her_github_account_is_hers_with_her_did_in_her_bio() {
 ///   And nothing was written to her PDS
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: unskip when the review app ships private suggestion queue"]
 fn priya_sees_private_evidence_backed_suggestions_from_her_own_repos() {
     // GIVEN Priya has verified github.com/priyaraman (WS-2's Given + When).
     let world = ReviewWorld::new();

@@ -228,16 +228,110 @@ impl ScanStatus {
     }
 }
 
+/// A scan run as the owner sees it: how it stands, and when a paused run
+/// may resume (`resume_after`, Unix seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanRun {
+    pub status: ScanStatus,
+    pub resume_after: Option<i64>,
+}
+
 /// Owner-scoped scan runs (`scan_runs`).
 pub trait ScanRunPort: Send + Sync {
-    /// Record a run that already ended with `status`.
-    fn record_finished_scan(
+    /// Record that a run started (`running`).
+    fn start_scan(&self, owner_did: &str, run_id: &str) -> Result<(), ReviewStoreError>;
+
+    /// Record how a started run ended.
+    fn finish_scan(
         &self,
         owner_did: &str,
         run_id: &str,
         status: ScanStatus,
+        resume_after: Option<i64>,
     ) -> Result<(), ReviewStoreError>;
 
-    /// The status of the owner's most recent run, if any.
-    fn latest_scan_status(&self, owner_did: &str) -> Result<Option<ScanStatus>, ReviewStoreError>;
+    /// The owner's most recent run, if any.
+    fn latest_scan(&self, owner_did: &str) -> Result<Option<ScanRun>, ReviewStoreError>;
+}
+
+/// A suggestion's identity (BR-1): one per (subject, predicate, object).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SuggestionKey {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
+/// Where a suggestion stands (`suggestions.state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SuggestionState {
+    Pending,
+    Declined,
+    Published,
+    Retracted,
+}
+
+impl SuggestionState {
+    pub const ALL: [SuggestionState; 4] = [
+        Self::Pending,
+        Self::Declined,
+        Self::Published,
+        Self::Retracted,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Declined => "declined",
+            Self::Published => "published",
+            Self::Retracted => "retracted",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str() == stored)
+    }
+}
+
+/// A private suggestion: the key, its confidence in basis points, the
+/// evidence URLs and the "why" of each producing signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    pub key: SuggestionKey,
+    pub confidence_bp: u16,
+    pub evidence: Vec<String>,
+    pub why: Vec<String>,
+    /// `owner/repo` the suggestion was derived from.
+    pub source_repo: String,
+}
+
+/// Owner-scoped READS of the suggestion queue (page renders).
+pub trait ReviewStateRead: Send + Sync {
+    /// The owner's pending suggestions, in a stable order.
+    fn pending_suggestions(&self, owner_did: &str) -> Result<Vec<Suggestion>, ReviewStoreError>;
+
+    /// Every key the owner has ever been offered, with its state.
+    fn suggestion_states(
+        &self,
+        owner_did: &str,
+    ) -> Result<Vec<(SuggestionKey, SuggestionState)>, ReviewStoreError>;
+}
+
+/// Owner-scoped WRITES to the suggestion queue (transitions).
+pub trait ReviewStateWrite: Send + Sync {
+    /// Add new pending suggestions (a key already held is left untouched).
+    fn add_pending(
+        &self,
+        owner_did: &str,
+        suggestions: &[Suggestion],
+    ) -> Result<(), ReviewStoreError>;
+
+    /// Move `key` from `from` to `to`; `false` when it was not in `from`.
+    fn change_state(
+        &self,
+        owner_did: &str,
+        key: &SuggestionKey,
+        from: SuggestionState,
+        to: SuggestionState,
+    ) -> Result<bool, ReviewStoreError>;
 }
