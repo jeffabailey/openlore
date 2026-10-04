@@ -719,7 +719,8 @@ is tag-driven and immutable, governed by ADR-011 (matrix + naming) and ADR-012
 
 ## Platform Architecture (PDS hosting)
 
-Feature `shared-pds-module` (DESIGN, 2026-10-02), with decisions in ADR-066 through ADR-069.
+Feature `shared-pds-module`: **IMPLEMENTED** (designed 2026-10-02, live 2026-10-04; module v1.6.0),
+with decisions in ADR-066 through ADR-070. History: `docs/evolution/shared-pds-module-evolution.md`.
 OpenLore gets its own ATProto PDS at `openlore.jeffbailey.us` in AWS account 091153021562
 (profile `jeff`). The deployment is the same OpenTofu module that the-reality-base runs in its
 own account. The module lives in the public repo `jeffabailey/tofu-aws-pds`
@@ -739,13 +740,14 @@ own account. The module lives in the public repo `jeffabailey/tofu-aws-pds`
   `openlore.jeffbailey.us` do not reverse-match.
 - **TRB migration** (ADR-069): a source swap that keeps every address, with a no-op plan gate,
   test then prod.
-- **Known blocker (feature-delta R1):** `org.openlore.claim` cannot yet be written to a stock
-  PDS, for three reasons:
-  - `confidence` is a float, and the ATProto data model has no floats.
-  - A JS PDS re-encodes float16 values as float64, so the CID diverges (ADR-062 / SPIKE-00).
-  - `adapter-atproto-pds` sends `createRecord` without authentication.
-
-  The PDS provides identity and hosting. Claim publishing to it needs separate application work.
+- **Publishing (R1, resolved)**: claims publish to the PDS signed by the account's own DID.
+  `confidence` travels as integer basis points (ADR-070). `claim publish` logs in with an app
+  password. `#org.openlore.application` is published in the PLC document by the deployment
+  (`verification_methods`), and `peer pull` verifies against it.
+- **Identity backup**: daily, hybrid-encrypted to a keychain-held RSA key, with an alarm after
+  two days without a successful backup (module v1.4.0 to v1.6.0).
+- **DNS**: `jeffbailey.us` is served by Cloudflare. The live A records are there, and the
+  Route 53 records the module writes are inert.
 
 ```mermaid
 C4Container

@@ -1,6 +1,6 @@
 # ADR-066: The PDS Deployment Is a Shared OpenTofu Module in Its Own Repo, With a Generic Input Contract
 
-- **Status**: Proposed (2026-10-02)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/shared-pds-module-evolution.md` (proposed 2026-10-02)
 - **Date**: 2026-10-02
 - **Deciders**: Jeff Bailey (user request: "make a module that I can share between the two deployments"), Apex (nw-platform-architect)
 - **Feature**: shared-pds-module (DESIGN)

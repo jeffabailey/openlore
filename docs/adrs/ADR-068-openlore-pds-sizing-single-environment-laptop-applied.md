@@ -1,6 +1,6 @@
 # ADR-068: OpenLore's PDS Is One t4g.micro Production Host, Applied From a Laptop
 
-- **Status**: Proposed (2026-10-02)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/shared-pds-module-evolution.md` (proposed 2026-10-02)
 - **Date**: 2026-10-02
 - **Deciders**: Jeff Bailey ("pick the cheapest options"), Apex (nw-platform-architect)
 - **Feature**: shared-pds-module (DESIGN)

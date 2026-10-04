@@ -1,6 +1,6 @@
 # ADR-069: the-reality-base Moves Onto the Shared Module With an Address-Stable Source Swap and a No-Op Plan Gate
 
-- **Status**: Proposed (2026-10-02)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/shared-pds-module-evolution.md` (proposed 2026-10-02)
 - **Date**: 2026-10-02
 - **Deciders**: Jeff Bailey, Apex (nw-platform-architect)
 - **Feature**: shared-pds-module (DESIGN)

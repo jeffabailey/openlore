@@ -1,6 +1,6 @@
 # ADR-067: One PDS Host Per Project, In That Project's Account, Bootstrapped by a Shared Module
 
-- **Status**: Proposed (2026-10-02)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/shared-pds-module-evolution.md` (proposed 2026-10-02)
 - **Date**: 2026-10-02
 - **Deciders**: Jeff Bailey (wizard lock: separate host per project; OpenLore on profile `jeff`), Apex (nw-platform-architect)
 - **Feature**: shared-pds-module (DESIGN)
