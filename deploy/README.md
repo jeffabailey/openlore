@@ -177,29 +177,32 @@ export OPENLORE_DID=did:plc:pnyxfnpkcldxtitsw64ycahw   # plus the OPENLORE_PDS_*
 ./cli.sh claim publish <cid>
 ```
 
-## 5. Identity backup (R6, do this once the account exists)
+## 5. Identity backup
 
-The host can write an encrypted archive of `/pds/secrets.env` (the PLC rotation key) to
-`s3://openlore-identity-backup-091153021562/prod/`. It refuses to upload until an operator
-public key is in place. Generate the key pair **off the host** and keep the private key
-offline:
+Set up 2026-10-04. The host archives `/pds/secrets.env` (the PLC rotation key) to
+`s3://openlore-identity-backup-091153021562/prod/`, hybrid-encrypted to the public key at
+`/pds/backup-pubkey.pem` (RSA-4096; tofu-aws-pds v1.4.0+). The private key is in the macOS
+keychain of the operator's Mac, base64-encoded: service `pds-backup`, account `openlore`. It is
+the only way to decrypt these archives -- keep the keychain backed up.
 
-```sh
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out openlore-backup-private.pem
-openssl pkey -in openlore-backup-private.pem -pubout -out backup-pubkey.pem
-```
-
-Any RSA key of 2048 bits or more works: the archive is hybrid-encrypted (tofu-aws-pds v1.4.0+),
-with only a per-archive AES/HMAC key wrapped by RSA-OAEP.
-
-Copy `backup-pubkey.pem` to `/pds/backup-pubkey.pem` on the host (for example, paste it into
-`sudo tee` in a Session Manager shell). Then run `sudo pds-backup-identity`. It should print
-`archived identity-<stamp>.enc.tar`. To restore, with OpenSSL 3 and the private key:
+Take a backup (on the host; it survives instance replacement, the key is on the data volume):
 
 ```sh
-aws s3 cp s3://openlore-identity-backup-091153021562/prod/identity-<stamp>.enc.tar . --profile jeff
-<tofu-aws-pds>/scripts/pds-restore-identity.sh identity-<stamp>.enc.tar openlore-backup-private.pem ./restored
+AWS_PROFILE=jeff aws ssm send-command --region us-east-1 --instance-ids <instance_id> \
+  --document-name AWS-RunShellScript --parameters 'commands=["/usr/local/bin/pds-backup-identity"]'
 ```
+
+Restore (OpenSSL 3; writes `./restored/secrets.env`, to place at `/pds/secrets.env` on a volume
+for a new host):
+
+```sh
+AWS_PROFILE=jeff aws s3 cp s3://openlore-identity-backup-091153021562/prod/identity-<stamp>.enc.tar .
+<tofu-aws-pds>/scripts/pds-restore-identity.sh identity-<stamp>.enc.tar \
+  <(security find-generic-password -s pds-backup -a openlore -w | base64 -d) ./restored
+```
+
+The first archive, `identity-20261004T002631Z.enc.tar`, was restored this way and matched the
+host's `secrets.env` byte for byte.
 
 ## DNS: Cloudflare, not Route 53
 
