@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ports::{Suggestion, SuggestionKey, SuggestionState};
+use ports::{ScanCounts, Suggestion, SuggestionKey, SuggestionState};
 
 /// What a scan adds, and what it found already settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,27 @@ pub struct Reconciled {
     pub already_published: usize,
     /// Derived keys the owner declined; they stay hidden.
     pub declined_hidden: usize,
+}
+
+impl Reconciled {
+    /// This reconcile's contribution to its scan's summary (DWD-11).
+    pub fn counts(&self) -> ScanCounts {
+        ScanCounts {
+            new: self.new.len(),
+            already_published: self.already_published,
+            declined_hidden: self.declined_hidden,
+        }
+    }
+}
+
+/// Two parts of one scan, counted together. A scan reconciles repo by repo;
+/// each repo derives keys of its own subject, so the parts never overlap.
+pub fn add_counts(left: ScanCounts, right: ScanCounts) -> ScanCounts {
+    ScanCounts {
+        new: left.new + right.new,
+        already_published: left.already_published + right.already_published,
+        declined_hidden: left.declined_hidden + right.declined_hidden,
+    }
 }
 
 /// Reconcile `derived` against the owner's `existing` keys.
@@ -120,6 +141,27 @@ mod tests {
             let mut after = existing.clone();
             after.extend(out.new.iter().map(|s| (s.key.clone(), SuggestionState::Pending)));
             prop_assert!(reconcile(&after, derived).new.is_empty());
+        }
+
+        /// Universe: (existing keys + states, derived suggestions split at
+        /// an arbitrary subject boundary). Reconciling repo by repo — each
+        /// part stored before the next — counts exactly what reconciling
+        /// the whole scan at once counts, so a scan's summary covers only
+        /// the keys that scan derived, each once.
+        #[test]
+        fn a_scan_counted_repo_by_repo_counts_the_whole_scan(
+            existing in prop::collection::btree_map(key(), state(), 0..9),
+            derived_keys in prop::collection::vec(key(), 0..12),
+        ) {
+            let (first, second): (Vec<SuggestionKey>, Vec<SuggestionKey>) =
+                derived_keys.iter().cloned().partition(|k| k.subject == "github:p/tidepool");
+            let whole = reconcile(&existing, derived_keys.iter().cloned().map(suggestion).collect());
+            let first_part = reconcile(&existing, first.into_iter().map(suggestion).collect());
+            let mut stored = existing.clone();
+            stored.extend(first_part.new.iter().map(|s| (s.key.clone(), SuggestionState::Pending)));
+            let second_part = reconcile(&stored, second.into_iter().map(suggestion).collect());
+            prop_assert_eq!(add_counts(first_part.counts(), second_part.counts()), whole.counts());
+            prop_assert_eq!(add_counts(ScanCounts::default(), whole.counts()), whole.counts());
         }
     }
 }

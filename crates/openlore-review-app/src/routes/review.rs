@@ -3,9 +3,11 @@
 //! suggestion named by anyone else's form is simply not found.
 
 use hyper::StatusCode;
-use ports::{Suggestion, SuggestionKey, WebSession};
+use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
 use review_domain::edits::{edit_claim, philosophy_choices};
-use review_domain::lifecycle::{owner_step, tally, LifecycleEvent, OwnerStep};
+use review_domain::lifecycle::{
+    owner_step, tally, visible_and_approvable, LifecycleEvent, OwnerStep,
+};
 use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
     PublishPlan,
@@ -200,11 +202,14 @@ fn keep_and_preview(
 /// May the owner publish the suggestion `key` right now? Only while it is
 /// pending and their GitHub link is verified (CORE-9).
 pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey) -> bool {
-    link_verified(app, owner_did)
-        && app
-            .review_read
-            .pending_suggestions(owner_did)
-            .is_ok_and(|pending| pending.iter().any(|s| &s.key == key))
+    let verified = link_verified(app, owner_did);
+    app.review_read
+        .suggestion_states(owner_did)
+        .is_ok_and(|states| {
+            states
+                .iter()
+                .any(|(k, state)| k == key && visible_and_approvable(*state, verified))
+        })
 }
 
 /// `POST /review/decline`: "Not me" — the suggestion leaves the queue,
@@ -305,9 +310,12 @@ fn with_own_suggestion(
     if !csrf_matches(request, &session) {
         return forbidden();
     }
-    let verified = link_verified(app, &session.owner_did);
+    let visible = visible_and_approvable(
+        SuggestionState::Pending,
+        link_verified(app, &session.owner_did),
+    );
     let named = key_of(request, object_field);
-    let found = named.filter(|_| verified).and_then(|key| {
+    let found = named.filter(|_| visible).and_then(|key| {
         app.review_read
             .pending_suggestions(&session.owner_did)
             .ok()?

@@ -3,17 +3,19 @@
 //! [`VerifiedOwnership`] no repo read can happen without (I-BRA-4), then
 //! `select_person_repos` → per repo: harvest → `derive_candidates` →
 //! `reconcile` → persist. Each repo's suggestions are stored as soon as that
-//! repo completes, so a paused scan keeps its partial results. Nothing is
-//! written to any PDS; suggestion content is never logged.
+//! repo completes, so a paused scan keeps its partial results, and a resumed
+//! one offers only keys never seen before. The run records what it found
+//! (DWD-11 summary counts, of its own derived keys only). Nothing is written
+//! to any PDS; suggestion content is never logged.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ports::{GithubError, GithubLink, OwnedRepo, ScanStatus};
+use ports::{GithubError, GithubLink, OwnedRepo, ScanCounts, ScanStatus};
 use review_domain::budget::github_budget_allows;
 use review_domain::lifecycle::suggestion_from_candidate;
 use review_domain::ownership::{prove_ownership, OwnershipRefusal, VerifiedOwnership};
-use review_domain::reconcile::reconcile;
+use review_domain::reconcile::{add_counts, reconcile};
 use scraper_domain::{derive_candidates, select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
 use crate::http::App;
@@ -24,11 +26,13 @@ use crate::wiring::{emit, LogEvent};
 /// How long a paused scan waits when GitHub named no reset time.
 const DEFAULT_PAUSE_SECS: i64 = 15 * 60;
 
-/// How a scan ended, with when a paused one may resume.
+/// How a scan ended, with when a paused one may resume and what it found
+/// before it ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Ended {
     status: ScanStatus,
     resume_after: Option<i64>,
+    counts: ScanCounts,
 }
 
 impl Ended {
@@ -36,7 +40,13 @@ impl Ended {
         Self {
             status,
             resume_after: None,
+            counts: ScanCounts::default(),
         }
+    }
+
+    /// This ending, having found `counts` first.
+    fn after_finding(self, counts: ScanCounts) -> Self {
+        Self { counts, ..self }
     }
 }
 
@@ -54,9 +64,13 @@ pub(crate) async fn run_scan(app: Arc<App>, owner_did: String, run_id: String, l
     };
     app.scan_limiter.release(&owner_did);
     emit(LogEvent::ScanFinished(ended.status));
-    let _ = app
-        .scans
-        .finish_scan(&owner_did, &run_id, ended.status, ended.resume_after);
+    let _ = app.scans.finish_scan(
+        &owner_did,
+        &run_id,
+        ended.status,
+        ended.resume_after,
+        ended.counts,
+    );
 }
 
 /// Read the linked profile now and prove ownership again, pinned to the
@@ -81,21 +95,24 @@ async fn scan_owned_repos(app: &App, ownership: &VerifiedOwnership) -> Ended {
         Err(error) => return failed(app, &error),
     };
     let selection = select_person_repos(&repos, DEFAULT_PERSON_REPO_COUNT);
+    let mut found = ScanCounts::default();
     for repo in &selection.chosen {
         if !github_budget_allows(app.github.last_rate_budget().map(|b| b.remaining)) {
-            return paused(app);
+            return paused(app).after_finding(found);
         }
-        if let Err(ended) = scan_repo(app, ownership.owner_did(), repo).await {
-            return ended;
+        match scan_repo(app, ownership.owner_did(), repo).await {
+            Ok(counts) => found = add_counts(found, counts),
+            Err(ended) => return ended.after_finding(found),
         }
     }
-    Ended::with_status(ScanStatus::Completed)
+    Ended::with_status(ScanStatus::Completed).after_finding(found)
 }
 
-/// Harvest one repo, derive and reconcile its suggestions, persist the new.
-async fn scan_repo(app: &App, owner_did: &str, repo: &OwnedRepo) -> Result<(), Ended> {
+/// Harvest one repo, derive and reconcile its suggestions, persist the new;
+/// what it found counts toward the scan's summary.
+async fn scan_repo(app: &App, owner_did: &str, repo: &OwnedRepo) -> Result<ScanCounts, Ended> {
     let Some((owner, name)) = repo.full_name.split_once('/') else {
-        return Ok(());
+        return Ok(ScanCounts::default());
     };
     let signals = app
         .github
@@ -117,6 +134,7 @@ async fn scan_repo(app: &App, owner_did: &str, repo: &OwnedRepo) -> Result<(), E
     let reconciled = reconcile(&existing, derived);
     app.review_write
         .add_pending(owner_did, &reconciled.new)
+        .map(|()| reconciled.counts())
         .map_err(interrupted)
 }
 
@@ -140,5 +158,6 @@ fn paused(app: &App) -> Ended {
     Ended {
         status: ScanStatus::RateLimited,
         resume_after: Some(resume_after),
+        counts: ScanCounts::default(),
     }
 }

@@ -238,12 +238,23 @@ impl ScanStatus {
     }
 }
 
-/// A scan run as the owner sees it: how it stands, and when a paused run
-/// may resume (`resume_after`, Unix seconds).
+/// What one scan found, counted over the keys that scan derived (DWD-11):
+/// how many became new pending suggestions, and how many were already
+/// published (or retracted) or declined.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanCounts {
+    pub new: usize,
+    pub already_published: usize,
+    pub declined_hidden: usize,
+}
+
+/// A scan run as the owner sees it: how it stands, when a paused run may
+/// resume (`resume_after`, Unix seconds), and what it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanRun {
     pub status: ScanStatus,
     pub resume_after: Option<i64>,
+    pub counts: ScanCounts,
 }
 
 /// Owner-scoped scan runs (`scan_runs`).
@@ -251,13 +262,14 @@ pub trait ScanRunPort: Send + Sync {
     /// Record that a run started (`running`).
     fn start_scan(&self, owner_did: &str, run_id: &str) -> Result<(), ReviewStoreError>;
 
-    /// Record how a started run ended.
+    /// Record how a started run ended and what it found.
     fn finish_scan(
         &self,
         owner_did: &str,
         run_id: &str,
         status: ScanStatus,
         resume_after: Option<i64>,
+        counts: ScanCounts,
     ) -> Result<(), ReviewStoreError>;
 
     /// The owner's most recent run, if any.

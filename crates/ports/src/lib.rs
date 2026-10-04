@@ -39,7 +39,7 @@ pub use review::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, CreatedRecord,
     GithubLink, GithubLinkPort, LinkRecorded, NewWebSession, OAuthPort, PdsCallback,
     PublishPlanPort, RepoWriteError, ReviewStateRead, ReviewStateWrite, ReviewStoreError,
-    ReviewStorePort, ScanRun, ScanRunPort, ScanStatus, SecretStorePort, SessionPort,
+    ReviewStorePort, ScanCounts, ScanRun, ScanRunPort, ScanStatus, SecretStorePort, SessionPort,
     StoredPublishPlan, Suggestion, SuggestionKey, SuggestionState, TakenPublishPlan,
     UserRepoReadPort, UserRepoWritePort, WebSession,
 };

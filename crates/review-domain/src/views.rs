@@ -7,7 +7,7 @@ use ports::claim_domain::{
     decode_claim_record, is_self_retracted, provenance_verdict, ClaimLineage, Did, Provenance,
     RecordOrigin, ReferenceType, UnsignedClaim,
 };
-use ports::{RepoRecord, ScanRun, ScanStatus, Suggestion, SuggestionKey};
+use ports::{RepoRecord, ScanCounts, ScanRun, ScanStatus, Suggestion, SuggestionKey};
 
 use crate::edits::CONFIDENCE_GUIDANCE;
 use crate::lifecycle::Tally;
@@ -257,6 +257,34 @@ fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -
     }
 }
 
+/// What a completed scan found (AC-010.5, DWD-11): ownership was re-checked
+/// first, how many suggestions are new, and — when any — how many of the
+/// keys it derived were already published or declined (declined stay
+/// hidden). Every count is of that scan's derived keys only.
+pub fn scan_summary(counts: ScanCounts) -> String {
+    let new = match counts.new {
+        1 => "1 new suggestion".to_string(),
+        n => format!("{n} new suggestions"),
+    };
+    let published = (counts.already_published > 0)
+        .then(|| format!("{} already published", counts.already_published));
+    let declined = (counts.declined_hidden > 0)
+        .then(|| format!("{} declined (hidden)", counts.declined_hidden));
+    ["Ownership re-checked ✓".to_string(), new]
+        .into_iter()
+        .chain(published)
+        .chain(declined)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The summary of the latest scan, once it has completed.
+fn completed_summary(latest: Option<ScanRun>) -> Option<String> {
+    latest
+        .filter(|run| run.status == ScanStatus::Completed)
+        .map(|run| scan_summary(run.counts))
+}
+
 /// `priyaraman/tidepool` of `github:priyaraman/tidepool`.
 fn repo_path(subject: &str) -> &str {
     subject.strip_prefix("github:").unwrap_or(subject)
@@ -436,6 +464,9 @@ fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
             }
             None => {}
         }
+        @if let Some(summary) = completed_summary(view.latest_scan) {
+            p role="status" { (summary) }
+        }
         @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
             p role="status" { (notice) }
         }
@@ -472,9 +503,10 @@ pub fn review_page(view: &QueueView<'_>) -> String {
                 }
                 GithubStep::NeedsReverify { login } => {
                     p role="alert" {
-                        "Your DID is no longer in github.com/" (login) "'s bio, or that account \
-                         changed hands, so nothing was scanned. Your pending suggestions are \
-                         hidden until you verify again: put your DID back in the bio, then verify."
+                        "Your DID is no longer in github.com/" (login) "'s bio, so we didn't scan. \
+                         Your published claims are untouched; your pending suggestions are \
+                         hidden until you re-verify: put your DID back in the bio (or, if that \
+                         account changed hands, link your own), then verify."
                     }
                     a href="/github" { "Verify GitHub ownership" }
                 }
@@ -1050,6 +1082,7 @@ mod tests {
             latest_scan: Some(ScanRun {
                 status: ScanStatus::Completed,
                 resume_after: None,
+                counts: ScanCounts::default(),
             }),
             pending: &[],
             tally,
@@ -1075,6 +1108,23 @@ mod tests {
                 let counts = format!("{declined} declined, {published} published");
                 prop_assert!(page.contains(&counts), "{}", page);
             }
+        }
+
+        /// Universe: a completed scan's counts. The summary always says
+        /// ownership was re-checked and how many are new (so "0 new" when
+        /// nothing is), and names each settled count exactly when nonzero.
+        #[test]
+        fn a_scan_summary_names_exactly_that_scans_counts(
+            new in 0usize..20, already_published in 0usize..20, declined_hidden in 0usize..20,
+        ) {
+            let summary = scan_summary(ScanCounts { new, already_published, declined_hidden });
+            prop_assert!(summary.starts_with("Ownership re-checked ✓ · "), "{}", summary);
+            let new_part = format!(" · {new} new suggestion");
+            prop_assert!(summary.contains(&new_part), "{}", summary);
+            let published = format!(" · {already_published} already published");
+            prop_assert_eq!(summary.contains(&published), already_published > 0);
+            let declined = format!(" · {declined_hidden} declined (hidden)");
+            prop_assert_eq!(summary.contains(&declined), declined_hidden > 0);
         }
     }
 

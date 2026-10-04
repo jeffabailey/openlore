@@ -113,8 +113,48 @@ struct Reconciled {
     declined_hidden: usize,
 }
 
-fn sut_reconcile(_existing: &[(Key, State)], _derived: &[Key]) -> Reconciled {
-    todo!("SCAFFOLD: bind review_domain reconcile (BR-1/BR-2)")
+fn port_key((subject, predicate, object): &Key) -> ports::SuggestionKey {
+    ports::SuggestionKey {
+        subject: subject.clone(),
+        predicate: predicate.clone(),
+        object: object.clone(),
+    }
+}
+
+fn port_state(state: State) -> ports::SuggestionState {
+    match state {
+        State::Pending => ports::SuggestionState::Pending,
+        State::Declined => ports::SuggestionState::Declined,
+        State::Published => ports::SuggestionState::Published,
+        State::Retracted => ports::SuggestionState::Retracted,
+    }
+}
+
+fn sut_reconcile(existing: &[(Key, State)], derived: &[Key]) -> Reconciled {
+    let existing = existing
+        .iter()
+        .map(|(key, state)| (port_key(key), port_state(*state)))
+        .collect();
+    let derived = derived
+        .iter()
+        .map(|key| ports::Suggestion {
+            key: port_key(key),
+            source_repo: key.0.trim_start_matches("github:").to_string(),
+            confidence_bp: 2500,
+            evidence: Vec::new(),
+            why: Vec::new(),
+        })
+        .collect();
+    let out = review_domain::reconcile::reconcile(&existing, derived);
+    Reconciled {
+        new: out
+            .new
+            .into_iter()
+            .map(|s| (s.key.subject, s.key.predicate, s.key.object))
+            .collect(),
+        already_published: out.already_published,
+        declined_hidden: out.declined_hidden,
+    }
 }
 
 /// BR-4: the typed confidence → basis points, or the guidance message.
@@ -233,19 +273,13 @@ enum Event {
 
 fn sut_transition(state: State, event: Event) -> Option<State> {
     use review_domain::lifecycle::{transition, LifecycleEvent};
-    let to_port = |state: State| match state {
-        State::Pending => ports::SuggestionState::Pending,
-        State::Declined => ports::SuggestionState::Declined,
-        State::Published => ports::SuggestionState::Published,
-        State::Retracted => ports::SuggestionState::Retracted,
-    };
     let event = match event {
         Event::Decline => LifecycleEvent::Decline,
         Event::Undo => LifecycleEvent::Undo,
         Event::Publish => LifecycleEvent::Publish,
         Event::Retract => LifecycleEvent::Retract,
     };
-    transition(to_port(state), event).map(|next| match next {
+    transition(port_state(state), event).map(|next| match next {
         ports::SuggestionState::Pending => State::Pending,
         ports::SuggestionState::Declined => State::Declined,
         ports::SuggestionState::Published => State::Published,
@@ -253,8 +287,8 @@ fn sut_transition(state: State, event: Event) -> Option<State> {
     })
 }
 
-fn sut_visible_and_approvable(_state: State, _link_verified: bool) -> bool {
-    todo!("SCAFFOLD: bind review_domain derived visibility (D-12)")
+fn sut_visible_and_approvable(state: State, link_verified: bool) -> bool {
+    review_domain::lifecycle::visible_and_approvable(port_state(state), link_verified)
 }
 
 fn sut_budget_allows(recent_event_ages_secs: &[u64], limit: usize, window_secs: u64) -> bool {
@@ -500,7 +534,6 @@ proptest! {
     /// derived keys already published / declined, and is idempotent: feeding
     /// its new keys back as pending yields nothing new.
     #[test]
-    #[ignore = "DELIVER R2: unskip one-at-a-time (CORE-4 reconcile)"]
     fn reconcile_offers_only_unseen_keys_and_is_idempotent(
         existing in prop::collection::btree_map(arb_key(), arb_state(), 0..12),
         derived in prop::collection::vec(arb_key(), 0..12),
@@ -611,7 +644,6 @@ proptest! {
     /// A suggestion is visible and approvable iff it is pending AND the
     /// GitHub link is currently verified (hidden, never deleted).
     #[test]
-    #[ignore = "DELIVER R2: unskip one-at-a-time (CORE-9 derived visibility)"]
     fn a_suggestion_is_approvable_only_while_pending_and_verified(state in arb_state(), verified in any::<bool>()) {
         prop_assert_eq!(sut_visible_and_approvable(state, verified), state == State::Pending && verified);
     }

@@ -45,7 +45,6 @@ fn given_priya_returns_with_3_published_and_1_declined(world: &ReviewWorld) -> B
 ///   And her queue holds the old pending one plus "priyaraman/estuary embodies semantic-versioning", nothing published or declined
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 only new suggestions)"]
 fn a_rescan_offers_only_new_suggestions_with_a_summary() {
     let world = ReviewWorld::new();
     let mut browser = given_priya_returns_with_3_published_and_1_declined(&world);
@@ -77,7 +76,6 @@ fn a_rescan_offers_only_new_suggestions_with_a_summary() {
 ///   Then she sees "0 new" and her queue is unchanged
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 nothing new)"]
 fn a_rescan_with_nothing_new_says_so() {
     let world = ReviewWorld::new();
     let mut browser = given_priya_returns_with_3_published_and_1_declined(&world);
@@ -96,7 +94,6 @@ fn a_rescan_with_nothing_new_says_so() {
 ///   Then before each scan reads any repo, the app read her GitHub bio and found her DID
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 re-check before every scrape)"]
 fn ownership_is_re_checked_before_every_scrape() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -131,7 +128,6 @@ fn ownership_is_re_checked_before_every_scrape() {
 ///   And her 2 pending suggestions are hidden, not deleted
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 failed re-check)"]
 fn a_failed_re_check_blocks_the_scan_and_keeps_published_claims_untouched() {
     let world = ReviewWorld::new();
     let mut browser = given_priya_returns_with_3_published_and_1_declined(&world);
@@ -175,7 +171,6 @@ fn a_failed_re_check_blocks_the_scan_and_keeps_published_claims_untouched() {
 ///   Then nothing is written to her PDS
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 hidden is not approvable)"]
 fn a_hidden_suggestion_cannot_be_approved_while_ownership_is_unproven() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -212,7 +207,6 @@ fn a_hidden_suggestion_cannot_be_approved_while_ownership_is_unproven() {
 ///   And scanning works again
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-010 re-verify restores)"]
 fn re_verifying_restores_scanning_and_pending_suggestions() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);

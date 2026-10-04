@@ -216,7 +216,6 @@ fn writes_only_ever_go_to_the_authors_own_pds_and_nothing_is_ever_updated_or_del
 ///   And no repo was read while the DID was missing
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (I-BRA-4 over a journey)"]
 fn no_repository_is_ever_read_without_a_passing_ownership_check_just_before() {
     let world = ReviewWorld::new();
     let mut b = given_pending_suggestions(&world, Persona::Priya);
@@ -483,7 +482,6 @@ fn the_operator_reads_aggregate_counts_that_identify_no_one() {
 ///        and resuming completes it without duplicates
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (interrupted scan resumable after restart)"]
 fn a_scan_interrupted_by_a_restart_is_offered_for_resume() {
     let world = ReviewWorld::new();
     let mut b = given_github_verified(&world, Persona::Priya);

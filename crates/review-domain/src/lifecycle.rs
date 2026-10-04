@@ -100,6 +100,14 @@ pub fn owner_step(current: SuggestionState, event: LifecycleEvent) -> Option<Own
     }
 }
 
+/// May the owner see and approve a suggestion in `state` right now? Only
+/// while it is pending AND their GitHub link is currently verified (D-12,
+/// CORE-9). Visibility is derived, never stored: an unproven link hides a
+/// pending suggestion without changing it, and proof restores it.
+pub fn visible_and_approvable(state: SuggestionState, link_verified: bool) -> bool {
+    state == SuggestionState::Pending && link_verified
+}
+
 /// How many of the owner's suggestions stand in each state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tally {
@@ -245,6 +253,22 @@ mod tests {
             prop_assert_eq!(&suggestion.why, &whys);
             prop_assert_eq!(suggestion.confidence_bp, 2500);
             prop_assert_eq!(&suggestion.source_repo, &repo);
+        }
+
+        /// Universe: a queue of suggestion states × the link verdict. An
+        /// unproven link hides every suggestion without changing any state;
+        /// proving it again shows exactly the pending ones — nothing
+        /// declined, published or retracted is ever approvable.
+        #[test]
+        fn only_pending_suggestions_of_a_verified_link_are_approvable(
+            queue in prop::collection::vec(state(), 0..12),
+        ) {
+            prop_assert!(queue.iter().all(|s| !visible_and_approvable(*s, false)));
+            let shown: Vec<SuggestionState> =
+                queue.iter().copied().filter(|s| visible_and_approvable(*s, true)).collect();
+            let pending: Vec<SuggestionState> =
+                queue.iter().copied().filter(|s| *s == SuggestionState::Pending).collect();
+            prop_assert_eq!(shown, pending);
         }
     }
 }
