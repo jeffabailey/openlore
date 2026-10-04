@@ -1,0 +1,1105 @@
+{
+  "roadmap": {
+    "project_id": "bluesky-claim-review-app",
+    "created_at": "2026-10-04T18:24:18Z",
+    "total_steps": 15
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking skeleton \u2014 sign in with Bluesky, prove GitHub ownership, private queue, publish one self-attested claim into the user's own PDS (US-BRA-000..004)",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "The third composition root boots, wires then probes, publishes its client details, and its capability boundary is enforced by check-arch",
+          "description": "Create crates review-domain, adapter-atproto-oauth, adapter-review-store, openlore-review-app (serve | probe [--self-test] | gen-client-jwk). DWD-7 config seams; wire\u2192probe\u2192use with health.startup.refused; /healthz, /readyz, client metadata, JWKS, security headers. Move the six app-only [[test]] targets into the app crate. check-arch + deny.toml deltas.",
+          "criteria": [
+            "OP-1/OP-2/OP-3: a healthy app answers /healthz and /readyz 200 and logs app.ready; expired PAT, missing data-key or missing client-jwk refuses start (health.startup.refused, non-zero, token never logged); `probe --self-test` exits 0 offline.",
+            "SI-1/SI-3: client metadata names \"OpenLore review\", its own client_id, one callback, DPoP, private_key_jwt and the configured scopes; JWKS is ES256 with no `d`; every page sends HSTS, CSP (self, no framing), nosniff, same-origin referrer.",
+            "AR-1..AR-7, AR-10: third root registered; disjoint capability sets; review-domain pure; create-only OAuth adapter; no signing identity; owner-scoped SQL with owner-free kpi_counters; log-field allowlist \u2014 each new rule has a synthetic-violation unit test.",
+            "Six app-only suites run under `-p openlore-review-app`; WS + self_attested_readers stay in cli with no cli dev-dep on the app; CI builds the app binary before the cli acceptance stage (release.yml verify in lockstep).",
+            "cargo deny passes with hickory-* <0.26 banned and atrium-oauth =0.1.7 default-features off; a release build refuses REVIEW_APP_ALLOW_LOOPBACK_HTTP; main stays green."
+          ],
+          "acceptance_criteria": [
+            "OP-1/OP-2/OP-3: a healthy app answers /healthz and /readyz 200 and logs app.ready; expired PAT, missing data-key or missing client-jwk refuses start (health.startup.refused, non-zero, token never logged); `probe --self-test` exits 0 offline.",
+            "SI-1/SI-3: client metadata names \"OpenLore review\", its own client_id, one callback, DPoP, private_key_jwt and the configured scopes; JWKS is ES256 with no `d`; every page sends HSTS, CSP (self, no framing), nosniff, same-origin referrer.",
+            "AR-1..AR-7, AR-10: third root registered; disjoint capability sets; review-domain pure; create-only OAuth adapter; no signing identity; owner-scoped SQL with owner-free kpi_counters; log-field allowlist \u2014 each new rule has a synthetic-violation unit test.",
+            "Six app-only suites run under `-p openlore-review-app`; WS + self_attested_readers stay in cli with no cli dev-dep on the app; CI builds the app binary before the cli acceptance stage (release.yml verify in lockstep).",
+            "cargo deny passes with hickory-* <0.26 banned and atrium-oauth =0.1.7 default-features off; a release build refuses REVIEW_APP_ALLOW_LOOPBACK_HTTP; main stays green."
+          ],
+          "test_file": "tests/acceptance/review_app_privacy_invariants.rs",
+          "scenario_name": "a_healthy_app_reports_live_and_ready",
+          "scenario_fns": [
+            "review_app_privacy_invariants::a_healthy_app_reports_live_and_ready",
+            "review_app_privacy_invariants::the_app_refuses_to_start_rather_than_run_half_wired",
+            "review_app_privacy_invariants::the_image_self_test_passes_with_throwaway_keys_and_no_network",
+            "review_app_sign_in_and_ownership::bluesky_identifies_the_review_app_from_its_published_client_details",
+            "review_app_sign_in_and_ownership::every_page_tells_the_browser_to_use_https_only_and_never_frame_it",
+            "review_app_architecture::the_review_app_is_a_workspace_member_with_its_own_composition_root",
+            "review_app_architecture::the_review_app_cannot_reach_the_cli_or_indexer_capabilities",
+            "review_app_architecture::only_the_review_app_reaches_the_oauth_and_private_store_adapters",
+            "review_app_architecture::review_domain_is_a_pure_core",
+            "review_app_architecture::the_oauth_adapter_can_only_create_records",
+            "review_app_architecture::the_review_app_holds_no_signing_identity",
+            "review_app_architecture::every_owner_table_query_is_owner_scoped_and_kpi_counters_name_no_owner",
+            "review_app_architecture::tracing_events_in_the_app_never_use_a_forbidden_field_name"
+          ],
+          "n_scenarios": [
+            "OP-1",
+            "OP-2",
+            "OP-3",
+            "SI-1",
+            "SI-3",
+            "AR-1",
+            "AR-2",
+            "AR-3",
+            "AR-4",
+            "AR-5",
+            "AR-6",
+            "AR-7",
+            "AR-10"
+          ],
+          "us_trace": [
+            "US-BRA-000"
+          ],
+          "type": "infrastructure",
+          "test_command": "cargo test -p xtask --test review_app_architecture && cargo run -p xtask -- check-arch && cargo test -p openlore-review-app --test review_app_privacy_invariants --test review_app_sign_in_and_ownership",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nDecision 1 (DWD-3): MOVE the [[test]] entries for sign_in_and_ownership, queue_and_publish, consent_and_share, lifecycle, privacy_invariants, core from crates/cli/Cargo.toml to crates/openlore-review-app/Cargo.toml (CARGO_BIN_EXE_openlore-review-app set). review_app_walking_skeleton + review_app_self_attested_readers stay in cli (they drive `openlore`/indexer); cli gets NO dev-dep on the app \u2014 CI's 'Build binaries the acceptance tests spawn' adds `-p openlore-review-app`; locally `cargo build -p openlore-review-app` first. WS-1..WS-4 are RED-active today: add temporary `#[ignore = \"DELIVER 01-0N: \u2026\"]` tags removed in 01-02..01-05 so every commit is green. Full v1 review-app.duckdb schema (ADR-074, incl. [DM] KPI columns) + schema_version refusal land here (expand-only after). Earned Trust: review-store probe = AEAD canary + cross-owner canary + schema version; OAuth probe = JWK sign/verify + JWKS shape (hard), AS metadata soft arm async; check-probes covers both. Env names/routes per DWD-6/DWD-7 are the contract. Adapter-atproto-oauth persists via SecretStorePort only. PBT: config parse totality, security-header presence over all routes.",
+          "estimate_hours": 12,
+          "estimated_effort": "12h (4 crate skeletons + config/probe/wiring + check-arch/deny deltas + suite move + CI build step)",
+          "depends_on": [],
+          "dependencies": [],
+          "files_to_modify": [
+            "Cargo.toml",
+            "deny.toml",
+            "crates/cli/Cargo.toml",
+            "crates/review-domain/Cargo.toml",
+            "crates/review-domain/src/lib.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-atproto-oauth/Cargo.toml",
+            "crates/adapter-atproto-oauth/src/lib.rs",
+            "crates/adapter-atproto-oauth/src/probe.rs",
+            "crates/adapter-review-store/Cargo.toml",
+            "crates/adapter-review-store/src/lib.rs",
+            "crates/adapter-review-store/src/schema.rs",
+            "crates/adapter-review-store/src/probe.rs",
+            "crates/openlore-review-app/Cargo.toml",
+            "crates/openlore-review-app/src/main.rs",
+            "crates/openlore-review-app/src/config.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/openlore-review-app/src/http.rs",
+            "xtask/src/check_arch.rs",
+            "xtask/src/check_probes.rs",
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            "tests/acceptance/review_app_walking_skeleton.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs",
+            "tests/acceptance/review_app_sign_in_and_ownership.rs",
+            "xtask/tests/review_app_architecture.rs"
+          ],
+          "mutation_note": "Mutation must kill removal of any check-arch rule (its synthetic-violation test fails) and any probe arm that returns Ok without exercising the canary."
+        },
+        {
+          "id": "01-02",
+          "name": "Priya signs in with her Bluesky handle through her own PDS; every failure is explained, changes nothing, and never takes the app down",
+          "description": "Landing page with the three never-commitments and handle form; resolve identity (adapter-atproto-did); PAR/DPoP/PKCE via atrium-oauth behind OAuthPort; callback with sign-in pin, single-use state and panic-isolated exchange; __Host- session cookie; sign out; scope-fallback disclosure.",
+          "criteria": [
+            "WS-1: Priya signs in with her handle and sees \"Signed in as @priyaraman.bsky.social\"; her PDS fetched the app's client details; only claim + post creation was requested; nothing was written.",
+            "SI-4/SI-5/SI-11/SI-13: the never-commitments and public-GitHub-only notice precede the handle field; Dmitri signs in via his self-hosted PDS; Sign out ends the session; broad-permission mode says why and still writes only claims.",
+            "SI-2/SI-6/SI-7: unreachable client-details fetch shows \"temporarily unavailable\" and nothing changed; a mistyped handle gets help and starts nothing; cancelling at the PDS leaves no session and no write.",
+            "SI-8/SI-9/SI-10 + CORE-12: a callback for a DID other than the resolved one is refused; a failed code exchange is explained and the app keeps serving; a replayed callback signs nobody in.",
+            "SI-12: the session cookie is HttpOnly, Secure, SameSite, __Host- prefixed; no page body, header or URL carries an access or refresh token."
+          ],
+          "acceptance_criteria": [
+            "WS-1: Priya signs in with her handle and sees \"Signed in as @priyaraman.bsky.social\"; her PDS fetched the app's client details; only claim + post creation was requested; nothing was written.",
+            "SI-4/SI-5/SI-11/SI-13: the never-commitments and public-GitHub-only notice precede the handle field; Dmitri signs in via his self-hosted PDS; Sign out ends the session; broad-permission mode says why and still writes only claims.",
+            "SI-2/SI-6/SI-7: unreachable client-details fetch shows \"temporarily unavailable\" and nothing changed; a mistyped handle gets help and starts nothing; cancelling at the PDS leaves no session and no write.",
+            "SI-8/SI-9/SI-10 + CORE-12: a callback for a DID other than the resolved one is refused; a failed code exchange is explained and the app keeps serving; a replayed callback signs nobody in.",
+            "SI-12: the session cookie is HttpOnly, Secure, SameSite, __Host- prefixed; no page body, header or URL carries an access or refresh token."
+          ],
+          "test_file": "tests/acceptance/review_app_walking_skeleton.rs",
+          "scenario_name": "priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_review_app",
+          "scenario_fns": [
+            "review_app_walking_skeleton::priya_signs_in_with_her_bluesky_handle_and_bluesky_recognises_the_openlore_review_app",
+            "review_app_sign_in_and_ownership::priya_sees_what_the_app_will_never_do_before_she_signs_in",
+            "review_app_sign_in_and_ownership::dmitri_signs_in_through_his_self_hosted_pds",
+            "review_app_sign_in_and_ownership::signing_out_ends_the_session",
+            "review_app_sign_in_and_ownership::an_unreachable_identity_check_is_explained_as_temporarily_unavailable_and_changes_nothing",
+            "review_app_sign_in_and_ownership::a_mistyped_handle_gets_a_helpful_message_and_starts_nothing",
+            "review_app_sign_in_and_ownership::cancelling_authorization_at_her_pds_changes_nothing",
+            "review_app_sign_in_and_ownership::a_sign_in_that_returns_a_different_account_than_the_handle_named_is_refused",
+            "review_app_sign_in_and_ownership::a_failed_sign_in_exchange_is_explained_and_never_takes_the_app_down",
+            "review_app_sign_in_and_ownership::a_replayed_sign_in_return_link_signs_nobody_in",
+            "review_app_sign_in_and_ownership::the_session_cookie_is_out_of_reach_of_page_scripts_and_pages_never_carry_tokens",
+            "review_app_sign_in_and_ownership::with_only_the_broad_permission_the_app_says_why_and_still_writes_only_claims",
+            "review_app_core::a_sign_in_is_accepted_only_for_the_did_the_handle_resolved_to"
+          ],
+          "n_scenarios": [
+            "WS-1",
+            "SI-4",
+            "SI-5",
+            "SI-11",
+            "SI-2",
+            "SI-6",
+            "SI-7",
+            "SI-8",
+            "SI-9",
+            "SI-10",
+            "SI-12",
+            "SI-13",
+            "CORE-12"
+          ],
+          "us_trace": [
+            "US-BRA-000",
+            "US-BRA-001"
+          ],
+          "test_command": "cargo test -p openlore-review-app --test review_app_sign_in_and_ownership --test review_app_core && cargo build -p openlore-review-app && cargo test -p cli --test review_app_walking_skeleton -- priya_signs_in",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRemove WS-1's temporary ignore. SPIKE finding 3: atrium-oauth's callback `Err(_) => todo!()` must be isolated (spawned task with panic mapped to a sign-in error, or a vendored patch) \u2014 emit signin.callback_panic_isolated; the app process never dies. Finding 4: sessions restore through the client restore path, never a cached handle. atrium-oauth default-features=false over the workspace rustls reqwest HttpClient; hickory-resolver >= 0.26. OAuth state/session blobs only through SecretStorePort (AEAD). Sign-in pin + handle syntax are pure review-domain functions (CORE-12 property: accepted iff sub == resolved DID). Per-IP sign-in budget (20/10 min) uses the pure budget core added in 01-04 \u2014 wire a placeholder-free limit here only if needed; otherwise defer to 01-04. resolve-identity is a read-only extension of IdentityResolvePort.",
+          "estimate_hours": 12,
+          "estimated_effort": "12h (resolve identity + atrium OAuth adapter + callback isolation + sessions + landing/sign-in views)",
+          "depends_on": [
+            "01-01"
+          ],
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/signin.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/ports/src/identity_resolve.rs",
+            "crates/ports/src/review.rs",
+            "crates/adapter-atproto-did/src/lib.rs",
+            "crates/adapter-atproto-oauth/src/lib.rs",
+            "crates/adapter-atproto-oauth/src/client.rs",
+            "crates/adapter-review-store/src/sessions.rs",
+            "crates/adapter-review-store/src/secrets.rs",
+            "crates/openlore-review-app/src/routes/signin.rs",
+            "crates/openlore-review-app/src/http.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "tests/acceptance/review_app_walking_skeleton.rs",
+            "tests/acceptance/review_app_sign_in_and_ownership.rs",
+            "tests/acceptance/review_app_core.rs"
+          ],
+          "mutation_note": "Sign-in pin and single-use state are load-bearing; mutation must kill accepting a mismatched sub or a reused state."
+        },
+        {
+          "id": "01-03",
+          "name": "Priya proves her GitHub account is hers with the exact DID token in her bio; nobody can claim an account that is not theirs",
+          "description": "Pure exact-token DID-in-bio verdict (ADR-076, DWD-10) minting VerifiedOwnership only for Verified; /github page with copyable DID; PersonProfile gains numeric id; github_links binds one GitHub id to one DID; verify budget; scan refused without proof.",
+          "criteria": [
+            "WS-2: with her DID in her bio, verifying \"priyaraman\" shows \"Verified: github.com/priyaraman belongs to @priyaraman.bsky.social\"; only her public profile was read, no repo.",
+            "CORE-1/CORE-1b/CORE-2/OW-7: verified iff the signed-in DID is an exact maximal [A-Za-z0-9._:%-] token; `xdid:plc:\u2026` and uppercased DIDs fail, `(did:\u2026).` passes; other DIDs never count.",
+            "OW-1/OW-3/OW-4/OW-5: the exact DID is offered with Copy and where to put it; a different DID, a rate limit and an unknown username each get their AC-002.3 message; retry after the wait succeeds.",
+            "OW-2/OW-6/OW-8: Sam cannot verify Priya's account; a verified GitHub id links to one DID only; a scan cannot start before proof and no repo is read.",
+            "OW-9: a renamed or re-registered GitHub account (login/id mismatch) must be verified again."
+          ],
+          "acceptance_criteria": [
+            "WS-2: with her DID in her bio, verifying \"priyaraman\" shows \"Verified: github.com/priyaraman belongs to @priyaraman.bsky.social\"; only her public profile was read, no repo.",
+            "CORE-1/CORE-1b/CORE-2/OW-7: verified iff the signed-in DID is an exact maximal [A-Za-z0-9._:%-] token; `xdid:plc:\u2026` and uppercased DIDs fail, `(did:\u2026).` passes; other DIDs never count.",
+            "OW-1/OW-3/OW-4/OW-5: the exact DID is offered with Copy and where to put it; a different DID, a rate limit and an unknown username each get their AC-002.3 message; retry after the wait succeeds.",
+            "OW-2/OW-6/OW-8: Sam cannot verify Priya's account; a verified GitHub id links to one DID only; a scan cannot start before proof and no repo is read.",
+            "OW-9: a renamed or re-registered GitHub account (login/id mismatch) must be verified again."
+          ],
+          "test_file": "tests/acceptance/review_app_walking_skeleton.rs",
+          "scenario_name": "priya_proves_her_github_account_is_hers_with_her_did_in_her_bio",
+          "scenario_fns": [
+            "review_app_walking_skeleton::priya_proves_her_github_account_is_hers_with_her_did_in_her_bio",
+            "review_app_core::ownership_is_verified_exactly_when_the_signed_in_did_is_an_exact_bio_token",
+            "review_app_core::ownership_verdict_key_examples",
+            "review_app_core::several_dids_in_a_bio_only_the_signed_in_one_counts",
+            "review_app_sign_in_and_ownership::only_the_exact_signed_in_did_token_proves_ownership",
+            "review_app_sign_in_and_ownership::priya_gets_the_exact_did_to_copy_and_where_to_put_it",
+            "review_app_sign_in_and_ownership::a_different_did_in_the_bio_is_explained",
+            "review_app_sign_in_and_ownership::a_github_rate_limit_is_explained_and_retrying_after_the_wait_succeeds",
+            "review_app_sign_in_and_ownership::a_github_username_that_does_not_exist_is_named_in_the_message",
+            "review_app_sign_in_and_ownership::sam_cannot_claim_someone_elses_github_account",
+            "review_app_sign_in_and_ownership::a_verified_github_link_belongs_to_one_did_only",
+            "review_app_sign_in_and_ownership::a_scan_cannot_be_started_before_ownership_is_proven",
+            "review_app_sign_in_and_ownership::a_renamed_or_re_registered_github_account_must_be_verified_again"
+          ],
+          "n_scenarios": [
+            "WS-2",
+            "CORE-1",
+            "CORE-1b",
+            "CORE-2",
+            "OW-7",
+            "OW-1",
+            "OW-3",
+            "OW-4",
+            "OW-5",
+            "OW-2",
+            "OW-6",
+            "OW-8",
+            "OW-9"
+          ],
+          "us_trace": [
+            "US-BRA-002"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_core --test review_app_sign_in_and_ownership && cargo test -p cli --test review_app_walking_skeleton -- priya_proves",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRemove WS-2's temporary ignore. Exact-token rule pinned by DISTILL (DWD-10) is the contract: tokenize into maximal runs of [A-Za-z0-9._:%-], compare case-sensitively to the session DID. VerifiedOwnership is a capability value minted only from Verified (non-representable otherwise) and is the only input that can start a scan. adapter-github change is limited to mapping `id` into PersonProfile. github_links are owner-scoped (AR-7 rule applies). Verify budget (20/h per DID) via the pure budget core \u2014 if 01-04 owns it, gate here with a simple count and fold in at 01-04.",
+          "estimate_hours": 8,
+          "estimated_effort": "8h (pure verdict + capability + /github + links store + id mapping)",
+          "depends_on": [
+            "01-02"
+          ],
+          "dependencies": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/ownership.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/ports/src/github.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/adapter-github/src/lib.rs",
+            "crates/adapter-review-store/src/github_links.rs",
+            "crates/openlore-review-app/src/routes/github.rs",
+            "tests/acceptance/review_app_walking_skeleton.rs",
+            "tests/acceptance/review_app_core.rs",
+            "tests/acceptance/review_app_sign_in_and_ownership.rs"
+          ],
+          "mutation_note": "Ownership verdict is in per-feature mutation scope (review-domain); mutation must kill substring matching, case-folding, and token-boundary off-by-ones."
+        },
+        {
+          "id": "01-04",
+          "name": "Priya's scan produces private, evidence-backed suggestions only she can see, within the GitHub budget, surviving restarts",
+          "description": "In-process scan task: re-check ownership \u2192 select_person_repos \u2192 derive_candidates \u2192 reconcile \u2192 per-repo persist; resumable scan_runs; pure budget (global floor 300, 2 concurrent; per DID 1 concurrent, 6/day); /review queue cards with signal, evidence, 0.25 speculative and the privacy statement.",
+          "criteria": [
+            "WS-3: the scan yields her 5 suggestions incl. tidepool dependency-pinning at 0.25 (speculative) with the Cargo.lock evidence link; \"Private: only you can see these\"; ownership re-checked right before any repo read; nothing written.",
+            "QP-1/QP-2/QP-3/QP-5: every card carries signal and evidence; ownership re-checked before the first scan; an empty scan explains forks/archived are skipped; every review page is keyboard-navigable with labelled controls.",
+            "QP-4/QP-16/QP-17/QP-18 + CORE-10: GitHub busy keeps partial results and resumes; the queue survives sign-out and restart; the 7th daily scan is politely refused; concurrent scans each get only their own suggestions.",
+            "PV-1/PV-2: Dmitri and an anonymous visitor replaying her suggestion actions get not-found or sign-in and see nothing; no public route exposes pending suggestions; no write, queue unchanged.",
+            "CORE-11: the shipped select_person_repos never picks a fork or archived repo (green-today regression guard un-ignored)."
+          ],
+          "acceptance_criteria": [
+            "WS-3: the scan yields her 5 suggestions incl. tidepool dependency-pinning at 0.25 (speculative) with the Cargo.lock evidence link; \"Private: only you can see these\"; ownership re-checked right before any repo read; nothing written.",
+            "QP-1/QP-2/QP-3/QP-5: every card carries signal and evidence; ownership re-checked before the first scan; an empty scan explains forks/archived are skipped; every review page is keyboard-navigable with labelled controls.",
+            "QP-4/QP-16/QP-17/QP-18 + CORE-10: GitHub busy keeps partial results and resumes; the queue survives sign-out and restart; the 7th daily scan is politely refused; concurrent scans each get only their own suggestions.",
+            "PV-1/PV-2: Dmitri and an anonymous visitor replaying her suggestion actions get not-found or sign-in and see nothing; no public route exposes pending suggestions; no write, queue unchanged.",
+            "CORE-11: the shipped select_person_repos never picks a fork or archived repo (green-today regression guard un-ignored)."
+          ],
+          "test_file": "tests/acceptance/review_app_walking_skeleton.rs",
+          "scenario_name": "priya_sees_private_evidence_backed_suggestions_from_her_own_repos",
+          "scenario_fns": [
+            "review_app_walking_skeleton::priya_sees_private_evidence_backed_suggestions_from_her_own_repos",
+            "review_app_queue_and_publish::every_suggestion_card_carries_its_signal_and_evidence",
+            "review_app_queue_and_publish::ownership_is_re_checked_right_before_the_first_scan",
+            "review_app_queue_and_publish::an_empty_scan_explains_that_forks_and_archived_repos_are_skipped",
+            "review_app_queue_and_publish::every_review_page_is_navigable_by_keyboard_with_labelled_controls",
+            "review_app_queue_and_publish::when_github_is_busy_partial_results_are_kept_and_the_scan_resumes",
+            "review_app_queue_and_publish::her_queue_survives_signing_out_and_the_app_restarting",
+            "review_app_queue_and_publish::the_seventh_scan_in_a_day_is_politely_refused",
+            "review_app_queue_and_publish::two_people_scanning_at_the_same_time_each_get_only_their_own_suggestions",
+            "review_app_core::a_budget_allows_exactly_while_under_its_limit_within_the_window",
+            "review_app_core::repo_selection_never_picks_a_fork_or_an_archived_repo",
+            "review_app_privacy_invariants::only_priya_can_see_her_queue_not_dmitri_not_an_anonymous_visitor",
+            "review_app_privacy_invariants::pending_suggestions_are_never_exposed_anywhere_public"
+          ],
+          "n_scenarios": [
+            "WS-3",
+            "QP-1",
+            "QP-2",
+            "QP-3",
+            "QP-5",
+            "QP-4",
+            "QP-16",
+            "QP-17",
+            "QP-18",
+            "CORE-10",
+            "CORE-11",
+            "PV-1",
+            "PV-2"
+          ],
+          "us_trace": [
+            "US-BRA-003"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_queue_and_publish --test review_app_core --test review_app_privacy_invariants && cargo test -p cli --test review_app_walking_skeleton -- priya_sees",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRemove WS-3's temporary ignore. scraper-domain is reused unchanged (select_person_repos, derive_candidates \u2014 SPIKE finding 5: candidates start at 0.25). The scan task takes VerifiedOwnership minted from a fresh bio read immediately before the first repo read (I-BRA-4). Reconcile (pure) is created here; its full property (CORE-4) activates at 03-03. Owner isolation is three-layer: OwnerScope from SessionPort only; split ReviewStateRead/ReviewStateWrite ports; AR-7 SQL rule + cross-owner probe canary. The budget is a pure state-in/state-out core; the in-memory limiter state lives in the root. The per-IP sign-in limit from 01-02 folds into this core.",
+          "estimate_hours": 12,
+          "estimated_effort": "12h (scan task + reconcile + budget + suggestions/scan_runs store + queue views)",
+          "depends_on": [
+            "01-03"
+          ],
+          "dependencies": [
+            "01-03"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/reconcile.rs",
+            "crates/review-domain/src/budget.rs",
+            "crates/review-domain/src/lifecycle.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/adapter-review-store/src/scan_runs.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/limiter.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "tests/acceptance/review_app_walking_skeleton.rs",
+            "tests/acceptance/review_app_queue_and_publish.rs",
+            "tests/acceptance/review_app_core.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs"
+          ],
+          "mutation_note": "Budget window arithmetic and the ownership-gate-before-read ordering are load-bearing; mutation must kill an off-by-one on 6 scans/day and any repo read not preceded by a passing verdict."
+        },
+        {
+          "id": "01-05",
+          "name": "Priya previews and publishes one suggestion into her own PDS as a self-attested claim, and OpenLore's peer pull accepts it as self-attested",
+          "description": "Plan-value publish: pure PublishPlan (record, rkey = claim-domain CID, bare-DID author, unsigned) stored per (owner, cid); confirm takes it once, creates via create-only UserRepoWritePort, reads back and CID-verifies. ADR-071 reader: ClaimRecord/Provenance ADT + pure verdict through peer read, peer pull, local store and render.",
+          "criteria": [
+            "WS-4: \"Publish to my repo\" writes exactly one org.openlore.claim (confidence 2500, bare-DID author, unsigned) whose recomputed CID is its rkey; the card leaves the queue; the at:// address and retract path are shown.",
+            "WS-4 reader half: after Maria adds and pulls Priya, OpenLore shows the claim as \"self-attested\", never \"unverified\"; every shipped app-signed peer/federated suite passes unmodified.",
+            "QP-6/QP-7/QP-9 + CORE-6: the preview shows exactly the record to be written (\"not as truth\") and writes nothing; the published record equals the preview field for field; Back writes nothing.",
+            "QP-8/QP-14/PV-6: the confirmation names the record and the way back and the queue moves on; Dmitri's approval lands on his self-hosted PDS; a missing or forged csrf token is refused with no write.",
+            "CORE-3: the provenance verdict follows the ADR-071 table over every shape \u00d7 origin combination; relay origin fails closed; app-signed verify is unchanged."
+          ],
+          "acceptance_criteria": [
+            "WS-4: \"Publish to my repo\" writes exactly one org.openlore.claim (confidence 2500, bare-DID author, unsigned) whose recomputed CID is its rkey; the card leaves the queue; the at:// address and retract path are shown.",
+            "WS-4 reader half: after Maria adds and pulls Priya, OpenLore shows the claim as \"self-attested\", never \"unverified\"; every shipped app-signed peer/federated suite passes unmodified.",
+            "QP-6/QP-7/QP-9 + CORE-6: the preview shows exactly the record to be written (\"not as truth\") and writes nothing; the published record equals the preview field for field; Back writes nothing.",
+            "QP-8/QP-14/PV-6: the confirmation names the record and the way back and the queue moves on; Dmitri's approval lands on his self-hosted PDS; a missing or forged csrf token is refused with no write.",
+            "CORE-3: the provenance verdict follows the ADR-071 table over every shape \u00d7 origin combination; relay origin fails closed; app-signed verify is unchanged."
+          ],
+          "test_file": "tests/acceptance/review_app_walking_skeleton.rs",
+          "scenario_name": "priya_approves_a_suggestion_and_it_lands_in_her_own_pds_accepted_by_openlore_as_self_attested",
+          "scenario_fns": [
+            "review_app_walking_skeleton::priya_approves_a_suggestion_and_it_lands_in_her_own_pds_accepted_by_openlore_as_self_attested",
+            "review_app_queue_and_publish::the_preview_shows_exactly_what_will_be_written_and_writes_nothing",
+            "review_app_queue_and_publish::the_published_record_is_the_previewed_record_field_for_field",
+            "review_app_queue_and_publish::backing_out_of_the_preview_writes_nothing",
+            "review_app_queue_and_publish::the_confirmation_names_the_record_and_the_way_back_and_the_queue_moves_on",
+            "review_app_queue_and_publish::dmitris_approval_lands_in_his_self_hosted_pds",
+            "review_app_privacy_invariants::a_confirmation_without_her_pages_anti_forgery_token_is_refused",
+            "review_app_core::a_publish_plan_record_is_its_preview_and_its_key_is_its_cid",
+            "review_app_core::the_provenance_verdict_follows_the_adr_071_table"
+          ],
+          "n_scenarios": [
+            "WS-4",
+            "QP-6",
+            "QP-7",
+            "QP-9",
+            "QP-8",
+            "QP-14",
+            "PV-6",
+            "CORE-6",
+            "CORE-3"
+          ],
+          "us_trace": [
+            "US-BRA-004",
+            "US-BRA-009"
+          ],
+          "test_command": "cargo test -p claim-domain -p review-domain && cargo test -p openlore-review-app --test review_app_queue_and_publish --test review_app_core --test review_app_privacy_invariants && cargo build -p openlore-review-app && cargo test -p cli --test review_app_walking_skeleton --test peer_pull --test federated_query",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRemove WS-4's temporary ignore \u2014 the walking skeleton is GREEN after this step. Contract shapes: plan building = pure (unbounded preservation: preview never writes); execute = bounded change (one record, claim collection, own repo). Never trust the PDS-returned CID \u2014 recompute on read-back (DWD-5). UserRepoWritePort has create only (I-BRA-8 non-representable; AR-5 structural). ADR-071 reader: claim-domain gains ClaimRecord/Provenance/RecordOrigin + pure verdict and reject reasons; `verify` untouched; adapter-atproto-pds parses an absent signature into SelfAttested with repo DID; cli peer pull calls the verdict; local store gets an additive provenance column; render shows [self-attested]. CORE-3 pulled forward from R2 because the verdict is born here. Operator prerequisite O-2/R-0 (SPIKE-1 on the OpenLore PDS) gates production use of US-BRA-004, not this commit.",
+          "estimate_hours": 14,
+          "estimated_effort": "14h (plan values + plan store + executor/read-back + create-only write + ADR-071 reader path)",
+          "depends_on": [
+            "01-04"
+          ],
+          "dependencies": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/claim-domain/src/provenance.rs",
+            "crates/claim-domain/src/decode.rs",
+            "crates/claim-domain/src/lib.rs",
+            "crates/ports/src/review.rs",
+            "crates/ports/src/peer_storage.rs",
+            "crates/ports/src/lib.rs",
+            "crates/adapter-atproto-oauth/src/write.rs",
+            "crates/adapter-review-store/src/plans.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs",
+            "crates/adapter-duckdb/src/schema.rs",
+            "crates/adapter-duckdb/src/schema_v6.rs",
+            "crates/adapter-duckdb/src/peer_storage.rs",
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/render.rs",
+            "crates/openlore-review-app/src/routes/publish.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "tests/acceptance/review_app_walking_skeleton.rs",
+            "tests/acceptance/review_app_queue_and_publish.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs",
+            "tests/acceptance/review_app_core.rs"
+          ],
+          "mutation_note": "Plan == record equality, rkey == CID, and the ADR-071 verdict (claim-domain) are in per-feature mutation scope; mutation must kill accepting a foreign-repo or signature-stripped record as self-attested."
+        },
+        {
+          "id": "01-06",
+          "name": "Publishing is exactly-once under failure, and the walking skeleton ships as a signed, guarded container image",
+          "description": "Publish resilience: failure leaves the suggestion pending with no partial record, retry publishes once, double or unpreviewed confirms refused, expired access refreshed. GitHub token-expiry warning. In-repo deploy artefacts: runtime Dockerfile, compose + Caddy site, host scripts, deploy.sh, CI build/image/nightly-smoke jobs, mount guard, alarm/IAM .tf.",
+          "criteria": [
+            "QP-10/QP-11: a failed publish (3 postures) leaves the suggestion pending with no partial record and offers Retry; retrying publishes exactly once.",
+            "QP-12/QP-13/QP-15: confirming the same preview twice writes one record; a confirm for an unpreviewed plan is refused; publishing after the PDS access token quietly expired succeeds.",
+            "OP-4: a server token 10 days from expiry logs github.token.expiring with the days left and the app keeps serving.",
+            "AR-8/AR-9: compose mounts exactly data and secrets:ro, read-only, memory limits, cap_drop, no-new-privileges, no AWS credentials; app.caddy is HTTPS-only and never proxies /admin; the CI mount guard lands in this same commit.",
+            "Main pushes build the arm64 binary in rust:1-bookworm, smoke the image (--version, probe --self-test), trivy-gate, push to GHCR, cosign-sign and attest; deploy-pds-check validates compose, Caddy, shell, digest-only deploy and module-ref lockstep."
+          ],
+          "acceptance_criteria": [
+            "QP-10/QP-11: a failed publish (3 postures) leaves the suggestion pending with no partial record and offers Retry; retrying publishes exactly once.",
+            "QP-12/QP-13/QP-15: confirming the same preview twice writes one record; a confirm for an unpreviewed plan is refused; publishing after the PDS access token quietly expired succeeds.",
+            "OP-4: a server token 10 days from expiry logs github.token.expiring with the days left and the app keeps serving.",
+            "AR-8/AR-9: compose mounts exactly data and secrets:ro, read-only, memory limits, cap_drop, no-new-privileges, no AWS credentials; app.caddy is HTTPS-only and never proxies /admin; the CI mount guard lands in this same commit.",
+            "Main pushes build the arm64 binary in rust:1-bookworm, smoke the image (--version, probe --self-test), trivy-gate, push to GHCR, cosign-sign and attest; deploy-pds-check validates compose, Caddy, shell, digest-only deploy and module-ref lockstep."
+          ],
+          "test_file": "tests/acceptance/review_app_queue_and_publish.rs",
+          "scenario_name": "a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record",
+          "scenario_fns": [
+            "review_app_queue_and_publish::a_failed_publish_leaves_the_suggestion_pending_with_no_partial_record",
+            "review_app_queue_and_publish::retrying_after_a_failure_publishes_exactly_once",
+            "review_app_queue_and_publish::confirming_the_same_preview_twice_writes_one_record",
+            "review_app_queue_and_publish::a_confirmation_for_something_never_previewed_is_refused",
+            "review_app_queue_and_publish::publishing_still_works_after_the_pds_access_has_quietly_expired",
+            "review_app_privacy_invariants::the_operator_is_warned_two_weeks_before_the_github_token_expires",
+            "review_app_architecture::the_app_container_mounts_only_its_data_and_secrets_and_has_no_aws_credentials",
+            "review_app_architecture::the_caddy_site_serves_the_app_over_https_only"
+          ],
+          "n_scenarios": [
+            "QP-10",
+            "QP-11",
+            "QP-12",
+            "QP-13",
+            "QP-15",
+            "OP-4",
+            "AR-8",
+            "AR-9"
+          ],
+          "us_trace": [
+            "US-BRA-000",
+            "US-BRA-004"
+          ],
+          "test_command": "cargo test -p openlore-review-app --test review_app_queue_and_publish --test review_app_privacy_invariants && cargo test -p xtask --test review_app_architecture",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nEXEMPT FROM PARADIGM (deploy artefacts only \u2014 Dockerfile, compose, Caddy, workflows, shell): declarative files with no invariant domain. Compensate with property-based test at unit level on adjacent slot: take-once plan store \u2014 any interleaving of N confirms of one (owner, cid) yields at most one write. SPIKE finding 4: refresh on 401 via restore, never the cached token. Dockerfile is runtime-only distroless (binary built in the rust:1-bookworm job container; glibc match). Do NOT bump the tofu-aws-pds ?ref (v1.7.0 tag not yet released); review-app.tf/review-app-iam.tf use only resources valid against the current module. OUT OF SCOPE (operator follow-ups, not steps): tofu apply, module v1.7.0 (M-1/M-2), SSM params + PAT, GHCR visibility, R-0..R-7.",
+          "estimate_hours": 12,
+          "estimated_effort": "12h (publish failure/idempotence + token expiry + Dockerfile/compose/Caddy/scripts + CI jobs + .tf)",
+          "depends_on": [
+            "01-05"
+          ],
+          "dependencies": [
+            "01-05"
+          ],
+          "files_to_modify": [
+            "crates/openlore-review-app/src/executor.rs",
+            "crates/adapter-review-store/src/plans.rs",
+            "crates/adapter-atproto-oauth/src/write.rs",
+            "crates/adapter-github/src/client.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "crates/openlore-review-app/Dockerfile",
+            "deploy/review-app/host/compose.yaml",
+            "deploy/review-app/host/app.caddy",
+            "deploy/review-app/host/render-secrets.sh",
+            "deploy/review-app/host/health-timer.sh",
+            "deploy/review-app/deploy.sh",
+            "deploy/tofu/environments/prod/review-app.tf",
+            "deploy/tofu/bootstrap/review-app-iam.tf",
+            "deploy/README.md",
+            ".github/workflows/ci.yml",
+            ".github/workflows/deploy-pds-check.yml",
+            ".github/workflows/nightly.yml",
+            "tests/acceptance/review_app_queue_and_publish.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs",
+            "xtask/tests/review_app_architecture.rs"
+          ],
+          "mutation_note": "Mutation must kill a plan store that allows a second take, and an executor that leaves a pending\u2192published transition on a failed create."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Release 1 \u2014 consent controls: edit before approving, private decline, approved-only public profile, opt-in share post (US-BRA-005..008)",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Priya edits a suggestion's confidence or philosophy before approving, and the published claim carries exactly her edit",
+          "description": "Edit form on a card: confidence 0.00\u20131.00 at two decimals (basis points, BR-4) and philosophy swap across the vocabulary (unknown allowed, BR-5); invalid input caught with guidance and approval blocked; cancel restores the suggestion. Edited values flow into the PublishPlan.",
+          "criteria": [
+            "ED-1: editing to 0.70, 1.00 or 0.00 and publishing writes a claim with exactly that confidence in basis points, previewed first.",
+            "ED-2 + CORE-5: each invalid confidence (e.g. 1.5, 0.555, -0.1, empty, text) is caught with guidance and blocks approval; every hundredth in range parses.",
+            "ED-3: cancelling an edit restores the suggestion unchanged and writes nothing.",
+            "ED-4: every vocabulary philosophy is offered when swapping."
+          ],
+          "acceptance_criteria": [
+            "ED-1: editing to 0.70, 1.00 or 0.00 and publishing writes a claim with exactly that confidence in basis points, previewed first.",
+            "ED-2 + CORE-5: each invalid confidence (e.g. 1.5, 0.555, -0.1, empty, text) is caught with guidance and blocks approval; every hundredth in range parses.",
+            "ED-3: cancelling an edit restores the suggestion unchanged and writes nothing.",
+            "ED-4: every vocabulary philosophy is offered when swapping."
+          ],
+          "test_file": "tests/acceptance/review_app_consent_and_share.rs",
+          "scenario_name": "priya_publishes_her_edited_claim",
+          "scenario_fns": [
+            "review_app_consent_and_share::priya_publishes_her_edited_claim",
+            "review_app_consent_and_share::an_invalid_confidence_is_caught_with_guidance_and_blocks_approval",
+            "review_app_consent_and_share::cancelling_an_edit_restores_the_suggestion",
+            "review_app_consent_and_share::every_vocabulary_philosophy_is_offered_when_swapping",
+            "review_app_core::confidence_parses_every_hundredth_and_refuses_everything_else"
+          ],
+          "n_scenarios": [
+            "ED-1",
+            "ED-2",
+            "ED-3",
+            "ED-4",
+            "CORE-5"
+          ],
+          "us_trace": [
+            "US-BRA-005"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_consent_and_share --test review_app_core",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nConfidence parse and philosophy swap are pure review-domain functions returning domain errors as values; the vocabulary comes from the shipped philosophy registry. The edited suggestion produces a new PublishPlan (new CID) \u2014 plan == record (CORE-6) still holds. Edit state is owner-scoped; it is not a PDS write. Count suggestion.approved.edited for KPIs (activated at 03-05).",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "01-06"
+          ],
+          "dependencies": [
+            "01-06"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/edits.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "tests/acceptance/review_app_consent_and_share.rs",
+            "tests/acceptance/review_app_core.rs"
+          ],
+          "mutation_note": "Mutation must kill boundary off-by-ones at 0.00/1.00 and accepting a third decimal."
+        },
+        {
+          "id": "02-02",
+          "name": "Priya declines a suggestion privately \u2014 nothing is written, nobody else can see it, it is not offered again, and Undo restores it",
+          "description": "\"Not me\" transitions a suggestion to Declined with no write-port access; declined keys are suppressed from the queue; Undo returns it to Pending; declining twice is idempotent. Lifecycle state machine (Pending \u21c4 Declined, Pending \u2192 Published \u2192 Retracted) as a pure ADT with legal transitions only.",
+          "criteria": [
+            "DC-1: declining writes nothing to any PDS and the PDS universe is unchanged.",
+            "DC-2/DC-5: a declined suggestion is not offered again; declining twice equals declining once.",
+            "DC-3: nobody else \u2014 another user or an anonymous visitor \u2014 can see Priya's declines.",
+            "DC-4: Undo restores a declined suggestion to her pending queue.",
+            "CORE-8: arbitrary event sequences against the lifecycle match the oracle; every illegal event from every state is refused."
+          ],
+          "acceptance_criteria": [
+            "DC-1: declining writes nothing to any PDS and the PDS universe is unchanged.",
+            "DC-2/DC-5: a declined suggestion is not offered again; declining twice equals declining once.",
+            "DC-3: nobody else \u2014 another user or an anonymous visitor \u2014 can see Priya's declines.",
+            "DC-4: Undo restores a declined suggestion to her pending queue.",
+            "CORE-8: arbitrary event sequences against the lifecycle match the oracle; every illegal event from every state is refused."
+          ],
+          "test_file": "tests/acceptance/review_app_consent_and_share.rs",
+          "scenario_name": "declining_writes_nothing_public",
+          "scenario_fns": [
+            "review_app_consent_and_share::declining_writes_nothing_public",
+            "review_app_consent_and_share::a_declined_suggestion_is_not_offered_again",
+            "review_app_consent_and_share::nobody_else_can_see_priyas_declines",
+            "review_app_consent_and_share::undo_restores_a_declined_suggestion",
+            "review_app_consent_and_share::declining_twice_is_the_same_as_declining_once",
+            "review_app_core::the_suggestion_lifecycle_allows_only_its_legal_transitions"
+          ],
+          "n_scenarios": [
+            "DC-1",
+            "DC-2",
+            "DC-3",
+            "DC-4",
+            "DC-5",
+            "CORE-8"
+          ],
+          "us_trace": [
+            "US-BRA-006"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_consent_and_share --test review_app_core",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nI-BRA-2: the decline handler receives no UserRepoWritePort (capability injection \u2014 writing is non-representable on this path). The full lifecycle ADT (incl. Retracted) is defined here so CORE-8 covers retract transitions before 03-04 wires them. Suppression is by derived key, so a later rescan never re-offers a decline (D-12). Count suggestion.declined for KPIs.",
+          "estimate_hours": 5,
+          "estimated_effort": "5h",
+          "depends_on": [
+            "02-01"
+          ],
+          "dependencies": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/lifecycle.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/adapter-review-store/src/suggestions.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "tests/acceptance/review_app_consent_and_share.rs",
+            "tests/acceptance/review_app_core.rs"
+          ],
+          "mutation_note": "Lifecycle transitions are in review-domain mutation scope; mutation must kill any illegal transition becoming legal (e.g. Declined \u2192 Published)."
+        },
+        {
+          "id": "02-03",
+          "name": "Priya's public profile shows only her published claims, read live from her PDS and labelled self-attested",
+          "description": "/@{handle|did} resolves identity, reads her claims live from her PDS through the ingest adapter (repo= one DID, cursor paging, bounded), the root computes origin, the provenance verdict and retraction filter apply. The handler receives no private-store port. Honest empty state; unreachable PDS stated.",
+          "criteria": [
+            "PR-1: the profile lists only published claims, each labelled self-attested; no pending, declined or private state appears.",
+            "PR-2: an empty profile says so honestly and offers its signed-in owner a call to action.",
+            "PR-3: an unreachable PDS is stated plainly; no stale or cached claims are shown.",
+            "PR-4: a profile is found by handle or by DID; an unknown handle is plainly not found."
+          ],
+          "acceptance_criteria": [
+            "PR-1: the profile lists only published claims, each labelled self-attested; no pending, declined or private state appears.",
+            "PR-2: an empty profile says so honestly and offers its signed-in owner a call to action.",
+            "PR-3: an unreachable PDS is stated plainly; no stale or cached claims are shown.",
+            "PR-4: a profile is found by handle or by DID; an unknown handle is plainly not found."
+          ],
+          "test_file": "tests/acceptance/review_app_consent_and_share.rs",
+          "scenario_name": "the_profile_shows_only_published_claims_each_labelled_self_attested",
+          "scenario_fns": [
+            "review_app_consent_and_share::the_profile_shows_only_published_claims_each_labelled_self_attested",
+            "review_app_consent_and_share::an_empty_profile_is_honest_with_a_call_to_action_for_its_owner",
+            "review_app_consent_and_share::an_unreachable_pds_is_stated_never_replaced_by_stale_claims",
+            "review_app_consent_and_share::a_profile_is_found_by_handle_or_did_and_an_unknown_handle_is_plainly_not_found"
+          ],
+          "n_scenarios": [
+            "PR-1",
+            "PR-2",
+            "PR-3",
+            "PR-4"
+          ],
+          "us_trace": [
+            "US-BRA-007"
+          ],
+          "test_command": "cargo test -p adapter-atproto-ingest && cargo test -p openlore-review-app --test review_app_consent_and_share",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nThis step ADDS the per-repo enumeration capability to adapter-atproto-ingest (listRecords with repo=<DID> + cursor paging, bounded, populating repo_did/rkey and reporting the base URL fetched). The adapter makes no trust decision; the root compares that URL with the freshly resolved DID-document PDS to compute origin (ADR-071 \u00a74). The indexer still uses its legacy call \u2014 03-02 switches it and removes the repo-less call at lib.rs:97. Principle 12: the profile route is wired with neither ReviewStateRead nor ReviewStateWrite (read/write split). No cache (DD-8). PBT: cursor paging terminates and yields each record once for any page split.",
+          "estimate_hours": 7,
+          "estimated_effort": "7h (ingest per-repo enumeration + origin + profile route/views)",
+          "depends_on": [
+            "02-02"
+          ],
+          "dependencies": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "crates/ports/src/ingest_source.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/openlore-review-app/src/routes/profile.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "tests/acceptance/review_app_consent_and_share.rs"
+          ],
+          "mutation_note": "Mutation must kill an origin computation that trusts the adapter's URL without comparing to the resolved PDS, and a pager that drops the last page."
+        },
+        {
+          "id": "02-04",
+          "name": "Priya shares her published claims on Bluesky only when she presses Post, with text she previewed and edited",
+          "description": "Opt-in share: pure SharePostPlan from live published, non-retracted claims only (\u2264300 graphemes, link facet with byte offsets to her profile); preview, edit, confirm creates one app.bsky.feed.post via the create-only port; \"Don't post\"/leaving writes nothing; unavailable with nothing published.",
+          "criteria": [
+            "SH-1 + CORE-7: preview, edit and confirm posts exactly the confirmed text with a working profile link; generated text names only live published claims.",
+            "SH-2/SH-3: pressing \"Don't post\" or leaving posts nothing; the post never mentions unapproved (pending or declined) items.",
+            "SH-4: sharing is unavailable when nothing is published.",
+            "SH-5: a failed post is explained and retryable, and the profile is unaffected.",
+            "SH-6: a post longer than Bluesky allows is caught before anything is sent."
+          ],
+          "acceptance_criteria": [
+            "SH-1 + CORE-7: preview, edit and confirm posts exactly the confirmed text with a working profile link; generated text names only live published claims.",
+            "SH-2/SH-3: pressing \"Don't post\" or leaving posts nothing; the post never mentions unapproved (pending or declined) items.",
+            "SH-4: sharing is unavailable when nothing is published.",
+            "SH-5: a failed post is explained and retryable, and the profile is unaffected.",
+            "SH-6: a post longer than Bluesky allows is caught before anything is sent."
+          ],
+          "test_file": "tests/acceptance/review_app_consent_and_share.rs",
+          "scenario_name": "priya_previews_edits_and_confirms_her_post",
+          "scenario_fns": [
+            "review_app_consent_and_share::priya_previews_edits_and_confirms_her_post",
+            "review_app_consent_and_share::nothing_is_posted_without_consent",
+            "review_app_consent_and_share::the_post_never_mentions_unapproved_items",
+            "review_app_consent_and_share::sharing_is_unavailable_with_nothing_published",
+            "review_app_consent_and_share::a_failed_post_is_explained_and_retryable_and_the_profile_is_unaffected",
+            "review_app_consent_and_share::a_post_longer_than_bluesky_allows_is_caught_before_anything_is_sent",
+            "review_app_core::the_share_post_names_only_live_published_claims_and_links_the_profile"
+          ],
+          "n_scenarios": [
+            "SH-1",
+            "SH-2",
+            "SH-3",
+            "SH-4",
+            "SH-5",
+            "SH-6",
+            "CORE-7"
+          ],
+          "us_trace": [
+            "US-BRA-008"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_consent_and_share --test review_app_core",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nI-BRA-6. Share text + facet are pure (unicode-segmentation for graphemes; facet offsets in UTF-8 bytes). The plan is built from the live published list read at preview time; confirm reuses the take-once plan store and the same executor as publish (WritableCollection::Post). Share budget 5 posts/day per DID via the pure budget core. PBT (CORE-7): facet byte range always slices to the link; text \u2264 300 graphemes or refused. Count share.posted.",
+          "estimate_hours": 7,
+          "estimated_effort": "7h",
+          "depends_on": [
+            "02-03"
+          ],
+          "dependencies": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/share.rs",
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/openlore-review-app/src/routes/share.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "tests/acceptance/review_app_consent_and_share.rs",
+            "tests/acceptance/review_app_core.rs"
+          ],
+          "mutation_note": "Share text generation is in review-domain mutation scope; mutation must kill inclusion of a non-published or retracted claim and grapheme/byte offset confusion."
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Release 2 \u2014 self-attested claims first-class across peer pull, viewer and index; rescan new-only; retract; disconnect and forget me (US-BRA-009..012)",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Readers pull, label and refuse self-attested claims honestly, and app-signed claims read exactly as before",
+          "description": "Complete ADR-071 for the CLI and viewer: viewer-domain and CLI render the [self-attested] marker; tampered, foreign-repo and malformed records are refused with their named reason; a self-attested retraction marker reads as retracted; lexicon description text for author/signature updated. App-signed paths unchanged.",
+          "criteria": [
+            "RD-1: Maria pulls Priya's self-attested claims and they are accepted, attributed to Priya.",
+            "RD-2: the viewer labels them self-attested, never unverified.",
+            "RD-3: app-signed claims read exactly as before, side by side with self-attested ones; every shipped app-signed suite passes unmodified.",
+            "RD-4: tampered, foreign-repo and malformed-provenance records are refused, each naming its reason (integrity check failed / foreign repo / malformed provenance).",
+            "RD-5: a claim Priya retracted through the app reads as retracted."
+          ],
+          "acceptance_criteria": [
+            "RD-1: Maria pulls Priya's self-attested claims and they are accepted, attributed to Priya.",
+            "RD-2: the viewer labels them self-attested, never unverified.",
+            "RD-3: app-signed claims read exactly as before, side by side with self-attested ones; every shipped app-signed suite passes unmodified.",
+            "RD-4: tampered, foreign-repo and malformed-provenance records are refused, each naming its reason (integrity check failed / foreign repo / malformed provenance).",
+            "RD-5: a claim Priya retracted through the app reads as retracted."
+          ],
+          "test_file": "tests/acceptance/review_app_self_attested_readers.rs",
+          "scenario_name": "maria_pulls_priyas_self_attested_claims",
+          "scenario_fns": [
+            "review_app_self_attested_readers::maria_pulls_priyas_self_attested_claims",
+            "review_app_self_attested_readers::the_viewer_labels_self_attested_claims_never_unverified",
+            "review_app_self_attested_readers::app_signed_claims_read_exactly_as_before_side_by_side_with_self_attested_ones",
+            "review_app_self_attested_readers::records_that_are_not_honest_self_attestations_are_refused",
+            "review_app_self_attested_readers::a_claim_priya_retracted_through_the_app_reads_as_retracted"
+          ],
+          "n_scenarios": [
+            "RD-1",
+            "RD-2",
+            "RD-3",
+            "RD-4",
+            "RD-5"
+          ],
+          "us_trace": [
+            "US-BRA-009"
+          ],
+          "test_command": "cargo test -p claim-domain -p viewer-domain && cargo test -p cli --test review_app_self_attested_readers --test peer_pull --test federated_query",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nIndependent of the app (cli suite; needs no app binary) \u2014 may run any time after 01-05. Reuses the 01-05 verdict; no second rule. Reject reasons are a closed ADT; the CLI/viewer map each to its message. Retraction of a self-attested claim is itself a self-attested retracts marker evaluated by the shipped retraction rule (claim-domain). `verify` unchanged (AC-009.4 guardrail). The lexicon `required[]` stays unchanged \u2014 description text only.",
+          "estimate_hours": 8,
+          "estimated_effort": "8h",
+          "depends_on": [
+            "02-04"
+          ],
+          "dependencies": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "crates/claim-domain/src/provenance.rs",
+            "crates/claim-domain/src/retraction.rs",
+            "crates/adapter-atproto-pds/src/peer_read.rs",
+            "crates/cli/src/verbs/peer_pull.rs",
+            "crates/cli/src/render.rs",
+            "crates/viewer-domain/src/peer_claims.rs",
+            "crates/viewer-domain/src/claims.rs",
+            "crates/viewer-domain/src/common.rs",
+            "tests/acceptance/review_app_self_attested_readers.rs"
+          ],
+          "mutation_note": "Reject-reason mapping and the self-attested marker are load-bearing; mutation must kill rendering self-attested as unverified or swapping reject reasons."
+        },
+        {
+          "id": "03-02",
+          "name": "The network index includes self-attested claims, attributed and marked, fetched per repo DID from the author's own PDS",
+          "description": "Indexer ingest enumerates each DID in OPENLORE_INDEXER_REPO_DIDS with listRecords repo= and cursor paging (closing the repo-less call at adapter-atproto-ingest lib.rs:97). appview-domain ingest_decision calls the provenance verdict; additive provenance migration in adapter-index-store; relay-origin self-attested refused as unverifiable provenance.",
+          "criteria": [
+            "RD-6: after ingest, the network index contains Priya's self-attested claims attributed to her DID and marked provenance=self-attested.",
+            "RD-7: a self-attested claim fetched through anything but the author's own PDS is not indexed, and the refusal names unverifiable provenance.",
+            "The indexer issues listRecords only with repo=<DID>, follows cursors to the end for every configured DID, and never calls listRecords without repo.",
+            "Existing index rows and the shipped indexer/search suites are unchanged; the provenance migration is additive and idempotent."
+          ],
+          "acceptance_criteria": [
+            "RD-6: after ingest, the network index contains Priya's self-attested claims attributed to her DID and marked provenance=self-attested.",
+            "RD-7: a self-attested claim fetched through anything but the author's own PDS is not indexed, and the refusal names unverifiable provenance.",
+            "The indexer issues listRecords only with repo=<DID>, follows cursors to the end for every configured DID, and never calls listRecords without repo.",
+            "Existing index rows and the shipped indexer/search suites are unchanged; the provenance migration is additive and idempotent."
+          ],
+          "test_file": "tests/acceptance/review_app_self_attested_readers.rs",
+          "scenario_name": "the_network_index_includes_self_attested_claims_attributed_and_marked",
+          "scenario_fns": [
+            "review_app_self_attested_readers::the_network_index_includes_self_attested_claims_attributed_and_marked",
+            "review_app_self_attested_readers::a_self_attested_claim_fetched_through_anything_but_the_authors_own_pds_is_not_indexed"
+          ],
+          "n_scenarios": [
+            "RD-6",
+            "RD-7"
+          ],
+          "us_trace": [
+            "US-BRA-009"
+          ],
+          "test_command": "cargo test -p appview-domain -p adapter-atproto-ingest -p adapter-index-store && cargo build -p openlore-indexer && cargo test -p cli --test review_app_self_attested_readers",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nDecision 5: closes the backlog bug at crates/adapter-atproto-ingest/src/lib.rs:97 by moving the indexer onto the per-repo enumeration added in 02-03; OPENLORE_INDEXER_REPO_DIDS (DWD-9) is the contract; origin computed by the indexer root against the PLC-resolved PDS (OPENLORE_INDEXER_PLC_ENDPOINT). Harness risk: RD-6/RD-7 call assert_cmd cargo_bin(\"openlore-indexer\"), which panics in CI when CARGO_BIN_EXE is unset \u2014 switch to the shared resolve_workspace_bin helper (test-harness only). Indexer gets no app adapters (AR-2). PBT: ingest_decision self-attested arm accepts iff verdict accepts.",
+          "estimate_hours": 7,
+          "estimated_effort": "7h",
+          "depends_on": [
+            "03-01"
+          ],
+          "dependencies": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/appview-domain/src/ingest.rs",
+            "crates/ports/src/indexed_claim.rs",
+            "crates/adapter-index-store/src/schema.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "tests/acceptance/review_app_self_attested_readers.rs"
+          ],
+          "mutation_note": "ingest_decision's self-attested arm and the relay-origin refusal are KPI-BRA-6 critical; mutation must kill indexing a relay-origin self-attested record."
+        },
+        {
+          "id": "03-03",
+          "name": "A rescan offers only new suggestions with a summary, re-checks ownership before every scrape, and an interrupted scan resumes",
+          "description": "Rescan reuses the scan pipeline: fresh ownership verdict before every scrape; failed re-check blocks the scan, hides pending suggestions (derived visibility) and leaves published claims untouched; re-verify restores; reconcile summary per DWD-11; scan interrupted by restart offered for resume without duplicates.",
+          "criteria": [
+            "RS-1/RS-2 + CORE-4: a rescan offers only unseen keys with \"N already published / N declined (hidden)\" summary counts of derived keys; nothing new says so; reconcile is idempotent.",
+            "RS-3/PV-5: every scrape is immediately preceded by a bio read finding her DID; no repo is read while the DID is missing.",
+            "RS-4/RS-5 + CORE-9: a failed re-check blocks the scan, keeps published claims untouched, and a hidden suggestion cannot be approved; approvable iff pending and verified.",
+            "RS-6: re-verifying restores scanning and the pending suggestions.",
+            "OP-7: a scan interrupted by a restart is offered for resume, keeps persisted suggestions and completes without duplicates."
+          ],
+          "acceptance_criteria": [
+            "RS-1/RS-2 + CORE-4: a rescan offers only unseen keys with \"N already published / N declined (hidden)\" summary counts of derived keys; nothing new says so; reconcile is idempotent.",
+            "RS-3/PV-5: every scrape is immediately preceded by a bio read finding her DID; no repo is read while the DID is missing.",
+            "RS-4/RS-5 + CORE-9: a failed re-check blocks the scan, keeps published claims untouched, and a hidden suggestion cannot be approved; approvable iff pending and verified.",
+            "RS-6: re-verifying restores scanning and the pending suggestions.",
+            "OP-7: a scan interrupted by a restart is offered for resume, keeps persisted suggestions and completes without duplicates."
+          ],
+          "test_file": "tests/acceptance/review_app_lifecycle.rs",
+          "scenario_name": "a_rescan_offers_only_new_suggestions_with_a_summary",
+          "scenario_fns": [
+            "review_app_lifecycle::a_rescan_offers_only_new_suggestions_with_a_summary",
+            "review_app_lifecycle::a_rescan_with_nothing_new_says_so",
+            "review_app_lifecycle::ownership_is_re_checked_before_every_scrape",
+            "review_app_lifecycle::a_failed_re_check_blocks_the_scan_and_keeps_published_claims_untouched",
+            "review_app_lifecycle::a_hidden_suggestion_cannot_be_approved_while_ownership_is_unproven",
+            "review_app_lifecycle::re_verifying_restores_scanning_and_pending_suggestions",
+            "review_app_core::reconcile_offers_only_unseen_keys_and_is_idempotent",
+            "review_app_core::a_suggestion_is_approvable_only_while_pending_and_verified",
+            "review_app_privacy_invariants::no_repository_is_ever_read_without_a_passing_ownership_check_just_before",
+            "review_app_privacy_invariants::a_scan_interrupted_by_a_restart_is_offered_for_resume"
+          ],
+          "n_scenarios": [
+            "RS-1",
+            "RS-2",
+            "RS-3",
+            "RS-4",
+            "RS-5",
+            "RS-6",
+            "CORE-4",
+            "CORE-9",
+            "PV-5",
+            "OP-7"
+          ],
+          "us_trace": [
+            "US-BRA-010"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_lifecycle --test review_app_core --test review_app_privacy_invariants",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nRescan-summary rule pinned by DISTILL (DWD-11): counts are of derived keys in that state. Visibility is derived, never stored (hide = unproven link, not a state change), so restoring proof restores the queue with no writes. scan_runs from 01-04 provides resume; the \"Resume scan\" label is the DWD-6 contract. No new GitHub request shape; per-DID budget still applies.",
+          "estimate_hours": 8,
+          "estimated_effort": "8h",
+          "depends_on": [
+            "03-02"
+          ],
+          "dependencies": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/reconcile.rs",
+            "crates/review-domain/src/lifecycle.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/adapter-review-store/src/github_links.rs",
+            "crates/adapter-review-store/src/scan_runs.rs",
+            "crates/openlore-review-app/src/scan.rs",
+            "crates/openlore-review-app/src/routes/review.rs",
+            "tests/acceptance/review_app_lifecycle.rs",
+            "tests/acceptance/review_app_core.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs"
+          ],
+          "mutation_note": "Reconcile and derived visibility are in review-domain mutation scope; mutation must kill re-offering a declined/published key and approving while unverified."
+        },
+        {
+          "id": "03-04",
+          "name": "Priya retracts a published claim by adding a retraction \u2014 never deleting \u2014 and every write in her whole journey follows one of her confirms",
+          "description": "Pure RetractPlan (a create of a self-attested retracts marker referencing the claim) previewed then confirmed through the take-once plan store and create-only port; failure leaves the claim active with Retry; twice adds one retraction; retracted claims leave the share post. Journey-wide write, ownership and log-privacy invariants activate.",
+          "criteria": [
+            "RT-1/RT-2: confirming a retraction adds one retraction record and the claim shows as retracted; cancelling writes nothing.",
+            "RT-3/RT-5: a failed retraction leaves the claim active with Retry; retracting the same claim twice adds one retraction.",
+            "RT-4: a retracted claim never appears in the share post.",
+            "PV-3/PV-4: across the full journey every PDS write follows one explicit confirm, declines write nothing, writes go only to the author's own PDS, and no update/put/delete is ever attempted.",
+            "OP-5: every log line of the full journey is a closed-catalogue JSON event revealing no token, code, bio, handle, raw DID, suggestion content, post text or server token."
+          ],
+          "acceptance_criteria": [
+            "RT-1/RT-2: confirming a retraction adds one retraction record and the claim shows as retracted; cancelling writes nothing.",
+            "RT-3/RT-5: a failed retraction leaves the claim active with Retry; retracting the same claim twice adds one retraction.",
+            "RT-4: a retracted claim never appears in the share post.",
+            "PV-3/PV-4: across the full journey every PDS write follows one explicit confirm, declines write nothing, writes go only to the author's own PDS, and no update/put/delete is ever attempted.",
+            "OP-5: every log line of the full journey is a closed-catalogue JSON event revealing no token, code, bio, handle, raw DID, suggestion content, post text or server token."
+          ],
+          "test_file": "tests/acceptance/review_app_lifecycle.rs",
+          "scenario_name": "priya_retracts_a_published_claim",
+          "scenario_fns": [
+            "review_app_lifecycle::priya_retracts_a_published_claim",
+            "review_app_lifecycle::cancelling_a_retraction_writes_nothing",
+            "review_app_lifecycle::a_failed_retraction_leaves_the_claim_active_with_a_retry",
+            "review_app_lifecycle::a_retracted_claim_never_appears_in_the_share_post",
+            "review_app_lifecycle::retracting_the_same_claim_twice_adds_one_retraction",
+            "review_app_privacy_invariants::every_write_to_her_pds_follows_one_of_her_explicit_confirms_and_declines_write_nothing",
+            "review_app_privacy_invariants::writes_only_ever_go_to_the_authors_own_pds_and_nothing_is_ever_updated_or_deleted",
+            "review_app_privacy_invariants::the_logs_of_a_whole_journey_reveal_nothing_about_anyone"
+          ],
+          "n_scenarios": [
+            "RT-1",
+            "RT-2",
+            "RT-3",
+            "RT-4",
+            "RT-5",
+            "PV-3",
+            "PV-4",
+            "OP-5"
+          ],
+          "us_trace": [
+            "US-BRA-011"
+          ],
+          "test_command": "cargo test -p review-domain && cargo test -p openlore-review-app --test review_app_lifecycle --test review_app_privacy_invariants",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nI-BRA-8: retraction is a create (the shipped retracts reference shape, self-attested), never deleteRecord \u2014 the port cannot express delete. Retract idempotence derives from the lifecycle (Retracted is terminal) plus the take-once plan. PV-3/PV-4/OP-5 were tagged R1/R2 by DISTILL but their shared full journey ends with a retract, so they activate here. OP-5 is the behavioural layer of the AR-10 log-field allowlist (pseudonymous owner = HMAC(log-salt, DID)[:12]). Count retract.posted.",
+          "estimate_hours": 7,
+          "estimated_effort": "7h",
+          "depends_on": [
+            "03-03"
+          ],
+          "dependencies": [
+            "03-03"
+          ],
+          "files_to_modify": [
+            "crates/review-domain/src/plans.rs",
+            "crates/review-domain/src/lifecycle.rs",
+            "crates/review-domain/src/share.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/openlore-review-app/src/routes/retract.rs",
+            "crates/openlore-review-app/src/executor.rs",
+            "crates/openlore-review-app/src/telemetry.rs",
+            "tests/acceptance/review_app_lifecycle.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs"
+          ],
+          "mutation_note": "Mutation must kill a second retraction write, a retracted claim leaking into share text, and any log event carrying a forbidden field."
+        },
+        {
+          "id": "03-05",
+          "name": "Disconnect and forget me revokes her grant, deletes everything the app holds about her and nothing in her PDS \u2014 and the operator sees only anonymous counts",
+          "description": "Forget me: revoke (200|204 = success), then always delete local tokens and purge(OwnerScope) in one transaction; never touches her PDS. Loopback admin listener (/admin/kpi aggregate counts, /admin/purge by DID for operator requests), unreachable on the public address.",
+          "criteria": [
+            "FG-1/FG-2: \"Yes, forget me\" removes everything the app holds about her and nothing in her PDS; Cancel keeps everything.",
+            "FG-3/FG-4: disconnect revokes her grant and a 200 answer counts as done; when her PDS cannot be reached to revoke, the app still forgets her.",
+            "FG-5: after forgetting, the app never again uses the access token her PDS already issued.",
+            "FG-6: the operator forgets a person on request through the loopback admin listener without their session.",
+            "OP-6: the admin listener returns today's aggregate counts (sign-in, verify, scan, approvals incl. edited, decline, share, retract) with no DID, handle or claim content; the public address answers 404."
+          ],
+          "acceptance_criteria": [
+            "FG-1/FG-2: \"Yes, forget me\" removes everything the app holds about her and nothing in her PDS; Cancel keeps everything.",
+            "FG-3/FG-4: disconnect revokes her grant and a 200 answer counts as done; when her PDS cannot be reached to revoke, the app still forgets her.",
+            "FG-5: after forgetting, the app never again uses the access token her PDS already issued.",
+            "FG-6: the operator forgets a person on request through the loopback admin listener without their session.",
+            "OP-6: the admin listener returns today's aggregate counts (sign-in, verify, scan, approvals incl. edited, decline, share, retract) with no DID, handle or claim content; the public address answers 404."
+          ],
+          "test_file": "tests/acceptance/review_app_lifecycle.rs",
+          "scenario_name": "forget_me_removes_everything_the_app_holds_and_nothing_in_her_pds",
+          "scenario_fns": [
+            "review_app_lifecycle::forget_me_removes_everything_the_app_holds_and_nothing_in_her_pds",
+            "review_app_lifecycle::cancelling_forget_me_keeps_everything",
+            "review_app_lifecycle::disconnecting_revokes_her_grant_and_an_answer_of_200_counts_as_done",
+            "review_app_lifecycle::forget_me_still_forgets_when_her_pds_cannot_be_reached_to_revoke",
+            "review_app_lifecycle::after_forgetting_the_app_never_uses_the_access_her_pds_already_issued",
+            "review_app_lifecycle::the_operator_can_forget_a_person_on_request_without_their_session",
+            "review_app_privacy_invariants::the_operator_reads_aggregate_counts_that_identify_no_one"
+          ],
+          "n_scenarios": [
+            "FG-1",
+            "FG-2",
+            "FG-3",
+            "FG-4",
+            "FG-5",
+            "FG-6",
+            "OP-6"
+          ],
+          "us_trace": [
+            "US-BRA-012"
+          ],
+          "test_command": "cargo test -p adapter-review-store && cargo test -p openlore-review-app --test review_app_lifecycle --test review_app_privacy_invariants",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\n\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nSPIKE finding 1: atrium-oauth 0.1.7 errors on RFC 7009's 200 \u2014 treat 200 or 204 as success and ALWAYS delete local tokens/session whatever the revoke outcome. Finding 2: revoke kills refresh, not the issued access token \u2014 FG-5 holds only because tokens are discarded immediately; never cache a session past purge. purge is the only multi-table DELETE (AR-7: purge/expiry modules only), single transaction, OwnerScope-bounded; kpi_counters untouched. Admin listener binds ADMIN_LISTEN_ADDR (loopback) only; Caddy never proxies /admin (AR-9). PBT on the store: purge(A) leaves every row of owner B byte-identical.",
+          "estimate_hours": 8,
+          "estimated_effort": "8h",
+          "depends_on": [
+            "03-04"
+          ],
+          "dependencies": [
+            "03-04"
+          ],
+          "files_to_modify": [
+            "crates/adapter-atproto-oauth/src/client.rs",
+            "crates/adapter-review-store/src/purge.rs",
+            "crates/adapter-review-store/src/kpi.rs",
+            "crates/review-domain/src/views.rs",
+            "crates/openlore-review-app/src/routes/settings.rs",
+            "crates/openlore-review-app/src/admin.rs",
+            "crates/openlore-review-app/src/wiring.rs",
+            "tests/acceptance/review_app_lifecycle.rs",
+            "tests/acceptance/review_app_privacy_invariants.rs"
+          ],
+          "mutation_note": "Mutation must kill a revoke error that skips local deletion, a purge that crosses owners, and an admin route reachable on the public listener."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/review-domain/src/",
+      "crates/adapter-atproto-oauth/src/",
+      "crates/adapter-review-store/src/",
+      "crates/openlore-review-app/",
+      "crates/ports/src/",
+      "crates/claim-domain/src/",
+      "crates/appview-domain/src/",
+      "crates/viewer-domain/src/",
+      "crates/adapter-github/src/",
+      "crates/adapter-atproto-did/src/",
+      "crates/adapter-atproto-pds/src/",
+      "crates/adapter-atproto-ingest/src/",
+      "crates/adapter-duckdb/src/",
+      "crates/adapter-index-store/src/",
+      "crates/openlore-indexer/src/",
+      "crates/cli/src/",
+      "xtask/src/",
+      "deploy/review-app/",
+      "deploy/tofu/",
+      ".github/workflows/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "xtask/tests/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-10-04",
+    "note": "3 phases / 15 steps / 123 scenarios, each activated by exactly one step (WS-1..WS-4 temporarily ignored at 01-01, re-enabled at 01-02..01-05). WS GREEN at 01-05. Steps/production files \u2248 15/75 = 0.2. Deviations from DISTILL release tags: CORE-3 pulled into 01-05 (verdict born there); PV-3, OP-5, OP-6 moved to Phase 03 because their full journey ends with a retract. review_app_walking_skeleton and review_app_self_attested_readers stay registered in crates/cli; the other six app suites move to crates/openlore-review-app.",
+    "operator_follow_ups": [
+      "R-0/O-2: SPIKE-1 + SPIKE-3 on the OpenLore PDS before US-BRA-004 is used in production",
+      "R-1/O-3: fine-grained GitHub PAT + SSM parameters (client-jwk, data-key, github-token, log-salt)",
+      "tofu-aws-pds v1.7.0 (M-1 Caddy sites mount, M-2 IMDS hop limit 1) in the module repo, then lockstep ?ref bump in bootstrap + prod",
+      "R-2 tofu apply (bootstrap IAM, prod replace + review-app.tf alarms disabled), R-3/O-1 GHCR package public, O-4 SNS subscription confirmed, R-4..R-7 deploy, soft launch, rollback drill, alarms enable, announce"
+    ]
+  }
+}
