@@ -185,6 +185,147 @@ fn base58btc_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+// -----------------------------------------------------------------------------
+// ADR-071: the ONE lexicon-JSON → ClaimRecord decode every reader shares
+// -----------------------------------------------------------------------------
+
+/// Decode a lexicon-shaped `org.openlore.claim` JSON body into a
+/// [`ClaimRecord`](crate::ClaimRecord): a `signature` block makes it
+/// app-signed (`sig` base64url-no-pad decoded; `kid` defaulting to
+/// `fallback_kid`), its absence makes it self-attested. The claim CID is
+/// recomputed here; NO trust decision is made (see `provenance_verdict`).
+/// `Err` names the unreadable field.
+pub fn decode_claim_record(
+    body: &serde_json::Value,
+    fallback_kid: &str,
+) -> Result<crate::ClaimRecord, String> {
+    let unsigned = decode_unsigned_claim(body)?;
+    let canonical =
+        crate::canonicalize(&unsigned).map_err(|e| format!("canonicalize claim: {e}"))?;
+    let Some(signature) = body.get("signature") else {
+        return crate::SelfAttestedClaim::new(unsigned)
+            .map(crate::ClaimRecord::SelfAttested)
+            .map_err(|e| format!("canonicalize claim: {e}"));
+    };
+    let sig_obj = signature
+        .as_object()
+        .ok_or_else(|| "signature block missing".to_string())?;
+    let sig_b64 = sig_obj
+        .get("sig")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "signature.sig missing".to_string())?;
+    let signature_bytes =
+        base64url_decode(sig_b64).map_err(|e| format!("signature.sig is not base64url: {e}"))?;
+    let verification_method = sig_obj
+        .get("kid")
+        .and_then(|v| v.as_str())
+        .map_or_else(|| fallback_kid.to_string(), str::to_string);
+    Ok(crate::ClaimRecord::AppSigned(crate::SignedClaim {
+        unsigned,
+        signature: crate::SignatureBlock {
+            signed_cid: crate::compute_cid(&canonical),
+            signature_bytes,
+            verification_method,
+        },
+    }))
+}
+
+fn decode_unsigned_claim(body: &serde_json::Value) -> Result<crate::UnsignedClaim, String> {
+    let evidence = body
+        .get("evidence")
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let confidence = body
+        .get("confidence")
+        .and_then(crate::Confidence::from_wire)
+        .ok_or_else(|| "confidence missing or not a number".to_string())?;
+    Ok(crate::UnsignedClaim {
+        subject: required_str(body, "subject")?,
+        predicate: required_str(body, "predicate")?,
+        object: required_str(body, "object")?,
+        evidence,
+        confidence,
+        author_did: crate::Did(required_str(body, "author")?),
+        composed_at: required_str(body, "composedAt")?,
+        references: decode_references(body)?,
+        reason: body
+            .get("reason")
+            .and_then(|r| r.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn decode_references(body: &serde_json::Value) -> Result<Vec<crate::ClaimReference>, String> {
+    let Some(entries) = body.get("references").and_then(|r| r.as_array()) else {
+        return Ok(Vec::new());
+    };
+    entries
+        .iter()
+        .map(|entry| {
+            let type_str = entry
+                .get("type")
+                .and_then(|t| t.as_str())
+                .ok_or_else(|| "reference entry missing `type`".to_string())?;
+            let cid = entry
+                .get("cid")
+                .and_then(|c| c.as_str())
+                .ok_or_else(|| "reference entry missing `cid`".to_string())?;
+            let ref_type = match type_str {
+                "retracts" => crate::ReferenceType::Retracts,
+                "corrects" => crate::ReferenceType::Corrects,
+                "counters" => crate::ReferenceType::Counters,
+                "supersedes" => crate::ReferenceType::Supersedes,
+                other => return Err(format!("unknown reference type `{other}`")),
+            };
+            Ok(crate::ClaimReference {
+                ref_type,
+                cid: crate::Cid(cid.to_string()),
+            })
+        })
+        .collect()
+}
+
+fn required_str(body: &serde_json::Value, key: &str) -> Result<String, String> {
+    body.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("required field `{key}` missing or not a string"))
+}
+
+/// base64url-no-pad decode of `signature.sig`, byte-identical to the
+/// decoder the app-signed readers always used (AC-009.4): leftover bits of a
+/// short final chunk are dropped, never an error.
+fn base64url_decode(text: &str) -> Result<Vec<u8>, String> {
+    fn sextet(c: u8) -> Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok(u32::from(c - b'A')),
+            b'a'..=b'z' => Ok(u32::from(c - b'a' + 26)),
+            b'0'..=b'9' => Ok(u32::from(c - b'0' + 52)),
+            b'-' => Ok(62),
+            b'_' => Ok(63),
+            other => Err(format!("invalid base64url char {:?}", other as char)),
+        }
+    }
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    for chunk in text.as_bytes().chunks(4) {
+        let (mut acc, mut bits) = (0u32, 0u32);
+        for &c in chunk {
+            acc = (acc << 6) | sextet(c)?;
+            bits += 6;
+        }
+        while bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

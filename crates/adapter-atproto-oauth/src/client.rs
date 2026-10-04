@@ -183,7 +183,7 @@ fn identity_of_app_state(app_state: Option<&str>) -> Option<ResolvedIdentity> {
 
 /// The confidential client and the store it persists through.
 pub(crate) struct Handshake {
-    client: Arc<AtriumClient>,
+    pub(crate) client: Arc<AtriumClient>,
     secrets: Arc<dyn SecretStorePort>,
     scopes: Vec<Scope>,
 }

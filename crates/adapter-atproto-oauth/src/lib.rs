@@ -13,6 +13,7 @@
 
 mod client;
 mod probe;
+mod write;
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -8,8 +8,11 @@
 //! 1. Issues `com.atproto.repo.listRecords` (walking ALL cursors per
 //!    Q-DELIVER-5) / `com.atproto.repo.getRecord` against the peer's
 //!    PDS endpoint (taken FRESH per ADR-016 — never cached on the adapter).
-//! 2. Parses each returned record's `value` (lexicon JSON) into the
-//!    domain `SignedRecord` ADT, carrying the peer-published `rkey`.
+//! 2. Parses each returned record's `value` (lexicon JSON) through the ONE
+//!    shared decoder (`claim_domain::decode_claim_record`) into the domain
+//!    `SignedRecord`, carrying the peer-published `rkey`. ADR-071: a record
+//!    with no `signature` parses as `ClaimRecord::SelfAttested`; the verb's
+//!    provenance verdict decides whether it is admitted.
 //!
 //! Signature verification + CID byte-matching are NOT this adapter's job
 //! (component-boundaries §adapter-atproto-pds) — they happen in
@@ -34,10 +37,7 @@
 //!     DRIVES (it re-computes CIDs against the listed records), so the
 //!     read path and the probe arm have different call directions.
 
-use ports::claim_domain::{
-    self, Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim,
-    UnsignedClaim,
-};
+use ports::claim_domain::{self, ClaimRecord, Did};
 use ports::{PdsError, PeerRecordPage, SignedRecord};
 use url::Url;
 
@@ -245,134 +245,19 @@ fn parse_record_view(peer_did: &Did, view: &serde_json::Value) -> Result<SignedR
             detail: "record view has neither `uri` nor `cid` to derive the rkey".to_string(),
         })?;
 
-    let signed_claim = parse_signed_claim(peer_did, body)?;
-    Ok(SignedRecord { rkey, signed_claim })
+    let record = parse_claim_record(peer_did, body)?;
+    Ok(SignedRecord { rkey, record })
 }
 
-/// Parse a lexicon-shaped claim JSON body into the domain `SignedClaim`.
-///
-/// Maps the wire field names (`author`, `composedAt`, nested
-/// `signature: {kid, alg, sig}`) onto the domain ADT. The signature `sig`
-/// is base64url-no-pad decoded into raw bytes. The unsigned-CID is
-/// recomputed locally via `canonicalize` + `compute_cid` so the returned
-/// `SignedClaim.signature.signed_cid` is well-formed — but NO trust
-/// decision is made here (the verb byte-matches it against `rkey` and runs
-/// `verify`).
-fn parse_signed_claim(peer_did: &Did, body: &serde_json::Value) -> Result<SignedClaim, PdsError> {
-    let invalid = |detail: String| PdsError::PeerRecordSchemaInvalid { detail };
-
-    let subject = required_str(body, "subject").map_err(invalid)?;
-    let predicate = required_str(body, "predicate").map_err(invalid)?;
-    let object = required_str(body, "object").map_err(invalid)?;
-    let author = required_str(body, "author").map_err(invalid)?;
-    let composed_at = required_str(body, "composedAt").map_err(invalid)?;
-
-    let evidence: Vec<String> = body
-        .get("evidence")
-        .and_then(|e| e.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Integer basis points (the ATProto-safe form) or a legacy float.
-    let confidence = body
-        .get("confidence")
-        .and_then(Confidence::from_wire)
-        .ok_or_else(|| invalid("confidence missing or not a number".to_string()))?;
-
-    let references = parse_references(body).map_err(invalid)?;
-    let reason = body
-        .get("reason")
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string());
-
-    let unsigned = UnsignedClaim {
-        subject,
-        predicate,
-        object,
-        evidence,
-        confidence,
-        author_did: Did(author),
-        composed_at,
-        references,
-        reason,
-    };
-
-    // Signature block: decode `sig` base64url-no-pad → raw bytes; carry the
-    // `kid` as the verification method.
-    let sig_obj = body
-        .get("signature")
-        .and_then(|s| s.as_object())
-        .ok_or_else(|| invalid("signature block missing".to_string()))?;
-    let sig_b64 = sig_obj
-        .get("sig")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| invalid("signature.sig missing".to_string()))?;
-    let signature_bytes = base64url_no_pad_decode(sig_b64)
-        .map_err(|e| invalid(format!("signature.sig is not base64url: {e}")))?;
-    let verification_method = sig_obj
-        .get("kid")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("{}#org.openlore.application", peer_did.0));
-
-    // Recompute the unsigned-CID locally so the returned SignedClaim is
-    // self-consistent. NO trust decision — the verb byte-matches this
-    // against the published rkey (WD-24).
-    let canonical = claim_domain::canonicalize(&unsigned)
-        .map_err(|e| invalid(format!("canonicalize peer claim: {e}")))?;
-    let signed_cid: Cid = claim_domain::compute_cid(&canonical);
-
-    Ok(SignedClaim {
-        unsigned,
-        signature: SignatureBlock {
-            signed_cid,
-            signature_bytes,
-            verification_method,
-        },
-    })
-}
-
-/// Parse the optional `references[]` array (`{type, cid}` entries) into
-/// the domain `ClaimReference` list.
-fn parse_references(body: &serde_json::Value) -> Result<Vec<ClaimReference>, String> {
-    let Some(arr) = body.get("references").and_then(|r| r.as_array()) else {
-        return Ok(Vec::new());
-    };
-    arr.iter()
-        .map(|entry| {
-            let type_str = entry
-                .get("type")
-                .and_then(|t| t.as_str())
-                .ok_or_else(|| "reference entry missing `type`".to_string())?;
-            let cid = entry
-                .get("cid")
-                .and_then(|c| c.as_str())
-                .ok_or_else(|| "reference entry missing `cid`".to_string())?;
-            let ref_type = match type_str {
-                "retracts" => ReferenceType::Retracts,
-                "corrects" => ReferenceType::Corrects,
-                "counters" => ReferenceType::Counters,
-                "supersedes" => ReferenceType::Supersedes,
-                other => return Err(format!("unknown reference type `{other}`")),
-            };
-            Ok(ClaimReference {
-                ref_type,
-                cid: Cid(cid.to_string()),
-            })
-        })
-        .collect()
-}
-
-/// Extract a required string field by `key`, naming it on absence.
-fn required_str(body: &serde_json::Value, key: &str) -> Result<String, String> {
-    body.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("required field `{key}` missing or not a string"))
+/// Parse a lexicon-shaped claim JSON body into the domain `ClaimRecord`
+/// (ADR-071: app-signed when a `signature` block is present, self-attested
+/// otherwise). The CID is recomputed locally; NO trust decision is made here
+/// (the verb byte-matches it against `rkey` and runs the provenance verdict).
+/// An absent `kid` defaults to the peer's `#org.openlore.application` key.
+fn parse_claim_record(peer_did: &Did, body: &serde_json::Value) -> Result<ClaimRecord, PdsError> {
+    let fallback_kid = format!("{}#org.openlore.application", peer_did.0);
+    claim_domain::decode_claim_record(body, &fallback_kid)
+        .map_err(|detail| PdsError::PeerRecordSchemaInvalid { detail })
 }
 
 /// Minimal percent-encoding for XRPC query parameters. DIDs carry `:`
@@ -391,56 +276,29 @@ fn urlencode(value: &str) -> String {
     out
 }
 
-/// base64url-no-pad decode (the lexicon `signature.sig` wire encoding per
-/// ADR-006). Hand-rolled so the adapter does not pull a base64 crate; MUST
-/// agree byte-for-byte with the encoder the acceptance harness uses.
-fn base64url_no_pad_decode(s: &str) -> Result<Vec<u8>, String> {
-    fn val(c: u8) -> Result<u32, String> {
-        match c {
-            b'A'..=b'Z' => Ok((c - b'A') as u32),
-            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
-            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
-            b'-' => Ok(62),
-            b'_' => Ok(63),
-            other => Err(format!("invalid base64url char {:?}", other as char)),
-        }
-    }
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    for chunk in bytes.chunks(4) {
-        let mut acc = 0u32;
-        let mut bits = 0;
-        for &c in chunk {
-            acc = (acc << 6) | val(c)?;
-            bits += 6;
-        }
-        // Emit the full bytes accumulated (drop the leftover < 8 bits).
-        while bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xff) as u8);
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// base64url round-trip across the byte domain (0..=255 covered via a
-    /// representative vector including the high bit). The encoder lives in
-    /// the acceptance harness; this pins the decoder contract so a drift
-    /// reds here, not silently in a subprocess pull.
+    /// The url-safe base64 alphabet decodes (`-` and `_`) into the raw
+    /// signature bytes of an app-signed record.
     #[test]
-    fn base64url_decode_roundtrips_known_vectors() {
-        // "Man" → "TWFu"; "Ma" → "TWE"; "M" → "TQ" (no padding).
-        assert_eq!(base64url_no_pad_decode("TWFu").unwrap(), b"Man");
-        assert_eq!(base64url_no_pad_decode("TWE").unwrap(), b"Ma");
-        assert_eq!(base64url_no_pad_decode("TQ").unwrap(), b"M");
-        // url-safe alphabet: 0xFB,0xFF,0xBF encodes with `-` and `_`.
+    fn signature_bytes_decode_from_url_safe_base64() {
+        let peer = Did("did:plc:jeff".to_string());
+        let body = serde_json::json!({
+            "subject": "s", "predicate": "p", "object": "o", "confidence": 5000,
+            "author": "did:plc:jeff#org.openlore.application",
+            "composedAt": "2026-05-22T09:18:44Z",
+            "signature": {"sig": "-_-_"}
+        });
+        let ClaimRecord::AppSigned(signed) = parse_claim_record(&peer, &body).expect("parses")
+        else {
+            panic!("a signature block makes the record app-signed");
+        };
+        assert_eq!(signed.signature.signature_bytes, vec![0xfb, 0xff, 0xbf]);
         assert_eq!(
-            base64url_no_pad_decode("-_-_").unwrap(),
-            vec![0xfb, 0xff, 0xbf]
+            signed.signature.verification_method,
+            "did:plc:jeff#org.openlore.application"
         );
     }
 
@@ -487,7 +345,11 @@ mod tests {
                 "sig": "TWFu"
             }
         });
-        let signed = parse_signed_claim(&peer, &body).expect("well-formed body parses");
+        let ClaimRecord::AppSigned(signed) =
+            parse_claim_record(&peer, &body).expect("well-formed body parses")
+        else {
+            panic!("a signature block makes the record app-signed");
+        };
         assert_eq!(signed.unsigned.subject, "github:rust-lang/cargo");
         assert_eq!(
             signed.unsigned.author_did.0,
@@ -501,18 +363,19 @@ mod tests {
         );
     }
 
-    /// A body missing the signature block fails to parse with a structured
-    /// schema-invalid error (never a panic).
+    /// ADR-071: a body with no signature block parses as a self-attested
+    /// record (the verdict, not the parser, decides whether it is admitted).
     #[test]
-    fn parse_signed_claim_rejects_missing_signature() {
+    fn a_body_without_a_signature_parses_as_self_attested() {
         let peer = Did("did:plc:rachel-test".to_string());
         let body = serde_json::json!({
             "subject": "s", "predicate": "p", "object": "o",
-            "confidence": 0.5,
-            "author": "did:plc:rachel-test#org.openlore.application",
+            "confidence": 2500,
+            "author": "did:plc:rachel-test",
             "composedAt": "2026-05-22T09:18:44Z"
         });
-        let err = parse_signed_claim(&peer, &body).expect_err("missing signature must reject");
-        assert!(matches!(err, PdsError::PeerRecordSchemaInvalid { .. }));
+        let record = parse_claim_record(&peer, &body).expect("an unsigned body parses");
+        assert!(matches!(record, ClaimRecord::SelfAttested(_)));
+        assert_eq!(record.unsigned().author_did, peer);
     }
 }

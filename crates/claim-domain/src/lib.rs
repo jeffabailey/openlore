@@ -27,6 +27,7 @@ mod cid;
 mod confidence;
 mod decode;
 mod normalize;
+mod provenance;
 mod references;
 mod retraction;
 mod sign;
@@ -39,9 +40,15 @@ pub use confidence::confidence_bucket;
 // Slice-05 (ADR-026): the PURE z6Mk publicKeyMultibase decode helper + its
 // value types. `verify`/`compute_cid` are UNCHANGED and reused (no second path).
 pub use decode::{
-    decode_ed25519_multibase, encode_ed25519_multibase, DecodeError, KeyId, VerificationKey,
+    decode_claim_record, decode_ed25519_multibase, encode_ed25519_multibase, DecodeError, KeyId,
+    VerificationKey,
 };
 pub use normalize::normalize_reason;
+// ADR-071: self-attested provenance — the record ADT + the pure verdict.
+pub use provenance::{
+    provenance_mode, provenance_verdict, ClaimRecord, Provenance, ProvenanceMode,
+    ProvenanceRejection, RecordOrigin, SelfAttestedClaim,
+};
 pub use references::reference_rules_validate;
 // ADR-060 D-RF-D3 self-retraction rule, hoisted here so appview search and
 // person inference share ONE rule (contributor-philosophy-inference DDD-7).

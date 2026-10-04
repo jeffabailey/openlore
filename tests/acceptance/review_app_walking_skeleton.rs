@@ -217,7 +217,6 @@ fn priya_sees_private_evidence_backed_suggestions_from_her_own_repos() {
 ///   And when Maria adds Priya as a peer and pulls, OpenLore stores the claim and shows it as "self-attested", never "unverified"
 /// ```
 #[test]
-#[ignore = "DELIVER 01-05: unskip when the review app ships approve + self-attested publish"]
 fn priya_approves_a_suggestion_and_it_lands_in_her_own_pds_accepted_by_openlore_as_self_attested() {
     use review_app::state_delta::{assert_state_delta, Delta};
 

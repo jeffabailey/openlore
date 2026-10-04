@@ -65,13 +65,34 @@ enum ProvenanceVerdict {
 }
 
 fn sut_provenance(
-    _signature_present: bool,
-    _author: &str,
-    _repo_did: &str,
-    _origin_is_author_pds: bool,
-    _recomputed_cid_matches_rkey: bool,
+    signature_present: bool,
+    author: &str,
+    repo_did: &str,
+    origin_is_author_pds: bool,
+    recomputed_cid_matches_rkey: bool,
 ) -> ProvenanceVerdict {
-    todo!("SCAFFOLD: bind claim_domain provenance verdict (ADR-071)")
+    use claim_domain::{provenance_mode, Did, ProvenanceMode, ProvenanceRejection, RecordOrigin};
+    let origin = if origin_is_author_pds {
+        RecordOrigin::AuthorPds
+    } else {
+        RecordOrigin::Relay
+    };
+    match provenance_mode(
+        signature_present,
+        &Did(author.to_string()),
+        &Did(repo_did.to_string()),
+        origin,
+        recomputed_cid_matches_rkey,
+    ) {
+        Ok(ProvenanceMode::AppSignedPath) => ProvenanceVerdict::AppSignedPath,
+        Ok(ProvenanceMode::SelfAttested { .. }) => ProvenanceVerdict::SelfAttested,
+        Err(ProvenanceRejection::MalformedProvenance) => ProvenanceVerdict::MalformedProvenance,
+        Err(ProvenanceRejection::ForeignRepo) => ProvenanceVerdict::ForeignRepo,
+        Err(ProvenanceRejection::UnverifiableProvenance) => {
+            ProvenanceVerdict::UnverifiableProvenance
+        }
+        Err(_) => ProvenanceVerdict::IntegrityFailure,
+    }
 }
 
 /// A suggestion key `(subject, predicate, object)` (BR-1).
@@ -110,14 +131,29 @@ struct PlanView {
 }
 
 fn sut_publish_plan(
-    _did: &str,
-    _subject: &str,
-    _object: &str,
-    _evidence: &[String],
-    _basis_points: i64,
-    _composed_at: &str,
+    did: &str,
+    subject: &str,
+    object: &str,
+    evidence: &[String],
+    basis_points: i64,
+    composed_at: &str,
 ) -> PlanView {
-    todo!("SCAFFOLD: bind review_domain PublishPlan (Plan-value, AC-004.4)")
+    use review_domain::plans::{publish_plan, ClaimDraft};
+    let draft = ClaimDraft {
+        key: ports::SuggestionKey {
+            subject: subject.to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: object.to_string(),
+        },
+        evidence: evidence.to_vec(),
+        confidence_bp: u16::try_from(basis_points).expect("0..=10000 basis points"),
+    };
+    let plan = publish_plan(did, &draft, composed_at).expect("a plan");
+    PlanView {
+        record: plan.record(),
+        rkey: plan.rkey().to_string(),
+        preview_text: review_domain::views::approval_preview_page(&plan, "csrf"),
+    }
 }
 
 /// The share post as observed: text, and the link facet's byte range + URI.
@@ -370,7 +406,6 @@ proptest! {
     /// The provenance verdict follows the ADR-071 table for every combination
     /// of signature × author shape × origin × CID match, over generated DIDs.
     #[test]
-    #[ignore = "DELIVER R2: unskip one-at-a-time (CORE-3 provenance table)"]
     fn the_provenance_verdict_follows_the_adr_071_table(
         repo in arb_did(), other in arb_did(),
         sig in any::<bool>(), author_shape in 0u8..3, author_pds in any::<bool>(), cid_ok in any::<bool>()
@@ -442,7 +477,6 @@ proptest! {
     /// lexicon keys only, basis points), its key is its recomputed CID, and
     /// the preview shows every written value plus "not as truth".
     #[test]
-    #[ignore = "DELIVER WS: unskip one-at-a-time (CORE-6 plan == record)"]
     fn a_publish_plan_record_is_its_preview_and_its_key_is_its_cid(
         did in arb_did(), key in arb_key(), bp in 0i64..=10_000,
         evidence in prop::collection::vec("https://github\\.com/[a-z]{1,8}/[a-z]{1,8}", 1..4)

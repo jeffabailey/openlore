@@ -335,3 +335,77 @@ pub trait ReviewStateWrite: Send + Sync {
         to: SuggestionState,
     ) -> Result<bool, ReviewStoreError>;
 }
+
+// -----------------------------------------------------------------------------
+// US-BRA-004 — publish plans and the create-only write to the user's own repo
+// -----------------------------------------------------------------------------
+
+/// A publish plan as stored between preview and confirm (Plan-value
+/// pattern): the exact record the preview showed, keyed by its CID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPublishPlan {
+    /// The record key = the claim's canonical CID.
+    pub plan_id: String,
+    pub key: SuggestionKey,
+    /// The exact `org.openlore.claim` record JSON to be written.
+    pub record_json: String,
+}
+
+/// Owner-scoped publish plans. `take` removes the plan as it returns it, so
+/// a plan is executed at most once.
+pub trait PublishPlanPort: Send + Sync {
+    fn put_publish_plan(
+        &self,
+        owner_did: &str,
+        plan: &StoredPublishPlan,
+    ) -> Result<(), ReviewStoreError>;
+    fn take_publish_plan(
+        &self,
+        owner_did: &str,
+        plan_id: &str,
+    ) -> Result<Option<StoredPublishPlan>, ReviewStoreError>;
+}
+
+/// The record a create landed (or already held, ADR-073 idempotency).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedRecord {
+    pub uri: String,
+}
+
+/// Why the user's PDS did not take or return a record.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RepoWriteError {
+    #[error("no live session for this account")]
+    NoSession,
+    #[error("the PDS is unreachable: {detail}")]
+    Unreachable { detail: String },
+    #[error("the PDS session has expired")]
+    SessionExpired,
+    #[error("the PDS refused the request ({status}): {detail}")]
+    Refused { status: u16, detail: String },
+}
+
+/// Create-only access to the signed-in user's OWN repo, claim collection
+/// only (ADR-073, I-BRA-8): there is no update, put or delete to call.
+#[async_trait]
+pub trait UserRepoWritePort: Send + Sync {
+    /// Create `record` under `rkey` in `owner_did`'s claim collection via
+    /// the user's DPoP session. An existing record under the same key is
+    /// success (the key is the content's CID).
+    async fn create_claim_record(
+        &self,
+        owner_did: &str,
+        rkey: &str,
+        record: &serde_json::Value,
+    ) -> Result<CreatedRecord, RepoWriteError>;
+}
+
+/// Read a claim record back from the user's own repo (DWD-5 read-back).
+#[async_trait]
+pub trait UserRepoReadPort: Send + Sync {
+    async fn read_claim_record(
+        &self,
+        owner_did: &str,
+        rkey: &str,
+    ) -> Result<serde_json::Value, RepoWriteError>;
+}

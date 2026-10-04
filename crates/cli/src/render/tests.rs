@@ -162,7 +162,7 @@ fn federated_row(
     FederatedRow {
         author_did: Did(author_did.to_string()),
         author_relationship: relationship,
-        signed_claim: SignedClaim {
+        claim: claim_domain::ClaimRecord::AppSigned(SignedClaim {
             unsigned: UnsignedClaim {
                 subject: "github:rust-lang/cargo".to_string(),
                 predicate: "embodiesPhilosophy".to_string(),
@@ -179,7 +179,7 @@ fn federated_row(
                 signature_bytes: vec![0u8; 64],
                 verification_method: format!("{author_did}#org.openlore.application"),
             },
-        },
+        }),
         source_table,
     }
 }
@@ -196,10 +196,12 @@ fn federated_counter_row(
     counters_target: &str,
 ) -> FederatedRow {
     let mut row = federated_row(author_did, cid, relationship, source_table);
-    row.signed_claim.unsigned.references = vec![ClaimReference {
-        ref_type: claim_domain::ReferenceType::Counters,
-        cid: Cid(counters_target.to_string()),
-    }];
+    if let claim_domain::ClaimRecord::AppSigned(signed) = &mut row.claim {
+        signed.unsigned.references = vec![ClaimReference {
+            ref_type: claim_domain::ReferenceType::Counters,
+            cid: Cid(counters_target.to_string()),
+        }];
+    }
     row
 }
 

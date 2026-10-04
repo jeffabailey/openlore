@@ -11,6 +11,9 @@
 //!   `schema_version` so reopening the DB twice is a no-op.
 //! - The probe refuses to open a DB whose `schema_version` is HIGHER
 //!   than `LATEST_VERSION` (the binary is older than the file).
+//! - Later slices add follow-on, self-gated migrations beside this runner
+//!   (`schema_v3` .. `schema_v6`); v6 is ADR-071's additive
+//!   `peer_claims.provenance` column (`app-signed` | `self-attested`).
 //!
 //! ## Functional discipline
 //!

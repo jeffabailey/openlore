@@ -59,6 +59,7 @@ mod schema;
 mod schema_v3;
 mod schema_v4;
 mod schema_v5;
+mod schema_v6;
 mod store_read;
 
 pub use contribution_links::DuckDbContributionLinkAdapter;
@@ -117,6 +118,9 @@ impl DuckDbStorageAdapter {
         // contributor-philosophy-inference migration v5: the append-only
         // `contribution_links` table (DDD-5). Idempotent forward-only.
         schema_v5::run_migration(&mut conn)?;
+        // bluesky-claim-review-app migration v6 (ADR-071): the additive
+        // `peer_claims.provenance` column. Idempotent forward-only.
+        schema_v6::run_migration(&mut conn)?;
         drop(conn);
 
         // Colocate `claims/` next to the DB file. data-models.md
@@ -253,6 +257,40 @@ impl DuckDbStorageAdapter {
     /// `<root>/peer_claims`), matching `DuckDbPeerStorageAdapter`'s own
     /// `get_peer_claim_by_cid` resolution.
     fn read_artifact_at(&self, artifact_path: &str) -> Result<SignedClaim, StorageError> {
+        let (resolved, bytes) = self.read_artifact_bytes(artifact_path)?;
+        serde_json::from_slice(&bytes).map_err(|err| StorageError::QueryFailed {
+            message: format!(
+                "deserialize federated artifact {}: {err}",
+                resolved.display()
+            ),
+        })
+    }
+
+    /// Read a federated row's claim in its stored ADR-071 mode: an
+    /// app-signed artifact is the `SignedClaim` serde shape; a self-attested
+    /// artifact is the `UnsignedClaim` shape, re-paired with its CID.
+    fn read_claim_record_at(
+        &self,
+        artifact_path: &str,
+        provenance: &str,
+    ) -> Result<claim_domain::ClaimRecord, StorageError> {
+        if provenance != SELF_ATTESTED {
+            return self
+                .read_artifact_at(artifact_path)
+                .map(claim_domain::ClaimRecord::AppSigned);
+        }
+        let (resolved, bytes) = self.read_artifact_bytes(artifact_path)?;
+        let failed = |detail: String| StorageError::QueryFailed {
+            message: format!("self-attested artifact {}: {detail}", resolved.display()),
+        };
+        let unsigned: claim_domain::UnsignedClaim =
+            serde_json::from_slice(&bytes).map_err(|err| failed(err.to_string()))?;
+        claim_domain::SelfAttestedClaim::new(unsigned)
+            .map(claim_domain::ClaimRecord::SelfAttested)
+            .map_err(|err| failed(err.to_string()))
+    }
+
+    fn read_artifact_bytes(&self, artifact_path: &str) -> Result<(PathBuf, Vec<u8>), StorageError> {
         let resolved: PathBuf = match artifact_path.strip_prefix("peer_claims/") {
             Some(relative) => self.peer_claims_root.join(relative),
             None => PathBuf::from(artifact_path),
@@ -260,12 +298,7 @@ impl DuckDbStorageAdapter {
         let bytes = fs::read(&resolved).map_err(|err| StorageError::QueryFailed {
             message: format!("read federated artifact {}: {err}", resolved.display()),
         })?;
-        serde_json::from_slice(&bytes).map_err(|err| StorageError::QueryFailed {
-            message: format!(
-                "deserialize federated artifact {}: {err}",
-                resolved.display()
-            ),
-        })
+        Ok((resolved, bytes))
     }
 }
 
@@ -276,7 +309,11 @@ struct FederatedProjection {
     author_did: String,
     source_table: String,
     artifact_path: String,
+    provenance: String,
 }
+
+/// The `peer_claims.provenance` value of a self-attested row (ADR-071, v6).
+pub(crate) const SELF_ATTESTED: &str = "self-attested";
 
 // -----------------------------------------------------------------------------
 // `StoragePort` impl — port-shaped, railway-oriented (nw-fp-domain-modeling §8)
@@ -693,18 +730,20 @@ impl StoragePort for DuckDbStorageAdapter {
 
             let mut stmt = conn
                 .prepare(
-                    "SELECT author_did, cid, source_table, artifact_path FROM ( \
+                    "SELECT author_did, cid, source_table, artifact_path, provenance FROM ( \
                        SELECT c.author_did AS author_did, \
                               c.cid AS cid, \
                               'Own' AS source_table, \
-                              c.artifact_path AS artifact_path \
+                              c.artifact_path AS artifact_path, \
+                              'app-signed' AS provenance \
                        FROM claims c \
                        WHERE c.subject = ? \
                        UNION ALL \
                        SELECT pc.author_did AS author_did, \
                               pc.cid AS cid, \
                               'Peer' AS source_table, \
-                              pc.signed_record_path AS artifact_path \
+                              pc.signed_record_path AS artifact_path, \
+                              pc.provenance AS provenance \
                        FROM peer_claims pc \
                        WHERE pc.subject = ? \
                      ) ORDER BY source_table, cid",
@@ -719,6 +758,7 @@ impl StoragePort for DuckDbStorageAdapter {
                         author_did: row.get::<_, String>(0)?,
                         source_table: row.get::<_, String>(2)?,
                         artifact_path: row.get::<_, String>(3)?,
+                        provenance: row.get::<_, String>(4)?,
                     })
                 })
                 .map_err(|err| StorageError::QueryFailed {
@@ -772,12 +812,13 @@ impl StoragePort for DuckDbStorageAdapter {
                 }
             };
 
-            let signed_claim = self.read_artifact_at(&projection.artifact_path)?;
+            let claim =
+                self.read_claim_record_at(&projection.artifact_path, &projection.provenance)?;
 
             results.push(FederatedRow {
                 author_did: claim_domain::Did(author_did),
                 author_relationship,
-                signed_claim,
+                claim,
                 source_table,
             });
         }
@@ -1295,14 +1336,9 @@ mod tests {
 
         // The signed claims round-trip: the own row's CID matches, and each
         // peer row's CID is one of the two we wrote (no CID drift).
-        assert_eq!(
-            own_rows[0].signed_claim.signature.signed_cid.0,
-            own.signature.signed_cid.0
-        );
-        let peer_cids: std::collections::HashSet<String> = peer_rows
-            .iter()
-            .map(|r| r.signed_claim.signature.signed_cid.0.clone())
-            .collect();
+        assert_eq!(own_rows[0].claim.cid().0, own.signature.signed_cid.0);
+        let peer_cids: std::collections::HashSet<String> =
+            peer_rows.iter().map(|r| r.claim.cid().0.clone()).collect();
         assert_eq!(peer_cids.len(), 2, "two distinct peer CIDs preserved");
     }
 

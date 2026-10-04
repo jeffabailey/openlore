@@ -39,14 +39,14 @@ impl RepoClaim {
 
 impl From<&FederatedRow> for RepoClaim {
     fn from(row: &FederatedRow) -> Self {
-        let unsigned = &row.signed_claim.unsigned;
+        let unsigned = row.claim.unsigned();
         Self {
             repo_subject: unsigned.subject.clone(),
             predicate: unsigned.predicate.clone(),
             philosophy: unsigned.object.clone(),
             author_did: row.author_did.0.clone(),
             relationship: row.author_relationship,
-            cid: row.signed_claim.signature.signed_cid.0.clone(),
+            cid: row.claim.cid().0.clone(),
             confidence: Hundredths::floor_of(unsigned.confidence.value()),
             references: unsigned.references.clone(),
         }

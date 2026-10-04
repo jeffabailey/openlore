@@ -15,6 +15,7 @@ maud = { workspace = true }
 # Pure shared value types (Suggestion, ScanStatus, CandidateClaim) and, through
 # its re-export, claim-domain's display-only confidence bucket.
 ports = { path = "../ports" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

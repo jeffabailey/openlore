@@ -11,6 +11,7 @@
 
 mod expiry;
 mod github_links;
+mod plans;
 mod probe;
 mod scan_runs;
 pub mod schema;

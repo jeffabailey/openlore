@@ -10,6 +10,7 @@
 pub mod budget;
 pub mod lifecycle;
 pub mod ownership;
+pub mod plans;
 pub mod reconcile;
 pub mod signin;
 pub mod views;

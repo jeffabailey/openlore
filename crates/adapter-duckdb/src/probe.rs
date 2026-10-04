@@ -34,6 +34,7 @@ use crate::schema;
 use crate::schema_v3;
 use crate::schema_v4;
 use crate::schema_v5;
+use crate::schema_v6;
 
 /// The highest schema version THIS binary knows how to read. Each slice
 /// that adds a migration bumps this: slice-03 taught migration v3, slice-24
@@ -47,12 +48,14 @@ const fn supported_version() -> i32 {
     let v3 = schema_v3::PEER_STORAGE_VERSION;
     let v4 = schema_v4::PHILOSOPHY_STORAGE_VERSION;
     let v5 = schema_v5::CONTRIBUTION_LINKS_VERSION;
+    let v6 = schema_v6::PEER_PROVENANCE_VERSION;
     let max_v1_v3 = if v3 > v1 { v3 } else { v1 };
     let max_v1_v4 = if v4 > max_v1_v3 { v4 } else { max_v1_v3 };
-    if v5 > max_v1_v4 {
-        v5
+    let max_v1_v5 = if v5 > max_v1_v4 { v5 } else { max_v1_v4 };
+    if v6 > max_v1_v5 {
+        v6
     } else {
-        max_v1_v4
+        max_v1_v5
     }
 }
 

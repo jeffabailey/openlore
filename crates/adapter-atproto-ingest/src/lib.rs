@@ -28,9 +28,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use claim_domain::{
-    Cid, ClaimReference, Confidence, Did, ReferenceType, SignatureBlock, SignedClaim, UnsignedClaim,
-};
+use claim_domain::{Cid, ClaimRecord, SignedClaim};
 use ports::{IngestError, IngestSourcePort, ProbeOutcome, RawRecord};
 
 /// The ATProto collection the indexer pulls (public signed claims).
@@ -167,151 +165,21 @@ fn parse_record_view(view: &serde_json::Value) -> Result<RawRecord, IngestError>
     })
 }
 
-/// Parse a lexicon-shaped claim JSON body into the domain `SignedClaim`. Maps the
-/// wire field names (`author`, `composedAt`, nested `signature:{kid,alg,sig}`)
-/// onto the domain ADT; the signature `sig` is base64url-no-pad decoded into raw
-/// bytes. The unsigned-CID is recomputed locally so the `SignedClaim` is
-/// self-consistent — but NO trust decision is made (the gate verifies).
+/// Parse a lexicon-shaped claim JSON body into the domain `SignedClaim`
+/// through the ONE shared decoder (`claim_domain::decode_claim_record`). The
+/// unsigned-CID is recomputed so the claim is self-consistent — but NO trust
+/// decision is made (the gate verifies).
+///
+/// ADR-071 fail-closed: the indexer's source is an operator-configured URL,
+/// so its origin is not yet computed against the repo DID's resolved PDS. A
+/// self-attested (unsigned) record is therefore refused here exactly as an
+/// unsigned record always was, until the indexer classifies origins.
 fn parse_signed_claim(body: &serde_json::Value) -> Result<SignedClaim, IngestError> {
     let bad = |detail: String| IngestError::BadResponse { message: detail };
-
-    let subject = required_str(body, "subject").map_err(bad)?;
-    let predicate = required_str(body, "predicate").map_err(bad)?;
-    let object = required_str(body, "object").map_err(bad)?;
-    let author = required_str(body, "author").map_err(bad)?;
-    let composed_at = required_str(body, "composedAt").map_err(bad)?;
-
-    let evidence: Vec<String> = body
-        .get("evidence")
-        .and_then(|e| e.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Integer basis points (the ATProto-safe form) or a legacy float.
-    let confidence = body
-        .get("confidence")
-        .and_then(Confidence::from_wire)
-        .ok_or_else(|| bad("confidence missing or not a number".to_string()))?;
-
-    let references = parse_references(body).map_err(bad)?;
-    let reason = body
-        .get("reason")
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string());
-
-    let unsigned = UnsignedClaim {
-        subject,
-        predicate,
-        object,
-        evidence,
-        confidence,
-        author_did: Did(author),
-        composed_at,
-        references,
-        reason,
-    };
-
-    let sig_obj = body
-        .get("signature")
-        .and_then(|s| s.as_object())
-        .ok_or_else(|| bad("signature block missing".to_string()))?;
-    let sig_b64 = sig_obj
-        .get("sig")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| bad("signature.sig missing".to_string()))?;
-    let signature_bytes = base64url_no_pad_decode(sig_b64)
-        .map_err(|e| bad(format!("signature.sig is not base64url: {e}")))?;
-    let verification_method = sig_obj
-        .get("kid")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-
-    let canonical = claim_domain::canonicalize(&unsigned)
-        .map_err(|e| bad(format!("canonicalize ingested claim: {e}")))?;
-    let signed_cid: Cid = claim_domain::compute_cid(&canonical);
-
-    Ok(SignedClaim {
-        unsigned,
-        signature: SignatureBlock {
-            signed_cid,
-            signature_bytes,
-            verification_method,
-        },
-    })
-}
-
-/// Parse the optional `references[]` array (`{type, cid}` entries).
-fn parse_references(body: &serde_json::Value) -> Result<Vec<ClaimReference>, String> {
-    let Some(arr) = body.get("references").and_then(|r| r.as_array()) else {
-        return Ok(Vec::new());
-    };
-    arr.iter()
-        .map(|entry| {
-            let type_str = entry
-                .get("type")
-                .and_then(|t| t.as_str())
-                .ok_or_else(|| "reference entry missing `type`".to_string())?;
-            let cid = entry
-                .get("cid")
-                .and_then(|c| c.as_str())
-                .ok_or_else(|| "reference entry missing `cid`".to_string())?;
-            let ref_type = match type_str {
-                "retracts" => ReferenceType::Retracts,
-                "corrects" => ReferenceType::Corrects,
-                "counters" => ReferenceType::Counters,
-                "supersedes" => ReferenceType::Supersedes,
-                other => return Err(format!("unknown reference type `{other}`")),
-            };
-            Ok(ClaimReference {
-                ref_type,
-                cid: Cid(cid.to_string()),
-            })
-        })
-        .collect()
-}
-
-/// Extract a required string field by `key`, naming it on absence.
-fn required_str(body: &serde_json::Value, key: &str) -> Result<String, String> {
-    body.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("required field `{key}` missing or not a string"))
-}
-
-/// base64url-no-pad decode (the lexicon `signature.sig` wire encoding per
-/// ADR-006). MUST agree byte-for-byte with the acceptance harness encoder + the
-/// `adapter-atproto-pds::peer_read` decoder.
-fn base64url_no_pad_decode(s: &str) -> Result<Vec<u8>, String> {
-    fn val(c: u8) -> Result<u32, String> {
-        match c {
-            b'A'..=b'Z' => Ok((c - b'A') as u32),
-            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
-            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
-            b'-' => Ok(62),
-            b'_' => Ok(63),
-            other => Err(format!("invalid base64url char {:?}", other as char)),
-        }
+    match claim_domain::decode_claim_record(body, "").map_err(bad)? {
+        ClaimRecord::AppSigned(signed) => Ok(signed),
+        ClaimRecord::SelfAttested(_) => Err(bad("signature block missing".to_string())),
     }
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    for chunk in bytes.chunks(4) {
-        let mut acc = 0u32;
-        let mut bits = 0;
-        for &c in chunk {
-            acc = (acc << 6) | val(c)?;
-            bits += 6;
-        }
-        while bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xff) as u8);
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

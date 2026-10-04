@@ -213,7 +213,6 @@ fn every_review_page_is_navigable_by_keyboard_with_labelled_controls() {
 ///   And nothing is written until she confirms
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 exact-record preview)"]
 fn the_preview_shows_exactly_what_will_be_written_and_writes_nothing() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -250,7 +249,6 @@ fn the_preview_shows_exactly_what_will_be_written_and_writes_nothing() {
 ///   And no display label is stored
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 preview == record)"]
 fn the_published_record_is_the_previewed_record_field_for_field() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -306,7 +304,6 @@ fn the_published_record_is_the_previewed_record_field_for_field() {
 ///   And her queue shows the 4 remaining suggestions and 1 published
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 confirmation + queue counts)"]
 fn the_confirmation_names_the_record_and_the_way_back_and_the_queue_moves_on() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -332,7 +329,6 @@ fn the_confirmation_names_the_record_and_the_way_back_and_the_queue_moves_on() {
 ///   Then nothing is written and the suggestion is still pending
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 Back writes nothing)"]
 fn backing_out_of_the_preview_writes_nothing() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -496,7 +492,6 @@ fn a_confirmation_for_something_never_previewed_is_refused() {
 ///   And no write reached any other PDS
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (US-BRA-004 self-hosted destination)"]
 fn dmitris_approval_lands_in_his_self_hosted_pds() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Dmitri);

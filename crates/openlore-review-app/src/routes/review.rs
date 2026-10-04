@@ -5,9 +5,11 @@
 use hyper::StatusCode;
 use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
 use review_domain::lifecycle::decline;
+use review_domain::plans::{publish_plan, rfc3339_utc, ClaimDraft};
 use review_domain::views::{self, QueueView, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
+use crate::limiter::unix_now;
 use crate::routes::github::github_step_of;
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
@@ -38,6 +40,15 @@ pub(crate) fn queue_page(
         .then(|| app.review_read.pending_suggestions(&session.owner_did).ok())
         .flatten()
         .unwrap_or_default();
+    let published = verified
+        .then(|| app.review_read.suggestion_states(&session.owner_did).ok())
+        .flatten()
+        .map_or(0, |states| {
+            states
+                .iter()
+                .filter(|(_, state)| *state == SuggestionState::Published)
+                .count()
+        });
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
     let csrf_token = csrf_token_for(cookie_value);
     Reply::Page {
@@ -48,6 +59,7 @@ pub(crate) fn queue_page(
             github: github_step_of(link.as_ref()),
             latest_scan,
             pending: &pending,
+            published,
             refused,
         }),
         set_cookie: None,
@@ -55,13 +67,52 @@ pub(crate) fn queue_page(
 }
 
 /// `POST /review/approve`: the exact-record preview of one of the owner's
-/// visible pending suggestions. Writes nothing.
+/// visible pending suggestions. Builds and keeps the publish plan (the
+/// Plan-value: what is shown is what a confirm writes); writes nothing to
+/// any repo.
 pub(crate) fn approve(app: &App, request: &PageRequest) -> Reply {
-    with_own_suggestion(app, request, |_, suggestion| Reply::Page {
-        status: StatusCode::OK,
-        html: views::approval_preview_page(&suggestion),
-        set_cookie: None,
+    let csrf_token = field(&request.cookies, crate::routes::signin::SESSION_COOKIE)
+        .map(|cookie| csrf_token_for(&cookie))
+        .unwrap_or_default();
+    with_own_suggestion(app, request, |session, suggestion| {
+        let draft = ClaimDraft {
+            key: suggestion.key,
+            evidence: suggestion.evidence,
+            confidence_bp: suggestion.confidence_bp,
+        };
+        let composed_at = rfc3339_utc(i64::try_from(unix_now()).unwrap_or_default());
+        let kept = publish_plan(&session.owner_did, &draft, &composed_at)
+            .ok()
+            .filter(|plan| {
+                app.plans
+                    .put_publish_plan(&session.owner_did, &plan.stored())
+                    .is_ok()
+            });
+        match kept {
+            Some(plan) => Reply::Page {
+                status: StatusCode::OK,
+                html: views::approval_preview_page(&plan, &csrf_token),
+                set_cookie: None,
+            },
+            None => not_found(),
+        }
     })
+}
+
+/// May the owner publish the suggestion `key` right now? Only while it is
+/// pending and their GitHub link is verified (CORE-9).
+pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey) -> bool {
+    let verified = app
+        .links
+        .github_link(owner_did)
+        .ok()
+        .flatten()
+        .is_some_and(|link| link.verified);
+    verified
+        && app
+            .review_read
+            .pending_suggestions(owner_did)
+            .is_ok_and(|pending| pending.iter().any(|s| &s.key == key))
 }
 
 /// `POST /review/decline`: "Not me" — the suggestion leaves the queue,
@@ -131,7 +182,7 @@ fn key_of(request: &PageRequest) -> Option<SuggestionKey> {
     })
 }
 
-fn not_found() -> Reply {
+pub(crate) fn not_found() -> Reply {
     Reply::Page {
         status: StatusCode::NOT_FOUND,
         html: views::not_found_page(),

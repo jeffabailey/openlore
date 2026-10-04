@@ -16,7 +16,7 @@
 // SCAFFOLD: false  (data types are real; behavior arrives via traits)
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Did, SignedClaim};
+use claim_domain::{ClaimRecord, Did};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -43,7 +43,9 @@ pub struct FederatedRow {
     /// author DID is a compile error, not a runtime check.
     pub author_did: Did,
     pub author_relationship: AuthorRelationship,
-    pub signed_claim: SignedClaim,
+    /// The claim in either ADR-071 provenance mode (app-signed or
+    /// self-attested); renderers label the mode per row.
+    pub claim: ClaimRecord,
     pub source_table: SourceTable,
 }
 
@@ -116,8 +118,8 @@ pub struct VerificationMethod {
 
 /// One signed record fetched from a peer's PDS.
 ///
-/// The `rkey` is the per-PDS record key (per ATProto); `signed_claim` is
-/// the canonical claim ADT after parsing the JSON value against the
+/// The `rkey` is the per-PDS record key (per ATProto); `record` is
+/// the canonical claim ADT (ADR-071: app-signed or self-attested) after parsing the JSON value against the
 /// `org.openlore.claim` lexicon. Splitting `rkey` out (rather than
 /// recomputing it from CID) lets `peer pull` log it for diagnostics
 /// without re-encoding.
@@ -127,7 +129,7 @@ pub struct VerificationMethod {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignedRecord {
     pub rkey: String,
-    pub signed_claim: SignedClaim,
+    pub record: ClaimRecord,
 }
 
 /// One page of `PdsPort::list_peer_records` results.
@@ -196,6 +198,7 @@ mod tests {
 
     use super::*;
     use claim_domain::proptest_strategies::arb_unsigned_claim;
+    use claim_domain::SignedClaim;
     use claim_domain::{Cid, SignatureBlock};
     use proptest::prelude::*;
 
@@ -255,7 +258,7 @@ mod tests {
             let row = FederatedRow {
                 author_did: did.clone(),
                 author_relationship: rel,
-                signed_claim: signed,
+                claim: ClaimRecord::AppSigned(signed),
                 source_table: src,
             };
             prop_assert_eq!(&row.author_did, &did,

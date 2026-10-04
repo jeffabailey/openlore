@@ -615,7 +615,6 @@ fn a_renamed_or_re_registered_github_account_must_be_verified_again() {
 ///   And her approved claim still lands in her claims collection and nowhere else
 /// ```
 #[test]
-#[ignore = "BLOCKED_BY_DEPENDENCY 01-03..01-05: sign-in half green in 01-02; chains given_published (verify/scan/publish)"]
 fn with_only_the_broad_permission_the_app_says_why_and_still_writes_only_claims() {
     const FALLBACK: &str = "atproto transition:generic";
     let world =

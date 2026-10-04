@@ -24,10 +24,12 @@ mod http;
 mod limiter;
 mod routes {
     pub(crate) mod github;
+    pub(crate) mod publish;
     pub(crate) mod review;
     pub(crate) mod scan;
     pub(crate) mod signin;
 }
+mod executor;
 mod scan;
 mod wiring;
 

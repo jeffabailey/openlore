@@ -16,7 +16,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::{github, review, scan};
+use crate::routes::{github, publish, review, scan};
 use crate::wiring::{emit, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
@@ -38,6 +38,7 @@ pub(crate) enum PageRoute {
     ScanStatus,
     ApproveSuggestion,
     DeclineSuggestion,
+    ConfirmPublish,
 }
 
 /// Pure routing of the pages.
@@ -53,6 +54,7 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("GET", "/scan/status") => Some(PageRoute::ScanStatus),
         ("POST", "/review/approve") => Some(PageRoute::ApproveSuggestion),
         ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
+        ("POST", "/review/publish") => Some(PageRoute::ConfirmPublish),
         _ => None,
     }
 }
@@ -66,12 +68,14 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::StartScan if same_origin => scan::start_scan(app, request).await,
         PageRoute::ApproveSuggestion if same_origin => review::approve(app, request),
         PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
+        PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
         PageRoute::SignIn
         | PageRoute::SignOut
         | PageRoute::VerifyGithub
         | PageRoute::StartScan
         | PageRoute::ApproveSuggestion
-        | PageRoute::DeclineSuggestion => forbidden(),
+        | PageRoute::DeclineSuggestion
+        | PageRoute::ConfirmPublish => forbidden(),
         PageRoute::PdsReturn => pds_return(app, request).await,
         PageRoute::Review => review::review(app, request),
         PageRoute::GithubStep => github::github_step(app, request),

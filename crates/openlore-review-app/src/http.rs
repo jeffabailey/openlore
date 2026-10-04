@@ -15,8 +15,8 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, ReviewStateRead, ReviewStateWrite,
-    ScanRunPort, SessionPort,
+    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, PublishPlanPort, ReviewStateRead,
+    ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -64,6 +64,9 @@ pub(crate) struct App {
     pub(crate) scans: Arc<dyn ScanRunPort>,
     pub(crate) review_read: Arc<dyn ReviewStateRead>,
     pub(crate) review_write: Arc<dyn ReviewStateWrite>,
+    pub(crate) plans: Arc<dyn PublishPlanPort>,
+    pub(crate) repo_write: Arc<dyn UserRepoWritePort>,
+    pub(crate) repo_read: Arc<dyn UserRepoReadPort>,
     pub(crate) mapping: SignalPredicateMapping,
     pub(crate) verify_attempts: VerifyAttempts,
     pub(crate) scan_limiter: ScanLimiter,

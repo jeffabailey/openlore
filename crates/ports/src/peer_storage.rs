@@ -20,7 +20,7 @@
 // SCAFFOLD: false  (trait + ADTs are real; implementations land in 01-02)
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
+use claim_domain::{Cid, Did, ReferenceType, SelfAttestedClaim, SignedClaim};
 use url::Url;
 
 use crate::federated_row::PeerSubscription;
@@ -179,6 +179,19 @@ pub trait PeerStoragePort {
         &self,
         peer_did: &Did,
         signed: &SignedClaim,
+        fetched_from_pds: &Url,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<WritePeerClaimOutcome, PeerStorageError>;
+
+    /// Persist one SELF-ATTESTED peer claim (ADR-071): admitted by the
+    /// caller's provenance verdict (no signature; author = repo DID; fetched
+    /// from the author's own PDS). Same attribution guards as
+    /// [`write_peer_claim`](Self::write_peer_claim); the row is stored with
+    /// `provenance = 'self-attested'`.
+    fn write_self_attested_peer_claim(
+        &self,
+        peer_did: &Did,
+        claim: &SelfAttestedClaim,
         fetched_from_pds: &Url,
         fetched_at: DateTime<Utc>,
     ) -> Result<WritePeerClaimOutcome, PeerStorageError>;

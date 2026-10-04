@@ -337,7 +337,7 @@ mod tests {
         // Turn it back into a v4 store.
         raw_sql(
             &db,
-            "DROP TABLE contribution_links; DELETE FROM schema_version WHERE version = 5;",
+            "DROP TABLE contribution_links; DELETE FROM schema_version WHERE version >= 5;",
         );
         assert_eq!(schema_version(&db), 4);
 
@@ -368,7 +368,11 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!((schema_version(&db), v5_rows), (5, 1));
+        // v5 applied exactly once; later additive migrations (v6) follow it.
+        assert_eq!(
+            (schema_version(&db), v5_rows),
+            (crate::schema_v6::PEER_PROVENANCE_VERSION, 1)
+        );
     }
 
     #[test]

@@ -246,7 +246,6 @@ fn no_repository_is_ever_read_without_a_passing_ownership_check_just_before() {
 ///   Then it is refused and nothing is written
 /// ```
 #[test]
-#[ignore = "DELIVER WS: unskip one-at-a-time (CSRF on every POST)"]
 fn a_confirmation_without_her_pages_anti_forgery_token_is_refused() {
     let world = ReviewWorld::new();
     let mut b = given_pending_suggestions(&world, Persona::Priya);

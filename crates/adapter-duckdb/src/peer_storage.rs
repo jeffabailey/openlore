@@ -37,7 +37,7 @@ use crate::conn::{ConnGuard, SharedConn};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did, ReferenceType, SignedClaim};
+use claim_domain::{Cid, Did, ReferenceType, SelfAttestedClaim, SignedClaim, UnsignedClaim};
 use duckdb::Connection;
 use ports::{
     AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, PeerSubscription,
@@ -64,6 +64,143 @@ pub struct DuckDbPeerStorageAdapter {
 }
 
 impl DuckDbPeerStorageAdapter {
+    /// The shared write path of both ADR-071 modes: attribution guards, one
+    /// transaction for the row + side tables, then the on-disk artifact.
+    fn store_peer_claim(
+        &self,
+        peer_did: &Did,
+        unsigned: &UnsignedClaim,
+        cid: &Cid,
+        artifact: PeerArtifact<'_>,
+        fetched_from_pds: &Url,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<WritePeerClaimOutcome, PeerStorageError> {
+        // Step 04-01 shipped the CrossAttribution arm (WD-41); step 04-05
+        // adds the SelfAttribution arm (WD-40). The DB core row +
+        // references/evidence side tables write in one transaction, then the
+        // on-disk `peer_claims/<encoded_did>/<cid>.json` artifact (atomic
+        // tmp+rename, Q-DELIVER-2 colon→underscore).
+
+        let record_author = bare_did(&unsigned.author_did.0);
+
+        // SelfAttribution (WD-40 — LOAD-BEARING, layer-2 storage guard): a
+        // record whose author is the LOCAL user is rejected at the WRITE
+        // boundary, INDEPENDENTLY of the cli's pure pre-check (layer 1).
+        // This is the key-compromise defense: even if the offending record's
+        // signature verified against the user's own key, the storage layer
+        // refuses to file it under peer_claims (I-FED-2: peer_claims.author_did
+        // NEVER == local user). Checked BEFORE CrossAttribution so a record
+        // self-attributed to the local user reports SelfAttribution even when
+        // the local user is also (improbably) the subscribed peer.
+        if record_author == self.local_did.0 {
+            return Err(PeerStorageError::SelfAttribution);
+        }
+
+        // Anti-merging (WD-41): the record's author (bare DID, fragment
+        // stripped) MUST equal the subscribed peer. A mismatch is a
+        // cross-attributed record — reject BEFORE any write.
+        if record_author != peer_did.0 {
+            return Err(PeerStorageError::CrossAttribution {
+                expected: peer_did.clone(),
+                actual: Did(record_author),
+            });
+        }
+
+        let cid = cid.clone();
+
+        {
+            let conn = self.lock_conn()?;
+            // Idempotent re-write (US-FED-002): an existing CID is a no-op.
+            let already: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM peer_claims WHERE cid = ?",
+                    duckdb::params![cid.0],
+                    |row| row.get(0),
+                )
+                .map_err(|err| {
+                    PeerStorageError::DuckDb(format!("write_peer_claim existence: {err}"))
+                })?;
+            if already > 0 {
+                return Ok(WritePeerClaimOutcome { written: false });
+            }
+        }
+
+        let confidence = confidence_as_f64(unsigned.confidence)?;
+        let signed_record_path = format!(
+            "peer_claims/{}/{}.json",
+            did_to_fs_segment(&peer_did.0),
+            cid.0
+        );
+
+        // ALL THREE DB inserts (core row + references + evidence) run in ONE
+        // transaction so a failure leaves no orphaned side-table rows
+        // (mirrors the slice-01 author-claim atomicity contract).
+        {
+            let mut conn = self.lock_conn()?;
+            let tx = conn.transaction().map_err(|err| {
+                PeerStorageError::DuckDb(format!("begin write_peer_claim tx: {err}"))
+            })?;
+
+            tx.execute(
+                "INSERT INTO peer_claims \
+                    (cid, author_did, subject, predicate, object, confidence, \
+                     composed_at, fetched_at, fetched_from_pds, signed_record_path, \
+                     provenance) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                duckdb::params![
+                    cid.0,
+                    peer_did.0,
+                    unsigned.subject,
+                    unsigned.predicate,
+                    unsigned.object,
+                    confidence,
+                    unsigned.composed_at,
+                    fetched_at.naive_utc(),
+                    fetched_from_pds.to_string(),
+                    signed_record_path,
+                    artifact.provenance(),
+                ],
+            )
+            .map_err(|err| PeerStorageError::DuckDb(format!("insert peer_claims: {err}")))?;
+
+            // Reference graph (denormalized from references[]).
+            for reference in &unsigned.references {
+                tx.execute(
+                    "INSERT INTO peer_claim_references \
+                        (referencing_cid, referenced_cid, ref_type) \
+                     VALUES (?, ?, ?)",
+                    duckdb::params![cid.0, reference.cid.0, ref_type_str(reference.ref_type)],
+                )
+                .map_err(|err| {
+                    PeerStorageError::DuckDb(format!("insert peer_claim_references: {err}"))
+                })?;
+            }
+
+            // Evidence URIs (denormalized, ordinal-keyed).
+            for (ordinal, evidence) in unsigned.evidence.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO peer_claim_evidence (cid, evidence, ordinal) VALUES (?, ?, ?)",
+                    duckdb::params![cid.0, evidence, ordinal as i32],
+                )
+                .map_err(|err| {
+                    PeerStorageError::DuckDb(format!("insert peer_claim_evidence: {err}"))
+                })?;
+            }
+
+            tx.commit().map_err(|err| {
+                PeerStorageError::DuckDb(format!("commit write_peer_claim tx: {err}"))
+            })?;
+        }
+
+        // Effect-shell tail (AFTER the DB commit): the on-disk artifact.
+        // Same `<cid>.json.tmp` → fsync → rename atomic pattern as the
+        // slice-01 author-claim write. Content is the domain `SignedClaim`
+        // serde shape (consistent with `claims/<cid>.json`).
+        write_peer_claim_artifact(&self.peer_claims_root, peer_did, &cid, &artifact)?;
+
+        Ok(WritePeerClaimOutcome { written: true })
+    }
+
     /// Construct from a SHARED connection handle + the colocated
     /// `peer_claims/` root + the LOCAL user's DID. Called from
     /// `DuckDbStorageAdapter::peer_adapter` so both adapters write through
@@ -268,11 +405,36 @@ fn ref_type_from_str(s: &str) -> Result<ReferenceType, PeerStorageError> {
 /// slice-01 author-claim write uses). Content is the domain `SignedClaim`
 /// serde shape — byte-consistent with `claims/<cid>.json`. Runs AFTER the
 /// DB commit so a DB rollback never leaves an orphan artifact.
+/// A peer claim's on-disk artifact in its ADR-071 mode: the `SignedClaim`
+/// serde shape (app-signed, unchanged) or the `UnsignedClaim` shape
+/// (self-attested — there is no signature to keep).
+pub(crate) enum PeerArtifact<'a> {
+    AppSigned(&'a SignedClaim),
+    SelfAttested(&'a UnsignedClaim),
+}
+
+impl PeerArtifact<'_> {
+    /// The `peer_claims.provenance` column value (migration v6).
+    fn provenance(&self) -> &'static str {
+        match self {
+            Self::AppSigned(_) => "app-signed",
+            Self::SelfAttested(_) => crate::SELF_ATTESTED,
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Result<Vec<u8>> {
+        match self {
+            Self::AppSigned(signed) => serde_json::to_vec_pretty(signed),
+            Self::SelfAttested(unsigned) => serde_json::to_vec_pretty(unsigned),
+        }
+    }
+}
+
 fn write_peer_claim_artifact(
     peer_claims_root: &std::path::Path,
     peer_did: &Did,
     cid: &Cid,
-    signed: &SignedClaim,
+    claim_artifact: &PeerArtifact<'_>,
 ) -> Result<(), PeerStorageError> {
     use std::io::Write;
 
@@ -282,7 +444,7 @@ fn write_peer_claim_artifact(
     let artifact = partition.join(format!("{}.json", cid.0));
     let artifact_tmp = artifact.with_extension("json.tmp");
 
-    let bytes = serde_json::to_vec_pretty(signed).map_err(|err| {
+    let bytes = claim_artifact.to_json().map_err(|err| {
         PeerStorageError::DuckDb(format!("serialize peer claim artifact {}: {err}", cid.0))
     })?;
 
@@ -569,129 +731,31 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         fetched_from_pds: &Url,
         fetched_at: DateTime<Utc>,
     ) -> Result<WritePeerClaimOutcome, PeerStorageError> {
-        // Step 04-01 shipped the CrossAttribution arm (WD-41); step 04-05
-        // adds the SelfAttribution arm (WD-40). The DB core row +
-        // references/evidence side tables write in one transaction, then the
-        // on-disk `peer_claims/<encoded_did>/<cid>.json` artifact (atomic
-        // tmp+rename, Q-DELIVER-2 colon→underscore).
+        self.store_peer_claim(
+            peer_did,
+            &signed.unsigned,
+            &signed.signature.signed_cid,
+            PeerArtifact::AppSigned(signed),
+            fetched_from_pds,
+            fetched_at,
+        )
+    }
 
-        let record_author = bare_did(&signed.unsigned.author_did.0);
-
-        // SelfAttribution (WD-40 — LOAD-BEARING, layer-2 storage guard): a
-        // record whose author is the LOCAL user is rejected at the WRITE
-        // boundary, INDEPENDENTLY of the cli's pure pre-check (layer 1).
-        // This is the key-compromise defense: even if the offending record's
-        // signature verified against the user's own key, the storage layer
-        // refuses to file it under peer_claims (I-FED-2: peer_claims.author_did
-        // NEVER == local user). Checked BEFORE CrossAttribution so a record
-        // self-attributed to the local user reports SelfAttribution even when
-        // the local user is also (improbably) the subscribed peer.
-        if record_author == self.local_did.0 {
-            return Err(PeerStorageError::SelfAttribution);
-        }
-
-        // Anti-merging (WD-41): the record's author (bare DID, fragment
-        // stripped) MUST equal the subscribed peer. A mismatch is a
-        // cross-attributed record — reject BEFORE any write.
-        if record_author != peer_did.0 {
-            return Err(PeerStorageError::CrossAttribution {
-                expected: peer_did.clone(),
-                actual: Did(record_author),
-            });
-        }
-
-        let cid = signed.signature.signed_cid.clone();
-
-        {
-            let conn = self.lock_conn()?;
-            // Idempotent re-write (US-FED-002): an existing CID is a no-op.
-            let already: i64 = conn
-                .query_row(
-                    "SELECT count(*) FROM peer_claims WHERE cid = ?",
-                    duckdb::params![cid.0],
-                    |row| row.get(0),
-                )
-                .map_err(|err| {
-                    PeerStorageError::DuckDb(format!("write_peer_claim existence: {err}"))
-                })?;
-            if already > 0 {
-                return Ok(WritePeerClaimOutcome { written: false });
-            }
-        }
-
-        let unsigned = &signed.unsigned;
-        let confidence = confidence_as_f64(unsigned.confidence)?;
-        let signed_record_path = format!(
-            "peer_claims/{}/{}.json",
-            did_to_fs_segment(&peer_did.0),
-            cid.0
-        );
-
-        // ALL THREE DB inserts (core row + references + evidence) run in ONE
-        // transaction so a failure leaves no orphaned side-table rows
-        // (mirrors the slice-01 author-claim atomicity contract).
-        {
-            let mut conn = self.lock_conn()?;
-            let tx = conn.transaction().map_err(|err| {
-                PeerStorageError::DuckDb(format!("begin write_peer_claim tx: {err}"))
-            })?;
-
-            tx.execute(
-                "INSERT INTO peer_claims \
-                    (cid, author_did, subject, predicate, object, confidence, \
-                     composed_at, fetched_at, fetched_from_pds, signed_record_path) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                duckdb::params![
-                    cid.0,
-                    peer_did.0,
-                    unsigned.subject,
-                    unsigned.predicate,
-                    unsigned.object,
-                    confidence,
-                    unsigned.composed_at,
-                    fetched_at.naive_utc(),
-                    fetched_from_pds.to_string(),
-                    signed_record_path,
-                ],
-            )
-            .map_err(|err| PeerStorageError::DuckDb(format!("insert peer_claims: {err}")))?;
-
-            // Reference graph (denormalized from references[]).
-            for reference in &unsigned.references {
-                tx.execute(
-                    "INSERT INTO peer_claim_references \
-                        (referencing_cid, referenced_cid, ref_type) \
-                     VALUES (?, ?, ?)",
-                    duckdb::params![cid.0, reference.cid.0, ref_type_str(reference.ref_type)],
-                )
-                .map_err(|err| {
-                    PeerStorageError::DuckDb(format!("insert peer_claim_references: {err}"))
-                })?;
-            }
-
-            // Evidence URIs (denormalized, ordinal-keyed).
-            for (ordinal, evidence) in unsigned.evidence.iter().enumerate() {
-                tx.execute(
-                    "INSERT INTO peer_claim_evidence (cid, evidence, ordinal) VALUES (?, ?, ?)",
-                    duckdb::params![cid.0, evidence, ordinal as i32],
-                )
-                .map_err(|err| {
-                    PeerStorageError::DuckDb(format!("insert peer_claim_evidence: {err}"))
-                })?;
-            }
-
-            tx.commit().map_err(|err| {
-                PeerStorageError::DuckDb(format!("commit write_peer_claim tx: {err}"))
-            })?;
-        }
-
-        // Effect-shell tail (AFTER the DB commit): the on-disk artifact.
-        // Same `<cid>.json.tmp` → fsync → rename atomic pattern as the
-        // slice-01 author-claim write. Content is the domain `SignedClaim`
-        // serde shape (consistent with `claims/<cid>.json`).
-        write_peer_claim_artifact(&self.peer_claims_root, peer_did, &cid, signed)?;
-
-        Ok(WritePeerClaimOutcome { written: true })
+    fn write_self_attested_peer_claim(
+        &self,
+        peer_did: &Did,
+        claim: &SelfAttestedClaim,
+        fetched_from_pds: &Url,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<WritePeerClaimOutcome, PeerStorageError> {
+        self.store_peer_claim(
+            peer_did,
+            claim.unsigned(),
+            claim.cid(),
+            PeerArtifact::SelfAttested(claim.unsigned()),
+            fetched_from_pds,
+            fetched_at,
+        )
     }
 
     fn get_peer_claim_by_cid(
@@ -710,7 +774,8 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         let row: Option<(String, String)> = {
             let conn = self.lock_conn()?;
             conn.query_row(
-                "SELECT author_did, signed_record_path FROM peer_claims WHERE cid = ?",
+                "SELECT author_did, signed_record_path FROM peer_claims \
+                 WHERE cid = ? AND provenance = 'app-signed'",
                 duckdb::params![cid.0],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )

@@ -39,7 +39,9 @@
 //! Rendering is a pure function of the accumulated counts (`render_report`).
 
 use anyhow::{anyhow, Result};
-use claim_domain::{canonicalize, compute_cid, verify, Cid, Did, SignedClaim, VerifyingKey};
+use claim_domain::{
+    provenance_verdict, Cid, ClaimRecord, Did, ProvenanceRejection, RecordOrigin, VerifyingKey,
+};
 use ports::{
     InstanceManifest, InstanceReadPort, PdsError, PeerInfo, PeerSubscription, SignedRecord,
 };
@@ -174,21 +176,15 @@ fn pull_one_peer(
     };
     block.peer_handle = peer_info.handle.clone();
 
-    // The peer's verifying key (from the resolved DID-doc verification
-    // methods). Absent / undecodable key ⇒ skip the whole peer (we cannot
-    // verify any of its records).
-    let verifying_key = match peer_verifying_key(&peer_info) {
-        Some(key) => key,
-        None => {
-            block.peer_skip_reason =
-                Some("no usable verification key in the peer's DID document".to_string());
-            return block;
-        }
-    };
+    // The peer's app verifying key (from the resolved DID-doc verification
+    // methods), if any. ADR-071: a Bluesky user has none — their
+    // self-attested records need none; an app-signed record without a key
+    // is rejected per record by the verdict.
+    let verifying_key = peer_verifying_key(&peer_info);
 
     // Fetch every record over the transport the peer's endpoint selects. A
     // peer-level failure (unreachable, unreadable listing) skips this peer.
-    let fetched = match fetch_peer_records(wiring, runtime, &peer_did, &peer_info) {
+    let (origin, fetched) = match fetch_peer_records(wiring, runtime, &peer_did, &peer_info) {
         Ok(fetched) => fetched,
         Err(skip_reason) => {
             block.peer_skip_reason = Some(skip_reason);
@@ -207,14 +203,9 @@ fn pull_one_peer(
                 continue;
             }
         };
-        match evaluate_record(record, &verifying_key, local_did) {
+        match evaluate_record(record, &peer_did, origin, verifying_key.as_ref(), local_did) {
             RecordVerdict::Verified => {
-                match wiring.peer_storage.write_peer_claim(
-                    &peer_did,
-                    &record.signed_claim,
-                    &peer_info.pds_endpoint,
-                    wiring.clock.now_utc(),
-                ) {
+                match store_admitted(wiring, &peer_did, &record.record, &peer_info) {
                     Ok(outcome) if outcome.written => block.stored += 1,
                     // Idempotent re-pull: the CID was already cached.
                     Ok(_) => block.skipped_existing += 1,
@@ -232,6 +223,31 @@ fn pull_one_peer(
     block
 }
 
+/// File an admitted record in its ADR-071 mode (app-signed rows exactly as
+/// before; self-attested rows marked `self-attested`).
+fn store_admitted(
+    wiring: &Wiring,
+    peer_did: &Did,
+    record: &ClaimRecord,
+    peer_info: &PeerInfo,
+) -> Result<ports::WritePeerClaimOutcome, ports::PeerStorageError> {
+    let fetched_at = wiring.clock.now_utc();
+    match record {
+        ClaimRecord::AppSigned(signed) => wiring.peer_storage.write_peer_claim(
+            peer_did,
+            signed,
+            &peer_info.pds_endpoint,
+            fetched_at,
+        ),
+        ClaimRecord::SelfAttested(claim) => wiring.peer_storage.write_self_attested_peer_claim(
+            peer_did,
+            claim,
+            &peer_info.pds_endpoint,
+            fetched_at,
+        ),
+    }
+}
+
 /// One record as fetched, BEFORE any trust decision: parsed into the domain
 /// `SignedRecord` (keyed by the CID the peer lists it under), or why it could
 /// not even be read — a per-record rejection reason.
@@ -239,13 +255,15 @@ type FetchedRecord = Result<SignedRecord, String>;
 
 /// Fetch all of one peer's records over the transport its resolved endpoint
 /// selects (US-SF-006): the opaque-instance read, or the shipped PDS XRPC
-/// listing. `Err` is the reason the whole peer is skipped (PP-7).
+/// listing, with the computed origin of what was read (ADR-071: only the
+/// PDS endpoint just resolved from the peer's DID document is the author's
+/// own PDS). `Err` is the reason the whole peer is skipped (PP-7).
 fn fetch_peer_records(
     wiring: &Wiring,
     runtime: &tokio::runtime::Runtime,
     peer_did: &Did,
     peer_info: &PeerInfo,
-) -> Result<Vec<FetchedRecord>, String> {
+) -> Result<(RecordOrigin, Vec<FetchedRecord>), String> {
     let endpoint = peer_info.pds_endpoint.as_str();
     let observation = wiring::observe_peer_endpoint(endpoint);
     match publish_domain::select_peer_transport(&observation) {
@@ -253,12 +271,16 @@ fn fetch_peer_records(
             // The selecting probe already read the manifest — use that ONE read.
             let manifest = publish_domain::classify_manifest_observation(&observation)
                 .map_err(|err| format!("instance read failed ({err})"))?;
-            Ok(read_peer_instance(
-                wiring::instance_reader_for(endpoint).as_ref(),
-                &manifest,
+            Ok((
+                RecordOrigin::Relay,
+                read_peer_instance(wiring::instance_reader_for(endpoint).as_ref(), &manifest),
             ))
         }
-        PeerTransport::AtprotoPds => list_pds_records(wiring, runtime, peer_did, peer_info),
+        PeerTransport::AtprotoPds => {
+            let fetched_from = peer_info.pds_endpoint.as_str();
+            let origin = RecordOrigin::of(fetched_from, peer_info.pds_endpoint.as_str());
+            list_pds_records(wiring, runtime, peer_did, peer_info).map(|fetched| (origin, fetched))
+        }
         PeerTransport::Unreachable { detail } => {
             Err(format!("peer endpoint unreachable ({detail})"))
         }
@@ -309,7 +331,7 @@ fn read_instance_record(instance: &dyn InstanceReadPort, cid: &Cid) -> FetchedRe
         .map_err(|unreadable| format!("unreadable record ({})", unreadable.detail))?;
     Ok(SignedRecord {
         rkey: cid.0.clone(),
-        signed_claim,
+        record: ClaimRecord::AppSigned(signed_claim),
     })
 }
 
@@ -325,51 +347,42 @@ fn write_rejection_reason(err: &ports::PeerStorageError) -> String {
     }
 }
 
-/// PURE per-record decision: a record is `Verified` iff BOTH (a) its
-/// signature verifies against the peer's key AND (b) its locally
-/// recomputed CID byte-matches the peer-published rkey (WD-24). A record
-/// authored by the LOCAL user is rejected here too (SelfAttribution /
-/// WD-40 — even if its signature verified, which would indicate key
-/// compromise). No I/O.
+/// PURE per-record decision. A record authored by the LOCAL user is
+/// rejected first (SelfAttribution / WD-40). Then the ADR-071 provenance
+/// verdict: an app-signed record must match its rkey (WD-24) and verify
+/// against the peer's key through the unchanged `verify`; a self-attested
+/// record must be unsigned, authored by the bare repo DID, fetched from the
+/// author's own PDS, and match its rkey. No I/O.
 fn evaluate_record(
     record: &SignedRecord,
-    verifying_key: &VerifyingKey,
+    repo_did: &Did,
+    origin: RecordOrigin,
+    verifying_key: Option<&VerifyingKey>,
     local_did: &Did,
 ) -> RecordVerdict {
-    // SelfAttribution (WD-40): a peer record claiming the LOCAL user's DID
-    // is rejected before any storage write.
-    if crate::verbs::bare_did(&record.signed_claim.unsigned.author_did.0) == local_did.0 {
+    if crate::verbs::bare_did(&record.record.unsigned().author_did.0) == local_did.0 {
         return RecordVerdict::rejected("self attribution");
     }
-
-    // CID round-trip (WD-24): recompute locally; reject on mismatch with
-    // the peer-published rkey (canonicalization disagreement → "possible
-    // adversarial input").
-    let Ok(canonical) = canonicalize(&record.signed_claim.unsigned) else {
-        return RecordVerdict::rejected("canonicalization failed");
-    };
-    let recomputed = compute_cid(&canonical);
-    if recomputed.0 != record.rkey {
-        return RecordVerdict::rejected("CID mismatch (possible adversarial input)");
+    match provenance_verdict(
+        &record.record,
+        &record.rkey,
+        repo_did,
+        origin,
+        verifying_key,
+    ) {
+        Ok(_) => RecordVerdict::Verified,
+        Err(rejection) => RecordVerdict::rejected(&rejection_reason(rejection)),
     }
+}
 
-    // Signature verify (WD-24) against the peer's DID-doc key. The parsed
-    // SignedClaim already carries `signed_cid = recomputed`, so `verify`
-    // checks the signature over the recomputed CID. A failure here is the
-    // KPI-FED-6 path — a tampered or wrong-key signature is dropped with a
-    // "signature invalid" reason, never stored.
-    let to_verify = SignedClaim {
-        unsigned: record.signed_claim.unsigned.clone(),
-        signature: claim_domain::SignatureBlock {
-            signed_cid: recomputed,
-            ..record.signed_claim.signature.clone()
-        },
-    };
-    if verify(&to_verify, verifying_key).is_err() {
-        return RecordVerdict::rejected("signature invalid");
+/// The user-facing reason for a refused provenance; the app-signed wording
+/// is unchanged ("CID mismatch (possible adversarial input)", "signature
+/// invalid", "canonicalization failed").
+fn rejection_reason(rejection: ProvenanceRejection) -> String {
+    match rejection {
+        ProvenanceRejection::NoAppKey => "signature invalid (no usable verification key)".into(),
+        other => other.to_string(),
     }
-
-    RecordVerdict::Verified
 }
 
 /// Outcome of the pure per-record evaluation. A `Rejected` verdict carries

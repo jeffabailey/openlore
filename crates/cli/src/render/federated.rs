@@ -95,19 +95,14 @@ pub(crate) fn counter_relationships(rows: &[FederatedRow]) -> Vec<CounterRelatio
     use std::collections::HashMap;
     let author_by_cid: HashMap<&str, &str> = rows
         .iter()
-        .map(|row| {
-            (
-                row.signed_claim.signature.signed_cid.0.as_str(),
-                row.author_did.0.as_str(),
-            )
-        })
+        .map(|row| (row.claim.cid().0.as_str(), row.author_did.0.as_str()))
         .collect();
 
     let mut relationships = Vec::new();
     for row in rows {
-        let counter_cid = row.signed_claim.signature.signed_cid.0.as_str();
+        let counter_cid = row.claim.cid().0.as_str();
         let counter_author = row.author_did.0.as_str();
-        for reference in &row.signed_claim.unsigned.references {
+        for reference in &row.claim.unsigned().references {
             if !matches!(reference.ref_type, claim_domain::ReferenceType::Counters) {
                 continue;
             }
@@ -224,10 +219,10 @@ pub(crate) fn render_one_federated_row(
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("  author_did:  {author_did}\n"));
-    for line in render_one_claim(&row.signed_claim).lines() {
+    for line in render_claim_record(&row.claim).lines() {
         out.push_str(&format!("  {line}\n"));
     }
-    for annotation in counter_annotations_for(&row.signed_claim.signature.signed_cid.0, counters) {
+    for annotation in counter_annotations_for(&row.claim.cid().0, counters) {
         out.push_str(&format!("  {annotation}\n"));
     }
     // FQ-7 / WD-42: peer rows carry the inline counter template (default-on).
@@ -235,6 +230,35 @@ pub(crate) fn render_one_federated_row(
         out.push_str(&format!("  {}\n", render_counter_template(row)));
     }
     out
+}
+
+/// One claim block in either ADR-071 mode: an app-signed claim renders
+/// exactly as before; a self-attested claim renders the same fields plus a
+/// `provenance:  self-attested` line (I-BRA-5: never "unverified").
+pub(crate) fn render_claim_record(record: &claim_domain::ClaimRecord) -> String {
+    match record {
+        claim_domain::ClaimRecord::AppSigned(signed) => render_one_claim(signed),
+        claim_domain::ClaimRecord::SelfAttested(claim) => {
+            let unsigned = claim.unsigned();
+            let mut out = String::new();
+            out.push_str(&format!("subject:     {}\n", unsigned.subject));
+            out.push_str(&format!("predicate:   {}\n", unsigned.predicate));
+            out.push_str(&format!("object:      {}\n", unsigned.object));
+            out.push_str(&format!(
+                "evidence:    {}\n",
+                render_evidence(&unsigned.evidence)
+            ));
+            out.push_str(&format!(
+                "confidence:  {}\n",
+                render_confidence(&unsigned.confidence)
+            ));
+            out.push_str(&format!("author:      {}\n", unsigned.author_did.0));
+            out.push_str(&format!("composedAt:  {}\n", unsigned.composed_at));
+            out.push_str(&format!("cid:         {}\n", claim.cid().0));
+            out.push_str("provenance:  self-attested\n");
+            out
+        }
+    }
 }
 
 /// Render the FQ-7 inline counter template for a peer row (WD-42). A single
@@ -246,11 +270,14 @@ pub(crate) fn render_one_federated_row(
 /// turns "I see a peer claim I disagree with" into one keystroke-away action
 /// (KPI-FED-3 friction reduction).
 pub(crate) fn render_counter_template(row: &FederatedRow) -> String {
-    let claim = &row.signed_claim.unsigned;
+    let claim = row.claim.unsigned();
     format!(
         "openlore claim counter {} --reason \"...\" \
          --subject {} --predicate {} --object {} --evidence ... --confidence ...",
-        row.signed_claim.signature.signed_cid.0, claim.subject, claim.predicate, claim.object,
+        row.claim.cid().0,
+        claim.subject,
+        claim.predicate,
+        claim.object,
     )
 }
 
