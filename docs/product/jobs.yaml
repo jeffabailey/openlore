@@ -850,6 +850,116 @@ jobs:
     # cross-instance federated READ of OTHER users' instances (requirement 4).
 
 
+  - id: J-009
+    name: Curate a consented, self-attested philosophy profile from my Bluesky identity
+    primary: false                  # a new participation channel; J-001 stays the umbrella primary
+    walking_skeleton_for: bluesky-claim-review-app   # PRIMARY (headline) job for this feature
+    job_story: >
+      When I'm a developer on Bluesky whose public GitHub work says something about how I
+      build, I want OpenLore to suggest the philosophies my work embodies and let me approve,
+      edit, or privately decline each one using only my Bluesky sign-in, so I can publish an
+      accurate, self-attested picture of how I build into my OWN PDS with nothing said about
+      me without my consent.
+
+    functional:
+      - Sign in with an existing Bluesky handle (ATProto OAuth); no CLI, keychain key, or app password.
+      - Prove GitHub ownership by the signed-in DID appearing in the GitHub bio (re-checked before every scrape).
+      - See suggestions inferred from my public GitHub work in a PRIVATE queue (owner-only).
+      - Approve (optionally edited) suggestions into my own PDS as self-attested org.openlore.claim records.
+      - Decline privately (never published) so a suggestion is not re-offered.
+      - Optionally share a previewed post linking to my profile of approved claims.
+
+    emotional:
+      - In control: "nothing goes out until I say so; nobody sees what I declined."
+      - Recognised: "that IS how I build — in my words, in my repo."
+      - Proud to share, on my terms.
+
+    social:
+      - A credible, self-attested values signal visible on the network I already use.
+      - Subjects speak for themselves instead of only being scraped/claimed about (complements J-004).
+
+    four_forces:
+      push: >
+        Participating in OpenLore today needs the CLI, a keychain key, a PLC-published
+        #org.openlore.application method, and an app password — effectively impossible for an
+        ordinary Bluesky user. Others can already claim things ABOUT a developer (J-004) while the
+        developer has no lightweight, consent-first way to speak for themselves.
+      pull: >
+        Sign in with my handle, prove my GitHub with my DID in my bio, see evidence-backed
+        suggestions in minutes, and publish only what I approve into my own PDS — then share it.
+      anxiety: >
+        (a) "Will it publish things I didn't agree to?" -> pending is owner-only; every write needs
+            an explicit confirm (I-BRA-1/3).
+        (b) "Will people see what I declined?" -> declines are private app-side state, never public (D-4).
+        (c) "Can someone claim my repos?" -> DID-in-bio proof, per signed-in DID, re-checked before
+            every scrape (D-3/D-12).
+        (d) "Are my claims second-class without a CLI key?" -> self-attested (repo-signed) provenance
+            is accepted and labelled by OpenLore readers (D-5).
+        (e) "Will the app post for me?" -> share is opt-in, previewed, confirmed (D-11).
+      habit: >
+        Bluesky users already "Sign in with Bluesky" on third-party tools; developers already
+        curate GitHub bios (Keybase-style proofs); triage queues feel like notifications/PR review.
+
+    opportunity_score:
+      importance: 8
+      satisfaction: 1
+      score: 15         # 8 + max(8 - 1, 0) = 15
+      verdict: underserved-primary-for-feature
+
+    success_signals:
+      - ">=50% of verified users with suggestions publish >=1 claim in their first session (KPI-BRA-1)."
+      - "Median sign-in -> first published claim <= 5 minutes (KPI-BRA-2)."
+      - "Zero pending/declined suggestions ever exposed outside the owner's view (KPI-BRA-4/4b)."
+      - "100% of app-approved claims accepted by OpenLore readers as self-attested (KPI-BRA-6)."
+
+    related_jobs: [J-001, J-004, J-007, J-010]
+
+    sub_jobs:
+      - id: J-009a
+        name: Use my existing Bluesky identity — no keys, no CLI (and leave without residue)
+        load_bearing: true
+      - id: J-009b
+        name: Prove the GitHub account is mine (signed-in DID in GitHub bio, re-checked before every scrape)
+        load_bearing: true
+      - id: J-009c
+        name: Review machine suggestions privately (owner-only queue; only new ones on rescan)
+        load_bearing: true
+      - id: J-009d
+        name: Approve (optionally edited) into my own PDS as self-attested; retract later
+        load_bearing: true
+      - id: J-009e
+        name: Decline privately and never be re-suggested (no public record)
+        load_bearing: true
+      - id: J-009f
+        name: Show my approved profile and share it on Bluesky, opt-in only
+        load_bearing: false
+
+    # Realized by bluesky-claim-review-app (WS + R1 + R2; US-BRA-000..012). See
+    # docs/feature/bluesky-claim-review-app/discuss/ (requirements.md D-1..D-12, I-BRA-1..8,
+    # OD-BRA-1..12; KPIs KPI-BRA-1..9).
+
+
+  - id: J-010
+    name: Find developers on Bluesky who share my philosophies (LATER)
+    primary: false
+    job_story: >
+      When I've published how I build, I want to find people on Bluesky who build the same way —
+      via a feed or a badge inside the Bluesky app I already use — so I can follow and
+      collaborate with them without leaving my social habitat.
+    four_forces:
+      push: "OpenLore discovery (J-005) lives outside Bluesky; my social graph lives inside it."
+      pull: "A 'people who share your philosophies' feed and philosophy labels in the Bluesky app."
+      anxiety: "Will badges/feeds become a judgment or blacklist mechanism? Only self-attested, published claims may feed them."
+      habit: "Bluesky users already subscribe to custom feeds and labelers."
+    opportunity_score:
+      importance: 6
+      satisfaction: 2
+      score: 10         # 6 + max(6 - 2, 0) = 10
+      verdict: later    # needs a population of J-009 self-attested claims first
+    related_jobs: [J-005, J-009]
+    # Mapped on the bluesky-claim-review-app story map as LATER (feed generator, labeler badges).
+
+
 # ---------------------------------------------------------------------------
 # Red cards — all resolved 2026-05-25. Retained here for decision provenance.
 # Binding form lives in docs/feature/openlore-foundation/feature-delta.md
@@ -1188,3 +1298,15 @@ changelog:
       lifecycle, N bounds) handed to DESIGN with recommendations. KPIs KPI-CPI-1..5.
       Companion journey: docs/product/journeys/infer-contributor-philosophy.yaml. See
       docs/feature/contributor-philosophy-inference/feature-delta.md.
+  - date: "2026-10-03"
+    feature: bluesky-claim-review-app
+    change: >
+      J-009 ADDED (headline job for bluesky-claim-review-app): a Bluesky user signs in via ATProto
+      OAuth, proves GitHub ownership by their DID in the GitHub bio (re-checked before every
+      scrape), privately reviews suggestions inferred from their public GitHub work, and publishes
+      approved claims as self-attested org.openlore.claim records into their OWN PDS (provenance =
+      PDS repo commit signature; no app-level signature, no PLC change). Declines are private
+      app-side state, never public. Opt-in previewed share post in v1. Sub-jobs J-009a..f.
+      Opportunity 15. J-010 ADDED as a LATER job (find like-minded developers inside Bluesky via
+      feed generator / labeler), opportunity 10. Related: J-001, J-004b/c/e, J-007. Personas:
+      P-003 Bluesky developer (Priya Raman). See docs/feature/bluesky-claim-review-app/discuss/.

@@ -1,0 +1,269 @@
+schema_version: 1
+
+journey:
+  name: "Review and publish my claims"
+  feature: bluesky-claim-review-app
+  job_id: J-009
+  goal: >
+    A Bluesky developer signs in with their handle, proves their GitHub account is theirs,
+    privately reviews philosophy suggestions inferred from their public GitHub work, publishes
+    the ones they approve as self-attested org.openlore.claim records in their OWN PDS, and
+    optionally shares a profile of those approved claims on Bluesky.
+  persona: "P-003 Bluesky developer (Priya Raman, @priyaraman.bsky.social, GitHub priyaraman)"
+  platform: web (hosted; public HTTPS origin ${app_origin})
+  emotional_arc:
+    start: "Curious but wary — 'what will it say about me, and who sees it?'"
+    middle: "In control, reassured — 'only I can see this; nothing goes out until I say so'"
+    end: "Recognised and proud — 'that is how I build, in my words, in my repo'"
+
+invariants:
+  - id: I-BRA-1
+    text: "Pending suggestions are visible only to the authenticated owner; never written to a PDS, posted, indexed, fed, or shown on a profile."
+  - id: I-BRA-2
+    text: "Declines are private app-side state; never written to the PDS or anywhere public; used only to suppress re-suggestion."
+  - id: I-BRA-3
+    text: "Every record written to the user's PDS traces to an explicit owner confirm action."
+  - id: I-BRA-4
+    text: "No scan and no suggestion before the signed-in DID appears exactly in the GitHub bio."
+  - id: I-BRA-5
+    text: "App-approved claims are accepted by OpenLore read/verify paths as self-attested (repo-signed); never rendered unverified or rejected."
+  - id: I-BRA-6
+    text: "A share post is created only on explicit confirm after preview, and references only approved, published claims."
+
+steps:
+  - id: 1
+    name: "Arrive and sign in with Bluesky"
+    action: "Open ${app_origin}; enter handle; press 'Sign in with Bluesky'"
+    tui_mockup: |
+      +-- OpenLore · How you build ------------------------------------+
+      | Nothing is shared until you approve it.                         |
+      | NEVER: publish unapproved · show pending/declined · auto-post   |
+      | Bluesky handle [ ${handle} ]          [ Sign in with Bluesky ]   |
+      +-----------------------------------------------------------------+
+    shared_artifacts:
+      - name: handle
+        source: "user input -> resolved by ATProto handle resolution"
+        displayed_as: "${handle}"
+        consumers: [1, 2, 4, 6, 9, 10]
+    emotional_state: { entry: "curious, wary", exit: "reassured enough to try" }
+    integration_checkpoint: "Handle resolves to a DID and a PDS endpoint before redirecting to authorize."
+    failure_modes:
+      - "Handle does not resolve (typo, deleted account)"
+      - "User's PDS is unreachable"
+    gherkin: |
+      Scenario: Priya starts sign-in with her Bluesky handle
+        Given Priya opens the OpenLore review app
+        When she enters "priyaraman.bsky.social" and chooses to sign in with Bluesky
+        Then she is sent to her own PDS to authorize the app
+
+  - id: 2
+    name: "Authorize the app at my PDS"
+    action: "Approve (or cancel) on the PDS-hosted consent screen"
+    tui_mockup: |
+      +-- bsky.social · Authorize application ---------------------------+
+      | "OpenLore review" wants to: know your identity · create OpenLore  |
+      | claim records · create posts only when you press Post             |
+      |                                    [ Cancel ]  [ Authorize ]      |
+      +-------------------------------------------------------------------+
+    shared_artifacts:
+      - name: user_did
+        source: "OAuth session (token subject) — single source for identity"
+        displayed_as: "${user_did}"
+        consumers: [3, 6, 7, 8, 9]
+      - name: pds_endpoint
+        source: "DID document of ${user_did} (service #atproto_pds)"
+        displayed_as: "${pds_host}"
+        consumers: [6, 7]
+    emotional_state: { entry: "cautious (peak tension 1)", exit: "reassured" }
+    integration_checkpoint: "Session DID equals the DID resolved from the handle in step 1."
+    failure_modes:
+      - "User cancels or denies consent -> back to start, nothing granted"
+      - "Session DID differs from resolved handle DID -> refuse sign-in"
+    gherkin: |
+      Scenario: Cancelling authorization changes nothing
+        Given Priya is on her PDS's authorization screen for the OpenLore review app
+        When she cancels
+        Then she returns to the app's start page with "No access granted. Nothing changed."
+
+  - id: 3
+    name: "Prove my GitHub account is mine"
+    action: "Copy DID into GitHub bio; enter GitHub username; press Verify"
+    tui_mockup: |
+      +-- Prove the GitHub account is yours -----------------------------+
+      | GitHub username [ ${github_login} ]                               |
+      | Add this exact text to your GitHub bio: ${user_did}  [ Copy ]     |
+      |                                                   [ Verify ]      |
+      +-------------------------------------------------------------------+
+    shared_artifacts:
+      - name: github_login
+        source: "user input, confirmed by public GitHub profile fetch"
+        displayed_as: "${github_login}"
+        consumers: [4, 5, 7, 9]
+      - name: ownership_link
+        source: "private app state: (user_did, github_login, github_user_id, verified_at)"
+        displayed_as: "Verified: github.com/${github_login} belongs to @${handle}"
+        consumers: [4, 10]
+    emotional_state: { entry: "slightly burdened", exit: "accomplished" }
+    integration_checkpoint: "Bio contains ${user_did} exactly; link recorded for THIS DID only."
+    failure_modes:
+      - "Bio does not contain the DID"
+      - "Bio contains a different DID"
+      - "GitHub user does not exist"
+      - "GitHub rate-limited"
+    gherkin: |
+      Scenario: Priya proves github.com/priyaraman is hers
+        Given Priya is signed in as did:plc:7x3kq2mzv5rj4w6hbn2tqclp
+        And her GitHub bio contains "did:plc:7x3kq2mzv5rj4w6hbn2tqclp"
+        When she verifies GitHub username "priyaraman"
+        Then she sees "Verified: github.com/priyaraman belongs to @priyaraman.bsky.social"
+
+  - id: 4
+    name: "Scan my public GitHub work"
+    action: "Automatic after verification (or 'Scan')"
+    tui_mockup: |
+      +-- Reading your public GitHub work ------------------------------+
+      | Public data only. Nothing is published.                          |
+      | ✓ ${github_login}/tidepool  4 signals  … dotfiles skipped (fork) |
+      | Found ${pending_count} suggestions.   [ Review suggestions → ]    |
+      +------------------------------------------------------------------+
+    shared_artifacts:
+      - name: suggestion
+        source: "private app state, derived by the existing scrape person / signal-detection pipeline"
+        displayed_as: "subject · philosophy · ${confidence} · evidence"
+        consumers: [5, 6]
+    emotional_state: { entry: "waiting", exit: "informed, curious" }
+    integration_checkpoint: "Only runs when ownership_link exists for ${user_did}; suggestions previously declined by ${user_did} are not produced."
+    failure_modes:
+      - "No public owned repos -> empty queue with guidance"
+      - "Repos have no detectable signals -> empty queue with guidance"
+      - "Rate limit mid-scan -> partial results kept, resume offered"
+    gherkin: |
+      Scenario: Scan produces private suggestions from Priya's repos
+        Given Priya has verified github.com/priyaraman
+        When the scan of her public repos completes
+        Then she sees 5 pending suggestions marked private
+
+  - id: 5
+    name: "Review suggestions privately (approve / edit / not me)"
+    action: "Act on each card; keyboard A/E/N"
+    tui_mockup: |
+      +-- Your suggestions (private — only you can see these) ---------+
+      | ${pending_count} pending · ${approved_count} approved · ${declined_count} declined |
+      | ┌ ${subject} embodies ${philosophy}  ${confidence} (bucket) ┐   |
+      | │ Why: ${signal}  Evidence: ${evidence_url}                 │   |
+      | │ [ Approve… ] [ Edit ] [ Not me ]                          │   |
+      +------------------------------------------------------------------+
+    shared_artifacts:
+      - name: confidence
+        source: "suggestion default 0.25 (J-004 mapping) or owner edit; persisted as basis points (ADR-070)"
+        displayed_as: "${confidence} (${bucket})"
+        consumers: [5, 6, 7, 8]
+      - name: rejection_set
+        source: "private app state keyed by user_did (D-4)"
+        displayed_as: "declined count"
+        consumers: [4, 5]
+    emotional_state: { entry: "judging", exit: "in control" }
+    integration_checkpoint: "Queue readable only by the session owner; decline writes nothing to the PDS."
+    failure_modes:
+      - "Another signed-in user requests Priya's queue -> denied"
+      - "Session expires mid-review -> pending/declined state preserved"
+    gherkin: |
+      Scenario: Declining is private and permanent
+        Given Priya has a pending suggestion "priyaraman/quill-docs embodies documentation-first"
+        When she chooses "Not me"
+        Then no record is written to her PDS
+        And the suggestion does not reappear after a rescan
+
+  - id: 6
+    name: "Preview the exact record and publish to my PDS"
+    action: "Approve… -> preview -> 'Publish to my repo'"
+    tui_mockup: |
+      +-- This will be published to YOUR repository -------------------+
+      | at://${user_did}/org.openlore.claim/…   host ${pds_host}          |
+      | subject ${subject} · object ${philosophy} · confidence ${confidence} |
+      | provenance self-attested · signed by your repository             |
+      |                            [ Back ]  [ Publish to my repo ]       |
+      +------------------------------------------------------------------+
+    shared_artifacts:
+      - name: record_uri
+        source: "PDS createRecord response"
+        displayed_as: "${record_uri}"
+        consumers: [7, 8, 9]
+    emotional_state: { entry: "deliberate (peak tension 2)", exit: "confident" }
+    integration_checkpoint: "Previewed fields == written record fields (field-for-field, KPI-4 analogue)."
+    failure_modes:
+      - "PDS write fails -> suggestion stays pending, no partial record, retry offered"
+      - "Token expired -> re-authorize, preview preserved"
+    gherkin: |
+      Scenario: Priya publishes an edited claim to her own PDS
+        Given Priya edited the tidepool suggestion to memory-safety at confidence 0.70
+        When she confirms "Publish to my repo" on the preview
+        Then her PDS holds an org.openlore.claim with confidence 7000 and object org.openlore.philosophy.memory-safety
+        And OpenLore's read/verify path accepts it as self-attested
+
+  - id: 7
+    name: "See it published"
+    action: "Read confirmation; continue or retract"
+    tui_mockup: |
+      | ✓ Published to your repository. ${record_uri}                    |
+      | Provenance: self-attested (repo-signed)   [ Retract ]             |
+    shared_artifacts:
+      - name: provenance_mode
+        source: "derived by OpenLore verify path: app-signature | self-attested (repo-signed)"
+        displayed_as: "self-attested"
+        consumers: [7, 8, "viewer", "search", "peer pull"]
+    emotional_state: { entry: "relieved", exit: "recognised" }
+    integration_checkpoint: "Confirmation shows the same record_uri the PDS returned."
+    failure_modes:
+      - "Verify path rejects the record -> treated as a defect (I-BRA-5 guardrail)"
+    gherkin: |
+      Scenario: Published confirmation names the record and how to retract
+        Given Priya just published a claim
+        Then she sees its at:// URI, "self-attested", and a way to retract it
+
+  - id: 8
+    name: "My profile and optional share post"
+    action: "Open profile; 'Share on Bluesky…' -> preview -> Post or Don't post"
+    tui_mockup: |
+      +-- Priya Raman · How I build — self-attested -------------------+
+      | memory-safety 0.70 well-evidenced tidepool [self-attested]       |
+      | Only approved, published claims appear.  [ Share on Bluesky… ]   |
+      +------------------------------------------------------------------+
+      +-- Preview your post -------------------------------------------+
+      | [ How I build, self-attested on OpenLore: memory-safety …     ]  |
+      | [ ${profile_url}                                              ]  |
+      |                         [ Don't post ]  [ Post to Bluesky ]      |
+      +------------------------------------------------------------------+
+    shared_artifacts:
+      - name: profile_url
+        source: "${app_origin} + handle/DID route (DESIGN, OD-BRA-8)"
+        displayed_as: "${profile_url}"
+        consumers: [8, "share post"]
+    emotional_state: { entry: "proud", exit: "proud, done" }
+    integration_checkpoint: "Profile and post text derive only from published, non-retracted claims of ${user_did}."
+    failure_modes:
+      - "Post fails -> profile unaffected, retry offered"
+      - "User declines -> nothing posted, no state change"
+    gherkin: |
+      Scenario: Sharing is opt-in and previewed
+        Given Priya has 2 published claims and 3 pending suggestions
+        When she opens the share preview
+        Then the post text mentions only her 2 published philosophies
+        And nothing is posted until she presses "Post to Bluesky"
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: user_did
+      must_match_across: [2, 3, 6, 7, 8]
+      failure_message: "DID shown for copy/verify/publish differs from the session DID"
+    - artifact: confidence
+      must_match_across: [5, 6, 7, 8]
+      failure_message: "Previewed confidence differs from stored basis points / profile"
+    - artifact: record_uri
+      must_match_across: [6, 7, 8]
+      failure_message: "Confirmation/profile URI differs from PDS-returned URI"
+
+changelog:
+  - date: "2026-10-03"
+    feature: bluesky-claim-review-app
+    change: "Initial journey (DISCUSS). Incorporates user decisions D-3 (DID-in-bio proof), D-4 (private declines), D-5 (repo-signed provenance), D-11 (share post in R1, opt-in)."
