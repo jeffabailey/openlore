@@ -45,6 +45,10 @@ Workspace layout — all crates live under `/Users/jeffbailey/Projects/foss/lead
 | `crates/adapter-xrpc-query-server` | effect | `hyper` HTTP server of the `org.openlore.appview.searchClaims` XRPC query method (per-result `author_did` always present) | slice-05     |
 | `crates/adapter-index-query` | effect      | CLI-side `IndexQueryPort` XRPC client (bounded timeouts); treats indexer-unreachable as a SOFT non-fatal outcome (graceful degradation) | slice-05     |
 | `crates/openlore-indexer`    | driver (binary) | The SECOND composition root (`serve`/`ingest`/`stats`); self-hostable network service; signing-incapable; holds no local store | slice-05     |
+| `crates/review-domain`       | pure core   | Review/consent context: ownership verdict, suggestion lifecycle, reconcile, Publish/Retract/SharePost **plans**, budget arithmetic, maud views (ADR-072/076) | bluesky-claim-review-app (DESIGN) |
+| `crates/adapter-atproto-oauth` | effect    | `OAuthPort` + create-only `UserRepoWritePort` over `atrium-oauth` (confidential client, DPoP) (ADR-073) | bluesky-claim-review-app (DESIGN) |
+| `crates/adapter-review-store`| effect      | Owner-scoped private state + AEAD secret store over a SEPARATE `review-app.duckdb` (ADR-074) | bluesky-claim-review-app (DESIGN) |
+| `crates/openlore-review-app` | driver (binary) | The THIRD composition root: hosted review web app (`serve`/`probe`/`kpi`); no signing key, no local store (ADR-072/075) | bluesky-claim-review-app (DESIGN) |
 | `crates/test-support`        | test-only   | `FakePds`, `FakeKeychain`, `FakeClock`, `TempXdg`, `FakeGithub`, scoring fixtures, `FakeIngestSource`/`FakeIndexStore`/`FakeIndexQuery` + real-`z6Mk` DID-doc + adversarial ingest fixtures — hermetic test doubles | slice-01/02/04/05 |
 | `xtask`                      | dev tooling | `check-arch` (hexagonal invariants), `check-probes` (probe contracts)   | slice-01     |
 
@@ -65,6 +69,39 @@ reports 21).**
 > finalize. The hexagonal/modular-monolith STYLE (above) is unchanged by these.
 
 Shipped slice extensions:
+
+- **bluesky-claim-review-app: DESIGN 2026-10-04. ADDITIVE: +4 crates (25 production / 27
+  members); a THIRD composition root; a second provenance mode across every reader.** This is a
+  hosted web app at `https://app.openlore.jeffbailey.us`. A Bluesky user signs in with ATProto
+  OAuth, proves their GitHub account with their DID in the bio (re-checked before every scrape),
+  privately reviews suggestions from the REUSED scrape pipeline, and publishes approved ones as
+  **self-attested** `org.openlore.claim` records into **their own PDS**. They can then share a
+  profile with an opt-in post. Pending and declined suggestions stay PRIVATE app-side state.
+  - **ADR-071 (self-attested provenance)**: no lexicon field is added. SelfAttested means: no
+    `signature`, a bare-DID `author` equal to the repo DID, and a fetch from the author's
+    DID-document PDS. CID == rkey integrity. `claim_domain::verify` is UNCHANGED. A pure
+    provenance verdict is used by `peer pull`, `ingest_decision`, the viewer and search. Additive
+    `provenance` columns. A relay origin fails closed until commit-proof verification exists.
+  - **ADR-072 (third root)**: `openlore-review-app` (hand-rolled hyper; `axum` stays banned).
+    Disjoint capabilities: no keychain identity, no `adapter-duckdb`, no app-password
+    `adapter-atproto-pds`. I-3 is reworded above.
+  - **ADR-073 (OAuth)**: confidential client (`private_key_jwt`, DPoP) via `atrium-oauth` (MIT,
+    default features off, rustls). A create-only `UserRepoWritePort` (claim + post) makes I-BRA-8
+    non-representable. Granular `repo:` scopes are the target, with `transition:generic` as the
+    fallback (SPIKE-3).
+  - **ADR-074 (private state)**: a separate `review-app.duckdb`, owner-scoped at the TYPE layer
+    (`OwnerScope`), the STRUCTURAL layer (SQL rule) and the BEHAVIORAL layer (cross-owner probe).
+    XChaCha20-Poly1305 for tokens. Aggregate-only KPI counters.
+  - **ADR-075 (hosting)**: co-located container on the PDS host behind the existing Caddy, through
+    a generic `import /pds/caddy/sites/*.caddy` hook (tofu-aws-pds v1.7.0, one planned replacement
+    or a hot-patch bridge, which is Jeff's decision). The existing wildcard DNS covers the host,
+    so there is no DNS change.
+  - **ADR-076 (GitHub)**: one public-read PAT; an in-process per-DID/per-IP/global budget; an
+    exact-token DID bio matcher; a `VerifiedOwnership` capability gates every scrape.
+  - `xtask` deltas: the review-app capability boundary, the disjoint-roots extension, a
+    create-only scan, the owner-scoped SQL scan, and the `review-domain` pure-core arm.
+  - See `docs/feature/bluesky-claim-review-app/design/` (architecture-design.md with C4
+    L1/L2/L3, component-boundaries.md, data-models.md, technology-stack.md, wave-decisions.md).
 
 - **contributor-philosophy-inference: DESIGN 2026-09-27 — IN-PLACE EXTENSION, ZERO new crates,
   ZERO Lexicon change.** `scrape github owner/repo` also records the repo's top-N human
@@ -612,7 +649,7 @@ build-fail.
 |---|------------------------------------------------------------------------|------------------------------------------------|
 | I-1 | Pure-core crates (`claim-domain`, `lexicon`, `ports`) MUST NOT depend on adapter crates | `cargo xtask check-arch`                       |
 | I-2 | Pure-core crates MUST NOT depend on `tokio`, `reqwest`, `duckdb`, `keyring`, or any other I/O crate | `cargo xtask check-arch`                       |
-| I-3 | The `cli` crate is the only composition root permitted to wire adapters into ports | `cargo xtask check-arch`                       |
+| I-3 | Only the declared composition roots (`cli`; `openlore-indexer` per ADR-023; `openlore-review-app` per ADR-072, DESIGN) may wire adapters into ports, and the roots wire DISJOINT capability sets | `cargo xtask check-arch`                       |
 | I-4 | Every adapter MUST implement a `probe() -> ProbeOutcome` for startup health-check | `cargo xtask check-probes`                     |
 | I-5 | Every adapter `probe()` MUST run with a 250ms timeout budget and degrade gracefully on timeout | `cargo xtask check-probes`                     |
 | I-6 | The signed-claim payload MUST contain only the locked numeric `confidence` (`[0.0, 1.0]`); display buckets MUST NEVER be serialized | `tests/lexicon_conformance.rs` (DISTILL gate)  |
