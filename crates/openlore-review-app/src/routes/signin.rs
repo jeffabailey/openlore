@@ -16,7 +16,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::{github, profile, publish, review, scan};
+use crate::routes::{github, profile, publish, review, scan, share};
 use crate::wiring::{emit, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
@@ -43,6 +43,8 @@ pub(crate) enum PageRoute {
     UndoDecline,
     ConfirmPublish,
     Profile,
+    SharePreview,
+    ConfirmShare,
 }
 
 /// Pure routing of the pages.
@@ -62,6 +64,8 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
         ("POST", "/review/undo") => Some(PageRoute::UndoDecline),
         ("POST", "/review/publish") => Some(PageRoute::ConfirmPublish),
+        ("GET", "/share") => Some(PageRoute::SharePreview),
+        ("POST", "/share") => Some(PageRoute::ConfirmShare),
         ("GET" | "HEAD", profile) if profile.starts_with("/@") => Some(PageRoute::Profile),
         _ => None,
     }
@@ -80,6 +84,7 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::DeclineSuggestion if same_origin => review::decline_suggestion(app, request),
         PageRoute::UndoDecline if same_origin => review::undo_decline(app, request),
         PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
+        PageRoute::ConfirmShare if same_origin => share::confirm_share(app, request).await,
         PageRoute::SignIn
         | PageRoute::SignOut
         | PageRoute::VerifyGithub
@@ -89,11 +94,13 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::PreviewEdit
         | PageRoute::DeclineSuggestion
         | PageRoute::UndoDecline
-        | PageRoute::ConfirmPublish => forbidden(),
+        | PageRoute::ConfirmPublish
+        | PageRoute::ConfirmShare => forbidden(),
         PageRoute::PdsReturn => pds_return(app, request).await,
         PageRoute::Review => review::review(app, request),
         PageRoute::GithubStep => github::github_step(app, request),
         PageRoute::ScanStatus => scan::scan_status(app, request),
+        PageRoute::SharePreview => share::share_preview(app, request).await,
         PageRoute::Profile => {
             let viewer = current_session(app, request).map(|(_, session)| session.owner_did);
             let ports = profile::ProfilePorts {

@@ -16,6 +16,8 @@ maud = { workspace = true }
 # its re-export, claim-domain's display-only confidence bucket.
 ports = { path = "../ports" }
 serde_json = { workspace = true }
+# Bluesky counts a post's length in grapheme clusters (300 max, I-BRA-6).
+unicode-segmentation = "1"
 
 [dev-dependencies]
 proptest = { workspace = true }

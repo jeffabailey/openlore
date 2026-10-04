@@ -1,10 +1,12 @@
-//! Executing a publish plan (US-BRA-004): the bounded change — ONE record,
+//! Executing a publish plan (US-BRA-004) or a confirmed share post
+//! (US-BRA-008): the bounded change — ONE record,
 //! claim collection, the owner's own repo — then the read-back that proves
 //! it landed as planned. The PDS-returned CID is never trusted: the record
 //! read back is recomputed with claim-domain's canonicalizer (DWD-5).
 
-use ports::{RepoWriteError, UserRepoReadPort, UserRepoWritePort};
+use ports::{CreatedRecord, RepoWriteError, UserRepoReadPort, UserRepoWritePort};
 use review_domain::plans::{read_back_matches, PublishPlan};
+use review_domain::share::SharePost;
 
 /// Why a publish did not complete.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,4 +66,18 @@ pub(crate) async fn execute_publish(
     } else {
         Err(PublishFailure::ReadBackMismatch)
     }
+}
+
+/// Create the owner's confirmed share post (US-BRA-008) in their own repo,
+/// exactly as composed, created at `created_at`. Returns its `at://` address.
+pub(crate) async fn execute_share(
+    write: &dyn UserRepoWritePort,
+    owner_did: &str,
+    post: &SharePost,
+    created_at: &str,
+) -> Result<CreatedRecord, PublishFailure> {
+    write
+        .create_post_record(owner_did, &post.record(created_at))
+        .await
+        .map_err(PublishFailure::NotWritten)
 }

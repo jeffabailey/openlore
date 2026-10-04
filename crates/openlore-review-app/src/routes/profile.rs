@@ -61,7 +61,7 @@ pub(crate) async fn profile(
 /// The owner's published claims, read live from the PDS their DID document
 /// names. The origin is computed by comparing where the listing was read
 /// from with that freshly resolved PDS; it is never assumed.
-async fn read_published(
+pub(crate) async fn read_published(
     repos: &dyn RepoListingPort,
     identity: &ResolvedIdentity,
 ) -> ProfileContent {

@@ -166,8 +166,61 @@ struct ShareView {
     facet_uri: String,
 }
 
-fn sut_share_post(_profile_url: &str, _published: &[(String, bool)]) -> ShareView {
-    todo!("SCAFFOLD: bind review_domain SharePostPlan (I-BRA-6)")
+/// Each `(object, retracted)` becomes the owner's self-attested claim record
+/// (plus, when retracted, the owner's retraction of it); the share plan is
+/// built from what the profile pipeline keeps of those records.
+fn sut_share_post(profile_url: &str, published: &[(String, bool)]) -> ShareView {
+    use ports::claim_domain::{
+        Cid, ClaimReference, RecordOrigin, ReferenceType, SelfAttestedClaim,
+    };
+    use review_domain::plans::{claim_record_json, publish_plan, ClaimDraft};
+    let did = "did:plc:7x3kq2mzv5rj4w6hbn2tqclp";
+    let record = |rkey: &str, value| ports::RepoRecord {
+        repo_did: did.to_string(),
+        rkey: rkey.to_string(),
+        value,
+    };
+    let records: Vec<ports::RepoRecord> = published
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (object, retracted))| {
+            let draft = ClaimDraft {
+                key: ports::SuggestionKey {
+                    subject: format!("github:priyaraman/repo{i}"),
+                    predicate: "embodiesPhilosophy".to_string(),
+                    object: object.clone(),
+                },
+                evidence: vec![format!("https://github.com/priyaraman/repo{i}")],
+                confidence_bp: 2500,
+            };
+            let plan = publish_plan(did, &draft, "2026-10-04T15:02:11Z").expect("a plan");
+            let mut records = vec![record(plan.rkey(), plan.record())];
+            if *retracted {
+                let mut retraction = plan.claim().clone();
+                retraction.composed_at = "2026-10-05T09:00:00Z".to_string();
+                retraction.references = vec![ClaimReference {
+                    ref_type: ReferenceType::Retracts,
+                    cid: Cid(plan.rkey().to_string()),
+                }];
+                let cid = SelfAttestedClaim::new(retraction.clone())
+                    .expect("a retraction")
+                    .cid()
+                    .0
+                    .clone();
+                records.push(record(&cid, claim_record_json(&retraction)));
+            }
+            records
+        })
+        .collect();
+    let live = review_domain::views::published_claims(did, &records, RecordOrigin::AuthorPds);
+    let plan = review_domain::share::share_draft(profile_url, &live).ok();
+    let post = plan.as_ref().map(|plan| plan.draft());
+    ShareView {
+        text: post.map(|p| p.text().to_string()).unwrap_or_default(),
+        facet_start: post.map(|p| p.link().byte_start).unwrap_or_default(),
+        facet_end: post.map(|p| p.link().byte_end).unwrap_or_default(),
+        facet_uri: post.map(|p| p.link().uri.clone()).unwrap_or_default(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,7 +571,6 @@ proptest! {
     /// 300 characters, and its link facet covers bytes of the text and points
     /// at the profile.
     #[test]
-    #[ignore = "DELIVER R1: unskip one-at-a-time (CORE-7 share text)"]
     fn the_share_post_names_only_live_published_claims_and_links_the_profile(
         claims in prop::collection::vec((arb_key(), any::<bool>()), 1..12)
     ) {

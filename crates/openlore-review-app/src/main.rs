@@ -28,6 +28,7 @@ mod routes {
     pub(crate) mod publish;
     pub(crate) mod review;
     pub(crate) mod scan;
+    pub(crate) mod share;
     pub(crate) mod signin;
 }
 mod executor;

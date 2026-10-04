@@ -433,7 +433,6 @@ fn a_profile_is_found_by_handle_or_did_and_an_unknown_handle_is_plainly_not_foun
 ///       with a link to her profile
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-008 preview, edit, post)"]
 fn priya_previews_edits_and_confirms_her_post() {
     let world = ReviewWorld::new();
     let mut browser = given_priya_with_2_published_3_pending_1_declined(&world);
@@ -484,7 +483,6 @@ fn priya_previews_edits_and_confirms_her_post() {
 ///   Examples: | presses "Don't post" | leaves the page |
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-008 no consent, no post)"]
 fn nothing_is_posted_without_consent() {
     for leaves_instead in [false, true] {
         let world = ReviewWorld::new();
@@ -510,7 +508,6 @@ fn nothing_is_posted_without_consent() {
 ///   Then the generated text names only the 2 published philosophies
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-008 approved-only text)"]
 fn the_post_never_mentions_unapproved_items() {
     let world = ReviewWorld::new();
     let mut browser = given_priya_with_2_published_3_pending_1_declined(&world);
@@ -538,7 +535,6 @@ fn the_post_never_mentions_unapproved_items() {
 ///   And a share request sent anyway posts nothing
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-008 nothing to share)"]
 fn sharing_is_unavailable_with_nothing_published() {
     let world = ReviewWorld::new();
     let mut aisha = given_signed_in(&world, Persona::Aisha);
@@ -563,7 +559,6 @@ fn sharing_is_unavailable_with_nothing_published() {
 ///   And her profile and published claims are unchanged
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-008 failed post)"]
 fn a_failed_post_is_explained_and_retryable_and_the_profile_is_unaffected() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);
@@ -598,7 +593,6 @@ fn a_failed_post_is_explained_and_retryable_and_the_profile_is_unaffected() {
 ///   Then she is told the post is too long and nothing is posted
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (300-grapheme limit)"]
 fn a_post_longer_than_bluesky_allows_is_caught_before_anything_is_sent() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);

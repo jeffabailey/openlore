@@ -7,9 +7,11 @@
 //! session's recorded expiry is dropped, so restore refreshes (SPIKE
 //! finding 4): the cached access token is never resent as-is.
 //!
-//! Only `com.atproto.repo.createRecord` is ever sent: the port has no
-//! update, put or delete (I-BRA-8 is non-representable here). An existing
-//! record under the same key is success — the key is the content's CID.
+//! Only `com.atproto.repo.createRecord` is ever sent, into the claim
+//! collection or (the opt-in share post) `app.bsky.feed.post`: the port has
+//! no update, put or delete (I-BRA-8 is non-representable here). An
+//! existing claim under the same key is success — the key is the content's
+//! CID.
 
 use async_trait::async_trait;
 use atrium_api::types::string::Did;
@@ -22,6 +24,7 @@ use serde_json::{json, Value};
 use crate::OAuthClientAdapter;
 
 const CLAIM_COLLECTION: &str = "org.openlore.claim";
+const POST_COLLECTION: &str = "app.bsky.feed.post";
 const CREATE_RECORD: &str = "com.atproto.repo.createRecord";
 const GET_RECORD: &str = "com.atproto.repo.getRecord";
 
@@ -161,6 +164,40 @@ impl UserRepoWritePort for OAuthClientAdapter {
                 .unwrap_or_else(fallback_uri)),
             Ok(OutputDataOrBytes::Bytes(_)) => Ok(fallback_uri()),
             Err(SendFailure::Xrpc(failure)) if already_exists(&failure) => Ok(fallback_uri()),
+            Err(failure) => Err(failure.into_repo_error()),
+        }
+    }
+
+    async fn create_post_record(
+        &self,
+        owner_did: &str,
+        record: &Value,
+    ) -> Result<CreatedRecord, RepoWriteError> {
+        let request = XrpcRequest {
+            method: Method::POST,
+            nsid: CREATE_RECORD.to_string(),
+            parameters: None,
+            input: Some(InputDataOrBytes::Data(json!({
+                "repo": owner_did,
+                "collection": POST_COLLECTION,
+                "record": record,
+            }))),
+            encoding: Some("application/json".to_string()),
+        };
+        match self.send_refreshing(owner_did, &request).await {
+            Ok(OutputDataOrBytes::Data(created)) => match created["uri"].as_str() {
+                Some(uri) => Ok(CreatedRecord {
+                    uri: uri.to_string(),
+                }),
+                None => Err(RepoWriteError::Refused {
+                    status: 200,
+                    detail: "createRecord answered without a uri".to_string(),
+                }),
+            },
+            Ok(OutputDataOrBytes::Bytes(_)) => Err(RepoWriteError::Refused {
+                status: 200,
+                detail: "createRecord answered with bytes".to_string(),
+            }),
             Err(failure) => Err(failure.into_repo_error()),
         }
     }

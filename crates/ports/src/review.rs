@@ -411,8 +411,9 @@ pub enum RepoWriteError {
     Refused { status: u16, detail: String },
 }
 
-/// Create-only access to the signed-in user's OWN repo, claim collection
-/// only (ADR-073, I-BRA-8): there is no update, put or delete to call.
+/// Create-only access to the signed-in user's OWN repo, in exactly two
+/// collections — claims and the share post (ADR-073, I-BRA-8): there is no
+/// update, put or delete to call.
 #[async_trait]
 pub trait UserRepoWritePort: Send + Sync {
     /// Create `record` under `rkey` in `owner_did`'s claim collection via
@@ -422,6 +423,14 @@ pub trait UserRepoWritePort: Send + Sync {
         &self,
         owner_did: &str,
         rkey: &str,
+        record: &serde_json::Value,
+    ) -> Result<CreatedRecord, RepoWriteError>;
+
+    /// Create the owner's opt-in share post (`app.bsky.feed.post`,
+    /// US-BRA-008) in their own repo; the PDS assigns its record key.
+    async fn create_post_record(
+        &self,
+        owner_did: &str,
         record: &serde_json::Value,
     ) -> Result<CreatedRecord, RepoWriteError>;
 }
