@@ -186,7 +186,7 @@ mod tests {
         /// moves only that owner's key, and only out of pending; the other
         /// owner's queue is untouched.
         #[test]
-        fn each_owner_reads_only_their_own_queue_and_declines_only_their_own(
+        fn each_owner_reads_only_their_own_queue_and_declines_and_undoes_only_their_own(
             adds in prop::collection::vec((0usize..2, suggestion()), 0..10),
             decline_pick in any::<prop::sample::Index>(),
         ) {
@@ -213,6 +213,10 @@ mod tests {
                 let states: BTreeMap<SuggestionKey, SuggestionState> =
                     store.suggestion_states(OWNERS[0]).unwrap().into_iter().collect();
                 prop_assert_eq!(states.get(&key), Some(&SuggestionState::Declined));
+                prop_assert!(store.change_state(OWNERS[0], &key, SuggestionState::Declined, SuggestionState::Pending).unwrap());
+                let restored: BTreeSet<SuggestionKey> = store
+                    .pending_suggestions(OWNERS[0]).unwrap().into_iter().map(|s| s.key).collect();
+                prop_assert_eq!(restored, expected[0].keys().cloned().collect::<BTreeSet<_>>());
             }
             prop_assert_eq!(store.pending_suggestions(OWNERS[1]).unwrap(), other_before);
         }

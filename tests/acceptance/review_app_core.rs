@@ -178,8 +178,26 @@ enum Event {
     Retract,
 }
 
-fn sut_transition(_state: State, _event: Event) -> Option<State> {
-    todo!("SCAFFOLD: bind review_domain suggestion lifecycle transition")
+fn sut_transition(state: State, event: Event) -> Option<State> {
+    use review_domain::lifecycle::{transition, LifecycleEvent};
+    let to_port = |state: State| match state {
+        State::Pending => ports::SuggestionState::Pending,
+        State::Declined => ports::SuggestionState::Declined,
+        State::Published => ports::SuggestionState::Published,
+        State::Retracted => ports::SuggestionState::Retracted,
+    };
+    let event = match event {
+        Event::Decline => LifecycleEvent::Decline,
+        Event::Undo => LifecycleEvent::Undo,
+        Event::Publish => LifecycleEvent::Publish,
+        Event::Retract => LifecycleEvent::Retract,
+    };
+    transition(to_port(state), event).map(|next| match next {
+        ports::SuggestionState::Pending => State::Pending,
+        ports::SuggestionState::Declined => State::Declined,
+        ports::SuggestionState::Published => State::Published,
+        ports::SuggestionState::Retracted => State::Retracted,
+    })
 }
 
 fn sut_visible_and_approvable(_state: State, _link_verified: bool) -> bool {
@@ -522,7 +540,6 @@ proptest! {
     /// pending ⇄ declined, pending → published → retracted; every other event
     /// is refused in every state, over arbitrary event sequences.
     #[test]
-    #[ignore = "DELIVER R1: unskip one-at-a-time (CORE-8 lifecycle state machine)"]
     fn the_suggestion_lifecycle_allows_only_its_legal_transitions(
         events in prop::collection::vec(arb_event(), 0..20)
     ) {

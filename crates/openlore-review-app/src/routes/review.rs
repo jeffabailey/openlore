@@ -3,14 +3,14 @@
 //! suggestion named by anyone else's form is simply not found.
 
 use hyper::StatusCode;
-use ports::{Suggestion, SuggestionKey, SuggestionState, WebSession};
+use ports::{Suggestion, SuggestionKey, WebSession};
 use review_domain::edits::{edit_claim, philosophy_choices};
-use review_domain::lifecycle::decline;
+use review_domain::lifecycle::{owner_step, tally, LifecycleEvent, OwnerStep};
 use review_domain::plans::{
     plan_expires_at, publish_edited_plan, publish_plan, rfc3339_utc, ClaimDraft, PlanError,
     PublishPlan,
 };
-use review_domain::views::{self, EditView, QueueView, ScanRefused};
+use review_domain::views::{self, EditView, QueueNotice, QueueView};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::limiter::unix_now;
@@ -18,6 +18,7 @@ use crate::routes::github::github_step_of;
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
 };
+use crate::wiring::{emit, LogEvent};
 
 /// `GET /review`: the signed-in queue.
 pub(crate) fn review(app: &App, request: &PageRequest) -> Reply {
@@ -36,7 +37,7 @@ pub(crate) fn queue_page(
     cookie_value: &str,
     session: &WebSession,
     status: StatusCode,
-    refused: Option<ScanRefused>,
+    notice: Option<QueueNotice<'_>>,
 ) -> Reply {
     let link = app.links.github_link(&session.owner_did).ok().flatten();
     let verified = link.as_ref().is_some_and(|link| link.verified);
@@ -44,15 +45,14 @@ pub(crate) fn queue_page(
         .then(|| app.review_read.pending_suggestions(&session.owner_did).ok())
         .flatten()
         .unwrap_or_default();
-    let published = verified
-        .then(|| app.review_read.suggestion_states(&session.owner_did).ok())
-        .flatten()
-        .map_or(0, |states| {
-            states
-                .iter()
-                .filter(|(_, state)| *state == SuggestionState::Published)
-                .count()
-        });
+    let tally = tally(
+        verified
+            .then(|| app.review_read.suggestion_states(&session.owner_did).ok())
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, state)| state),
+    );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
     let csrf_token = csrf_token_for(cookie_value);
     Reply::Page {
@@ -63,8 +63,8 @@ pub(crate) fn queue_page(
             github: github_step_of(link.as_ref()),
             latest_scan,
             pending: &pending,
-            published,
-            refused,
+            tally,
+            notice,
         }),
         set_cookie: None,
     }
@@ -200,13 +200,7 @@ fn keep_and_preview(
 /// May the owner publish the suggestion `key` right now? Only while it is
 /// pending and their GitHub link is verified (CORE-9).
 pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey) -> bool {
-    let verified = app
-        .links
-        .github_link(owner_did)
-        .ok()
-        .flatten()
-        .is_some_and(|link| link.verified);
-    verified
+    link_verified(app, owner_did)
         && app
             .review_read
             .pending_suggestions(owner_did)
@@ -214,28 +208,86 @@ pub(crate) fn owner_can_publish(app: &App, owner_did: &str, key: &SuggestionKey)
 }
 
 /// `POST /review/decline`: "Not me" — the suggestion leaves the queue,
-/// declined, and is never offered again.
+/// declined, and is never offered again. Private app state only: this path
+/// holds no repo-write capability (I-BRA-2), and declining twice is the
+/// same as declining once.
 pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
-    with_own_suggestion(app, request, "object", |session, suggestion| {
-        let declined = decline(SuggestionState::Pending).is_some_and(|to| {
-            app.review_write
-                .change_state(
-                    &session.owner_did,
-                    &suggestion.key,
-                    SuggestionState::Pending,
-                    to,
-                )
-                .unwrap_or(false)
-        });
-        if declined {
-            Reply::Redirect {
-                location: "/review".to_string(),
-                set_cookie: None,
+    with_own_step(
+        app,
+        request,
+        LifecycleEvent::Decline,
+        |cookie_value, session, key, moved| {
+            if moved {
+                emit(LogEvent::SuggestionDeclined);
             }
-        } else {
-            not_found()
+            queue_page(
+                app,
+                cookie_value,
+                session,
+                StatusCode::OK,
+                Some(QueueNotice::Declined(key)),
+            )
+        },
+    )
+}
+
+/// `POST /review/undo`: a declined suggestion is pending again.
+pub(crate) fn undo_decline(app: &App, request: &PageRequest) -> Reply {
+    with_own_step(app, request, LifecycleEvent::Undo, |_, _, _, _| {
+        Reply::Redirect {
+            location: "/review".to_string(),
+            set_cookie: None,
         }
     })
+}
+
+/// Take the owner's `event` on the suggestion the form names, if it is the
+/// signed-in owner's and their GitHub link is verified; `done` gets whether
+/// the suggestion moved (`false`: it already stood where `event` leaves it).
+/// A refused event, or anyone else's suggestion, is not found.
+fn with_own_step(
+    app: &App,
+    request: &PageRequest,
+    event: LifecycleEvent,
+    done: impl FnOnce(&str, &WebSession, &SuggestionKey, bool) -> Reply,
+) -> Reply {
+    let Some((cookie_value, session)) = current_session(app, request) else {
+        return to_landing();
+    };
+    if !csrf_matches(request, &session) {
+        return forbidden();
+    }
+    let Some(key) = key_of(request, "object").filter(|_| link_verified(app, &session.owner_did))
+    else {
+        return not_found();
+    };
+    let current = app
+        .review_read
+        .suggestion_states(&session.owner_did)
+        .ok()
+        .and_then(|states| states.into_iter().find(|(k, _)| *k == key))
+        .map(|(_, state)| state);
+    let moved = match current.and_then(|state| owner_step(state, event)) {
+        Some(OwnerStep::Move { from, to }) => app
+            .review_write
+            .change_state(&session.owner_did, &key, from, to)
+            .ok(),
+        Some(OwnerStep::AlreadyDone) => Some(false),
+        None => None,
+    };
+    match moved {
+        Some(moved) => done(&cookie_value, &session, &key, moved),
+        None => not_found(),
+    }
+}
+
+/// Is the owner's GitHub link currently verified?
+fn link_verified(app: &App, owner_did: &str) -> bool {
+    app.links
+        .github_link(owner_did)
+        .ok()
+        .flatten()
+        .is_some_and(|link| link.verified)
 }
 
 /// Run `act` on the visible pending suggestion the form names (its object
@@ -253,12 +305,7 @@ fn with_own_suggestion(
     if !csrf_matches(request, &session) {
         return forbidden();
     }
-    let verified = app
-        .links
-        .github_link(&session.owner_did)
-        .ok()
-        .flatten()
-        .is_some_and(|link| link.verified);
+    let verified = link_verified(app, &session.owner_did);
     let named = key_of(request, object_field);
     let found = named.filter(|_| verified).and_then(|key| {
         app.review_read

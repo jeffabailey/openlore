@@ -7,7 +7,7 @@ use std::sync::Arc;
 use hyper::StatusCode;
 use ports::ScanStatus;
 use review_domain::budget::ScanAdmission;
-use review_domain::views::{self, ScanRefused};
+use review_domain::views::{self, QueueNotice, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::review::queue_page;
@@ -40,7 +40,7 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
             &cookie_value,
             &session,
             StatusCode::TOO_MANY_REQUESTS,
-            Some(refused),
+            Some(QueueNotice::ScanRefused(refused)),
         );
     }
     let run_id = random_token();
@@ -51,7 +51,7 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
             &cookie_value,
             &session,
             StatusCode::SERVICE_UNAVAILABLE,
-            Some(ScanRefused::AppBusy),
+            Some(QueueNotice::ScanRefused(ScanRefused::AppBusy)),
         );
     }
     tokio::spawn(run_scan(

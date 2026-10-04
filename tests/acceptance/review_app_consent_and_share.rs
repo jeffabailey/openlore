@@ -172,7 +172,6 @@ fn every_vocabulary_philosophy_is_offered_when_swapping() {
 ///   And only that card left her queue
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-006 decline writes nothing)"]
 fn declining_writes_nothing_public() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -197,7 +196,6 @@ fn declining_writes_nothing_public() {
 ///   Then that suggestion is not offered
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-006 no re-offer)"]
 fn a_declined_suggestion_is_not_offered_again() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -218,7 +216,6 @@ fn a_declined_suggestion_is_not_offered_again() {
 ///   Then there is no trace of the decline
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-006 declines invisible to others)"]
 fn nobody_else_can_see_priyas_declines() {
     let world = ReviewWorld::new();
     let mut priya_browser = given_pending_suggestions(&world, Persona::Priya);
@@ -250,7 +247,6 @@ fn nobody_else_can_see_priyas_declines() {
 ///   Then the suggestion is pending again and nothing was written
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-006 undo)"]
 fn undo_restores_a_declined_suggestion() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -269,7 +265,6 @@ fn undo_restores_a_declined_suggestion() {
 ///   Then exactly that one suggestion is declined and nothing is written
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (decline idempotent)"]
 fn declining_twice_is_the_same_as_declining_once() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);

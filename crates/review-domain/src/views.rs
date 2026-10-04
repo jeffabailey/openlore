@@ -6,6 +6,7 @@ use maud::{html, Markup, DOCTYPE};
 use ports::{ScanRun, ScanStatus, Suggestion, SuggestionKey};
 
 use crate::edits::CONFIDENCE_GUIDANCE;
+use crate::lifecycle::Tally;
 use crate::ownership::OwnershipRefusal;
 use crate::plans::PublishPlan;
 use crate::signin::{PermissionMode, SignInFailure};
@@ -151,6 +152,21 @@ pub const PRIVATE_NOTICE: &str = "Private: only you can see these.";
 pub const EMPTY_SCAN_NOTICE: &str = "We didn't find suggestions in your owned, public repos. \
      Forks and archived repos are skipped.";
 
+/// What the queue says right after "Not me" (AC-006.2).
+pub const DECLINED_NOTICE: &str = "Declined. Private: never published, won't be suggested again.";
+
+/// The label of the button that restores a just-declined suggestion.
+pub const UNDO_LABEL: &str = "Undo";
+
+/// What the queue says once every suggestion is settled: unlike an empty
+/// scan, the scan did find suggestions and the owner reviewed them all.
+pub fn all_reviewed_notice(tally: &Tally) -> String {
+    format!(
+        "You've reviewed every suggestion: {} declined, {} published.",
+        tally.declined, tally.published
+    )
+}
+
 /// Why a scan did not start (ADR-076 §2 budget).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanRefused {
@@ -174,6 +190,15 @@ pub fn scan_refused_message(refused: ScanRefused) -> &'static str {
     }
 }
 
+/// What the queue reports about the owner's last action.
+#[derive(Debug, Clone, Copy)]
+pub enum QueueNotice<'a> {
+    /// The scan the owner asked for did not start.
+    ScanRefused(ScanRefused),
+    /// The owner just declined this suggestion; it can still be undone.
+    Declined(&'a SuggestionKey),
+}
+
 /// Everything the signed-in queue shows.
 #[derive(Debug, Clone, Copy)]
 pub struct QueueView<'a> {
@@ -183,9 +208,9 @@ pub struct QueueView<'a> {
     pub latest_scan: Option<ScanRun>,
     /// The owner's pending suggestions (shown only while the link is verified).
     pub pending: &'a [Suggestion],
-    /// How many of the owner's suggestions are published (AC-004.7).
-    pub published: usize,
-    pub refused: Option<ScanRefused>,
+    /// How many of the owner's suggestions stand in each state (AC-004.7).
+    pub tally: Tally,
+    pub notice: Option<QueueNotice<'a>>,
 }
 
 /// `HH:MM` UTC of a Unix time.
@@ -205,10 +230,13 @@ fn scan_action(latest: Option<ScanRun>) -> Option<&'static str> {
 }
 
 /// What the latest scan says above the cards, if anything.
-fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion]) -> Option<String> {
+fn scan_notice(latest: Option<ScanRun>, pending: &[Suggestion], tally: &Tally) -> Option<String> {
     let run = latest?;
     match run.status {
         ScanStatus::Running => Some("Scanning your repos…".to_string()),
+        ScanStatus::Completed if pending.is_empty() && tally.all_reviewed() => {
+            Some(all_reviewed_notice(tally))
+        }
         ScanStatus::Completed if pending.is_empty() => Some(EMPTY_SCAN_NOTICE.to_string()),
         ScanStatus::RateLimited => Some(format!(
             "GitHub is busy, resuming at {} UTC. The suggestions found so far are kept; \
@@ -377,20 +405,38 @@ pub fn edit_page(view: &EditView<'_>) -> String {
     .into_string()
 }
 
+/// The just-declined notice and its Undo (AC-006.2 / AC-006.5).
+fn declined_notice(key: &SuggestionKey, csrf_token: &str) -> Markup {
+    html! {
+        p role="status" { (DECLINED_NOTICE) }
+        form method="post" action="/review/undo" {
+            input type="hidden" name="csrf" value=(csrf_token);
+            (key_fields(key))
+            button type="submit" { (UNDO_LABEL) }
+        }
+    }
+}
+
 /// The verified owner's queue: privacy statement, scan state, cards.
 fn verified_queue(login: &str, view: &QueueView<'_>) -> Markup {
     html! {
         p { "GitHub: github.com/" (login) " (verified)" }
         h1 { "Your suggestions" }
         p { strong { (PRIVATE_NOTICE) } }
-        @if let Some(refused) = view.refused {
-            p role="alert" { (scan_refused_message(refused)) }
+        @match view.notice {
+            Some(QueueNotice::ScanRefused(refused)) => {
+                p role="alert" { (scan_refused_message(refused)) }
+            }
+            Some(QueueNotice::Declined(key)) => {
+                (declined_notice(key, view.csrf_token))
+            }
+            None => {}
         }
-        @if let Some(notice) = scan_notice(view.latest_scan, view.pending) {
+        @if let Some(notice) = scan_notice(view.latest_scan, view.pending, &view.tally) {
             p role="status" { (notice) }
         }
-        @if view.published > 0 {
-            p { (view.pending.len()) " pending · " (view.published) " published" }
+        @if view.tally.published > 0 {
+            p { (view.pending.len()) " pending · " (view.tally.published) " published" }
         }
         @if let Some(label) = scan_action(view.latest_scan) {
             form method="post" action="/scan" {
@@ -709,3 +755,47 @@ pub const TRIAGE_SCRIPT: &str = "(function () {\n\
     else { var c = cards()[current]; var b = c && c.querySelector('[data-key=\"' + key + '\"]'); if (b) b.click(); }\n\
   });\n\
 })();\n";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn completed_queue(tally: Tally) -> String {
+        review_page(&QueueView {
+            handle: "priyaraman.bsky.social",
+            csrf_token: "csrf",
+            github: GithubStep::Verified {
+                login: "priyaraman",
+            },
+            latest_scan: Some(ScanRun {
+                status: ScanStatus::Completed,
+                resume_after: None,
+            }),
+            pending: &[],
+            tally,
+            notice: None,
+        })
+    }
+
+    proptest! {
+        /// Universe: settled tallies with nothing pending, after a completed
+        /// scan. A queue the owner has fully reviewed says so with its
+        /// declined and published counts; only a queue with nothing ever
+        /// suggested says the scan found nothing.
+        #[test]
+        fn a_fully_reviewed_queue_is_not_mistaken_for_an_empty_scan(
+            declined in 0usize..5, published in 0usize..5, retracted in 0usize..3,
+        ) {
+            let tally = Tally { pending: 0, declined, published, retracted };
+            let page = completed_queue(tally);
+            let settled = declined + published + retracted > 0;
+            prop_assert_eq!(page.contains(EMPTY_SCAN_NOTICE), !settled);
+            prop_assert_eq!(page.contains(&all_reviewed_notice(&tally)), settled);
+            if settled {
+                let counts = format!("{declined} declined, {published} published");
+                prop_assert!(page.contains(&counts), "{}", page);
+            }
+        }
+    }
+}

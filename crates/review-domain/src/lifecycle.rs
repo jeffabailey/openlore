@@ -33,12 +33,102 @@ pub fn suggestion_from_candidate(candidate: &CandidateClaim, source_repo: &str) 
     }
 }
 
+/// What the owner can do to a suggestion (data-models §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleEvent {
+    /// "Not me".
+    Decline,
+    /// Undo a decline.
+    Undo,
+    /// Publish to the owner's repo.
+    Publish,
+    /// Retract a published claim.
+    Retract,
+}
+
+impl LifecycleEvent {
+    pub const ALL: [LifecycleEvent; 4] = [Self::Decline, Self::Undo, Self::Publish, Self::Retract];
+
+    /// The state this event leaves a suggestion in.
+    pub fn settles_in(self) -> SuggestionState {
+        match self {
+            Self::Decline => SuggestionState::Declined,
+            Self::Undo => SuggestionState::Pending,
+            Self::Publish => SuggestionState::Published,
+            Self::Retract => SuggestionState::Retracted,
+        }
+    }
+
+    /// The only state this event may start from.
+    fn starts_from(self) -> SuggestionState {
+        match self {
+            Self::Decline | Self::Publish => SuggestionState::Pending,
+            Self::Undo => SuggestionState::Declined,
+            Self::Retract => SuggestionState::Published,
+        }
+    }
+}
+
+/// The lifecycle state machine: pending ⇄ declined, pending → published →
+/// retracted. Every other event is refused in every state.
+pub fn transition(state: SuggestionState, event: LifecycleEvent) -> Option<SuggestionState> {
+    (state == event.starts_from()).then(|| event.settles_in())
+}
+
 /// "Not me": only a pending suggestion can be declined.
 pub fn decline(state: SuggestionState) -> Option<SuggestionState> {
-    match state {
-        SuggestionState::Pending => Some(SuggestionState::Declined),
-        SuggestionState::Declined | SuggestionState::Published | SuggestionState::Retracted => None,
+    transition(state, LifecycleEvent::Decline)
+}
+
+/// What the owner's action does to a stored suggestion: move it, or nothing
+/// because it is already where the action leaves it (a repeated "Not me" or
+/// Undo is the same as one, C4a). `None`: the action is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerStep {
+    Move {
+        from: SuggestionState,
+        to: SuggestionState,
+    },
+    AlreadyDone,
+}
+
+/// The step `event` takes from `current`.
+pub fn owner_step(current: SuggestionState, event: LifecycleEvent) -> Option<OwnerStep> {
+    match transition(current, event) {
+        Some(to) => Some(OwnerStep::Move { from: current, to }),
+        None => (current == event.settles_in()).then_some(OwnerStep::AlreadyDone),
     }
+}
+
+/// How many of the owner's suggestions stand in each state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub pending: usize,
+    pub declined: usize,
+    pub published: usize,
+    pub retracted: usize,
+}
+
+impl Tally {
+    /// Has the owner settled suggestions, and none is left pending?
+    pub fn all_reviewed(&self) -> bool {
+        self.pending == 0 && self.declined + self.published + self.retracted > 0
+    }
+}
+
+/// Count `states` by state.
+pub fn tally(states: impl IntoIterator<Item = SuggestionState>) -> Tally {
+    states
+        .into_iter()
+        .fold(Tally::default(), |mut tally, state| {
+            match state {
+                SuggestionState::Pending => tally.pending += 1,
+                SuggestionState::Declined => tally.declined += 1,
+                SuggestionState::Published => tally.published += 1,
+                SuggestionState::Retracted => tally.retracted += 1,
+            }
+            tally
+        })
 }
 
 #[cfg(test)]
@@ -51,7 +141,66 @@ mod tests {
         proptest::sample::select(SuggestionState::ALL.to_vec())
     }
 
+    fn event() -> impl Strategy<Value = LifecycleEvent> {
+        proptest::sample::select(LifecycleEvent::ALL.to_vec())
+    }
+
     proptest! {
+        /// Universe: (state, event) pairs. Exactly the four legal moves
+        /// (pending ⇄ declined, pending → published → retracted) succeed;
+        /// in particular declined → published is refused.
+        #[test]
+        fn only_the_legal_moves_succeed(from in state(), on in event()) {
+            use LifecycleEvent::*;
+            use SuggestionState::*;
+            let expected = match (from, on) {
+                (Pending, Decline) => Some(Declined),
+                (Declined, Undo) => Some(Pending),
+                (Pending, Publish) => Some(Published),
+                (Published, Retract) => Some(Retracted),
+                _ => None,
+            };
+            prop_assert_eq!(transition(from, on), expected);
+        }
+
+        /// Universe: (state, event). Taking the owner's step twice leaves the
+        /// suggestion where taking it once did; a refused step moves nothing.
+        #[test]
+        fn an_owner_step_taken_twice_equals_once(from in state(), on in event()) {
+            let apply = |current: SuggestionState| match owner_step(current, on) {
+                Some(OwnerStep::Move { from: was, to }) => {
+                    prop_assert_eq!(was, current);
+                    Ok(Some(to))
+                }
+                Some(OwnerStep::AlreadyDone) => Ok(Some(current)),
+                None => Ok(None),
+            };
+            match apply(from)? {
+                Some(once) => {
+                    prop_assert_eq!(once, on.settles_in());
+                    prop_assert_eq!(apply(once)?, Some(once));
+                }
+                None => prop_assert!(transition(from, on).is_none() && from != on.settles_in()),
+            }
+        }
+
+        /// Universe: lists of states. The tally counts each state exactly,
+        /// and "all reviewed" holds iff nothing is pending and something is
+        /// settled.
+        #[test]
+        fn the_tally_counts_every_state(states in prop::collection::vec(state(), 0..12)) {
+            let counted = tally(states.iter().copied());
+            let count = |wanted| states.iter().filter(|s| **s == wanted).count();
+            prop_assert_eq!(counted.pending, count(SuggestionState::Pending));
+            prop_assert_eq!(counted.declined, count(SuggestionState::Declined));
+            prop_assert_eq!(counted.published, count(SuggestionState::Published));
+            prop_assert_eq!(counted.retracted, count(SuggestionState::Retracted));
+            prop_assert_eq!(
+                counted.all_reviewed(),
+                counted.pending == 0 && !states.is_empty()
+            );
+        }
+
         /// Universe: every state. Declining moves pending → declined and
         /// refuses every other state (nothing else changes).
         #[test]
