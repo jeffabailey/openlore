@@ -49,7 +49,7 @@ provider "aws" {
 }
 
 module "pds_bootstrap" {
-  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.5.0"
+  source = "git::https://github.com/jeffabailey/tofu-aws-pds.git//modules/pds-bootstrap?ref=v1.6.0"
 
   name_prefix         = "openlore"
   project             = "openlore"
@@ -68,4 +68,7 @@ module "pds_bootstrap" {
 
   # The prod host creates its first account and stores the passwords in SSM (v1.2.0).
   bootstrap_account = true
+
+  # The host reports each successful backup as a PDS/Backup metric for the backup alarm (v1.6.0).
+  backup_metrics = true
 }
