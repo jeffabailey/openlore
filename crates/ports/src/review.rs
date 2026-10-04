@@ -368,12 +368,41 @@ pub trait ReviewStateWrite: Send + Sync {
 // US-BRA-004 — publish plans and the create-only write to the user's own repo
 // -----------------------------------------------------------------------------
 
-/// A publish plan as stored between preview and confirm (Plan-value
-/// pattern): the exact record the preview showed, keyed by its CID.
+/// Which confirm a stored plan belongs to (data-models `plans.kind`). The
+/// store takes a plan only for the confirm of its own kind, so a share
+/// draft can never be executed by the claim publish route, nor a publish
+/// plan by `/share`, nor either as a retraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlanKind {
+    /// "Publish to my repo": create the previewed claim.
+    Publish,
+    /// "Confirm retraction": create the previewed retraction.
+    Retract,
+    /// "Post to Bluesky": create the previewed share post.
+    Share,
+}
+
+impl PlanKind {
+    pub const ALL: [PlanKind; 3] = [Self::Publish, Self::Retract, Self::Share];
+
+    /// The `plans.kind` column value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Publish => "publish",
+            Self::Retract => "retract",
+            Self::Share => "share",
+        }
+    }
+}
+
+/// A plan as stored between preview and confirm (Plan-value pattern): the
+/// exact record the preview showed, under the confirm it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredPublishPlan {
-    /// The record key = the claim's canonical CID.
+    /// The record key = the claim's canonical CID (publish, retract), or a
+    /// random id (share).
     pub plan_id: String,
+    pub kind: PlanKind,
     pub key: SuggestionKey,
     /// The exact `org.openlore.claim` record JSON to be written.
     pub record_json: String,
@@ -397,10 +426,13 @@ pub trait PublishPlanPort: Send + Sync {
         plan: &StoredPublishPlan,
         expires_at: i64,
     ) -> Result<(), ReviewStoreError>;
+    /// Take the owner's plan `plan_id` of `kind`; a plan of another kind is
+    /// neither returned nor removed.
     fn take_publish_plan(
         &self,
         owner_did: &str,
         plan_id: &str,
+        kind: PlanKind,
     ) -> Result<Option<TakenPublishPlan>, ReviewStoreError>;
 }
 

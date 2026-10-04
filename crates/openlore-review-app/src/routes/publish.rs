@@ -7,7 +7,7 @@
 //! key is the content's CID, so a create that already landed is success).
 
 use hyper::StatusCode;
-use ports::{SuggestionState, TakenPublishPlan};
+use ports::{PlanKind, SuggestionState, TakenPublishPlan};
 use review_domain::plans::{plan_freshness, restore_plan, PlanFreshness, PublishPlan};
 use review_domain::views::{self, PublishRetry};
 
@@ -28,8 +28,11 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
         return forbidden();
     }
     let owner_did = session.owner_did.as_str();
-    let taken = field(&request.form, "plan")
-        .and_then(|plan_id| app.plans.take_publish_plan(owner_did, &plan_id).ok()?);
+    let taken = field(&request.form, "plan").and_then(|plan_id| {
+        app.plans
+            .take_publish_plan(owner_did, &plan_id, PlanKind::Publish)
+            .ok()?
+    });
     let Some(TakenPublishPlan { plan, expires_at }) = taken else {
         return not_found();
     };

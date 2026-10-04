@@ -140,7 +140,6 @@ fn pending_suggestions_are_never_exposed_anywhere_public() {
 ///   And the declined suggestion appears in no record
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (I-BRA-3 write audit over a journey)"]
 fn every_write_to_her_pds_follows_one_of_her_explicit_confirms_and_declines_write_nothing() {
     let world = ReviewWorld::new();
     let mut confirms = 0;
@@ -167,7 +166,6 @@ fn every_write_to_her_pds_follows_one_of_her_explicit_confirms_and_declines_writ
 ///   And no update, put or delete was ever attempted on any repo
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (I-BRA-7 + I-BRA-8 over two journeys)"]
 fn writes_only_ever_go_to_the_authors_own_pds_and_nothing_is_ever_updated_or_deleted() {
     let world = ReviewWorld::new();
     let mut confirms = 0;
@@ -393,7 +391,6 @@ fn the_operator_is_warned_two_weeks_before_the_github_token_expires() {
 ///       any suggestion's subject, philosophy or evidence, the post text, or the server GitHub token
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (log privacy over a journey)"]
 fn the_logs_of_a_whole_journey_reveal_nothing_about_anyone() {
     let world = ReviewWorld::new();
     let mut confirms = 0;

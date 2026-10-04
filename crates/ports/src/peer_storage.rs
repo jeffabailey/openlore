@@ -20,7 +20,7 @@
 // SCAFFOLD: false  (trait + ADTs are real; implementations land in 01-02)
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did, ReferenceType, SelfAttestedClaim, SignedClaim};
+use claim_domain::{Cid, ClaimRecord, Did, ReferenceType, SelfAttestedClaim, SignedClaim};
 use url::Url;
 
 use crate::federated_row::PeerSubscription;
@@ -204,6 +204,22 @@ pub trait PeerStoragePort {
         &self,
         cid: &Cid,
     ) -> Result<Option<(Did, SignedClaim)>, PeerStorageError>;
+
+    /// Fetch one peer claim by CID with its `author_did`, WHATEVER its
+    /// provenance (ADR-071): an app-signed row as `ClaimRecord::AppSigned`
+    /// (exactly what [`get_peer_claim_by_cid`] returns), a self-attested
+    /// row as `ClaimRecord::SelfAttested`. Additive: the default knows only
+    /// app-signed rows, so stores without self-attested rows are unchanged.
+    ///
+    /// [`get_peer_claim_by_cid`]: PeerStoragePort::get_peer_claim_by_cid
+    fn get_peer_claim_record_by_cid(
+        &self,
+        cid: &Cid,
+    ) -> Result<Option<(Did, ClaimRecord)>, PeerStorageError> {
+        Ok(self
+            .get_peer_claim_by_cid(cid)?
+            .map(|(author, signed)| (author, ClaimRecord::AppSigned(signed))))
+    }
 
     /// All peer claims matching a subject, each paired with its
     /// `author_did`. Used by `claim graph --federated` joined against

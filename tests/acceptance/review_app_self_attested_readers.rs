@@ -98,6 +98,54 @@ fn maria_pulls_priyas_self_attested_claims() {
     assert!(!shown.stdout.contains("unverified"));
 }
 
+/// RD-1b (DELIVER 03-04 carry-over: no DISTILL scenario covers it)
+/// ```gherkin
+/// @US-BRA-009 @ADR-071 @real-io @driving_port @contract-shape:bounded-change
+/// Scenario: Maria can counter Priya's self-attested claim by its CID
+///   Given Maria pulled Priya's self-attested claim
+///   When she counters it by its CID with a reason and confirms
+///   Then the preview names the claim and Priya as its author, and the counter is published
+/// ```
+#[test]
+fn maria_can_counter_priyas_self_attested_claim_by_its_cid() {
+    let value = self_attested_claim_value(
+        Persona::Priya.did(),
+        priya::TIDEPOOL_MEMORY_SAFETY,
+        2500,
+        &[],
+    );
+    let cid = recomputed_cid(&value);
+    let net = priya_pds_with(vec![(value, None)]);
+    let env = maria();
+    let pulled = when_maria_adds_priya_and_pulls(&env, &net);
+    assert_eq!(pulled.status, 0, "{}\n{}", pulled.stdout, pulled.stderr);
+    let countered = support::run_openlore_with_peer_resolver_stdin(
+        &env,
+        &[
+            "claim",
+            "counter",
+            &cid,
+            "--reason",
+            "tidepool has unsafe blocks in its core",
+        ],
+        Persona::Priya.did(),
+        &net.pds_url_for(Persona::Priya.did()),
+        "\nY\n",
+    );
+    assert_eq!(
+        countered.status, 0,
+        "{}\n{}",
+        countered.stdout, countered.stderr
+    );
+    assert!(
+        countered
+            .stdout
+            .contains(&format!("counters: {cid} (by {})", Persona::Priya.did())),
+        "{}",
+        countered.stdout
+    );
+}
+
 /// RD-2
 /// ```gherkin
 /// @US-BRA-009 @AC-009.3 @I-BRA-5 @real-io @contract-shape:pure-function

@@ -100,6 +100,19 @@ pub fn owner_step(current: SuggestionState, event: LifecycleEvent) -> Option<Own
     }
 }
 
+/// What a confirmed retraction does, given whether its claim is still live
+/// in the owner's repo (US-BRA-011, C4a): a live (published) claim moves to
+/// retracted, so one retraction is written; an already-retracted claim is
+/// `AlreadyDone`, so nothing more is written — Retracted is terminal.
+pub fn retraction_step(claim_is_live: bool) -> Option<OwnerStep> {
+    let current = if claim_is_live {
+        SuggestionState::Published
+    } else {
+        SuggestionState::Retracted
+    };
+    owner_step(current, LifecycleEvent::Retract)
+}
+
 /// May the owner see and approve a suggestion in `state` right now? Only
 /// while it is pending AND their GitHub link is currently verified (D-12,
 /// CORE-9). Visibility is derived, never stored: an unproven link hides a
@@ -190,6 +203,22 @@ mod tests {
                 }
                 None => prop_assert!(transition(from, on).is_none() && from != on.settles_in()),
             }
+        }
+
+        /// Universe: any number of retraction confirms of one claim (each
+        /// from its own preview). The repo holds exactly one retraction
+        /// afterwards: the first confirm writes, every later one finds the
+        /// claim no longer live and writes nothing.
+        #[test]
+        fn retracting_a_claim_any_number_of_times_writes_one_retraction(confirms in 1usize..8) {
+            let retractions_written = (0..confirms).fold(0usize, |written, _| {
+                match retraction_step(written == 0) {
+                    Some(OwnerStep::Move { from: SuggestionState::Published, to: SuggestionState::Retracted }) => written + 1,
+                    _ => written,
+                }
+            });
+            prop_assert_eq!(retractions_written, 1);
+            prop_assert_eq!(retraction_step(false), Some(OwnerStep::AlreadyDone));
         }
 
         /// Universe: lists of states. The tally counts each state exactly,

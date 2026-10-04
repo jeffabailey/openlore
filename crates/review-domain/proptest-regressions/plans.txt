@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9c696ae083233ff509b37b49bcd5c4cc27b48cdcef9a5332603b9b6630695045 # shrinks to (did, draft) = ("did:plc:2aa22aa2a2222aaa2aaa2a2a", ClaimDraft { key: SuggestionKey { subject: "github:a/a", predicate: "embodiesPhilosophy", object: "org.openlore.philosophy.-a-" }, evidence: ["https://github.com/a/a"], confidence_bp: 0 }), label = Publish, confirm = Publish

@@ -37,7 +37,9 @@ use crate::conn::{ConnGuard, SharedConn};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, Did, ReferenceType, SelfAttestedClaim, SignedClaim, UnsignedClaim};
+use claim_domain::{
+    Cid, ClaimRecord, Did, ReferenceType, SelfAttestedClaim, SignedClaim, UnsignedClaim,
+};
 use duckdb::Connection;
 use ports::{
     AddSubscriptionOutcome, HardPurgeOutcome, PeerStorageError, PeerStoragePort, PeerSubscription,
@@ -810,6 +812,60 @@ impl PeerStoragePort for DuckDbPeerStorageAdapter {
         })?;
 
         Ok(Some((Did(author_did), signed)))
+    }
+
+    fn get_peer_claim_record_by_cid(
+        &self,
+        cid: &Cid,
+    ) -> Result<Option<(Did, ClaimRecord)>, PeerStorageError> {
+        // App-signed rows read exactly as `get_peer_claim_by_cid` does.
+        if let Some((author, signed)) = self.get_peer_claim_by_cid(cid)? {
+            return Ok(Some((author, ClaimRecord::AppSigned(signed))));
+        }
+        // A self-attested row's artifact is its `UnsignedClaim`; it is
+        // admitted only if it still hashes to the CID it is stored under.
+        let row: Option<(String, String)> = {
+            let conn = self.lock_conn()?;
+            conn.query_row(
+                "SELECT author_did, signed_record_path FROM peer_claims \
+                 WHERE cid = ? AND provenance = ?",
+                duckdb::params![cid.0, crate::SELF_ATTESTED],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .map(Some)
+            .or_else(|err| match err {
+                duckdb::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(PeerStorageError::DuckDb(format!(
+                    "query self-attested peer_claims by cid {}: {other}",
+                    cid.0
+                ))),
+            })?
+        };
+        let Some((author_did, record_path)) = row else {
+            return Ok(None);
+        };
+        let relative = record_path
+            .strip_prefix("peer_claims/")
+            .unwrap_or(&record_path);
+        let artifact = self.peer_claims_root.join(relative);
+        let bytes = std::fs::read(&artifact).map_err(PeerStorageError::Io)?;
+        let corrupt = |detail: String| {
+            PeerStorageError::DuckDb(format!(
+                "self-attested peer claim artifact {}: {detail}",
+                artifact.display()
+            ))
+        };
+        let unsigned: UnsignedClaim =
+            serde_json::from_slice(&bytes).map_err(|err| corrupt(err.to_string()))?;
+        let claim = SelfAttestedClaim::new(unsigned).map_err(|err| corrupt(err.to_string()))?;
+        if claim.cid() != cid {
+            return Err(corrupt(format!(
+                "hashes to {}, not {}",
+                claim.cid().0,
+                cid.0
+            )));
+        }
+        Ok(Some((Did(author_did), ClaimRecord::SelfAttested(claim))))
     }
 
     fn list_peer_claims_by_subject(

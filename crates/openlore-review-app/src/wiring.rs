@@ -92,6 +92,9 @@ pub(crate) enum LogEvent<'a> {
     /// An owner confirmed a share post and it landed (KPI count; never the
     /// text, whose or where).
     SharePosted,
+    /// An owner confirmed a retraction and it landed (KPI count; never which
+    /// claim or whose).
+    RetractPosted,
 }
 
 /// The operator-facing name of why a sign-in did not complete.
@@ -134,6 +137,7 @@ pub(crate) fn emit(event: LogEvent<'_>) {
             json!({"ts": ts, "level": "info", "event": "suggestion.declined"})
         }
         LogEvent::SharePosted => json!({"ts": ts, "level": "info", "event": "share.posted"}),
+        LogEvent::RetractPosted => json!({"ts": ts, "level": "info", "event": "retract.posted"}),
         LogEvent::GithubVerified => {
             json!({"ts": ts, "level": "info", "event": "github.verified"})
         }

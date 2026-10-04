@@ -106,9 +106,9 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
     let confidence: claim_domain::Confidence = serde_json::from_value(serde_json::json!(1.0))
         .map_err(|e| anyhow!("encoding confidence 1.0 for counter-claim: {e}"))?;
     let unsigned = UnsignedClaim {
-        subject: resolved.claim.unsigned.subject.clone(),
-        predicate: resolved.claim.unsigned.predicate.clone(),
-        object: resolved.claim.unsigned.object.clone(),
+        subject: resolved.claim.subject.clone(),
+        predicate: resolved.claim.predicate.clone(),
+        object: resolved.claim.object.clone(),
         evidence: Vec::new(),
         confidence,
         author_did: wiring.identity.author_did().clone(),
@@ -260,7 +260,7 @@ pub fn run(wiring: &Wiring, args: &ClaimCounterArgs) -> Result<ClaimCounterOutco
 /// author DID. Carrying the author alongside the claim is the anti-merging
 /// discipline: a peer claim is never separated from its attribution.
 struct ResolvedTarget {
-    claim: SignedClaim,
+    claim: UnsignedClaim,
     author_did: Did,
 }
 
@@ -276,18 +276,22 @@ fn resolve_target(wiring: &Wiring, target_cid: &Cid) -> Result<Option<ResolvedTa
     {
         let author_did = own.unsigned.author_did.clone();
         return Ok(Some(ResolvedTarget {
-            claim: own,
+            claim: own.unsigned,
             author_did,
         }));
     }
-    // Peer cache: `get_peer_claim_by_cid` returns the attribution pair so
-    // we never get a claim without its author DID (anti-merging layer-1).
-    if let Some((author_did, claim)) = wiring
+    // Peer cache, app-signed OR self-attested (ADR-071): the lookup returns
+    // the attribution pair so we never get a claim without its author DID
+    // (anti-merging layer-1).
+    if let Some((author_did, record)) = wiring
         .peer_storage
-        .get_peer_claim_by_cid(target_cid)
+        .get_peer_claim_record_by_cid(target_cid)
         .map_err(|e| anyhow!("looking up peer claim for cid {}: {e}", target_cid.0))?
     {
-        return Ok(Some(ResolvedTarget { claim, author_did }));
+        return Ok(Some(ResolvedTarget {
+            claim: record.unsigned().clone(),
+            author_did,
+        }));
     }
     Ok(None)
 }

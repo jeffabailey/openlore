@@ -12,7 +12,7 @@ use ports::{RepoRecord, ScanCounts, ScanRun, ScanStatus, Suggestion, SuggestionK
 use crate::edits::CONFIDENCE_GUIDANCE;
 use crate::lifecycle::Tally;
 use crate::ownership::OwnershipRefusal;
-use crate::plans::PublishPlan;
+use crate::plans::{PublishPlan, RetractPlan};
 use crate::signin::{PermissionMode, SignInFailure};
 
 /// The name Bluesky shows when the app asks for permission.
@@ -714,25 +714,58 @@ pub fn published_claims(
     records: &[RepoRecord],
     origin: RecordOrigin,
 ) -> Vec<PublishedClaim> {
+    let mut shown: Vec<PublishedClaim> = live_claims(owner_did, records, origin)
+        .iter()
+        .map(|(rkey, claim)| shown_claim(rkey, claim))
+        .collect();
+    shown.sort();
+    shown
+}
+
+/// The owner's live published claim under `rkey` — the only claim a
+/// retraction may be built for (US-BRA-011). `None` once it is retracted,
+/// or if it is not the owner's own self-attested claim.
+pub fn live_published_claim(
+    owner_did: &str,
+    records: &[RepoRecord],
+    origin: RecordOrigin,
+    rkey: &str,
+) -> Option<UnsignedClaim> {
+    live_claims(owner_did, records, origin)
+        .into_iter()
+        .find_map(|(key, claim)| (key == rkey).then_some(claim))
+}
+
+/// `(rkey, claim)` of the owner's self-attested claims that are neither
+/// retractions nor self-retracted.
+fn live_claims<'r>(
+    owner_did: &str,
+    records: &'r [RepoRecord],
+    origin: RecordOrigin,
+) -> Vec<(&'r str, UnsignedClaim)> {
     let owner = Did(owner_did.to_string());
     let accepted: Vec<(&str, UnsignedClaim)> = records
         .iter()
         .filter(|record| record.repo_did == owner_did)
         .filter_map(|record| self_attested(record, &owner, origin))
         .collect();
-    let lineages: Vec<ClaimLineage<'_>> = accepted
-        .iter()
-        .map(|(rkey, claim)| lineage(rkey, claim))
-        .collect();
-    let mut shown: Vec<PublishedClaim> = accepted
-        .iter()
-        .filter(|(rkey, claim)| {
-            !is_retraction(claim) && !is_self_retracted(&lineage(rkey, claim), &lineages)
-        })
-        .map(|(rkey, claim)| shown_claim(rkey, claim))
-        .collect();
-    shown.sort();
-    shown
+    let retracted: Vec<bool> = {
+        let lineages: Vec<ClaimLineage<'_>> = accepted
+            .iter()
+            .map(|(rkey, claim)| lineage(rkey, claim))
+            .collect();
+        accepted
+            .iter()
+            .map(|(rkey, claim)| {
+                is_retraction(claim) || is_self_retracted(&lineage(rkey, claim), &lineages)
+            })
+            .collect()
+    };
+    accepted
+        .into_iter()
+        .zip(retracted)
+        .filter_map(|(claim, retracted)| (!retracted).then_some(claim))
+        .collect()
 }
 
 /// The record's claim, if its provenance verdict is self-attested by `owner`.
@@ -803,19 +836,27 @@ pub struct ProfileView<'a> {
     pub content: &'a ProfileContent,
 }
 
-fn profile_card(claim: &PublishedClaim) -> Markup {
-    let repo = repo_path(&claim.subject);
+fn profile_card(claim: &PublishedClaim, viewer_is_owner: bool) -> Markup {
     html! {
         article {
-            h2 {
-                a href=(format!("https://github.com/{repo}/")) { (repo) }
-                " embodies " (philosophy_slug(&claim.object))
-            }
+            h2 { (claim_headline(&claim.subject, &claim.object)) }
             p {
                 (SELF_ATTESTED_LABEL) " · Confidence " (confidence_text(claim.confidence_bp))
                 " (" (bucket_label(claim.confidence_bp)) ")"
             }
+            @if viewer_is_owner {
+                p { a href=(format!("/retract?claim={}", claim.rkey)) { (RETRACT_LABEL) } }
+            }
         }
+    }
+}
+
+/// "<owner>/<repo> embodies <slug>", linking the repo.
+fn claim_headline(subject: &str, object: &str) -> Markup {
+    let repo = repo_path(subject);
+    html! {
+        a href=(format!("https://github.com/{repo}/")) { (repo) }
+        " embodies " (philosophy_slug(object))
     }
 }
 
@@ -835,12 +876,105 @@ pub fn profile_page(view: &ProfileView<'_>) -> String {
                     }
                 },
                 ProfileContent::Claims(claims) => {
-                    @for claim in claims { (profile_card(claim)) }
+                    @for claim in claims { (profile_card(claim, view.viewer_is_owner)) }
                     @if view.viewer_is_owner {
                         p { a href="/share" { (SHARE_LABEL) } }
                     }
                 },
             }
+        },
+    )
+    .into_string()
+}
+
+// =============================================================================
+// Retraction (US-BRA-011): a new record that points at the claim, never a delete
+// =============================================================================
+
+/// The owner's way from a profile card to the retract preview.
+pub const RETRACT_LABEL: &str = "Retract";
+
+/// The only button that retracts.
+pub const CONFIRM_RETRACTION_LABEL: &str = "Confirm retraction";
+
+/// What a retraction is (AC-011.1, AC-011.2).
+pub const RETRACTION_NOTICE: &str = "A public retraction referencing this claim will be added to \
+     your repo. The original stays readable, marked retracted.";
+
+/// The retract preview: which claim, what will be added, and the one
+/// button that adds it. Nothing is written here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetractPreview<'a> {
+    pub plan: &'a RetractPlan,
+    pub csrf_token: &'a str,
+    pub profile_path: &'a str,
+}
+
+pub fn retract_preview_page(view: &RetractPreview<'_>) -> String {
+    let claim = view.plan.claim();
+    page(
+        "Retract this claim?",
+        html! {
+            h1 { "Retract this claim?" }
+            p { (claim_headline(&claim.subject, &claim.object)) }
+            p { strong { (RETRACTION_NOTICE) } }
+            p {
+                "The retraction is added at " code { (view.plan.at_uri()) }
+                " and references " code { (view.plan.retracted_cid()) } "."
+            }
+            p { "Nothing has been retracted yet." }
+            (retract_form(view.plan.rkey(), view.csrf_token, CONFIRM_RETRACTION_LABEL))
+            p { a href=(view.profile_path) { (CANCEL_LABEL) } }
+        },
+    )
+    .into_string()
+}
+
+fn retract_form(plan_id: &str, csrf_token: &str, label: &str) -> Markup {
+    html! {
+        form method="post" action="/retract" {
+            input type="hidden" name="csrf" value=(csrf_token);
+            input type="hidden" name="plan" value=(plan_id);
+            button type="submit" { (label) }
+        }
+    }
+}
+
+/// The retraction landed (or the claim already was retracted): the claim
+/// no longer shows on the profile; the original record is untouched.
+pub fn retracted_page(at_uri: Option<&str>, profile_path: &str) -> String {
+    page(
+        "Retracted",
+        html! {
+            h1 { "Retracted" }
+            @match at_uri {
+                Some(uri) => p { "Your retraction is in your repo at " code { (uri) } },
+                None => p { "This claim was already retracted; nothing more was added." },
+            }
+            p { "The original claim stays readable, marked retracted. It no longer shows on your profile." }
+            p { a href=(profile_path) { "Back to your profile" } }
+        },
+    )
+    .into_string()
+}
+
+/// A retraction that did not land (AC-011.4): the claim is still active and
+/// the owner can try again (`retry`: the same plan, once).
+pub fn retract_failed_page(
+    reason: &str,
+    retry: Option<PublishRetry<'_>>,
+    profile_path: &str,
+) -> String {
+    page(
+        "Nothing was retracted",
+        html! {
+            h1 { "Nothing was retracted" }
+            p role="alert" { (reason) }
+            p { "Your claim is still active and still on your profile." }
+            @if let Some(retry) = retry {
+                (retract_form(retry.plan_id, retry.csrf_token, RETRY_LABEL))
+            }
+            p { a href=(profile_path) { "Back to your profile" } }
         },
     )
     .into_string()

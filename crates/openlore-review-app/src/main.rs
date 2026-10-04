@@ -26,6 +26,7 @@ mod routes {
     pub(crate) mod github;
     pub(crate) mod profile;
     pub(crate) mod publish;
+    pub(crate) mod retract;
     pub(crate) mod review;
     pub(crate) mod scan;
     pub(crate) mod share;

@@ -5,7 +5,7 @@
 
 use duckdb::params;
 use ports::{
-    PublishPlanPort, ReviewStoreError, StoredPublishPlan, SuggestionKey, TakenPublishPlan,
+    PlanKind, PublishPlanPort, ReviewStoreError, StoredPublishPlan, SuggestionKey, TakenPublishPlan,
 };
 
 use crate::secrets::port_error;
@@ -13,7 +13,7 @@ use crate::{db_error, ReviewStore};
 
 const PUT_PLAN: &str = "INSERT OR REPLACE INTO plans
     (owner_did, plan_id, kind, suggestion_key, plan, created_at, expires_at)
-    VALUES (?, ?, 'publish', ?, ?, now(), to_timestamp(?))";
+    VALUES (?, ?, ?, ?, ?, now(), to_timestamp(?))";
 
 fn key_json(key: &SuggestionKey) -> String {
     serde_json::json!([key.subject, key.predicate, key.object]).to_string()
@@ -44,6 +44,7 @@ impl PublishPlanPort for ReviewStore {
                 params![
                     owner_did,
                     plan.plan_id,
+                    plan.kind.as_str(),
                     key_json(&plan.key),
                     plan.record_json,
                     expires_at
@@ -59,13 +60,15 @@ impl PublishPlanPort for ReviewStore {
         &self,
         owner_did: &str,
         plan_id: &str,
+        kind: PlanKind,
     ) -> Result<Option<TakenPublishPlan>, ReviewStoreError> {
         self.with_connection(|conn| {
-            let taken = crate::expiry::take_publish_plan(conn, owner_did, plan_id)?;
+            let taken = crate::expiry::take_plan(conn, owner_did, plan_id, kind.as_str())?;
             Ok(taken.and_then(|(key, record_json, expires_at)| {
                 Some(TakenPublishPlan {
                     plan: StoredPublishPlan {
                         plan_id: plan_id.to_string(),
+                        kind,
                         key: key_of_json(&key?)?,
                         record_json,
                     },
@@ -89,8 +92,13 @@ mod tests {
     use std::sync::Arc;
 
     fn plan(id: &str) -> StoredPublishPlan {
+        plan_of(id, PlanKind::Publish)
+    }
+
+    fn plan_of(id: &str, kind: PlanKind) -> StoredPublishPlan {
         StoredPublishPlan {
             plan_id: id.to_string(),
+            kind,
             key: SuggestionKey {
                 subject: "github:a/b".into(),
                 predicate: "embodiesPhilosophy".into(),
@@ -122,10 +130,33 @@ mod tests {
             let (priya, maria) = ("did:plc:priya", "did:plc:maria");
             store.put_publish_plan(priya, &plan(&id), expires_at).expect("put");
             store.put_publish_plan(maria, &plan(&id), expires_at + 1).expect("put");
-            prop_assert_eq!(store.take_publish_plan(priya, "other").expect("take"), None);
-            prop_assert_eq!(store.take_publish_plan(priya, &id).expect("take"), Some(taken(&id, expires_at)));
-            prop_assert_eq!(store.take_publish_plan(priya, &id).expect("take"), None);
-            prop_assert_eq!(store.take_publish_plan(maria, &id).expect("take"), Some(taken(&id, expires_at + 1)));
+            let publish = PlanKind::Publish;
+            prop_assert_eq!(store.take_publish_plan(priya, "other", publish).expect("take"), None);
+            prop_assert_eq!(store.take_publish_plan(priya, &id, publish).expect("take"), Some(taken(&id, expires_at)));
+            prop_assert_eq!(store.take_publish_plan(priya, &id, publish).expect("take"), None);
+            prop_assert_eq!(store.take_publish_plan(maria, &id, publish).expect("take"), Some(taken(&id, expires_at + 1)));
+        }
+
+        /// Universe: (kind kept, kind confirmed). A plan is taken only by
+        /// the confirm of its own kind; a confirm of any other kind finds
+        /// nothing and leaves the plan in place (carry-over: a share draft
+        /// is never executed as a claim, nor a claim as a share or retraction).
+        #[test]
+        fn a_plan_is_taken_only_by_the_confirm_of_its_own_kind(
+            id in "baf[a-z2-7]{10}",
+            kept in proptest::sample::select(PlanKind::ALL.to_vec()),
+            confirmed in proptest::sample::select(PlanKind::ALL.to_vec()),
+        ) {
+            let store = store();
+            store.put_publish_plan("did:plc:priya", &plan_of(&id, kept), 2_000_000_000).expect("put");
+            let took = store.take_publish_plan("did:plc:priya", &id, confirmed).expect("take");
+            if kept == confirmed {
+                prop_assert_eq!(took.map(|t| t.plan), Some(plan_of(&id, kept)));
+            } else {
+                prop_assert_eq!(took, None);
+                let still = store.take_publish_plan("did:plc:priya", &id, kept).expect("take");
+                prop_assert_eq!(still.map(|t| t.plan), Some(plan_of(&id, kept)));
+            }
         }
 
         /// Any number of confirms of one (owner, plan) racing each other:
@@ -141,7 +172,7 @@ mod tests {
                 .map(|_| {
                     let store = Arc::clone(&store);
                     let id = id.clone();
-                    std::thread::spawn(move || store.take_publish_plan("did:plc:priya", &id).expect("take"))
+                    std::thread::spawn(move || store.take_publish_plan("did:plc:priya", &id, PlanKind::Publish).expect("take"))
                 })
                 .collect();
             let took = takers

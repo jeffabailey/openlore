@@ -237,7 +237,6 @@ fn re_verifying_restores_scanning_and_pending_suggestions() {
 ///   And her profile no longer lists test-driven
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-011 retract)"]
 fn priya_retracts_a_published_claim() {
     let world = ReviewWorld::new();
     let mut browser = given_published(
@@ -286,7 +285,6 @@ fn priya_retracts_a_published_claim() {
 ///   Then nothing is written and the claim is still on her profile
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-011 cancel retraction)"]
 fn cancelling_a_retraction_writes_nothing() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);
@@ -307,7 +305,6 @@ fn cancelling_a_retraction_writes_nothing() {
 ///   And her claim is still active and still on her profile once her PDS is back
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-011 failed retraction)"]
 fn a_failed_retraction_leaves_the_claim_active_with_a_retry() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);
@@ -334,7 +331,6 @@ fn a_failed_retraction_leaves_the_claim_active_with_a_retry() {
 ///   Then the text names memory-safety only
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-011 retracted excluded from share)"]
 fn a_retracted_claim_never_appears_in_the_share_post() {
     let world = ReviewWorld::new();
     let mut browser = given_published(
@@ -360,7 +356,6 @@ fn a_retracted_claim_never_appears_in_the_share_post() {
 ///   Then her repo holds exactly one retraction for it
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (retraction exactly once)"]
 fn retracting_the_same_claim_twice_adds_one_retraction() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);

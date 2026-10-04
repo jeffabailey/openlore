@@ -6,7 +6,7 @@
 //! leaving simply lets the plan expire. The post text is never logged.
 
 use hyper::StatusCode;
-use ports::{ResolvedIdentity, TakenPublishPlan};
+use ports::{PlanKind, ResolvedIdentity, TakenPublishPlan};
 use review_domain::plans::{plan_expires_at, plan_freshness, rfc3339_utc, PlanFreshness};
 use review_domain::share::{compose_post, restore_share_plan, share_post_plan, SharePostPlan};
 use review_domain::views::{self, ProfileContent, SharePreview};
@@ -81,7 +81,7 @@ pub(crate) async fn confirm_share(app: &App, request: &PageRequest) -> Reply {
     let plan_id = field(&request.form, "plan").unwrap_or_default();
     let Some(TakenPublishPlan { plan, expires_at }) = app
         .plans
-        .take_publish_plan(owner_did, &plan_id)
+        .take_publish_plan(owner_did, &plan_id, PlanKind::Share)
         .ok()
         .flatten()
     else {

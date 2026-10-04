@@ -9,7 +9,7 @@
 //!   whose `byteStart`/`byteEnd` are UTF-8 BYTE offsets (SPIKE-1), never
 //!   char or grapheme counts.
 
-use ports::{StoredPublishPlan, SuggestionKey};
+use ports::{PlanKind, StoredPublishPlan, SuggestionKey};
 use serde_json::{json, Value};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -139,6 +139,7 @@ impl SharePostPlan {
     pub fn stored(&self, owner_did: &str, plan_id: &str) -> StoredPublishPlan {
         StoredPublishPlan {
             plan_id: plan_id.to_string(),
+            kind: PlanKind::Share,
             key: share_key(owner_did, self.profile_url()),
             record_json: json!({"$type": POST_COLLECTION, "text": self.draft.text}).to_string(),
         }
@@ -192,7 +193,8 @@ pub fn restore_share_plan(
     let record: Value =
         serde_json::from_str(&stored.record_json).map_err(|_| PlanError::NotTheOwnersRecord)?;
     let draft = record["text"].as_str().unwrap_or_default();
-    let is_share = record["$type"] == POST_COLLECTION
+    let is_share = stored.kind == PlanKind::Share
+        && record["$type"] == POST_COLLECTION
         && stored.key == share_key(owner_did, &stored.key.object);
     match compose_post(draft, &stored.key.object) {
         Ok(draft) if is_share => Ok(SharePostPlan { draft }),
