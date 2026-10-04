@@ -15,8 +15,9 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, PublishPlanPort, ReviewStateRead,
-    ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort, UserRepoWritePort,
+    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, PublishPlanPort, RepoListingPort,
+    ReviewStateRead, ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort,
+    UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
@@ -67,6 +68,7 @@ pub(crate) struct App {
     pub(crate) plans: Arc<dyn PublishPlanPort>,
     pub(crate) repo_write: Arc<dyn UserRepoWritePort>,
     pub(crate) repo_read: Arc<dyn UserRepoReadPort>,
+    pub(crate) repo_listing: Arc<dyn RepoListingPort>,
     pub(crate) mapping: SignalPredicateMapping,
     pub(crate) verify_attempts: VerifyAttempts,
     pub(crate) scan_limiter: ScanLimiter,
@@ -110,6 +112,7 @@ fn admin_route(_method: &Method, _path: &str) -> Route {
 /// A page request, already read: query, cookies, form and `Origin`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PageRequest {
+    pub(crate) path: String,
     pub(crate) query: Vec<(String, String)>,
     pub(crate) cookies: Vec<(String, String)>,
     pub(crate) form: Vec<(String, String)>,
@@ -273,6 +276,7 @@ async fn answer(
             .collect::<Vec<_>>()
     };
     let request = PageRequest {
+        path: path.to_string(),
         query: pairs(parts.uri.query().unwrap_or("").as_bytes()),
         cookies: header("cookie")
             .into_iter()

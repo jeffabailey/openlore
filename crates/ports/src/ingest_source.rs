@@ -84,3 +84,39 @@ pub trait IngestSourcePort: Send + Sync {
     /// adapter.
     async fn enumerate(&self, source: &str) -> Result<Vec<RawRecord>, IngestError>;
 }
+
+// -----------------------------------------------------------------------------
+// RepoListingPort — one repo's records, read live from a PDS (ADR-071 §4)
+// -----------------------------------------------------------------------------
+
+/// One record of a single repo as fetched: the repo DID and rkey come from
+/// the record's own `at://` URI (the rkey is what the claim CID is checked
+/// against, never the view's `cid`). The body is undecoded; no trust
+/// decision has been made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepoRecord {
+    pub repo_did: String,
+    pub rkey: String,
+    pub value: serde_json::Value,
+}
+
+/// Every claim record of one repo, with the base URL it was actually read
+/// from. The reader's root compares `fetched_from` with the PDS it freshly
+/// resolved for the DID to compute the record origin; the adapter never does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepoListing {
+    pub fetched_from: String,
+    pub records: Vec<RepoRecord>,
+}
+
+/// Read-only, bounded enumeration of ONE repo's `org.openlore.claim`
+/// records (`listRecords` with `repo=<DID>`, cursor paging). Like
+/// [`IngestSourcePort`] it has no write, sign or publish method.
+#[async_trait]
+pub trait RepoListingPort: Send + Sync {
+    async fn list_repo_claims(
+        &self,
+        pds_base: &str,
+        repo_did: &str,
+    ) -> Result<RepoListing, IngestError>;
+}

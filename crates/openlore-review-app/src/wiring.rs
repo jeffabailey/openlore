@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use adapter_atproto_did::IdentityLookup;
+use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_atproto_oauth::{ClientKey, OAuthClientAdapter, Upstreams};
 use adapter_github::client::{
     token_days_left, token_expiry_needs_warning, TOKEN_EXPIRATION_HEADER,
@@ -412,6 +413,7 @@ fn app(wired: Wired) -> App {
         identity: wired.identity,
         repo_write: wired.oauth.clone(),
         repo_read: wired.oauth.clone(),
+        repo_listing: Arc::new(AtProtoIngestAdapter::new("")),
         oauth: wired.oauth,
         sessions: wired.store.clone(),
         github: Arc::new(github),

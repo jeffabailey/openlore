@@ -318,7 +318,6 @@ fn given_priya_with_2_published_3_pending_1_declined(world: &ReviewWorld) -> Bro
 ///   And nothing pending or declined is mentioned
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-007 published only)"]
 fn the_profile_shows_only_published_claims_each_labelled_self_attested() {
     let world = ReviewWorld::new();
     let _priya = given_priya_with_2_published_3_pending_1_declined(&world);
@@ -361,7 +360,6 @@ fn the_profile_shows_only_published_claims_each_labelled_self_attested() {
 ///   And when Aisha herself opens it she also sees "Review suggestions →"
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-007 empty profile)"]
 fn an_empty_profile_is_honest_with_a_call_to_action_for_its_owner() {
     let world = ReviewWorld::new();
     let mut visitor = world.browser();
@@ -382,7 +380,6 @@ fn an_empty_profile_is_honest_with_a_call_to_action_for_its_owner() {
 ///   Then they see "We can't reach this person's PDS right now" and no claims
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (US-BRA-007 unreachable PDS stated)"]
 fn an_unreachable_pds_is_stated_never_replaced_by_stale_claims() {
     let world = ReviewWorld::new();
     let _priya = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);
@@ -406,7 +403,6 @@ fn an_unreachable_pds_is_stated_never_replaced_by_stale_claims() {
 ///   And /@nobody.invalid answers "not found" without an error page
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (profile by handle or DID)"]
 fn a_profile_is_found_by_handle_or_did_and_an_unknown_handle_is_plainly_not_found() {
     let world = ReviewWorld::new();
     let _priya = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_MEMORY_SAFETY]);

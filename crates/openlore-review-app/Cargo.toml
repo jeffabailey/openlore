@@ -22,6 +22,8 @@ review-domain = { path = "../review-domain" }
 adapter-atproto-oauth = { path = "../adapter-atproto-oauth" }
 adapter-review-store = { path = "../adapter-review-store" }
 adapter-atproto-did = { path = "../adapter-atproto-did" }
+# Live, read-only listRecords of one repo for the public profile (US-BRA-007).
+adapter-atproto-ingest = { path = "../adapter-atproto-ingest" }
 adapter-github = { path = "../adapter-github" }
 # The pure scan pipeline, reused verbatim (select_person_repos, derive_candidates).
 scraper-domain = { path = "../scraper-domain" }

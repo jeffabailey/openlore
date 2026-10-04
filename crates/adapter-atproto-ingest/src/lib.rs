@@ -29,7 +29,10 @@
 
 use async_trait::async_trait;
 use claim_domain::{Cid, ClaimRecord, SignedClaim};
-use ports::{IngestError, IngestSourcePort, ProbeOutcome, RawRecord};
+use ports::{
+    IngestError, IngestSourcePort, ProbeOutcome, RawRecord, RepoListing, RepoListingPort,
+    RepoRecord,
+};
 
 /// The ATProto collection the indexer pulls (public signed claims).
 const CLAIM_COLLECTION: &str = "org.openlore.claim";
@@ -136,6 +139,189 @@ impl IngestSourcePort for AtProtoIngestAdapter {
 }
 
 // -----------------------------------------------------------------------------
+// One repo's claims: `listRecords` with `repo=<DID>`, cursor paging, bounded
+// -----------------------------------------------------------------------------
+
+/// Records asked for per `listRecords` page (the XRPC maximum).
+const PAGE_LIMIT: usize = 100;
+
+/// The most pages one repo enumeration reads (bounds a hostile or endless
+/// cursor chain: at most `MAX_PAGES * PAGE_LIMIT` records).
+pub const MAX_PAGES: usize = 50;
+
+/// One `listRecords` page: its records and the cursor to the next page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListedPage<T> {
+    pub records: Vec<T>,
+    pub cursor: Option<String>,
+}
+
+/// Paging so far: the records collected, the pages read, and the cursor the
+/// next page is requested with (`None` before the first page).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paging<T> {
+    pub collected: Vec<T>,
+    pub pages_read: usize,
+    pub cursor: Option<String>,
+}
+
+impl<T> Paging<T> {
+    pub fn start() -> Self {
+        Self {
+            collected: Vec::new(),
+            pages_read: 0,
+            cursor: None,
+        }
+    }
+}
+
+/// What to do after a page arrived.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PagingStep<T> {
+    /// Request the next page with `paging.cursor`.
+    Fetch(Paging<T>),
+    /// Every page has been read (or the bound was reached).
+    Done(Vec<T>),
+}
+
+/// Fold one page into the paging state (pure). Paging stops when the page
+/// names no cursor, is empty, repeats the cursor it was requested with, or
+/// the page bound is reached, so every enumeration terminates.
+pub fn take_page<T>(paging: Paging<T>, page: ListedPage<T>) -> PagingStep<T> {
+    let Paging {
+        mut collected,
+        pages_read,
+        cursor: requested_with,
+    } = paging;
+    let page_was_empty = page.records.is_empty();
+    collected.extend(page.records);
+    let pages_read = pages_read + 1;
+    match page.cursor {
+        Some(next)
+            if !page_was_empty
+                && pages_read < MAX_PAGES
+                && requested_with.as_deref() != Some(next.as_str()) =>
+        {
+            PagingStep::Fetch(Paging {
+                collected,
+                pages_read,
+                cursor: Some(next),
+            })
+        }
+        _ => PagingStep::Done(collected),
+    }
+}
+
+#[async_trait]
+impl RepoListingPort for AtProtoIngestAdapter {
+    async fn list_repo_claims(
+        &self,
+        pds_base: &str,
+        repo_did: &str,
+    ) -> Result<RepoListing, IngestError> {
+        let fetched_from = pds_base.trim_end_matches('/').to_string();
+        let mut paging = Paging::start();
+        loop {
+            let page = self
+                .list_page(&fetched_from, repo_did, paging.cursor.as_deref())
+                .await?;
+            match take_page(paging, page) {
+                PagingStep::Fetch(next) => paging = next,
+                PagingStep::Done(records) => {
+                    return Ok(RepoListing {
+                        fetched_from,
+                        records,
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl AtProtoIngestAdapter {
+    /// One `listRecords` page of `repo_did`'s claims from `base`.
+    async fn list_page(
+        &self,
+        base: &str,
+        repo_did: &str,
+        cursor: Option<&str>,
+    ) -> Result<ListedPage<RepoRecord>, IngestError> {
+        let mut url = url::Url::parse(&format!("{base}/xrpc/com.atproto.repo.listRecords"))
+            .map_err(|err| IngestError::BadResponse {
+                message: format!("PDS URL is not a URL: {err}"),
+            })?;
+        url.query_pairs_mut()
+            .append_pair("repo", repo_did)
+            .append_pair("collection", CLAIM_COLLECTION)
+            .append_pair("limit", &PAGE_LIMIT.to_string());
+        if let Some(cursor) = cursor {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
+        let response =
+            self.client
+                .get(url)
+                .send()
+                .await
+                .map_err(|err| IngestError::Unreachable {
+                    message: format!("listRecords transport error: {err}"),
+                })?;
+        if !response.status().is_success() {
+            return Err(IngestError::BadResponse {
+                message: format!("listRecords returned HTTP {}", response.status().as_u16()),
+            });
+        }
+        let body: serde_json::Value =
+            response
+                .json()
+                .await
+                .map_err(|err| IngestError::BadResponse {
+                    message: format!("listRecords body is not JSON: {err}"),
+                })?;
+        parse_listed_page(&body)
+    }
+}
+
+/// A `listRecords` body as one page of repo records (pure).
+fn parse_listed_page(body: &serde_json::Value) -> Result<ListedPage<RepoRecord>, IngestError> {
+    let records = body
+        .get("records")
+        .and_then(|r| r.as_array())
+        .ok_or_else(|| IngestError::BadResponse {
+            message: "listRecords response missing `records` array".to_string(),
+        })?
+        .iter()
+        .map(parse_repo_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    let cursor = body
+        .get("cursor")
+        .and_then(|c| c.as_str())
+        .map(str::to_string);
+    Ok(ListedPage { records, cursor })
+}
+
+/// One record view as a [`RepoRecord`]: repo DID and rkey from its
+/// `at://<did>/<collection>/<rkey>` URI.
+fn parse_repo_record(view: &serde_json::Value) -> Result<RepoRecord, IngestError> {
+    let uri = view.get("uri").and_then(|u| u.as_str()).unwrap_or_default();
+    let (repo_did, rkey) = repo_and_rkey(uri).ok_or_else(|| IngestError::BadResponse {
+        message: "record view has no `at://<did>/<collection>/<rkey>` uri".to_string(),
+    })?;
+    Ok(RepoRecord {
+        repo_did,
+        rkey,
+        value: view.get("value").cloned().unwrap_or_default(),
+    })
+}
+
+/// `(did, rkey)` of `at://<did>/<collection>/<rkey>`.
+fn repo_and_rkey(uri: &str) -> Option<(String, String)> {
+    let mut parts = uri.strip_prefix("at://")?.split('/');
+    let (did, _collection, rkey) = (parts.next()?, parts.next()?, parts.next()?);
+    let well_formed = did.starts_with("did:") && !rkey.is_empty() && parts.next().is_none();
+    well_formed.then(|| (did.to_string(), rkey.to_string()))
+}
+
+// -----------------------------------------------------------------------------
 // Lexicon-JSON → domain RawRecord parse (mirrors adapter-atproto-pds::peer_read)
 // -----------------------------------------------------------------------------
 
@@ -185,6 +371,97 @@ fn parse_signed_claim(body: &serde_json::Value) -> Result<SignedClaim, IngestErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    /// Serve `records` split into pages of the given sizes; the cursor of a
+    /// page is the index its successor starts at (the last page has none).
+    fn serve(records: &[u32], sizes: &[usize], cursor: Option<&str>) -> ListedPage<u32> {
+        let start: usize = cursor.and_then(|c| c.parse().ok()).unwrap_or(0);
+        let boundaries: Vec<usize> = sizes
+            .iter()
+            .scan(0, |end, size| {
+                *end += size;
+                Some(*end)
+            })
+            .take_while(|end| *end < records.len())
+            .collect();
+        let end = boundaries
+            .iter()
+            .copied()
+            .find(|b| *b > start)
+            .unwrap_or(records.len());
+        ListedPage {
+            records: records[start.min(records.len())..end].to_vec(),
+            cursor: (end < records.len()).then(|| end.to_string()),
+        }
+    }
+
+    /// Run the pure pager against `fetch`, counting the requests.
+    fn enumerate(mut fetch: impl FnMut(Option<&str>) -> ListedPage<u32>) -> (Vec<u32>, usize) {
+        let mut paging = Paging::start();
+        let mut requests = 0;
+        loop {
+            requests += 1;
+            let page = fetch(paging.cursor.as_deref());
+            match take_page(paging, page) {
+                PagingStep::Fetch(next) => paging = next,
+                PagingStep::Done(records) => return (records, requests),
+            }
+        }
+    }
+
+    proptest! {
+        /// Universe: record lists (up to the bound) and every way of
+        /// splitting them into pages. Paging terminates and yields every
+        /// record exactly once, in order, including the last page.
+        #[test]
+        fn cursor_paging_yields_each_record_once_for_any_page_split(
+            count in 0usize..400,
+            sizes in proptest::collection::vec(1usize..=PAGE_LIMIT, 1..=MAX_PAGES),
+        ) {
+            let records: Vec<u32> = (0..count as u32).collect();
+            prop_assume!(sizes.iter().sum::<usize>() >= count);
+            let (seen, requests) = enumerate(|cursor| serve(&records, &sizes, cursor));
+            prop_assert_eq!(&seen, &records);
+            prop_assert!(requests <= MAX_PAGES);
+        }
+
+        /// Universe: servers that repeat a cursor forever or never stop.
+        /// Paging still terminates within the page bound.
+        #[test]
+        fn a_cursor_chain_that_never_ends_is_bounded(repeat_cursor in any::<bool>(), size in 1usize..5) {
+            let mut issued = 0u32;
+            let (seen, requests) = enumerate(|_| {
+                issued += 1;
+                ListedPage {
+                    records: vec![issued; size],
+                    cursor: Some(if repeat_cursor { "same".to_string() } else { issued.to_string() }),
+                }
+            });
+            prop_assert!(requests <= MAX_PAGES);
+            prop_assert_eq!(seen.len(), requests * size);
+        }
+    }
+
+    /// The `at://` URI names the repo and the rkey the claim CID is checked
+    /// against; the view's `cid` field is ignored.
+    // bypass: one wire example pins the URI-to-(repo, rkey) mapping.
+    #[test]
+    fn a_listed_page_takes_repo_and_rkey_from_the_record_uri() {
+        let body = serde_json::json!({
+            "records": [{
+                "uri": "at://did:plc:priya/org.openlore.claim/bafyrkey",
+                "cid": "bafyreiother",
+                "value": {"subject": "github:priyaraman/tidepool"}
+            }],
+            "cursor": "next"
+        });
+        let page = parse_listed_page(&body).expect("well-formed page");
+        assert_eq!(page.cursor.as_deref(), Some("next"));
+        assert_eq!(page.records[0].repo_did, "did:plc:priya");
+        assert_eq!(page.records[0].rkey, "bafyrkey");
+        assert!(parse_listed_page(&serde_json::json!({"records": [{"uri": "nope"}]})).is_err());
+    }
 
     /// The lexicon → RawRecord parse maps the wire fields onto the domain ADT and
     /// preserves the published CID + the author (the inner-loop contract the

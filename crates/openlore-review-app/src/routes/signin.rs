@@ -16,7 +16,7 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::{github, publish, review, scan};
+use crate::routes::{github, profile, publish, review, scan};
 use crate::wiring::{emit, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
@@ -42,6 +42,7 @@ pub(crate) enum PageRoute {
     DeclineSuggestion,
     UndoDecline,
     ConfirmPublish,
+    Profile,
 }
 
 /// Pure routing of the pages.
@@ -61,6 +62,7 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/review/decline") => Some(PageRoute::DeclineSuggestion),
         ("POST", "/review/undo") => Some(PageRoute::UndoDecline),
         ("POST", "/review/publish") => Some(PageRoute::ConfirmPublish),
+        ("GET" | "HEAD", profile) if profile.starts_with("/@") => Some(PageRoute::Profile),
         _ => None,
     }
 }
@@ -92,6 +94,14 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::Review => review::review(app, request),
         PageRoute::GithubStep => github::github_step(app, request),
         PageRoute::ScanStatus => scan::scan_status(app, request),
+        PageRoute::Profile => {
+            let viewer = current_session(app, request).map(|(_, session)| session.owner_did);
+            let ports = profile::ProfilePorts {
+                identity: app.identity.as_ref(),
+                repos: app.repo_listing.as_ref(),
+            };
+            profile::profile(ports, &request.path, viewer.as_deref()).await
+        }
     }
 }
 

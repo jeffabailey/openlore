@@ -100,4 +100,9 @@ pub enum IdentityLookupError {
 pub trait IdentityLookupPort: Send + Sync {
     async fn resolve_identity(&self, handle: &str)
         -> Result<ResolvedIdentity, IdentityLookupError>;
+
+    /// DID → its DID document's PDS and handle. The handle is the
+    /// document's `at://` alias only when that handle resolves back to the
+    /// DID; otherwise `verified_handle` is the DID itself.
+    async fn resolve_did(&self, did: &str) -> Result<ResolvedIdentity, IdentityLookupError>;
 }

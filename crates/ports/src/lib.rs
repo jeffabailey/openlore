@@ -177,7 +177,9 @@ pub use index_query::{
 };
 pub use index_store::{IndexStoreError, IndexStorePort};
 pub use indexed_claim::{CounterRef, IndexedClaim, SearchDimension};
-pub use ingest_source::{IngestError, IngestSourcePort, RawRecord};
+pub use ingest_source::{
+    IngestError, IngestSourcePort, RawRecord, RepoListing, RepoListingPort, RepoRecord,
+};
 pub use store_read::{
     ClaimDetail, ClaimRow, CounterClaimRow, Page, PageRequest, PeerClaimRow, PeerOrigin,
     PeerSubscriptionSummary, StoreReadError, StoreReadPort, SurveyRow,

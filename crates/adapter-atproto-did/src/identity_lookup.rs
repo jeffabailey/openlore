@@ -140,6 +140,33 @@ impl IdentityLookupPort for IdentityLookup {
         let document = self.did_document(&did).await?;
         confirmed_identity(&did, handle, &document).ok_or(IdentityLookupError::NotFound)
     }
+
+    async fn resolve_did(&self, did: &str) -> Result<ResolvedIdentity, IdentityLookupError> {
+        let document = self.did_document(did).await?;
+        let claimed = claimed_handle(&document).unwrap_or_else(|| did.to_string());
+        let resolves_back = match self.did_for_handle(&claimed).await {
+            Ok(resolved) => resolved == did,
+            Err(IdentityLookupError::NotFound) => false,
+            Err(unavailable) => return Err(unavailable),
+        };
+        let handle = if resolves_back { claimed.as_str() } else { did };
+        confirmed_identity(did, &claimed, &document)
+            .map(|identity| ResolvedIdentity {
+                verified_handle: handle.to_string(),
+                ..identity
+            })
+            .ok_or(IdentityLookupError::NotFound)
+    }
+}
+
+/// The first `at://` alias a DID document claims (pure; unverified).
+pub fn claimed_handle(document: &Value) -> Option<String> {
+    document["alsoKnownAs"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find_map(|aka| aka.strip_prefix("at://"))
+        .map(str::to_string)
 }
 
 #[cfg(test)]
