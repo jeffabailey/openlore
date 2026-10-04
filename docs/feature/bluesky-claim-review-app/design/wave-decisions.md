@@ -32,6 +32,28 @@
 | **SPIKE-4** | Does Caddy accept an `import` glob that matches no files? What is the app's RSS during a 10-repo scan next to the PDS on t4g.micro? | Caddy starts with an empty `sites/`; app RSS under 150 MB and no OOM. Otherwise move to t4g.small. | DEVOPS rollout |
 | SPIKE-5 (later) | Commit-proof verification (`atrium-repo` + `atrium-crypto` + a proof walker) | Verifies a `sync.getRecord` CAR against the `#atproto` key | Only if relay/firehose ingest is adopted (ADR-071 trigger) |
 
+### Spike results (2026-10-04)
+
+Throwaway programs (scratchpad only, not in the repo) ran against `canzantest.bsky.social`
+(`did:plc:ds4bj4ymxzwpisg4qhlislvc`, hosted on a bsky.network PDS).
+
+| Spike | Result | Evidence |
+|---|---|---|
+| SPIKE-1 (bsky.social) | **Pass** | `createRecord` of a self-attested claim (no `signature`, `author` = repo DID, rkey = claim CID, `validate` unset) returned 200 with `validationStatus: unknown`. The recomputed CID equals the rkey on both `getRecord` and `listRecords`. The stored keys are exactly the lexicon keys. A post with a link facet was stored with the link intact, confirmed through the public AppView. |
+| SPIKE-1 (OpenLore PDS) | Not run | The signed form already publishes there in production. The self-attested form needs the `jeff` app password. Run it before US-BRA-004 ships. |
+| SPIKE-2 (localhost client) | **Pass, with library defects** | `atrium-oauth` 0.1.7 with `default-features = false` and a rustls `reqwest` `HttpClient`: PAR, DPoP, sign-in, writes and refresh (both tokens rotated) all work against bsky.social. `cargo deny check` passes once `hickory-resolver` is at **0.26 or later** (0.24 hits RUSTSEC-2026-0119). The confidential `private_key_jwt` path needs the public origin and is deferred to the first deploy. |
+| SPIKE-3 (bsky.social) | **Pass** | Granted scope `atproto repo:org.openlore.claim?action=create repo:app.bsky.feed.post?action=create`. A create in another collection was refused with 403 `ScopeMissingError`, and so was a `deleteRecord` on `org.openlore.claim` (needs `action=delete`). The `transition:generic` fallback is not needed on bsky.social. Not yet run on the OpenLore PDS. |
+| SPIKE-4a (Caddy) | **Pass** | An `import /etc/caddy/sites/*.caddy` that matches no files validates on `caddy:2`, `2-alpine` and `2.6.1`. Adding a site file later is picked up. |
+| SPIKE-4b (RSS) | **Pass (proxy)** | `openlore scrape person jeffabailey --repos 10`: peak RSS 71 MB in 19 s, giving 20 repo candidates (macOS arm64). Re-measure on t4g.micro during DEVOPS. |
+
+Findings the design must absorb (input to DEVOPS and DELIVER):
+
+1. **`revoke` fails on a correct server.** `atrium-oauth` 0.1.7 expects 204 from revocation. bsky.social returns 200, which is what RFC 7009 specifies, so `revoke()` errors and leaves the session in the local store. The disconnect path must treat 200 or 204 as success and **always delete the local session and tokens**, whatever the outcome.
+2. **Revocation stops refresh, not the access token already issued.** After revoke, the refresh token was dead (the forced refresh was refused), but the access token in hand still wrote a record. US-BRA-012 holds only because the app discards its tokens immediately. Document the remaining window, which is the access-token lifetime.
+3. **The code-exchange error path panics.** `OAuthClient::callback` has `Err(_) => todo!()` when the token exchange fails. The callback handler must isolate it, either in a spawned task with the panic mapped to a sign-in error or with a patched or vendored fix, so that a bad or replayed code cannot crash the app.
+4. **Sessions cache the access token.** `OAuthSession` refreshes on a 401 from its own cached token, not from the store. Tests that simulate expiry must go through `OAuthClient::restore`.
+5. **Suggestions start at confidence 0.25.** `derive_candidates` yields one candidate per signal at 0.25. The edit-confidence story (US-BRA-005) is how users express real conviction.
+
 ## Risks
 
 | Risk | P | I | Mitigation |
