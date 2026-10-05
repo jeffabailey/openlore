@@ -417,7 +417,6 @@ fn an_unresolvable_authors_app_signed_claims_come_through_the_fallback() {
 ///   And the fallback was asked only about did:plc:ghost0000
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: a resolved DID has no path to the fallback (FR-5)"]
 fn a_resolvable_author_is_never_read_from_the_fallback() {
     let (world, _, _) = given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
 
@@ -557,7 +556,6 @@ fn a_fallback_whose_name_leads_only_to_a_private_address_is_never_contacted() {
 /// (Positive did:web resolution needs a TLS host on port 443 and is proven at
 /// the adapter level by DELIVER — `pds_endpoint_of` + the fake did:web test.)
 #[test]
-#[ignore = "DELIVER 01-03: did:web accepted; unresolvable did:web is fallback-eligible"]
 fn a_did_web_author_whose_web_host_is_down_is_read_through_the_fallback() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Wren]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

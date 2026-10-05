@@ -151,8 +151,33 @@ fn sut_plan_listing(
     policy: Policy,
     fallback: Option<&str>,
 ) -> Plan {
-    let _ = (resolution, policy, fallback);
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::plan_listing (ADR-077)")
+    use appview_domain::ingest_pass::{
+        plan_listing, FallbackUrl, ListingPlan, ListingSource, SkipReason,
+    };
+    let resolution = resolution
+        .map(str::to_string)
+        .map_err(|failure| match failure {
+            ResolutionFailure::NotFound => appview_domain::ingest_pass::ResolutionFailure::NotFound,
+            ResolutionFailure::Unavailable => {
+                appview_domain::ingest_pass::ResolutionFailure::Unavailable
+            }
+            ResolutionFailure::TimedOut => appview_domain::ingest_pass::ResolutionFailure::TimedOut,
+        });
+    let policy = match policy {
+        Policy::HttpsPublicOnly => ports::net_policy::TransportPolicy::HttpsPublicOnly,
+        Policy::HttpsOrLoopbackHttp => ports::net_policy::TransportPolicy::HttpsOrLoopbackHttp,
+    };
+    let fallback = fallback.and_then(FallbackUrl::new);
+    match plan_listing(resolution, policy, fallback.as_ref()) {
+        ListingPlan::List(ListingSource::OwnPds(e)) => {
+            Plan::List(Source::OwnPds(e.as_str().into()))
+        }
+        ListingPlan::List(ListingSource::Fallback(f)) => {
+            Plan::List(Source::Fallback(f.as_str().into()))
+        }
+        ListingPlan::Skip(SkipReason::DidUnresolvable) => Plan::Skip(Reason::DidUnresolvable),
+        ListingPlan::Skip(SkipReason::PdsAddressRefused) => Plan::Skip(Reason::PdsAddressRefused),
+    }
 }
 
 fn sut_classify_fetch_failure(source: &Source, failure: FetchFailure) -> Classified {
@@ -372,7 +397,6 @@ proptest! {
     /// fallback); a refused one is skipped (never the fallback); an unresolved
     /// DID goes to the fallback when there is one, else is skipped.
     #[test]
-    #[ignore = "DELIVER 01-03 (unit): plan_listing decision table"]
     fn the_listing_plan_never_sends_a_resolved_did_to_the_fallback(
         resolved in arb_public_https_url(),
         refused in arb_refused_endpoint(),

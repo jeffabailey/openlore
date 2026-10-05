@@ -286,7 +286,6 @@ fn a_repo_did_listed_twice_is_read_once_and_counted_once() {
 ///   And the fallback is never needed, because every author resolves to that same PDS
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: NFR-3 regression — resolved PDS == old source ⇒ same set"]
 fn a_single_source_deployment_indexes_exactly_what_it_did_before() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Jeff]);
     world.author_moves_to(Author::Priya, Host::JeffbaileyUs);
@@ -337,7 +336,6 @@ fn a_single_source_deployment_indexes_exactly_what_it_did_before() {
 ///   And Priya's self-attested claim is refused for provenance, exactly as before
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: NFR-3 regression with PLC down (fallback reproduces old origin)"]
 fn with_the_directory_down_a_single_source_deployment_keeps_its_old_behaviour() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Jeff]);
     world.author_moves_to(Author::Priya, Host::JeffbaileyUs);

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use appview_domain::FallbackUrl;
 use claim_domain::Did;
+use ports::net_policy::TransportPolicy;
 
 /// The production PLC directory (ADR-026 §"Config + default").
 const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
@@ -29,6 +30,8 @@ pub struct IndexerConfig {
     pub repo_dids: Vec<Did>,
     /// The PLC directory each repo DID's document is resolved from.
     pub plc_endpoint: String,
+    /// Which PDS addresses may be contacted (DD-IPF-5).
+    pub policy: TransportPolicy,
 }
 
 /// Parse the configuration from `lookup` (a variable name → its value).
@@ -43,6 +46,19 @@ pub fn parse_config(lookup: impl Fn(&str) -> Option<String>) -> IndexerConfig {
         repo_dids: parse_repo_dids(&lookup("OPENLORE_INDEXER_REPO_DIDS").unwrap_or_default()),
         plc_endpoint: lookup("OPENLORE_INDEXER_PLC_ENDPOINT")
             .unwrap_or_else(|| DEFAULT_PLC_ENDPOINT.to_string()),
+        policy: transport_policy(
+            lookup("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP").as_deref(),
+            cfg!(debug_assertions),
+        ),
+    }
+}
+
+/// `HttpsOrLoopbackHttp` only for the TEST-ONLY seam set to `1` in a debug
+/// build; `HttpsPublicOnly` otherwise (the release-build refusal is 02-03).
+fn transport_policy(seam: Option<&str>, debug_build: bool) -> TransportPolicy {
+    match (seam, debug_build) {
+        (Some("1"), true) => TransportPolicy::HttpsOrLoopbackHttp,
+        _ => TransportPolicy::HttpsPublicOnly,
     }
 }
 

@@ -198,7 +198,6 @@ fn every_way_an_authors_pds_can_fail_skips_only_that_author_with_its_reason() {
 ///   And Jeff sees did:plc:ghost0000 skipped with reason did_unresolvable, without a PDS address
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: plan_listing → Skip(DidUnresolvable) without a fallback"]
 fn an_unresolvable_author_is_skipped_with_a_reason() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Ghost]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -230,7 +229,6 @@ fn an_unresolvable_author_is_skipped_with_a_reason() {
 ///     | names no PDS                                       |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: resolve_pds failure classes → ResolutionFailure (ADR-077)"]
 fn every_way_a_did_document_can_fail_makes_that_author_unresolvable() {
     for posture in [
         DidDocPosture::NotFound,

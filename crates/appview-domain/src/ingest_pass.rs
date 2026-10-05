@@ -10,6 +10,7 @@
 //! fallback can never be classified as the author's PDS.
 
 use claim_domain::{decode_claim_record, ClaimRecord, Did, ProvenanceRejection, RecordOrigin};
+use ports::net_policy::{address_refused, is_loopback, TransportPolicy};
 use ports::{RepoListing, RepoRecord};
 
 use crate::RejectReason;
@@ -81,6 +82,7 @@ impl ListingSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     DidUnresolvable,
+    PdsAddressRefused,
 }
 
 impl SkipReason {
@@ -88,6 +90,7 @@ impl SkipReason {
     pub const fn token(self) -> &'static str {
         match self {
             Self::DidUnresolvable => "did_unresolvable",
+            Self::PdsAddressRefused => "pds_address_refused",
         }
     }
 }
@@ -99,14 +102,49 @@ pub enum ListingPlan {
     Skip(SkipReason),
 }
 
-/// A resolved DID is listed on its own PDS; an unresolved one goes to the
-/// fallback when there is one, else it is skipped.
+/// A resolved PDS address the transport policy does not admit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddressRefused;
+
+/// The pre-check on a resolved PDS address (DD-IPF-5): `https`, or `http`
+/// only to a loopback address under [`TransportPolicy::HttpsOrLoopbackHttp`];
+/// no userinfo; an IP-literal host outside the refused ranges (loopback is
+/// admitted under the test policy). Hostnames are checked after DNS by the
+/// adapters, not here.
+pub fn pds_endpoint_admissible(
+    endpoint: &str,
+    policy: TransportPolicy,
+) -> Result<PdsEndpoint, AddressRefused> {
+    let url = url::Url::parse(endpoint).map_err(|_| AddressRefused)?;
+    let ip = match url.host() {
+        Some(url::Host::Ipv4(v4)) => Some(std::net::IpAddr::V4(v4)),
+        Some(url::Host::Ipv6(v6)) => Some(std::net::IpAddr::V6(v6)),
+        Some(url::Host::Domain(_)) => None,
+        None => return Err(AddressRefused),
+    };
+    let test_loopback =
+        policy == TransportPolicy::HttpsOrLoopbackHttp && ip.is_some_and(is_loopback);
+    let scheme_admitted = url.scheme() == "https" || (url.scheme() == "http" && test_loopback);
+    let host_admitted = test_loopback || !ip.is_some_and(address_refused);
+    let no_userinfo = url.username().is_empty() && url.password().is_none();
+    (scheme_admitted && host_admitted && no_userinfo)
+        .then(|| PdsEndpoint::new(endpoint))
+        .ok_or(AddressRefused)
+}
+
+/// An admissible resolved PDS is listed (never the fallback); a refused one is
+/// skipped (never the fallback); an unresolved DID goes to the fallback when
+/// there is one, else it is skipped.
 pub fn plan_listing(
     resolution: Result<String, ResolutionFailure>,
+    policy: TransportPolicy,
     fallback: Option<&FallbackUrl>,
 ) -> ListingPlan {
     match (resolution, fallback) {
-        (Ok(endpoint), _) => ListingPlan::List(ListingSource::OwnPds(PdsEndpoint::new(&endpoint))),
+        (Ok(endpoint), _) => match pds_endpoint_admissible(&endpoint, policy) {
+            Ok(endpoint) => ListingPlan::List(ListingSource::OwnPds(endpoint)),
+            Err(AddressRefused) => ListingPlan::Skip(SkipReason::PdsAddressRefused),
+        },
         (Err(_), Some(fallback)) => ListingPlan::List(ListingSource::Fallback(fallback.clone())),
         (Err(_), None) => ListingPlan::Skip(SkipReason::DidUnresolvable),
     }
@@ -209,6 +247,8 @@ pub enum DidFetch {
     Skipped {
         did: Did,
         reason: SkipReason,
+        /// The resolved PDS, when one was known (never for `DidUnresolvable`).
+        pds_url: Option<String>,
     },
 }
 
@@ -301,6 +341,7 @@ mod tests {
             Kind::Skip => DidFetch::Skipped {
                 did,
                 reason: SkipReason::DidUnresolvable,
+                pds_url: None,
             },
         }
     }
@@ -345,15 +386,16 @@ mod tests {
             fallback in proptest::option::of(arb_url())
         ) {
             let fallback = fallback.and_then(|f| FallbackUrl::new(&f));
+            let policy = TransportPolicy::HttpsPublicOnly;
             prop_assert_eq!(
-                plan_listing(Ok(format!("{resolved}/")), fallback.as_ref()),
+                plan_listing(Ok(format!("{resolved}/")), policy, fallback.as_ref()),
                 ListingPlan::List(ListingSource::OwnPds(PdsEndpoint::new(&resolved)))
             );
             let expected = match &fallback {
                 Some(f) => ListingPlan::List(ListingSource::Fallback(f.clone())),
                 None => ListingPlan::Skip(SkipReason::DidUnresolvable),
             };
-            prop_assert_eq!(plan_listing(Err(failure), fallback.as_ref()), expected);
+            prop_assert_eq!(plan_listing(Err(failure), policy, fallback.as_ref()), expected);
         }
 
         /// Universe {configured, own_pds, fallback, skipped}: each DID moves

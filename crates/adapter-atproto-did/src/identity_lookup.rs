@@ -246,4 +246,79 @@ mod tests {
             );
         }
     }
+
+    /// A one-shot fake PLC directory on loopback: every request is answered
+    /// with `status` and `body`.
+    fn fake_plc(status: u16, body: String) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake PLC");
+        let address = listener.local_addr().expect("fake PLC address");
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://{address}")
+    }
+
+    // bypass: wiring over real HTTP — one example per DID-document failure
+    // class (ADR-077); the document rules themselves are covered by property.
+    #[test]
+    fn every_did_document_failure_class_is_reported_through_resolve_pds() {
+        let did = "did:plc:abc";
+        let good = document(
+            did,
+            "at://priya.example",
+            "#atproto_pds",
+            "AtprotoPersonalDataServer",
+        );
+        let cases = [
+            (200, good.to_string(), Ok("https://pds.example".to_string())),
+            (404, String::new(), Err(IdentityLookupError::NotFound)),
+            (
+                200,
+                document(
+                    "did:plc:other",
+                    "at://priya.example",
+                    "#atproto_pds",
+                    "AtprotoPersonalDataServer",
+                )
+                .to_string(),
+                Err(IdentityLookupError::NotFound),
+            ),
+            (
+                200,
+                document(did, "at://priya.example", "#other", "Other").to_string(),
+                Err(IdentityLookupError::NotFound),
+            ),
+        ];
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        for (status, body, expected) in cases {
+            let plc = fake_plc(status, body);
+            let lookup = IdentityLookup::new(&plc, &plc);
+            assert_eq!(
+                runtime.block_on(lookup.resolve_pds(did)),
+                expected,
+                "HTTP {status}"
+            );
+        }
+        let plc = fake_plc(503, String::new());
+        let lookup = IdentityLookup::new(&plc, &plc);
+        assert!(
+            matches!(
+                runtime.block_on(lookup.resolve_pds(did)),
+                Err(IdentityLookupError::Unavailable { .. })
+            ),
+            "a directory error is unavailability"
+        );
+    }
 }

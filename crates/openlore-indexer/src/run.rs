@@ -44,6 +44,7 @@ use claim_domain::{ClaimRecord, Did, VerificationKey};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
 };
+use ports::net_policy::TransportPolicy;
 use ports::{
     ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexStorePort,
     IngestSourcePort, RepoListingPort, SearchDimension,
@@ -80,6 +81,8 @@ pub struct IndexerWiring {
     /// Where a DID whose document cannot be resolved is listed (relay
     /// origin, ADR-077); `None` = such a DID is skipped.
     pub fallback: Option<FallbackUrl>,
+    /// Which resolved PDS addresses may be listed (DD-IPF-5).
+    pub policy: TransportPolicy,
     /// The configured SEPARATE `index.duckdb` path (ADR-023). Threaded into the
     /// `capability_boundary_probe` so it can REFUSE if mis-wired against the
     /// user's `openlore.duckdb` (the capability boundary, I-AV-5).
@@ -126,6 +129,7 @@ impl IndexerWiring {
             query_server,
             clock: Box::new(clock),
             fallback: cfg.fallback,
+            policy: cfg.policy,
             index_path: cfg.index_path,
             listen_addr: cfg.listen_addr,
         })
@@ -423,6 +427,7 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
     };
 
     fetches.iter().for_each(emit_fallback_read);
+    fetches.iter().for_each(emit_source_skipped);
 
     let mut tally = IngestTally::default();
     for fetch in &fetches {
@@ -447,7 +452,8 @@ fn fetch_repo(
     let resolution = runtime
         .block_on(wiring.pds_lookup.resolve_pds(&repo_did.0))
         .map_err(resolution_failure_of);
-    match plan_listing(resolution, wiring.fallback.as_ref()) {
+    let pds_url = resolution.as_ref().ok().cloned();
+    match plan_listing(resolution, wiring.policy, wiring.fallback.as_ref()) {
         ListingPlan::List(source) => runtime
             .block_on(
                 wiring
@@ -463,6 +469,7 @@ fn fetch_repo(
         ListingPlan::Skip(reason) => Ok(DidFetch::Skipped {
             did: repo_did.clone(),
             reason,
+            pds_url,
         }),
     }
 }
@@ -537,6 +544,28 @@ fn emit_fallback_read(fetch: &DidFetch) {
             "reason": SkipReason::DidUnresolvable.token(),
             "fallback_url": fallback.as_str(),
         });
+        println!("{event}");
+    }
+}
+
+/// Emit `indexer.ingest.source_skipped` for a DID that contributed nothing:
+/// its DID and reason, the PDS only when one was resolved — NO claim content.
+fn emit_source_skipped(fetch: &DidFetch) {
+    if let DidFetch::Skipped {
+        did,
+        reason,
+        pds_url,
+    } = fetch
+    {
+        let mut event = serde_json::json!({
+            "event": "indexer.ingest.source_skipped",
+            "did": did.0,
+            "reason": reason.token(),
+            "fallback_used": false,
+        });
+        if let Some(pds_url) = pds_url {
+            event["pds_url"] = serde_json::Value::from(pds_url.as_str());
+        }
         println!("{event}");
     }
 }

@@ -154,6 +154,8 @@ mod index_query;
 mod index_store;
 mod indexed_claim;
 mod ingest_source;
+/// indexer-per-did-pds-fetch (DD-IPF-5): the shared transport policy.
+pub mod net_policy;
 
 pub use identity_resolve::{
     IdentityLookupError, IdentityLookupPort, IdentityResolvePort, ResolveError, ResolvedIdentity,
