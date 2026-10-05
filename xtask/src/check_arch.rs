@@ -1617,6 +1617,58 @@ pub fn classify_forbidden_tokens(source: &str, tokens: &[&str]) -> Vec<String> {
         .collect()
 }
 
+// -----------------------------------------------------------------------------
+// `indexer_origin_only_via_listing_source` (ADR-077, DD-IPF-12)
+// -----------------------------------------------------------------------------
+
+/// Tokens that would let the indexer derive a record's origin without going
+/// through `appview_domain::origin_of(ListingSource)`.
+const INDEXER_ORIGIN_BYPASS_TOKENS: &[&str] = &["RecordOrigin::of", "RecordOrigin::AuthorPds"];
+
+/// The indexer sources the origin rule scans.
+const INDEXER_SOURCE_DIR: &str = "crates/openlore-indexer/src";
+
+/// Pure rule: every origin-bypass token in an item that is NOT
+/// `#[cfg(...)]`-gated (test modules are exempt), as findings.
+pub fn classify_indexer_origin_bypass(source: &str) -> Vec<String> {
+    INDEXER_ORIGIN_BYPASS_TOKENS
+        .iter()
+        .filter_map(|token| {
+            classify_cfg_gated_token(source, token).map(|line| format!("`{token}` in `{line}`"))
+        })
+        .collect()
+}
+
+/// Effect shell for `indexer_origin_only_via_listing_source`. Scanning no
+/// file at all is itself a finding (the rule must never pass vacuously).
+pub fn scan_indexer_origin_only_via_listing_source(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let sources = rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR));
+    if sources.is_empty() {
+        return Ok(vec![format!(
+            "indexer_origin_only_via_listing_source: no Rust source under {INDEXER_SOURCE_DIR} \
+             — the rule would pass vacuously"
+        )]);
+    }
+    let mut findings = Vec::new();
+    for path in sources {
+        let source = std::fs::read_to_string(&path)?;
+        findings.extend(
+            classify_indexer_origin_bypass(&source)
+                .into_iter()
+                .map(|finding| {
+                    format!(
+                "indexer_origin_only_via_listing_source: {}: {finding} — the indexer derives \
+                 origin only through appview_domain::origin_of(ListingSource) (ADR-077)",
+                path.display()
+            )
+                }),
+        );
+    }
+    Ok(findings)
+}
+
 /// Tables keyed by `owner_did` in `review-app.duckdb` (ADR-074).
 const REVIEW_OWNER_TABLES: &[&str] = &[
     "accounts",
@@ -1806,6 +1858,7 @@ pub fn run() -> anyhow::Result<i32> {
     let contribution_links_findings = scan_contribution_links_append_only(&workspace_root)?;
     let adapter_github_port_findings = scan_adapter_github_port_references(&workspace_root)?;
     let review_app_findings = scan_review_app_rules(&workspace_root)?;
+    let indexer_origin_findings = scan_indexer_origin_only_via_listing_source(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1818,6 +1871,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(contribution_links_findings);
     rendered.extend(adapter_github_port_findings);
     rendered.extend(review_app_findings);
+    rendered.extend(indexer_origin_findings);
 
     if rendered.is_empty() {
         println!(
@@ -2940,5 +2994,40 @@ mod review_app_rule_tests {
         }
         assert!(classify_log_fields("info!(probe = \"github\", \"app.ready\");").is_empty());
         assert!(classify_log_fields("let token = 1;").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod indexer_origin_rule_tests {
+    use super::*;
+
+    // --- indexer_origin_only_via_listing_source (ADR-077) ------------------
+
+    #[test]
+    fn an_ungated_origin_bypass_in_the_indexer_is_a_violation() {
+        let source = "fn gate() {\n    let o = RecordOrigin::of(a, b);\n}\n\
+                      fn trust() -> RecordOrigin {\n    RecordOrigin::AuthorPds\n}\n";
+        assert_eq!(classify_indexer_origin_bypass(source).len(), 2);
+    }
+
+    #[test]
+    fn origin_bypass_tokens_in_tests_and_comments_are_allowed() {
+        let source = "// RecordOrigin::of in a comment\nfn gate() {\n    origin_of(s, f)\n}\n\
+                      #[cfg(test)]\nmod tests {\n    fn m() {\n        RecordOrigin::of(a, b);\n    }\n}\n";
+        assert!(classify_indexer_origin_bypass(source).is_empty());
+    }
+
+    #[test]
+    fn the_real_indexer_derives_origin_only_through_the_listing_source() {
+        let root = locate_workspace_root().expect("workspace root");
+        let findings = scan_indexer_origin_only_via_listing_source(&root).expect("scan");
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn the_indexer_origin_rule_refuses_to_pass_on_an_empty_tree() {
+        let empty = std::env::temp_dir().join("openlore-xtask-no-indexer-sources");
+        let findings = scan_indexer_origin_only_via_listing_source(&empty).expect("scan");
+        assert_eq!(findings.len(), 1, "{findings:?}");
     }
 }

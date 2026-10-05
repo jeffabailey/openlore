@@ -189,8 +189,20 @@ fn sut_parse_config(
 }
 
 fn sut_records_of(did: &str, listed: &[(String, String)]) -> (Vec<String>, u64) {
-    let _ = (did, listed);
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::records_of (FR-4)")
+    let listed: Vec<ports::RepoRecord> = listed
+        .iter()
+        .map(|(repo_did, rkey)| ports::RepoRecord {
+            repo_did: repo_did.clone(),
+            rkey: rkey.clone(),
+            value: serde_json::json!({}),
+        })
+        .collect();
+    let bound =
+        appview_domain::ingest_pass::records_of(&claim_domain::Did(did.to_string()), &listed);
+    (
+        bound.own.into_iter().map(|(rkey, _)| rkey).collect(),
+        bound.foreign,
+    )
 }
 
 fn sut_decode_wire_provenance(token: Option<&str>) -> Option<WireProvenance> {
@@ -336,7 +348,6 @@ proptest! {
     /// Anything listed through the fallback is relay origin — whatever URL it
     /// came from, even one equal to somebody's resolved PDS.
     #[test]
-    #[ignore = "DELIVER 01-02 (unit): origin_of(Fallback, _) == Relay"]
     fn anything_read_through_the_fallback_is_relay_origin(
         fallback in arb_public_https_url(), fetched_from in arb_public_https_url()
     ) {
@@ -504,7 +515,6 @@ proptest! {
     /// Repo binding partitions a listing: records of the requested repo are
     /// kept, every other record is counted as foreign, none is lost.
     #[test]
-    #[ignore = "DELIVER 01-02 (unit): records_of keeps own, counts foreign"]
     fn repo_binding_keeps_own_records_and_counts_every_foreign_one(
         did in arb_did(),
         listed in proptest::collection::vec((prop_oneof![Just(None), arb_did().prop_map(Some)], "[a-z0-9]{8}"), 0..20)

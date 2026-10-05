@@ -152,6 +152,12 @@ pub enum ProbeRefusalReason {
     OAuthClientKeyUnusable,
     /// The published JWKS is not ES256-only or carries a private part.
     OAuthJwksMalformed,
+
+    // -------- indexer-per-did-pds-fetch additions (ADR-077) --------
+    /// The indexer's origin classifier misbehaved on its in-process fixtures:
+    /// a fallback read was not relay origin, or the resolved PDS was not
+    /// author-PDS origin exactly when fetched from it.
+    IndexerOriginClassificationUnsound,
 }
 
 // -----------------------------------------------------------------------------
@@ -233,5 +239,16 @@ mod tests {
             }
             ProbeOutcome::Ok => panic!("roundtripped value must be Refused"),
         }
+    }
+
+    /// The indexer's origin-classification refusal serializes to its
+    /// PascalCase variant name and roundtrips (ADR-077).
+    #[test]
+    fn indexer_origin_classification_refusal_serializes_verbatim_and_roundtrips() {
+        let reason = ProbeRefusalReason::IndexerOriginClassificationUnsound;
+        let value = serde_json::to_value(reason).expect("serialize reason");
+        assert_eq!(value, json!("IndexerOriginClassificationUnsound"));
+        let parsed: ProbeRefusalReason = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, reason);
     }
 }

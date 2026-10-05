@@ -265,7 +265,6 @@ fn an_author_who_moved_pds_is_followed_to_the_new_one() {
 ///   And Priya's own 3 claims are indexed exactly once, under Priya
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: records_of counts foreign-repo records (FR-4)"]
 fn records_of_another_repo_are_never_attributed_to_the_requested_author() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Mallory]);
     let priya = world.publishes_self_attested(
@@ -312,7 +311,6 @@ fn records_of_another_repo_are_never_attributed_to_the_requested_author() {
 ///   And her other 2 claims are indexed as self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: CID == rkey still refuses tampered records via own PDS"]
 fn a_tampered_self_attested_record_is_still_refused() {
     let world = IndexerWorld::configured_with(&[Author::Priya]);
     let honest = world.publishes_self_attested(
@@ -369,7 +367,6 @@ fn given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback(
 ///   And the pass summary counts 1 own-PDS read and 1 fallback read
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: plan_listing → Fallback; fallback is always relay origin"]
 fn an_unresolvable_authors_app_signed_claims_come_through_the_fallback() {
     let (world, app_signed, self_attested) =
         given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
@@ -451,7 +448,6 @@ fn a_resolvable_author_is_never_read_from_the_fallback() {
 ///   And Priya's own claim is still admitted as self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: Fallback is Relay with no URL comparison (OQ-IPF-3)"]
 fn a_fallback_that_is_somebodys_own_pds_never_vouches_for_self_attested_claims() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Ghost]);
     let priya = world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

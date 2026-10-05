@@ -5672,7 +5672,7 @@ impl FakeIngestServer {
                             let response = if path.starts_with(AUTH_SCOPED_TRIPWIRE_PATH) {
                                 ok_response(&private_body)
                             } else {
-                                ok_response(&public_body)
+                                ok_response(&listing_of_requested_repo(&public_body, &path))
                             };
                             let _ = stream.write_all(response.as_bytes());
                             let _ = stream.flush();
@@ -5780,6 +5780,31 @@ fn repo_dids_of(list_records_body: &str) -> String {
         }
     }
     dids.join(",")
+}
+
+/// What a real `listRecords` answers: only the records of the `repo=` the
+/// request names (every record when the request names none).
+fn listing_of_requested_repo(list_records_body: &str, path: &str) -> String {
+    let requested = path
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or_default()
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("repo="))
+        .map(|repo| repo.replace("%3A", ":").replace("%3a", ":"));
+    let Some(repo) = requested else {
+        return list_records_body.to_string();
+    };
+    let mut body: serde_json::Value = serde_json::from_str(list_records_body).unwrap_or_default();
+    if let Some(records) = body["records"].as_array_mut() {
+        let prefix = format!("at://{repo}/");
+        records.retain(|record| {
+            record["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.starts_with(&prefix))
+        });
+    }
+    body.to_string()
 }
 
 /// Materialize a `listRecords`-shaped JSON body from `specs` (each run through

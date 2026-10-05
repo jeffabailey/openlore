@@ -17,6 +17,8 @@
 
 use std::path::Path;
 
+use appview_domain::{origin_of, FallbackUrl, ListingSource, PdsEndpoint};
+use claim_domain::RecordOrigin;
 use ports::{IdentityResolvePort, IndexStorePort, IngestSourcePort, ProbeOutcome};
 
 /// A refusal carried up from the indexer's probe gauntlet — the same shape the
@@ -173,6 +175,60 @@ pub fn probe_gauntlet(
     Ok(())
 }
 
+/// One origin-rule fixture: listing source, where the records were fetched
+/// from, and whether they must be relay origin (else author-PDS origin).
+type OriginFixture = (ListingSource, &'static str, bool);
+
+/// The origin rule's in-process fixtures: a fallback read is relay origin even
+/// when fetched from a URL somebody's PDS also has; a resolved PDS is
+/// author-PDS origin exactly when the listing came from it (ADR-077).
+fn origin_fixtures() -> Vec<OriginFixture> {
+    const PDS: &str = "https://pds.origin-probe.invalid";
+    const ELSEWHERE: &str = "https://elsewhere.origin-probe.invalid";
+    let own_pds = || ListingSource::OwnPds(PdsEndpoint::new(PDS));
+    FallbackUrl::new(PDS)
+        .map(|fallback| (ListingSource::Fallback(fallback), PDS, true))
+        .into_iter()
+        .chain([(own_pds(), PDS, false), (own_pds(), ELSEWHERE, true)])
+        .collect()
+}
+
+/// PURE check of an origin classifier against [`origin_fixtures`]; refuses
+/// (`IndexerOriginClassificationUnsound`) on the first fixture it gets wrong.
+fn check_origin_classifier(
+    classify: impl Fn(&ListingSource, &str) -> RecordOrigin,
+) -> Result<(), ProbeRefusal> {
+    let is_relay = |source: &ListingSource, fetched_from: &str| {
+        classify(source, fetched_from) == RecordOrigin::Relay
+    };
+    origin_fixtures()
+        .into_iter()
+        .find(|(source, fetched_from, relay)| is_relay(source, fetched_from) != *relay)
+        .map_or(Ok(()), |(source, fetched_from, relay)| {
+            let expected = if relay { "relay" } else { "author_pds" };
+            Err(ProbeRefusal {
+                adapter: "origin_classification",
+                reason: ports::ProbeRefusalReason::IndexerOriginClassificationUnsound,
+                detail: format!(
+                    "origin classifier is unsound: {source:?} fetched from {fetched_from} \
+                     must be {expected} origin (ADR-077)"
+                ),
+                structured: serde_json::json!({
+                    "event": "indexer.origin_classification_unsound",
+                    "fetched_from": fetched_from,
+                    "expected": expected,
+                }),
+            })
+        })
+}
+
+/// Earned Trust for the origin rule itself: the shipped classifier
+/// (`appview_domain::origin_of`) must pass its fixtures before the indexer
+/// starts. Pure and in-process — no network.
+pub fn origin_classification_probe() -> Result<(), ProbeRefusal> {
+    check_origin_classifier(origin_of)
+}
+
 // -----------------------------------------------------------------------------
 // Unit tests — the PURE capability-boundary store-path decision (ADR-023 / I-AV-5).
 //
@@ -205,6 +261,35 @@ mod tests {
             err.contains("openlore.duckdb") && err.contains("local store"),
             "the refusal must name the user-local-store breach; got {err:?}"
         );
+    }
+
+    #[test]
+    fn the_shipped_origin_classifier_passes_its_probe() {
+        assert!(origin_classification_probe().is_ok());
+    }
+
+    /// bypass: each mutant is one deliberate mis-classification; the probe
+    /// must refuse every one of them.
+    #[test]
+    fn a_mutated_origin_classifier_is_refused() {
+        let fallback_trusted = |source: &ListingSource, fetched_from: &str| {
+            RecordOrigin::of(fetched_from, source.base())
+        };
+        let always_author =
+            |source: &ListingSource, _: &str| RecordOrigin::of(source.base(), source.base());
+        let always_relay = |_: &ListingSource, _: &str| RecordOrigin::Relay;
+        for refusal in [
+            check_origin_classifier(fallback_trusted),
+            check_origin_classifier(always_author),
+            check_origin_classifier(always_relay),
+        ] {
+            let refusal = refusal.expect_err("a mutated classifier must refuse");
+            assert_eq!(
+                refusal.reason,
+                ports::ProbeRefusalReason::IndexerOriginClassificationUnsound
+            );
+            assert_eq!(refusal.adapter, "origin_classification");
+        }
     }
 
     #[test]

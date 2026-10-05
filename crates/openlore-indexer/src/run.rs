@@ -32,10 +32,13 @@ use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
+use std::collections::BTreeMap;
+
+use appview_domain::ingest_pass::{refusal_cause_of, RefusalCause, SkipReason};
 use appview_domain::{
     compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
-    FallbackUrl, IngestOutcome, ListingPlan, NetworkSearchResult, PassSummary, RejectReason,
-    ResolutionFailure,
+    FallbackUrl, IngestOutcome, ListingPlan, ListingSource, NetworkSearchResult, PassSummary,
+    RejectReason, ResolutionFailure,
 };
 use claim_domain::{ClaimRecord, Did, VerificationKey};
 use lexicon::{
@@ -48,7 +51,9 @@ use ports::{
 
 use crate::config::parse_config;
 
-use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
+use crate::probe_gauntlet::{
+    capability_boundary_probe, origin_classification_probe, probe_gauntlet, ProbeRefusal,
+};
 use crate::Command;
 
 /// The indexer's wired adapter set, owned by the composition root for the
@@ -141,6 +146,7 @@ impl IndexerWiring {
             self.ingest_source.as_ref(),
             self.identity_resolve.as_ref(),
         )?;
+        origin_classification_probe()?;
         // The query server's probe is an inherent method (not a `*Port` trait),
         // so it is checked here at the composition root, not in the gauntlet.
         // SCAFFOLD: true — `check the query_server.probe()` once its body lands.
@@ -416,6 +422,8 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
+    fetches.iter().for_each(emit_fallback_read);
+
     let mut tally = IngestTally::default();
     for fetch in &fetches {
         if let Err(err) = gate_fetch(wiring, &runtime, fetch, &mut tally) {
@@ -484,9 +492,11 @@ fn gate_fetch(
         return Ok(());
     };
     let origin = origin_of(source, &listing.fetched_from);
-    for (rkey, decoded) in records_of(repo_did, &listing.records) {
+    let bound = records_of(repo_did, &listing.records);
+    tally.count(RefusalCause::ForeignRepo, bound.foreign);
+    for (rkey, decoded) in bound.own {
         let Ok(record) = decoded else {
-            tally.reject(RejectReason::SchemaUnknown);
+            tally.reject(&RejectReason::SchemaUnknown);
             continue;
         };
         let key = author_key(wiring, runtime, &record);
@@ -505,11 +515,30 @@ fn gate_fetch(
                         repo_did.0
                     );
                 }
-                tally.reject(reason);
+                tally.reject(&reason);
             }
         }
     }
     Ok(())
+}
+
+/// Emit `indexer.ingest.source_fallback` for a DID read through the fallback
+/// (it was unresolvable — the only way onto that arm, ADR-077).
+fn emit_fallback_read(fetch: &DidFetch) {
+    if let DidFetch::Read {
+        did,
+        source: ListingSource::Fallback(fallback),
+        ..
+    } = fetch
+    {
+        let event = serde_json::json!({
+            "event": "indexer.ingest.source_fallback",
+            "did": did.0,
+            "reason": SkipReason::DidUnresolvable.token(),
+            "fallback_url": fallback.as_str(),
+        });
+        println!("{event}");
+    }
 }
 
 /// Emit `indexer.ingest.pass_summary` — the pass's LAST stdout event.
@@ -550,47 +579,37 @@ fn author_key(
 #[derive(Debug, Default)]
 struct IngestTally {
     verified: u64,
-    unsigned: u64,
-    bad_signature: u64,
-    cid_mismatch: u64,
-    schema_unknown: u64,
-    provenance: u64,
+    refused: BTreeMap<RefusalCause, u64>,
 }
 
 impl IngestTally {
-    fn reject(&mut self, reason: RejectReason) {
-        match reason {
-            RejectReason::Unsigned => self.unsigned += 1,
-            RejectReason::BadSignature => self.bad_signature += 1,
-            RejectReason::CidMismatch => self.cid_mismatch += 1,
-            RejectReason::SchemaUnknown => self.schema_unknown += 1,
-            RejectReason::Provenance(_) => self.provenance += 1,
-        }
+    fn count(&mut self, cause: RefusalCause, times: u64) {
+        *self.refused.entry(cause).or_default() += times;
+    }
+
+    fn reject(&mut self, reason: &RejectReason) {
+        self.count(refusal_cause_of(reason), 1);
     }
 
     /// Emit the structured `indexer.ingest.verified` + `indexer.ingest.rejected`
     /// events to stdout (the DevOps observability contract). Structural counts +
     /// per-reason breakdown ONLY — NO claim-content telemetry (WD-105 privacy).
     fn emit(&self) {
-        let rejected_total = self.unsigned
-            + self.bad_signature
-            + self.cid_mismatch
-            + self.schema_unknown
-            + self.provenance;
+        let by_reason: serde_json::Map<String, serde_json::Value> = RefusalCause::ALL
+            .iter()
+            .map(|cause| {
+                let count = self.refused.get(cause).copied().unwrap_or_default();
+                (cause.token().to_string(), count.into())
+            })
+            .collect();
         let verified_event = serde_json::json!({
             "event": "indexer.ingest.verified",
             "count": self.verified,
         });
         let rejected_event = serde_json::json!({
             "event": "indexer.ingest.rejected",
-            "count": rejected_total,
-            "by_reason": {
-                "unsigned": self.unsigned,
-                "bad_signature": self.bad_signature,
-                "cid_mismatch": self.cid_mismatch,
-                "schema_unknown": self.schema_unknown,
-                "provenance": self.provenance,
-            },
+            "count": self.refused.values().sum::<u64>(),
+            "by_reason": by_reason,
         });
         println!("{verified_event}");
         println!("{rejected_event}");

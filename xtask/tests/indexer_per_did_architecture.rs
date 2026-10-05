@@ -59,7 +59,6 @@ fn violations(tokens: &[&str]) -> Vec<String> {
 
 /// XA-1 @US-IPF-003 @I-IPF-2 @ADR-077 @DD-IPF-12 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 01-02: origin only via ListingSource (indexer_origin_only_via_listing_source)"]
 fn the_indexer_derives_origin_only_through_the_listing_source() {
     let found = violations(&["RecordOrigin::of", "RecordOrigin::AuthorPds"]);
     assert!(
@@ -102,7 +101,6 @@ fn both_rules_are_part_of_check_arch() {
 /// XA-4 @contract-shape:pure-function — non-vacuity: the scanner sees a
 /// planted violation and ignores a commented one.
 #[test]
-#[ignore = "DELIVER 01-02: enable with XA-1 (guards XA-1/XA-2 against vacuity)"]
 fn the_token_scan_sees_a_planted_violation() {
     let planted = "fn origin() { let o = RecordOrigin::of(a, b); }\n// RecordOrigin::AuthorPds in a comment\n";
     let found =

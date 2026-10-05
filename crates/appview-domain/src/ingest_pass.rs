@@ -9,8 +9,10 @@
 //! endpoint, and [`origin_of`] takes no URL into account on that arm — the
 //! fallback can never be classified as the author's PDS.
 
-use claim_domain::{decode_claim_record, ClaimRecord, Did, RecordOrigin};
+use claim_domain::{decode_claim_record, ClaimRecord, Did, ProvenanceRejection, RecordOrigin};
 use ports::{RepoListing, RepoRecord};
+
+use crate::RejectReason;
 
 /// Base URL without its trailing `/` (the form origin comparison uses).
 fn base_url(url: &str) -> String {
@@ -81,6 +83,15 @@ pub enum SkipReason {
     DidUnresolvable,
 }
 
+impl SkipReason {
+    /// The event token (`indexer.ingest.source_skipped` / `source_fallback`).
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::DidUnresolvable => "did_unresolvable",
+        }
+    }
+}
+
 /// The decision for one DID before any listing happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListingPlan {
@@ -111,18 +122,80 @@ pub fn origin_of(source: &ListingSource, fetched_from: &str) -> RecordOrigin {
     }
 }
 
+/// A listing bound to its requested repo: the repo's own records (rkey +
+/// decoded record) and how many records of other repos it also returned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundRecords {
+    pub own: Vec<(String, Result<ClaimRecord, String>)>,
+    pub foreign: u64,
+}
+
 /// The records a listing holds for `repo_did`, each with its rkey and decoded
 /// through the one shared decoder. A listing answers for one repo; anything
-/// it returns from another repo is not this repo's record.
-pub fn records_of(
-    repo_did: &Did,
-    listed: &[RepoRecord],
-) -> Vec<(String, Result<ClaimRecord, String>)> {
-    listed
+/// it returns from another repo is never this repo's record and is counted
+/// as foreign (FR-4).
+pub fn records_of(repo_did: &Did, listed: &[RepoRecord]) -> BoundRecords {
+    let (own, foreign): (Vec<&RepoRecord>, Vec<&RepoRecord>) = listed
         .iter()
-        .filter(|record| record.repo_did == repo_did.0)
-        .map(|record| (record.rkey.clone(), decode_claim_record(&record.value, "")))
-        .collect()
+        .partition(|record| record.repo_did == repo_did.0);
+    BoundRecords {
+        own: own
+            .into_iter()
+            .map(|record| (record.rkey.clone(), decode_claim_record(&record.value, "")))
+            .collect(),
+        foreign: foreign.len() as u64,
+    }
+}
+
+/// Why the pass refused a record, as reported in
+/// `indexer.ingest.rejected.by_reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RefusalCause {
+    Unsigned,
+    BadSignature,
+    CidMismatch,
+    SchemaUnknown,
+    Provenance,
+    ForeignRepo,
+}
+
+impl RefusalCause {
+    /// Every cause, in reporting order.
+    pub const ALL: [Self; 6] = [
+        Self::Unsigned,
+        Self::BadSignature,
+        Self::CidMismatch,
+        Self::SchemaUnknown,
+        Self::Provenance,
+        Self::ForeignRepo,
+    ];
+
+    /// The `by_reason` key.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Unsigned => "unsigned",
+            Self::BadSignature => "bad_signature",
+            Self::CidMismatch => "cid_mismatch",
+            Self::SchemaUnknown => "schema_unknown",
+            Self::Provenance => "provenance",
+            Self::ForeignRepo => "foreign_repo",
+        }
+    }
+}
+
+/// The reported cause of a gate refusal. A self-attested record whose content
+/// does not hash to its rkey is a CID mismatch, wherever it was read from.
+pub fn refusal_cause_of(reason: &RejectReason) -> RefusalCause {
+    match reason {
+        RejectReason::Unsigned => RefusalCause::Unsigned,
+        RejectReason::BadSignature => RefusalCause::BadSignature,
+        RejectReason::CidMismatch
+        | RejectReason::Provenance(ProvenanceRejection::IntegrityFailure) => {
+            RefusalCause::CidMismatch
+        }
+        RejectReason::SchemaUnknown => RefusalCause::SchemaUnknown,
+        RejectReason::Provenance(_) => RefusalCause::Provenance,
+    }
 }
 
 /// What one DID's fetch phase produced.
@@ -232,6 +305,37 @@ mod tests {
         }
     }
 
+    /// bypass: closed-world table — every gate refusal maps to exactly one
+    /// reported cause; a self-attested integrity failure is a CID mismatch.
+    #[test]
+    fn every_gate_refusal_maps_to_its_reported_cause() {
+        let table = [
+            (RejectReason::Unsigned, RefusalCause::Unsigned),
+            (RejectReason::BadSignature, RefusalCause::BadSignature),
+            (RejectReason::CidMismatch, RefusalCause::CidMismatch),
+            (RejectReason::SchemaUnknown, RefusalCause::SchemaUnknown),
+            (
+                RejectReason::Provenance(ProvenanceRejection::IntegrityFailure),
+                RefusalCause::CidMismatch,
+            ),
+            (
+                RejectReason::Provenance(ProvenanceRejection::UnverifiableProvenance),
+                RefusalCause::Provenance,
+            ),
+            (
+                RejectReason::Provenance(ProvenanceRejection::ForeignRepo),
+                RefusalCause::Provenance,
+            ),
+            (
+                RejectReason::Provenance(ProvenanceRejection::MalformedProvenance),
+                RefusalCause::Provenance,
+            ),
+        ];
+        for (reason, cause) in table {
+            assert_eq!(refusal_cause_of(&reason), cause, "{reason:?}");
+        }
+    }
+
     proptest! {
         /// A resolved DID is always listed on its own PDS, never the fallback;
         /// an unresolved one goes to the fallback iff one is configured.
@@ -270,7 +374,8 @@ mod tests {
             });
         }
 
-        /// Only records of the requested repo are kept, in listing order.
+        /// Universe {own, foreign}: every record of the requested repo is
+        /// kept in listing order, every other one is counted, none is lost.
         #[test]
         fn only_the_requested_repos_records_are_kept(
             repos in proptest::collection::vec(prop_oneof![Just("did:plc:a"), Just("did:plc:b")], 0..10)
@@ -280,10 +385,11 @@ mod tests {
                 rkey: format!("r{i}"),
                 value: serde_json::json!({}),
             }).collect();
-            let kept: Vec<String> = records_of(&Did("did:plc:a".to_string()), &listed)
-                .into_iter().map(|(rkey, _)| rkey).collect();
+            let bound = records_of(&Did("did:plc:a".to_string()), &listed);
+            let kept: Vec<String> = bound.own.into_iter().map(|(rkey, _)| rkey).collect();
             let expected: Vec<String> = listed.iter()
                 .filter(|r| r.repo_did == "did:plc:a").map(|r| r.rkey.clone()).collect();
+            prop_assert_eq!(bound.foreign as usize, listed.len() - expected.len());
             prop_assert_eq!(kept, expected);
         }
     }
