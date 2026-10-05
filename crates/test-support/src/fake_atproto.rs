@@ -422,6 +422,13 @@ impl FakeAtprotoNetwork {
         }
     }
 
+    /// A hermetic PLC directory that knows no DID: every DID document is a
+    /// `404` (no PDS host). Stands in for the live directory wherever a test
+    /// must never contact `plc.directory`.
+    pub fn directory_only() -> Self {
+        Self::start(Vec::new())
+    }
+
     // ------------------------------------------------------------------ urls
 
     /// PLC directory + handle resolver base URL.

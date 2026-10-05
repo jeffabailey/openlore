@@ -29,7 +29,7 @@ mod review_app;
 
 use std::process::{Command, Stdio};
 
-use openlore_test_support::FakeAtprotoNetwork;
+use openlore_test_support::{DidDocPosture, FakeAtprotoNetwork};
 use review_app::*;
 use support::{run_openlore, run_openlore_with_peer_resolver, CliOutcome, FakeIdentity, TestEnv};
 
@@ -364,7 +364,7 @@ fn ingest_priya_repo(env: &TestEnv, net: &FakeAtprotoNetwork, source_url: &str) 
         )
         .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
         .env("OPENLORE_INDEXER_PLC_ENDPOINT", net.directory_url())
-        // indexer-per-did-pds-fetch (DD-IPF-5): TEST-ONLY loopback seam (inert before DELIVER).
+        // indexer-per-did-pds-fetch (DD-IPF-5): TEST-ONLY loopback seam for the local fakes.
         .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         // DISTILL-proposed seam (DWD-9): which repo DIDs a single-PDS source enumerates.
         .env("OPENLORE_INDEXER_REPO_DIDS", Persona::Priya.did())
@@ -428,8 +428,9 @@ fn the_network_index_includes_self_attested_claims_attributed_and_marked() {
 /// ```gherkin
 /// @US-BRA-009 @ADR-071 @error @adversarial @contract-shape:unbounded-preservation
 /// Scenario: A self-attested claim fetched through anything but the author's own PDS is not indexed
-///   Given Priya's self-attested claim is served by a host that is not her DID document's PDS (a relay)
-///   When the indexer ingests from that host
+///   Given Priya's DID document cannot be resolved
+///   And her self-attested claim is served by the indexer's fallback, a host that is not her PDS (a relay)
+///   When the indexer ingests and reads Priya through that fallback
 ///   Then the claim is refused as unverifiable provenance and nothing is indexed
 /// ```
 #[test]
@@ -446,6 +447,8 @@ fn a_self_attested_claim_fetched_through_anything_but_the_authors_own_pds_is_not
     // Dmitri's host also answers listRecords for any repo it is asked about — but it is
     // not Priya's DID-document PDS, so it stands in for a relay.
     let relay = net.host_url(PdsHost::VOLKOV);
+    // Priya is unresolvable, so the indexer reads her through the fallback (relay origin).
+    net.set_did_doc_posture(Persona::Priya.did(), DidDocPosture::NotFound);
     let env = maria();
     let ingest = ingest_priya_repo(&env, &net, &relay);
     let output = format!("{}{}", ingest.stdout, ingest.stderr);

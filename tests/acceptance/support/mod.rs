@@ -4571,8 +4571,10 @@ fn spawn_indexer_serve(env: &TestEnv, source: FakeIngestServer) -> IndexerHandle
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
         // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
-        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        // debug indexer reach the http://127.0.0.1 fakes.
         .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
+        // A hermetic directory that knows no DID — never the live plc.directory.
+        .env("OPENLORE_INDEXER_PLC_ENDPOINT", source.directory_url())
         // Point serve at the reachable source so the wire→probe→use gauntlet's
         // ingest-source probe passes (serve reads the index; it does not re-ingest
         // here — the corpus is already indexed).
@@ -5558,6 +5560,10 @@ pub struct FakeIngestServer {
     /// The repo DIDs the public records live in (from their `at://` URIs),
     /// comma-separated — what the indexer is told to enumerate (DWD-9).
     repo_dids: String,
+    /// A hermetic PLC directory that 404s every DID: each repo DID is then
+    /// unresolvable and read through this source as the indexer's fallback
+    /// (relay origin, ADR-077) — never the live `plc.directory`.
+    directory: openlore_test_support::FakeAtprotoNetwork,
 }
 
 impl FakeIngestServer {
@@ -5686,7 +5692,14 @@ impl FakeIngestServer {
             recorded,
             join: Some(join),
             repo_dids,
+            directory: openlore_test_support::FakeAtprotoNetwork::directory_only(),
         }
+    }
+
+    /// The hermetic PLC directory the indexer resolves repo DIDs against
+    /// (wired via `OPENLORE_INDEXER_PLC_ENDPOINT`); it knows no DID.
+    pub fn directory_url(&self) -> &str {
+        self.directory.directory_url()
     }
 
     /// The comma-separated repo DIDs the hosted public records live in.
@@ -5828,10 +5841,17 @@ pub fn raw_record_to_list_records_view(record: &ports::RawRecord) -> serde_json:
         }
     });
     serde_json::json!({
-        "uri": format!("at://{}/org.openlore.claim/{}", claim.author_did.0, record.published_cid.0),
+        "uri": format!("at://{}/org.openlore.claim/{}", bare_repo_did(&claim.author_did.0), record.published_cid.0),
         "cid": record.published_cid.0,
         "value": value,
     })
+}
+
+/// The repo DID an app-signed author identity lives in: the DID without its
+/// `#fragment` (`did:plc:priya-test#org.openlore.application` → `did:plc:priya-test`).
+/// The record's author keeps its fragment; repos and `at://` URIs never carry one.
+fn bare_repo_did(author: &str) -> &str {
+    author.split('#').next().unwrap_or(author)
 }
 
 /// Map a `claim_domain::ReferenceType` to its lexicon wire token.
@@ -5886,9 +5906,12 @@ pub fn run_openlore_indexer_with_source(
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
         // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
-        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        // debug indexer reach the http://127.0.0.1 fakes.
         .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
+        // The source is the FALLBACK: the hermetic directory knows no repo DID,
+        // so every DID is read through it (relay origin, ADR-077).
         .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
+        .env("OPENLORE_INDEXER_PLC_ENDPOINT", source.directory_url())
         .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
         .env("PATH", std::env::var("PATH").unwrap_or_default());
     for (did, pubkey_hex) in pubkey_seams {
@@ -5929,15 +5952,18 @@ pub fn run_openlore_indexer_with_fsync_lying_store(
     source_url: &str,
 ) -> CliOutcome {
     let bin = resolve_workspace_bin("openlore-indexer");
+    // A hermetic directory that knows no DID — never the live plc.directory.
+    let directory = openlore_test_support::FakeAtprotoNetwork::directory_only();
     let output = Command::new(&bin)
         .args(args)
         .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
         // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
-        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        // debug indexer reach the http://127.0.0.1 fakes.
         .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
+        .env("OPENLORE_INDEXER_PLC_ENDPOINT", directory.directory_url())
         // The substrate lie: force the index-store fsync-honesty probe to reach
         // the no-op verdict (storage.fsync_unhonored) it would reach on a real
         // tmpfs/overlayfs/DrvFs durability no-op.
@@ -6154,11 +6180,9 @@ fn did_document_json(fixture: &openlore_test_support::DidDocFixture) -> String {
             "controller": fixture.did,
             "publicKeyMultibase": fixture.public_key_multibase,
         }],
-        "service": [{
-            "id": "#atproto_pds",
-            "type": "AtprotoPersonalDataServer",
-            "serviceEndpoint": "https://pds.example.test",
-        }]
+        // No `#atproto_pds` service: this fixture serves verification keys only,
+        // so the indexer cannot resolve a PDS here and reads the repo through
+        // the configured source as its fallback (ADR-077).
     })
     .to_string()
 }
@@ -6234,7 +6258,7 @@ pub fn run_openlore_indexer_with_plc_resolver(
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
         // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
-        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        // debug indexer reach the http://127.0.0.1 fakes.
         .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
         .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
