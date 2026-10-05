@@ -133,8 +133,17 @@ enum WireProvenance {
 // =============================================================================
 
 fn sut_origin_of(source: &Source, fetched_from: &str) -> Origin {
-    let _ = (source, fetched_from);
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::origin_of (ADR-077)")
+    use appview_domain::ingest_pass::{origin_of, FallbackUrl, ListingSource, PdsEndpoint};
+    let source = match source {
+        Source::OwnPds(endpoint) => ListingSource::OwnPds(PdsEndpoint::new(endpoint)),
+        Source::Fallback(url) => {
+            ListingSource::Fallback(FallbackUrl::new(url).expect("a non-empty fallback URL"))
+        }
+    };
+    match origin_of(&source, fetched_from) {
+        claim_domain::RecordOrigin::AuthorPds => Origin::AuthorPds,
+        claim_domain::RecordOrigin::Relay => Origin::Relay,
+    }
 }
 
 fn sut_plan_listing(
@@ -339,7 +348,6 @@ proptest! {
     /// A record read from the freshly resolved PDS is author-PDS origin exactly
     /// when it was fetched from that PDS.
     #[test]
-    #[ignore = "DELIVER 01-01 (unit): origin_of(OwnPds(e), f) == AuthorPds iff f == e"]
     fn own_pds_origin_holds_exactly_when_fetched_from_the_resolved_pds(
         endpoint in arb_public_https_url(), other in arb_public_https_url()
     ) {

@@ -105,4 +105,67 @@ pub trait IdentityLookupPort: Send + Sync {
     /// document's `at://` alias only when that handle resolves back to the
     /// DID; otherwise `verified_handle` is the DID itself.
     async fn resolve_did(&self, did: &str) -> Result<ResolvedIdentity, IdentityLookupError>;
+
+    /// DID → the PDS its document names (`#atproto_pds`), read afresh. The
+    /// indexer needs only the PDS, so an implementation may skip the handle
+    /// round-trip [`Self::resolve_did`] makes.
+    async fn resolve_pds(&self, did: &str) -> Result<String, IdentityLookupError> {
+        self.resolve_did(did)
+            .await
+            .map(|identity| identity.pds_endpoint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A lookup that knows only `resolve_did`, answering one fixed result.
+    struct DidOnlyLookup(Result<ResolvedIdentity, IdentityLookupError>);
+
+    #[async_trait]
+    impl IdentityLookupPort for DidOnlyLookup {
+        async fn resolve_identity(
+            &self,
+            _handle: &str,
+        ) -> Result<ResolvedIdentity, IdentityLookupError> {
+            unreachable!("resolve_pds never resolves a handle")
+        }
+
+        async fn resolve_did(&self, _did: &str) -> Result<ResolvedIdentity, IdentityLookupError> {
+            self.0.clone()
+        }
+    }
+
+    /// Drive a future that never waits (the fake answers immediately).
+    fn ready<T>(future: impl std::future::Future<Output = T>) -> T {
+        let mut future = std::pin::pin!(future);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => unreachable!("the fake lookup never waits"),
+        }
+    }
+
+    proptest! {
+        /// The default `resolve_pds` is exactly `resolve_did`'s PDS, and its
+        /// failure unchanged.
+        #[test]
+        fn the_default_pds_is_the_resolved_identitys_pds(
+            pds in "https://[a-z]{1,10}\\.[a-z]{2,4}", found in any::<bool>()
+        ) {
+            let answer = if found {
+                Ok(ResolvedIdentity {
+                    did: "did:plc:abc".to_string(),
+                    verified_handle: "did:plc:abc".to_string(),
+                    pds_endpoint: pds.clone(),
+                })
+            } else {
+                Err(IdentityLookupError::NotFound)
+            };
+            let expected = answer.clone().map(|identity| identity.pds_endpoint);
+            prop_assert_eq!(ready(DidOnlyLookup(answer).resolve_pds("did:plc:abc")), expected);
+        }
+    }
 }

@@ -104,23 +104,11 @@ fn parse_url(text: &str) -> Result<url::Url, IdentityLookupError> {
 /// The identity a DID document confirms for `handle` (pure): the document
 /// must name the DID, list `at://<handle>` and declare an `#atproto_pds`.
 pub fn confirmed_identity(did: &str, handle: &str, document: &Value) -> Option<ResolvedIdentity> {
-    let names_did = document["id"].as_str() == Some(did);
     let claims_handle = document["alsoKnownAs"].as_array().is_some_and(|akas| {
         akas.iter()
             .any(|aka| aka.as_str() == Some(&format!("at://{handle}")))
     });
-    let pds_endpoint = document["service"].as_array().and_then(|services| {
-        services
-            .iter()
-            .find(|s| {
-                let id = s["id"].as_str().unwrap_or_default();
-                (id == "#atproto_pds" || id == format!("{did}#atproto_pds"))
-                    && s["type"].as_str() == Some("AtprotoPersonalDataServer")
-            })
-            .and_then(|s| s["serviceEndpoint"].as_str())
-            .map(|endpoint| endpoint.trim_end_matches('/').to_string())
-    });
-    match (names_did && claims_handle, pds_endpoint) {
+    match (claims_handle, pds_endpoint_of(did, document)) {
         (true, Some(pds_endpoint)) => Some(ResolvedIdentity {
             did: did.to_string(),
             verified_handle: handle.to_string(),
@@ -128,6 +116,25 @@ pub fn confirmed_identity(did: &str, handle: &str, document: &Value) -> Option<R
         }),
         _ => None,
     }
+}
+
+/// The PDS a DID document names for `did` (pure): the document must name the
+/// DID itself and declare an `AtprotoPersonalDataServer` service with id
+/// `#atproto_pds` (or `<did>#atproto_pds`). Trailing `/` trimmed.
+pub fn pds_endpoint_of(did: &str, document: &Value) -> Option<String> {
+    if document["id"].as_str() != Some(did) {
+        return None;
+    }
+    document["service"]
+        .as_array()?
+        .iter()
+        .find(|s| {
+            let id = s["id"].as_str().unwrap_or_default();
+            (id == "#atproto_pds" || id == format!("{did}#atproto_pds"))
+                && s["type"].as_str() == Some("AtprotoPersonalDataServer")
+        })
+        .and_then(|s| s["serviceEndpoint"].as_str())
+        .map(|endpoint| endpoint.trim_end_matches('/').to_string())
 }
 
 #[async_trait]
@@ -156,6 +163,12 @@ impl IdentityLookupPort for IdentityLookup {
                 ..identity
             })
             .ok_or(IdentityLookupError::NotFound)
+    }
+
+    /// The DID document only — no handle back-check (the indexer needs the PDS).
+    async fn resolve_pds(&self, did: &str) -> Result<String, IdentityLookupError> {
+        let document = self.did_document(did).await?;
+        pds_endpoint_of(did, &document).ok_or(IdentityLookupError::NotFound)
     }
 }
 
@@ -205,6 +218,32 @@ mod tests {
             if let Some(identity) = confirmed {
                 prop_assert_eq!(identity.pds_endpoint, "https://pds.example");
             }
+        }
+
+        /// Universe: documents varying in the DID they name and the service
+        /// they declare. A PDS is found iff the document names the DID and
+        /// declares an `#atproto_pds` PDS service; the handle never matters.
+        #[test]
+        fn a_pds_is_read_only_from_a_document_naming_the_did(
+            same_did in any::<bool>(), qualified_id in any::<bool>(),
+            pds_id in any::<bool>(), pds_type in any::<bool>(), same_handle in any::<bool>()
+        ) {
+            let did = "did:plc:abc";
+            let service_id = match (pds_id, qualified_id) {
+                (true, true) => format!("{did}#atproto_pds"),
+                (true, false) => "#atproto_pds".to_string(),
+                (false, _) => "#other".to_string(),
+            };
+            let doc = document(
+                if same_did { did } else { "did:plc:other" },
+                if same_handle { "at://priya.example" } else { "at://someone.else" },
+                &service_id,
+                if pds_type { "AtprotoPersonalDataServer" } else { "Other" },
+            );
+            prop_assert_eq!(
+                pds_endpoint_of(did, &doc),
+                (same_did && pds_id && pds_type).then(|| "https://pds.example".to_string())
+            );
         }
     }
 }

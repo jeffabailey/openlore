@@ -27,6 +27,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod config;
 mod probe_gauntlet;
 mod run;
 

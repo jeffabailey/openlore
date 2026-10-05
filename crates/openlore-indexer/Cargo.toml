@@ -47,5 +47,9 @@ serde_json = { workspace = true }
 # (the hyper listener); the runtime stays current-thread (single-query-at-a-time).
 tokio = { workspace = true, features = ["macros", "rt", "net"] }
 
+[dev-dependencies]
+# Property tests for the pure `config::parse_config` (indexer-per-did-pds-fetch).
+proptest = { workspace = true }
+
 [lints]
 workspace = true

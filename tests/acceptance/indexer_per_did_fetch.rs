@@ -110,7 +110,6 @@ fn then_index_holds_exactly(world: &IndexerWorld, expected: &[(&str, &[String], 
 ///   And she sees Dmitri's claim on ferrite next to it, attributed to Dmitri
 /// ```
 #[test]
-#[ignore = "DELIVER 01-01: per-DID PDS resolution (ADR-077) — walking skeleton"]
 fn maria_finds_priyas_self_attested_claim_published_on_her_own_pds() {
     let (world, _published) = given_three_authors_publish_on_their_own_pdses();
 
@@ -154,7 +153,6 @@ fn maria_finds_priyas_self_attested_claim_published_on_her_own_pds() {
 ///   And Jeff sees a pass summary of 3 configured, 3 read from their own PDS, none skipped
 /// ```
 #[test]
-#[ignore = "DELIVER 01-01: per-DID listing + pass summary (ADR-077/078)"]
 fn authors_on_different_pdses_are_all_found_in_one_pass() {
     let (world, published) = given_three_authors_publish_on_their_own_pdses();
 
@@ -220,7 +218,6 @@ fn authors_on_different_pdses_are_all_found_in_one_pass() {
 ///   And nothing is read from her old PDS
 /// ```
 #[test]
-#[ignore = "DELIVER 01-01: resolve every pass; follow a moved PDS (FR-2)"]
 fn an_author_who_moved_pds_is_followed_to_the_new_one() {
     let (world, published) = given_three_authors_publish_on_their_own_pdses();
     world

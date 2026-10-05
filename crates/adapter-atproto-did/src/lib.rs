@@ -82,7 +82,7 @@ pub mod probe;
 mod peer_resolve;
 
 mod identity_lookup;
-pub use identity_lookup::{confirmed_identity, IdentityLookup};
+pub use identity_lookup::{confirmed_identity, pds_endpoint_of, IdentityLookup};
 
 /// The fragment identifying the OpenLore verification method on the
 /// user's DID document. Pinned by ADR-002 §Earned Trust step 1.

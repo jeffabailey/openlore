@@ -68,19 +68,19 @@ impl AtProtoIngestAdapter {
 #[async_trait]
 impl IngestSourcePort for AtProtoIngestAdapter {
     fn probe(&self) -> ProbeOutcome {
-        // Earned-Trust probe (happy-path arm for the AV-1 walking skeleton): a
-        // configured source URL must be present + well-shaped (the real adapter
-        // cannot PULL from an empty seed). The network-lies (tampered/CID-mismatch)
-        // reachability arms are AV-6/03-06; here we assert a REAL configuration
-        // readiness check rather than a trivial `Ok`.
-        if self.source.trim().is_empty() {
-            return ProbeOutcome::Refused {
+        // An empty source is a valid configuration since ADR-077: the indexer
+        // has no fallback and lists every repo DID from the PDS its document
+        // names. A configured source must be an absolute http(s) base URL, or
+        // the fallback could never be listed. (The transport-policy pre-check
+        // lands with the guarded client, ADR-077 §4.)
+        match source_readiness(&self.source) {
+            Ok(()) => ProbeOutcome::Ok,
+            Err(detail) => ProbeOutcome::Refused {
                 reason: ports::ProbeRefusalReason::PdsTlsHandshakeFailed,
-                detail: "ingest source URL is empty — cannot PULL listRecords".to_string(),
+                detail,
                 structured: serde_json::json!({"adapter": "ingest_source"}),
-            };
+            },
         }
-        ProbeOutcome::Ok
     }
 
     /// Refused: `listRecords` lists ONE repo and a real PDS rejects a call
@@ -90,6 +90,21 @@ impl IngestSourcePort for AtProtoIngestAdapter {
         Err(IngestError::BadResponse {
             message: "listRecords needs repo=<DID>: enumerate per repo DID".to_string(),
         })
+    }
+}
+
+/// Whether a configured source can be listed from (pure): empty (no source)
+/// or an absolute `http`/`https` URL.
+fn source_readiness(source: &str) -> Result<(), String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Ok(());
+    }
+    match url::Url::parse(source) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => Ok(()),
+        _ => Err(format!(
+            "ingest source {source:?} is not an absolute http(s) URL — cannot PULL listRecords"
+        )),
     }
 }
 
@@ -448,5 +463,23 @@ mod tests {
             record.raw_payload.unsigned.subject,
             "github:bazelbuild/bazel"
         );
+    }
+
+    proptest! {
+        /// A source is ready iff it is unset (blank) or an absolute http(s)
+        /// URL; any other scheme or a bare host is refused.
+        #[test]
+        fn a_source_is_ready_only_when_blank_or_an_http_url(
+            host in "[a-z]{1,10}\\.[a-z]{2,4}",
+            scheme in prop_oneof![Just("http"), Just("https"), Just("ftp"), Just("")],
+            blank in "[ \t]{0,3}",
+        ) {
+            prop_assert!(source_readiness(&blank).is_ok());
+            let source = if scheme.is_empty() { host.clone() } else { format!("{scheme}://{host}") };
+            prop_assert_eq!(
+                source_readiness(&source).is_ok(),
+                matches!(scheme, "http" | "https")
+            );
+        }
     }
 }

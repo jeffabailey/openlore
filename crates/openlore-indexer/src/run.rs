@@ -25,6 +25,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
@@ -32,16 +33,20 @@ use adapter_index_store::IndexStoreAdapter;
 use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
 use appview_domain::{
-    compose_results, ingest_repo_record, IngestOutcome, NetworkSearchResult, RejectReason,
+    compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
+    FallbackUrl, IngestOutcome, ListingPlan, NetworkSearchResult, PassSummary, RejectReason,
+    ResolutionFailure,
 };
-use claim_domain::{decode_claim_record, ClaimRecord, Did, RecordOrigin, VerificationKey};
+use claim_domain::{ClaimRecord, Did, VerificationKey};
 use lexicon::{
     ClaimReferenceDto, SearchDimensionDto, SearchQueryRequest, SearchQueryResponse, SearchResultDto,
 };
 use ports::{
-    ClockPort, IdentityLookupPort, IdentityResolvePort, IndexStorePort, IngestSourcePort,
-    RepoListingPort, RepoRecord, SearchDimension,
+    ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexStorePort,
+    IngestSourcePort, RepoListingPort, SearchDimension,
 };
+
+use crate::config::parse_config;
 
 use crate::probe_gauntlet::{capability_boundary_probe, probe_gauntlet, ProbeRefusal};
 use crate::Command;
@@ -55,8 +60,9 @@ pub struct IndexerWiring {
     pub ingest_source: Box<dyn IngestSourcePort>,
     /// Read-only `listRecords` of ONE repo DID, cursor-paged (ADR-071 §4).
     pub repo_listing: Box<dyn RepoListingPort>,
-    /// DID → its DID document's PDS: the only origin a self-attested record
-    /// may be indexed from (ADR-071).
+    /// DID → its DID document's PDS, resolved afresh every pass: where each
+    /// repo is listed and the only origin a self-attested record may be
+    /// indexed from (ADR-071, ADR-077).
     pub pds_lookup: Box<dyn IdentityLookupPort>,
     /// The repo DIDs one ingest pass enumerates (DWD-9).
     pub repo_dids: Vec<Did>,
@@ -66,8 +72,9 @@ pub struct IndexerWiring {
     /// one-shot pass leaves it `None` (it does not serve).
     pub query_server: Option<XrpcQueryServer>,
     pub clock: Box<dyn ClockPort>,
-    /// The configured bounded ingest source base URL (ADR-024).
-    pub source_url: String,
+    /// Where a DID whose document cannot be resolved is listed (relay
+    /// origin, ADR-077); `None` = such a DID is skipped.
+    pub fallback: Option<FallbackUrl>,
     /// The configured SEPARATE `index.duckdb` path (ADR-023). Threaded into the
     /// `capability_boundary_probe` so it can REFUSE if mis-wired against the
     /// user's `openlore.duckdb` (the capability boundary, I-AV-5).
@@ -77,72 +84,6 @@ pub struct IndexerWiring {
     pub listen_addr: String,
 }
 
-/// The indexer's resolved configuration (the test analog of `config.toml`, read
-/// from env-var seams; mirrors the CLI's `OPENLORE_*` seams). Production reads
-/// `~/.config/openlore-indexer/config.toml`; the TOML path lands in a later step.
-struct IndexerConfig {
-    /// The SEPARATE `index.duckdb` path (ADR-023; NEVER the user's openlore.duckdb).
-    index_path: PathBuf,
-    /// The bounded ingest source base URL hosting public `listRecords` (ADR-024).
-    source_url: String,
-    /// The HTTP/XRPC query surface listen address (ADR-027). `:0` for an
-    /// OS-assigned ephemeral port (the parallel-safe test default; DEVOPS open-q 8).
-    listen_addr: String,
-    /// The repo DIDs to enumerate (`OPENLORE_INDEXER_REPO_DIDS`, DWD-9).
-    repo_dids: Vec<Did>,
-    /// The PLC directory a repo DID's PDS is resolved from.
-    plc_endpoint: String,
-}
-
-/// The production PLC directory (ADR-026 §"Config + default").
-const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
-
-/// The repo DIDs named in a comma- or whitespace-separated list (pure).
-fn parse_repo_dids(list: &str) -> Vec<Did> {
-    list.split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|did| !did.is_empty())
-        .map(|did| Did(did.to_string()))
-        .collect()
-}
-
-impl IndexerConfig {
-    /// Resolve config from env-var seams. `OPENLORE_INDEXER_INDEX_PATH` /
-    /// `OPENLORE_INDEXER_SOURCE_URL` / `OPENLORE_INDEXER_LISTEN_ADDR` override;
-    /// otherwise fall back to the `OPENLORE_HOME`-anchored default path + an empty
-    /// source + an ephemeral localhost listen address.
-    fn from_env() -> Self {
-        let index_path = std::env::var("OPENLORE_INDEXER_INDEX_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_index_path());
-        let source_url = std::env::var("OPENLORE_INDEXER_SOURCE_URL").unwrap_or_default();
-        let listen_addr = std::env::var("OPENLORE_INDEXER_LISTEN_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1:0".to_string());
-        let repo_dids =
-            parse_repo_dids(&std::env::var("OPENLORE_INDEXER_REPO_DIDS").unwrap_or_default());
-        let plc_endpoint = std::env::var("OPENLORE_INDEXER_PLC_ENDPOINT")
-            .unwrap_or_else(|_| DEFAULT_PLC_ENDPOINT.to_string());
-        Self {
-            index_path,
-            source_url,
-            listen_addr,
-            repo_dids,
-            plc_endpoint,
-        }
-    }
-}
-
-/// The `OPENLORE_HOME`-anchored default index path:
-/// `<home>/.local/share/openlore-indexer/index.duckdb`.
-fn default_index_path() -> PathBuf {
-    let home = std::env::var("OPENLORE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    home.join(".local")
-        .join("share")
-        .join("openlore-indexer")
-        .join("index.duckdb")
-}
-
 impl IndexerWiring {
     /// Construct the production wiring from the indexer's OWN config (env-seam now;
     /// `config.toml` later). NONE of the wired adapters can sign/publish or touch
@@ -150,14 +91,19 @@ impl IndexerWiring {
     /// is the ABSENCE of the signing identity / local store from this dep graph
     /// (`xtask check-arch`'s `indexer_holds_no_signing_or_local_store` rule).
     pub fn production() -> anyhow::Result<Self> {
-        let cfg = IndexerConfig::from_env();
+        let cfg = parse_config(|name| std::env::var(name).ok());
+        let fallback_base = cfg
+            .fallback
+            .as_ref()
+            .map(FallbackUrl::as_str)
+            .unwrap_or_default();
 
         let clock = SystemClockAdapter::new();
         // SEPARATE index.duckdb (ADR-023).
         let index_store = IndexStoreAdapter::open(&cfg.index_path)
             .map_err(|err| anyhow::anyhow!("open index store: {err}"))?;
         // Read-only bounded PULL (ADR-024).
-        let ingest_source = AtProtoIngestAdapter::new(&cfg.source_url);
+        let ingest_source = AtProtoIngestAdapter::new(fallback_base);
         // VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
         let identity_resolve = AtProtoDidAdapter::resolve_only();
         // The query server is bound only for `serve` (Phase 04); the `ingest`
@@ -168,13 +114,13 @@ impl IndexerWiring {
         Ok(Self {
             index_store: Box::new(index_store),
             ingest_source: Box::new(ingest_source),
-            repo_listing: Box::new(AtProtoIngestAdapter::new(&cfg.source_url)),
+            repo_listing: Box::new(AtProtoIngestAdapter::new(fallback_base)),
             pds_lookup: Box::new(IdentityLookup::new(&cfg.plc_endpoint, &cfg.plc_endpoint)),
             repo_dids: cfg.repo_dids,
             identity_resolve: Box::new(identity_resolve),
             query_server,
             clock: Box::new(clock),
-            source_url: cfg.source_url,
+            fallback: cfg.fallback,
             index_path: cfg.index_path,
             listen_addr: cfg.listen_addr,
         })
@@ -429,21 +375,23 @@ fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
     }
 }
 
-/// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024).
+/// `openlore-indexer ingest` — a one-shot bounded PULL pass (ADR-024, ADR-077).
 ///
-/// For each configured repo DID (DWD-9): `listRecords` with `repo=<DID>`,
-/// every cursor followed within the page bound → decode each of that repo's
-/// records → resolve the author key for an app-signed record → the PURE
-/// `appview_domain::ingest_repo_record` gate (app-signed records go through
-/// the unchanged verify-before-index gate, WD-104; self-attested ones through
-/// the ADR-071 verdict, whose origin is the listing's base URL compared with
-/// the PDS freshly resolved for the DID) → on `Index` upsert the attributed
-/// row; on `Reject` count the reason (a refused provenance is reported).
+/// Fetch phase, per configured repo DID (DWD-9): resolve the DID's document
+/// afresh (never cached across passes) → the PURE `plan_listing` decides the
+/// listing source (its own PDS, else the fallback, else skip) → `listRecords`
+/// with `repo=<DID>`, every cursor followed within the page bound.
 ///
-/// Emits `indexer.ingest.verified` (count) + `indexer.ingest.rejected` (count)
-/// as structured stdout events (the DevOps observability contract — structural
-/// counts + DIDs only, NO claim-content telemetry, WD-105).
+/// Gate phase, in configured order: the PURE `records_of` keeps the repo's own
+/// records → `origin_of` the listing source → resolve the author key for an
+/// app-signed record → the PURE `ingest_repo_record` gate → on `Index` upsert
+/// the attributed row; on `Reject` count the reason.
+///
+/// Emits `indexer.ingest.verified`, `indexer.ingest.rejected` and, last,
+/// `indexer.ingest.pass_summary` on stdout (structural counts + DIDs only, NO
+/// claim-content telemetry, WD-105).
 fn ingest(wiring: &IndexerWiring) -> i32 {
+    let started = Instant::now();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -455,89 +403,127 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
-    let mut tally = IngestTally::default();
-    for repo_did in &wiring.repo_dids {
-        // Bounded, cursor-paged PULL of ONE repo (read-only, ADR-024).
-        let listing = match runtime.block_on(
-            wiring
-                .repo_listing
-                .list_repo_claims(&wiring.source_url, &repo_did.0),
-        ) {
-            Ok(listing) => listing,
-            Err(err) => {
-                eprintln!("openlore-indexer: listing {} failed: {err}", repo_did.0);
-                return 2;
-            }
-        };
-        let records = decoded_records_of(repo_did, &listing.records);
-        let origin = origin_for(wiring, &runtime, repo_did, &listing.fetched_from, &records);
+    let fetches = match wiring
+        .repo_dids
+        .iter()
+        .map(|repo_did| fetch_repo(wiring, &runtime, repo_did))
+        .collect::<Result<Vec<DidFetch>, String>>()
+    {
+        Ok(fetches) => fetches,
+        Err(err) => {
+            eprintln!("openlore-indexer: {err}");
+            return 2;
+        }
+    };
 
-        for (rkey, decoded) in records {
-            let Ok(record) = decoded else {
-                tally.reject(RejectReason::SchemaUnknown);
-                continue;
-            };
-            let key = author_key(wiring, &runtime, &record);
-            match ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref()) {
-                IngestOutcome::Index(claim) => {
-                    if let Err(err) = wiring.index_store.upsert(&claim) {
-                        eprintln!("openlore-indexer: index upsert failed: {err}");
-                        return 2;
-                    }
-                    tally.verified += 1;
-                }
-                IngestOutcome::Reject(reason) => {
-                    if let RejectReason::Provenance(rejection) = reason {
-                        eprintln!(
-                            "openlore-indexer: refused at://{}/org.openlore.claim/{rkey}: {rejection}",
-                            repo_did.0
-                        );
-                    }
-                    tally.reject(reason);
-                }
-            }
+    let mut tally = IngestTally::default();
+    for fetch in &fetches {
+        if let Err(err) = gate_fetch(wiring, &runtime, fetch, &mut tally) {
+            eprintln!("openlore-indexer: index upsert failed: {err}");
+            return 2;
         }
     }
 
     tally.emit();
+    emit_pass_summary(&summarize(&fetches), started);
     0
 }
 
-/// The records a repo listing holds for `repo_did`, each with its rkey and
-/// decoded through the ONE shared decoder (pure). A listing answers for one
-/// repo; anything it returns from another repo is not this repo's record.
-fn decoded_records_of(
-    repo_did: &Did,
-    listed: &[RepoRecord],
-) -> Vec<(String, Result<ClaimRecord, String>)> {
-    listed
-        .iter()
-        .filter(|record| record.repo_did == repo_did.0)
-        .map(|record| (record.rkey.clone(), decode_claim_record(&record.value, "")))
-        .collect()
-}
-
-/// Where a repo's records were read from (ADR-071): the author's own PDS only
-/// when the listing's base URL is the PDS freshly resolved from the DID's
-/// document. Only self-attested records depend on it, so a listing without
-/// one never triggers a DID lookup; a failed lookup is never the author's PDS.
-fn origin_for(
+/// One repo DID's fetch: resolve its PDS, plan where to list it, list it.
+/// A listing failure is still fatal to the pass (per-DID isolation is ADR-078).
+fn fetch_repo(
     wiring: &IndexerWiring,
     runtime: &tokio::runtime::Runtime,
     repo_did: &Did,
-    fetched_from: &str,
-    records: &[(String, Result<ClaimRecord, String>)],
-) -> RecordOrigin {
-    let holds_self_attested = records
-        .iter()
-        .any(|(_, record)| matches!(record, Ok(ClaimRecord::SelfAttested(_))));
-    if !holds_self_attested {
-        return RecordOrigin::Relay;
+) -> Result<DidFetch, String> {
+    let resolution = runtime
+        .block_on(wiring.pds_lookup.resolve_pds(&repo_did.0))
+        .map_err(resolution_failure_of);
+    match plan_listing(resolution, wiring.fallback.as_ref()) {
+        ListingPlan::List(source) => runtime
+            .block_on(
+                wiring
+                    .repo_listing
+                    .list_repo_claims(source.base(), &repo_did.0),
+            )
+            .map(|listing| DidFetch::Read {
+                did: repo_did.clone(),
+                source,
+                listing,
+            })
+            .map_err(|err| format!("listing {} failed: {err}", repo_did.0)),
+        ListingPlan::Skip(reason) => Ok(DidFetch::Skipped {
+            did: repo_did.clone(),
+            reason,
+        }),
     }
-    runtime
-        .block_on(wiring.pds_lookup.resolve_did(&repo_did.0))
-        .map(|identity| RecordOrigin::of(fetched_from, &identity.pds_endpoint))
-        .unwrap_or(RecordOrigin::Relay)
+}
+
+/// Why a DID's PDS could not be resolved, as the pure planner sees it.
+fn resolution_failure_of(error: IdentityLookupError) -> ResolutionFailure {
+    match error {
+        IdentityLookupError::NotFound => ResolutionFailure::NotFound,
+        IdentityLookupError::Unavailable { .. } => ResolutionFailure::Unavailable,
+    }
+}
+
+/// Run one fetched repo's records through the verify/provenance gate and
+/// upsert the admitted ones. `Err` only for a store failure (fatal, exit 2).
+fn gate_fetch(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    fetch: &DidFetch,
+    tally: &mut IngestTally,
+) -> Result<(), String> {
+    let DidFetch::Read {
+        did: repo_did,
+        source,
+        listing,
+    } = fetch
+    else {
+        return Ok(());
+    };
+    let origin = origin_of(source, &listing.fetched_from);
+    for (rkey, decoded) in records_of(repo_did, &listing.records) {
+        let Ok(record) = decoded else {
+            tally.reject(RejectReason::SchemaUnknown);
+            continue;
+        };
+        let key = author_key(wiring, runtime, &record);
+        match ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref()) {
+            IngestOutcome::Index(claim) => {
+                wiring
+                    .index_store
+                    .upsert(&claim)
+                    .map_err(|err| err.to_string())?;
+                tally.verified += 1;
+            }
+            IngestOutcome::Reject(reason) => {
+                if let RejectReason::Provenance(rejection) = &reason {
+                    eprintln!(
+                        "openlore-indexer: refused at://{}/org.openlore.claim/{rkey}: {rejection}",
+                        repo_did.0
+                    );
+                }
+                tally.reject(reason);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Emit `indexer.ingest.pass_summary` — the pass's LAST stdout event.
+fn emit_pass_summary(summary: &PassSummary, started: Instant) {
+    let event = serde_json::json!({
+        "event": "indexer.ingest.pass_summary",
+        "configured": summary.configured,
+        "own_pds": summary.own_pds,
+        "fallback": summary.fallback,
+        "skipped": summary.skipped,
+        "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "exit_code": 0,
+    });
+    println!("{event}");
 }
 
 /// The resolved verification key of an app-signed record's author (ADR-026
