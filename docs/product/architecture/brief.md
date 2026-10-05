@@ -70,6 +70,34 @@ reports 21).**
 
 Shipped slice extensions:
 
+- **indexer-per-did-pds-fetch: DESIGN 2026-10-05. IN-PLACE EXTENSION of the indexer root.
+  ZERO new crates, ZERO schema change, ZERO new crates in `Cargo.lock`.** Every pass resolves
+  each repo DID to its own `#atproto_pds` and lists it there, so self-attested claims from any
+  author's PDS reach `openlore search`.
+  - **ADR-077 (per-DID source)**: `IdentityLookupPort::resolve_pds` (a default method; the
+    document-only override in `IdentityLookup`; `did:plc` + `did:web`). The pure
+    `appview_domain::ingest_pass` has `ListingSource = OwnPds | Fallback`. Only `OwnPds` on
+    exact match is `AuthorPds`. `OPENLORE_INDEXER_SOURCE_URL` is now an optional fallback that is
+    relay origin **by type**. There is no startup network probe. A pure
+    `origin_classification_probe` is added. Supersedes ADR-024 source discovery and ADR-071 §4's
+    indexer bullet.
+  - **ADR-078 (isolation and bounds)**: one DID = one failure unit
+    (`did_unresolvable | pds_unreachable | pds_timeout | listing_failed | pds_address_refused`).
+    Exit 0 when at least one DID was listed, **3 when every configured DID was skipped** (after
+    `pass_summary`), and 2 for config, probe or upsert failure. `futures-util` `buffered(4)`, a
+    30 s per-DID deadline (env-tunable; defaults confirmed). Events `source_skipped`,
+    `source_fallback`, `pass_summary`, `config.loaded`.
+  - **SSRF guard (ADR-077 §4)**: https only. Loopback, private, link-local and unique-local
+    addresses are refused after DNS by a guarded `reqwest` resolver, which connects to the
+    checked IP. No redirects. The TEST-ONLY `OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP` is refused in
+    release builds.
+  - **ADR-079 (wire provenance)**: optional `SearchResultDto.provenance`. Absent means
+    app-signed. An unknown value hides the row. The CLI shows `[verified] [self-attested]`.
+  - `xtask` deltas: `indexer_origin_only_via_listing_source` (token ban on `RecordOrigin::of` /
+    `::AuthorPds` in the indexer root) and `indexer_guarded_clients_only` (the indexer wires
+    only the `::guarded` adapter constructors).
+  - See `docs/feature/indexer-per-did-pds-fetch/design/`.
+
 - **bluesky-claim-review-app: IMPLEMENTED (designed and delivered 2026-10-04; not yet deployed). ADDITIVE: +4 crates (25 production / 27
   members); a THIRD composition root; a second provenance mode across every reader.** This is a
   hosted web app at `https://app.openlore.jeffbailey.us`. A Bluesky user signs in with ATProto
@@ -733,6 +761,9 @@ that generalizes it.
   `crates/claim-domain` (ADR-026). base58btc is a small pure decode (a `bs58`-style
   dependency or hand-rolled inline, Q-DELIVER-AV-8); license-clean (MIT/Apache-2.0)
   and within the pure-core allowlist (no I/O), like slice-02/03's pure deps.
+- `futures-util` (indexer-per-did-pds-fetch, ADR-078): a direct dependency of
+  `openlore-indexer` only, for `StreamExt::buffered` bounded fan-out. It was already transitive
+  in `Cargo.lock` (0.3.x, MIT OR Apache-2.0), so the tree and `deny.toml` are unchanged.
 
 ## Release pipeline (deployment topology)
 

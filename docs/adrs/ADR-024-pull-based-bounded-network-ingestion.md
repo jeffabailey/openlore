@@ -1,6 +1,9 @@
 # ADR-024: Pull-Based Bounded Network Ingestion — the ADR-016 Firehose Re-Evaluation (Pull, not Firehose, for slice-05)
 
-- **Status**: Proposed
+- **Status**: Proposed. **Partly superseded (2026-10-05)**: §"Bounded source-discovery strategy"
+  and §"Earned Trust" item 1 are superseded by ADR-077. Source discovery is now per-DID PDS
+  resolution plus an optional relay-origin fallback, and there is no startup refusal on source
+  reachability. The per-source fault-isolation row is realized and bounded by ADR-078.
 - **Date**: 2026-05-28
 - **Deciders**: Morgan (nw-solution-architect), per WD-108 / OD-AV-4 for openlore-appview-search (slice-05)
 - **Feature**: openlore-appview-search (slice-05)

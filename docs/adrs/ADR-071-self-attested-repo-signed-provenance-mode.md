@@ -1,6 +1,10 @@
 # ADR-071: Self-Attested (Repo-Signed) Provenance as a Second Verification Mode
 
-- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04).
+  **Amended (2026-10-05)**: the indexer bullet of Decision 4 is superseded by ADR-077. The
+  indexer now resolves and lists each repo DID at its own PDS, and its operator-configured URL
+  is a fallback that is relay origin by type. The rule itself (computed, exact match, relay
+  fails closed) is unchanged. Decision 5's search DTO field is realized by ADR-079.
 - **Date**: 2026-10-04
 - **Deciders**: Jeff Bailey (D-5, 2026-10-03), Morgan (nw-solution-architect)
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves OD-BRA-1
