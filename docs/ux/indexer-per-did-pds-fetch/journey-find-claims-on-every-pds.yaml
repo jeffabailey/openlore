@@ -1,0 +1,86 @@
+journey:
+  id: find-claims-on-every-pds
+  feature: indexer-per-did-pds-fetch
+  jobs: [J-005, J-009]
+  actors: [Jeff (operator), Maria (searcher), Priya Raman (author, bsky.social), Dmitri Volkov (author, self-hosted)]
+  emotional_arc: {start: "Maria: wary (only some authors appear)", middle: "Jeff: in control (every skip explained)", end: "Maria: reassured (new authors, honest labels)"}
+
+  steps:
+    - id: S1
+      name: Operator configures repo DIDs and optional fallback
+      actor: Jeff
+      artifacts_in: [repo_dids, fallback_source_url]
+      gherkin: |
+        Scenario: A malformed repo DID is explained at startup
+          Given Jeff sets OPENLORE_INDEXER_REPO_DIDS to "did:plc:priyaraman7x2k,priya"
+          When Jeff starts openlore-indexer ingest
+          Then the indexer refuses to start
+          And the message names OPENLORE_INDEXER_REPO_DIDS and the entry "priya"
+      stories: [US-IPF-004]
+
+    - id: S2
+      name: Each DID is resolved to its own PDS
+      actor: indexer
+      artifacts_in: [repo_dids, plc_endpoint]
+      artifacts_out: [resolved_pds]
+      gherkin: |
+        Scenario: Authors on different PDSes are each read from their own PDS
+          Given Priya's DID document names https://morel.us-east.host.bsky.network
+          And Dmitri's DID document names https://pds.volkov.dev
+          When one ingest pass runs
+          Then Priya's records are read from morel.us-east.host.bsky.network
+          And Dmitri's records are read from pds.volkov.dev
+      error_paths: [E1 unresolvable, E2 fallback, E4 moved]
+      stories: [US-IPF-001, US-IPF-002, US-IPF-003]
+
+    - id: S3
+      name: Repo is listed on that PDS with cursor paging
+      actor: indexer
+      artifacts_in: [resolved_pds, repo_did, page_bound, max_concurrent_fetches]
+      artifacts_out: [fetched_from, repo_records]
+      error_paths: [E3 pds down/timeout, E5 wrong repo]
+      stories: [US-IPF-001, US-IPF-002]
+
+    - id: S4
+      name: ADR-071 verdict per record (unchanged)
+      actor: indexer
+      artifacts_in: [fetched_from, resolved_pds, repo_records]
+      artifacts_out: [record_origin, provenance]
+      gherkin: |
+        Scenario: Self-attested claims read through the fallback stay refused
+          Given did:plc:ghost0000 cannot be resolved
+          And the fallback source serves one self-attested claim for it
+          When one ingest pass runs
+          Then that claim is refused for provenance
+          And it does not appear in search
+      stories: [US-IPF-001, US-IPF-003]
+
+    - id: S5
+      name: Operator reads the pass outcome
+      actor: Jeff
+      artifacts_in: [skip_reason, source_counts]
+      gherkin: |
+        Scenario: One PDS being down does not hide the others
+          Given pds.volkov.dev returns 502
+          When one ingest pass runs
+          Then Priya's and Jeff's claims are indexed
+          And Jeff sees did:plc:dvolkov3m9q skipped with reason pds_unreachable
+          And the pass completes successfully
+      stories: [US-IPF-002]
+
+    - id: S6
+      name: Searcher finds and recognizes self-attested claims
+      actor: Maria
+      artifacts_in: [provenance]
+      gherkin: |
+        Scenario: Maria finds Priya's self-attested claim, labeled as such
+          Given Priya's self-attested claim on github:priyaraman/cargo-pin is indexed
+          When Maria runs openlore search --object org.openlore.philosophy.reproducible-builds
+          Then she sees Priya's claim marked [self-attested]
+      stories: [US-IPF-001, US-IPF-005]
+
+  integration_checkpoints:
+    - IC-1: fetched_from used for the verdict is the URL the listing was actually read from (never assumed)
+    - IC-2: resolved_pds is resolved in the same pass as the listing
+    - IC-3: provenance written by ingest equals provenance shown by search (index -> DTO -> CLI)
+    - IC-4: a skipped DID never removes rows from the index

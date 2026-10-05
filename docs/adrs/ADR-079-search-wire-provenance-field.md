@@ -1,6 +1,6 @@
 # ADR-079: Provenance on the Search Wire (`SearchResultDto.provenance`) and CLI Rendering
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05) — implemented; see `docs/evolution/indexer-per-did-pds-fetch-evolution.md` (proposed 2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: Morgan (nw-solution-architect)
 - **Feature**: indexer-per-did-pds-fetch (DESIGN), US-IPF-005

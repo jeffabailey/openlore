@@ -150,6 +150,8 @@ Each step also has a `chore: execution log` commit.
   claims stored on other PDSes (for example bsky.social) therefore look like they came from a
   relay and are refused under ADR-071. Fetching from each DID's resolved PDS would be a
   separate follow-up feature.
+  **Resolved by indexer-per-did-pds-fetch (2026-10-05)**; see
+  [`indexer-per-did-pds-fetch-evolution.md`](indexer-per-did-pds-fetch-evolution.md).
 - **Legacy data key.** A 64-hex `data-key` is still accepted as the key with kid `legacy`.
   Decide whether to require the JSON key set and drop this path.
 - **Not built:** the 5/day share budget, and automatic resume of interrupted scans. A manual

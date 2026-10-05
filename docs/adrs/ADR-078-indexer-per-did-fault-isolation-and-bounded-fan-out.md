@@ -1,6 +1,6 @@
 # ADR-078: Per-DID Fault Isolation, Bounded Fan-Out and Pass Observability for the Indexer Ingest Pass
 
-- **Status**: Proposed. User decisions (2026-10-05): defaults confirmed (cap 4, 30 s); total outage exits 3.
+- **Status**: Accepted (2026-10-05) — implemented; see `docs/evolution/indexer-per-did-pds-fetch-evolution.md` (proposed 2026-10-05). User decisions (2026-10-05): defaults confirmed (cap 4, 30 s); total outage exits 3.
 - **Date**: 2026-10-05
 - **Deciders**: Morgan (nw-solution-architect)
 - **Feature**: indexer-per-did-pds-fetch (DESIGN)

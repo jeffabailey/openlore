@@ -1,6 +1,6 @@
 # ADR-077: Indexer Reads Each Repo DID From Its Freshly Resolved PDS; the Source URL Becomes a Relay-Origin Fallback
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05) — implemented; see `docs/evolution/indexer-per-did-pds-fetch-evolution.md` (proposed 2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: Morgan (nw-solution-architect); user decision WD-IPF-2 (wizard)
 - **Feature**: indexer-per-did-pds-fetch (DESIGN)

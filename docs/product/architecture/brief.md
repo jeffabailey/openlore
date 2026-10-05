@@ -70,7 +70,7 @@ reports 21).**
 
 Shipped slice extensions:
 
-- **indexer-per-did-pds-fetch: DESIGN 2026-10-05. IN-PLACE EXTENSION of the indexer root.
+- **indexer-per-did-pds-fetch: IMPLEMENTED (designed and delivered 2026-10-05). IN-PLACE EXTENSION of the indexer root.
   ZERO new crates, ZERO schema change, ZERO new crates in `Cargo.lock`.** Every pass resolves
   each repo DID to its own `#atproto_pds` and lists it there, so self-attested claims from any
   author's PDS reach `openlore search`.
@@ -96,7 +96,9 @@ Shipped slice extensions:
   - `xtask` deltas: `indexer_origin_only_via_listing_source` (token ban on `RecordOrigin::of` /
     `::AuthorPds` in the indexer root) and `indexer_guarded_clients_only` (the indexer wires
     only the `::guarded` adapter constructors).
-  - See `docs/feature/indexer-per-did-pds-fetch/design/`.
+  - ADR-077..079 accepted. See `docs/architecture/indexer-per-did-pds-fetch/`
+    (architecture-design.md, component-boundaries.md, data-models.md, technology-stack.md).
+    History and open follow-ups: `docs/evolution/indexer-per-did-pds-fetch-evolution.md`.
 
 - **bluesky-claim-review-app: IMPLEMENTED (designed and delivered 2026-10-04; not yet deployed). ADDITIVE: +4 crates (25 production / 27
   members); a THIRD composition root; a second provenance mode across every reader.** This is a
@@ -130,7 +132,8 @@ Shipped slice extensions:
     create-only scan, the owner-scoped SQL scan, and the `review-domain` pure-core arm.
   - See `docs/architecture/bluesky-claim-review-app/` (architecture-design.md with C4
     L1/L2/L3, component-boundaries.md, data-models.md, technology-stack.md). History and open
-    follow-ups (go-live operator steps; the indexer reads all DIDs from one source URL):
+    follow-ups (go-live operator steps; the single-source indexer follow-up was resolved by
+    indexer-per-did-pds-fetch):
     `docs/evolution/bluesky-claim-review-app-evolution.md`.
 
 - **contributor-philosophy-inference: DESIGN 2026-09-27 — IN-PLACE EXTENSION, ZERO new crates,
