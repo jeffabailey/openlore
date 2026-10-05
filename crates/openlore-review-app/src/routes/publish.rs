@@ -8,6 +8,7 @@
 
 use hyper::StatusCode;
 use ports::{PlanKind, SuggestionState, TakenPublishPlan};
+use review_domain::kpi::approval_was_edited;
 use review_domain::plans::{plan_freshness, restore_plan, PlanFreshness, PublishPlan};
 use review_domain::views::{self, PublishRetry};
 
@@ -18,6 +19,7 @@ use crate::routes::review::{not_found, owner_can_publish};
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing, SESSION_COOKIE,
 };
+use crate::wiring::{observe, LogEvent};
 
 /// Confirm "Publish to my repo" (or "Retry").
 pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
@@ -59,12 +61,22 @@ pub(crate) async fn confirm_publish(app: &App, request: &PageRequest) -> Reply {
 async fn publish(app: &App, plan: &PublishPlan, expires_at: i64, csrf_token: &str) -> Reply {
     match execute_publish(app.repo_write.as_ref(), app.repo_read.as_ref(), plan).await {
         Ok(at_uri) => {
-            let _ = app.review_write.change_state(
+            let offered = app
+                .review_read
+                .pending_suggestions(plan.owner_did())
+                .unwrap_or_default()
+                .into_iter()
+                .find(|suggestion| &suggestion.key == plan.key());
+            let edited = approval_was_edited(plan.claim(), offered.as_ref());
+            let moved = app.review_write.change_state(
                 plan.owner_did(),
                 plan.key(),
                 SuggestionState::Pending,
                 SuggestionState::Published,
             );
+            if matches!(moved, Ok(true)) {
+                observe(app, LogEvent::SuggestionApproved { edited });
+            }
             Reply::Page {
                 status: StatusCode::OK,
                 html: views::published_page(&at_uri),

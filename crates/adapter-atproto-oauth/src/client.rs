@@ -23,7 +23,7 @@ use atrium_oauth::{
 };
 use ports::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, PdsCallback,
-    ResolvedIdentity, SecretStorePort,
+    ResolvedIdentity, RevokeOutcome, SecretStorePort,
 };
 use serde_json::{json, Value};
 
@@ -298,6 +298,26 @@ impl Handshake {
         let _ = self.secrets.remove_oauth_session(owner_did);
     }
 
+    /// Revoke `owner_did`'s grant at her PDS, then ALWAYS delete her
+    /// session (SPIKE finding 1: atrium 0.1.7 expects 204, so a correct
+    /// RFC 7009 server's 200 comes back as an error and atrium leaves the
+    /// session stored). Nothing is cached in-process: atrium restores a
+    /// session from the store on every use, so once the row is gone the
+    /// app can never send the access token her PDS already issued
+    /// (SPIKE finding 2).
+    pub(crate) async fn revoke(&self, owner_did: &str) -> RevokeOutcome {
+        let held = matches!(self.secrets.oauth_session(owner_did), Ok(Some(_)));
+        let outcome = match (held, owner_did.parse::<Did>()) {
+            (true, Ok(did)) => {
+                let answer = self.client.revoke(&did).await;
+                revocation_outcome(answer.map_err(|e| e.to_string()))
+            }
+            _ => RevokeOutcome::NothingHeld,
+        };
+        self.forget_session(owner_did);
+        outcome
+    }
+
     /// SPIKE finding 4: the PDS refused the access token before the expiry
     /// the session recorded. Drop that recorded expiry so the next restore
     /// refreshes (atrium only refreshes a session it believes expired),
@@ -311,12 +331,45 @@ impl Handshake {
     }
 }
 
+/// What a revocation answer means (pure). atrium reports a status it did
+/// not expect as `http status: <code> <reason>`; 200 is the RFC 7009
+/// success and 204 atrium's own, so both count as revoked.
+pub(crate) fn revocation_outcome(answer: Result<(), String>) -> RevokeOutcome {
+    let accepted = |message: &str| {
+        ["http status: 200", "http status: 204"]
+            .iter()
+            .any(|ok| message.starts_with(ok))
+    };
+    match answer {
+        Ok(()) => RevokeOutcome::Revoked,
+        Err(message) if accepted(&message) => RevokeOutcome::Revoked,
+        Err(_) => RevokeOutcome::NotConfirmed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
 
     proptest! {
+        /// Universe: every HTTP status atrium can report for a revocation.
+        /// Exactly 200 and 204 are success; everything else (and any
+        /// transport failure) is unconfirmed — never a reason to keep tokens.
+        #[test]
+        fn only_200_or_204_counts_as_revoked(status in 100u16..600, transport in ".{0,30}") {
+            let reported = format!("http status: {status} Some Reason");
+            let expected = if status == 200 || status == 204 {
+                RevokeOutcome::Revoked
+            } else {
+                RevokeOutcome::NotConfirmed
+            };
+            prop_assert_eq!(revocation_outcome(Err(reported)), expected);
+            prop_assume!(!transport.starts_with("http status: 20"));
+            prop_assert_eq!(revocation_outcome(Err(transport)), RevokeOutcome::NotConfirmed);
+            prop_assert_eq!(revocation_outcome(Ok(())), RevokeOutcome::Revoked);
+        }
+
         /// Universe: scope strings over atproto scope tokens. The scopes the
         /// client asks for join back to exactly the configured string.
         #[test]

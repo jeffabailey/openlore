@@ -19,6 +19,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod admin;
 mod config;
 mod http;
 mod limiter;
@@ -29,6 +30,7 @@ mod routes {
     pub(crate) mod retract;
     pub(crate) mod review;
     pub(crate) mod scan;
+    pub(crate) mod settings;
     pub(crate) mod share;
     pub(crate) mod signin;
 }

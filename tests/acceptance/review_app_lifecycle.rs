@@ -393,7 +393,6 @@ fn retracting_the_same_claim_twice_adds_one_retraction() {
 ///   And on her next sign-in she has no pending suggestions, no declines and no GitHub link
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-012 forget me)"]
 fn forget_me_removes_everything_the_app_holds_and_nothing_in_her_pds() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);
@@ -431,7 +430,6 @@ fn forget_me_removes_everything_the_app_holds_and_nothing_in_her_pds() {
 ///   Then nothing is removed and she is still signed in
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (US-BRA-012 cancel)"]
 fn cancelling_forget_me_keeps_everything() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -453,7 +451,6 @@ fn cancelling_forget_me_keeps_everything() {
 ///   And the app keeps no tokens: signing in again needs a fresh authorization
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (SPIKE-2 finding 1: revoke 200 tolerated, tokens deleted)"]
 fn disconnecting_revokes_her_grant_and_an_answer_of_200_counts_as_done() {
     let world = ReviewWorld::new();
     let mut browser = given_signed_in(&world, Persona::Priya);
@@ -486,7 +483,6 @@ fn disconnecting_revokes_her_grant_and_an_answer_of_200_counts_as_done() {
 ///   Then she is signed out and, on her next sign-in, the app holds nothing about her
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (revoke is best effort; purge always happens)"]
 fn forget_me_still_forgets_when_her_pds_cannot_be_reached_to_revoke() {
     let world = ReviewWorld::new();
     let mut browser = given_pending_suggestions(&world, Persona::Priya);
@@ -508,7 +504,6 @@ fn forget_me_still_forgets_when_her_pds_cannot_be_reached_to_revoke() {
 ///   And the app makes no further call to her PDS of any kind
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (SPIKE-2 finding 2: residual access-token window)"]
 fn after_forgetting_the_app_never_uses_the_access_her_pds_already_issued() {
     let world = ReviewWorld::new();
     let mut browser = given_published(&world, Persona::Priya, &[priya::TIDEPOOL_TEST_DRIVEN]);
@@ -540,7 +535,6 @@ fn after_forgetting_the_app_never_uses_the_access_her_pds_already_issued() {
 ///   And the public listener does not offer the admin routes
 /// ```
 #[test]
-#[ignore = "DELIVER R2: unskip one-at-a-time (operator purge via admin listener)"]
 fn the_operator_can_forget_a_person_on_request_without_their_session() {
     let world = ReviewWorld::new();
     let _browser = given_pending_suggestions(&world, Persona::Priya);

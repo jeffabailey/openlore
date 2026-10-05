@@ -24,7 +24,7 @@ use jose_jwk::{Class, Ec, EcCurves, Jwk, JwkSet, Key, Parameters};
 use p256::SecretKey;
 use ports::{
     AuthenticatedIdentity, BeginAuthorizationError, CompleteAuthorizationError, OAuthPort,
-    PdsCallback, ProbeOutcome, ResolvedIdentity, SecretStorePort,
+    PdsCallback, ProbeOutcome, ResolvedIdentity, RevokeOutcome, SecretStorePort,
 };
 
 pub use client::{OAuthSetupError, Upstreams};
@@ -213,6 +213,10 @@ impl OAuthPort for OAuthClientAdapter {
 
     fn forget_session(&self, owner_did: &str) {
         self.handshake.forget_session(owner_did);
+    }
+
+    async fn revoke_grant(&self, owner_did: &str) -> RevokeOutcome {
+        self.handshake.revoke(owner_did).await
     }
 }
 

@@ -201,7 +201,7 @@ pub(crate) struct RawSecrets {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Secrets {
     pub(crate) client_jwk: String,
-    pub(crate) data_key: [u8; 32],
+    pub(crate) data_key: DataKeyMaterial,
     pub(crate) github_token: GithubToken,
 }
 
@@ -219,15 +219,65 @@ pub(crate) fn parse_secrets(raw: RawSecrets) -> Result<Secrets, ConfigError> {
     required(raw.log_salt, "log-salt")?;
     Ok(Secrets {
         client_jwk,
-        data_key: parse_data_key(&data_key).ok_or(ConfigError::Invalid {
-            name: "data-key",
-            reason: "must be 64 hex characters (32 bytes)",
-        })?,
+        data_key: parse_data_key("data-key", &data_key)?,
         github_token: GithubToken(github_token),
     })
 }
 
-fn parse_data_key(hex: &str) -> Option<[u8; 32]> {
+/// A data key as configured: its key id and its 32 bytes (never printed).
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct DataKeyMaterial {
+    pub(crate) kid: Option<String>,
+    pub(crate) key: [u8; 32],
+}
+
+impl std::fmt::Debug for DataKeyMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DataKeyMaterial({:?}, <redacted>)", self.kid)
+    }
+}
+
+const DATA_KEY_SHAPE: &str =
+    "must be JSON {\"kid\":\"<id>\",\"key\":\"<base64 of 32 bytes>\"} (or legacy 64 hex characters)";
+
+/// Parse the `data-key` / `data-key-previous` secret (pure): the documented
+/// `{"kid","key"}` JSON (infrastructure-integration §5), or the legacy bare
+/// 64-hex key, which has no kid. Anything else refuses startup.
+pub(crate) fn parse_data_key(
+    name: &'static str,
+    text: &str,
+) -> Result<DataKeyMaterial, ConfigError> {
+    let invalid = ConfigError::Invalid {
+        name,
+        reason: DATA_KEY_SHAPE,
+    };
+    let text = text.trim();
+    if !text.starts_with('{') {
+        return parse_hex_key(text)
+            .map(|key| DataKeyMaterial { kid: None, key })
+            .ok_or(invalid);
+    }
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid.clone())?;
+    let kid = value["kid"].as_str().filter(|kid| {
+        !kid.is_empty() && kid.len() <= 32 && kid.bytes().all(|b| b.is_ascii_graphic())
+    });
+    let key = value["key"].as_str().and_then(|b64| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+    });
+    match (kid, key) {
+        (Some(kid), Some(key)) => Ok(DataKeyMaterial {
+            kid: Some(kid.to_string()),
+            key,
+        }),
+        _ => Err(invalid),
+    }
+}
+
+fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
     if hex.len() != 64 || !hex.is_ascii() {
         return None;
     }
@@ -284,6 +334,29 @@ mod tests {
     }
 
     proptest! {
+        /// Universe: data-key texts — the documented JSON with any kid and
+        /// key length, legacy hex, and noise. Exactly a printable kid with a
+        /// 32-byte base64 key (or 64 hex) is accepted, with its kid.
+        #[test]
+        fn a_data_key_parses_only_in_its_documented_shape(
+            kid in "[ -~]{0,40}", len in 0usize..48, byte in any::<u8>(), noise in ".{0,40}"
+        ) {
+            use base64::Engine as _;
+            let key = base64::engine::general_purpose::STANDARD.encode(vec![byte; len]);
+            let json = serde_json::json!({"kid": kid, "key": key}).to_string();
+            let good_kid = !kid.is_empty() && kid.len() <= 32 && kid.bytes().all(|b| b.is_ascii_graphic());
+            let parsed = parse_data_key("data-key", &json);
+            prop_assert_eq!(parsed.is_ok(), good_kid && len == 32);
+            if let Ok(material) = parsed {
+                prop_assert_eq!(material.kid, Some(kid));
+                prop_assert_eq!(material.key, [byte; 32]);
+            }
+            let hex: String = std::iter::repeat_n(format!("{byte:02x}"), 32).collect();
+            prop_assert_eq!(parse_data_key("data-key", &hex).map(|m| (m.kid, m.key)), Ok((None, [byte; 32])));
+            prop_assume!(!noise.trim().starts_with('{') && noise.trim().len() != 64);
+            prop_assert!(parse_data_key("data-key", &noise).is_err());
+        }
+
         /// Totality + transport invariant over the declared universe of
         /// environments: parsing never panics, and every accepted config
         /// speaks HTTPS unless a development build opted into loopback HTTP,

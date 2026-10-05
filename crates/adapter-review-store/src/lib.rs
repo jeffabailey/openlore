@@ -11,8 +11,10 @@
 
 mod expiry;
 mod github_links;
+mod kpi;
 mod plans;
 mod probe;
+mod purge;
 mod scan_runs;
 pub mod schema;
 mod secrets;
@@ -32,18 +34,101 @@ use schema::{schema_verdict, SchemaVerdict, SCHEMA_VERSION};
 /// Length of the XChaCha20 nonce prefixed to every sealed blob.
 const NONCE_LEN: usize = 24;
 
-/// The operator's 32-byte data key (SSM `data-key`).
-pub struct DataKey([u8; 32]);
+/// The operator's 32-byte data key and its key id (SSM `data-key`,
+/// `{"kid":"d1","key":"<base64>"}`). Every sealed blob is tagged with the
+/// kid that sealed it, so a rotation can find the rows still on an old key.
+pub struct DataKey {
+    kid: String,
+    key: [u8; 32],
+}
+
+/// The kid of a key given without one (legacy hex format).
+pub const LEGACY_KID: &str = "legacy";
+
+/// Key ids are short printable labels (they prefix every sealed blob).
+const MAX_KID_LEN: usize = 32;
 
 impl DataKey {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    /// A key named `kid`; `None` when the kid is empty, too long or not
+    /// printable ASCII.
+    pub fn new(kid: &str, key: [u8; 32]) -> Option<Self> {
+        let printable = kid.bytes().all(|b| b.is_ascii_graphic());
+        (!kid.is_empty() && kid.len() <= MAX_KID_LEN && printable).then(|| Self {
+            kid: kid.to_string(),
+            key,
+        })
+    }
+
+    /// A key without an operator kid (the legacy bare 64-hex `data-key`),
+    /// tagged `legacy` so a rotation can move its rows to a named key.
+    pub fn from_bytes(key: [u8; 32]) -> Self {
+        Self {
+            kid: LEGACY_KID.to_string(),
+            key,
+        }
     }
 
     /// A throwaway key (the image self-test).
     pub fn generate() -> Self {
-        Self(XChaCha20Poly1305::generate_key(&mut OsRng).into())
+        Self {
+            kid: "ephemeral".to_string(),
+            key: XChaCha20Poly1305::generate_key(&mut OsRng).into(),
+        }
     }
+
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+
+    fn cipher(&self) -> XChaCha20Poly1305 {
+        XChaCha20Poly1305::new(&self.key.into())
+    }
+}
+
+/// `kid_len ‖ kid ‖ nonce ‖ ciphertext` — split into the kid and the rest.
+pub(crate) fn split_kid(blob: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (&len, rest) = blob.split_first()?;
+    let len = usize::from(len);
+    (rest.len() >= len).then(|| rest.split_at(len))
+}
+
+/// Seal under `key`, bound to `aad`, tagged with the key's kid.
+pub(crate) fn seal_with(
+    key: &DataKey,
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, StoreError> {
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let sealed = key
+        .cipher()
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| StoreError::Seal)?;
+    let kid_len = u8::try_from(key.kid.len()).map_err(|_| StoreError::Seal)?;
+    Ok([
+        &[kid_len][..],
+        key.kid.as_bytes(),
+        nonce.as_slice(),
+        sealed.as_slice(),
+    ]
+    .concat())
+}
+
+/// Open a blob sealed by [`seal_with`] under the same key and `aad`.
+pub(crate) fn unseal_with(key: &DataKey, aad: &[u8], blob: &[u8]) -> Result<Vec<u8>, StoreError> {
+    let (kid, rest) = split_kid(blob).ok_or(StoreError::Seal)?;
+    if kid != key.kid.as_bytes() || rest.len() < NONCE_LEN {
+        return Err(StoreError::Seal);
+    }
+    let (nonce, sealed) = rest.split_at(NONCE_LEN);
+    key.cipher()
+        .decrypt(XNonce::from_slice(nonce), Payload { msg: sealed, aad })
+        .map_err(|_| StoreError::Seal)
 }
 
 /// Why the store could not be opened or used.
@@ -84,7 +169,7 @@ fn db_error(e: duckdb::Error) -> StoreError {
 /// The private store: one DuckDB connection plus the AEAD cipher.
 pub struct ReviewStore {
     conn: Mutex<Connection>,
-    cipher: XChaCha20Poly1305,
+    key: DataKey,
 }
 
 impl ReviewStore {
@@ -103,35 +188,22 @@ impl ReviewStore {
         migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
-            cipher: XChaCha20Poly1305::new(&key.0.into()),
+            key,
         })
     }
 
-    /// Seal `plaintext` bound to `aad`: `nonce ‖ ciphertext`.
+    /// Seal `plaintext` bound to `aad` under the active key.
     pub(crate) fn seal(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let sealed = self
-            .cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: plaintext,
-                    aad,
-                },
-            )
-            .map_err(|_| StoreError::Seal)?;
-        Ok([nonce.as_slice(), sealed.as_slice()].concat())
+        seal_with(&self.key, aad, plaintext)
     }
 
-    /// Open a blob sealed by [`ReviewStore::seal`] under the same `aad`.
+    /// Open a blob sealed under the active key with the same `aad`.
     pub(crate) fn unseal(&self, aad: &[u8], blob: &[u8]) -> Result<Vec<u8>, StoreError> {
-        if blob.len() < NONCE_LEN {
-            return Err(StoreError::Seal);
-        }
-        let (nonce, sealed) = blob.split_at(NONCE_LEN);
-        self.cipher
-            .decrypt(XNonce::from_slice(nonce), Payload { msg: sealed, aad })
-            .map_err(|_| StoreError::Seal)
+        unseal_with(&self.key, aad, blob)
+    }
+
+    pub(crate) fn active_key(&self) -> &DataKey {
+        &self.key
     }
 
     pub(crate) fn with_connection<T>(

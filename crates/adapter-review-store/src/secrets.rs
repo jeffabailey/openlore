@@ -5,7 +5,9 @@
 use duckdb::{params, OptionalExt};
 use ports::{ReviewStoreError, SecretStorePort};
 
-use crate::{expiry, ReviewStore, StoreError};
+use crate::{
+    db_error, expiry, seal_with, split_kid, unseal_with, DataKey, ReviewStore, StoreError,
+};
 
 const PUT_AUTH_REQUEST: &str = "INSERT INTO oauth_auth_requests
     (state, owner_did_expected, issuer, enc_blob, created_at, expires_at)
@@ -22,6 +24,91 @@ const PUT_OAUTH_SESSION: &str = "INSERT INTO oauth_sessions
         updated_at = excluded.updated_at";
 
 const READ_OAUTH_SESSION: &str = "SELECT enc_blob FROM oauth_sessions WHERE owner_did = ?";
+
+const AUTH_REQUEST_BLOBS: &str = "SELECT state, enc_blob FROM oauth_auth_requests";
+const RESEAL_AUTH_REQUEST: &str = "UPDATE oauth_auth_requests SET enc_blob = ? WHERE state = ?";
+const OAUTH_SESSION_BLOBS: &str = "SELECT owner_did, enc_blob FROM oauth_sessions";
+const RESEAL_OAUTH_SESSION: &str = "UPDATE oauth_sessions SET enc_blob = ? WHERE owner_did = ?";
+
+/// One table of sealed blobs: how to list them, re-store one, and the
+/// associated data of a row.
+struct SealedTable {
+    list: &'static str,
+    reseal: &'static str,
+    aad: fn(&str) -> Vec<u8>,
+}
+
+const SEALED_TABLES: [SealedTable; 2] = [
+    SealedTable {
+        list: AUTH_REQUEST_BLOBS,
+        reseal: RESEAL_AUTH_REQUEST,
+        aad: auth_request_aad,
+    },
+    SealedTable {
+        list: OAUTH_SESSION_BLOBS,
+        reseal: RESEAL_OAUTH_SESSION,
+        aad: oauth_session_aad,
+    },
+];
+
+fn sealed_rows(conn: &duckdb::Connection, sql: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+    let mut statement = conn.prepare(sql).map_err(db_error)?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<_, _>>().map_err(db_error)
+}
+
+fn sealed_under(blob: &[u8], kid: &str) -> bool {
+    split_kid(blob).is_some_and(|(tag, _)| tag == kid.as_bytes())
+}
+
+fn reseal_table(
+    conn: &duckdb::Connection,
+    table: &SealedTable,
+    previous: &DataKey,
+    active: &DataKey,
+) -> Result<usize, StoreError> {
+    let stale: Vec<(String, Vec<u8>)> = sealed_rows(conn, table.list)?
+        .into_iter()
+        .filter(|(_, blob)| sealed_under(blob, previous.kid()))
+        .collect();
+    for (key, blob) in &stale {
+        let aad = (table.aad)(key);
+        let resealed = seal_with(active, &aad, &unseal_with(previous, &aad, blob)?)?;
+        conn.execute(table.reseal, params![resealed, key])
+            .map_err(db_error)?;
+    }
+    Ok(stale.len())
+}
+
+impl ReviewStore {
+    /// Data-key rotation (infrastructure-integration §7.4): re-encrypt every
+    /// blob still sealed under `previous` with the active key, in one
+    /// transaction. Returns how many rows moved (`secrets.rekeyed{rows}`).
+    pub fn rekey(&self, previous: &DataKey) -> Result<usize, StoreError> {
+        let active = self.active_key();
+        if previous.kid() == active.kid() {
+            return Ok(0);
+        }
+        self.with_connection(|conn| {
+            conn.execute_batch("BEGIN TRANSACTION").map_err(db_error)?;
+            let moved = SEALED_TABLES.iter().try_fold(0, |n, table| {
+                Ok::<_, StoreError>(n + reseal_table(conn, table, previous, active)?)
+            });
+            match moved {
+                Ok(rows) => conn
+                    .execute_batch("COMMIT")
+                    .map_err(db_error)
+                    .map(|()| rows),
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
+        })
+    }
+}
 
 fn auth_request_aad(state: &str) -> Vec<u8> {
     format!("oauth_auth_requests:{state}").into_bytes()
@@ -132,6 +219,38 @@ mod tests {
     }
 
     proptest! {
+        /// Universe: every sealed blob of a store file. After a rotation, each
+        /// blob sealed under the previous key opens under the new one with
+        /// its plaintext unchanged, the count is exactly those rows, and a
+        /// second rekey moves nothing.
+        #[test]
+        fn a_rotation_re_encrypts_every_blob_on_the_previous_key(
+            sessions in prop::collection::vec(prop::collection::vec(any::<u8>(), 1..16), 0..4),
+            requests in prop::collection::vec(prop::collection::vec(any::<u8>(), 1..16), 0..4),
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("review-app.duckdb");
+            let old = || DataKey::new("d1", [7; 32]).unwrap();
+            {
+                let store = ReviewStore::open(&path, old()).unwrap();
+                for (i, blob) in sessions.iter().enumerate() {
+                    store.put_oauth_session(&format!("did:plc:{i}"), "iss", "atproto", blob).unwrap();
+                }
+                for (i, blob) in requests.iter().enumerate() {
+                    store.put_auth_request(&format!("state-{i}"), "iss", None, blob).unwrap();
+                }
+            }
+            let store = ReviewStore::open(&path, DataKey::new("d2", [9; 32]).unwrap()).unwrap();
+            prop_assert_eq!(store.rekey(&old()).unwrap(), sessions.len() + requests.len());
+            for (i, blob) in sessions.iter().enumerate() {
+                prop_assert_eq!(store.oauth_session(&format!("did:plc:{i}")).unwrap(), Some(blob.clone()));
+            }
+            for (i, blob) in requests.iter().enumerate() {
+                prop_assert_eq!(store.auth_request(&format!("state-{i}")).unwrap(), Some(blob.clone()));
+            }
+            prop_assert_eq!(store.rekey(&old()).unwrap(), 0);
+        }
+
         /// Universe: the oauth_auth_requests rows of a fresh store. A pending
         /// authorization opens only under its own state, and once removed it
         /// is gone (single use); other states are untouched.

@@ -19,14 +19,21 @@ use adapter_github::client::{
 };
 use adapter_github::GithubAdapter;
 use adapter_review_store::{DataKey, ReviewStore};
-use ports::{OAuthPort, ProbeOutcome, ReviewStorePort, ScanRunPort, ScanStatus, SecretStorePort};
+use ports::{
+    OAuthPort, ProbeOutcome, ReviewStorePort, RevokeOutcome, ScanRunPort, ScanStatus,
+    SecretStorePort,
+};
+use review_domain::kpi::{
+    approval_events, rollup_day, seconds_until_next_rollup, sign_in_refusal_event, sum_counters,
+    utc_day, KpiEvent,
+};
 use review_domain::signin::{permission_mode, SignInFailure};
 use scraper_domain::{load_mapping, SignalPredicateMapping, EMBEDDED_MAPPING_YAML};
 use serde_json::json;
 
 use crate::config::{
-    parse_config, parse_secrets, AppConfig, BuildProfile, GithubToken, RawSecrets,
-    DEFAULT_OAUTH_SCOPES,
+    parse_config, parse_data_key, parse_secrets, AppConfig, BuildProfile, DataKeyMaterial,
+    GithubToken, RawSecrets, DEFAULT_OAUTH_SCOPES,
 };
 use crate::http::{self, App, Surface};
 use crate::limiter::ScanLimiter;
@@ -95,6 +102,50 @@ pub(crate) enum LogEvent<'a> {
     /// An owner confirmed a retraction and it landed (KPI count; never which
     /// claim or whose).
     RetractPosted,
+    /// An owner's approval landed in her repo (KPI count; `edited` when she
+    /// changed it first; never which or whose).
+    SuggestionApproved {
+        edited: bool,
+    },
+    /// A person was forgotten (by herself or on request) and how the
+    /// revocation at her PDS ended.
+    Disconnect(RevokeOutcome),
+    /// The daily anonymous counters of `day`.
+    KpiRollup {
+        day: String,
+        counters: std::collections::BTreeMap<&'static str, i64>,
+    },
+    /// A data-key rotation re-encrypted `rows` sealed blobs at startup.
+    SecretsRekeyed(usize),
+}
+
+/// The counters one event adds (pure). Only the closed catalogue counts.
+fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
+    match event {
+        LogEvent::SignInStarted => vec![KpiEvent::SignInStarted],
+        LogEvent::SignInCompleted => vec![KpiEvent::SignInCompleted],
+        LogEvent::SignInRefused(failure) => vec![sign_in_refusal_event(*failure)],
+        LogEvent::GithubVerified => vec![KpiEvent::GithubVerifyOk],
+        LogEvent::GithubVerifyRefused(_) => vec![KpiEvent::GithubVerifyFail],
+        LogEvent::ScanFinished(ScanStatus::Completed) => vec![KpiEvent::ScanCompleted],
+        LogEvent::SuggestionDeclined => vec![KpiEvent::SuggestionDeclined],
+        LogEvent::SuggestionApproved { edited } => approval_events(*edited),
+        LogEvent::SharePosted => vec![KpiEvent::SharePosted],
+        LogEvent::RetractPosted => vec![KpiEvent::RetractPosted],
+        LogEvent::Disconnect(_) => vec![KpiEvent::Disconnect],
+        _ => Vec::new(),
+    }
+}
+
+/// Log `event` and add its anonymous counters for today (UTC). A counter
+/// that cannot be stored never fails the request it describes.
+pub(crate) fn observe(app: &App, event: LogEvent<'_>) {
+    let counted = counters_of(&event);
+    emit(event);
+    let today = utc_day(i64::try_from(crate::limiter::unix_now()).unwrap_or_default());
+    for counter in counted {
+        let _ = app.kpi.count(&today, counter.name());
+    }
 }
 
 /// The operator-facing name of why a sign-in did not complete.
@@ -138,6 +189,31 @@ pub(crate) fn emit(event: LogEvent<'_>) {
         }
         LogEvent::SharePosted => json!({"ts": ts, "level": "info", "event": "share.posted"}),
         LogEvent::RetractPosted => json!({"ts": ts, "level": "info", "event": "retract.posted"}),
+        LogEvent::SuggestionApproved { edited } => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "suggestion.approved",
+            "edited": edited,
+        }),
+        LogEvent::Disconnect(outcome) => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "disconnect",
+            "revoke_outcome": outcome.as_str(),
+        }),
+        LogEvent::KpiRollup { day, counters } => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "kpi.rollup",
+            "day": day,
+            "counters": counters,
+        }),
+        LogEvent::SecretsRekeyed(rows) => json!({
+            "ts": ts,
+            "level": "info",
+            "event": "secrets.rekeyed",
+            "rows": rows,
+        }),
         LogEvent::GithubVerified => {
             json!({"ts": ts, "level": "info", "event": "github.verified"})
         }
@@ -216,8 +292,14 @@ pub(crate) async fn serve(env: &BTreeMap<String, String>) -> u8 {
     };
     // Nothing survives a restart still running (data-models `scan_runs`).
     let _ = wired.store.interrupt_running_scans();
+    let token_check = (
+        wired.config.github_api_base.clone(),
+        wired.github_token.clone(),
+    );
+    let app = Arc::new(app(wired));
+    tokio::spawn(daily_signals(app.clone(), token_check));
     emit(LogEvent::AppReady);
-    match http::serve(public, admin, Arc::new(app(wired))).await {
+    match http::serve(public, admin, app).await {
         Ok(()) => 0,
         Err(e) => refuse(&Refusal {
             probe: Probe::Listeners,
@@ -295,9 +377,19 @@ fn wire(env: &BTreeMap<String, String>) -> Result<Wired, Refusal> {
         .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
     let key = ClientKey::parse(&secrets.client_jwk)
         .map_err(|e| refusal(Probe::OAuthClient)(e.to_string()))?;
-    let store = ReviewStore::open(&config.review_db, DataKey::from_bytes(secrets.data_key))
+    let previous = read_secret(&config.secrets_dir, "data-key-previous")
+        .map(|text| parse_data_key("data-key-previous", &text))
+        .transpose()
+        .map_err(|e| refusal(Probe::Secrets)(e.to_string()))?;
+    let store = ReviewStore::open(&config.review_db, data_key(secrets.data_key)?)
         .map(Arc::new)
         .map_err(|e| refusal(Probe::ReviewStore)(e.to_string()))?;
+    if let Some(previous) = previous {
+        let rows = store
+            .rekey(&data_key(previous)?)
+            .map_err(|e| refusal(Probe::ReviewStore)(format!("data-key rotation: {e}")))?;
+        emit(LogEvent::SecretsRekeyed(rows));
+    }
     let upstreams = Upstreams {
         plc_url: &config.plc_url,
         handle_resolver_url: &config.handle_resolver_url,
@@ -331,6 +423,27 @@ async fn probe(wired: &Wired) -> Result<(), Refusal> {
     arm(Probe::OAuthClient, wired.oauth.probe())?;
     arm(Probe::ReviewStore, wired.store.probe())?;
     github_token_arm(&wired.config.github_api_base, &wired.github_token).await
+}
+
+/// Once a day at 00:05 UTC: yesterday's anonymous counters as one
+/// `kpi.rollup` line, and the server GitHub token's expiry re-checked so
+/// `github.token.expiring` (alarm A-8, 14 days ahead) fires daily, not only
+/// at startup.
+async fn daily_signals(app: Arc<App>, (api_base, token): (String, GithubToken)) {
+    loop {
+        let now = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+        let wait = u64::try_from(seconds_until_next_rollup(now)).unwrap_or(1);
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        let at = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+        let day = rollup_day(at);
+        if let Ok(rows) = app.kpi.counters_between(&day, &day) {
+            emit(LogEvent::KpiRollup {
+                counters: sum_counters(&rows),
+                day,
+            });
+        }
+        let _ = github_token_arm(&api_base, &token).await;
+    }
 }
 
 fn arm(probe: Probe, outcome: ProbeOutcome) -> Result<(), Refusal> {
@@ -378,6 +491,22 @@ fn warn_if_token_expiring(headers: &reqwest::header::HeaderMap) {
     if let Some(days_left) = days_left {
         emit(LogEvent::GithubTokenExpiring(days_left));
     }
+}
+
+/// The store key of a configured data key (a legacy key has no kid).
+fn data_key(material: DataKeyMaterial) -> Result<DataKey, Refusal> {
+    match material.kid {
+        Some(kid) => DataKey::new(&kid, material.key)
+            .ok_or_else(|| refusal(Probe::Secrets)("data-key: unusable key id".into())),
+        None => Ok(DataKey::from_bytes(material.key)),
+    }
+}
+
+/// One optional secrets file; absent or empty is `None`.
+fn read_secret(dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(name))
+        .ok()
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// Read each secrets file; an absent file is `None`.
@@ -429,6 +558,8 @@ fn app(wired: Wired) -> App {
         scans: wired.store.clone(),
         review_read: wired.store.clone(),
         plans: wired.store.clone(),
+        forget: wired.store.clone(),
+        kpi: wired.store.clone(),
         review_write: wired.store,
         mapping: wired.mapping,
         verify_attempts: VerifyAttempts::default(),

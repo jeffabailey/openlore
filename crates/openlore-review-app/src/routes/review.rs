@@ -20,7 +20,7 @@ use crate::routes::github::github_step_of;
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
 };
-use crate::wiring::{emit, LogEvent};
+use crate::wiring::{observe, LogEvent};
 
 /// `GET /review`: the signed-in queue.
 pub(crate) fn review(app: &App, request: &PageRequest) -> Reply {
@@ -223,7 +223,7 @@ pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
         LifecycleEvent::Decline,
         |cookie_value, session, key, moved| {
             if moved {
-                emit(LogEvent::SuggestionDeclined);
+                observe(app, LogEvent::SuggestionDeclined);
             }
             queue_page(
                 app,

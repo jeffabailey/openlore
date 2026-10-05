@@ -247,7 +247,8 @@ Operator follow-ups before the first deploy (in order):
    (`review-app.tf`; alarms are created with `review_app_alarms_enabled = false`).
 3. Put the SSM SecureStrings without echoing them (`read -rs -p 'value: ' V; echo`, then
    `aws ssm put-parameter --type SecureString --name ... --value "$V" --overwrite; unset V`): `client-jwk`
-   (`openlore-review-app gen-client-jwk`), `data-key` (64 hex chars: `openssl rand -hex 32`),
+   (`openlore-review-app gen-client-jwk`), `data-key` (JSON `{"kid":"d1","key":"<base64 32 bytes>"}`, key from
+   `head -c32 /dev/urandom | base64`; rotate via `data-key-previous`, infrastructure-integration §7.4),
    `github-token` (fine-grained, public repositories read-only, no permissions) and `log-salt`
    (`openssl rand -base64 32`), all under `/openlore/prod/review-app/`.
 4. After the first CI image push, set the GHCR package `openlore-review-app` to **public** (the

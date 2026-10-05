@@ -16,8 +16,8 @@ use review_domain::views;
 use sha2::{Digest, Sha256};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::{github, profile, publish, retract, review, scan, share};
-use crate::wiring::{emit, LogEvent};
+use crate::routes::{github, profile, publish, retract, review, scan, settings, share};
+use crate::wiring::{emit, observe, LogEvent};
 
 /// The browser-session cookie (data-models §3.2): host-only by its prefix.
 pub(crate) const SESSION_COOKIE: &str = "__Host-ol_session";
@@ -47,6 +47,9 @@ pub(crate) enum PageRoute {
     ConfirmShare,
     RetractPreview,
     ConfirmRetract,
+    Settings,
+    ForgetMePreview,
+    ConfirmForgetMe,
 }
 
 /// Pure routing of the pages.
@@ -70,6 +73,9 @@ pub(crate) fn page_route(method: &Method, path: &str) -> Option<PageRoute> {
         ("POST", "/share") => Some(PageRoute::ConfirmShare),
         ("GET", "/retract") => Some(PageRoute::RetractPreview),
         ("POST", "/retract") => Some(PageRoute::ConfirmRetract),
+        ("GET", "/settings") => Some(PageRoute::Settings),
+        ("GET", "/settings/forget") => Some(PageRoute::ForgetMePreview),
+        ("POST", "/settings/forget") => Some(PageRoute::ConfirmForgetMe),
         ("GET" | "HEAD", profile) if profile.starts_with("/@") => Some(PageRoute::Profile),
         _ => None,
     }
@@ -90,6 +96,9 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         PageRoute::ConfirmPublish if same_origin => publish::confirm_publish(app, request).await,
         PageRoute::ConfirmShare if same_origin => share::confirm_share(app, request).await,
         PageRoute::ConfirmRetract if same_origin => retract::confirm_retract(app, request).await,
+        PageRoute::ConfirmForgetMe if same_origin => {
+            settings::confirm_forget_me(app, request).await
+        }
         PageRoute::SignIn
         | PageRoute::SignOut
         | PageRoute::VerifyGithub
@@ -101,7 +110,10 @@ pub(crate) async fn handle(app: &Arc<App>, route: PageRoute, request: &PageReque
         | PageRoute::UndoDecline
         | PageRoute::ConfirmPublish
         | PageRoute::ConfirmShare
-        | PageRoute::ConfirmRetract => forbidden(),
+        | PageRoute::ConfirmRetract
+        | PageRoute::ConfirmForgetMe => forbidden(),
+        PageRoute::Settings => settings::settings(app, request),
+        PageRoute::ForgetMePreview => settings::forget_me_preview(app, request),
         PageRoute::PdsReturn => pds_return(app, request).await,
         PageRoute::Review => review::review(app, request),
         PageRoute::GithubStep => github::github_step(app, request),
@@ -133,7 +145,7 @@ async fn begin_sign_in(app: &App, request: &PageRequest) -> Reply {
     };
     match app.oauth.begin_authorization(&identity).await {
         Ok(consent_screen) => {
-            emit(LogEvent::SignInStarted);
+            observe(app, LogEvent::SignInStarted);
             Reply::Redirect {
                 location: consent_screen,
                 set_cookie: None,
@@ -198,7 +210,7 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
     };
     match app.sessions.start_session(&session) {
         Ok(()) => {
-            emit(LogEvent::SignInCompleted);
+            observe(app, LogEvent::SignInCompleted);
             Reply::Redirect {
                 location: "/review".to_string(),
                 set_cookie: Some(session_cookie(&cookie_value)),
@@ -251,7 +263,7 @@ pub(crate) fn current_session(
 
 /// The landing page explaining why the sign-in did not complete.
 fn failed(app: &App, failure: SignInFailure) -> Reply {
-    emit(LogEvent::SignInRefused(failure));
+    observe(app, LogEvent::SignInRefused(failure));
     Reply::Page {
         status: failure_status(failure),
         html: views::landing_page(app.permission_mode, Some(failure)),
@@ -319,7 +331,7 @@ fn session_cookie(value: &str) -> String {
     )
 }
 
-fn cleared_session_cookie() -> String {
+pub(crate) fn cleared_session_cookie() -> String {
     format!("{SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0")
 }
 

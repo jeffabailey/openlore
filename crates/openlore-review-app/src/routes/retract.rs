@@ -23,7 +23,7 @@ use crate::routes::review::not_found;
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing, SESSION_COOKIE,
 };
-use crate::wiring::{emit, LogEvent};
+use crate::wiring::{observe, LogEvent};
 
 /// The owner's PDS could not be read, so nothing can be decided or written.
 struct PdsUnreachable;
@@ -132,7 +132,7 @@ impl Confirmed<'_> {
         let app = self.app;
         match execute_retract(app.repo_write.as_ref(), app.repo_read.as_ref(), self.plan).await {
             Ok(at_uri) => {
-                emit(LogEvent::RetractPosted);
+                observe(app, LogEvent::RetractPosted);
                 let _ = app.review_write.change_state(
                     self.plan.owner_did(),
                     &self.plan.key(),

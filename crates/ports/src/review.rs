@@ -86,6 +86,33 @@ pub trait OAuthPort: Send + Sync {
 
     /// Forget the OAuth session held for `owner_did` (a refused sign-in).
     fn forget_session(&self, owner_did: &str);
+
+    /// Revoke the grant `owner_did` gave the app at her PDS, then delete the
+    /// tokens held for her WHATEVER the PDS answered (SPIKE finding 1): the
+    /// outcome is only reported, never a reason to keep a token.
+    async fn revoke_grant(&self, owner_did: &str) -> RevokeOutcome;
+}
+
+/// How a grant revocation ended. Either way the app holds no token after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevokeOutcome {
+    /// Her PDS accepted the revocation (200 per RFC 7009, or 204).
+    Revoked,
+    /// The app held no grant for her: nothing to revoke.
+    NothingHeld,
+    /// Her PDS could not be reached or refused; tokens were deleted anyway.
+    NotConfirmed,
+}
+
+impl RevokeOutcome {
+    /// The operator-facing label (`disconnect{revoke_outcome}`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Revoked => "revoked",
+            Self::NothingHeld => "nothing_held",
+            Self::NotConfirmed => "not_confirmed",
+        }
+    }
 }
 
 /// A store operation failed (the detail is operator-facing, never a secret).
@@ -128,6 +155,35 @@ pub trait SecretStorePort: Send + Sync {
     fn oauth_session(&self, owner_did: &str) -> Result<Option<Vec<u8>>, ReviewStoreError>;
 
     fn remove_oauth_session(&self, owner_did: &str) -> Result<(), ReviewStoreError>;
+}
+
+/// Forget a person (US-BRA-012, ADR-074): delete every row the app holds
+/// about `owner_did`, in one transaction, and nothing else. Anonymous
+/// `kpi_counters` are not hers and stay.
+pub trait ForgetPort: Send + Sync {
+    fn purge_owner(&self, owner_did: &str) -> Result<(), ReviewStoreError>;
+}
+
+/// One stored counter row: `(day YYYY-MM-DD, event, count)`. No owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KpiCounterRow {
+    pub day: String,
+    pub event: String,
+    pub count: i64,
+}
+
+/// Aggregate, owner-free KPI counters (OD-BRA-11). An event name is a
+/// `&'static str`: it comes from the closed catalogue, never from request data.
+pub trait KpiCounterPort: Send + Sync {
+    /// Add one to `event` on `day` (`YYYY-MM-DD`, UTC).
+    fn count(&self, day: &str, event: &'static str) -> Result<(), ReviewStoreError>;
+
+    /// Every counter row with `from <= day <= to`.
+    fn counters_between(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<KpiCounterRow>, ReviewStoreError>;
 }
 
 /// A browser session to start: only hashes of the cookie and CSRF token.

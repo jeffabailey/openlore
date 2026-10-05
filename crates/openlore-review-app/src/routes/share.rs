@@ -20,7 +20,7 @@ use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, random_token, to_landing,
     SESSION_COOKIE,
 };
-use crate::wiring::{emit, LogEvent};
+use crate::wiring::{observe, LogEvent};
 
 /// Open the share preview: the draft, its profile link, and the Post button.
 pub(crate) async fn share_preview(app: &App, request: &PageRequest) -> Reply {
@@ -135,7 +135,7 @@ impl Confirmed<'_> {
         .await
         {
             Ok(created) => {
-                emit(LogEvent::SharePosted);
+                observe(self.app, LogEvent::SharePosted);
                 Reply::Page {
                     status: StatusCode::OK,
                     html: views::share_posted_page(&created.uri, &profile_path(plan)),

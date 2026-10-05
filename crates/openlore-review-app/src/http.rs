@@ -15,14 +15,15 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use ports::{
-    GithubLinkPort, GithubPort, IdentityLookupPort, OAuthPort, PublishPlanPort, RepoListingPort,
-    ReviewStateRead, ReviewStateWrite, ScanRunPort, SessionPort, UserRepoReadPort,
-    UserRepoWritePort,
+    ForgetPort, GithubLinkPort, GithubPort, IdentityLookupPort, KpiCounterPort, OAuthPort,
+    PublishPlanPort, RepoListingPort, ReviewStateRead, ReviewStateWrite, ScanRunPort, SessionPort,
+    UserRepoReadPort, UserRepoWritePort,
 };
 use review_domain::signin::PermissionMode;
 use scraper_domain::SignalPredicateMapping;
 use tokio::net::TcpListener;
 
+use crate::admin;
 use crate::limiter::ScanLimiter;
 use crate::routes::github::VerifyAttempts;
 use crate::routes::signin;
@@ -69,6 +70,8 @@ pub(crate) struct App {
     pub(crate) repo_write: Arc<dyn UserRepoWritePort>,
     pub(crate) repo_read: Arc<dyn UserRepoReadPort>,
     pub(crate) repo_listing: Arc<dyn RepoListingPort>,
+    pub(crate) forget: Arc<dyn ForgetPort>,
+    pub(crate) kpi: Arc<dyn KpiCounterPort>,
     pub(crate) mapping: SignalPredicateMapping,
     pub(crate) verify_attempts: VerifyAttempts,
     pub(crate) scan_limiter: ScanLimiter,
@@ -104,7 +107,8 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
 }
 
-/// The operator listener has no routes yet (KPI and purge land later).
+/// The operator listener serves no public page or asset: its only routes
+/// are [`admin::admin_route`]'s.
 fn admin_route(_method: &Method, _path: &str) -> Route {
     Route::NotFound
 }
@@ -166,12 +170,27 @@ pub(crate) fn respond(surface: &Surface, route: Route) -> Response<Full<Bytes>> 
         ),
         Route::NotFound => (StatusCode::NOT_FOUND, text, "not found".to_string()),
     };
+    plain(status, content_type, body)
+}
+
+/// Pure response with a body of `content_type`, security headers applied.
+pub(crate) fn plain(
+    status: StatusCode,
+    content_type: &'static str,
+    body: String,
+) -> Response<Full<Bytes>> {
     let mut response = Response::new(Full::new(Bytes::from(body)));
     *response.status_mut() = status;
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
     secured(response)
+}
+
+/// Where a request on a listener goes past the static surface.
+enum Handler {
+    Page(signin::PageRoute),
+    Operator(admin::AdminRoute),
 }
 
 /// Pure response for a page reply. Pages are never cached.
@@ -252,21 +271,27 @@ async fn answer(
 ) -> Response<Full<Bytes>> {
     let (parts, body) = request.into_parts();
     let path = parts.uri.path();
-    let page = match kind {
-        Listener::Public => signin::page_route(&parts.method, path),
-        Listener::Admin => None,
+    let handler = match kind {
+        Listener::Public => signin::page_route(&parts.method, path).map(Handler::Page),
+        Listener::Admin => admin::admin_route(&parts.method, path).map(Handler::Operator),
     };
-    let Some(page) = page else {
+    let Some(handler) = handler else {
         let routes = match kind {
             Listener::Public => route,
             Listener::Admin => admin_route,
         };
         return respond(&app.surface, routes(&parts.method, path));
     };
-    let form = match Limited::new(body, MAX_FORM_BYTES).collect().await {
-        Ok(collected) => pairs(&collected.to_bytes()),
+    let body = match Limited::new(body, MAX_FORM_BYTES).collect().await {
+        Ok(collected) => collected.to_bytes(),
         Err(_) => return respond(&app.surface, Route::NotFound),
     };
+    let query = pairs(parts.uri.query().unwrap_or("").as_bytes());
+    let page = match handler {
+        Handler::Operator(operator) => return admin::handle(app, operator, &query, &body).await,
+        Handler::Page(page) => page,
+    };
+    let form = pairs(&body);
     let header = |name: &str| {
         parts
             .headers
@@ -277,7 +302,7 @@ async fn answer(
     };
     let request = PageRequest {
         path: path.to_string(),
-        query: pairs(parts.uri.query().unwrap_or("").as_bytes()),
+        query,
         cookies: header("cookie")
             .into_iter()
             .flat_map(cookie_pairs)

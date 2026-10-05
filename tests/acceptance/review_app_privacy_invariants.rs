@@ -425,7 +425,6 @@ fn the_logs_of_a_whole_journey_reveal_nothing_about_anyone() {
 ///   And the public address does not answer for the admin routes
 /// ```
 #[test]
-#[ignore = "DELIVER R1: unskip one-at-a-time (aggregate KPI counters via admin listener)"]
 fn the_operator_reads_aggregate_counts_that_identify_no_one() {
     let world = ReviewWorld::new();
     let mut confirms = 0;

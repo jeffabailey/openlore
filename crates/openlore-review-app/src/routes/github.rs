@@ -19,7 +19,7 @@ use crate::http::{App, PageRequest, Reply};
 use crate::routes::signin::{
     csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
 };
-use crate::wiring::{emit, LogEvent};
+use crate::wiring::{observe, LogEvent};
 
 /// Recent verify attempts per DID (in memory; resets on restart, ADR-076 §2).
 #[derive(Default)]
@@ -81,7 +81,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
     let (login, outcome) = check_bio(app, &session, typed).await;
     let message = match &outcome {
         Ok(()) => {
-            emit(LogEvent::GithubVerified);
+            observe(app, LogEvent::GithubVerified);
             views::ownership_message(
                 OwnershipOutcome::Verified,
                 &login,
@@ -90,7 +90,7 @@ pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
             )
         }
         Err(refusal) => {
-            emit(LogEvent::GithubVerifyRefused(refusal.label()));
+            observe(app, LogEvent::GithubVerifyRefused(refusal.label()));
             views::ownership_message(
                 OwnershipOutcome::Refused(refusal),
                 &login,
