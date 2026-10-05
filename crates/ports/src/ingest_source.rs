@@ -55,6 +55,11 @@ pub enum IngestError {
     Unreachable { message: String },
     #[error("ingest source returned a malformed response: {message}")]
     BadResponse { message: String },
+    /// The transport policy (DD-IPF-5) left no admissible address for the
+    /// source: a refused scheme or IP literal, or every address DNS returned
+    /// was in a refused range. Nothing was contacted.
+    #[error("ingest source address refused: {message}")]
+    AddressRefused { message: String },
 }
 
 // -----------------------------------------------------------------------------

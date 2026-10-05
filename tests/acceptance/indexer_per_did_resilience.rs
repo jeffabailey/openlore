@@ -477,7 +477,6 @@ fn when_every_authors_source_fails_the_pass_reports_a_total_outage() {
 ///     | http://pds.volkov.example     |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: pds_endpoint_admissible pre-check → Skip(PdsAddressRefused)"]
 fn a_did_document_pointing_at_a_private_or_insecure_address_is_never_followed() {
     for address in [
         "http://10.0.0.1",

@@ -119,8 +119,9 @@ impl IndexerWiring {
         // SEPARATE index.duckdb (ADR-023).
         let index_store = IndexStoreAdapter::open(&cfg.index_path)
             .map_err(|err| anyhow::anyhow!("open index store: {err}"))?;
-        // Read-only bounded PULL (ADR-024).
-        let ingest_source = AtProtoIngestAdapter::new(fallback_base);
+        // Read-only bounded PULL (ADR-024), SSRF-guarded (ADR-077 §4): every
+        // outbound request obeys the transport policy, after DNS.
+        let ingest_source = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
         // VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
         let identity_resolve = AtProtoDidAdapter::resolve_only();
         // The query server is bound only for `serve` (Phase 04); the `ingest`
@@ -131,8 +132,12 @@ impl IndexerWiring {
         Ok(Self {
             index_store: Box::new(index_store),
             ingest_source: Box::new(ingest_source),
-            repo_listing: Box::new(AtProtoIngestAdapter::new(fallback_base)),
-            pds_lookup: Box::new(IdentityLookup::new(&cfg.plc_endpoint, &cfg.plc_endpoint)),
+            repo_listing: Box::new(AtProtoIngestAdapter::guarded(fallback_base, cfg.policy)),
+            pds_lookup: Box::new(IdentityLookup::guarded(
+                &cfg.plc_endpoint,
+                &cfg.plc_endpoint,
+                cfg.policy,
+            )),
             repo_dids: cfg.repo_dids,
             identity_resolve: Box::new(identity_resolve),
             query_server,
@@ -513,6 +518,7 @@ fn fetch_failure_of(error: &IngestError) -> FetchFailure {
         IngestError::BadResponse { .. } | IngestError::ProbeRefused { .. } => {
             FetchFailure::BadResponse
         }
+        IngestError::AddressRefused { .. } => FetchFailure::AddressRefused,
     }
 }
 

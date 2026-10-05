@@ -11,7 +11,7 @@
 //! fallback can never be classified as the author's PDS.
 
 use claim_domain::{decode_claim_record, ClaimRecord, Did, ProvenanceRejection, RecordOrigin};
-use ports::net_policy::{address_refused, is_loopback, TransportPolicy};
+use ports::net_policy::{url_admissible, TransportPolicy};
 use ports::{RepoListing, RepoRecord};
 
 use crate::RejectReason;
@@ -172,29 +172,19 @@ pub enum ListingPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddressRefused;
 
-/// The pre-check on a resolved PDS address (DD-IPF-5): `https`, or `http`
-/// only to a loopback address under [`TransportPolicy::HttpsOrLoopbackHttp`];
-/// no userinfo; an IP-literal host outside the refused ranges (loopback is
-/// admitted under the test policy). Hostnames are checked after DNS by the
-/// adapters, not here.
+/// The pre-check on a resolved PDS address (DD-IPF-5): the shared
+/// [`url_admissible`] rule — `https`, or `http` only to a loopback IP literal
+/// under [`TransportPolicy::HttpsOrLoopbackHttp`]; no userinfo; an IP-literal
+/// host outside the refused ranges. Hostnames are checked after DNS by the
+/// guarded adapters, not here.
 pub fn pds_endpoint_admissible(
     endpoint: &str,
     policy: TransportPolicy,
 ) -> Result<PdsEndpoint, AddressRefused> {
-    let url = url::Url::parse(endpoint).map_err(|_| AddressRefused)?;
-    let ip = match url.host() {
-        Some(url::Host::Ipv4(v4)) => Some(std::net::IpAddr::V4(v4)),
-        Some(url::Host::Ipv6(v6)) => Some(std::net::IpAddr::V6(v6)),
-        Some(url::Host::Domain(_)) => None,
-        None => return Err(AddressRefused),
-    };
-    let test_loopback =
-        policy == TransportPolicy::HttpsOrLoopbackHttp && ip.is_some_and(is_loopback);
-    let scheme_admitted = url.scheme() == "https" || (url.scheme() == "http" && test_loopback);
-    let host_admitted = test_loopback || !ip.is_some_and(address_refused);
-    let no_userinfo = url.username().is_empty() && url.password().is_none();
-    (scheme_admitted && host_admitted && no_userinfo)
-        .then(|| PdsEndpoint::new(endpoint))
+    url::Url::parse(endpoint)
+        .ok()
+        .filter(|url| url_admissible(url, policy))
+        .map(|_| PdsEndpoint::new(endpoint))
         .ok_or(AddressRefused)
 }
 

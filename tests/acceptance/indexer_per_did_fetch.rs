@@ -511,7 +511,6 @@ fn a_failing_fallback_is_isolated_like_any_other_source() {
 ///   And because every configured DID was skipped, the pass ends with the total-outage code 3
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: guarded DNS resolver refuses the fallback after DNS (AC-003.4)"]
 fn a_fallback_whose_name_leads_only_to_a_private_address_is_never_contacted() {
     let directory = Tripwire::arm();
     let fallback = Tripwire::arm();

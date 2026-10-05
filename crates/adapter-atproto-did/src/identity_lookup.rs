@@ -6,9 +6,11 @@
 //! ASYNC reqwest: the review app serves on a tokio runtime, where the blocking
 //! client used by `peer_resolve` must not run.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
 use ports::{IdentityLookupError, IdentityLookupPort, ResolvedIdentity};
 use serde_json::Value;
 
@@ -17,23 +19,59 @@ pub struct IdentityLookup {
     client: reqwest::Client,
     handle_resolver_url: String,
     plc_url: String,
+    /// The transport policy every lookup obeys; `None` = unguarded (the
+    /// review app's sign-in, never the indexer).
+    policy: Option<TransportPolicy>,
 }
 
 impl IdentityLookup {
+    /// The UNGUARDED lookup (the review app's sign-in).
     pub fn new(handle_resolver_url: &str, plc_url: &str) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent("openlore-review-app")
             .build()
             .unwrap_or_default();
+        Self::with_client(client, handle_resolver_url, plc_url, None)
+    }
+
+    /// The SSRF-guarded lookup the indexer wires (ADR-077 §4, DD-IPF-5): every
+    /// directory / `did:web` URL is pre-checked against `policy`, hostnames
+    /// resolve through [`GuardedResolver`] (refused addresses dropped, the
+    /// connection goes to a checked address), no proxy, redirects not followed.
+    /// A refused lookup is `Unavailable` (the DID is then unresolvable).
+    pub fn guarded(handle_resolver_url: &str, plc_url: &str, policy: TransportPolicy) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("openlore-indexer")
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .dns_resolver(Arc::new(GuardedResolver { policy }))
+            .build()
+            .unwrap_or_default();
+        Self::with_client(client, handle_resolver_url, plc_url, Some(policy))
+    }
+
+    fn with_client(
+        client: reqwest::Client,
+        handle_resolver_url: &str,
+        plc_url: &str,
+        policy: Option<TransportPolicy>,
+    ) -> Self {
         Self {
             client,
             handle_resolver_url: handle_resolver_url.trim_end_matches('/').to_string(),
             plc_url: plc_url.trim_end_matches('/').to_string(),
+            policy,
         }
     }
 
     async fn get_json(&self, url: url::Url) -> Result<Lookup, IdentityLookupError> {
+        if let Some(policy) = self.policy.filter(|policy| !url_admissible(&url, *policy)) {
+            return Err(IdentityLookupError::Unavailable {
+                detail: format!("{url} is refused by the transport policy {policy:?}"),
+            });
+        }
         let response = self.client.get(url).send().await.map_err(unavailable)?;
         let status = response.status();
         if status.is_server_error() {
@@ -74,6 +112,35 @@ impl IdentityLookup {
             .await?
             .found()
             .ok_or(IdentityLookupError::NotFound)
+    }
+}
+
+/// The reqwest resolver of a guarded lookup: hands the connector only the
+/// addresses the transport policy admits, so the connection goes to an
+/// address that was checked (no second lookup, no rebinding window).
+struct GuardedResolver {
+    policy: TransportPolicy,
+}
+
+/// Every address a host resolved to is refused by the transport policy.
+#[derive(Debug, thiserror::Error)]
+#[error("{host}: every resolved address is refused by the transport policy")]
+struct AddressRefusedByPolicy {
+    host: String,
+}
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        let policy = self.policy;
+        Box::pin(async move {
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let admitted = admitted_addresses(resolved, policy);
+            if admitted.is_empty() {
+                return Err(Box::new(AddressRefusedByPolicy { host }) as _);
+            }
+            Ok(Box::new(admitted.into_iter()) as reqwest::dns::Addrs)
+        })
     }
 }
 
@@ -319,6 +386,53 @@ mod tests {
                 Err(IdentityLookupError::Unavailable { .. })
             ),
             "a directory error is unavailability"
+        );
+    }
+
+    // bypass: wiring over real sockets — the guarded lookup refuses a loopback
+    // directory (IP literal and a name resolving to loopback) without
+    // connecting, and admits loopback http only under the test policy.
+    #[test]
+    fn the_guarded_lookup_never_contacts_a_refused_directory() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind tripwire");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let port = listener.local_addr().expect("tripwire address").port();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        for directory in [
+            format!("http://127.0.0.1:{port}"),
+            format!("https://127.0.0.1:{port}"),
+            format!("https://localhost:{port}"),
+        ] {
+            let lookup =
+                IdentityLookup::guarded(&directory, &directory, TransportPolicy::HttpsPublicOnly);
+            assert!(
+                matches!(
+                    runtime.block_on(lookup.resolve_pds("did:plc:abc")),
+                    Err(IdentityLookupError::Unavailable { .. })
+                ),
+                "{directory}"
+            );
+        }
+        assert_eq!(
+            std::iter::from_fn(|| listener.accept().ok()).count(),
+            0,
+            "a refused directory is never contacted"
+        );
+
+        let good = document(
+            "did:plc:abc",
+            "at://priya.example",
+            "#atproto_pds",
+            "AtprotoPersonalDataServer",
+        );
+        let plc = fake_plc(200, good.to_string());
+        let lookup = IdentityLookup::guarded(&plc, &plc, TransportPolicy::HttpsOrLoopbackHttp);
+        assert_eq!(
+            runtime.block_on(lookup.resolve_pds("did:plc:abc")),
+            Ok("https://pds.example".to_string())
         );
     }
 }

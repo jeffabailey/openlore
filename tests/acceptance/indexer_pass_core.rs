@@ -237,13 +237,17 @@ fn sut_pass_exit_code(summary: Summary) -> i32 {
 }
 
 fn sut_address_refused(ip: IpAddr) -> bool {
-    let _ = ip;
-    todo!("SCAFFOLD: bind ports::net_policy::address_refused (DD-IPF-5)")
+    ports::net_policy::address_refused(ip)
 }
 
 fn sut_endpoint_admissible(url: &str, policy: Policy) -> Result<String, ()> {
-    let _ = (url, policy);
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::pds_endpoint_admissible (DD-IPF-5)")
+    let policy = match policy {
+        Policy::HttpsPublicOnly => ports::net_policy::TransportPolicy::HttpsPublicOnly,
+        Policy::HttpsOrLoopbackHttp => ports::net_policy::TransportPolicy::HttpsOrLoopbackHttp,
+    };
+    appview_domain::ingest_pass::pds_endpoint_admissible(url, policy)
+        .map(|endpoint| endpoint.as_str().to_string())
+        .map_err(|_| ())
 }
 
 fn sut_parse_config(
@@ -479,7 +483,6 @@ proptest! {
     /// The address guard refuses exactly the documented ranges, for every IPv4
     /// address and every IPv6 address (IPv4-mapped addresses judged as IPv4).
     #[test]
-    #[ignore = "DELIVER 02-02 (unit): ports::net_policy::address_refused"]
     fn the_address_guard_refuses_exactly_the_documented_ranges(v4 in any::<u32>(), v6 in any::<u128>()) {
         let v4 = Ipv4Addr::from(v4);
         let v6 = Ipv6Addr::from(v6);
@@ -496,7 +499,6 @@ proptest! {
     /// trimmed) under both policies, and plain http only to loopback under the
     /// test policy.
     #[test]
-    #[ignore = "DELIVER 02-02 (unit): pds_endpoint_admissible"]
     fn the_endpoint_precheck_admits_https_public_and_loopback_http_only_under_the_test_policy(
         public in arb_public_https_url(), refused in arb_refused_endpoint(), port in 1u16..
     ) {
@@ -651,7 +653,6 @@ fn every_fetch_failure_maps_to_exactly_one_documented_reason() {
 /// CORE-13 @US-IPF-002 @AC-002.9 @DD-IPF-5 @C1b @boundary @contract-shape:pure-function
 /// The range edges, pinned (172.15.255.255 is public, 172.16.0.0 is not, …).
 #[test]
-#[ignore = "DELIVER 02-02 (unit): address_refused at every range boundary"]
 fn the_address_guard_holds_at_every_range_edge() {
     let cases: [(&str, bool); 20] = [
         ("0.0.0.0", true),

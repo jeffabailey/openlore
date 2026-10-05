@@ -25,7 +25,8 @@ claim-domain = { path = "../claim-domain" }
 async-trait = "0.1"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+# `net`: the guarded DNS resolver (DD-IPF-5) looks hosts up itself.
+tokio = { workspace = true, features = ["net"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 url = { workspace = true }
 

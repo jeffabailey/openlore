@@ -1644,26 +1644,67 @@ pub fn classify_indexer_origin_bypass(source: &str) -> Vec<String> {
 pub fn scan_indexer_origin_only_via_listing_source(
     workspace_root: &Path,
 ) -> anyhow::Result<Vec<String>> {
+    scan_indexer_sources(
+        workspace_root,
+        "indexer_origin_only_via_listing_source",
+        classify_indexer_origin_bypass,
+        "the indexer derives origin only through appview_domain::origin_of(ListingSource) \
+         (ADR-077)",
+    )
+}
+
+// -----------------------------------------------------------------------------
+// `indexer_guarded_clients_only` (ADR-077 §4, DD-IPF-5, R-IPF-7)
+// -----------------------------------------------------------------------------
+
+/// The unguarded HTTP-client constructors: a client built through them
+/// resolves and connects without the transport policy (SSRF guard).
+const INDEXER_UNGUARDED_CLIENT_TOKENS: &[&str] =
+    &["AtProtoIngestAdapter::new", "IdentityLookup::new"];
+
+/// Pure rule: every unguarded-client constructor in an item that is NOT
+/// `#[cfg(...)]`-gated (test modules are exempt), as findings.
+pub fn classify_indexer_unguarded_clients(source: &str) -> Vec<String> {
+    INDEXER_UNGUARDED_CLIENT_TOKENS
+        .iter()
+        .filter_map(|token| {
+            classify_cfg_gated_token(source, token).map(|line| format!("`{token}` in `{line}`"))
+        })
+        .collect()
+}
+
+/// Effect shell for `indexer_guarded_clients_only`. Scanning no file at all
+/// is itself a finding (the rule must never pass vacuously).
+pub fn scan_indexer_guarded_clients_only(workspace_root: &Path) -> anyhow::Result<Vec<String>> {
+    scan_indexer_sources(
+        workspace_root,
+        "indexer_guarded_clients_only",
+        classify_indexer_unguarded_clients,
+        "the indexer wires only the ::guarded constructors (ADR-077 §4 SSRF guard)",
+    )
+}
+
+/// Run one pure source rule over every indexer source, prefixing each finding
+/// with the rule and file and suffixing it with `why`.
+fn scan_indexer_sources(
+    workspace_root: &Path,
+    rule: &str,
+    classify: fn(&str) -> Vec<String>,
+    why: &str,
+) -> anyhow::Result<Vec<String>> {
     let sources = rust_sources_under(&workspace_root.join(INDEXER_SOURCE_DIR));
     if sources.is_empty() {
         return Ok(vec![format!(
-            "indexer_origin_only_via_listing_source: no Rust source under {INDEXER_SOURCE_DIR} \
-             — the rule would pass vacuously"
+            "{rule}: no Rust source under {INDEXER_SOURCE_DIR} — the rule would pass vacuously"
         )]);
     }
     let mut findings = Vec::new();
     for path in sources {
         let source = std::fs::read_to_string(&path)?;
         findings.extend(
-            classify_indexer_origin_bypass(&source)
+            classify(&source)
                 .into_iter()
-                .map(|finding| {
-                    format!(
-                "indexer_origin_only_via_listing_source: {}: {finding} — the indexer derives \
-                 origin only through appview_domain::origin_of(ListingSource) (ADR-077)",
-                path.display()
-            )
-                }),
+                .map(|finding| format!("{rule}: {}: {finding} — {why}", path.display())),
         );
     }
     Ok(findings)
@@ -1859,6 +1900,7 @@ pub fn run() -> anyhow::Result<i32> {
     let adapter_github_port_findings = scan_adapter_github_port_references(&workspace_root)?;
     let review_app_findings = scan_review_app_rules(&workspace_root)?;
     let indexer_origin_findings = scan_indexer_origin_only_via_listing_source(&workspace_root)?;
+    let indexer_client_findings = scan_indexer_guarded_clients_only(&workspace_root)?;
 
     let mut rendered: Vec<String> = dep_violations.iter().map(Violation::render).collect();
     rendered.extend(sql_findings);
@@ -1872,6 +1914,7 @@ pub fn run() -> anyhow::Result<i32> {
     rendered.extend(adapter_github_port_findings);
     rendered.extend(review_app_findings);
     rendered.extend(indexer_origin_findings);
+    rendered.extend(indexer_client_findings);
 
     if rendered.is_empty() {
         println!(
@@ -3028,6 +3071,38 @@ mod indexer_origin_rule_tests {
     fn the_indexer_origin_rule_refuses_to_pass_on_an_empty_tree() {
         let empty = std::env::temp_dir().join("openlore-xtask-no-indexer-sources");
         let findings = scan_indexer_origin_only_via_listing_source(&empty).expect("scan");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    // --- indexer_guarded_clients_only (ADR-077 §4) ---------------------------
+    // bypass: closed-world token rule; one planted and one exempt source pin it.
+
+    #[test]
+    fn an_ungated_unguarded_client_in_the_indexer_is_a_violation() {
+        let source = "fn wire() {\n    let a = AtProtoIngestAdapter::new(base);\n    \
+                      let l = IdentityLookup::new(plc, plc);\n}\n";
+        assert_eq!(classify_indexer_unguarded_clients(source).len(), 2);
+    }
+
+    #[test]
+    fn guarded_constructors_and_test_only_unguarded_clients_are_allowed() {
+        let source = "// AtProtoIngestAdapter::new in a comment\nfn wire() {\n    \
+                      AtProtoIngestAdapter::guarded(base, policy)\n}\n\
+                      #[cfg(test)]\nmod tests {\n    fn m() {\n        IdentityLookup::new(a, b);\n    }\n}\n";
+        assert!(classify_indexer_unguarded_clients(source).is_empty());
+    }
+
+    #[test]
+    fn the_real_indexer_wires_only_guarded_clients() {
+        let root = locate_workspace_root().expect("workspace root");
+        let findings = scan_indexer_guarded_clients_only(&root).expect("scan");
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn the_guarded_clients_rule_refuses_to_pass_on_an_empty_tree() {
+        let empty = std::env::temp_dir().join("openlore-xtask-no-indexer-sources");
+        let findings = scan_indexer_guarded_clients_only(&empty).expect("scan");
         assert_eq!(findings.len(), 1, "{findings:?}");
     }
 }

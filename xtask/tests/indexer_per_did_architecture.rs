@@ -71,7 +71,6 @@ fn the_indexer_derives_origin_only_through_the_listing_source() {
 
 /// XA-2 @US-IPF-002 @AC-002.9 @DD-IPF-5 @R-IPF-7 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: guarded clients only (indexer_guarded_clients_only)"]
 fn the_indexer_wires_only_address_guarded_clients() {
     let found = violations(&["AtProtoIngestAdapter::new", "IdentityLookup::new"]);
     assert!(
@@ -83,7 +82,6 @@ fn the_indexer_wires_only_address_guarded_clients() {
 
 /// XA-3 @DD-IPF-12 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-02: both rules registered in cargo xtask check-arch"]
 fn both_rules_are_part_of_check_arch() {
     let check_arch = std::fs::read_to_string(root().join("xtask/src/check_arch.rs"))
         .expect("read xtask/src/check_arch.rs");

@@ -29,6 +29,9 @@
 
 use async_trait::async_trait;
 use claim_domain::{Cid, ClaimRecord, SignedClaim};
+use std::net::{IpAddr, SocketAddr};
+
+use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
 use ports::{
     IngestError, IngestSourcePort, ProbeOutcome, RawRecord, RepoListing, RepoListingPort,
     RepoRecord,
@@ -47,12 +50,16 @@ pub struct AtProtoIngestAdapter {
     client: reqwest::Client,
     /// The configured source base URL (a PDS / relay hosting `listRecords`).
     source: String,
+    /// The transport policy every request obeys; `None` = unguarded (the
+    /// review app's reader, never the indexer — xtask `indexer_guarded_clients_only`).
+    policy: Option<TransportPolicy>,
 }
 
 impl AtProtoIngestAdapter {
-    /// Construct the ingest adapter pointed at `source` (a base URL hosting the
-    /// public `com.atproto.repo.listRecords` surface). Redirects are never
-    /// followed (ADR-078): a 3xx is a failed listing, its target is not contacted.
+    /// Construct the UNGUARDED ingest adapter pointed at `source` (a base URL
+    /// hosting the public `com.atproto.repo.listRecords` surface). Redirects
+    /// are never followed (ADR-078): a 3xx is a failed listing, its target is
+    /// not contacted.
     pub fn new(source: &str) -> Self {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -61,6 +68,30 @@ impl AtProtoIngestAdapter {
         Self {
             client,
             source: source.to_string(),
+            policy: None,
+        }
+    }
+
+    /// The SSRF-guarded adapter the indexer wires (ADR-077 §4, DD-IPF-5):
+    /// every URL is pre-checked against `policy`, hostnames resolve through
+    /// [`GuardedResolver`] (refused addresses dropped, the connection goes to
+    /// a checked address), no proxy, redirects never followed.
+    pub fn guarded(source: &str, policy: TransportPolicy) -> Self {
+        Self::guarded_with_lookup(source, policy, system_lookup())
+    }
+
+    /// [`Self::guarded`] over an injected DNS lookup (the rebinding test seam).
+    pub fn guarded_with_lookup(source: &str, policy: TransportPolicy, lookup: HostLookup) -> Self {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(GuardedResolver { policy, lookup }))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            client,
+            source: source.to_string(),
+            policy: Some(policy),
         }
     }
 
@@ -70,15 +101,84 @@ impl AtProtoIngestAdapter {
     }
 }
 
+// -----------------------------------------------------------------------------
+// The SSRF guard: DNS answers filtered by the transport policy (DD-IPF-5)
+// -----------------------------------------------------------------------------
+
+/// A host's addresses as DNS returns them (the effect the guard wraps).
+pub type HostLookup = std::sync::Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = std::io::Result<Vec<IpAddr>>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// The system resolver.
+fn system_lookup() -> HostLookup {
+    std::sync::Arc::new(|host: String| {
+        Box::pin(async move {
+            tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map(|addrs| addrs.map(|addr| addr.ip()).collect())
+        })
+    })
+}
+
+/// Every address `host` resolved to is refused by the transport policy.
+#[derive(Debug, thiserror::Error)]
+#[error("{host}: every resolved address is refused by the transport policy")]
+pub struct AddressRefusedByPolicy {
+    pub host: String,
+}
+
+/// The reqwest resolver of a guarded client: hands the connector only the
+/// admitted addresses, so the connection goes to an address that was checked
+/// (no second lookup, no rebinding window); none admitted = an error.
+pub struct GuardedResolver {
+    policy: TransportPolicy,
+    lookup: HostLookup,
+}
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        let lookup = (self.lookup)(host.clone());
+        let policy = self.policy;
+        Box::pin(async move {
+            let resolved = lookup.await?;
+            let admitted = admitted_addresses(
+                resolved.into_iter().map(|ip| SocketAddr::new(ip, 0)),
+                policy,
+            );
+            if admitted.is_empty() {
+                return Err(Box::new(AddressRefusedByPolicy { host }) as _);
+            }
+            Ok(Box::new(admitted.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// Whether a request failed because the guard refused every address.
+fn refused_by_policy(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |e| e.source())
+        .any(|e| e.downcast_ref::<AddressRefusedByPolicy>().is_some())
+}
+
 #[async_trait]
 impl IngestSourcePort for AtProtoIngestAdapter {
     fn probe(&self) -> ProbeOutcome {
         // An empty source is a valid configuration since ADR-077: the indexer
         // has no fallback and lists every repo DID from the PDS its document
-        // names. A configured source must be an absolute http(s) base URL, or
-        // the fallback could never be listed. (The transport-policy pre-check
-        // lands with the guarded client, ADR-077 §4.)
-        match source_readiness(&self.source) {
+        // names. A configured source must be an absolute http(s) base URL —
+        // and, for a guarded adapter, pass the transport-policy pre-check —
+        // or the fallback could never be listed.
+        let readiness = match self.policy {
+            Some(policy) => guarded_source_readiness(&self.source, policy),
+            None => source_readiness(&self.source),
+        };
+        match readiness {
             Ok(()) => ProbeOutcome::Ok,
             Err(detail) => ProbeOutcome::Refused {
                 reason: ports::ProbeRefusalReason::PdsTlsHandshakeFailed,
@@ -110,6 +210,17 @@ fn source_readiness(source: &str) -> Result<(), String> {
         _ => Err(format!(
             "ingest source {source:?} is not an absolute http(s) URL — cannot PULL listRecords"
         )),
+    }
+}
+
+/// [`source_readiness`] plus the transport-policy pre-check (pure).
+fn guarded_source_readiness(source: &str, policy: TransportPolicy) -> Result<(), String> {
+    source_readiness(source)?;
+    match url::Url::parse(source.trim()) {
+        Ok(url) if !url_admissible(&url, policy) => Err(format!(
+            "ingest source {source:?} is refused by the transport policy {policy:?}"
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -232,14 +343,17 @@ impl AtProtoIngestAdapter {
         if let Some(cursor) = cursor {
             url.query_pairs_mut().append_pair("cursor", cursor);
         }
-        let response =
-            self.client
-                .get(url)
-                .send()
-                .await
-                .map_err(|err| IngestError::Unreachable {
-                    message: format!("listRecords transport error: {err}"),
-                })?;
+        if let Some(policy) = self.policy.filter(|policy| !url_admissible(&url, *policy)) {
+            return Err(IngestError::AddressRefused {
+                message: format!("{base} is refused by the transport policy {policy:?}"),
+            });
+        }
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(transport_failure)?;
         if let Some(failure) = listing_status_failure(response.status().as_u16()) {
             return Err(failure);
         }
@@ -251,6 +365,19 @@ impl AtProtoIngestAdapter {
                     message: format!("listRecords body is not JSON: {err}"),
                 })?;
         parse_listed_page(&body)
+    }
+}
+
+/// A transport error: refused by the guard, or the source is unreachable.
+fn transport_failure(err: reqwest::Error) -> IngestError {
+    if refused_by_policy(&err) {
+        IngestError::AddressRefused {
+            message: format!("listRecords: {err}"),
+        }
+    } else {
+        IngestError::Unreachable {
+            message: format!("listRecords transport error: {err}"),
+        }
     }
 }
 
@@ -496,6 +623,7 @@ mod tests {
                 Some(IngestError::Unreachable { .. }) => "unreachable",
                 Some(IngestError::BadResponse { .. }) => "bad_response",
                 Some(IngestError::ProbeRefused { .. }) => "probe_refused",
+                Some(IngestError::AddressRefused { .. }) => "address_refused",
             };
             prop_assert_eq!(observed, expected);
         }
@@ -515,5 +643,88 @@ mod tests {
                 matches!(scheme, "http" | "https")
             );
         }
+    }
+
+    /// A listener on `[::1]` counting the connections that reached it.
+    fn loopback_listener() -> (std::net::TcpListener, u16) {
+        let listener = std::net::TcpListener::bind("[::1]:0").expect("bind [::1]");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let port = listener.local_addr().expect("addr").port();
+        (listener, port)
+    }
+
+    fn connections(listener: &std::net::TcpListener) -> usize {
+        std::iter::from_fn(|| listener.accept().ok()).count()
+    }
+
+    /// DNS answers only refused addresses (a rebinding-style answer for an
+    /// innocent-looking name).
+    fn rebinding_lookup() -> HostLookup {
+        std::sync::Arc::new(|_host: String| {
+            Box::pin(async {
+                Ok(vec![
+                    "10.0.0.1".parse().unwrap(),
+                    "::1".parse().unwrap(),
+                    "169.254.169.254".parse().unwrap(),
+                ])
+            })
+        })
+    }
+
+    async fn list_through_rebinding_dns(policy: TransportPolicy, port: u16) -> Option<IngestError> {
+        let adapter = AtProtoIngestAdapter::guarded_with_lookup("", policy, rebinding_lookup());
+        let base = format!("https://pds.rebind.test:{port}");
+        let listing = adapter.list_repo_claims(&base, "did:plc:x");
+        match tokio::time::timeout(std::time::Duration::from_secs(2), listing).await {
+            Ok(result) => result.err(),
+            Err(_elapsed) => None,
+        }
+    }
+
+    // bypass: a real socket + stub DNS (adapter integration), one example per policy.
+    #[tokio::test]
+    async fn a_name_resolving_only_to_refused_addresses_is_never_connected_to() {
+        let (listener, port) = loopback_listener();
+        let refused = list_through_rebinding_dns(TransportPolicy::HttpsPublicOnly, port).await;
+        assert!(
+            matches!(refused, Some(IngestError::AddressRefused { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            connections(&listener),
+            0,
+            "a refused address is never contacted"
+        );
+
+        // Non-vacuity: under the test policy the loopback answer is admitted
+        // and the connection reaches the listener.
+        let _ = list_through_rebinding_dns(TransportPolicy::HttpsOrLoopbackHttp, port).await;
+        assert_eq!(connections(&listener), 1);
+    }
+
+    // bypass: closed-world pre-check examples (no DNS involved), one per refusal kind.
+    #[tokio::test]
+    async fn refused_urls_are_rejected_before_any_request() {
+        let adapter = AtProtoIngestAdapter::guarded("", TransportPolicy::HttpsPublicOnly);
+        for base in [
+            "http://pds.example.com",
+            "https://10.0.0.1",
+            "https://[::ffff:127.0.0.1]",
+        ] {
+            let refused = adapter.list_repo_claims(base, "did:plc:x").await;
+            assert!(
+                matches!(refused, Err(IngestError::AddressRefused { .. })),
+                "{base}: {refused:?}"
+            );
+        }
+        assert!(
+            matches!(adapter.probe(), ProbeOutcome::Ok),
+            "an empty source is ready"
+        );
+        let insecure = AtProtoIngestAdapter::guarded(
+            "http://relay.example.com",
+            TransportPolicy::HttpsPublicOnly,
+        );
+        assert!(matches!(insecure.probe(), ProbeOutcome::Refused { .. }));
     }
 }
