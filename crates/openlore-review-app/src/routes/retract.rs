@@ -8,22 +8,27 @@
 
 use hyper::StatusCode;
 use ports::claim_domain::{RecordOrigin, UnsignedClaim};
-use ports::{PlanKind, ResolvedIdentity, SuggestionState, TakenPublishPlan};
+use ports::{PlanKind, ResolvedIdentity, SuggestionState};
 use review_domain::lifecycle::{retraction_step, OwnerStep};
 use review_domain::plans::{
-    plan_expires_at, plan_freshness, restore_retract_plan, retract_plan, rfc3339_utc,
-    PlanFreshness, RetractPlan,
+    plan_expires_at, restore_retract_plan, retract_plan, rfc3339_utc, RetractPlan,
 };
 use review_domain::views::{self, live_published_claim, PublishRetry, RetractPreview};
 
 use crate::executor::execute_retract;
 use crate::http::{App, PageRequest, Reply};
-use crate::limiter::unix_now;
+use crate::limiter::unix_now_secs;
+use crate::routes::confirm::{take_confirmed_plan, ConfirmedPlan};
 use crate::routes::review::not_found;
-use crate::routes::signin::{
-    csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing, SESSION_COOKIE,
-};
+use crate::routes::signin::{csrf_token_for, current_session, field, to_landing};
 use crate::wiring::{observe, LogEvent};
+
+/// What a confirm that arrived after its preview's deadline is told.
+const EXPIRED_NOTICE: &str =
+    "This preview has expired. Nothing was retracted; press Retract again.";
+
+/// What a confirm whose PDS could not be read is told.
+const PDS_UNREACHABLE_ON_CONFIRM: &str = "We couldn't reach your PDS. Nothing was retracted.";
 
 /// The owner's PDS could not be read, so nothing can be decided or written.
 struct PdsUnreachable;
@@ -44,15 +49,16 @@ pub(crate) async fn retract_preview(app: &App, request: &PageRequest) -> Reply {
             return unavailable(views::PDS_UNREACHABLE_NOTICE, &profile_path(&identity))
         }
     };
-    let kept = retract_plan(&identity.did, &rkey, &original, &rfc3339_utc(now()))
+    let now = unix_now_secs();
+    let kept = retract_plan(&identity.did, &rkey, &original, &rfc3339_utc(now))
         .ok()
         .filter(|plan| {
             app.plans
-                .put_publish_plan(&identity.did, &plan.stored(), plan_expires_at(now()))
+                .put_publish_plan(&identity.did, &plan.stored(), plan_expires_at(now))
                 .is_ok()
         });
     match kept {
-        Some(plan) => page(
+        Some(plan) => Reply::page(
             StatusCode::OK,
             views::retract_preview_page(&RetractPreview {
                 plan: &plan,
@@ -67,68 +73,45 @@ pub(crate) async fn retract_preview(app: &App, request: &PageRequest) -> Reply {
 /// "Confirm retraction" (or "Retry"): take the retract plan exactly once and
 /// add the retraction — unless the claim already is retracted.
 pub(crate) async fn confirm_retract(app: &App, request: &PageRequest) -> Reply {
-    let Some((_, session)) = current_session(app, request) else {
-        return to_landing();
+    let confirmed = match take_confirmed_plan(app, request, PlanKind::Retract) {
+        Ok(confirmed) => confirmed,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
-    let owner_did = session.owner_did.as_str();
-    let plan_id = field(&request.form, "plan").unwrap_or_default();
-    let Some(TakenPublishPlan { plan, expires_at }) = app
-        .plans
-        .take_publish_plan(owner_did, &plan_id, PlanKind::Retract)
-        .ok()
-        .flatten()
-    else {
-        return not_found();
-    };
-    let Ok(identity) = app.identity.resolve_did(owner_did).await else {
+    let Ok(identity) = app.identity.resolve_did(&confirmed.owner_did).await else {
         return unavailable(views::DIRECTORY_UNREACHABLE_NOTICE, "/review");
     };
-    if plan_freshness(expires_at, now()) == PlanFreshness::Expired {
-        return unavailable(
-            "This preview has expired. Nothing was retracted; press Retract again.",
-            &profile_path(&identity),
-        );
+    let profile_path = profile_path(&identity);
+    if confirmed.expired() {
+        return unavailable(EXPIRED_NOTICE, &profile_path);
     }
-    let Ok(plan) = restore_retract_plan(owner_did, &plan) else {
+    let Ok(plan) = restore_retract_plan(&confirmed.owner_did, &confirmed.stored) else {
         return not_found();
     };
-    let confirmed = Confirmed {
+    let retraction = Retraction {
         app,
         plan: &plan,
-        expires_at,
-        csrf_token: &field(&request.cookies, SESSION_COOKIE)
-            .map(|cookie| csrf_token_for(&cookie))
-            .unwrap_or_default(),
-        profile_path: &profile_path(&identity),
+        confirmed: &confirmed,
+        profile_path: &profile_path,
     };
     match live_claim(app, &identity, plan.retracted_cid()).await {
         Ok(live) => match retraction_step(live.is_some()) {
-            Some(OwnerStep::Move { .. }) => confirmed.retract().await,
-            _ => page(
-                StatusCode::OK,
-                views::retracted_page(None, confirmed.profile_path),
-            ),
+            Some(OwnerStep::Move { .. }) => retraction.add().await,
+            _ => Reply::page(StatusCode::OK, views::retracted_page(None, &profile_path)),
         },
-        Err(PdsUnreachable) => {
-            confirmed.not_retracted("We couldn't reach your PDS. Nothing was retracted.")
-        }
+        Err(PdsUnreachable) => retraction.not_added(PDS_UNREACHABLE_ON_CONFIRM),
     }
 }
 
 /// A taken, fresh retract plan of a still-live claim.
-struct Confirmed<'a> {
+struct Retraction<'a> {
     app: &'a App,
     plan: &'a RetractPlan,
-    expires_at: i64,
-    csrf_token: &'a str,
+    confirmed: &'a ConfirmedPlan,
     profile_path: &'a str,
 }
 
-impl Confirmed<'_> {
-    async fn retract(&self) -> Reply {
+impl Retraction<'_> {
+    async fn add(&self) -> Reply {
         let app = self.app;
         match execute_retract(app.repo_write.as_ref(), app.repo_read.as_ref(), self.plan).await {
             Ok(at_uri) => {
@@ -139,28 +122,32 @@ impl Confirmed<'_> {
                     SuggestionState::Published,
                     SuggestionState::Retracted,
                 );
-                page(
+                Reply::page(
                     StatusCode::OK,
                     views::retracted_page(Some(&at_uri), self.profile_path),
                 )
             }
-            Err(failure) => self.not_retracted(failure.retract_message()),
+            Err(failure) => self.not_added(failure.retract_message()),
         }
     }
 
     /// Nothing was retracted: the plan goes back (same deadline) so Retry
     /// adds the retraction exactly once.
-    fn not_retracted(&self, reason: &str) -> Reply {
+    fn not_added(&self, reason: &str) -> Reply {
         let kept = self
             .app
             .plans
-            .put_publish_plan(self.plan.owner_did(), &self.plan.stored(), self.expires_at)
+            .put_publish_plan(
+                self.plan.owner_did(),
+                &self.plan.stored(),
+                self.confirmed.expires_at,
+            )
             .is_ok();
         let retry = kept.then_some(PublishRetry {
             plan_id: self.plan.rkey(),
-            csrf_token: self.csrf_token,
+            csrf_token: &self.confirmed.csrf_token,
         });
-        page(
+        Reply::page(
             StatusCode::BAD_GATEWAY,
             views::retract_failed_page(reason, retry, self.profile_path),
         )
@@ -192,20 +179,8 @@ fn profile_path(identity: &ResolvedIdentity) -> String {
 }
 
 fn unavailable(reason: &str, profile_path: &str) -> Reply {
-    page(
+    Reply::page(
         StatusCode::SERVICE_UNAVAILABLE,
         views::retract_failed_page(reason, None, profile_path),
     )
-}
-
-fn page(status: StatusCode, html: String) -> Reply {
-    Reply::Page {
-        status,
-        html,
-        set_cookie: None,
-    }
-}
-
-fn now() -> i64 {
-    i64::try_from(unix_now()).unwrap_or_default()
 }

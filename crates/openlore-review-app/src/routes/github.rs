@@ -16,9 +16,7 @@ use review_domain::ownership::{
 use review_domain::views::{self, GithubStep, OwnershipOutcome};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::routes::signin::{
-    csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
-};
+use crate::routes::signin::{csrf_token_for, current_session, field, signed_in_post, to_landing};
 use crate::wiring::{observe, LogEvent};
 
 /// Recent verify attempts per DID (in memory; resets on restart, ADR-076 §2).
@@ -70,35 +68,24 @@ pub(crate) fn github_step(app: &App, request: &PageRequest) -> Reply {
 
 /// `POST /github`: check the named account's bio for the signed-in DID.
 pub(crate) async fn verify(app: &App, request: &PageRequest) -> Reply {
-    let Some((cookie_value, session)) = current_session(app, request) else {
-        return to_landing();
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     let typed = field(&request.form, "github_login").unwrap_or_default();
     let typed = typed.trim();
     let (login, outcome) = check_bio(app, &session, typed).await;
-    let message = match &outcome {
+    let shown = match &outcome {
         Ok(()) => {
             observe(app, LogEvent::GithubVerified);
-            views::ownership_message(
-                OwnershipOutcome::Verified,
-                &login,
-                &session.owner_did,
-                &session.handle,
-            )
+            OwnershipOutcome::Verified
         }
         Err(refusal) => {
             observe(app, LogEvent::GithubVerifyRefused(refusal.label()));
-            views::ownership_message(
-                OwnershipOutcome::Refused(refusal),
-                &login,
-                &session.owner_did,
-                &session.handle,
-            )
+            OwnershipOutcome::Refused(refusal)
         }
     };
+    let message = views::ownership_message(shown, &login, &session.owner_did, &session.handle);
     github_page(&session, &cookie_value, Some(&message))
 }
 
@@ -179,9 +166,8 @@ pub(crate) fn refusal_of(error: &GithubError) -> OwnershipRefusal {
 }
 
 fn github_page(session: &WebSession, cookie_value: &str, message: Option<&str>) -> Reply {
-    Reply::Page {
-        status: StatusCode::OK,
-        html: views::github_page(&session.owner_did, &csrf_token_for(cookie_value), message),
-        set_cookie: None,
-    }
+    Reply::page(
+        StatusCode::OK,
+        views::github_page(&session.owner_did, &csrf_token_for(cookie_value), message),
+    )
 }

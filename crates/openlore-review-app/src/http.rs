@@ -137,6 +137,25 @@ pub(crate) enum Reply {
     },
 }
 
+impl Reply {
+    /// A page with no cookie change.
+    pub(crate) fn page(status: StatusCode, html: String) -> Self {
+        Self::Page {
+            status,
+            html,
+            set_cookie: None,
+        }
+    }
+
+    /// A redirect with no cookie change.
+    pub(crate) fn redirect(location: &str) -> Self {
+        Self::Redirect {
+            location: location.to_string(),
+            set_cookie: None,
+        }
+    }
+}
+
 fn secured(mut response: Response<Full<Bytes>>) -> Response<Full<Bytes>> {
     let headers = response.headers_mut();
     for (name, value) in SECURITY_HEADERS {

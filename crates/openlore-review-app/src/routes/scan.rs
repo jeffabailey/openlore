@@ -11,26 +11,24 @@ use review_domain::views::{self, QueueNotice, ScanRefused};
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::review::queue_page;
-use crate::routes::signin::{csrf_matches, current_session, forbidden, random_token, to_landing};
+use crate::routes::signin::{current_session, random_token, signed_in_post, to_landing};
 use crate::scan::run_scan;
 
 /// `POST /scan`: refused (sent to the GitHub step) unless a verified link
 /// exists; refused with the reason when the budget says no; otherwise the
 /// scan starts in the background and the queue shows its progress.
 pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
-    let Some((cookie_value, session)) = current_session(app, request) else {
-        return to_landing();
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     let link = app.links.github_link(&session.owner_did).ok().flatten();
     let Some(link) = link.filter(|link| link.verified) else {
-        return redirect("/github");
+        return Reply::redirect("/github");
     };
     let refused = match app.scan_limiter.admit(&session.owner_did) {
         ScanAdmission::Admitted => None,
-        ScanAdmission::AlreadyScanning => return redirect("/review"),
+        ScanAdmission::AlreadyScanning => return Reply::redirect("/review"),
         ScanAdmission::DailyLimitReached => Some(ScanRefused::DailyLimitReached),
         ScanAdmission::AppBusy => Some(ScanRefused::AppBusy),
     };
@@ -60,7 +58,7 @@ pub(crate) async fn start_scan(app: &Arc<App>, request: &PageRequest) -> Reply {
         run_id,
         link,
     ));
-    redirect("/review")
+    Reply::redirect("/review")
 }
 
 /// `GET /scan/status`: the status of the person's latest scan.
@@ -74,16 +72,5 @@ pub(crate) fn scan_status(app: &App, request: &PageRequest) -> Reply {
         .ok()
         .flatten()
         .map_or("none", |run| ScanStatus::as_str(run.status));
-    Reply::Page {
-        status: StatusCode::OK,
-        html: views::scan_status_page(status),
-        set_cookie: None,
-    }
-}
-
-fn redirect(location: &str) -> Reply {
-    Reply::Redirect {
-        location: location.to_string(),
-        set_cookie: None,
-    }
+    Reply::page(StatusCode::OK, views::scan_status_page(status))
 }

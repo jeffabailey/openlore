@@ -9,7 +9,7 @@ use hyper::{Method, Response, StatusCode};
 use review_domain::kpi::{parse_day, sum_counters, utc_day};
 
 use crate::http::{plain, App};
-use crate::limiter::unix_now;
+use crate::limiter::unix_now_secs;
 use crate::routes::settings::forget;
 
 /// The operator routes.
@@ -43,7 +43,7 @@ pub(crate) async fn handle(
 }
 
 fn kpi(app: &App, query: &[(String, String)]) -> Response<Full<Bytes>> {
-    let today = utc_day(i64::try_from(unix_now()).unwrap_or_default());
+    let today = utc_day(unix_now_secs());
     let day = |name: &str| {
         query
             .iter()

@@ -19,7 +19,7 @@ use review_domain::reconcile::{add_counts, reconcile};
 use scraper_domain::{derive_candidates, select_person_repos, DEFAULT_PERSON_REPO_COUNT};
 
 use crate::http::App;
-use crate::limiter::unix_now;
+use crate::limiter::unix_now_secs;
 use crate::routes::github::{account_of, refusal_of};
 use crate::wiring::{observe, LogEvent};
 
@@ -148,7 +148,7 @@ fn failed(app: &App, error: &GithubError) -> Ended {
 
 /// Paused for GitHub's budget: resume when it refills.
 fn paused(app: &App) -> Ended {
-    let now = i64::try_from(unix_now()).unwrap_or_default();
+    let now = unix_now_secs();
     let resume_after = app
         .github
         .last_rate_budget()

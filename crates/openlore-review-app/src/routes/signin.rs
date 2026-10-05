@@ -146,10 +146,7 @@ async fn begin_sign_in(app: &App, request: &PageRequest) -> Reply {
     match app.oauth.begin_authorization(&identity).await {
         Ok(consent_screen) => {
             observe(app, LogEvent::SignInStarted);
-            Reply::Redirect {
-                location: consent_screen,
-                set_cookie: None,
-            }
+            Reply::redirect(&consent_screen)
         }
         Err(_) => failed(app, SignInFailure::TemporarilyUnavailable),
     }
@@ -224,21 +221,24 @@ fn start_session(app: &App, identity: &ports::ResolvedIdentity) -> Reply {
 }
 
 fn sign_out(app: &App, request: &PageRequest) -> Reply {
-    let Some((cookie_value, session)) = current_session(app, request) else {
-        return to_landing();
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     match app
         .sessions
         .end_session(&sha256_hex(&cookie_value), &session.owner_did)
     {
-        Ok(()) => Reply::Redirect {
-            location: "/".to_string(),
-            set_cookie: Some(cleared_session_cookie()),
-        },
+        Ok(()) => signed_out(),
         Err(_) => failed(app, SignInFailure::TemporarilyUnavailable),
+    }
+}
+
+/// Back to the landing page, the session cookie cleared.
+pub(crate) fn signed_out() -> Reply {
+    Reply::Redirect {
+        location: "/".to_string(),
+        set_cookie: Some(cleared_session_cookie()),
     }
 }
 
@@ -264,11 +264,10 @@ pub(crate) fn current_session(
 /// The landing page explaining why the sign-in did not complete.
 fn failed(app: &App, failure: SignInFailure) -> Reply {
     observe(app, LogEvent::SignInRefused(failure));
-    Reply::Page {
-        status: failure_status(failure),
-        html: views::landing_page(app.permission_mode, Some(failure)),
-        set_cookie: None,
-    }
+    Reply::page(
+        failure_status(failure),
+        views::landing_page(app.permission_mode, Some(failure)),
+    )
 }
 
 fn failure_status(failure: SignInFailure) -> StatusCode {
@@ -283,18 +282,11 @@ fn failure_status(failure: SignInFailure) -> StatusCode {
 }
 
 pub(crate) fn forbidden() -> Reply {
-    Reply::Page {
-        status: StatusCode::FORBIDDEN,
-        html: "Forbidden".to_string(),
-        set_cookie: None,
-    }
+    Reply::page(StatusCode::FORBIDDEN, "Forbidden".to_string())
 }
 
 pub(crate) fn to_landing() -> Reply {
-    Reply::Redirect {
-        location: "/".to_string(),
-        set_cookie: None,
-    }
+    Reply::redirect("/")
 }
 
 pub(crate) fn field(pairs: &[(String, String)], name: &str) -> Option<String> {
@@ -323,6 +315,28 @@ fn sha256_hex(text: &str) -> String {
 /// hash needs storing (the page re-derives it on render).
 pub(crate) fn csrf_token_for(cookie_value: &str) -> String {
     sha256_hex(&format!("csrf:{cookie_value}"))
+}
+
+/// The anti-forgery token of the request's session cookie.
+pub(crate) fn csrf_token_of(request: &PageRequest) -> String {
+    field(&request.cookies, SESSION_COOKIE)
+        .map(|cookie| csrf_token_for(&cookie))
+        .unwrap_or_default()
+}
+
+/// The session of a state-changing request (with its cookie value), or the
+/// reply that refuses it: no session goes to the landing page, a missing or
+/// forged anti-forgery token is forbidden.
+pub(crate) fn signed_in_post(
+    app: &App,
+    request: &PageRequest,
+) -> Result<(String, ports::WebSession), Reply> {
+    let (cookie_value, session) = current_session(app, request).ok_or_else(to_landing)?;
+    if csrf_matches(request, &session) {
+        Ok((cookie_value, session))
+    } else {
+        Err(forbidden())
+    }
 }
 
 fn session_cookie(value: &str) -> String {

@@ -13,6 +13,7 @@ pub mod kpi;
 pub mod lifecycle;
 pub mod ownership;
 pub mod plans;
+pub mod published;
 pub mod reconcile;
 pub mod share;
 pub mod signin;

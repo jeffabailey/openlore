@@ -83,21 +83,16 @@ fn page(
     viewer_is_owner: bool,
     content: &ProfileContent,
 ) -> Reply {
-    Reply::Page {
+    Reply::page(
         status,
-        html: views::profile_page(&ProfileView {
+        views::profile_page(&ProfileView {
             handle,
             viewer_is_owner,
             content,
         }),
-        set_cookie: None,
-    }
+    )
 }
 
 fn not_found() -> Reply {
-    Reply::Page {
-        status: StatusCode::NOT_FOUND,
-        html: views::profile_not_found_page(),
-        set_cookie: None,
-    }
+    Reply::page(StatusCode::NOT_FOUND, views::profile_not_found_page())
 }

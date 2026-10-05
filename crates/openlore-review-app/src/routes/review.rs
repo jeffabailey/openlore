@@ -15,10 +15,10 @@ use review_domain::plans::{
 use review_domain::views::{self, EditView, QueueNotice, QueueView};
 
 use crate::http::{App, PageRequest, Reply};
-use crate::limiter::unix_now;
+use crate::limiter::unix_now_secs;
 use crate::routes::github::github_step_of;
 use crate::routes::signin::{
-    csrf_matches, csrf_token_for, current_session, field, forbidden, to_landing,
+    csrf_token_for, csrf_token_of, current_session, field, signed_in_post, to_landing,
 };
 use crate::wiring::{observe, LogEvent};
 
@@ -57,9 +57,9 @@ pub(crate) fn queue_page(
     );
     let latest_scan = app.scans.latest_scan(&session.owner_did).ok().flatten();
     let csrf_token = csrf_token_for(cookie_value);
-    Reply::Page {
+    Reply::page(
         status,
-        html: views::review_page(&QueueView {
+        views::review_page(&QueueView {
             handle: &session.handle,
             csrf_token: &csrf_token,
             github: github_step_of(link.as_ref()),
@@ -68,8 +68,7 @@ pub(crate) fn queue_page(
             tally,
             notice,
         }),
-        set_cookie: None,
-    }
+    )
 }
 
 /// `POST /review/approve`: the exact-record preview of one of the owner's
@@ -139,9 +138,9 @@ fn edit_form(
     status: StatusCode,
 ) -> Reply {
     let choices = philosophy_choices(&suggestion.key.object);
-    Reply::Page {
+    Reply::page(
         status,
-        html: views::edit_page(&EditView {
+        views::edit_page(&EditView {
             suggestion,
             csrf_token: &csrf_token_of(request),
             choices: &choices,
@@ -149,8 +148,7 @@ fn edit_form(
             typed_confidence,
             guidance,
         }),
-        set_cookie: None,
-    }
+    )
 }
 
 fn draft_of(suggestion: Suggestion) -> ClaimDraft {
@@ -162,14 +160,7 @@ fn draft_of(suggestion: Suggestion) -> ClaimDraft {
 }
 
 fn composed_now() -> String {
-    rfc3339_utc(i64::try_from(unix_now()).unwrap_or_default())
-}
-
-/// The anti-forgery token of the request's session cookie.
-fn csrf_token_of(request: &PageRequest) -> String {
-    field(&request.cookies, crate::routes::signin::SESSION_COOKIE)
-        .map(|cookie| csrf_token_for(&cookie))
-        .unwrap_or_default()
+    rfc3339_utc(unix_now_secs())
 }
 
 /// Keep a built plan until its deadline and show its exact-record preview;
@@ -185,16 +176,15 @@ fn keep_and_preview(
             .put_publish_plan(
                 &session.owner_did,
                 &plan.stored(),
-                plan_expires_at(i64::try_from(unix_now()).unwrap_or_default()),
+                plan_expires_at(unix_now_secs()),
             )
             .is_ok()
     });
     match kept {
-        Some(plan) => Reply::Page {
-            status: StatusCode::OK,
-            html: views::approval_preview_page(&plan, &csrf_token_of(request)),
-            set_cookie: None,
-        },
+        Some(plan) => Reply::page(
+            StatusCode::OK,
+            views::approval_preview_page(&plan, &csrf_token_of(request)),
+        ),
         None => not_found(),
     }
 }
@@ -239,10 +229,7 @@ pub(crate) fn decline_suggestion(app: &App, request: &PageRequest) -> Reply {
 /// `POST /review/undo`: a declined suggestion is pending again.
 pub(crate) fn undo_decline(app: &App, request: &PageRequest) -> Reply {
     with_own_step(app, request, LifecycleEvent::Undo, |_, _, _, _| {
-        Reply::Redirect {
-            location: "/review".to_string(),
-            set_cookie: None,
-        }
+        Reply::redirect("/review")
     })
 }
 
@@ -256,12 +243,10 @@ fn with_own_step(
     event: LifecycleEvent,
     done: impl FnOnce(&str, &WebSession, &SuggestionKey, bool) -> Reply,
 ) -> Reply {
-    let Some((cookie_value, session)) = current_session(app, request) else {
-        return to_landing();
+    let (cookie_value, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     let Some(key) = key_of(request, "object").filter(|_| link_verified(app, &session.owner_did))
     else {
         return not_found();
@@ -304,12 +289,10 @@ fn with_own_suggestion(
     object_field: &str,
     act: impl FnOnce(&WebSession, Suggestion) -> Reply,
 ) -> Reply {
-    let Some((_, session)) = current_session(app, request) else {
-        return to_landing();
+    let (_, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     let visible = visible_and_approvable(
         SuggestionState::Pending,
         link_verified(app, &session.owner_did),
@@ -338,9 +321,5 @@ fn key_of(request: &PageRequest, object_field: &str) -> Option<SuggestionKey> {
 }
 
 pub(crate) fn not_found() -> Reply {
-    Reply::Page {
-        status: StatusCode::NOT_FOUND,
-        html: views::not_found_page(),
-        set_cookie: None,
-    }
+    Reply::page(StatusCode::NOT_FOUND, views::not_found_page())
 }

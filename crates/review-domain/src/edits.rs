@@ -8,12 +8,14 @@ use std::fmt;
 
 use ports::lexicon::philosophy::{object_id, seeds};
 
+use crate::lifecycle::BASIS_POINTS;
+
 /// The field guidance shown for any confidence that is not 0.00–1.00 at
 /// two decimals.
 pub const CONFIDENCE_GUIDANCE: &str = "Enter a number from 0.00 to 1.00";
 
 /// The highest confidence, in basis points (1.00).
-const MAX_BASIS_POINTS: u32 = 10_000;
+const MAX_BASIS_POINTS: u32 = BASIS_POINTS as u32;
 
 /// A typed confidence that is not 0.00–1.00 with at most two decimals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

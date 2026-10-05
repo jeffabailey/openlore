@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use adapter_atproto_did::IdentityLookup;
 use adapter_atproto_ingest::AtProtoIngestAdapter;
@@ -29,7 +29,7 @@ use review_domain::kpi::{
 };
 use review_domain::signin::{permission_mode, SignInFailure};
 use scraper_domain::{load_mapping, SignalPredicateMapping, EMBEDDED_MAPPING_YAML};
-use serde_json::json;
+use serde_json::{json, Map, Value};
 
 use crate::config::{
     parse_config, parse_data_key, parse_secrets, AppConfig, BuildProfile, DataKeyMaterial,
@@ -113,7 +113,7 @@ pub(crate) enum LogEvent<'a> {
     /// The daily anonymous counters of `day`.
     KpiRollup {
         day: String,
-        counters: std::collections::BTreeMap<&'static str, i64>,
+        counters: BTreeMap<&'static str, i64>,
     },
     /// A data-key rotation re-encrypted `rows` sealed blobs at startup.
     SecretsRekeyed(usize),
@@ -142,7 +142,7 @@ fn counters_of(event: &LogEvent<'_>) -> Vec<KpiEvent> {
 pub(crate) fn observe(app: &App, event: LogEvent<'_>) {
     let counted = counters_of(&event);
     emit(event);
-    let today = utc_day(i64::try_from(crate::limiter::unix_now()).unwrap_or_default());
+    let today = utc_day(crate::limiter::unix_now_secs());
     for counter in counted {
         let _ = app.kpi.count(&today, counter.name());
     }
@@ -160,90 +160,101 @@ fn refusal_reason(failure: SignInFailure) -> &'static str {
     }
 }
 
+/// How loud an event is.
+#[derive(Debug, Clone, Copy)]
+enum Level {
+    Info,
+    Warn,
+    Error,
+}
+
+impl Level {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// An event's level, catalogue name and extra fields (pure). The fields are
+/// the whole allowlist: nothing outside this table is ever logged.
+fn describe(event: LogEvent<'_>) -> (Level, &'static str, Vec<(&'static str, Value)>) {
+    use Level::{Error, Info, Warn};
+    match event {
+        LogEvent::AppReady => (Info, "app.ready", vec![]),
+        LogEvent::ProbePassed => (Info, "health.probe.passed", vec![]),
+        LogEvent::SignInStarted => (Info, "signin.started", vec![]),
+        LogEvent::SignInCompleted => (Info, "signin.completed", vec![]),
+        LogEvent::SignInRefused(failure) => (
+            Info,
+            "signin.refused",
+            vec![("reason", json!(refusal_reason(failure)))],
+        ),
+        LogEvent::CallbackPanicIsolated => (Warn, "signin.callback_panic_isolated", vec![]),
+        LogEvent::SuggestionDeclined => (Info, "suggestion.declined", vec![]),
+        LogEvent::SharePosted => (Info, "share.posted", vec![]),
+        LogEvent::RetractPosted => (Info, "retract.posted", vec![]),
+        LogEvent::SuggestionApproved { edited } => {
+            (Info, "suggestion.approved", vec![("edited", json!(edited))])
+        }
+        LogEvent::Disconnect(outcome) => (
+            Info,
+            "disconnect",
+            vec![("revoke_outcome", json!(outcome.as_str()))],
+        ),
+        LogEvent::KpiRollup { day, counters } => (
+            Info,
+            "kpi.rollup",
+            vec![("day", json!(day)), ("counters", json!(counters))],
+        ),
+        LogEvent::SecretsRekeyed(rows) => (Info, "secrets.rekeyed", vec![("rows", json!(rows))]),
+        LogEvent::GithubVerified => (Info, "github.verified", vec![]),
+        LogEvent::GithubVerifyRefused(reason) => (
+            Info,
+            "github.verify_refused",
+            vec![("reason", json!(reason))],
+        ),
+        LogEvent::ScanFinished(status) => (
+            Info,
+            "scan.finished",
+            vec![("status", json!(status.as_str()))],
+        ),
+        LogEvent::GithubTokenExpiring(days_left) => (
+            Warn,
+            "github.token.expiring",
+            vec![("days_left", json!(days_left))],
+        ),
+        LogEvent::StartupRefused(r) => (
+            Error,
+            "health.startup.refused",
+            vec![
+                ("probe", json!(r.probe.name())),
+                ("reason", json!(r.detail)),
+            ],
+        ),
+    }
+}
+
+/// The JSON line of `event` at Unix second `ts` (pure).
+fn event_line(ts: u64, event: LogEvent<'_>) -> Value {
+    let (level, name, fields) = describe(event);
+    let mut line = Map::new();
+    line.insert("ts".into(), json!(ts));
+    line.insert("level".into(), json!(level.as_str()));
+    line.insert("event".into(), json!(name));
+    line.extend(
+        fields
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value)),
+    );
+    Value::Object(line)
+}
+
 /// Emit one structured JSON event on stdout.
 pub(crate) fn emit(event: LogEvent<'_>) {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default();
-    let line = match event {
-        LogEvent::AppReady => json!({"ts": ts, "level": "info", "event": "app.ready"}),
-        LogEvent::ProbePassed => json!({"ts": ts, "level": "info", "event": "health.probe.passed"}),
-        LogEvent::SignInStarted => json!({"ts": ts, "level": "info", "event": "signin.started"}),
-        LogEvent::SignInCompleted => {
-            json!({"ts": ts, "level": "info", "event": "signin.completed"})
-        }
-        LogEvent::SignInRefused(failure) => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "signin.refused",
-            "reason": refusal_reason(failure),
-        }),
-        LogEvent::CallbackPanicIsolated => json!({
-            "ts": ts,
-            "level": "warn",
-            "event": "signin.callback_panic_isolated",
-        }),
-        LogEvent::SuggestionDeclined => {
-            json!({"ts": ts, "level": "info", "event": "suggestion.declined"})
-        }
-        LogEvent::SharePosted => json!({"ts": ts, "level": "info", "event": "share.posted"}),
-        LogEvent::RetractPosted => json!({"ts": ts, "level": "info", "event": "retract.posted"}),
-        LogEvent::SuggestionApproved { edited } => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "suggestion.approved",
-            "edited": edited,
-        }),
-        LogEvent::Disconnect(outcome) => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "disconnect",
-            "revoke_outcome": outcome.as_str(),
-        }),
-        LogEvent::KpiRollup { day, counters } => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "kpi.rollup",
-            "day": day,
-            "counters": counters,
-        }),
-        LogEvent::SecretsRekeyed(rows) => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "secrets.rekeyed",
-            "rows": rows,
-        }),
-        LogEvent::GithubVerified => {
-            json!({"ts": ts, "level": "info", "event": "github.verified"})
-        }
-        LogEvent::GithubVerifyRefused(reason) => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "github.verify_refused",
-            "reason": reason,
-        }),
-        LogEvent::ScanFinished(status) => json!({
-            "ts": ts,
-            "level": "info",
-            "event": "scan.finished",
-            "status": status.as_str(),
-        }),
-        LogEvent::GithubTokenExpiring(days_left) => json!({
-            "ts": ts,
-            "level": "warn",
-            "event": "github.token.expiring",
-            "days_left": days_left,
-        }),
-        LogEvent::StartupRefused(r) => json!({
-            "ts": ts,
-            "level": "error",
-            "event": "health.startup.refused",
-            "probe": r.probe.name(),
-            "reason": r.detail,
-        }),
-    };
-    println!("{line}");
+    println!("{}", event_line(crate::limiter::unix_now(), event));
 }
 
 /// Everything the app runs on, wired but not yet trusted.
@@ -356,10 +367,7 @@ pub(crate) fn self_test() -> u8 {
 
 /// `gen-client-jwk`: print a fresh private client JWK.
 pub(crate) fn gen_client_jwk() -> u8 {
-    let issued = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default();
+    let issued = crate::limiter::unix_now();
     println!(
         "{}",
         ClientKey::generate(&format!("openlore-review-{issued}")).to_private_json()
@@ -431,10 +439,10 @@ async fn probe(wired: &Wired) -> Result<(), Refusal> {
 /// at startup.
 async fn daily_signals(app: Arc<App>, (api_base, token): (String, GithubToken)) {
     loop {
-        let now = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+        let now = crate::limiter::unix_now_secs();
         let wait = u64::try_from(seconds_until_next_rollup(now)).unwrap_or(1);
         tokio::time::sleep(Duration::from_secs(wait)).await;
-        let at = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+        let at = crate::limiter::unix_now_secs();
         let day = rollup_day(at);
         if let Ok(rows) = app.kpi.counters_between(&day, &day) {
             emit(LogEvent::KpiRollup {
@@ -482,7 +490,7 @@ async fn github_token_arm(api_base: &str, token: &GithubToken) -> Result<(), Ref
 
 /// A token close to expiry still serves; the operator is warned (A-8).
 fn warn_if_token_expiring(headers: &reqwest::header::HeaderMap) {
-    let now = i64::try_from(crate::limiter::unix_now()).unwrap_or_default();
+    let now = crate::limiter::unix_now_secs();
     let days_left = headers
         .get(TOKEN_EXPIRATION_HEADER)
         .and_then(|value| value.to_str().ok())

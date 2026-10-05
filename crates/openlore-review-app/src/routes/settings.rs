@@ -12,7 +12,7 @@ use review_domain::views;
 
 use crate::http::{App, PageRequest, Reply};
 use crate::routes::signin::{
-    cleared_session_cookie, csrf_matches, csrf_token_for, current_session, forbidden, to_landing,
+    csrf_token_for, current_session, signed_in_post, signed_out, to_landing,
 };
 use crate::wiring::{observe, LogEvent};
 
@@ -34,22 +34,16 @@ pub(crate) fn forget_me_preview(app: &App, request: &PageRequest) -> Reply {
 
 /// `POST /settings/forget`: "Yes, forget me". She ends signed out.
 pub(crate) async fn confirm_forget_me(app: &App, request: &PageRequest) -> Reply {
-    let Some((_, session)) = current_session(app, request) else {
-        return to_landing();
+    let (_, session) = match signed_in_post(app, request) {
+        Ok(signed_in) => signed_in,
+        Err(refused) => return refused,
     };
-    if !csrf_matches(request, &session) {
-        return forbidden();
-    }
     match forget(app, &session.owner_did).await {
-        Ok(_) => Reply::Redirect {
-            location: "/".to_string(),
-            set_cookie: Some(cleared_session_cookie()),
-        },
-        Err(_) => Reply::Page {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            html: views::forget_me_failed_page(),
-            set_cookie: None,
-        },
+        Ok(_) => signed_out(),
+        Err(_) => Reply::page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            views::forget_me_failed_page(),
+        ),
     }
 }
 
@@ -63,9 +57,5 @@ pub(crate) async fn forget(app: &App, owner_did: &str) -> Result<RevokeOutcome, 
 }
 
 fn page(html: String) -> Reply {
-    Reply::Page {
-        status: StatusCode::OK,
-        html,
-        set_cookie: None,
-    }
+    Reply::page(StatusCode::OK, html)
 }

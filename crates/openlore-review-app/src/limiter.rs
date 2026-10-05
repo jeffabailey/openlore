@@ -14,6 +14,11 @@ pub(crate) fn unix_now() -> u64 {
         .unwrap_or_default()
 }
 
+/// Unix seconds now, signed as the pure core's clocks are.
+pub(crate) fn unix_now_secs() -> i64 {
+    i64::try_from(unix_now()).unwrap_or_default()
+}
+
 /// Who is scanning and who scanned recently.
 #[derive(Default)]
 pub(crate) struct ScanLimiter(Mutex<ScanBudget>);

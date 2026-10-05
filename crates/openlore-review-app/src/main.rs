@@ -24,6 +24,7 @@ mod config;
 mod http;
 mod limiter;
 mod routes {
+    pub(crate) mod confirm;
     pub(crate) mod github;
     pub(crate) mod profile;
     pub(crate) mod publish;
