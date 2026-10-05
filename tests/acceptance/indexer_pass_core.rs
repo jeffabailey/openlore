@@ -327,7 +327,7 @@ proptest! {
     /// Anything listed through the fallback is relay origin — whatever URL it
     /// came from, even one equal to somebody's resolved PDS.
     #[test]
-    #[ignore = "DELIVER 03-01 (unit): origin_of(Fallback, _) == Relay"]
+    #[ignore = "DELIVER 01-02 (unit): origin_of(Fallback, _) == Relay"]
     fn anything_read_through_the_fallback_is_relay_origin(
         fallback in arb_public_https_url(), fetched_from in arb_public_https_url()
     ) {
@@ -339,7 +339,7 @@ proptest! {
     /// A record read from the freshly resolved PDS is author-PDS origin exactly
     /// when it was fetched from that PDS.
     #[test]
-    #[ignore = "DELIVER 01-02 (unit): origin_of(OwnPds(e), f) == AuthorPds iff f == e"]
+    #[ignore = "DELIVER 01-01 (unit): origin_of(OwnPds(e), f) == AuthorPds iff f == e"]
     fn own_pds_origin_holds_exactly_when_fetched_from_the_resolved_pds(
         endpoint in arb_public_https_url(), other in arb_public_https_url()
     ) {
@@ -353,7 +353,7 @@ proptest! {
     /// fallback); a refused one is skipped (never the fallback); an unresolved
     /// DID goes to the fallback when there is one, else is skipped.
     #[test]
-    #[ignore = "DELIVER 03-02 (unit): plan_listing decision table"]
+    #[ignore = "DELIVER 01-03 (unit): plan_listing decision table"]
     fn the_listing_plan_never_sends_a_resolved_did_to_the_fallback(
         resolved in arb_public_https_url(),
         refused in arb_refused_endpoint(),
@@ -380,7 +380,7 @@ proptest! {
     /// The pass summary accounts for every configured DID, and the exit code is
     /// 3 exactly when at least one DID was configured and none was listed.
     #[test]
-    #[ignore = "DELIVER 02-10 (unit): summarize + pass_exit_code"]
+    #[ignore = "DELIVER 02-01 (unit): summarize + pass_exit_code"]
     fn the_summary_accounts_for_every_did_and_exit_3_means_total_outage(
         outcomes in proptest::collection::vec(arb_outcome(), 0..60)
     ) {
@@ -396,7 +396,7 @@ proptest! {
     /// The address guard refuses exactly the documented ranges, for every IPv4
     /// address and every IPv6 address (IPv4-mapped addresses judged as IPv4).
     #[test]
-    #[ignore = "DELIVER 02-11 (unit): ports::net_policy::address_refused"]
+    #[ignore = "DELIVER 02-02 (unit): ports::net_policy::address_refused"]
     fn the_address_guard_refuses_exactly_the_documented_ranges(v4 in any::<u32>(), v6 in any::<u128>()) {
         let v4 = Ipv4Addr::from(v4);
         let v6 = Ipv6Addr::from(v6);
@@ -413,7 +413,7 @@ proptest! {
     /// trimmed) under both policies, and plain http only to loopback under the
     /// test policy.
     #[test]
-    #[ignore = "DELIVER 02-11 (unit): pds_endpoint_admissible"]
+    #[ignore = "DELIVER 02-02 (unit): pds_endpoint_admissible"]
     fn the_endpoint_precheck_admits_https_public_and_loopback_http_only_under_the_test_policy(
         public in arb_public_https_url(), refused in arb_refused_endpoint(), port in 1u16..
     ) {
@@ -432,7 +432,7 @@ proptest! {
     /// Config parsing is total: for any environment it either loads or refuses
     /// naming one of the indexer's variables and a value taken from it.
     #[test]
-    #[ignore = "DELIVER 04-01 (unit): parse_config is total, refusals name variable + value"]
+    #[ignore = "DELIVER 02-03 (unit): parse_config is total, refusals name variable + value"]
     fn config_parsing_is_total_and_every_refusal_names_a_variable_and_its_value(env in arb_env()) {
         match sut_parse_config(&env, false) {
             Ok(cfg) => {
@@ -453,7 +453,7 @@ proptest! {
     /// A release build refuses the loopback test seam whatever else is set; a
     /// debug build turns it into the loopback-http test policy.
     #[test]
-    #[ignore = "DELIVER 04-10 (unit): BuildProfile::Release + seam ⇒ refusal"]
+    #[ignore = "DELIVER 02-03 (unit): BuildProfile::Release + seam ⇒ refusal"]
     fn a_release_build_refuses_the_loopback_seam_whatever_else_is_set(mut env in arb_env()) {
         env.insert("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP".to_string(), "1".to_string());
         let refusal = sut_parse_config(&env, true);
@@ -472,7 +472,7 @@ proptest! {
     /// Any list of valid DIDs (comma or whitespace separated, with repeats)
     /// loads as the distinct DIDs in first-seen order.
     #[test]
-    #[ignore = "DELIVER 04-06 (unit): DID list parse + dedup, first wins"]
+    #[ignore = "DELIVER 02-03 (unit): DID list parse + dedup, first wins"]
     fn a_list_of_valid_dids_loads_as_its_distinct_dids_in_order(
         dids in proptest::collection::vec(arb_did(), 0..12), comma in any::<bool>()
     ) {
@@ -496,7 +496,7 @@ proptest! {
     /// Repo binding partitions a listing: records of the requested repo are
     /// kept, every other record is counted as foreign, none is lost.
     #[test]
-    #[ignore = "DELIVER 01-04 (unit): records_of keeps own, counts foreign"]
+    #[ignore = "DELIVER 01-02 (unit): records_of keeps own, counts foreign"]
     fn repo_binding_keeps_own_records_and_counts_every_foreign_one(
         did in arb_did(),
         listed in proptest::collection::vec((prop_oneof![Just(None), arb_did().prop_map(Some)], "[a-z0-9]{8}"), 0..20)
@@ -515,7 +515,7 @@ proptest! {
     /// Over the wire, a missing provenance reads as app-signed, the two known
     /// tokens read as themselves, and any other token is withheld (never guessed).
     #[test]
-    #[ignore = "DELIVER 05-04 (unit): provenance decode in adapter-index-query"]
+    #[ignore = "DELIVER 02-04 (unit): provenance decode in adapter-index-query"]
     fn an_unknown_wire_provenance_is_withheld_never_guessed(token in "[ -~]{0,24}") {
         let expected = match token.as_str() {
             "app-signed" => Some(WireProvenance::AppSigned),
@@ -535,7 +535,7 @@ proptest! {
 /// Every fetch failure maps to exactly one documented reason; a failing
 /// fallback keeps `did_unresolvable` and records the fallback failure.
 #[test]
-#[ignore = "DELIVER 02-02 (unit): classify_fetch_failure, all 8 cases"]
+#[ignore = "DELIVER 01-04 (unit): classify_fetch_failure, all 8 cases"]
 fn every_fetch_failure_maps_to_exactly_one_documented_reason() {
     let own = Source::OwnPds("https://pds.volkov.dev".to_string());
     let fallback = Source::Fallback("https://pds.jeffbailey.us".to_string());
@@ -570,7 +570,7 @@ fn every_fetch_failure_maps_to_exactly_one_documented_reason() {
 /// CORE-13 @US-IPF-002 @AC-002.9 @DD-IPF-5 @C1b @boundary @contract-shape:pure-function
 /// The range edges, pinned (172.15.255.255 is public, 172.16.0.0 is not, …).
 #[test]
-#[ignore = "DELIVER 02-11 (unit): address_refused at every range boundary"]
+#[ignore = "DELIVER 02-02 (unit): address_refused at every range boundary"]
 fn the_address_guard_holds_at_every_range_edge() {
     let cases: [(&str, bool); 20] = [
         ("0.0.0.0", true),
@@ -614,7 +614,7 @@ fn the_address_guard_holds_at_every_range_edge() {
 /// An old server's search row (no provenance key) still decodes, as "no
 /// provenance", and re-encodes without the key; a current row keeps it.
 #[test]
-#[ignore = "DELIVER 05-04 (unit): SearchResultDto.provenance is additive"]
+#[ignore = "DELIVER 02-04 (unit): SearchResultDto.provenance is additive"]
 fn an_old_search_row_without_provenance_still_decodes_and_reencodes_unchanged() {
     let old = serde_json::json!({
         "author_did": "did:plc:dvolkov3m9q#org.openlore.application",

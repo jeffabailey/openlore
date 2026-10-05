@@ -59,7 +59,7 @@ fn violations(tokens: &[&str]) -> Vec<String> {
 
 /// XA-1 @US-IPF-003 @I-IPF-2 @ADR-077 @DD-IPF-12 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-01: origin only via ListingSource (indexer_origin_only_via_listing_source)"]
+#[ignore = "DELIVER 01-02: origin only via ListingSource (indexer_origin_only_via_listing_source)"]
 fn the_indexer_derives_origin_only_through_the_listing_source() {
     let found = violations(&["RecordOrigin::of", "RecordOrigin::AuthorPds"]);
     assert!(
@@ -72,7 +72,7 @@ fn the_indexer_derives_origin_only_through_the_listing_source() {
 
 /// XA-2 @US-IPF-002 @AC-002.9 @DD-IPF-5 @R-IPF-7 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-11: guarded clients only (indexer_guarded_clients_only)"]
+#[ignore = "DELIVER 02-02: guarded clients only (indexer_guarded_clients_only)"]
 fn the_indexer_wires_only_address_guarded_clients() {
     let found = violations(&["AtProtoIngestAdapter::new", "IdentityLookup::new"]);
     assert!(
@@ -84,7 +84,7 @@ fn the_indexer_wires_only_address_guarded_clients() {
 
 /// XA-3 @DD-IPF-12 @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 02-11 / 03-01: both rules registered in cargo xtask check-arch"]
+#[ignore = "DELIVER 02-02: both rules registered in cargo xtask check-arch"]
 fn both_rules_are_part_of_check_arch() {
     let check_arch = std::fs::read_to_string(root().join("xtask/src/check_arch.rs"))
         .expect("read xtask/src/check_arch.rs");
@@ -102,7 +102,7 @@ fn both_rules_are_part_of_check_arch() {
 /// XA-4 @contract-shape:pure-function — non-vacuity: the scanner sees a
 /// planted violation and ignores a commented one.
 #[test]
-#[ignore = "DELIVER 03-01: enable with XA-1 (guards XA-1/XA-2 against vacuity)"]
+#[ignore = "DELIVER 01-02: enable with XA-1 (guards XA-1/XA-2 against vacuity)"]
 fn the_token_scan_sees_a_planted_violation() {
     let planted = "fn origin() { let o = RecordOrigin::of(a, b); }\n// RecordOrigin::AuthorPds in a comment\n";
     let found =

@@ -154,7 +154,7 @@ fn maria_finds_priyas_self_attested_claim_published_on_her_own_pds() {
 ///   And Jeff sees a pass summary of 3 configured, 3 read from their own PDS, none skipped
 /// ```
 #[test]
-#[ignore = "DELIVER 01-02: per-DID listing + pass summary (ADR-077/078)"]
+#[ignore = "DELIVER 01-01: per-DID listing + pass summary (ADR-077/078)"]
 fn authors_on_different_pdses_are_all_found_in_one_pass() {
     let (world, published) = given_three_authors_publish_on_their_own_pdses();
 
@@ -220,7 +220,7 @@ fn authors_on_different_pdses_are_all_found_in_one_pass() {
 ///   And nothing is read from her old PDS
 /// ```
 #[test]
-#[ignore = "DELIVER 01-03: resolve every pass; follow a moved PDS (FR-2)"]
+#[ignore = "DELIVER 01-01: resolve every pass; follow a moved PDS (FR-2)"]
 fn an_author_who_moved_pds_is_followed_to_the_new_one() {
     let (world, published) = given_three_authors_publish_on_their_own_pdses();
     world
@@ -268,7 +268,7 @@ fn an_author_who_moved_pds_is_followed_to_the_new_one() {
 ///   And Priya's own 3 claims are indexed exactly once, under Priya
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: records_of counts foreign-repo records (FR-4)"]
+#[ignore = "DELIVER 01-02: records_of counts foreign-repo records (FR-4)"]
 fn records_of_another_repo_are_never_attributed_to_the_requested_author() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Mallory]);
     let priya = world.publishes_self_attested(
@@ -315,7 +315,7 @@ fn records_of_another_repo_are_never_attributed_to_the_requested_author() {
 ///   And her other 2 claims are indexed as self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER 01-05: CID == rkey still refuses tampered records via own PDS"]
+#[ignore = "DELIVER 01-02: CID == rkey still refuses tampered records via own PDS"]
 fn a_tampered_self_attested_record_is_still_refused() {
     let world = IndexerWorld::configured_with(&[Author::Priya]);
     let honest = world.publishes_self_attested(
@@ -372,7 +372,7 @@ fn given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback(
 ///   And the pass summary counts 1 own-PDS read and 1 fallback read
 /// ```
 #[test]
-#[ignore = "DELIVER 03-01: plan_listing → Fallback; fallback is always relay origin"]
+#[ignore = "DELIVER 01-02: plan_listing → Fallback; fallback is always relay origin"]
 fn an_unresolvable_authors_app_signed_claims_come_through_the_fallback() {
     let (world, app_signed, self_attested) =
         given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
@@ -423,7 +423,7 @@ fn an_unresolvable_authors_app_signed_claims_come_through_the_fallback() {
 ///   And the fallback was asked only about did:plc:ghost0000
 /// ```
 #[test]
-#[ignore = "DELIVER 03-02: a resolved DID has no path to the fallback (FR-5)"]
+#[ignore = "DELIVER 01-03: a resolved DID has no path to the fallback (FR-5)"]
 fn a_resolvable_author_is_never_read_from_the_fallback() {
     let (world, _, _) = given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
 
@@ -454,7 +454,7 @@ fn a_resolvable_author_is_never_read_from_the_fallback() {
 ///   And Priya's own claim is still admitted as self-attested
 /// ```
 #[test]
-#[ignore = "DELIVER 03-03: Fallback is Relay with no URL comparison (OQ-IPF-3)"]
+#[ignore = "DELIVER 01-02: Fallback is Relay with no URL comparison (OQ-IPF-3)"]
 fn a_fallback_that_is_somebodys_own_pds_never_vouches_for_self_attested_claims() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Ghost]);
     let priya = world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -487,7 +487,7 @@ fn a_fallback_that_is_somebodys_own_pds_never_vouches_for_self_attested_claims()
 ///   And Priya's claim is indexed and the pass completes successfully
 /// ```
 #[test]
-#[ignore = "DELIVER 03-04: fallback failure → skip with fallback_used/fallback_failure"]
+#[ignore = "DELIVER 01-04: fallback failure → skip with fallback_used/fallback_failure"]
 fn a_failing_fallback_is_isolated_like_any_other_source() {
     let (world, _, _) = given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
     world.host_answers(Host::JeffbaileyUs, ListingPosture::Status(503));
@@ -520,7 +520,7 @@ fn a_failing_fallback_is_isolated_like_any_other_source() {
 ///   And because every configured DID was skipped, the pass ends with the total-outage code 3
 /// ```
 #[test]
-#[ignore = "DELIVER 03-05: guarded DNS resolver refuses the fallback after DNS (AC-003.4)"]
+#[ignore = "DELIVER 02-02: guarded DNS resolver refuses the fallback after DNS (AC-003.4)"]
 fn a_fallback_whose_name_leads_only_to_a_private_address_is_never_contacted() {
     let directory = Tripwire::arm();
     let fallback = Tripwire::arm();
@@ -564,7 +564,7 @@ fn a_fallback_whose_name_leads_only_to_a_private_address_is_never_contacted() {
 /// (Positive did:web resolution needs a TLS host on port 443 and is proven at
 /// the adapter level by DELIVER — `pds_endpoint_of` + the fake did:web test.)
 #[test]
-#[ignore = "DELIVER 03-06: did:web accepted; unresolvable did:web is fallback-eligible"]
+#[ignore = "DELIVER 01-03: did:web accepted; unresolvable did:web is fallback-eligible"]
 fn a_did_web_author_whose_web_host_is_down_is_read_through_the_fallback() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Wren]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);

@@ -61,7 +61,7 @@ fn then_only_priyas_row_is_marked_self_attested(stdout: &str) {
 ///   And Dmitri's claim is marked [verified] only
 /// ```
 #[test]
-#[ignore = "DELIVER 05-01: SearchResultDto.provenance + CLI label (ADR-079)"]
+#[ignore = "DELIVER 02-04: SearchResultDto.provenance + CLI label (ADR-079)"]
 fn maria_sees_priyas_claim_marked_self_attested_next_to_verified() {
     let world = given_priyas_self_attested_and_dmitris_app_signed_claims_are_indexed();
 
@@ -85,7 +85,7 @@ fn maria_sees_priyas_claim_marked_self_attested_next_to_verified() {
 ///     | contributor (--contributor did:plc:priyaraman7x2k)  |
 /// ```
 #[test]
-#[ignore = "DELIVER 05-02: provenance consistent across object/subject/contributor"]
+#[ignore = "DELIVER 02-04: provenance consistent across object/subject/contributor"]
 fn the_label_is_the_same_whichever_way_maria_searches() {
     let world = given_priyas_self_attested_and_dmitris_app_signed_claims_are_indexed();
     let object = CARGO_PIN_REPRODUCIBLE_BUILDS.object();
@@ -123,7 +123,7 @@ fn the_label_is_the_same_whichever_way_maria_searches() {
 ///   And she is never told a signature was verified
 /// ```
 #[test]
-#[ignore = "DELIVER 05-03: --show verification line for self-attested rows"]
+#[ignore = "DELIVER 02-04: --show verification line for self-attested rows"]
 fn inspecting_a_self_attested_claim_never_claims_a_signature_was_checked() {
     let world = given_priyas_self_attested_and_dmitris_app_signed_claims_are_indexed();
     let cid = world.rows_of(Author::Priya)[0].cid.clone();
@@ -161,7 +161,7 @@ fn inspecting_a_self_attested_claim_never_claims_a_signature_was_checked() {
 ///   Then both outputs are identical, and the claim is marked [verified] only
 /// ```
 #[test]
-#[ignore = "DELIVER 05-04: absent provenance ⇒ app-signed; old-server output unchanged"]
+#[ignore = "DELIVER 02-04: absent provenance ⇒ app-signed; old-server output unchanged"]
 fn results_from_an_indexer_that_does_not_report_provenance_read_exactly_as_before() {
     let env = maria_home();
     let dmitri = Author::Dmitri.app_identity();
@@ -203,7 +203,7 @@ fn results_from_an_indexer_that_does_not_report_provenance_read_exactly_as_befor
 ///   And the "peer-vouched" claim is not shown, and Maria is told a result was withheld for its provenance
 /// ```
 #[test]
-#[ignore = "DELIVER 05-05: unknown provenance token ⇒ row dropped + notice"]
+#[ignore = "DELIVER 02-04: unknown provenance token ⇒ row dropped + notice"]
 fn a_result_with_an_unknown_provenance_is_withheld_not_misstated() {
     let env = maria_home();
     let indexer = CannedIndexer::answering(wire_response(vec![

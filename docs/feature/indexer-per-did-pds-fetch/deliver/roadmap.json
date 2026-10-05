@@ -1,0 +1,390 @@
+{
+  "roadmap": {
+    "project_id": "indexer-per-did-pds-fetch",
+    "created_at": "2026-10-05T14:48:50Z",
+    "total_steps": 8,
+    "paradigm": "functional Rust (ADR-007) \u2014 crafter: @nw-functional-software-crafter",
+    "scenario_count": 55,
+    "tag_renumbering": "DISTILL tagged scenarios with a 00/01..05-xx scheme (27 sub-steps). This roadmap regroups them into 8 steps (01-01..01-04, 02-01..02-04); every #[ignore = \"DELIVER <step>: ...\"] reason was rewritten to the new step id (description text unchanged). Old -> new: 00 + 01-01/01-02/01-03 -> 01-01; 01-04/01-05/03-01/03-03 -> 01-02; 03-02/03-06/02-03/02-04/04-07/04-08 -> 01-03; 02-01/02-02/02-05/02-08/03-04 -> 01-04; 02-06/02-07/02-09/02-10 -> 02-01; 02-11/03-05 -> 02-02; 04-01..04-06/04-09/04-10 -> 02-03; 05-01..05-05 -> 02-04. The enablement order in distill/test-scenarios.md \u00a7'DELIVER enablement order' is superseded by this file.",
+    "global_rules": [
+      "Keep main green: every step is independently committable; scenarios of later steps stay #[ignore]. Remove one ignore at a time, see it RED for the right reason, then GREEN.",
+      "After any change to a shared crate (ports, lexicon, appview-domain, test-support, tests/acceptance/support) run the dependent suites NARROWLY (cargo test -p <crate> / cargo test -p cli --test <target>), never the whole workspace on the host; CI verifies the full suite.",
+      "Trunk-based: commit to main, no PRs. Workflow (.github/workflows) changes are pushed over SSH."
+    ]
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Per-DID PDS resolution: walking skeleton, fallback-as-relay, failure isolation",
+      "description": "The indexer resolves every configured repo DID to its own PDS each pass, binds listed records to the requested repo, classifies origin only through ListingSource (the fallback is always relay origin), and isolates per-DID resolution/listing failures as structured skips. Sequential fan-out is acceptable in this phase; bounds, deadlines and the SSRF guard arrive in phase 02.",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Harness migration + walking skeleton: resolve each DID to its own PDS every pass",
+          "description": "First, migrate the EXISTING indexer harness so later config hardening cannot break it: FakeIngestServer derives bare repo DIDs (no '#fragment') for OPENLORE_INDEXER_REPO_DIDS and at:// URIs, and every existing indexer spawner sets OPENLORE_INDEXER_PLC_ENDPOINT to a hermetic local directory that 404s (never the live plc.directory) plus OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1 (already set, inert). With PLC 404ing, every legacy DID routes through the fallback (the old OPENLORE_INDEXER_SOURCE_URL), reproducing today's behaviour; RD-7 in review_app_self_attested_readers becomes 'Priya unresolvable -> read via fallback = relay -> refused'. Then land the walking skeleton: new pure module appview_domain::ingest_pass (ListingSource{OwnPds(endpoint),Fallback}, ResolutionFailure, ListingPlan, plan_listing, origin_of, PassSummary/summarize), IdentityLookupPort::resolve_pds default method + IdentityLookup override (DID document only, pure pds_endpoint_of requiring id == did), and run.rs ingest reworked into a per-DID fetch phase (resolve every pass, never cached) + gate phase, emitting pass_summary as the last stdout event. IndexerWiring.source_url becomes fallback: Option<FallbackUrl>, built only in the new config.rs (minimal parse_config: repo DIDs, fallback, PLC endpoint \u2014 no new refusals yet).",
+          "criteria": [
+            "Existing suites indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers and the viewer search suites pass unchanged in assertions (RD-7 reworded only as specified) with bare DIDs and a hermetic local directory; no test contacts plc.directory",
+            "Maria finds Priya's self-attested claim published on Priya's own PDS, attributed to Priya's bare DID with author-PDS origin (WS-1)",
+            "Authors on three different PDSes are all indexed in one pass and the pass summary counts own=3, fallback=0, skipped=0 (WS-2)",
+            "An author who moved PDS between passes is listed from the new PDS on the next pass; nothing is cached across passes (IPF-01)",
+            "Property: origin_of(OwnPds(e), f) is AuthorPds iff f == e (CORE-2)"
+          ],
+          "time_estimate_hours": 6,
+          "dependencies": [],
+          "test_file": "tests/acceptance/indexer_per_did_fetch.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_fetch.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "maria_finds_priyas_self_attested_claim_published_on_her_own_pds",
+          "scenario_fns": [
+            "maria_finds_priyas_self_attested_claim_published_on_her_own_pds",
+            "authors_on_different_pdses_are_all_found_in_one_pass",
+            "an_author_who_moved_pds_is_followed_to_the_new_one",
+            "own_pds_origin_holds_exactly_when_fetched_from_the_resolved_pds"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_pass_core && cargo test -p cli --test indexer_ingest --test appview_search --test search_hide_retracted --test review_app_self_attested_readers && cargo test -p appview-domain && cargo test -p adapter-atproto-did",
+          "files_to_modify": [
+            "tests/acceptance/support/mod.rs",
+            "tests/acceptance/review_app_self_attested_readers.rs",
+            "crates/test-support/src/fake_atproto.rs",
+            "crates/appview-domain/src/ingest_pass.rs (NEW)",
+            "crates/appview-domain/src/lib.rs",
+            "crates/ports/src/identity_resolve.rs",
+            "crates/adapter-atproto-did/src/identity_lookup.rs",
+            "crates/openlore-indexer/src/config.rs (NEW)",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/main.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nORDER INSIDE THE STEP: (1) harness migration alone, run the existing suites narrowly, commit green; (2) then the skeleton. Do the migration as its own commit so a regression is attributable. DISTILL hand-off item 1: FakeIngestServer (tests/acceptance/support/mod.rs ~L5551) currently builds DIDs from the app-signed author 'did:plc:priya-test#org.openlore.application'; derive the bare repo DID for REPO_DIDS and at:// URIs while the record's author/app identity keeps its fragment. Add (or reuse from FakeAtprotoNetwork) a hermetic 404 directory and set OPENLORE_INDEXER_PLC_ENDPOINT in all 5 spawn sites (support/mod.rs x4, review_app_self_attested_readers.rs). Shared harness change => run each dependent suite narrowly: indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, viewer_* search targets.\nSKELETON: pure core in appview-domain (no tokio, no reqwest \u2014 the existing check_arch pure-core arm must stay green). origin_of(Fallback, _) returns Relay with no URL input on that arm (subtype layer of Earned Trust). Move run.rs decoded_records_of -> appview_domain::ingest_pass::records_of (foreign count lands in 01-02); delete run.rs origin_for once origin_of is wired. resolve_pds is a read-only DID-document fetch with NO handle back-check; pds_endpoint_of(did, &doc) is pure and gets a property test (id mismatch and missing #atproto_pds are errors). Sequential per-DID loop is fine here; bounded fan-out is 02-01. pass_summary must be the LAST stdout event. Contract shape of run.rs ingest: bounded-change (mutation set = index.duckdb indexed_claims upserts + stdout/stderr). Upsert failure stays fatal (exit 2). Other 01-xx..02-xx scenarios remain #[ignore]."
+        },
+        {
+          "id": "01-02",
+          "name": "Repo binding and origin only via ListingSource: the fallback is always relay",
+          "description": "records_of keeps only records of the requested repo and counts foreign ones; tampered self-attested records are still refused by the CID == rkey gate when read from the author's own PDS. plan_listing yields Fallback for an unresolvable DID when a fallback is configured; anything read via the fallback is relay origin, even when the fallback URL equals someone's resolved PDS (no URL comparison, OQ-IPF-3). A fallback read emits source_fallback. New xtask rule indexer_origin_only_via_listing_source bans RecordOrigin::of / RecordOrigin::AuthorPds in non-test indexer sources, with a vacuity guard.",
+          "criteria": [
+            "Records of another repo served by an author's PDS are never attributed to the requested author and are counted as foreign_repo (IPF-02)",
+            "A tampered self-attested record is refused (cid_mismatch) even when read from the author's own PDS (IPF-03)",
+            "An unresolvable author's app-signed claims are indexed through the fallback with relay origin and a source_fallback event (IPF-04)",
+            "A fallback that is somebody's own PDS never vouches for self-attested claims read through it (IPF-06)",
+            "Property: records_of keeps every own record and counts every foreign one (CORE-10); origin_of(Fallback, any) == Relay (CORE-1)",
+            "cargo xtask check-arch fails on a planted RecordOrigin::of in openlore-indexer/src and passes on the real tree (XA-1, XA-4)"
+          ],
+          "time_estimate_hours": 5,
+          "dependencies": [
+            "01-01"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_fetch.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_fetch.rs",
+            "tests/acceptance/indexer_pass_core.rs",
+            "xtask/tests/indexer_per_did_architecture.rs"
+          ],
+          "scenario_name": "an_unresolvable_authors_app_signed_claims_come_through_the_fallback",
+          "scenario_fns": [
+            "records_of_another_repo_are_never_attributed_to_the_requested_author",
+            "a_tampered_self_attested_record_is_still_refused",
+            "an_unresolvable_authors_app_signed_claims_come_through_the_fallback",
+            "a_fallback_that_is_somebodys_own_pds_never_vouches_for_self_attested_claims",
+            "repo_binding_keeps_own_records_and_counts_every_foreign_one",
+            "anything_read_through_the_fallback_is_relay_origin",
+            "the_indexer_derives_origin_only_through_the_listing_source",
+            "the_token_scan_sees_a_planted_violation"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_pass_core && cargo test -p xtask --test indexer_per_did_architecture && cargo test -p appview-domain",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/probe_gauntlet.rs",
+            "crates/ports/src/probe.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nrecords_of returns (own records, foreign count) \u2014 pure; the foreign count surfaces in pass reporting (foreign_repo). ingest_repo_record / provenance_verdict are UNCHANGED: their existing property suites are the regression guardrail. Earned Trust behavioral layer: add origin_classification_probe() to probe_gauntlet (pure, in-process, no network) + ProbeRefusalReason::IndexerOriginClassificationUnsound (JSON contract test in ports/probe.rs pattern); a deliberately mutated classifier must make it refuse. Structural layer: xtask rule indexer_origin_only_via_listing_source reusing the syn visitor / classify_cfg_gated_token helpers, excluding #[cfg(test)]; XA-4 guards it against vacuity. Do NOT touch review-app or peer_pull RecordOrigin::of calls (their source is always the resolved PDS). The FallbackUrl type is only constructed in config.rs; ListingSource::Fallback only in plan_listing on a ResolutionFailure. xtask is a shared tool: run cargo test -p xtask narrowly."
+        },
+        {
+          "id": "01-03",
+          "name": "Resolution failures and fallback eligibility (incl. NFR-3 single-source regression)",
+          "description": "Every DID-document failure class (not found, directory 5xx, id mismatch, no PDS service, unresolvable did:web) maps to a ResolutionFailure; plan_listing turns it into Fallback when a fallback is configured, otherwise Skip(DidUnresolvable) emitted as source_skipped without a PDS address. A resolved DID has no code path to the fallback. did:web DIDs are accepted. A single-source deployment (every author on the old source URL, which is also the fallback) indexes exactly what it did before, with and without the directory reachable.",
+          "criteria": [
+            "A resolvable author is never read from the fallback (IPF-05); property: plan_listing never sends a resolved DID to the fallback (CORE-3)",
+            "A did:web author whose web host is down is read through the fallback (IPF-09)",
+            "An unresolvable author with no fallback is skipped with reason did_unresolvable, fallback_used false and no pds_url, while others are indexed (IPF-12)",
+            "Each DID-document failure (not found, directory error, different id, no PDS) skips that author as did_unresolvable and lists nothing on its host (IPF-13)",
+            "Single-source deployment: same (author_did, cid, provenance) set as before, each DID listed once, fallback unused (IPF-27); with the directory down, app-signed indexed via fallback and self-attested refused for provenance exactly as before (IPF-28)"
+          ],
+          "time_estimate_hours": 4,
+          "dependencies": [
+            "01-02"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_resilience.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_fetch.rs",
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/indexer_per_did_config.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "every_way_a_did_document_can_fail_makes_that_author_unresolvable",
+          "scenario_fns": [
+            "a_resolvable_author_is_never_read_from_the_fallback",
+            "the_listing_plan_never_sends_a_resolved_did_to_the_fallback",
+            "a_did_web_author_whose_web_host_is_down_is_read_through_the_fallback",
+            "an_unresolvable_author_is_skipped_with_a_reason",
+            "every_way_a_did_document_can_fail_makes_that_author_unresolvable",
+            "a_single_source_deployment_indexes_exactly_what_it_did_before",
+            "with_the_directory_down_a_single_source_deployment_keeps_its_old_behaviour"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_per_did_resilience && cargo test -p cli --test indexer_per_did_config && cargo test -p cli --test indexer_pass_core && cargo test -p adapter-atproto-did",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/adapter-atproto-did/src/identity_lookup.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nMap IdentityLookupError variants to the closed ResolutionFailure set in the adapter (TimedOut is added in 02-01 with the deadline). Add a fake-PLC integration test in adapter-atproto-did covering 404 / 5xx / id mismatch / missing service (single-example, wiring). Skip events must carry NO claim content (assert_skipped enforces AC-002.3) and no pds_url for did_unresolvable. IPF-27/28 are the NFR-3 regression guard: if they fail, the change is wrong, not the test. did:web positive resolution over real TLS is an earned-trust gap \u2014 cover pds_endpoint_of by property test only (see distill/wave-decisions gaps table)."
+        },
+        {
+          "id": "01-04",
+          "name": "Per-DID fault isolation: listing failures skip one author, never abort or delete",
+          "description": "Replace the exit-2 abort on a source failure with per-DID isolation: classify_fetch_failure maps every FetchFailure (unreachable, 5xx, 429, 404, non-JSON, redirect, fallback failure) to exactly one SkipReason; the listing adapter maps HTTP 5xx/429 to IngestError::Unreachable and other non-2xx (incl. 3xx) to BadResponse with redirects never followed. A skip deletes nothing and persists nothing, so the author is retried next pass. A failing fallback is isolated like any other source (source_skipped with fallback_used and fallback_failure).",
+          "criteria": [
+            "One PDS being down skips only that author; the others are indexed and the pass exits 0 (IPF-10)",
+            "Down / 503 / 429 skip as pds_unreachable; 404 / non-JSON / redirect skip as listing_failed; a redirect target is never contacted (IPF-11)",
+            "classify_fetch_failure maps all 8 failure cases to exactly one documented reason (CORE-12)",
+            "A skipped author's earlier claims stay searchable (IPF-14); a skipped author is retried and indexed on the next pass with nothing about the skip persisted (IPF-17)",
+            "A failing fallback skips only the affected author with fallback_used true and a fallback_failure reason (IPF-07)"
+          ],
+          "time_estimate_hours": 4,
+          "dependencies": [
+            "01-03"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_resilience.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/indexer_per_did_fetch.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "one_pds_being_down_does_not_hide_the_others",
+          "scenario_fns": [
+            "one_pds_being_down_does_not_hide_the_others",
+            "every_way_an_authors_pds_can_fail_skips_only_that_author_with_its_reason",
+            "every_fetch_failure_maps_to_exactly_one_documented_reason",
+            "a_skipped_authors_earlier_claims_stay_searchable",
+            "skipped_authors_are_retried_on_the_next_pass",
+            "a_failing_fallback_is_isolated_like_any_other_source"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_resilience && cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_pass_core && cargo test -p adapter-atproto-ingest && cargo test -p cli --test indexer_ingest",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nCORE-12 is a closed-world exhaustive table (DISTILL falsifier gate) \u2014 keep it example-based; it already is. Set reqwest redirect policy to none on the ingest client NOW (IPF-11 asserts a redirect is never followed); 02-02 moves it into the guarded constructor. FR-6 holds by construction (IndexStorePort has no delete) \u2014 do not add one. Upsert failure remains fatal exit 2 (unit test on the gate loop: earlier rows stay committed \u2014 DISTILL gap). The adapter status mapping changes a shared adapter: rerun indexer_ingest narrowly. Total-outage exit 3 is 02-01, not here: a pass with only some skips exits 0."
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Hardening: bounded fan-out, SSRF guard, typed config, self-attested search label",
+      "description": "Bound the pass (4 concurrent, 30 s per DID, exit 3 on total outage), refuse private/loopback/link-local/ULA PDS addresses after DNS (https only; loopback seam test-only and refused in release builds), validate configuration at startup, and label self-attested claims in openlore search (including contributor search for self-attested authors).",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Bounded fan-out, one deadline per DID, exit 3 on total outage",
+          "description": "Fetch phase uses futures-util buffered(max_concurrent_fetches) (default 4) and a single tokio::time::timeout_at deadline per DID (default 30 s) covering both resolving and listing; the pure core sees only FetchFailure::TimedOut{stage} / ResolutionFailure::TimedOut. summarize + pass_exit_code give exit 3 iff at least one DID is configured and every configured DID is skipped, emitted after pass_summary.",
+          "criteria": [
+            "A hanging PDS is skipped as pds_timeout within the per-DID budget and the pass completes (IPF-15)",
+            "A DID document that never arrives counts against the same per-DID budget (IPF-16)",
+            "With 40 authors, requests in flight never exceed the concurrency cap (IPF-18)",
+            "When every author's source fails, pass_summary is the last event and the pass exits 3; earlier claims remain (IPF-19)",
+            "Property: own + fallback + skipped == configured, and exit 3 iff configured >= 1 and own + fallback == 0 (CORE-4)"
+          ],
+          "time_estimate_hours": 4,
+          "dependencies": [
+            "01-04"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_resilience.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "a_hanging_pds_cannot_stall_the_pass",
+          "scenario_fns": [
+            "a_hanging_pds_cannot_stall_the_pass",
+            "a_did_document_that_never_arrives_counts_against_the_same_budget",
+            "many_authors_never_cause_unbounded_concurrent_requests",
+            "when_every_authors_source_fails_the_pass_reports_a_total_outage",
+            "the_summary_accounts_for_every_did_and_exit_3_means_total_outage"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_resilience && cargo test -p cli --test indexer_pass_core && cargo test -p appview-domain",
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/Cargo.toml"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nBoundary rule 3: the pure core never sees time \u2014 the budget is a Duration in config, the deadline lives in the shell. Add futures-util (MIT/Apache-2.0) to openlore-indexer and to the allowed-deps comment in its Cargo.toml (ADR-078); check_arch indexer_holds_no_signing_or_local_store is unchanged and must stay green. Config fields max_concurrent_fetches / per_did_budget exist with defaults here (parsed from env with defaults; range validation 1..=16 / 1..=600 is 02-03). Exit code is computed via pass_exit_code AFTER pass_summary is printed. Suite runs are bounded at 90 s by the harness \u2014 a missing deadline fails, it does not hang."
+        },
+        {
+          "id": "02-02",
+          "name": "SSRF guard: refuse private/loopback/link-local/ULA addresses after DNS, https only",
+          "description": "ports::net_policy (pure): address_refused(IpAddr) over the documented ranges incl. IPv4-mapped IPv6, and TransportPolicy {HttpsPublicOnly, AllowLoopbackHttp}. pds_endpoint_admissible pre-check (scheme + IP-literal hosts) -> Skip(PdsAddressRefused) without contacting. Guarded constructors AtProtoIngestAdapter::guarded / IdentityLookup::guarded build reqwest clients with a DNS resolver that drops refused addresses (connection goes to the checked IP: rebinding-safe), redirects disabled; refusal = IngestError::AddressRefused. The indexer wires only guarded clients (xtask rule indexer_guarded_clients_only). Policy defaults to HttpsPublicOnly; OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1 selects AllowLoopbackHttp in debug builds only.",
+          "criteria": [
+            "A DID document pointing at a private or insecure address is never followed: the author is skipped as pds_address_refused, the address is never contacted, and the fallback is not used (IPF-20)",
+            "A fallback whose name resolves only to a private address is never contacted (IPF-08)",
+            "Property: address_refused refuses exactly the documented ranges (CORE-5) and holds at every range edge, e.g. 172.15.255.255 admitted / 172.16.0.0 refused (CORE-13)",
+            "Property: pds_endpoint_admissible admits https public endpoints, and loopback http only under the test policy (CORE-6)",
+            "cargo xtask check-arch bans AtProtoIngestAdapter::new / IdentityLookup::new in indexer sources and both new rules are registered (XA-2, XA-3)"
+          ],
+          "time_estimate_hours": 6,
+          "dependencies": [
+            "02-01"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_resilience.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/indexer_per_did_fetch.rs",
+            "tests/acceptance/indexer_pass_core.rs",
+            "xtask/tests/indexer_per_did_architecture.rs"
+          ],
+          "scenario_name": "a_did_document_pointing_at_a_private_or_insecure_address_is_never_followed",
+          "scenario_fns": [
+            "a_did_document_pointing_at_a_private_or_insecure_address_is_never_followed",
+            "a_fallback_whose_name_leads_only_to_a_private_address_is_never_contacted",
+            "the_address_guard_refuses_exactly_the_documented_ranges",
+            "the_address_guard_holds_at_every_range_edge",
+            "the_endpoint_precheck_admits_https_public_and_loopback_http_only_under_the_test_policy",
+            "the_indexer_wires_only_address_guarded_clients",
+            "both_rules_are_part_of_check_arch"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_resilience && cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_pass_core && cargo test -p xtask --test indexer_per_did_architecture && cargo test -p ports && cargo test -p adapter-atproto-ingest && cargo test -p adapter-atproto-did && cargo test -p cli --test indexer_ingest --test review_app_self_attested_readers",
+          "files_to_modify": [
+            "crates/ports/src/net_policy.rs (NEW)",
+            "crates/ports/src/lib.rs",
+            "crates/ports/src/ingest_source.rs",
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/adapter-atproto-ingest/src/lib.rs",
+            "crates/adapter-atproto-did/src/identity_lookup.rs",
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/main.rs",
+            "xtask/src/check_arch.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nCORE-13 is an exhaustive range-edge table (closed world) \u2014 example-based by design. Earned-trust gap from DISTILL: add an adapter guard test with a STUB DNS resolver returning 10.0.0.1, ::1 and 169.254.169.254, asserting no connection is attempted (rebinding). The review app keeps the unguarded IdentityLookup::new \u2014 do not change it. Policy selection from OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP must be gated on cfg!(debug_assertions) already here (the release-build startup refusal itself is 02-03). The existing suites rely on the seam being honoured once the guard lands (DWD-5): rerun indexer_ingest, appview_search, search_hide_retracted, review_app_self_attested_readers and viewer search targets narrowly. Probe: AtProtoIngestAdapter::probe() no longer refuses an empty source; it refuses a non-empty source that fails the policy pre-check. XA-3 asserts both xtask rules are registered in check-arch (XA-1 from 01-02 + XA-2 here). Shared crate ports changed: run cargo test -p ports and dependents narrowly."
+        },
+        {
+          "id": "02-03",
+          "name": "Typed startup config: parse_config refusals, bounds, defaults, release-build seam refusal (+ CI release guard)",
+          "description": "parse_config(lookup, BuildProfile) -> Result<IndexerConfig, ConfigError> is pure and total: repo DIDs validated (did:plc / did:web, no '#fragment'), deduplicated first-wins; fallback URL validated + policy pre-check; fan-out bounds 1..=16 and 1..=600; an empty DID list and absent fallback are reported, not refused; BuildProfile::Release + OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP is a ConfigError. Refusals emit health.startup.refused naming the variable and value (ProbeRefusalReason::IndexerConfigInvalid), exit 2, contact nothing. config.loaded reports bounds and defaults. CI gains a release-guard job running IPF-30 against the release binary.",
+          "criteria": [
+            "A malformed repo DID (incl. did#fragment, other methods) refuses startup naming OPENLORE_INDEXER_REPO_DIDS and the value (IPF-21)",
+            "A malformed or unsafe fallback source refuses startup naming OPENLORE_INDEXER_SOURCE_URL (IPF-22); a plain-http loopback fallback is refused without the test seam (IPF-29)",
+            "Fan-out bounds 0/17 and 0/601 are refused; 1/16 and 1/600 accepted and reported in config.loaded with defaults cap 4 and 30 s (IPF-23, IPF-24)",
+            "An empty DID list and no fallback are reported, not refused (IPF-25); a DID listed twice is read once and counted once (IPF-26)",
+            "Properties: parse_config is total and every refusal names a known variable and its value (CORE-7); DID list loads as its distinct DIDs in order (CORE-9); Release + seam is always refused (CORE-8)",
+            "The release binary refuses OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP=1 at startup; CI runs this after cargo build --release -p openlore-indexer (IPF-30)"
+          ],
+          "time_estimate_hours": 5,
+          "dependencies": [
+            "02-02"
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_config.rs",
+          "test_files": [
+            "tests/acceptance/indexer_per_did_config.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "a_malformed_repo_did_is_explained_at_startup",
+          "scenario_fns": [
+            "a_malformed_repo_did_is_explained_at_startup",
+            "a_malformed_or_unsafe_fallback_source_is_explained_at_startup",
+            "fan_out_bounds_outside_their_range_are_explained_at_startup",
+            "fan_out_bounds_at_the_edge_of_their_range_are_accepted_and_reported",
+            "an_empty_did_list_and_no_fallback_are_reported_not_refused",
+            "a_repo_did_listed_twice_is_read_once_and_counted_once",
+            "without_the_test_seam_the_production_policy_refuses_a_loopback_fallback",
+            "config_parsing_is_total_and_every_refusal_names_a_variable_and_its_value",
+            "a_list_of_valid_dids_loads_as_its_distinct_dids_in_order",
+            "a_release_build_refuses_the_loopback_seam_whatever_else_is_set",
+            "a_release_build_refuses_the_loopback_test_seam"
+          ],
+          "test_command": "cargo test -p cli --test indexer_per_did_config && cargo test -p cli --test indexer_pass_core && cargo test -p ports && cargo test -p cli --test indexer_ingest --test appview_search --test search_hide_retracted --test review_app_self_attested_readers ; CI release guard: cargo build --release -p openlore-indexer && cargo test -p cli --test indexer_per_did_config -- --ignored a_release_build_refuses_the_loopback_test_seam",
+          "files_to_modify": [
+            "crates/openlore-indexer/src/config.rs",
+            "crates/openlore-indexer/src/main.rs",
+            "crates/ports/src/probe.rs",
+            ".github/workflows/ci.yml"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nComposition-root invariant: parse config, THEN wire, THEN probe, THEN use; ConfigError -> health.startup.refused, exit 2, zero network requests. BuildProfile::of_this_build() from cfg!(debug_assertions) (review-app config.rs pattern). FallbackUrl is constructible only here (boundary rule 2). The '#fragment' refusal is what would break the legacy harness \u2014 01-01 must already be in; rerun every existing indexer-spawning suite narrowly before committing. DISTILL hand-off item 3 (IPF-30): add a CI job/step to .github/workflows/ci.yml that runs `cargo build --release -p openlore-indexer` then `cargo test -p cli --test indexer_per_did_config -- --ignored a_release_build_refuses_the_loopback_test_seam` (binary from target/release or OPENLORE_INDEXER_RELEASE_BIN); keep IPF-30's ignore reason as the CI release-guard marker (do NOT remove that ignore \u2014 CI runs it with --ignored). CORE-8 is the always-on guard locally. Workflow changes are pushed over SSH (gh credential helper lacks workflow scope).\n\nCI: add a NEW job `release-guard (indexer)` with `needs: [test]` (not a step inside the test job): cargo build --release -p openlore-indexer, then cargo test -p cli --test indexer_per_did_config -- --ignored a_release_build_refuses_the_loopback_test_seam. Workflow changes push over SSH."
+        },
+        {
+          "id": "02-04",
+          "name": "Self-attested provenance in search: optional DTO field, CLI label, contributor match on bare DID",
+          "description": "Indexer serve projects provenance; lexicon SearchResultDto gains provenance: Option<String> (serde default, skip if none: absent = app-signed); NetworkResultRowRaw gains provenance: PeerClaimProvenance; adapter-index-query decodes None/'app-signed' -> AppSigned, 'self-attested' -> SelfAttested, anything else -> row dropped + counted notice. render/search.rs prints [self-attested] after [verified]; --show prints 'self-attested by <repo DID>; read from the author's own PDS' and never 'signature verified'. Contributor search fix (DISTILL hand-off item 2): the index store matches a contributor on the bare DID \u2014 author_did = bare OR author_did starts with bare + '#' \u2014 so self-attested authors (stored under the bare DID) are found while app-signed matching is preserved.",
+          "criteria": [
+            "Maria sees Priya's claim marked [self-attested] next to Dmitri's verified app-signed claim (IPF-31)",
+            "The label is identical whether Maria searches by object, subject or contributor, and contributor search for a self-attested author finds her claims (IPF-32, AC-005.3)",
+            "Inspecting a self-attested claim with --show never claims a signature was checked (IPF-33)",
+            "Results from an indexer that does not report provenance read byte-identically to before (IPF-34); old JSON rows without provenance decode and re-encode unchanged (CORE-14)",
+            "An unknown provenance token withholds the row with a notice rather than misstating it (IPF-35); property: unknown wire provenance is never guessed (CORE-11)"
+          ],
+          "time_estimate_hours": 4,
+          "dependencies": [
+            "01-02"
+          ],
+          "test_file": "tests/acceptance/search_self_attested_label.rs",
+          "test_files": [
+            "tests/acceptance/search_self_attested_label.rs",
+            "tests/acceptance/indexer_pass_core.rs"
+          ],
+          "scenario_name": "maria_sees_priyas_claim_marked_self_attested_next_to_verified",
+          "scenario_fns": [
+            "maria_sees_priyas_claim_marked_self_attested_next_to_verified",
+            "the_label_is_the_same_whichever_way_maria_searches",
+            "inspecting_a_self_attested_claim_never_claims_a_signature_was_checked",
+            "results_from_an_indexer_that_does_not_report_provenance_read_exactly_as_before",
+            "a_result_with_an_unknown_provenance_is_withheld_not_misstated",
+            "an_unknown_wire_provenance_is_withheld_never_guessed",
+            "an_old_search_row_without_provenance_still_decodes_and_reencodes_unchanged"
+          ],
+          "test_command": "cargo test -p cli --test search_self_attested_label && cargo test -p cli --test indexer_pass_core && cargo test -p lexicon && cargo test -p adapter-index-query && cargo test -p adapter-index-store && cargo test -p cli --test appview_search --test search_hide_retracted --test review_app_self_attested_readers && cargo test -p cli --lib verbs::search",
+          "files_to_modify": [
+            "crates/lexicon/src/appview_query.rs",
+            "crates/ports/src/index_query.rs",
+            "crates/adapter-index-query/src/lib.rs",
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "crates/cli/src/render/search.rs",
+            "crates/cli/src/verbs/search.rs"
+          ],
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: NEW code = Stage 0 (paradigm from day zero).\n\nDepends only on 01-02 (self-attested rows indexed via own PDS); can ship as its own milestone and be done in parallel with 02-01..02-03. Contributor fix (decided): normalise the query DID to its bare form (text before the first '#') and match author_did = bare OR starts_with(author_did, bare || '#') in adapter-index-store query_by_contributor \u2014 use DuckDB starts_with, not LIKE (DIDs may contain '%' / '_'). The CLI lift in verbs/search.rs resolve_contributor_to_did (and adapter-http-viewer's twin) may stay: the store normalises, so app-signed results are unchanged and viewer contributor search benefits too. Property test: for any bare DID and fragment set, the match set equals rows whose author_did bare-prefix equals the query (state-delta over a declared row universe). Additive DTO field: serde(default, skip_serializing_if = Option::is_none) so old servers/clients are unaffected; CORE-14 and CORE-11's closed 3-class table are the wire contract. App-signed render output must stay byte-identical (NFR-3) \u2014 golden render tests. Shared crates lexicon/ports changed: update NetworkResultRowRaw constructor sites with AppSigned default and run dependent suites narrowly (appview_search, search_hide_retracted, viewer search targets, cli lib tests)."
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/appview-domain/src/",
+      "crates/ports/src/",
+      "crates/adapter-atproto-did/src/",
+      "crates/adapter-atproto-ingest/src/",
+      "crates/adapter-index-query/src/",
+      "crates/adapter-index-store/src/",
+      "crates/lexicon/src/",
+      "crates/openlore-indexer/src/",
+      "crates/cli/src/",
+      "xtask/src/",
+      ".github/workflows/"
+    ],
+    "test_directories": [
+      "tests/acceptance/",
+      "crates/test-support/src/",
+      "xtask/tests/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.duckdb"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-10-05"
+  }
+}

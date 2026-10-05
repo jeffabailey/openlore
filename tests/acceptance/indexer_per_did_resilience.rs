@@ -86,7 +86,7 @@ fn given_three_authors_with_dmitri_indexed_on_an_earlier_pass() -> IndexerWorld 
 ///   And the pass completes successfully
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: per-DID fault isolation (ADR-078) — replaces the exit-2 abort"]
+#[ignore = "DELIVER 01-04: per-DID fault isolation (ADR-078) — replaces the exit-2 abort"]
 fn one_pds_being_down_does_not_hide_the_others() {
     let world = given_three_authors_publish_on_their_own_pdses();
     world.host_answers(Host::VolkovDev, ListingPosture::Status(502));
@@ -120,7 +120,7 @@ fn one_pds_being_down_does_not_hide_the_others() {
 ///     | redirects to another address                 | listing_failed  |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-02: status mapping 5xx/429 → Unreachable, other → BadResponse"]
+#[ignore = "DELIVER 01-04: status mapping 5xx/429 → Unreachable, other → BadResponse"]
 fn every_way_an_authors_pds_can_fail_skips_only_that_author_with_its_reason() {
     let redirect_target = Tripwire::arm();
     let cases: Vec<(&str, Option<ListingPosture>, SkipReason)> = vec![
@@ -198,7 +198,7 @@ fn every_way_an_authors_pds_can_fail_skips_only_that_author_with_its_reason() {
 ///   And Jeff sees did:plc:ghost0000 skipped with reason did_unresolvable, without a PDS address
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: plan_listing → Skip(DidUnresolvable) without a fallback"]
+#[ignore = "DELIVER 01-03: plan_listing → Skip(DidUnresolvable) without a fallback"]
 fn an_unresolvable_author_is_skipped_with_a_reason() {
     let world = IndexerWorld::configured_with(&[Author::Priya, Author::Ghost]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -230,7 +230,7 @@ fn an_unresolvable_author_is_skipped_with_a_reason() {
 ///     | names no PDS                                       |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: resolve_pds failure classes → ResolutionFailure (ADR-077)"]
+#[ignore = "DELIVER 01-03: resolve_pds failure classes → ResolutionFailure (ADR-077)"]
 fn every_way_a_did_document_can_fail_makes_that_author_unresolvable() {
     for posture in [
         DidDocPosture::NotFound,
@@ -266,7 +266,7 @@ fn every_way_a_did_document_can_fail_makes_that_author_unresolvable() {
 ///   And Maria still finds both of Dmitri's claims when she searches for his work
 /// ```
 #[test]
-#[ignore = "DELIVER 02-05: skipping never deletes (FR-6)"]
+#[ignore = "DELIVER 01-04: skipping never deletes (FR-6)"]
 fn a_skipped_authors_earlier_claims_stay_searchable() {
     let world = given_three_authors_with_dmitri_indexed_on_an_earlier_pass();
     let before = world.rows_of(Author::Dmitri);
@@ -302,7 +302,7 @@ fn a_skipped_authors_earlier_claims_stay_searchable() {
 ///   And the pass finishes within a small multiple of the budget
 /// ```
 #[test]
-#[ignore = "DELIVER 02-06: one deadline per DID (timeout_at) → pds_timeout"]
+#[ignore = "DELIVER 02-01: one deadline per DID (timeout_at) → pds_timeout"]
 fn a_hanging_pds_cannot_stall_the_pass() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Sam]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -338,7 +338,7 @@ fn a_hanging_pds_cannot_stall_the_pass() {
 ///   And the pass finishes within a small multiple of the budget
 /// ```
 #[test]
-#[ignore = "DELIVER 02-07: the deadline covers resolving (ResolutionFailure::TimedOut)"]
+#[ignore = "DELIVER 02-01: the deadline covers resolving (ResolutionFailure::TimedOut)"]
 fn a_did_document_that_never_arrives_counts_against_the_same_budget() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Dmitri]);
     world.publishes_app_signed(Author::Dmitri, &[FERRITE_REPRODUCIBLE_BUILDS]);
@@ -368,7 +368,7 @@ fn a_did_document_that_never_arrives_counts_against_the_same_budget() {
 ///   And no skip is reported for him
 /// ```
 #[test]
-#[ignore = "DELIVER 02-08: nothing about a skip is persisted; retried next pass"]
+#[ignore = "DELIVER 01-04: nothing about a skip is persisted; retried next pass"]
 fn skipped_authors_are_retried_on_the_next_pass() {
     let mut world = given_three_authors_publish_on_their_own_pdses();
     world.host_is_reachable(Host::VolkovDev, false);
@@ -401,7 +401,7 @@ fn skipped_authors_are_retried_on_the_next_pass() {
 ///   And the pass summary accounts for all 40 authors: 37 from their own PDS, 3 skipped
 /// ```
 #[test]
-#[ignore = "DELIVER 02-09: buffered(max_concurrent_fetches) fan-out (ADR-078)"]
+#[ignore = "DELIVER 02-01: buffered(max_concurrent_fetches) fan-out (ADR-078)"]
 fn many_authors_never_cause_unbounded_concurrent_requests() {
     let (mut world, by_host) = IndexerWorld::crowd(40, 12);
     world.setting(var::MAX_CONCURRENT, "3");
@@ -442,7 +442,7 @@ fn many_authors_never_cause_unbounded_concurrent_requests() {
 ///   And nothing previously indexed is removed
 /// ```
 #[test]
-#[ignore = "DELIVER 02-10: pass_exit_code == 3 iff every configured DID skipped"]
+#[ignore = "DELIVER 02-01: pass_exit_code == 3 iff every configured DID skipped"]
 fn when_every_authors_source_fails_the_pass_reports_a_total_outage() {
     let world = given_three_authors_with_dmitri_indexed_on_an_earlier_pass();
     let before = world.indexed_rows();
@@ -487,7 +487,7 @@ fn when_every_authors_source_fails_the_pass_reports_a_total_outage() {
 ///     | http://pds.volkov.example     |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-11: pds_endpoint_admissible pre-check → Skip(PdsAddressRefused)"]
+#[ignore = "DELIVER 02-02: pds_endpoint_admissible pre-check → Skip(PdsAddressRefused)"]
 fn a_did_document_pointing_at_a_private_or_insecure_address_is_never_followed() {
     for address in [
         "http://10.0.0.1",
