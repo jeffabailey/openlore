@@ -51,10 +51,15 @@ pub struct AtProtoIngestAdapter {
 
 impl AtProtoIngestAdapter {
     /// Construct the ingest adapter pointed at `source` (a base URL hosting the
-    /// public `com.atproto.repo.listRecords` surface).
+    /// public `com.atproto.repo.listRecords` surface). Redirects are never
+    /// followed (ADR-078): a 3xx is a failed listing, its target is not contacted.
     pub fn new(source: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            client: reqwest::Client::new(),
+            client,
             source: source.to_string(),
         }
     }
@@ -235,10 +240,8 @@ impl AtProtoIngestAdapter {
                 .map_err(|err| IngestError::Unreachable {
                     message: format!("listRecords transport error: {err}"),
                 })?;
-        if !response.status().is_success() {
-            return Err(IngestError::BadResponse {
-                message: format!("listRecords returned HTTP {}", response.status().as_u16()),
-            });
+        if let Some(failure) = listing_status_failure(response.status().as_u16()) {
+            return Err(failure);
         }
         let body: serde_json::Value =
             response
@@ -248,6 +251,18 @@ impl AtProtoIngestAdapter {
                     message: format!("listRecords body is not JSON: {err}"),
                 })?;
         parse_listed_page(&body)
+    }
+}
+
+/// The failure a non-2xx `listRecords` status is reported as (pure): 5xx and
+/// 429 mean the PDS is unreachable for now; any other non-2xx (3xx included,
+/// redirects are never followed) is a bad response. `None` for 2xx.
+fn listing_status_failure(status: u16) -> Option<IngestError> {
+    let message = format!("listRecords returned HTTP {status}");
+    match status {
+        200..=299 => None,
+        429 | 500..=599 => Some(IngestError::Unreachable { message }),
+        _ => Some(IngestError::BadResponse { message }),
     }
 }
 
@@ -466,6 +481,25 @@ mod tests {
     }
 
     proptest! {
+        /// Universe: every HTTP status. 2xx lists; 5xx and 429 are
+        /// unreachable; every other status (3xx, 4xx, 1xx) is a bad response.
+        #[test]
+        fn a_listing_status_maps_to_exactly_one_outcome(status in 100u16..600) {
+            let outcome = listing_status_failure(status);
+            let expected = match status {
+                200..=299 => "listed",
+                429 | 500..=599 => "unreachable",
+                _ => "bad_response",
+            };
+            let observed = match outcome {
+                None => "listed",
+                Some(IngestError::Unreachable { .. }) => "unreachable",
+                Some(IngestError::BadResponse { .. }) => "bad_response",
+                Some(IngestError::ProbeRefused { .. }) => "probe_refused",
+            };
+            prop_assert_eq!(observed, expected);
+        }
+
         /// A source is ready iff it is unset (blank) or an absolute http(s)
         /// URL; any other scheme or a bare host is refused.
         #[test]

@@ -151,9 +151,7 @@ fn sut_plan_listing(
     policy: Policy,
     fallback: Option<&str>,
 ) -> Plan {
-    use appview_domain::ingest_pass::{
-        plan_listing, FallbackUrl, ListingPlan, ListingSource, SkipReason,
-    };
+    use appview_domain::ingest_pass::{plan_listing, FallbackUrl, ListingPlan, ListingSource};
     let resolution = resolution
         .map(str::to_string)
         .map_err(|failure| match failure {
@@ -175,14 +173,43 @@ fn sut_plan_listing(
         ListingPlan::List(ListingSource::Fallback(f)) => {
             Plan::List(Source::Fallback(f.as_str().into()))
         }
-        ListingPlan::Skip(SkipReason::DidUnresolvable) => Plan::Skip(Reason::DidUnresolvable),
-        ListingPlan::Skip(SkipReason::PdsAddressRefused) => Plan::Skip(Reason::PdsAddressRefused),
+        ListingPlan::Skip(reason) => Plan::Skip(view_reason(reason)),
+    }
+}
+
+fn view_reason(reason: appview_domain::ingest_pass::SkipReason) -> Reason {
+    use appview_domain::ingest_pass::SkipReason;
+    match reason {
+        SkipReason::DidUnresolvable => Reason::DidUnresolvable,
+        SkipReason::PdsUnreachable => Reason::PdsUnreachable,
+        SkipReason::PdsTimeout => Reason::PdsTimeout,
+        SkipReason::ListingFailed => Reason::ListingFailed,
+        SkipReason::PdsAddressRefused => Reason::PdsAddressRefused,
     }
 }
 
 fn sut_classify_fetch_failure(source: &Source, failure: FetchFailure) -> Classified {
-    let _ = (source, failure);
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::classify_fetch_failure (ADR-078)")
+    use appview_domain::ingest_pass::{
+        classify_fetch_failure, FallbackUrl, FetchFailure as Failure, ListingSource, PdsEndpoint,
+    };
+    let source = match source {
+        Source::OwnPds(endpoint) => ListingSource::OwnPds(PdsEndpoint::new(endpoint)),
+        Source::Fallback(url) => {
+            ListingSource::Fallback(FallbackUrl::new(url).expect("a non-empty fallback URL"))
+        }
+    };
+    let failure = match failure {
+        FetchFailure::Unreachable => Failure::Unreachable,
+        FetchFailure::BadResponse => Failure::BadResponse,
+        FetchFailure::AddressRefused => Failure::AddressRefused,
+        FetchFailure::TimedOut => Failure::TimedOut,
+    };
+    let classified = classify_fetch_failure(&source, failure);
+    Classified {
+        reason: view_reason(classified.reason),
+        fallback_used: classified.fallback_used(),
+        fallback_failure: classified.fallback_failure.map(view_reason),
+    }
 }
 
 fn sut_summarize(outcomes: &[PassOutcome]) -> Summary {
@@ -577,7 +604,6 @@ proptest! {
 /// Every fetch failure maps to exactly one documented reason; a failing
 /// fallback keeps `did_unresolvable` and records the fallback failure.
 #[test]
-#[ignore = "DELIVER 01-04 (unit): classify_fetch_failure, all 8 cases"]
 fn every_fetch_failure_maps_to_exactly_one_documented_reason() {
     let own = Source::OwnPds("https://pds.volkov.dev".to_string());
     let fallback = Source::Fallback("https://pds.jeffbailey.us".to_string());

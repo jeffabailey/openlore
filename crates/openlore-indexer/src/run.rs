@@ -34,7 +34,10 @@ use adapter_system_clock::SystemClockAdapter;
 use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
 use std::collections::BTreeMap;
 
-use appview_domain::ingest_pass::{refusal_cause_of, RefusalCause, SkipReason};
+use appview_domain::ingest_pass::{
+    classify_fetch_failure, refusal_cause_of, ClassifiedSkip, FetchFailure, RefusalCause,
+    SkipReason,
+};
 use appview_domain::{
     compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
     FallbackUrl, IngestOutcome, ListingPlan, ListingSource, NetworkSearchResult, PassSummary,
@@ -47,7 +50,7 @@ use lexicon::{
 use ports::net_policy::TransportPolicy;
 use ports::{
     ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexStorePort,
-    IngestSourcePort, RepoListingPort, SearchDimension,
+    IngestError, IngestSourcePort, RepoListingPort, SearchDimension,
 };
 
 use crate::config::parse_config;
@@ -413,18 +416,11 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
-    let fetches = match wiring
+    let fetches: Vec<DidFetch> = wiring
         .repo_dids
         .iter()
         .map(|repo_did| fetch_repo(wiring, &runtime, repo_did))
-        .collect::<Result<Vec<DidFetch>, String>>()
-    {
-        Ok(fetches) => fetches,
-        Err(err) => {
-            eprintln!("openlore-indexer: {err}");
-            return 2;
-        }
-    };
+        .collect();
 
     fetches.iter().for_each(emit_fallback_read);
     fetches.iter().for_each(emit_source_skipped);
@@ -443,34 +439,63 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
 }
 
 /// One repo DID's fetch: resolve its PDS, plan where to list it, list it.
-/// A listing failure is still fatal to the pass (per-DID isolation is ADR-078).
+/// Any failure skips only this DID, with its reason (ADR-078); nothing about
+/// the skip is stored, so the DID is retried on the next pass.
 fn fetch_repo(
     wiring: &IndexerWiring,
     runtime: &tokio::runtime::Runtime,
     repo_did: &Did,
-) -> Result<DidFetch, String> {
+) -> DidFetch {
     let resolution = runtime
         .block_on(wiring.pds_lookup.resolve_pds(&repo_did.0))
         .map_err(resolution_failure_of);
     let pds_url = resolution.as_ref().ok().cloned();
     match plan_listing(resolution, wiring.policy, wiring.fallback.as_ref()) {
-        ListingPlan::List(source) => runtime
-            .block_on(
-                wiring
-                    .repo_listing
-                    .list_repo_claims(source.base(), &repo_did.0),
-            )
-            .map(|listing| DidFetch::Read {
-                did: repo_did.clone(),
-                source,
-                listing,
-            })
-            .map_err(|err| format!("listing {} failed: {err}", repo_did.0)),
-        ListingPlan::Skip(reason) => Ok(DidFetch::Skipped {
+        ListingPlan::List(source) => list_source(wiring, runtime, repo_did, source),
+        ListingPlan::Skip(reason) => DidFetch::Skipped {
             did: repo_did.clone(),
-            reason,
+            skip: ClassifiedSkip::planned(reason),
             pds_url,
-        }),
+        },
+    }
+}
+
+/// List `repo_did` from its planned source; a failed listing becomes a
+/// classified skip naming the source that failed.
+fn list_source(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    repo_did: &Did,
+    source: ListingSource,
+) -> DidFetch {
+    match runtime.block_on(
+        wiring
+            .repo_listing
+            .list_repo_claims(source.base(), &repo_did.0),
+    ) {
+        Ok(listing) => DidFetch::Read {
+            did: repo_did.clone(),
+            source,
+            listing,
+        },
+        Err(err) => {
+            eprintln!("openlore-indexer: listing {} failed: {err}", repo_did.0);
+            DidFetch::Skipped {
+                did: repo_did.clone(),
+                skip: classify_fetch_failure(&source, fetch_failure_of(&err)),
+                pds_url: Some(source.base().to_string()),
+            }
+        }
+    }
+}
+
+/// How a listing error is classified by the pure core.
+fn fetch_failure_of(error: &IngestError) -> FetchFailure {
+    match error {
+        IngestError::Unreachable { .. } => FetchFailure::Unreachable,
+        IngestError::BadResponse { .. } | IngestError::ProbeRefused { .. } => {
+            FetchFailure::BadResponse
+        }
     }
 }
 
@@ -551,20 +576,18 @@ fn emit_fallback_read(fetch: &DidFetch) {
 /// Emit `indexer.ingest.source_skipped` for a DID that contributed nothing:
 /// its DID and reason, the PDS only when one was resolved — NO claim content.
 fn emit_source_skipped(fetch: &DidFetch) {
-    if let DidFetch::Skipped {
-        did,
-        reason,
-        pds_url,
-    } = fetch
-    {
+    if let DidFetch::Skipped { did, skip, pds_url } = fetch {
         let mut event = serde_json::json!({
             "event": "indexer.ingest.source_skipped",
             "did": did.0,
-            "reason": reason.token(),
-            "fallback_used": false,
+            "reason": skip.reason.token(),
+            "fallback_used": skip.fallback_used(),
         });
         if let Some(pds_url) = pds_url {
             event["pds_url"] = serde_json::Value::from(pds_url.as_str());
+        }
+        if let Some(fallback_failure) = skip.fallback_failure {
+            event["fallback_failure"] = serde_json::Value::from(fallback_failure.token());
         }
         println!("{event}");
     }

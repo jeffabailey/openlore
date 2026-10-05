@@ -479,7 +479,6 @@ fn a_fallback_that_is_somebodys_own_pds_never_vouches_for_self_attested_claims()
 ///   And Priya's claim is indexed and the pass completes successfully
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: fallback failure → skip with fallback_used/fallback_failure"]
 fn a_failing_fallback_is_isolated_like_any_other_source() {
     let (world, _, _) = given_ghost_is_unresolvable_and_jeffs_pds_is_the_fallback();
     world.host_answers(Host::JeffbaileyUs, ListingPosture::Status(503));

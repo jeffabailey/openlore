@@ -86,7 +86,6 @@ fn given_three_authors_with_dmitri_indexed_on_an_earlier_pass() -> IndexerWorld 
 ///   And the pass completes successfully
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: per-DID fault isolation (ADR-078) — replaces the exit-2 abort"]
 fn one_pds_being_down_does_not_hide_the_others() {
     let world = given_three_authors_publish_on_their_own_pdses();
     world.host_answers(Host::VolkovDev, ListingPosture::Status(502));
@@ -120,7 +119,6 @@ fn one_pds_being_down_does_not_hide_the_others() {
 ///     | redirects to another address                 | listing_failed  |
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: status mapping 5xx/429 → Unreachable, other → BadResponse"]
 fn every_way_an_authors_pds_can_fail_skips_only_that_author_with_its_reason() {
     let redirect_target = Tripwire::arm();
     let cases: Vec<(&str, Option<ListingPosture>, SkipReason)> = vec![
@@ -264,7 +262,6 @@ fn every_way_a_did_document_can_fail_makes_that_author_unresolvable() {
 ///   And Maria still finds both of Dmitri's claims when she searches for his work
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: skipping never deletes (FR-6)"]
 fn a_skipped_authors_earlier_claims_stay_searchable() {
     let world = given_three_authors_with_dmitri_indexed_on_an_earlier_pass();
     let before = world.rows_of(Author::Dmitri);
@@ -366,7 +363,6 @@ fn a_did_document_that_never_arrives_counts_against_the_same_budget() {
 ///   And no skip is reported for him
 /// ```
 #[test]
-#[ignore = "DELIVER 01-04: nothing about a skip is persisted; retried next pass"]
 fn skipped_authors_are_retried_on_the_next_pass() {
     let mut world = given_three_authors_publish_on_their_own_pdses();
     world.host_is_reachable(Host::VolkovDev, false);

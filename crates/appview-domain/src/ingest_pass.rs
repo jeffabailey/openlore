@@ -2,8 +2,9 @@
 //!
 //! Every repo DID is resolved to its own PDS every pass; the shell asks this
 //! module where to list it ([`plan_listing`]), which origin its records carry
-//! ([`origin_of`]), which listed records belong to it ([`records_of`]) and how
-//! the pass is summarised ([`summarize`]). Total functions over ADTs; no I/O.
+//! ([`origin_of`]), which listed records belong to it ([`records_of`]), why a
+//! failed listing skips it ([`classify_fetch_failure`]) and how the pass is
+//! summarised ([`summarize`]). Total functions over ADTs; no I/O.
 //!
 //! Earned Trust, subtype layer: [`ListingSource::Fallback`] carries no resolved
 //! endpoint, and [`origin_of`] takes no URL into account on that arm — the
@@ -78,10 +79,13 @@ impl ListingSource {
     }
 }
 
-/// Why a DID contributed nothing this pass.
+/// Why a DID contributed nothing this pass (ADR-078).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     DidUnresolvable,
+    PdsUnreachable,
+    PdsTimeout,
+    ListingFailed,
     PdsAddressRefused,
 }
 
@@ -90,8 +94,70 @@ impl SkipReason {
     pub const fn token(self) -> &'static str {
         match self {
             Self::DidUnresolvable => "did_unresolvable",
+            Self::PdsUnreachable => "pds_unreachable",
+            Self::PdsTimeout => "pds_timeout",
+            Self::ListingFailed => "listing_failed",
             Self::PdsAddressRefused => "pds_address_refused",
         }
+    }
+}
+
+/// Why a planned listing failed, as the shell reports it (mapped from the
+/// listing port's error and the per-DID deadline).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchFailure {
+    /// Transport error, HTTP 5xx, HTTP 429.
+    Unreachable,
+    /// Any other non-2xx (redirects included — never followed), non-JSON, malformed.
+    BadResponse,
+    /// No admissible address was left for the source's host.
+    AddressRefused,
+    TimedOut,
+}
+
+/// A skip with its reason; when the fallback was the source that failed, the
+/// DID stays `DidUnresolvable` and the fallback's own failure rides along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassifiedSkip {
+    pub reason: SkipReason,
+    pub fallback_failure: Option<SkipReason>,
+}
+
+impl ClassifiedSkip {
+    /// A skip decided before any listing (the fallback was never tried).
+    pub const fn planned(reason: SkipReason) -> Self {
+        Self {
+            reason,
+            fallback_failure: None,
+        }
+    }
+
+    /// Whether the fallback was tried (and failed) for this DID.
+    pub const fn fallback_used(&self) -> bool {
+        self.fallback_failure.is_some()
+    }
+}
+
+/// The reason a failure of the DID's own PDS is reported under.
+const fn own_pds_reason(failure: FetchFailure) -> SkipReason {
+    match failure {
+        FetchFailure::Unreachable => SkipReason::PdsUnreachable,
+        FetchFailure::TimedOut => SkipReason::PdsTimeout,
+        FetchFailure::BadResponse => SkipReason::ListingFailed,
+        FetchFailure::AddressRefused => SkipReason::PdsAddressRefused,
+    }
+}
+
+/// Every listing failure skips exactly that DID with one documented reason. A
+/// failing fallback keeps the DID `DidUnresolvable` (the reason it was on the
+/// fallback) and records what went wrong with the fallback.
+pub fn classify_fetch_failure(source: &ListingSource, failure: FetchFailure) -> ClassifiedSkip {
+    match source {
+        ListingSource::OwnPds(_) => ClassifiedSkip::planned(own_pds_reason(failure)),
+        ListingSource::Fallback(_) => ClassifiedSkip {
+            reason: SkipReason::DidUnresolvable,
+            fallback_failure: Some(own_pds_reason(failure)),
+        },
     }
 }
 
@@ -246,8 +312,9 @@ pub enum DidFetch {
     },
     Skipped {
         did: Did,
-        reason: SkipReason,
-        /// The resolved PDS, when one was known (never for `DidUnresolvable`).
+        skip: ClassifiedSkip,
+        /// The source that failed (own PDS, or the fallback when it was
+        /// used), when one was known.
         pds_url: Option<String>,
     },
 }
@@ -340,7 +407,7 @@ mod tests {
             },
             Kind::Skip => DidFetch::Skipped {
                 did,
-                reason: SkipReason::DidUnresolvable,
+                skip: ClassifiedSkip::planned(SkipReason::DidUnresolvable),
                 pds_url: None,
             },
         }
