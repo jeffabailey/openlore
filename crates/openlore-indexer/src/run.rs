@@ -25,7 +25,9 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use futures_util::stream::{self, StreamExt};
 
 use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
@@ -35,8 +37,8 @@ use adapter_xrpc_query_server::{QueryHandler, XrpcQueryServer};
 use std::collections::BTreeMap;
 
 use appview_domain::ingest_pass::{
-    classify_fetch_failure, refusal_cause_of, ClassifiedSkip, FetchFailure, RefusalCause,
-    SkipReason,
+    classify_fetch_failure, pass_exit_code, refusal_cause_of, ClassifiedSkip, FetchFailure,
+    RefusalCause, SkipReason,
 };
 use appview_domain::{
     compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
@@ -86,6 +88,10 @@ pub struct IndexerWiring {
     pub fallback: Option<FallbackUrl>,
     /// Which resolved PDS addresses may be listed (DD-IPF-5).
     pub policy: TransportPolicy,
+    /// How many DIDs are fetched at once (ADR-078).
+    pub max_concurrent_fetches: usize,
+    /// The single deadline each DID's fetch (resolve + listing) runs under.
+    pub per_did_time_budget: Duration,
     /// The configured SEPARATE `index.duckdb` path (ADR-023). Threaded into the
     /// `capability_boundary_probe` so it can REFUSE if mis-wired against the
     /// user's `openlore.duckdb` (the capability boundary, I-AV-5).
@@ -133,6 +139,8 @@ impl IndexerWiring {
             clock: Box::new(clock),
             fallback: cfg.fallback,
             policy: cfg.policy,
+            max_concurrent_fetches: cfg.max_concurrent_fetches,
+            per_did_time_budget: cfg.per_did_time_budget,
             index_path: cfg.index_path,
             listen_addr: cfg.listen_addr,
         })
@@ -416,11 +424,12 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
         }
     };
 
-    let fetches: Vec<DidFetch> = wiring
-        .repo_dids
-        .iter()
-        .map(|repo_did| fetch_repo(wiring, &runtime, repo_did))
-        .collect();
+    let fetches: Vec<DidFetch> = runtime.block_on(
+        stream::iter(&wiring.repo_dids)
+            .map(|repo_did| fetch_repo(wiring, repo_did))
+            .buffered(wiring.max_concurrent_fetches)
+            .collect(),
+    );
 
     fetches.iter().for_each(emit_fallback_read);
     fetches.iter().for_each(emit_source_skipped);
@@ -434,24 +443,26 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
     }
 
     tally.emit();
-    emit_pass_summary(&summarize(&fetches), started);
-    0
+    let summary = summarize(&fetches);
+    let exit_code = pass_exit_code(&summary);
+    emit_pass_summary(&summary, exit_code, started);
+    exit_code
 }
 
-/// One repo DID's fetch: resolve its PDS, plan where to list it, list it.
-/// Any failure skips only this DID, with its reason (ADR-078); nothing about
-/// the skip is stored, so the DID is retried on the next pass.
-fn fetch_repo(
-    wiring: &IndexerWiring,
-    runtime: &tokio::runtime::Runtime,
-    repo_did: &Did,
-) -> DidFetch {
-    let resolution = runtime
-        .block_on(wiring.pds_lookup.resolve_pds(&repo_did.0))
-        .map_err(resolution_failure_of);
+/// One repo DID's fetch, under ONE deadline covering resolving and every
+/// listing page: resolve its PDS, plan where to list it, list it. Any failure
+/// skips only this DID, with its reason (ADR-078); nothing about the skip is
+/// stored, so the DID is retried on the next pass.
+async fn fetch_repo(wiring: &IndexerWiring, repo_did: &Did) -> DidFetch {
+    let deadline = tokio::time::Instant::now() + wiring.per_did_time_budget;
+    let resolution =
+        match tokio::time::timeout_at(deadline, wiring.pds_lookup.resolve_pds(&repo_did.0)).await {
+            Ok(resolved) => resolved.map_err(resolution_failure_of),
+            Err(_elapsed) => Err(ResolutionFailure::TimedOut),
+        };
     let pds_url = resolution.as_ref().ok().cloned();
     match plan_listing(resolution, wiring.policy, wiring.fallback.as_ref()) {
-        ListingPlan::List(source) => list_source(wiring, runtime, repo_did, source),
+        ListingPlan::List(source) => list_source(wiring, repo_did, source, deadline).await,
         ListingPlan::Skip(reason) => DidFetch::Skipped {
             did: repo_did.clone(),
             skip: ClassifiedSkip::planned(reason),
@@ -460,32 +471,38 @@ fn fetch_repo(
     }
 }
 
-/// List `repo_did` from its planned source; a failed listing becomes a
-/// classified skip naming the source that failed.
-fn list_source(
+/// List `repo_did` from its planned source before `deadline`; a failed or
+/// timed-out listing becomes a classified skip naming the source that failed.
+async fn list_source(
     wiring: &IndexerWiring,
-    runtime: &tokio::runtime::Runtime,
     repo_did: &Did,
     source: ListingSource,
+    deadline: tokio::time::Instant,
 ) -> DidFetch {
-    match runtime.block_on(
-        wiring
-            .repo_listing
-            .list_repo_claims(source.base(), &repo_did.0),
-    ) {
-        Ok(listing) => DidFetch::Read {
-            did: repo_did.clone(),
-            source,
-            listing,
-        },
-        Err(err) => {
-            eprintln!("openlore-indexer: listing {} failed: {err}", repo_did.0);
-            DidFetch::Skipped {
+    let listing = wiring
+        .repo_listing
+        .list_repo_claims(source.base(), &repo_did.0);
+    let failure = match tokio::time::timeout_at(deadline, listing).await {
+        Ok(Ok(listing)) => {
+            return DidFetch::Read {
                 did: repo_did.clone(),
-                skip: classify_fetch_failure(&source, fetch_failure_of(&err)),
-                pds_url: Some(source.base().to_string()),
+                source,
+                listing,
             }
         }
+        Ok(Err(err)) => {
+            eprintln!("openlore-indexer: listing {} failed: {err}", repo_did.0);
+            fetch_failure_of(&err)
+        }
+        Err(_elapsed) => {
+            eprintln!("openlore-indexer: listing {} timed out", repo_did.0);
+            FetchFailure::TimedOut
+        }
+    };
+    DidFetch::Skipped {
+        did: repo_did.clone(),
+        skip: classify_fetch_failure(&source, failure),
+        pds_url: Some(source.base().to_string()),
     }
 }
 
@@ -594,7 +611,7 @@ fn emit_source_skipped(fetch: &DidFetch) {
 }
 
 /// Emit `indexer.ingest.pass_summary` — the pass's LAST stdout event.
-fn emit_pass_summary(summary: &PassSummary, started: Instant) {
+fn emit_pass_summary(summary: &PassSummary, exit_code: i32, started: Instant) {
     let event = serde_json::json!({
         "event": "indexer.ingest.pass_summary",
         "configured": summary.configured,
@@ -602,7 +619,7 @@ fn emit_pass_summary(summary: &PassSummary, started: Instant) {
         "fallback": summary.fallback,
         "skipped": summary.skipped,
         "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "exit_code": 0,
+        "exit_code": exit_code,
     });
     println!("{event}");
 }

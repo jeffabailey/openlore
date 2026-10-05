@@ -319,6 +319,31 @@ pub enum DidFetch {
     },
 }
 
+/// How one configured DID ended the pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOutcome {
+    ReadFromOwnPds,
+    ReadFromFallback,
+    Skipped,
+}
+
+impl DidFetch {
+    /// The DID's outcome, as the pass summary counts it.
+    pub const fn outcome(&self) -> PassOutcome {
+        match self {
+            Self::Read {
+                source: ListingSource::OwnPds(_),
+                ..
+            } => PassOutcome::ReadFromOwnPds,
+            Self::Read {
+                source: ListingSource::Fallback(_),
+                ..
+            } => PassOutcome::ReadFromFallback,
+            Self::Skipped { .. } => PassOutcome::Skipped,
+        }
+    }
+}
+
 /// The per-pass accounting: `own_pds + fallback + skipped == configured`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PassSummary {
@@ -329,26 +354,20 @@ pub struct PassSummary {
 }
 
 impl PassSummary {
-    fn count(self, fetch: &DidFetch) -> Self {
+    fn count(self, outcome: PassOutcome) -> Self {
         let configured = self.configured + 1;
-        match fetch {
-            DidFetch::Read {
-                source: ListingSource::OwnPds(_),
-                ..
-            } => Self {
+        match outcome {
+            PassOutcome::ReadFromOwnPds => Self {
                 configured,
                 own_pds: self.own_pds + 1,
                 ..self
             },
-            DidFetch::Read {
-                source: ListingSource::Fallback(_),
-                ..
-            } => Self {
+            PassOutcome::ReadFromFallback => Self {
                 configured,
                 fallback: self.fallback + 1,
                 ..self
             },
-            DidFetch::Skipped { .. } => Self {
+            PassOutcome::Skipped => Self {
                 configured,
                 skipped: self.skipped + 1,
                 ..self
@@ -358,10 +377,26 @@ impl PassSummary {
 }
 
 /// Fold the pass's per-DID outcomes into its summary.
-pub fn summarize(fetches: &[DidFetch]) -> PassSummary {
-    fetches
-        .iter()
+pub fn summarize_outcomes(outcomes: impl IntoIterator<Item = PassOutcome>) -> PassSummary {
+    outcomes
+        .into_iter()
         .fold(PassSummary::default(), PassSummary::count)
+}
+
+/// Fold the pass's per-DID fetches into its summary.
+pub fn summarize(fetches: &[DidFetch]) -> PassSummary {
+    summarize_outcomes(fetches.iter().map(DidFetch::outcome))
+}
+
+/// The pass's exit code (DD-IPF-6): `3` (total outage) exactly when at least
+/// one DID was configured and none was listed; `0` otherwise. A store failure
+/// (exit 2) never reaches this decision.
+pub const fn pass_exit_code(summary: &PassSummary) -> i32 {
+    if summary.configured >= 1 && summary.own_pds + summary.fallback == 0 {
+        3
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]

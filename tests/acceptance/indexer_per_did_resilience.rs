@@ -297,7 +297,6 @@ fn a_skipped_authors_earlier_claims_stay_searchable() {
 ///   And the pass finishes within a small multiple of the budget
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: one deadline per DID (timeout_at) → pds_timeout"]
 fn a_hanging_pds_cannot_stall_the_pass() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Sam]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -333,7 +332,6 @@ fn a_hanging_pds_cannot_stall_the_pass() {
 ///   And the pass finishes within a small multiple of the budget
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: the deadline covers resolving (ResolutionFailure::TimedOut)"]
 fn a_did_document_that_never_arrives_counts_against_the_same_budget() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Dmitri]);
     world.publishes_app_signed(Author::Dmitri, &[FERRITE_REPRODUCIBLE_BUILDS]);
@@ -395,7 +393,6 @@ fn skipped_authors_are_retried_on_the_next_pass() {
 ///   And the pass summary accounts for all 40 authors: 37 from their own PDS, 3 skipped
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: buffered(max_concurrent_fetches) fan-out (ADR-078)"]
 fn many_authors_never_cause_unbounded_concurrent_requests() {
     let (mut world, by_host) = IndexerWorld::crowd(40, 12);
     world.setting(var::MAX_CONCURRENT, "3");
@@ -436,7 +433,6 @@ fn many_authors_never_cause_unbounded_concurrent_requests() {
 ///   And nothing previously indexed is removed
 /// ```
 #[test]
-#[ignore = "DELIVER 02-01: pass_exit_code == 3 iff every configured DID skipped"]
 fn when_every_authors_source_fails_the_pass_reports_a_total_outage() {
     let world = given_three_authors_with_dmitri_indexed_on_an_earlier_pass();
     let before = world.indexed_rows();

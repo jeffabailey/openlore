@@ -24,6 +24,8 @@ path = "src/main.rs"
 #   - adapter-atproto-did      (IdentityResolvePort — VERIFY-ONLY resolve; no signing)
 #   - adapter-xrpc-query-server(the HTTP/XRPC query surface)
 #   - adapter-system-clock     (ClockPort          — degenerate, no capability)
+# Permitted non-adapter deps (ADR-078):
+#   - futures-util (MIT/Apache-2.0) — the bounded per-DID fetch fan-out (`buffered`)
 # FORBIDDEN (NOT listed): adapter-duckdb (StoragePort/local store),
 # adapter-atproto-pds (PDS-write surface).
 [dependencies]
@@ -45,7 +47,9 @@ serde_json = { workspace = true }
 # rt + macros only (no multi-thread); the indexer's pure gate + sync store stay off the
 # async path. Step 04-01: `net` is added for the `serve` query-server accept loop
 # (the hyper listener); the runtime stays current-thread (single-query-at-a-time).
-tokio = { workspace = true, features = ["macros", "rt", "net"] }
+# `time` (ADR-078): one `timeout_at` deadline per DID covering resolve + listing.
+tokio = { workspace = true, features = ["macros", "rt", "net", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Property tests for the pure `config::parse_config` (indexer-per-did-pds-fetch).

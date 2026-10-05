@@ -213,13 +213,27 @@ fn sut_classify_fetch_failure(source: &Source, failure: FetchFailure) -> Classif
 }
 
 fn sut_summarize(outcomes: &[PassOutcome]) -> Summary {
-    let _ = outcomes;
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::summarize (ADR-078)")
+    use appview_domain::ingest_pass::{summarize_outcomes, PassOutcome as Outcome};
+    let summary = summarize_outcomes(outcomes.iter().map(|outcome| match outcome {
+        PassOutcome::ReadFromOwnPds => Outcome::ReadFromOwnPds,
+        PassOutcome::ReadFromFallback => Outcome::ReadFromFallback,
+        PassOutcome::Skipped => Outcome::Skipped,
+    }));
+    Summary {
+        configured: summary.configured,
+        own_pds: summary.own_pds,
+        fallback: summary.fallback,
+        skipped: summary.skipped,
+    }
 }
 
 fn sut_pass_exit_code(summary: Summary) -> i32 {
-    let _ = summary;
-    todo!("SCAFFOLD: bind appview_domain::ingest_pass::pass_exit_code (DD-IPF-6)")
+    appview_domain::ingest_pass::pass_exit_code(&appview_domain::ingest_pass::PassSummary {
+        configured: summary.configured,
+        own_pds: summary.own_pds,
+        fallback: summary.fallback,
+        skipped: summary.skipped,
+    })
 }
 
 fn sut_address_refused(ip: IpAddr) -> bool {
@@ -450,7 +464,6 @@ proptest! {
     /// The pass summary accounts for every configured DID, and the exit code is
     /// 3 exactly when at least one DID was configured and none was listed.
     #[test]
-    #[ignore = "DELIVER 02-01 (unit): summarize + pass_exit_code"]
     fn the_summary_accounts_for_every_did_and_exit_3_means_total_outage(
         outcomes in proptest::collection::vec(arb_outcome(), 0..60)
     ) {

@@ -6,6 +6,7 @@
 //! there, always as relay origin. The fallback is built only here.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use appview_domain::FallbackUrl;
 use claim_domain::Did;
@@ -16,6 +17,12 @@ const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
 
 /// The ephemeral localhost listen address (the parallel-safe default).
 const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:0";
+
+/// How many DIDs are fetched at once (ADR-078).
+const DEFAULT_MAX_CONCURRENT_FETCHES: usize = 4;
+
+/// One DID's whole fetch — resolving plus every listing page (ADR-078).
+const DEFAULT_PER_DID_TIME_BUDGET: Duration = Duration::from_secs(30);
 
 /// The indexer's resolved configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +39,10 @@ pub struct IndexerConfig {
     pub plc_endpoint: String,
     /// Which PDS addresses may be contacted (DD-IPF-5).
     pub policy: TransportPolicy,
+    /// How many DIDs are fetched at once (ADR-078).
+    pub max_concurrent_fetches: usize,
+    /// The single deadline each DID's fetch runs under (ADR-078).
+    pub per_did_time_budget: Duration,
 }
 
 /// Parse the configuration from `lookup` (a variable name → its value).
@@ -50,7 +61,25 @@ pub fn parse_config(lookup: impl Fn(&str) -> Option<String>) -> IndexerConfig {
             lookup("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP").as_deref(),
             cfg!(debug_assertions),
         ),
+        max_concurrent_fetches: positive_number(
+            lookup("OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES").as_deref(),
+        )
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_FETCHES),
+        per_did_time_budget: positive_number(
+            lookup("OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS").as_deref(),
+        )
+        .map_or(DEFAULT_PER_DID_TIME_BUDGET, |secs| {
+            Duration::from_secs(secs as u64)
+        }),
     }
+}
+
+/// A set positive integer; anything else takes the default (range checks and
+/// refusals are 02-03).
+fn positive_number(value: Option<&str>) -> Option<usize> {
+    value
+        .and_then(|value| value.trim().parse().ok())
+        .filter(|number| *number >= 1)
 }
 
 /// `HttpsOrLoopbackHttp` only for the TEST-ONLY seam set to `1` in a debug
@@ -124,5 +153,7 @@ mod tests {
         assert_eq!(config.plc_endpoint, DEFAULT_PLC_ENDPOINT);
         assert_eq!(config.listen_addr, DEFAULT_LISTEN_ADDR);
         assert!(config.repo_dids.is_empty());
+        assert_eq!(config.max_concurrent_fetches, 4);
+        assert_eq!(config.per_did_time_budget, Duration::from_secs(30));
     }
 }
