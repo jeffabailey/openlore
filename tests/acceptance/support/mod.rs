@@ -7689,10 +7689,7 @@ impl ViewerServer {
     /// SCAFFOLD: true (slice-06).
     pub fn get(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = shared_http_client()
-            .get(&url)
-            .send()
-            .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+        let response = send_idempotent(&url, "GET", || shared_http_client().get(&url));
         let status = response.status().as_u16();
         let content_type = content_type_of(&response);
         let body = response
@@ -7743,11 +7740,9 @@ impl ViewerServer {
     /// is byte-unaffected (I-HX-4).
     pub fn get_htmx(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = shared_http_client()
-            .get(&url)
-            .header("HX-Request", "true")
-            .send()
-            .unwrap_or_else(|e| panic!("GET (htmx) {url}: {e}"));
+        let response = send_idempotent(&url, "GET (htmx)", || {
+            shared_http_client().get(&url).header("HX-Request", "true")
+        });
         let status = response.status().as_u16();
         let content_type = content_type_of(&response);
         let body = response
@@ -7774,13 +7769,13 @@ impl ViewerServer {
     /// real htmx for fidelity; `Shape::from_request` keys on the header's PRESENCE.
     pub fn get_boosted(&self, path: &str) -> ViewerResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = shared_http_client()
-            .get(&url)
-            .header("HX-Request", "true")
-            .header("HX-Boosted", "true")
-            .header("HX-Target", "viewer-main")
-            .send()
-            .unwrap_or_else(|e| panic!("GET (boosted) {url}: {e}"));
+        let response = send_idempotent(&url, "GET (boosted)", || {
+            shared_http_client()
+                .get(&url)
+                .header("HX-Request", "true")
+                .header("HX-Boosted", "true")
+                .header("HX-Target", "viewer-main")
+        });
         let status = response.status().as_u16();
         let content_type = content_type_of(&response);
         let body = response
@@ -7838,6 +7833,30 @@ impl ViewerServer {
 /// deterministically), NOT a latency assertion, so a slow-under-load response
 /// now passes instead of flaking. `reqwest::blocking::Client` is `Send + Sync +
 /// Clone`, so sharing it across cargo's parallel test threads is safe.
+/// Send an idempotent (GET) request to a local viewer, retrying a transport-level
+/// failure up to twice with a short backoff. CI intermittently saw
+/// "error sending request" against a freshly spawned viewer under load; a response
+/// with ANY HTTP status is returned as-is and never retried, so a wrong answer can
+/// never be masked. Only GETs use this: a POST must never be sent twice.
+fn send_idempotent(
+    url: &str,
+    label: &str,
+    request: impl Fn() -> reqwest::blocking::RequestBuilder,
+) -> reqwest::blocking::Response {
+    const ATTEMPTS: u32 = 3;
+    let mut attempt = 1;
+    loop {
+        match request().send() {
+            Ok(response) => return response,
+            Err(e) if attempt < ATTEMPTS && (e.is_connect() || e.is_request()) => {
+                std::thread::sleep(std::time::Duration::from_millis(200 * u64::from(attempt)));
+                attempt += 1;
+            }
+            Err(e) => panic!("{label} {url}: {e} (after {attempt} attempt(s))"),
+        }
+    }
+}
+
 fn shared_http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
