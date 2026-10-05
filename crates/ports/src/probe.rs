@@ -158,6 +158,10 @@ pub enum ProbeRefusalReason {
     /// a fallback read was not relay origin, or the resolved PDS was not
     /// author-PDS origin exactly when fetched from it.
     IndexerOriginClassificationUnsound,
+    /// The indexer's configuration was refused at startup (a malformed repo
+    /// DID or fallback URL, an out-of-range bound, or the loopback test seam
+    /// in a release build); `structured` names the variable and its value.
+    IndexerConfigInvalid,
 }
 
 // -----------------------------------------------------------------------------
@@ -241,14 +245,24 @@ mod tests {
         }
     }
 
-    /// The indexer's origin-classification refusal serializes to its
-    /// PascalCase variant name and roundtrips (ADR-077).
+    /// The indexer's refusals serialize to their PascalCase variant names and
+    /// roundtrip (ADR-077) — the closed table of indexer-per-did additions.
     #[test]
-    fn indexer_origin_classification_refusal_serializes_verbatim_and_roundtrips() {
-        let reason = ProbeRefusalReason::IndexerOriginClassificationUnsound;
-        let value = serde_json::to_value(reason).expect("serialize reason");
-        assert_eq!(value, json!("IndexerOriginClassificationUnsound"));
-        let parsed: ProbeRefusalReason = serde_json::from_value(value).expect("deserialize");
-        assert_eq!(parsed, reason);
+    fn indexer_refusals_serialize_verbatim_and_roundtrip() {
+        for (reason, name) in [
+            (
+                ProbeRefusalReason::IndexerOriginClassificationUnsound,
+                "IndexerOriginClassificationUnsound",
+            ),
+            (
+                ProbeRefusalReason::IndexerConfigInvalid,
+                "IndexerConfigInvalid",
+            ),
+        ] {
+            let value = serde_json::to_value(reason).expect("serialize reason");
+            assert_eq!(value, json!(name));
+            let parsed: ProbeRefusalReason = serde_json::from_value(value).expect("deserialize");
+            assert_eq!(parsed, reason);
+        }
     }
 }

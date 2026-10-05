@@ -55,7 +55,7 @@ use ports::{
     IngestError, IngestSourcePort, RepoListingPort, SearchDimension,
 };
 
-use crate::config::parse_config;
+use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig};
 
 use crate::probe_gauntlet::{
     capability_boundary_probe, origin_classification_probe, probe_gauntlet, ProbeRefusal,
@@ -107,8 +107,7 @@ impl IndexerWiring {
     /// the user's `openlore.duckdb` — the capability boundary (ADR-023 / I-AV-5)
     /// is the ABSENCE of the signing identity / local store from this dep graph
     /// (`xtask check-arch`'s `indexer_holds_no_signing_or_local_store` rule).
-    pub fn production() -> anyhow::Result<Self> {
-        let cfg = parse_config(|name| std::env::var(name).ok());
+    pub fn production(cfg: IndexerConfig) -> anyhow::Result<Self> {
         let fallback_base = cfg
             .fallback
             .as_ref()
@@ -188,8 +187,22 @@ impl IndexerWiring {
 /// Bootstrap SCAFFOLD (step 01-04): the sequence is wired; the verb bodies are
 /// `todo!()`.
 pub fn run(command: Command) -> i32 {
+    // Step 0: CONFIG — refuse a bad configuration before anything is wired or
+    // contacted (ADR-077/078).
+    let cfg = match parse_config(
+        |name| std::env::var(name).ok(),
+        BuildProfile::of_this_build(),
+    ) {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            emit_health_startup_refused(&config_refusal(&error));
+            return 2;
+        }
+    };
+    emit_config_loaded(&cfg);
+
     // Step 1: WIRE.
-    let wiring = match IndexerWiring::production() {
+    let wiring = match IndexerWiring::production(cfg) {
         Ok(w) => w,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
@@ -696,6 +709,43 @@ impl IngestTally {
 fn stats(_wiring: &IndexerWiring) -> i32 {
     // SCAFFOLD: true — index coverage report lands in Phase 03/04.
     todo!("openlore-indexer stats — index coverage report (Phase 03/04)")
+}
+
+/// A refused configuration as a startup refusal naming the variable and value.
+fn config_refusal(error: &ConfigError) -> ProbeRefusal {
+    ProbeRefusal {
+        adapter: "config",
+        reason: ports::ProbeRefusalReason::IndexerConfigInvalid,
+        detail: error.to_string(),
+        structured: serde_json::json!({
+            "variable": error.variable,
+            "value": error.value,
+        }),
+    }
+}
+
+/// `indexer.config.loaded` (stdout): what this run was configured with.
+fn emit_config_loaded(cfg: &IndexerConfig) {
+    let mut event = serde_json::json!({
+        "event": "indexer.config.loaded",
+        "repo_did_count": cfg.repo_dids.len(),
+        "fallback_configured": cfg.fallback.is_some(),
+        "max_concurrent_fetches": cfg.max_concurrent_fetches,
+        "per_did_time_budget_secs": cfg.per_did_time_budget.as_secs(),
+        "plc_endpoint": cfg.plc_endpoint,
+        "transport_policy": policy_token(cfg.policy),
+    });
+    if let Some(fallback) = &cfg.fallback {
+        event["fallback_url"] = fallback.as_str().into();
+    }
+    println!("{event}");
+}
+
+fn policy_token(policy: TransportPolicy) -> &'static str {
+    match policy {
+        TransportPolicy::HttpsPublicOnly => "https_public_only",
+        TransportPolicy::HttpsOrLoopbackHttp => "https_or_loopback_http",
+    }
 }
 
 /// Emit a `health.startup.refused` event to stderr in the structured shape

@@ -28,7 +28,6 @@
 //
 // SCAFFOLD: true
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use proptest::prelude::*;
@@ -105,21 +104,6 @@ struct Summary {
     own_pds: u64,
     fallback: u64,
     skipped: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LoadedConfig {
-    repo_dids: Vec<String>,
-    fallback: Option<String>,
-    max_concurrent_fetches: u64,
-    per_did_time_budget_secs: u64,
-    policy: Policy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ConfigRefusal {
-    variable: String,
-    value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,14 +234,6 @@ fn sut_endpoint_admissible(url: &str, policy: Policy) -> Result<String, ()> {
         .map_err(|_| ())
 }
 
-fn sut_parse_config(
-    env: &BTreeMap<String, String>,
-    release_build: bool,
-) -> Result<LoadedConfig, ConfigRefusal> {
-    let _ = (env, release_build);
-    todo!("SCAFFOLD: bind openlore-indexer config::parse_config (data-models §4)")
-}
-
 fn sut_records_of(did: &str, listed: &[(String, String)]) -> (Vec<String>, u64) {
     let listed: Vec<ports::RepoRecord> = listed
         .iter()
@@ -385,28 +361,6 @@ fn arb_did() -> impl Strategy<Value = String> {
     ("(plc|web)", "[a-z0-9]{1,24}").prop_map(|(m, id)| format!("did:{m}:{id}"))
 }
 
-const KNOWN_VARIABLES: [&str; 5] = [
-    "OPENLORE_INDEXER_REPO_DIDS",
-    "OPENLORE_INDEXER_SOURCE_URL",
-    "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP",
-    "OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES",
-    "OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS",
-];
-
-fn arb_env() -> impl Strategy<Value = BTreeMap<String, String>> {
-    proptest::collection::btree_map(
-        proptest::sample::select(KNOWN_VARIABLES.to_vec()).prop_map(str::to_string),
-        prop_oneof![
-            Just(String::new()),
-            "[ -~]{0,40}",
-            "[0-9]{1,4}",
-            arb_did(),
-            arb_public_https_url(),
-        ],
-        0..5,
-    )
-}
-
 // =============================================================================
 // Properties
 // =============================================================================
@@ -513,69 +467,12 @@ proptest! {
         prop_assert!(sut_endpoint_admissible("http://10.0.0.1", Policy::HttpsOrLoopbackHttp).is_err());
     }
 
-    /// CORE-7 @property @US-IPF-004 @AC-004.1 @AC-004.2 @AC-004.3 @C6a @C6c @contract-shape:pure-function
-    /// Config parsing is total: for any environment it either loads or refuses
-    /// naming one of the indexer's variables and a value taken from it.
-    #[test]
-    #[ignore = "DELIVER 02-03 (unit): parse_config is total, refusals name variable + value"]
-    fn config_parsing_is_total_and_every_refusal_names_a_variable_and_its_value(env in arb_env()) {
-        match sut_parse_config(&env, false) {
-            Ok(cfg) => {
-                prop_assert!((1..=16).contains(&cfg.max_concurrent_fetches));
-                prop_assert!((1..=600).contains(&cfg.per_did_time_budget_secs));
-                let distinct: BTreeSet<&String> = cfg.repo_dids.iter().collect();
-                prop_assert_eq!(distinct.len(), cfg.repo_dids.len(), "duplicates collapsed");
-            }
-            Err(refusal) => {
-                prop_assert!(KNOWN_VARIABLES.contains(&refusal.variable.as_str()), "{:?}", refusal);
-                let raw = env.get(&refusal.variable).cloned().unwrap_or_default();
-                prop_assert!(raw.contains(&refusal.value), "{:?} not in {:?}", refusal, raw);
-            }
-        }
-    }
-
-    /// CORE-8 @property @US-IPF-004 @AC-004.5 @R-IPF-9 @release-gate @contract-shape:pure-function
-    /// A release build refuses the loopback test seam whatever else is set; a
-    /// debug build turns it into the loopback-http test policy.
-    #[test]
-    #[ignore = "DELIVER 02-03 (unit): BuildProfile::Release + seam ⇒ refusal"]
-    fn a_release_build_refuses_the_loopback_seam_whatever_else_is_set(mut env in arb_env()) {
-        env.insert("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP".to_string(), "1".to_string());
-        let refusal = sut_parse_config(&env, true);
-        prop_assert!(
-            matches!(&refusal, Err(r) if r.variable == "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP"),
-            "{:?}", refusal
-        );
-        env.retain(|k, _| k == "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP");
-        prop_assert_eq!(
-            sut_parse_config(&env, false).map(|c| c.policy),
-            Ok(Policy::HttpsOrLoopbackHttp)
-        );
-    }
-
-    /// CORE-9 @property @US-IPF-004 @AC-004.1 @AC-002.7 @C3 @C4a @contract-shape:pure-function
-    /// Any list of valid DIDs (comma or whitespace separated, with repeats)
-    /// loads as the distinct DIDs in first-seen order.
-    #[test]
-    #[ignore = "DELIVER 02-03 (unit): DID list parse + dedup, first wins"]
-    fn a_list_of_valid_dids_loads_as_its_distinct_dids_in_order(
-        dids in proptest::collection::vec(arb_did(), 0..12), comma in any::<bool>()
-    ) {
-        let mut repeated = dids.clone();
-        repeated.extend(dids.iter().take(3).cloned());
-        let sep = if comma { "," } else { " " };
-        let env = BTreeMap::from([(
-            "OPENLORE_INDEXER_REPO_DIDS".to_string(),
-            repeated.join(sep),
-        )]);
-        let mut expected: Vec<String> = Vec::new();
-        for d in &dids {
-            if !expected.contains(d) {
-                expected.push(d.clone());
-            }
-        }
-        prop_assert_eq!(sut_parse_config(&env, false).map(|c| c.repo_dids), Ok(expected));
-    }
+    // CORE-7 / CORE-8 / CORE-9 (config parsing) live VERBATIM in
+    // `crates/openlore-indexer/src/config.rs` (`pass_core_properties`):
+    // `parse_config` is private to the indexer BINARY, and exposing it through a
+    // lib target would make `cli` link the indexer's server/store/ingest crates
+    // (check-arch I-3, disjoint composition roots) — the binding seam's
+    // documented alternative.
 
     /// CORE-10 @property @US-IPF-001 @AC-001.5 @I-IPF-5 @C3 @contract-shape:pure-function
     /// Repo binding partitions a listing: records of the requested repo are

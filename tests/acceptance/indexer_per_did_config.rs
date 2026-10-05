@@ -77,7 +77,6 @@ fn then_start_is_refused_naming(
 ///     | did:plc:priya#org.openlore.application  | a key reference, not a DID|
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: parse_config validates repo DIDs (FR-8)"]
 fn a_malformed_repo_did_is_explained_at_startup() {
     for entry in [
         "priya",
@@ -113,7 +112,6 @@ fn a_malformed_repo_did_is_explained_at_startup() {
 ///     | https://[::1]:8443                  | loopback address           |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: parse_config validates the fallback URL + policy pre-check"]
 fn a_malformed_or_unsafe_fallback_source_is_explained_at_startup() {
     for value in [
         "pds.jeffbailey.us",
@@ -150,7 +148,6 @@ fn a_malformed_or_unsafe_fallback_source_is_explained_at_startup() {
 ///     | OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS   | -5    |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: parse_config bounds 1..=16 and 1..=600"]
 fn fan_out_bounds_outside_their_range_are_explained_at_startup() {
     for (variable, value) in [
         (var::MAX_CONCURRENT, "0"),
@@ -184,7 +181,6 @@ fn fan_out_bounds_outside_their_range_are_explained_at_startup() {
 ///     | (unset) | (unset) → defaults 4 and 30 |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: config.loaded reports bounds and defaults (cap 4, 30 s)"]
 fn fan_out_bounds_at_the_edge_of_their_range_are_accepted_and_reported() {
     for (fetches, secs, want_fetches, want_secs) in [
         (Some("1"), Some("1"), 1, 1),
@@ -222,7 +218,6 @@ fn fan_out_bounds_at_the_edge_of_their_range_are_accepted_and_reported() {
 ///   And the pass summary shows nothing configured and the pass exits 0
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: empty list / absent fallback are reported (FR-8)"]
 fn an_empty_did_list_and_no_fallback_are_reported_not_refused() {
     let mut world = IndexerWorld::configured_with(&[]);
     world.repo_dids_text_is("");
@@ -251,7 +246,6 @@ fn an_empty_did_list_and_no_fallback_are_reported_not_refused() {
 ///   And Priya's PDS was asked for her repo exactly once
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: duplicates collapsed, first wins (data-models §4)"]
 fn a_repo_did_listed_twice_is_read_once_and_counted_once() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Dmitri]);
     world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
@@ -368,7 +362,6 @@ fn with_the_directory_down_a_single_source_deployment_keeps_its_old_behaviour() 
 ///   Then it refuses to start, naming OPENLORE_INDEXER_SOURCE_URL and that address
 /// ```
 #[test]
-#[ignore = "DELIVER 02-03: HttpsPublicOnly is the default transport policy"]
 fn without_the_test_seam_the_production_policy_refuses_a_loopback_fallback() {
     let mut world = IndexerWorld::configured_with(&[Author::Priya]);
     world.without_loopback_seam();
