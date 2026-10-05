@@ -62,6 +62,11 @@ use crate::probe_gauntlet::{
 };
 use crate::Command;
 
+/// Refused to start (bad config, wiring, probe) or a fatal runtime/store failure.
+const EXIT_FATAL: i32 = 2;
+/// `serve` ran to completion.
+const EXIT_SERVED: i32 = 0;
+
 /// The indexer's wired adapter set, owned by the composition root for the
 /// duration of the program (mirrors the CLI's `Wiring`). Holds ONLY the
 /// indexer's driven adapters — by construction NO signing identity + NO local
@@ -121,6 +126,9 @@ impl IndexerWiring {
         // Read-only bounded PULL (ADR-024), SSRF-guarded (ADR-077 §4): every
         // outbound request obeys the transport policy, after DNS.
         let ingest_source = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
+        let repo_listing = AtProtoIngestAdapter::guarded(fallback_base, cfg.policy);
+        // DID → PDS, SSRF-guarded like every other outbound request.
+        let pds_lookup = IdentityLookup::guarded(&cfg.plc_endpoint, &cfg.plc_endpoint, cfg.policy);
         // VERIFY-ONLY resolve path (ADR-026) — never the signing `IdentityPort`.
         let identity_resolve = AtProtoDidAdapter::resolve_only();
         // The query server is bound only for `serve` (Phase 04); the `ingest`
@@ -131,12 +139,8 @@ impl IndexerWiring {
         Ok(Self {
             index_store: Box::new(index_store),
             ingest_source: Box::new(ingest_source),
-            repo_listing: Box::new(AtProtoIngestAdapter::guarded(fallback_base, cfg.policy)),
-            pds_lookup: Box::new(IdentityLookup::guarded(
-                &cfg.plc_endpoint,
-                &cfg.plc_endpoint,
-                cfg.policy,
-            )),
+            repo_listing: Box::new(repo_listing),
+            pds_lookup: Box::new(pds_lookup),
             repo_dids: cfg.repo_dids,
             identity_resolve: Box::new(identity_resolve),
             query_server,
@@ -196,7 +200,7 @@ pub fn run(command: Command) -> i32 {
         Ok(cfg) => cfg,
         Err(error) => {
             emit_health_startup_refused(&config_refusal(&error));
-            return 2;
+            return EXIT_FATAL;
         }
     };
     emit_config_loaded(&cfg);
@@ -206,7 +210,7 @@ pub fn run(command: Command) -> i32 {
         Ok(w) => w,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
-            return 2;
+            return EXIT_FATAL;
         }
     };
 
@@ -214,7 +218,7 @@ pub fn run(command: Command) -> i32 {
     // start on any probe failure — emit `health.startup.refused` + exit 2.
     if let Err(refusal) = wiring.probe_all() {
         emit_health_startup_refused(&refusal);
-        return 2;
+        return EXIT_FATAL;
     }
 
     // Step 3: USE — dispatch the subcommand.
@@ -250,7 +254,7 @@ fn serve(wiring: &IndexerWiring) -> i32 {
         Ok(s) => Arc::new(s),
         Err(err) => {
             eprintln!("openlore-indexer serve: open index store: {err}");
-            return 2;
+            return EXIT_FATAL;
         }
     };
 
@@ -266,7 +270,7 @@ fn serve(wiring: &IndexerWiring) -> i32 {
                 "openlore-indexer serve: invalid listen address {:?}: {err}",
                 wiring.listen_addr
             );
-            return 2;
+            return EXIT_FATAL;
         }
     };
 
@@ -274,14 +278,11 @@ fn serve(wiring: &IndexerWiring) -> i32 {
     // accept loop + the per-connection tasks run concurrently on the single-thread
     // executor (the CLI makes one query at a time). The indexer's `tokio` feature
     // set is `rt` + (via the query-server crate) `net`/`macros` — no multi-thread.
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match current_thread_runtime() {
         Ok(rt) => rt,
         Err(err) => {
             eprintln!("openlore-indexer serve: build async runtime: {err}");
-            return 2;
+            return EXIT_FATAL;
         }
     };
 
@@ -290,26 +291,25 @@ fn serve(wiring: &IndexerWiring) -> i32 {
             Ok(server) => server,
             Err(err) => {
                 eprintln!("openlore-indexer serve: bind query server: {err}");
-                return 2;
+                return EXIT_FATAL;
             }
         };
         // Emit the bound address so the supervisor (the test harness) can read the
         // ephemeral port back. The event is structural (an address; no claim
         // content) — the DevOps observability contract (WD-105).
-        let listening = serde_json::json!({
+        emit(serde_json::json!({
             "event": "indexer.serve.listening",
             "addr": server.local_addr().to_string(),
-        });
-        println!("{listening}");
+        }));
         // Flush stdout so a line-reading supervisor sees the event immediately.
         use std::io::Write;
         let _ = std::io::stdout().flush();
 
         match server.serve().await {
-            Ok(()) => 0,
+            Ok(()) => EXIT_SERVED,
             Err(err) => {
                 eprintln!("openlore-indexer serve: serve loop failed: {err}");
-                2
+                EXIT_FATAL
             }
         }
     })
@@ -444,40 +444,63 @@ fn from_dto_dimension(dim: SearchDimensionDto) -> SearchDimension {
 /// claim-content telemetry, WD-105).
 fn ingest(wiring: &IndexerWiring) -> i32 {
     let started = Instant::now();
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match current_thread_runtime() {
         Ok(rt) => rt,
         Err(err) => {
             eprintln!("openlore-indexer: failed to build async runtime: {err}");
-            return 2;
+            return EXIT_FATAL;
         }
     };
 
-    let fetches: Vec<DidFetch> = runtime.block_on(
-        stream::iter(&wiring.repo_dids)
-            .map(|repo_did| fetch_repo(wiring, repo_did))
-            .buffered(wiring.max_concurrent_fetches)
-            .collect(),
-    );
-
+    let fetches = fetch_all(wiring, &runtime);
     fetches.iter().for_each(emit_fallback_read);
     fetches.iter().for_each(emit_source_skipped);
 
-    let mut tally = IngestTally::default();
-    for fetch in &fetches {
-        if let Err(err) = gate_fetch(wiring, &runtime, fetch, &mut tally) {
+    let tally = match gate_all(wiring, &runtime, &fetches) {
+        Ok(tally) => tally,
+        Err(err) => {
             eprintln!("openlore-indexer: index upsert failed: {err}");
-            return 2;
+            return EXIT_FATAL;
         }
-    }
-
+    };
     tally.emit();
+
     let summary = summarize(&fetches);
     let exit_code = pass_exit_code(&summary);
     emit_pass_summary(&summary, exit_code, started);
     exit_code
+}
+
+/// The single-threaded runtime both `serve` and `ingest` run on.
+fn current_thread_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// The fetch phase: every configured repo DID, at most
+/// `max_concurrent_fetches` at once, results in configured order.
+fn fetch_all(wiring: &IndexerWiring, runtime: &tokio::runtime::Runtime) -> Vec<DidFetch> {
+    runtime.block_on(
+        stream::iter(&wiring.repo_dids)
+            .map(|repo_did| fetch_repo(wiring, repo_did))
+            .buffered(wiring.max_concurrent_fetches)
+            .collect(),
+    )
+}
+
+/// The gate phase: every fetched repo through the verify/provenance gate, in
+/// configured order. `Err` only for a store failure (fatal).
+fn gate_all(
+    wiring: &IndexerWiring,
+    runtime: &tokio::runtime::Runtime,
+    fetches: &[DidFetch],
+) -> Result<IngestTally, String> {
+    let mut tally = IngestTally::default();
+    for fetch in fetches {
+        gate_fetch(wiring, runtime, fetch, &mut tally)?;
+    }
+    Ok(tally)
 }
 
 /// One repo DID's fetch, under ONE deadline covering resolving and every
@@ -486,11 +509,7 @@ fn ingest(wiring: &IndexerWiring) -> i32 {
 /// stored, so the DID is retried on the next pass.
 async fn fetch_repo(wiring: &IndexerWiring, repo_did: &Did) -> DidFetch {
     let deadline = tokio::time::Instant::now() + wiring.per_did_time_budget;
-    let resolution =
-        match tokio::time::timeout_at(deadline, wiring.pds_lookup.resolve_pds(&repo_did.0)).await {
-            Ok(resolved) => resolved.map_err(resolution_failure_of),
-            Err(_elapsed) => Err(ResolutionFailure::TimedOut),
-        };
+    let resolution = resolve_pds(wiring, repo_did, deadline).await;
     let pds_url = resolution.as_ref().ok().cloned();
     match plan_listing(resolution, wiring.policy, wiring.fallback.as_ref()) {
         ListingPlan::List(source) => list_source(wiring, repo_did, source, deadline).await,
@@ -499,6 +518,18 @@ async fn fetch_repo(wiring: &IndexerWiring, repo_did: &Did) -> DidFetch {
             skip: ClassifiedSkip::planned(reason),
             pds_url,
         },
+    }
+}
+
+/// Resolve `repo_did`'s PDS afresh before `deadline` (never cached).
+async fn resolve_pds(
+    wiring: &IndexerWiring,
+    repo_did: &Did,
+    deadline: tokio::time::Instant,
+) -> Result<String, ResolutionFailure> {
+    match tokio::time::timeout_at(deadline, wiring.pds_lookup.resolve_pds(&repo_did.0)).await {
+        Ok(resolved) => resolved.map_err(resolution_failure_of),
+        Err(_elapsed) => Err(ResolutionFailure::TimedOut),
     }
 }
 
@@ -581,23 +612,38 @@ fn gate_fetch(
             continue;
         };
         let key = author_key(wiring, runtime, &record);
-        match ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref()) {
-            IngestOutcome::Index(claim) => {
-                wiring
-                    .index_store
-                    .upsert(&claim)
-                    .map_err(|err| err.to_string())?;
-                tally.verified += 1;
+        let outcome = ingest_repo_record(&record, &rkey, repo_did, origin, key.as_ref());
+        record_outcome(wiring, repo_did, &rkey, outcome, tally)?;
+    }
+    Ok(())
+}
+
+/// Act on one record's gate decision: upsert an admitted claim, count a
+/// refusal (naming a provenance refusal on stderr). `Err` only for a store
+/// failure.
+fn record_outcome(
+    wiring: &IndexerWiring,
+    repo_did: &Did,
+    rkey: &str,
+    outcome: IngestOutcome,
+    tally: &mut IngestTally,
+) -> Result<(), String> {
+    match outcome {
+        IngestOutcome::Index(claim) => {
+            wiring
+                .index_store
+                .upsert(&claim)
+                .map_err(|err| err.to_string())?;
+            tally.verified += 1;
+        }
+        IngestOutcome::Reject(reason) => {
+            if let RejectReason::Provenance(rejection) = &reason {
+                eprintln!(
+                    "openlore-indexer: refused at://{}/org.openlore.claim/{rkey}: {rejection}",
+                    repo_did.0
+                );
             }
-            IngestOutcome::Reject(reason) => {
-                if let RejectReason::Provenance(rejection) = &reason {
-                    eprintln!(
-                        "openlore-indexer: refused at://{}/org.openlore.claim/{rkey}: {rejection}",
-                        repo_did.0
-                    );
-                }
-                tally.reject(&reason);
-            }
+            tally.reject(&reason);
         }
     }
     Ok(())
@@ -612,13 +658,12 @@ fn emit_fallback_read(fetch: &DidFetch) {
         ..
     } = fetch
     {
-        let event = serde_json::json!({
+        emit(serde_json::json!({
             "event": "indexer.ingest.source_fallback",
             "did": did.0,
             "reason": SkipReason::DidUnresolvable.token(),
             "fallback_url": fallback.as_str(),
-        });
-        println!("{event}");
+        }));
     }
 }
 
@@ -638,13 +683,13 @@ fn emit_source_skipped(fetch: &DidFetch) {
         if let Some(fallback_failure) = skip.fallback_failure {
             event["fallback_failure"] = serde_json::Value::from(fallback_failure.token());
         }
-        println!("{event}");
+        emit(event);
     }
 }
 
 /// Emit `indexer.ingest.pass_summary` — the pass's LAST stdout event.
 fn emit_pass_summary(summary: &PassSummary, exit_code: i32, started: Instant) {
-    let event = serde_json::json!({
+    emit(serde_json::json!({
         "event": "indexer.ingest.pass_summary",
         "configured": summary.configured,
         "own_pds": summary.own_pds,
@@ -652,7 +697,11 @@ fn emit_pass_summary(summary: &PassSummary, exit_code: i32, started: Instant) {
         "skipped": summary.skipped,
         "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "exit_code": exit_code,
-    });
+    }));
+}
+
+/// Print one structured event as a stdout line.
+fn emit(event: serde_json::Value) {
     println!("{event}");
 }
 
@@ -703,17 +752,15 @@ impl IngestTally {
                 (cause.token().to_string(), count.into())
             })
             .collect();
-        let verified_event = serde_json::json!({
+        emit(serde_json::json!({
             "event": "indexer.ingest.verified",
             "count": self.verified,
-        });
-        let rejected_event = serde_json::json!({
+        }));
+        emit(serde_json::json!({
             "event": "indexer.ingest.rejected",
             "count": self.refused.values().sum::<u64>(),
             "by_reason": by_reason,
-        });
-        println!("{verified_event}");
-        println!("{rejected_event}");
+        }));
     }
 }
 
@@ -746,19 +793,12 @@ fn emit_config_loaded(cfg: &IndexerConfig) {
         "max_concurrent_fetches": cfg.max_concurrent_fetches,
         "per_did_time_budget_secs": cfg.per_did_time_budget.as_secs(),
         "plc_endpoint": cfg.plc_endpoint,
-        "transport_policy": policy_token(cfg.policy),
+        "transport_policy": cfg.policy.token(),
     });
     if let Some(fallback) = &cfg.fallback {
         event["fallback_url"] = fallback.as_str().into();
     }
-    println!("{event}");
-}
-
-fn policy_token(policy: TransportPolicy) -> &'static str {
-    match policy {
-        TransportPolicy::HttpsPublicOnly => "https_public_only",
-        TransportPolicy::HttpsOrLoopbackHttp => "https_or_loopback_http",
-    }
+    emit(event);
 }
 
 /// Emit a `health.startup.refused` event to stderr in the structured shape

@@ -30,6 +30,7 @@
 use async_trait::async_trait;
 use claim_domain::{Cid, ClaimRecord, SignedClaim};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
 use ports::{
@@ -61,15 +62,8 @@ impl AtProtoIngestAdapter {
     /// are never followed (ADR-078): a 3xx is a failed listing, its target is
     /// not contacted.
     pub fn new(source: &str) -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self {
-            client,
-            source: source.to_string(),
-            policy: None,
-        }
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        Self::with_client(client, source, None)
     }
 
     /// The SSRF-guarded adapter the indexer wires (ADR-077 §4, DD-IPF-5):
@@ -85,13 +79,19 @@ impl AtProtoIngestAdapter {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .dns_resolver(std::sync::Arc::new(GuardedResolver { policy, lookup }))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .dns_resolver(Arc::new(GuardedResolver { policy, lookup }));
+        Self::with_client(client, source, Some(policy))
+    }
+
+    fn with_client(
+        client: reqwest::ClientBuilder,
+        source: &str,
+        policy: Option<TransportPolicy>,
+    ) -> Self {
         Self {
-            client,
+            client: client.build().unwrap_or_else(|_| reqwest::Client::new()),
             source: source.to_string(),
-            policy: Some(policy),
+            policy,
         }
     }
 
@@ -106,7 +106,7 @@ impl AtProtoIngestAdapter {
 // -----------------------------------------------------------------------------
 
 /// A host's addresses as DNS returns them (the effect the guard wraps).
-pub type HostLookup = std::sync::Arc<
+pub type HostLookup = Arc<
     dyn Fn(
             String,
         ) -> std::pin::Pin<
@@ -117,7 +117,7 @@ pub type HostLookup = std::sync::Arc<
 
 /// The system resolver.
 fn system_lookup() -> HostLookup {
-    std::sync::Arc::new(|host: String| {
+    Arc::new(|host: String| {
         Box::pin(async move {
             tokio::net::lookup_host((host.as_str(), 0))
                 .await

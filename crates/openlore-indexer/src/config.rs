@@ -30,6 +30,14 @@ pub const LOOPBACK_SEAM_VAR: &str = "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP";
 pub const MAX_CONCURRENT_FETCHES_VAR: &str = "OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES";
 /// One DID's whole-fetch deadline, in seconds.
 pub const PER_DID_TIMEOUT_SECS_VAR: &str = "OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS";
+/// The SEPARATE `index.duckdb` path.
+const INDEX_PATH_VAR: &str = "OPENLORE_INDEXER_INDEX_PATH";
+/// The home directory the default index path lives under.
+const HOME_VAR: &str = "OPENLORE_HOME";
+/// The query surface listen address.
+const LISTEN_ADDR_VAR: &str = "OPENLORE_INDEXER_LISTEN_ADDR";
+/// The PLC directory repo DIDs are resolved from.
+const PLC_ENDPOINT_VAR: &str = "OPENLORE_INDEXER_PLC_ENDPOINT";
 
 /// The production PLC directory (ADR-026 §"Config + default").
 const DEFAULT_PLC_ENDPOINT: &str = "https://plc.directory";
@@ -145,15 +153,13 @@ pub fn parse_config(
         DEFAULT_PER_DID_TIMEOUT_SECS,
     )?;
     Ok(IndexerConfig {
-        index_path: lookup("OPENLORE_INDEXER_INDEX_PATH")
+        index_path: lookup(INDEX_PATH_VAR)
             .map(PathBuf::from)
-            .unwrap_or_else(|| default_index_path(lookup("OPENLORE_HOME"))),
+            .unwrap_or_else(|| default_index_path(lookup(HOME_VAR))),
         fallback,
-        listen_addr: lookup("OPENLORE_INDEXER_LISTEN_ADDR")
-            .unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string()),
+        listen_addr: lookup(LISTEN_ADDR_VAR).unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string()),
         repo_dids,
-        plc_endpoint: lookup("OPENLORE_INDEXER_PLC_ENDPOINT")
-            .unwrap_or_else(|| DEFAULT_PLC_ENDPOINT.to_string()),
+        plc_endpoint: lookup(PLC_ENDPOINT_VAR).unwrap_or_else(|| DEFAULT_PLC_ENDPOINT.to_string()),
         policy,
         max_concurrent_fetches: usize::try_from(max_concurrent_fetches).unwrap_or(usize::MAX),
         per_did_time_budget: Duration::from_secs(per_did_timeout_secs),

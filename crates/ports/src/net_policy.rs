@@ -15,6 +15,16 @@ pub enum TransportPolicy {
     HttpsOrLoopbackHttp,
 }
 
+impl TransportPolicy {
+    /// The event token (`indexer.config.loaded.transport_policy`).
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::HttpsPublicOnly => "https_public_only",
+            Self::HttpsOrLoopbackHttp => "https_or_loopback_http",
+        }
+    }
+}
+
 /// Whether `ip` is in a refused range: 0.0.0.0/8, 127/8, 10/8, 172.16/12,
 /// 192.168/16, 169.254/16, `::`, `::1`, fc00::/7, fe80::/10. An IPv4-mapped
 /// IPv6 address is judged as its IPv4 address.

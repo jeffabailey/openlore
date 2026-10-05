@@ -378,14 +378,20 @@ pub fn summarize(fetches: &[DidFetch]) -> PassSummary {
     summarize_outcomes(fetches.iter().map(DidFetch::outcome))
 }
 
-/// The pass's exit code (DD-IPF-6): `3` (total outage) exactly when at least
-/// one DID was configured and none was listed; `0` otherwise. A store failure
-/// (exit 2) never reaches this decision.
+/// The exit code of a pass that listed at least one DID, or had none to list.
+pub const EXIT_PASS_COMPLETED: i32 = 0;
+/// The exit code of a pass in which every configured DID was skipped.
+pub const EXIT_TOTAL_OUTAGE: i32 = 3;
+
+/// The pass's exit code (DD-IPF-6): [`EXIT_TOTAL_OUTAGE`] exactly when at
+/// least one DID was configured and none was listed; [`EXIT_PASS_COMPLETED`]
+/// otherwise. A store failure (exit 2) never reaches this decision.
 pub const fn pass_exit_code(summary: &PassSummary) -> i32 {
-    if summary.configured >= 1 && summary.own_pds + summary.fallback == 0 {
-        3
+    let listed = summary.own_pds + summary.fallback;
+    if summary.configured >= 1 && listed == 0 {
+        EXIT_TOTAL_OUTAGE
     } else {
-        0
+        EXIT_PASS_COMPLETED
     }
 }
 

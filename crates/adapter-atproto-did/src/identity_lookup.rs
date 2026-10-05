@@ -14,6 +14,9 @@ use ports::net_policy::{admitted_addresses, url_admissible, TransportPolicy};
 use ports::{IdentityLookupError, IdentityLookupPort, ResolvedIdentity};
 use serde_json::Value;
 
+/// The whole-request deadline of one lookup.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Resolves handles against a resolver service and a PLC directory.
 pub struct IdentityLookup {
     client: reqwest::Client,
@@ -28,7 +31,7 @@ impl IdentityLookup {
     /// The UNGUARDED lookup (the review app's sign-in).
     pub fn new(handle_resolver_url: &str, plc_url: &str) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(LOOKUP_TIMEOUT)
             .user_agent("openlore-review-app")
             .build()
             .unwrap_or_default();
@@ -42,7 +45,7 @@ impl IdentityLookup {
     /// A refused lookup is `Unavailable` (the DID is then unresolvable).
     pub fn guarded(handle_resolver_url: &str, plc_url: &str, policy: TransportPolicy) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(LOOKUP_TIMEOUT)
             .user_agent("openlore-indexer")
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
