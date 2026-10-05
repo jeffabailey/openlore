@@ -372,6 +372,9 @@ fn flat_attributed_rows(
             let references = source
                 .map(|r| r.references.iter().map(reference_to_dto).collect())
                 .unwrap_or_default();
+            // ADR-079: the stored provenance travels over the wire. App-signed rows
+            // send the explicit token; an old reader ignores the additive field.
+            let provenance = source.map(|r| provenance_token(r.provenance).to_string());
             out.push(SearchResultDto {
                 author_did: composed_row.author_did.0.clone(),
                 cid: composed_row.cid.0.clone(),
@@ -383,10 +386,20 @@ fn flat_attributed_rows(
                 verified_against: composed_row.verified_against.0.clone(),
                 evidence,
                 references,
+                provenance,
             });
         }
     }
     out
+}
+
+/// The ADR-079 wire token for a stored provenance (the same domain as the
+/// `indexed_claims.provenance` column).
+fn provenance_token(provenance: ports::PeerClaimProvenance) -> &'static str {
+    match provenance {
+        ports::PeerClaimProvenance::AppSigned => "app-signed",
+        ports::PeerClaimProvenance::SelfAttested => "self-attested",
+    }
 }
 
 /// Map a typed `claim_domain::ClaimReference` to its wire DTO, using the lowercase

@@ -332,7 +332,14 @@ fn render_network_result(
         distinct_author_count,
         total_claims,
         suggestion,
+        withheld_unknown_provenance,
     } = result;
+
+    // ADR-079: rows with a provenance this CLI does not know were withheld by the
+    // decode (never guessed); tell the user on stderr so stdout stays the result.
+    if let Some(notice) = render::render_withheld_provenance_notice(withheld_unknown_provenance) {
+        eprint!("{notice}");
+    }
 
     // The SINGLE pure decision both surfaces invoke over the RAW rows. When
     // `hide_retracted == false` this returns the rows unchanged, `hidden_count == 0`
@@ -355,6 +362,7 @@ fn render_network_result(
         distinct_author_count,
         total_claims,
         suggestion,
+        withheld_unknown_provenance,
     };
     let relationship_for =
         |author_did: &str| -> AuthorRelationship { resolve_relationship(wiring, author_did) };

@@ -1917,6 +1917,7 @@ mod tests {
             verified_against: KeyId("did:key:fixture".to_string()),
             evidence: vec![],
             references: vec![],
+            provenance: ports::PeerClaimProvenance::AppSigned,
         }
     }
 

@@ -22,6 +22,34 @@ pub const SEARCH_NO_MERGE_FOOTER: &str =
 /// NOT paraphrase.
 pub const VERIFIED_MARKER: &str = "[verified]";
 
+/// Content-frozen `[self-attested]` marker (ADR-079 / US-IPF-005): printed after
+/// `[verified]` on a row the author attested through their own repo (no app
+/// signature). App-signed rows carry no second marker. Do NOT paraphrase.
+pub const SELF_ATTESTED_MARKER: &str = "[self-attested]";
+
+/// The marker line of one network row: `[verified]`, plus `[self-attested]` for
+/// a self-attested claim. App-signed rows render exactly as before (NFR-3).
+pub(crate) fn network_row_markers(provenance: ports::PeerClaimProvenance) -> String {
+    match provenance {
+        ports::PeerClaimProvenance::AppSigned => VERIFIED_MARKER.to_string(),
+        ports::PeerClaimProvenance::SelfAttested => {
+            format!("{VERIFIED_MARKER} {SELF_ATTESTED_MARKER}")
+        }
+    }
+}
+
+/// The stderr notice for rows withheld because the indexer labelled them with a
+/// provenance this CLI does not recognise (ADR-079): they are not shown rather
+/// than misstated. `None` when nothing was withheld.
+pub fn render_withheld_provenance_notice(withheld: u32) -> Option<String> {
+    (withheld > 0).then(|| {
+        format!(
+            "{withheld} result(s) withheld: the indexer reported a provenance this \
+             version of openlore does not recognise. Upgrade openlore to see them.\n"
+        )
+    })
+}
+
 /// Content-frozen honest-trail footer for the `--contributor` network view
 /// (US-AV-003 / J-002). One developer's RAW trail — never a community consensus.
 /// Do NOT paraphrase.
@@ -193,7 +221,7 @@ pub(crate) fn render_one_network_row(
         render_evidence(&row.evidence)
     ));
     out.push_str(&format!("    cid:        {}\n", row.cid.0));
-    out.push_str(&format!("    {VERIFIED_MARKER}\n"));
+    out.push_str(&format!("    {}\n", network_row_markers(row.provenance)));
     // OD-AV-7: the counter annotation(s) for THIS row (it is countered by K).
     for annotation in network_counter_annotations_for(&row.cid.0, counters) {
         out.push_str(&format!("    {annotation}\n"));
@@ -466,10 +494,41 @@ pub fn render_show_verification_line(row: &NetworkResultRowRaw) -> String {
         .split('#')
         .next()
         .unwrap_or(&row.verified_against.0);
-    out.push_str(&format!("{SHOW_SIGNATURE_VERIFIED_PREFIX}{bare_did}\n"));
+    out.push_str(&show_attestation_line(
+        row.provenance,
+        bare_did,
+        &row.author_did.0,
+    ));
     out.push_str(&format!("CID: {}{SHOW_CID_RECOMPUTED_SUFFIX}\n", row.cid.0));
     out
 }
+
+/// The `--show` attestation line (ADR-071 / ADR-079): an app-signed claim's
+/// signature was VERIFIED against the author's DID; a self-attested claim carries
+/// no signature, so the line names the repo DID it was read from and NEVER claims
+/// a signature was checked.
+fn show_attestation_line(
+    provenance: ports::PeerClaimProvenance,
+    verified_bare_did: &str,
+    author_did: &str,
+) -> String {
+    match provenance {
+        ports::PeerClaimProvenance::AppSigned => {
+            format!("{SHOW_SIGNATURE_VERIFIED_PREFIX}{verified_bare_did}\n")
+        }
+        ports::PeerClaimProvenance::SelfAttested => {
+            let repo_did = author_did.split('#').next().unwrap_or(author_did);
+            format!("{SHOW_SELF_ATTESTED_PREFIX}{repo_did}{SHOW_SELF_ATTESTED_SUFFIX}\n")
+        }
+    }
+}
+
+/// Content-frozen `--show` line for a self-attested claim (ADR-071 §5):
+/// `self-attested by <repo DID>; read from the author's own PDS`. Do NOT
+/// paraphrase — it must never read as a signature check.
+pub const SHOW_SELF_ATTESTED_PREFIX: &str = "Attestation: self-attested by ";
+/// See [`SHOW_SELF_ATTESTED_PREFIX`].
+pub const SHOW_SELF_ATTESTED_SUFFIX: &str = "; read from the author's own PDS";
 
 /// Content-frozen `--share` sharing-semantics line (US-AV-006 Ex1 / I-AV-8 /
 /// KPI-AV-6): the shared link encodes the QUERY (dimension+value), so opening it

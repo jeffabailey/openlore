@@ -32,3 +32,4 @@ duckdb = { version = "1.3", features = ["bundled", "chrono"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }

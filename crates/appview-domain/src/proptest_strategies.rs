@@ -426,6 +426,7 @@ fn raw_row(
         verified_against: KeyId(format!("{author}{APP_FRAGMENT}")),
         evidence: vec![format!("https://example.test/evidence/{subject}")],
         references,
+        provenance: ports::PeerClaimProvenance::AppSigned,
     }
 }
 

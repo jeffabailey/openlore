@@ -766,6 +766,7 @@ fn raw_network_row(author_did: &str, cid: &str, confidence: f64) -> NetworkResul
         verified_against: claim_domain::KeyId(format!("{author_did}#org.openlore.application")),
         evidence: vec![format!("https://example.test/e/{cid}")],
         references: Vec::new(),
+        provenance: ports::PeerClaimProvenance::AppSigned,
     }
 }
 
@@ -807,6 +808,7 @@ proptest! {
             total_claims: rows.len() as u32,
             results: rows.clone(),
             suggestion: None,
+            withheld_unknown_provenance: 0,
         };
         let unfollowed = |_did: &str| AuthorRelationship::NetworkUnfollowed;
 
@@ -962,6 +964,7 @@ fn render_contributor_trail_footer_frames_one_developer_not_consensus() {
         total_claims: rows.len() as u32,
         results: rows,
         suggestion: None,
+        withheld_unknown_provenance: 0,
     };
     let unfollowed = |_did: &str| AuthorRelationship::NetworkUnfollowed;
 

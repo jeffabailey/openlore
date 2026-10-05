@@ -91,6 +91,14 @@ pub struct SearchResultDto {
     /// the wire when empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ClaimReferenceDto>,
+    /// How the row's claim was attested (ADR-079): `"app-signed"` |
+    /// `"self-attested"`. ADDITIVE + OPTIONAL — an older indexer omits it and a
+    /// reader treats the absent field as app-signed; the key is omitted on the
+    /// wire when `None` so an old client reads a current server unchanged. The
+    /// token is carried verbatim here; classifying it (and withholding an
+    /// unrecognised one) is the reader's job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
 }
 
 /// One typed inter-claim reference carried over the wire (the wire form of
@@ -202,6 +210,7 @@ mod tests {
                     evidence: vec!["https://example.org/e1".to_string()],
                     // A references-less row stays backward-compatible (field omitted).
                     references: vec![],
+                    provenance: None,
                 },
                 SearchResultDto {
                     author_did: "did:plc:rachel-test".to_string(),
@@ -218,6 +227,7 @@ mod tests {
                         ref_type: "counters".to_string(),
                         cid: "bafyk2".to_string(),
                     }],
+                    provenance: None,
                 },
             ],
             distinct_author_count: 2,

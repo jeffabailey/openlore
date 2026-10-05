@@ -33,8 +33,8 @@ use lexicon::{
     SearchResultDto, SEARCH_CLAIMS_NSID,
 };
 use ports::{
-    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw, ProbeOutcome,
-    ProbeRefusalReason, SearchDimension,
+    IndexQueryError, IndexQueryPort, NetworkResultRowRaw, NetworkSearchResultRaw,
+    PeerClaimProvenance, ProbeOutcome, ProbeRefusalReason, SearchDimension,
 };
 
 /// The bounded connect timeout (KPI-5 / WD-116): an unreachable indexer that does
@@ -185,23 +185,44 @@ fn to_dto_dimension(dim: SearchDimension) -> SearchDimensionDto {
 /// Decode the lexicon `SearchQueryResponse` into the raw FLAT attributed
 /// transport result. Every row MUST carry a non-empty `author_did` (the
 /// anti-merging-across-the-transport contract, I-AV-2) — a dropped attribution is
-/// a `BadResponse`.
+/// a `BadResponse`. A row whose provenance this reader does not recognise is
+/// withheld (never guessed) and counted in `withheld_unknown_provenance` (ADR-079).
 fn decode_response(body: SearchQueryResponse) -> Result<NetworkSearchResultRaw, IndexQueryError> {
     let mut results = Vec::with_capacity(body.results.len());
+    let mut withheld_unknown_provenance = 0;
     for row in body.results {
-        results.push(decode_row(row)?);
+        match decode_wire_provenance(row.provenance.as_deref()) {
+            Some(provenance) => results.push(decode_row(row, provenance)?),
+            None => withheld_unknown_provenance += 1,
+        }
     }
     Ok(NetworkSearchResultRaw {
         results,
         distinct_author_count: body.distinct_author_count,
         total_claims: body.total_claims,
         suggestion: body.suggestion,
+        withheld_unknown_provenance,
     })
 }
 
-/// Decode one wire `SearchResultDto` into a `NetworkResultRowRaw`. Refuses an
-/// empty `author_did` (I-AV-2 — the wire dropped attribution).
-fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryError> {
+/// Classify a row's wire provenance token (ADR-079, closed 3-class table):
+/// absent ⇒ `AppSigned` (an older indexer that never sends the field), the two
+/// known tokens ⇒ themselves, anything else ⇒ `None` (withhold, never guess).
+pub fn decode_wire_provenance(token: Option<&str>) -> Option<PeerClaimProvenance> {
+    match token {
+        None | Some("app-signed") => Some(PeerClaimProvenance::AppSigned),
+        Some("self-attested") => Some(PeerClaimProvenance::SelfAttested),
+        Some(_) => None,
+    }
+}
+
+/// Decode one wire `SearchResultDto` (whose provenance was already classified)
+/// into a `NetworkResultRowRaw`. Refuses an empty `author_did` (I-AV-2 — the
+/// wire dropped attribution).
+fn decode_row(
+    row: SearchResultDto,
+    provenance: PeerClaimProvenance,
+) -> Result<NetworkResultRowRaw, IndexQueryError> {
     if row.author_did.is_empty() {
         return Err(IndexQueryError::BadResponse {
             message: "a result row carried an empty author_did (I-AV-2 violation)".to_string(),
@@ -229,6 +250,7 @@ fn decode_row(row: SearchResultDto) -> Result<NetworkResultRowRaw, IndexQueryErr
         verified_against: KeyId(row.verified_against),
         evidence: row.evidence,
         references,
+        provenance,
     })
 }
 
@@ -274,6 +296,7 @@ fn probe_decode_shape_contract() -> Result<(), String> {
             verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
             evidence: Vec::new(),
             references: Vec::new(),
+            provenance: None,
         }
     }
 
@@ -340,6 +363,7 @@ mod tests {
             verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
             evidence: vec!["https://example.org/e1".to_string()],
             references: Vec::new(),
+            provenance: None,
         }
     }
 
@@ -489,5 +513,83 @@ mod tests {
             INDEXER_REQUEST_TIMEOUT,
             elapsed
         );
+    }
+}
+
+#[cfg(test)]
+mod provenance_properties {
+    //! ADR-079: the wire provenance decode withholds what it does not know.
+    //! State-delta over the declared universe of wire rows `{absent,
+    //! "app-signed", "self-attested", any other token}`: every row is either
+    //! kept with its classified provenance or counted as withheld — none is lost,
+    //! none is guessed.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    fn wire_row(index: usize, provenance: Option<String>) -> SearchResultDto {
+        SearchResultDto {
+            author_did: format!("did:plc:author{index}"),
+            cid: format!("bafyrow{index}"),
+            subject: "github:example/project".to_string(),
+            predicate: "embodiesPhilosophy".to_string(),
+            object: "org.openlore.philosophy.reproducible-builds".to_string(),
+            confidence: 0.5,
+            composed_at: "2026-10-04T15:02:11+00:00".to_string(),
+            verified_against: format!("did:plc:author{index}"),
+            evidence: Vec::new(),
+            references: Vec::new(),
+            provenance,
+        }
+    }
+
+    fn arb_wire_provenance() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
+            Just(None),
+            Just(Some("app-signed".to_string())),
+            Just(Some("self-attested".to_string())),
+            "[ -~]{0,24}".prop_map(Some),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn every_row_is_kept_as_classified_or_counted_as_withheld(
+            provenances in proptest::collection::vec(arb_wire_provenance(), 0..16)
+        ) {
+            let rows: Vec<SearchResultDto> = provenances
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, provenance)| wire_row(index, provenance))
+                .collect();
+            let total = rows.len();
+            let decoded = decode_response(SearchQueryResponse {
+                results: rows,
+                distinct_author_count: 0,
+                total_claims: 0,
+                suggestion: None,
+            })
+            .expect("attributed rows decode");
+
+            let expected: Vec<(String, PeerClaimProvenance)> = provenances
+                .iter()
+                .enumerate()
+                .filter_map(|(index, token)| {
+                    decode_wire_provenance(token.as_deref())
+                        .map(|provenance| (format!("bafyrow{index}"), provenance))
+                })
+                .collect();
+            let kept: Vec<(String, PeerClaimProvenance)> = decoded
+                .results
+                .iter()
+                .map(|row| (row.cid.0.clone(), row.provenance))
+                .collect();
+            prop_assert_eq!(&kept, &expected);
+            prop_assert_eq!(
+                decoded.withheld_unknown_provenance as usize,
+                total - expected.len()
+            );
+        }
     }
 }

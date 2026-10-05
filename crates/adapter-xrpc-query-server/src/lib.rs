@@ -252,6 +252,7 @@ mod tests {
             verified_against: "did:plc:priya-test#org.openlore.application".to_string(),
             evidence: vec!["https://example.org/e1".to_string()],
             references: Vec::new(),
+            provenance: None,
         }
     }
 

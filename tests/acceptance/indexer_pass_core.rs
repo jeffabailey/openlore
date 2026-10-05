@@ -252,15 +252,19 @@ fn sut_records_of(did: &str, listed: &[(String, String)]) -> (Vec<String>, u64) 
 }
 
 fn sut_decode_wire_provenance(token: Option<&str>) -> Option<WireProvenance> {
-    let _ = token;
-    todo!("SCAFFOLD: bind adapter-index-query provenance decode (ADR-079)")
+    adapter_index_query::decode_wire_provenance(token).map(|provenance| match provenance {
+        ports::PeerClaimProvenance::AppSigned => WireProvenance::AppSigned,
+        ports::PeerClaimProvenance::SelfAttested => WireProvenance::SelfAttested,
+    })
 }
 
 /// `SearchResultDto` JSON → its `provenance` field after a serde round trip
 /// (deserialize, then serialize again): `(field after decode, key present after encode)`.
 fn sut_search_dto_provenance_round_trip(json: &serde_json::Value) -> (Option<String>, bool) {
-    let _ = json;
-    todo!("SCAFFOLD: bind lexicon::SearchResultDto serde (ADR-079)")
+    let row: lexicon::SearchResultDto =
+        serde_json::from_value(json.clone()).expect("a search row decodes");
+    let reencoded = serde_json::to_value(&row).expect("a search row encodes");
+    (row.provenance, reencoded.get("provenance").is_some())
 }
 
 // =============================================================================
@@ -496,7 +500,6 @@ proptest! {
     /// Over the wire, a missing provenance reads as app-signed, the two known
     /// tokens read as themselves, and any other token is withheld (never guessed).
     #[test]
-    #[ignore = "DELIVER 02-04 (unit): provenance decode in adapter-index-query"]
     fn an_unknown_wire_provenance_is_withheld_never_guessed(token in "[ -~]{0,24}") {
         let expected = match token.as_str() {
             "app-signed" => Some(WireProvenance::AppSigned),
@@ -593,7 +596,6 @@ fn the_address_guard_holds_at_every_range_edge() {
 /// An old server's search row (no provenance key) still decodes, as "no
 /// provenance", and re-encodes without the key; a current row keeps it.
 #[test]
-#[ignore = "DELIVER 02-04 (unit): SearchResultDto.provenance is additive"]
 fn an_old_search_row_without_provenance_still_decodes_and_reencodes_unchanged() {
     let old = serde_json::json!({
         "author_did": "did:plc:dvolkov3m9q#org.openlore.application",

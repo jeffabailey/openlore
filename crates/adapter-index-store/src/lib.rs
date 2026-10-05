@@ -371,8 +371,15 @@ impl IndexStorePort for IndexStoreAdapter {
         self.select_rows("object = ?", object)
     }
 
+    /// A contributor is matched on the BARE DID (ADR-079 / AC-005.3): rows stored
+    /// under the bare DID (self-attested) and under any `bare#fragment` key
+    /// (app-signed) both belong to them. `starts_with`, not `LIKE`, so `%` / `_`
+    /// in a DID are never wildcards.
     fn query_by_contributor(&self, did: &Did) -> Result<Vec<IndexedClaim>, IndexStoreError> {
-        self.select_rows("author_did = ?", &did.0)
+        self.select_rows(
+            "author_did = $1 OR starts_with(author_did, $1 || '#')",
+            bare_did(&did.0),
+        )
     }
 
     fn query_by_subject(&self, subject: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
@@ -387,6 +394,12 @@ impl IndexStorePort for IndexStoreAdapter {
 // -----------------------------------------------------------------------------
 // Pure helpers (free functions; no I/O except where wired through the adapter)
 // -----------------------------------------------------------------------------
+
+/// The bare DID of an author key id: the text before the first `#`
+/// (`did:plc:x#org.openlore.application` ⇒ `did:plc:x`; a bare DID is itself).
+fn bare_did(author_did: &str) -> &str {
+    author_did.split('#').next().unwrap_or(author_did)
+}
 
 /// Map one `indexed_claims` row (the SAFE attributed projection) into an
 /// `IndexedClaim`. `author_did` is NON-`Option` (the column is `NOT NULL`).
@@ -610,7 +623,7 @@ mod tests {
     use ports::AuthorRelationship;
 
     /// Build a verified, attributed `IndexedClaim` for the round-trip test.
-    fn sample_claim() -> IndexedClaim {
+    pub(super) fn sample_claim() -> IndexedClaim {
         IndexedClaim {
             author_did: Did("did:plc:priya-test#org.openlore.application".to_string()),
             cid: Cid("bafytestpriyaclaim001".to_string()),
@@ -951,6 +964,71 @@ mod tests {
                 .expect("v1 row survives");
             assert_eq!(row.provenance, PeerClaimProvenance::AppSigned);
             assert_eq!(row.author_did, Did("did:plc:priya-test".to_string()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod contributor_match_properties {
+    //! ADR-079 / AC-005.3: contributor search matches on the bare DID. State-delta
+    //! over a declared row universe — authors drawn from a few bare DIDs (some
+    //! carrying DuckDB `LIKE` metacharacters) each stored bare or with a key
+    //! fragment: the match set is exactly the rows whose bare DID equals the
+    //! query's bare DID, whichever form (bare or fragmented) is queried.
+
+    use super::*;
+    use proptest::prelude::*;
+
+    const BARE_DIDS: [&str; 4] = [
+        "did:plc:priya",
+        "did:plc:priya_x",
+        "did:plc:pri%a",
+        "did:plc:priyaraman",
+    ];
+    const FRAGMENTS: [Option<&str>; 3] = [None, Some("org.openlore.application"), Some("k2")];
+
+    fn author(bare: usize, fragment: usize) -> String {
+        match FRAGMENTS[fragment] {
+            None => BARE_DIDS[bare].to_string(),
+            Some(f) => format!("{}#{f}", BARE_DIDS[bare]),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn contributor_matches_exactly_the_rows_sharing_the_bare_did(
+            rows in proptest::collection::vec((0..BARE_DIDS.len(), 0..FRAGMENTS.len()), 0..10),
+            query in (0..BARE_DIDS.len(), 0..FRAGMENTS.len()),
+        ) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+            for (index, (bare, fragment)) in rows.iter().enumerate() {
+                let did = author(*bare, *fragment);
+                store
+                    .upsert(&IndexedClaim {
+                        author_did: Did(did.clone()),
+                        verified_against: KeyId(did),
+                        cid: Cid(format!("bafyrow{index}")),
+                        ..super::tests::sample_claim()
+                    })
+                    .expect("upsert");
+            }
+
+            let found = store
+                .query_by_contributor(&Did(author(query.0, query.1)))
+                .expect("query");
+
+            let mut found_cids: Vec<String> = found.into_iter().map(|c| c.cid.0).collect();
+            found_cids.sort();
+            let mut expected: Vec<String> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, (bare, _))| *bare == query.0)
+                .map(|(index, _)| format!("bafyrow{index}"))
+                .collect();
+            expected.sort();
+            prop_assert_eq!(found_cids, expected);
         }
     }
 }

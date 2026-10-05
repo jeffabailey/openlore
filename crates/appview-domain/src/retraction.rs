@@ -173,6 +173,7 @@ mod tests {
             verified_against: KeyId(format!("{author}{APP}")),
             evidence: vec!["https://example.test/evidence".to_string()],
             references,
+            provenance: ports::PeerClaimProvenance::AppSigned,
         }
     }
 

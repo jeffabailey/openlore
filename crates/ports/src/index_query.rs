@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use claim_domain::{Cid, ClaimReference, Did, KeyId};
 
-use crate::{ProbeOutcome, SearchDimension};
+use crate::{PeerClaimProvenance, ProbeOutcome, SearchDimension};
 
 // -----------------------------------------------------------------------------
 // NetworkSearchResultRaw — the raw transport result (CLI ← indexer)
@@ -52,6 +52,10 @@ pub struct NetworkResultRowRaw {
     pub verified_against: KeyId,
     pub evidence: Vec<String>,
     pub references: Vec<ClaimReference>,
+    /// How the claim was attested (ADR-079). A row whose wire provenance was
+    /// absent reads as `AppSigned`; a row with an unrecognised token never
+    /// becomes a `NetworkResultRowRaw` (it is withheld and counted instead).
+    pub provenance: PeerClaimProvenance,
 }
 
 /// The raw transport result of one `IndexQueryPort::search` call.
@@ -73,6 +77,9 @@ pub struct NetworkSearchResultRaw {
     pub total_claims: u32,
     /// Near-match suggestion for an empty result (US-AV-002 Ex 4).
     pub suggestion: Option<String>,
+    /// Rows the indexer sent with a provenance this reader does not recognise —
+    /// withheld rather than misstated (ADR-079); the CLI tells the user.
+    pub withheld_unknown_provenance: u32,
 }
 
 // -----------------------------------------------------------------------------
