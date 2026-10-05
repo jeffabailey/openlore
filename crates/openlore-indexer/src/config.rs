@@ -524,3 +524,9 @@ mod pass_core_properties {
         }
     }
 }
+
+/// Behaviour contracts pinning DID syntax edges, refusal messages, the
+/// fallback's test-seam rule and the default index path (DELIVER Phase 5).
+#[cfg(test)]
+#[path = "config_contracts.rs"]
+mod contracts;
