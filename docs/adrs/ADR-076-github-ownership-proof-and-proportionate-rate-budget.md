@@ -1,6 +1,6 @@
 # ADR-076: GitHub Ownership Proof Matching and a Proportionate, In-Process Rate Budget
 
-- **Status**: Proposed (2026-10-04)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04)
 - **Date**: 2026-10-04
 - **Deciders**: Jeff Bailey (D-3, D-12; "simple, proportionate, no queues"), Morgan (nw-solution-architect)
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves OD-BRA-3, OD-BRA-10 and OD-BRA-12

@@ -1,6 +1,6 @@
 # ADR-072: The Hosted Review App Is a Third Composition Root (`openlore-review-app`)
 
-- **Status**: Proposed (2026-10-04)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04)
 - **Date**: 2026-10-04
 - **Deciders**: Jeff Bailey (D-2 hosted web app; time-to-market + low ops), Morgan (nw-solution-architect)
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves OD-BRA-4

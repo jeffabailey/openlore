@@ -1,6 +1,6 @@
 # ADR-073: ATProto OAuth as a Confidential Web Client via `atrium-oauth`, Create-Only Write Port
 
-- **Status**: Proposed (2026-10-04). The library choice is conditional on SPIKE-2. The scope choice is conditional on SPIKE-3.
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04). SPIKE-2 passed with `atrium-oauth` 0.1.7 (with workarounds for its revoke-200 and callback `todo!()` defects; `hickory` ≥ 0.26); SPIKE-3 passed on bsky.social, so granular scopes are used (OpenLore PDS run pending).
 - **Date**: 2026-10-04
 - **Deciders**: Jeff Bailey (sign-in via ATProto OAuth, settled), Morgan (nw-solution-architect)
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves OD-BRA-2 (client type and library) and OD-BRA-7 (scopes)

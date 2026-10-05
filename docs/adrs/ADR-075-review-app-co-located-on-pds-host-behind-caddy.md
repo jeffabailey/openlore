@@ -1,6 +1,6 @@
 # ADR-075: Co-Locate the Review App on the OpenLore PDS Host, Behind the Existing Caddy
 
-- **Status**: Proposed (2026-10-04). The rollout path needs Jeff Bailey's decision (see "Decision needed").
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04). Rollout decided 2026-10-04: option A, one planned instance replacement (tofu-aws-pds v1.7.0, with the sites mount at `/etc/caddy/sites` per the DEVOPS correction). Not yet applied.
 - **Date**: 2026-10-04
 - **Deciders**: Jeff Bailey (co-locate, low ops cost), Morgan (nw-solution-architect); DEVOPS owns execution
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves the hosting half of OD-BRA-2

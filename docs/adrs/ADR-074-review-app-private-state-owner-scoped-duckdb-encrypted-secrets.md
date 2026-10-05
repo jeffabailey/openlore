@@ -1,6 +1,6 @@
 # ADR-074: Review-App Private State in a Separate, Owner-Scoped DuckDB File with AEAD-Encrypted Secrets
 
-- **Status**: Proposed (2026-10-04)
+- **Status**: Accepted (2026-10-04) — implemented; see `docs/evolution/bluesky-claim-review-app-evolution.md` (proposed 2026-10-04)
 - **Date**: 2026-10-04
 - **Deciders**: Morgan (nw-solution-architect); retention and backup posture flagged for Jeff Bailey
 - **Feature**: bluesky-claim-review-app (DESIGN), resolves OD-BRA-5 and the storage half of OD-BRA-2
