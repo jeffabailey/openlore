@@ -1419,3 +1419,35 @@ harness = true
 name = "review_app_self_attested_readers"
 path = "../../tests/acceptance/review_app_self_attested_readers.rs"
 harness = true
+
+# indexer-per-did-pds-fetch (DISTILL 2026-10-05; ADR-077/078/079). Layer-3
+# subprocess suites drive the REAL `openlore-indexer ingest`/`serve` and the REAL
+# `openlore search` against ONE `FakeAtprotoNetwork` (PLC directory + one loopback
+# PDS per author + the fallback host); shared harness
+# `tests/acceptance/support/indexer_network.rs`. `indexer_pass_core` holds the
+# layer-2 proptest contracts of the pure pass core (RED `sut_*` bindings).
+# Every scenario is `#[ignore]`d at hand-off; DELIVER enables them one at a time.
+[[test]]
+name = "indexer_per_did_fetch"
+path = "../../tests/acceptance/indexer_per_did_fetch.rs"
+harness = true
+
+[[test]]
+name = "indexer_per_did_resilience"
+path = "../../tests/acceptance/indexer_per_did_resilience.rs"
+harness = true
+
+[[test]]
+name = "indexer_per_did_config"
+path = "../../tests/acceptance/indexer_per_did_config.rs"
+harness = true
+
+[[test]]
+name = "search_self_attested_label"
+path = "../../tests/acceptance/search_self_attested_label.rs"
+harness = true
+
+[[test]]
+name = "indexer_pass_core"
+path = "../../tests/acceptance/indexer_pass_core.rs"
+harness = true

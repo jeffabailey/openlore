@@ -37,6 +37,29 @@
 //! Observations (`records`, `write_attempts`, `authorizations`,
 //! `client_metadata_seen`, `revocations`) are the port-exposed universe the
 //! acceptance tests assert on.
+//!
+//! ## Indexer-facing postures (indexer-per-did-pds-fetch DISTILL, 2026-10-05)
+//!
+//! The network indexer resolves every repo DID to its own PDS and lists it there
+//! (ADR-077/078), so the same double also serves as a **multi-PDS network** for
+//! the `openlore-indexer` acceptance suites:
+//!
+//! * [`ListingPosture`] per host — serve, answer a status (502/503/429/404),
+//!   answer non-JSON, redirect, answer slowly, or hang (the substrate lies of
+//!   architecture-design.md §9);
+//! * [`DidDocPosture`] per DID — published, 404, 500, hang, `id` mismatch, no
+//!   `#atproto_pds` service, or an advertised PDS endpoint override (e.g. a
+//!   private address literal for the SSRF guard);
+//! * [`FakeAtprotoNetwork::move_account`] — the DID document names another host
+//!   from now on (a PDS migration between passes);
+//! * [`FakeAtprotoNetwork::serve_repo_as`] — a host answers `listRecords` for
+//!   one repo with the records of another (the foreign-repo lie);
+//! * an ordered request log ([`RequestSeen`]) and the peak number of requests in
+//!   flight across the whole network ([`FakeAtprotoNetwork::max_requests_in_flight`]).
+//!
+//! Records live in one network-wide store: any host answers `listRecords` for
+//! any repo (that is what lets a host stand in for a relay or a fallback). Which
+//! host was asked is observable through the request log.
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -119,6 +142,62 @@ impl StoredRecord {
     }
 }
 
+/// How a PDS host answers `com.atproto.repo.listRecords` (indexer postures).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListingPosture {
+    /// Answer with the repo's records (the default).
+    Serve,
+    /// Answer with this HTTP status and a small JSON error body (e.g. 502, 503, 429, 404).
+    Status(u16),
+    /// Answer `200` with an HTML body (not JSON).
+    NotJson,
+    /// Answer `302` to this location.
+    RedirectTo(String),
+    /// Wait this long, then serve normally.
+    Slow(std::time::Duration),
+    /// Accept the request and never answer.
+    Hang,
+}
+
+/// How the directory answers a DID-document request for one DID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DidDocPosture {
+    /// The honest document naming the account's current host (the default).
+    Published,
+    /// `404` — the DID is not known.
+    NotFound,
+    /// `500`.
+    ServerError,
+    /// Accept the request and never answer.
+    Hang,
+    /// A document whose `id` is a different DID.
+    IdMismatch,
+    /// A document with no `#atproto_pds` service.
+    NoPdsService,
+    /// A document whose `#atproto_pds` endpoint is this string (e.g. `http://10.0.0.1`).
+    PdsEndpoint(String),
+}
+
+/// One request any server of the network received, in arrival order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestSeen {
+    /// `"directory"` or the PDS host label.
+    pub server: String,
+    pub method: String,
+    pub path: String,
+    /// The `repo` query parameter (listRecords / getRecord / describeRepo).
+    pub repo: Option<String>,
+    /// The DID a DID-document request asked for.
+    pub did: Option<String>,
+}
+
+impl RequestSeen {
+    /// Whether this was a `listRecords` call.
+    pub fn is_listing(&self) -> bool {
+        self.path == "/xrpc/com.atproto.repo.listRecords"
+    }
+}
+
 /// One XRPC write attempt (accepted or not), in arrival order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteAttempt {
@@ -152,6 +231,7 @@ struct AccountState {
     consent: ConsentPosture,
     token: TokenPosture,
     write: WritePosture,
+    did_doc: DidDocPosture,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +240,7 @@ struct HostState {
     reachable: bool,
     client_metadata_blocked: bool,
     nonce: String,
+    listing: ListingPosture,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +290,10 @@ struct NetState {
     client_metadata: Mutex<Vec<serde_json::Value>>,
     token_exchanges: AtomicU64,
     seq: AtomicU64,
+    listing_aliases: Mutex<HashMap<String, String>>,
+    requests: Mutex<Vec<RequestSeen>>,
+    in_flight: AtomicU64,
+    max_in_flight: AtomicU64,
 }
 
 impl NetState {
@@ -269,6 +354,13 @@ impl std::fmt::Debug for FakeAtprotoNetwork {
 impl FakeAtprotoNetwork {
     /// Start the directory plus one server per distinct `host` among `accounts`.
     pub fn start(accounts: Vec<BlueskyAccount>) -> Self {
+        Self::start_with_extra_hosts(accounts, &[])
+    }
+
+    /// Like [`Self::start`], plus a server for each label in `extra_hosts`
+    /// that no account lives on yet (a fallback source, a host an author will
+    /// move to, a host that answers for somebody else's repo).
+    pub fn start_with_extra_hosts(accounts: Vec<BlueskyAccount>, extra_hosts: &[&str]) -> Self {
         let runtime = test_runtime("fake-atproto-rt");
         let state = Arc::new(NetState::default());
         state.directory_reachable.store(true, Ordering::SeqCst);
@@ -280,11 +372,16 @@ impl FakeAtprotoNetwork {
                 consent: ConsentPosture::Approve,
                 token: TokenPosture::Honest,
                 write: WritePosture::Accept,
+                did_doc: DidDocPosture::Published,
             })
             .collect();
 
         let mut tasks = Vec::new();
-        let mut host_labels: Vec<String> = accounts.iter().map(|a| a.host.clone()).collect();
+        let mut host_labels: Vec<String> = accounts
+            .iter()
+            .map(|a| a.host.clone())
+            .chain(extra_hosts.iter().map(|h| h.to_string()))
+            .collect();
         host_labels.sort();
         host_labels.dedup();
         for label in host_labels {
@@ -296,6 +393,7 @@ impl FakeAtprotoNetwork {
                     reachable: true,
                     client_metadata_blocked: false,
                     nonce: format!("nonce-{label}-1"),
+                    listing: ListingPosture::Serve,
                 },
             );
             let st = state.clone();
@@ -405,6 +503,40 @@ impl FakeAtprotoNetwork {
         });
     }
 
+    /// How `host` answers `listRecords` from now on (indexer postures).
+    pub fn set_listing_posture(&self, host: &str, listing: ListingPosture) {
+        let mut hosts = self.state.hosts.lock().unwrap();
+        let h = hosts
+            .get_mut(host)
+            .unwrap_or_else(|| panic!("FakeAtprotoNetwork: unknown host {host}"));
+        h.listing = listing;
+    }
+
+    /// How the directory answers `did`'s DID-document request from now on.
+    pub fn set_did_doc_posture(&self, did: &str, posture: DidDocPosture) {
+        self.state.update_account(did, |a| a.did_doc = posture);
+    }
+
+    /// `did` migrates to `host`: its DID document names that host from now on.
+    pub fn move_account(&self, did: &str, host: &str) {
+        assert!(
+            self.state.host(host).is_some(),
+            "FakeAtprotoNetwork: unknown host {host} (start it with start_with_extra_hosts)"
+        );
+        self.state
+            .update_account(did, |a| a.account.host = host.to_string());
+    }
+
+    /// Every host answers `listRecords?repo=<requested>` with the records of
+    /// `served` (whose `at://` URIs name `served`) — the foreign-repo lie.
+    pub fn serve_repo_as(&self, requested: &str, served: &str) {
+        self.state
+            .listing_aliases
+            .lock()
+            .unwrap()
+            .insert(requested.to_string(), served.to_string());
+    }
+
     // ---------------------------------------------------------- observations
 
     /// Records in `did`'s repo for `collection`, in creation order.
@@ -422,6 +554,47 @@ impl FakeAtprotoNetwork {
     /// Every record in every repo, in creation order.
     pub fn all_records(&self) -> Vec<StoredRecord> {
         self.state.records.lock().unwrap().clone()
+    }
+
+    /// Every request the directory and the hosts received, in arrival order.
+    pub fn requests(&self) -> Vec<RequestSeen> {
+        self.state.requests.lock().unwrap().clone()
+    }
+
+    /// The repos `host` was asked to list (`listRecords?repo=`), in order.
+    pub fn listings_on(&self, host: &str) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.server == host && r.is_listing())
+            .filter_map(|r| r.repo)
+            .collect()
+    }
+
+    /// Every request `host` received (any path).
+    pub fn requests_to(&self, host: &str) -> Vec<RequestSeen> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.server == host)
+            .collect()
+    }
+
+    /// How many times the directory was asked for `did`'s DID document.
+    pub fn did_document_fetches(&self, did: &str) -> usize {
+        self.requests()
+            .iter()
+            .filter(|r| r.server == "directory" && r.did.as_deref() == Some(did))
+            .count()
+    }
+
+    /// The peak number of requests in flight at once, across every server.
+    pub fn max_requests_in_flight(&self) -> u64 {
+        self.state.max_in_flight.load(Ordering::SeqCst)
+    }
+
+    /// Forget the request log and the in-flight peak (between two passes).
+    pub fn clear_request_log(&self) {
+        self.state.requests.lock().unwrap().clear();
+        self.state.max_in_flight.store(0, Ordering::SeqCst);
     }
 
     /// Every XRPC write attempt (accepted or refused), in order.
@@ -546,14 +719,102 @@ async fn serve_loop(
     }
 }
 
+/// Decrements the network's in-flight count when a request ends — including
+/// when its connection is dropped mid-answer.
+struct InFlight(Arc<NetState>);
+
+impl InFlight {
+    fn enter(state: &Arc<NetState>) -> Self {
+        let now = state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        state.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        Self(state.clone())
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The DID a directory request asks for (`GET /<did>` or `resolveDid?did=`).
+fn requested_did(req: &HttpRequest) -> Option<String> {
+    let path = crate::review_http::url_decode(req.uri().path());
+    if let Some(did) = path.strip_prefix('/').filter(|p| p.starts_with("did:")) {
+        return Some(did.to_string());
+    }
+    parse_form(req.uri().query().unwrap_or(""))
+        .get("did")
+        .cloned()
+}
+
+fn log_request(state: &NetState, route: &Route, req: &HttpRequest) {
+    let query = parse_form(req.uri().query().unwrap_or(""));
+    let server = match route {
+        Route::Directory => "directory".to_string(),
+        Route::Host { label, .. } => label.clone(),
+    };
+    state.requests.lock().unwrap().push(RequestSeen {
+        server,
+        method: req.method().as_str().to_string(),
+        path: req.uri().path().to_string(),
+        repo: query.get("repo").cloned(),
+        did: match route {
+            Route::Directory => requested_did(req),
+            Route::Host { .. } => None,
+        },
+    });
+}
+
+/// Never answers (the indexer's per-DID deadline must abandon it).
+async fn hang() {
+    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+}
+
 async fn dispatch(
     state: Arc<NetState>,
     route: Route,
     req: HttpRequest,
 ) -> Result<HttpResponse, Infallible> {
+    let _in_flight = InFlight::enter(&state);
+    log_request(&state, &route, &req);
     Ok(match route {
-        Route::Directory => directory_route(&state, req),
-        Route::Host { label, base_url } => host_route(&state, &label, &base_url, req).await,
+        Route::Directory => {
+            let posture = requested_did(&req)
+                .and_then(|did| state.account_by_did(&did))
+                .map(|a| a.did_doc);
+            if posture == Some(DidDocPosture::Hang) {
+                hang().await;
+            }
+            directory_route(&state, req)
+        }
+        Route::Host { label, base_url } => {
+            let listing = state.host(&label).map(|h| h.listing);
+            let is_listing = req.uri().path() == "/xrpc/com.atproto.repo.listRecords";
+            match (is_listing, listing) {
+                (true, Some(ListingPosture::Hang)) => {
+                    hang().await;
+                    json(504, serde_json::json!({"error": "Hang"}))
+                }
+                (true, Some(ListingPosture::Status(code))) => json(
+                    code,
+                    serde_json::json!({"error": "UpstreamFailure", "message": format!("fake status {code}")}),
+                ),
+                (true, Some(ListingPosture::NotJson)) => hyper::Response::builder()
+                    .status(200)
+                    .header("content-type", "text/html")
+                    .body(http_body_util::Full::new(bytes::Bytes::from_static(
+                        b"<html><body>maintenance</body></html>",
+                    )))
+                    .expect("build html response"),
+                (true, Some(ListingPosture::RedirectTo(location))) => redirect(&location),
+                (true, Some(ListingPosture::Slow(delay))) => {
+                    tokio::time::sleep(delay).await;
+                    host_route(&state, &label, &base_url, req).await
+                }
+                _ => host_route(&state, &label, &base_url, req).await,
+            }
+        }
     })
 }
 
@@ -591,7 +852,31 @@ fn did_doc_response(state: &NetState, did: &str) -> HttpResponse {
                 .host(&a.account.host)
                 .map(|h| h.base_url)
                 .unwrap_or_default();
-            json(200, did_document(&a.account, &base))
+            match &a.did_doc {
+                DidDocPosture::Published | DidDocPosture::Hang => {
+                    json(200, did_document(&a.account, &base))
+                }
+                DidDocPosture::NotFound => json(
+                    404,
+                    serde_json::json!({"message": format!("DID not registered: {did}")}),
+                ),
+                DidDocPosture::ServerError => {
+                    json(500, serde_json::json!({"message": "directory failure"}))
+                }
+                DidDocPosture::IdMismatch => {
+                    let mut doc = did_document(&a.account, &base);
+                    doc["id"] = serde_json::json!("did:plc:someoneelse0000000000000");
+                    json(200, doc)
+                }
+                DidDocPosture::NoPdsService => {
+                    let mut doc = did_document(&a.account, &base);
+                    doc["service"] = serde_json::json!([]);
+                    json(200, doc)
+                }
+                DidDocPosture::PdsEndpoint(endpoint) => {
+                    json(200, did_document(&a.account, endpoint))
+                }
+            }
         }
         None => json(
             404,
@@ -1268,6 +1553,13 @@ fn list_records(state: &NetState, req: &HttpRequest) -> HttpResponse {
         .account_by_handle(&repo)
         .map(|a| a.account.did)
         .unwrap_or(repo);
+    let repo_did = state
+        .listing_aliases
+        .lock()
+        .unwrap()
+        .get(&repo_did)
+        .cloned()
+        .unwrap_or(repo_did);
     let records: Vec<serde_json::Value> = state
         .records
         .lock()
@@ -1641,5 +1933,92 @@ mod tests {
             pkce_s256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
+    }
+
+    // ------------------------------------------- indexer postures (2026-10-05)
+
+    fn volkov() -> BlueskyAccount {
+        BlueskyAccount::new("dmitri.volkov.dev", "did:plc:dvolkov3m9q", "volkov-dev")
+    }
+
+    #[test]
+    fn each_did_document_names_its_own_host_and_a_move_is_followed() {
+        let net = FakeAtprotoNetwork::start_with_extra_hosts(
+            vec![priya(), volkov()],
+            &["priyaraman-dev"],
+        );
+        let doc = |did: &str| {
+            let (status, body) = get(&net, &format!("{}/{did}", net.directory_url()));
+            assert_eq!(status, 200);
+            let doc: serde_json::Value = serde_json::from_str(&body).unwrap();
+            doc["service"][0]["serviceEndpoint"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(doc(&priya().did), net.host_url("bsky-social"));
+        assert_eq!(doc(&volkov().did), net.host_url("volkov-dev"));
+        net.move_account(&priya().did, "priyaraman-dev");
+        assert_eq!(doc(&priya().did), net.host_url("priyaraman-dev"));
+        assert_eq!(net.did_document_fetches(&priya().did), 2);
+    }
+
+    #[test]
+    fn did_document_postures_answer_as_declared() {
+        let net = FakeAtprotoNetwork::start(vec![priya()]);
+        let url = format!("{}/{}", net.directory_url(), priya().did);
+        net.set_did_doc_posture(&priya().did, DidDocPosture::NotFound);
+        assert_eq!(get(&net, &url).0, 404);
+        net.set_did_doc_posture(&priya().did, DidDocPosture::ServerError);
+        assert_eq!(get(&net, &url).0, 500);
+        net.set_did_doc_posture(
+            &priya().did,
+            DidDocPosture::PdsEndpoint("http://10.0.0.1".to_string()),
+        );
+        assert!(get(&net, &url).1.contains("http://10.0.0.1"));
+        net.set_did_doc_posture(&priya().did, DidDocPosture::NoPdsService);
+        assert!(!get(&net, &url).1.contains("atproto_pds"));
+        net.set_did_doc_posture(&priya().did, DidDocPosture::IdMismatch);
+        assert!(!get(&net, &url)
+            .1
+            .contains(&format!("\"id\":\"{}\"", priya().did)));
+    }
+
+    #[test]
+    fn listing_postures_and_the_request_log_are_observable() {
+        let net = FakeAtprotoNetwork::start(vec![priya(), volkov()]);
+        net.seed_record(
+            &priya().did,
+            CLAIM_COLLECTION,
+            "k1",
+            serde_json::json!({"subject": "github:priyaraman/cargo-pin"}),
+        );
+        let list = |host: &str, repo: &str| {
+            get(
+                &net,
+                &format!(
+                    "{}/xrpc/com.atproto.repo.listRecords?repo={repo}&collection={CLAIM_COLLECTION}",
+                    net.host_url(host)
+                ),
+            )
+        };
+        let (status, body) = list("bsky-social", &priya().did);
+        assert_eq!(status, 200);
+        assert!(body.contains("cargo-pin"));
+        net.set_listing_posture("volkov-dev", ListingPosture::Status(502));
+        assert_eq!(list("volkov-dev", &volkov().did).0, 502);
+        net.set_listing_posture("volkov-dev", ListingPosture::NotJson);
+        let (status, body) = list("volkov-dev", &volkov().did);
+        assert_eq!(status, 200);
+        assert!(serde_json::from_str::<serde_json::Value>(&body).is_err());
+        net.set_listing_posture("volkov-dev", ListingPosture::Serve);
+        net.serve_repo_as(&volkov().did, &priya().did);
+        let (_, body) = list("volkov-dev", &volkov().did);
+        assert!(body.contains(&format!("at://{}/", priya().did)));
+        assert_eq!(net.listings_on("volkov-dev"), vec![volkov().did.clone(); 3]);
+        assert_eq!(net.listings_on("bsky-social"), vec![priya().did.clone()]);
+        assert!(net.max_requests_in_flight() >= 1);
+        net.clear_request_log();
+        assert!(net.requests().is_empty());
     }
 }

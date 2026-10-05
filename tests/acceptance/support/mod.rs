@@ -4570,6 +4570,9 @@ fn spawn_indexer_serve(env: &TestEnv, source: FakeIngestServer) -> IndexerHandle
         .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
+        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         // Point serve at the reachable source so the wire→probe→use gauntlet's
         // ingest-source probe passes (serve reads the index; it does not re-ingest
         // here — the corpus is already indexed).
@@ -5796,7 +5799,7 @@ impl Drop for FakeIngestServer {
 /// lexicon claim JSON (`author`/`composedAt`/nested `signature:{kid,alg,sig}`);
 /// `cid` echoes the published CID so the adapter's recompute-vs-published gate
 /// has the published value (the SAME wire shape the slice-03 peer PDS uses).
-fn raw_record_to_list_records_view(record: &ports::RawRecord) -> serde_json::Value {
+pub fn raw_record_to_list_records_view(record: &ports::RawRecord) -> serde_json::Value {
     let claim = &record.raw_payload.unsigned;
     let sig = &record.raw_payload.signature;
     let references: Vec<serde_json::Value> = claim
@@ -5882,6 +5885,9 @@ pub fn run_openlore_indexer_with_source(
         .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
+        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
         .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
         .env("PATH", std::env::var("PATH").unwrap_or_default());
@@ -5928,6 +5934,9 @@ pub fn run_openlore_indexer_with_fsync_lying_store(
         .env_clear()
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
+        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
         // The substrate lie: force the index-store fsync-honesty probe to reach
         // the no-op verdict (storage.fsync_unhonored) it would reach on a real
@@ -6224,6 +6233,9 @@ pub fn run_openlore_indexer_with_plc_resolver(
         // (The OPENLORE_PEER_PUBKEY_HEX_<did> seam is deliberately NOT re-set.)
         .env("OPENLORE_HOME", &env.home)
         .env("OPENLORE_INDEXER_INDEX_PATH", index_duckdb_path(env))
+        // indexer-per-did-pds-fetch (DD-IPF-5): the TEST-ONLY seam that lets a
+        // debug indexer reach the http://127.0.0.1 fakes (inert before DELIVER).
+        .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         .env("OPENLORE_INDEXER_SOURCE_URL", source.source_url())
         .env("OPENLORE_INDEXER_REPO_DIDS", source.repo_dids())
         .env("OPENLORE_INDEXER_PLC_ENDPOINT", plc_endpoint)

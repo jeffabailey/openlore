@@ -133,8 +133,9 @@ mod review_http;
 pub use review_http::url_encode;
 pub mod fake_atproto;
 pub use fake_atproto::{
-    AuthorizationSeen, BlueskyAccount, ConsentPosture, FakeAtprotoNetwork, RevocationSeen,
-    StoredRecord, TokenPosture, WriteAttempt, WritePosture, CLAIM_COLLECTION, POST_COLLECTION,
+    AuthorizationSeen, BlueskyAccount, ConsentPosture, DidDocPosture, FakeAtprotoNetwork,
+    ListingPosture, RequestSeen, RevocationSeen, StoredRecord, TokenPosture, WriteAttempt,
+    WritePosture, CLAIM_COLLECTION, POST_COLLECTION,
 };
 pub mod fake_github_accounts;
 pub use fake_github_accounts::{

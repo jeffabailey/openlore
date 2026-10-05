@@ -364,6 +364,8 @@ fn ingest_priya_repo(env: &TestEnv, net: &FakeAtprotoNetwork, source_url: &str) 
         )
         .env("OPENLORE_INDEXER_SOURCE_URL", source_url)
         .env("OPENLORE_INDEXER_PLC_ENDPOINT", net.directory_url())
+        // indexer-per-did-pds-fetch (DD-IPF-5): TEST-ONLY loopback seam (inert before DELIVER).
+        .env("OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP", "1")
         // DISTILL-proposed seam (DWD-9): which repo DIDs a single-PDS source enumerates.
         .env("OPENLORE_INDEXER_REPO_DIDS", Persona::Priya.did())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
