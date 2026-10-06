@@ -28,3 +28,4 @@ Source: nw-troubleshooter investigation, 2026-10-05 (read-only). User decisions 
 - D1: give the fallback its own FRESH per-DID budget. Amend ADR-078 §4 and data-models §2. Worst-case pass time can double.
 - D3: remove duplicate references, then index. Wrap each upsert in one transaction.
 - One bugfix delivery in order D2 → D3 → D1, each step starting with a regression test that fails today, auto-advancing.
+D2 follow-up (user 2026-10-05): a SET-but-blank OPENLORE_INDEXER_PLC_ENDPOINT must be refused at startup by the config check, naming the variable; unset still means https://plc.directory. peer_resolve.rs and its pinned test stay unchanged. Folded into step 01-02.
