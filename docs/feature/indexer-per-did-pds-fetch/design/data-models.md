@@ -93,7 +93,8 @@ is `PdsTimeout`.
 | `OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP` | no (TEST-ONLY) | unset → `HttpsPublicOnly` | `1` in a debug build → `HttpsOrLoopbackHttp`. **Set in a release build → refuse start** (`BuildProfile` from `cfg!(debug_assertions)`, the review-app pattern). |
 | `OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES` | no | `4` | integer 1..=16 |
 | `OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS` | no | `30` | integer 1..=600 |
-| `OPENLORE_INDEXER_PLC_ENDPOINT`, `_INDEX_PATH`, `_LISTEN_ADDR` | unchanged | unchanged | unchanged |
+| `OPENLORE_INDEXER_PLC_ENDPOINT` | no | `https://plc.directory` (also when blank) | Validated at startup under the transport policy, exactly like the fallback (fix-indexer-follow-ups D2): an absolute https URL to a public host, without credentials, query or fragment; plain http to a loopback address only under the test seam. A refusal names the variable and the value. A hostname that resolves only to private addresses is still refused at runtime (IPF-08). |
+| `OPENLORE_INDEXER_INDEX_PATH`, `_LISTEN_ADDR` | unchanged | unchanged | unchanged |
 
 `ConfigError { variable: &'static str, value: String, problem: String }`. The rendered message
 names the variable and the offending value (the single bad entry, not the whole list).

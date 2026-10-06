@@ -140,6 +140,10 @@ pub fn parse_config(
     let fallback = setting(FALLBACK_VAR)
         .map(|url| fallback_url(&url, policy))
         .transpose()?;
+    let plc_endpoint = setting(PLC_ENDPOINT_VAR)
+        .map_or(Ok(DEFAULT_PLC_ENDPOINT.to_string()), |url| {
+            plc_endpoint(&url, policy)
+        })?;
     let max_concurrent_fetches = bounded_number(
         MAX_CONCURRENT_FETCHES_VAR,
         setting(MAX_CONCURRENT_FETCHES_VAR).as_deref(),
@@ -159,7 +163,7 @@ pub fn parse_config(
         fallback,
         listen_addr: lookup(LISTEN_ADDR_VAR).unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string()),
         repo_dids,
-        plc_endpoint: lookup(PLC_ENDPOINT_VAR).unwrap_or_else(|| DEFAULT_PLC_ENDPOINT.to_string()),
+        plc_endpoint,
         policy,
         max_concurrent_fetches: usize::try_from(max_concurrent_fetches).unwrap_or(usize::MAX),
         per_did_time_budget: Duration::from_secs(per_did_timeout_secs),
@@ -227,25 +231,35 @@ fn did_identifier_valid(identifier: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '%' | '-'))
 }
 
-/// The fallback source: an absolute URL without query or fragment that passes
-/// the production pre-check (https to a public host, no userinfo) — or, under
-/// the test policy only, plain http to a loopback address.
-fn fallback_url(url: &str, policy: TransportPolicy) -> Result<FallbackUrl, ConfigError> {
+/// A source URL the indexer may be configured with: absolute, without query
+/// or fragment, passing the production pre-check (https to a public host, no
+/// userinfo) — or, under the test policy only, plain http to a loopback
+/// address. A hostname passes here; what it resolves to is judged at runtime.
+fn source_url_admissible(url: &str, policy: TransportPolicy) -> bool {
     let plain_http_under_test_policy = policy == TransportPolicy::HttpsOrLoopbackHttp
         && url.to_ascii_lowercase().starts_with("http://");
-    let admissible = !url.contains(['?', '#'])
+    !url.contains(['?', '#'])
         && (pds_endpoint_admissible(url, TransportPolicy::HttpsPublicOnly).is_ok()
-            || (plain_http_under_test_policy && pds_endpoint_admissible(url, policy).is_ok()));
-    admissible
+            || (plain_http_under_test_policy && pds_endpoint_admissible(url, policy).is_ok()))
+}
+
+const SOURCE_URL_PROBLEM: &str =
+    "must be an absolute https URL to a public host, without credentials, query or fragment";
+
+/// The fallback source: an admissible source URL.
+fn fallback_url(url: &str, policy: TransportPolicy) -> Result<FallbackUrl, ConfigError> {
+    source_url_admissible(url, policy)
         .then(|| FallbackUrl::new(url))
         .flatten()
-        .ok_or_else(|| {
-            ConfigError::new(
-                FALLBACK_VAR,
-                url,
-                "must be an absolute https URL to a public host, without credentials, query or fragment",
-            )
-        })
+        .ok_or_else(|| ConfigError::new(FALLBACK_VAR, url, SOURCE_URL_PROBLEM))
+}
+
+/// The PLC directory: an admissible source URL, exactly as the guarded client
+/// that resolves through it would admit it.
+fn plc_endpoint(url: &str, policy: TransportPolicy) -> Result<String, ConfigError> {
+    source_url_admissible(url, policy)
+        .then(|| url.to_string())
+        .ok_or_else(|| ConfigError::new(PLC_ENDPOINT_VAR, url, SOURCE_URL_PROBLEM))
 }
 
 /// A set whole number within `range`; unset takes `default`.
@@ -351,6 +365,85 @@ mod tests {
         }
     }
 
+    /// The shapes a PLC directory endpoint can take, each with the verdict
+    /// the transport policy gives it (no DNS: hostnames are judged at runtime).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PlcShape {
+        PublicHttps,
+        LoopbackHttp,
+        PlainHttpToAHost,
+        PrivateLiteral,
+        Userinfo,
+        QueryOrFragment,
+        Blank,
+        Garbage,
+    }
+
+    fn arb_plc_endpoint() -> impl Strategy<Value = (PlcShape, String)> {
+        let host = "[a-z]{1,10}\\.[a-z]{2,6}";
+        prop_oneof![
+            host.prop_map(|h| (PlcShape::PublicHttps, format!("https://{h}"))),
+            (1u16..=65535)
+                .prop_map(|port| (PlcShape::LoopbackHttp, format!("http://127.0.0.1:{port}"))),
+            host.prop_map(|h| (PlcShape::PlainHttpToAHost, format!("http://{h}"))),
+            prop_oneof![
+                (0u8..=255, 0u8..=255).prop_map(|(b, c)| format!("https://10.{b}.{c}.1")),
+                (0u8..=255).prop_map(|c| format!("https://192.168.{c}.1")),
+                Just("https://127.0.0.1".to_string()),
+                Just("https://[::1]".to_string()),
+            ]
+            .prop_map(|url| (PlcShape::PrivateLiteral, url)),
+            host.prop_map(|h| (PlcShape::Userinfo, format!("https://u:p@{h}"))),
+            (host, prop_oneof![Just("?a=1"), Just("#frag")])
+                .prop_map(|(h, tail)| (PlcShape::QueryOrFragment, format!("https://{h}/{tail}"))),
+            "[ \t]{0,3}".prop_map(|blank| (PlcShape::Blank, blank)),
+            "[a-z][a-z ]{0,19}".prop_map(|text| (PlcShape::Garbage, text)),
+        ]
+    }
+
+    proptest! {
+        /// Universe = the whole loaded [`IndexerConfig`]. A PLC endpoint is
+        /// accepted iff the transport policy admits it (loopback http only
+        /// under the test seam); accepting it changes ONLY `plc_endpoint`
+        /// (blank -> the default directory), and refusing it names
+        /// `PLC_ENDPOINT_VAR` and the (trimmed) value.
+        #[test]
+        fn a_plc_endpoint_is_accepted_iff_the_policy_admits_it(
+            (shape, url) in arb_plc_endpoint(),
+            seam in any::<bool>(),
+            padding in prop_oneof![Just(""), Just(" "), Just("\n")],
+        ) {
+            let mut env = BTreeMap::new();
+            if seam {
+                env.insert(LOOPBACK_SEAM_VAR, "1".to_string());
+            }
+            let baseline = parse(&env).expect("the seam alone loads");
+            env.insert(PLC_ENDPOINT_VAR, format!("{padding}{url}{padding}"));
+            let admitted = match shape {
+                PlcShape::PublicHttps | PlcShape::Blank => true,
+                PlcShape::LoopbackHttp => seam,
+                _ => false,
+            };
+            match parse(&env) {
+                Ok(config) => {
+                    prop_assert!(admitted, "{:?} {:?} was accepted", shape, url);
+                    let expected_endpoint = if shape == PlcShape::Blank {
+                        DEFAULT_PLC_ENDPOINT.to_string()
+                    } else {
+                        url.clone()
+                    };
+                    let expected = IndexerConfig { plc_endpoint: expected_endpoint, ..baseline };
+                    prop_assert_eq!(config, expected);
+                }
+                Err(refusal) => {
+                    prop_assert!(!admitted, "{:?} {:?} was refused: {}", shape, url, refusal);
+                    prop_assert_eq!(refusal.variable, PLC_ENDPOINT_VAR);
+                    prop_assert_eq!(refusal.value, url.trim());
+                }
+            }
+        }
+    }
+
     // bypass: a single absent-variable example pins the documented defaults.
     #[test]
     fn unset_variables_take_the_documented_defaults() {
@@ -391,6 +484,7 @@ mod pass_core_properties {
         max_concurrent_fetches: u64,
         per_did_time_budget_secs: u64,
         policy: Policy,
+        plc_endpoint: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +512,7 @@ mod pass_core_properties {
                     TransportPolicy::HttpsPublicOnly => Policy::HttpsPublicOnly,
                     TransportPolicy::HttpsOrLoopbackHttp => Policy::HttpsOrLoopbackHttp,
                 },
+                plc_endpoint: cfg.plc_endpoint,
             })
             .map_err(|error| ConfigRefusal {
                 variable: error.variable.to_string(),
@@ -437,15 +532,50 @@ mod pass_core_properties {
         ("(plc|web)", "[a-z0-9]{1,24}").prop_map(|(m, id)| format!("did:{m}:{id}"))
     }
 
-    const KNOWN_VARIABLES: [&str; 5] = [
+    const KNOWN_VARIABLES: [&str; 6] = [
         "OPENLORE_INDEXER_REPO_DIDS",
+        "OPENLORE_INDEXER_PLC_ENDPOINT",
         "OPENLORE_INDEXER_SOURCE_URL",
         "OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP",
         "OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES",
         "OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS",
     ];
 
+    /// A PLC endpoint the transport policy admits under either policy.
+    fn plc_endpoint_admitted(raw: &str) -> bool {
+        let trimmed = raw.trim();
+        trimmed.is_empty()
+            || (trimmed.starts_with("https://")
+                && !trimmed.contains(['@', '?', '#'])
+                && !trimmed.starts_with("https://10.")
+                && !trimmed.starts_with("https://192.168."))
+    }
+
+    /// The PLC dimension: admissible, plain http, a private literal,
+    /// userinfo, blank, garbage.
+    fn arb_plc_value() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_public_https_url(),
+            arb_host().prop_map(|h| format!("http://{h}")),
+            (0u8..=255).prop_map(|b| format!("https://10.0.{b}.1")),
+            (0u8..=255).prop_map(|c| format!("https://192.168.{c}.1")),
+            arb_host().prop_map(|h| format!("https://u:p@{h}")),
+            "[ \\t]{0,3}",
+            "[a-z][a-z ]{0,19}",
+        ]
+    }
+
     fn arb_env() -> impl Strategy<Value = BTreeMap<String, String>> {
+        (arb_other_env(), proptest::option::of(arb_plc_value())).prop_map(|(mut env, plc)| {
+            env.remove("OPENLORE_INDEXER_PLC_ENDPOINT");
+            if let Some(plc) = plc {
+                env.insert("OPENLORE_INDEXER_PLC_ENDPOINT".to_string(), plc);
+            }
+            env
+        })
+    }
+
+    fn arb_other_env() -> impl Strategy<Value = BTreeMap<String, String>> {
         proptest::collection::btree_map(
             proptest::sample::select(KNOWN_VARIABLES.to_vec()).prop_map(str::to_string),
             prop_oneof![
@@ -473,6 +603,14 @@ mod pass_core_properties {
                     prop_assert!((1..=600).contains(&cfg.per_did_time_budget_secs));
                     let distinct: BTreeSet<&String> = cfg.repo_dids.iter().collect();
                     prop_assert_eq!(distinct.len(), cfg.repo_dids.len(), "duplicates collapsed");
+                    let plc = env.get("OPENLORE_INDEXER_PLC_ENDPOINT").cloned().unwrap_or_default();
+                    prop_assert!(plc_endpoint_admitted(&plc), "a refused PLC endpoint {:?} was accepted", plc);
+                    prop_assert!(!cfg.plc_endpoint.is_empty(), "blank falls back to the default");
+                }
+                Err(refusal) if refusal.variable == "OPENLORE_INDEXER_PLC_ENDPOINT" => {
+                    let raw = env.get(&refusal.variable).cloned().unwrap_or_default();
+                    prop_assert!(!plc_endpoint_admitted(&raw), "an admissible {:?} was refused", raw);
+                    prop_assert_eq!(refusal.value, raw.trim());
                 }
                 Err(refusal) => {
                     prop_assert!(KNOWN_VARIABLES.contains(&refusal.variable.as_str()), "{:?}", refusal);

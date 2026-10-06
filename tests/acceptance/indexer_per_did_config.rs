@@ -131,6 +131,87 @@ fn a_malformed_or_unsafe_fallback_source_is_explained_at_startup() {
     }
 }
 
+/// IPF-22b (fix-indexer-follow-ups D2)
+/// ```gherkin
+/// @US-IPF-004 @AC-004.2 @DD-IPF-5 @infrastructure @error @adversarial @real-io @regression
+/// @contract-shape:unbounded-preservation
+/// Scenario Outline: A malformed or unsafe PLC directory endpoint is explained at startup
+///   Given OPENLORE_INDEXER_PLC_ENDPOINT is "<value>"
+///   When Jeff starts the indexer
+///   Then it refuses to start, naming OPENLORE_INDEXER_PLC_ENDPOINT and "<value>"
+///   And no ingest pass runs
+///   Examples:
+///     | value                     | why                         |
+///     | http://plc.example        | plain http to a public host |
+///     | https://10.0.0.1          | private address             |
+///     | https://u:p@plc.directory | credentials in the URL      |
+/// ```
+#[test]
+fn a_malformed_or_unsafe_plc_endpoint_is_explained_at_startup() {
+    for value in [
+        "http://plc.example",
+        "https://10.0.0.1",
+        "https://u:p@plc.directory",
+    ] {
+        let mut world = IndexerWorld::configured_with(&[Author::Priya]);
+        world.directory_url_is(value);
+
+        let report = world.jeff_starts_the_indexer();
+
+        then_start_is_refused_naming(&world, &report, var::PLC, value);
+        assert!(
+            report.config_loaded().is_none()
+                && report
+                    .events_named("indexer.ingest.pass_summary")
+                    .is_empty(),
+            "no ingest pass runs after a refused start\n{}",
+            report.dump()
+        );
+    }
+}
+
+/// IPF-22c (fix-indexer-follow-ups D2)
+/// ```gherkin
+/// @US-IPF-004 @AC-004.3 @infrastructure @boundary @real-io @regression @contract-shape:bounded-change
+/// Scenario Outline: A blank PLC directory endpoint uses the default directory
+///   Given no repo DIDs are configured
+///   And OPENLORE_INDEXER_PLC_ENDPOINT is "<blank>"
+///   When one ingest pass runs
+///   Then the loaded configuration reports the default directory https://plc.directory
+///   And the configuration does not refuse it
+///   Examples:
+///     | blank   |
+///     | (empty) |
+///     | "   "   |
+/// ```
+#[test]
+fn a_blank_plc_endpoint_uses_the_default_directory() {
+    for blank in ["", "   "] {
+        let mut world = IndexerWorld::configured_with(&[]);
+        world.repo_dids_text_is("");
+        world.directory_url_is(blank);
+
+        let pass = world.one_ingest_pass_runs();
+
+        let loaded = pass
+            .config_loaded()
+            .unwrap_or_else(|| panic!("indexer.config.loaded is reported\n{}", pass.dump()));
+        assert_eq!(loaded["plc_endpoint"], "https://plc.directory", "{loaded}");
+        // The config is not refused; the identity_resolve readiness probe reads
+        // the variable itself and is out of this scenario's scope.
+        assert!(
+            pass.startup_refusal()
+                .is_none_or(|refusal| refusal["adapter"] != "config"),
+            "a blank endpoint is not refused by the configuration\n{}",
+            pass.dump()
+        );
+        assert!(
+            world.net.requests().is_empty(),
+            "with no repo DIDs nothing is contacted"
+        );
+    }
+}
+
 /// IPF-23
 /// ```gherkin
 /// @US-IPF-004 @AC-004.2 @DD-IPF-7 @infrastructure @error @boundary @real-io @contract-shape:unbounded-preservation

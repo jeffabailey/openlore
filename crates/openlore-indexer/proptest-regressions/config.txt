@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 148c1180b70d3660a1a9a09c4d7c1f7efb3d6a9c274c089867ab89fda1ded966 # shrinks to (shape, url) = (PublicHttps, "https://a.aa"), seam = false, padding = " "
+cc 57908467b4eb28925ac4b2b2c486d816bc2cd73990850d263ff4a503a272de97 # shrinks to env = {"OPENLORE_INDEXER_PLC_ENDPOINT": "http://a.aa"}
+cc 97e488749882f302456d0fcedb9fa864a8237fe1c5468c9d0322ed52ac3836da # shrinks to (shape, url) = (Garbage, "a "), seam = false, padding = ""
