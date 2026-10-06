@@ -1,0 +1,113 @@
+journey:
+  id: live-network-search
+  feature: indexer-deployment
+  jobs: [J-005, J-009]
+  actors: [Jeff (operator), host timer, Maria (searcher), Priya Raman (author, bsky.social), Dmitri Volkov (author, pds.volkov.dev)]
+  emotional_arc: {start: "Jeff uneasy (nothing runs, nothing watched); Maria skeptical (local only)", middle: "Jeff in control (edits and alerts are cheap and precise)", end: "Maria reassured (live, multi-PDS results); Jeff calm (one-command rollback)"}
+
+  steps:
+    - id: S1
+      name: Operator deploys the indexer by digest
+      actor: Jeff
+      artifacts_in: [image_digest]
+      artifacts_out: [public_index_url]
+      gherkin: |
+        Scenario: The first deploy leaves the PDS and the review app serving
+          Given the PDS health check and the review app's /healthz answer 200
+          When Jeff deploys the indexer for the first time by digest
+          Then both still answer 200 during and after the deploy
+      error_paths: [E6 not ready, unsigned digest refused]
+      stories: [US-IXD-001, US-IXD-006]
+
+    - id: S2
+      name: Operator edits the DID list
+      actor: Jeff
+      artifacts_in: [did_list_param]
+      artifacts_out: [did_list_file]
+      gherkin: |
+        Scenario: A DID added to the list is indexed on the next pass without a redeploy
+          Given Jeff adds did:plc:therrera2v6w to the DID list parameter at 15:05
+          When the 15:15 pass runs
+          Then the pass reports 13 configured DIDs
+          And no deploy or restart happened
+      error_paths: [E1 malformed, E2 unreadable]
+      stories: [US-IXD-003]
+
+    - id: S3
+      name: Timer runs a non-overlapping ingest pass every 15 minutes
+      actor: host timer
+      artifacts_in: [did_list_file, index_store]
+      artifacts_out: [index_store, pass_summary, exit_code]
+      gherkin: |
+        Scenario: Passes never overlap
+          Given a pass is still running when the next one is due
+          When the timer fires
+          Then no second concurrent pass starts
+      error_paths: [E3 total outage, E4 partial skip, E5 long pass]
+      stories: [US-IXD-002]
+
+    - id: S4
+      name: Serve answers during and between passes
+      actor: indexer serve
+      artifacts_in: [index_store]
+      gherkin: |
+        Scenario: Search keeps answering while a pass runs
+          Given a pass is writing to the index
+          When Maria searches
+          Then she gets results within 1 second and no error
+      error_paths: [E7 write or unknown path refused]
+      stories: [US-IXD-001, US-IXD-002]
+
+    - id: S5
+      name: Searcher finds claims from authors on many PDSes
+      actor: Maria
+      artifacts_in: [public_index_url]
+      gherkin: |
+        Scenario: Maria finds claims from authors on different PDSes through the public index
+          Given the public index holds Priya's and Dmitri's claims
+          And Maria has set OPENLORE_INDEXER_URL to https://index.openlore.jeffbailey.us
+          When Maria runs openlore search --object org.openlore.philosophy.reproducible-builds
+          Then Maria sees both claims, each attributed to its own author DID
+      stories: [US-IXD-001, US-IXD-002]
+
+    - id: S6
+      name: Operator is alerted on real failures only
+      actor: Jeff
+      artifacts_in: [exit_code, alarm_topic]
+      gherkin: |
+        Scenario: Two consecutive total outages alert the operator once
+          Given every DID is unreachable
+          When two consecutive passes exit 3
+          Then Jeff receives one alarm email
+      stories: [US-IXD-004]
+
+    - id: S7
+      name: Operator checks freshness
+      actor: Jeff
+      artifacts_in: [last_successful_pass_at, pass_summary, exit_code]
+      gherkin: |
+        Scenario: A stopped schedule is visible
+          Given no pass has run for 2 hours
+          When Jeff runs the freshness command
+          Then he sees how long ago the last pass of any kind ran
+      error_paths: [E9 timer stopped]
+      stories: [US-IXD-005]
+
+    - id: S8
+      name: Operator ships or rolls back a version
+      actor: Jeff
+      artifacts_in: [image_digest]
+      gherkin: |
+        Scenario: The operator rolls back on command
+          Given digest B is running
+          When Jeff runs the rollback command
+          Then digest A is running and search answers, with no data restore
+      error_paths: [E8 memory gate]
+      stories: [US-IXD-006]
+
+  integration_checkpoints:
+    - "S1 -> S4: the Caddy site for public_index_url reaches serve over the PDS compose network (needs the v1.7.0 sites mount)"
+    - "S2 -> S3: the edited parameter is in did_list_file before the next pass starts"
+    - "S3 <-> S4: one index_store, with neither side refusing the other (OQ-IXD-1)"
+    - "S3 -> S6: exit_code reaches CloudWatch for every pass"
+    - "S5: openlore search with OPENLORE_INDEXER_URL gets the same results as a direct XRPC call"
