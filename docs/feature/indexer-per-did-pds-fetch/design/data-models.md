@@ -64,12 +64,19 @@ Functions. All are pure and total:
 | `records_of(&Did, &[RepoRecord]) -> (Vec<(rkey, Result<ClaimRecord, String>)>, u64)` | Moved from `run.rs::decoded_records_of`. Returns the repo-bound decoded records plus the count of records whose `at://` repo ≠ the DID (FR-4). |
 | `summarize(&[DidFetch]) -> PassSummary` | A fold. `Read` with `OwnPds` → own_pds. `Read` with `Fallback` → fallback. `Skipped` → skipped. |
 
-The deadline rule is implemented in the shell and documented here so ATs can assert it. One
-deadline per DID (`per_did_time_budget`) covers resolve, then (if planned) the listing,
-including the fallback listing. If it expires while resolving, the result is
-`ResolutionFailure::TimedOut`. The fallback is then tried with whatever budget remains, and an
-immediate expiry gives `fallback_failure = pds_timeout`. If it expires while listing, the result
-is `PdsTimeout`.
+The deadline rule is documented here so ATs can assert it. The pure core decides which budget a
+listing runs under (`ListingSource::budget() -> ListingBudget`); the shell only builds the
+deadline. One deadline per DID (`per_did_time_budget`) covers resolve and, when the plan is
+`OwnPds`, the listing (`RemainingOfShared`). If it expires while resolving, the result is
+`ResolutionFailure::TimedOut`, which is fallback-eligible like any resolution failure. A
+`Fallback` listing runs under a FRESH `per_did_time_budget` (`Fresh`), so a resolution that
+used up the budget still leaves the fallback a full one (ADR-077 NFR-3). If a listing expires,
+the result is `PdsTimeout` (own PDS) or `fallback_failure = pds_timeout` (fallback). Worst case
+per DID: two budgets.
+
+> Amended 2026-10-05 (fix-indexer-follow-ups, rca.md D1; ADR-078 §4): this section used to say
+> the fallback gets whatever budget remains and that an immediate expiry gives
+> `fallback_failure = pds_timeout`. The fallback now gets a fresh budget.
 
 ## 3. Ports and adapter-visible types
 

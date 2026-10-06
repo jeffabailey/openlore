@@ -7,6 +7,14 @@
 - **Realizes**: ADR-024 §"Per-record / per-source fault isolation" (the `source_skipped` row was
   specified but not implemented: `run.rs` returns exit 2 on the first listing error).
 - **Amends**: ADR-024 (adds concrete bounds and event shapes).
+- **Amended 2026-10-05** (fix-indexer-follow-ups, `docs/feature/fix-indexer-follow-ups/rca.md`
+  D1): §4 used to give the fallback "the remaining budget". When resolving used up the budget,
+  the fallback ran on an expired deadline and the DID was skipped with `pds_timeout`, which broke
+  ADR-077 NFR-3 ("when PLC is down the fallback reproduces the old outcome"). User decision: every
+  fallback listing gets a fresh per-DID budget. The pure `plan_listing` still makes the decision
+  (`ListingSource::budget()`: `OwnPds` → remaining of the shared deadline, `Fallback` → fresh);
+  the shell only builds the deadline. Accepted cost: worst-case time per DID, and so per pass,
+  can double.
 
 ## Context
 
@@ -48,11 +56,13 @@ under 50 authors, with a solo maintainer, so there is no appetite for new infras
    unit issues its requests sequentially, so outstanding PLC/PDS requests ≤ the cap (NFR-1).
    Defaults: `max_concurrent_fetches = 4` (env `OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES`,
    1..=16). The per-repo page bound is unchanged (`MAX_PAGES` 50 × 100).
-4. **Time bound.** One deadline per DID: `per_did_time_budget = 30 s` (env
-   `OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS`, 1..=600), applied with `tokio::time::timeout_at`
-   across resolve and listing, including a fallback listing. Expiry while resolving counts as a
-   resolution failure (the fallback gets the remaining budget). Expiry while listing gives
-   `pds_timeout`. The worst-case pass is ⌈N/cap⌉ × budget (N = 50 → 6.5 min). The budget does
+4. **Time bound.** A per-DID budget: `per_did_time_budget = 30 s` (env
+   `OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS`, 1..=600), applied with `tokio::time::timeout_at`.
+   Resolving and an own-PDS listing share one deadline. A fallback listing runs under a fresh
+   budget of its own (see the amendment below). Expiry while resolving counts as a resolution
+   failure, so the DID goes to the fallback when one is configured. Expiry while listing gives
+   `pds_timeout`. The worst-case DID costs two budgets (resolve, then fallback), so the
+   worst-case pass is ⌈N/cap⌉ × 2 × budget (N = 50 → 13 min). The budget does
    not cover app-signed author-key resolution in the gate phase, which is unchanged and bounded
    by the resolve adapter's own client timeout.
 5. **Observability (stdout JSON, `indexer.*`, WD-105).**

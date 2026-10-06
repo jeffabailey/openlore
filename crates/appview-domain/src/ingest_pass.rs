@@ -69,7 +69,28 @@ pub enum ListingSource {
     Fallback(FallbackUrl),
 }
 
+/// Which per-DID budget a listing runs under (ADR-078 §4, amended 2026-10-05
+/// by fix-indexer-follow-ups D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingBudget {
+    /// What is left of the one deadline that also covered resolving.
+    RemainingOfShared,
+    /// A fresh per-DID budget, started when the listing starts.
+    Fresh,
+}
+
 impl ListingSource {
+    /// The budget this listing runs under: the DID's own PDS shares the
+    /// resolve+list deadline; the fallback gets a fresh one, so a resolution
+    /// that used up the budget still leaves the fallback a full budget
+    /// (ADR-077 NFR-3). The worst case per DID is two budgets.
+    pub const fn budget(&self) -> ListingBudget {
+        match self {
+            Self::OwnPds(_) => ListingBudget::RemainingOfShared,
+            Self::Fallback(_) => ListingBudget::Fresh,
+        }
+    }
+
     /// The base URL the listing is requested from.
     pub fn base(&self) -> &str {
         match self {
@@ -476,8 +497,11 @@ mod tests {
     }
 
     proptest! {
-        /// A resolved DID is always listed on its own PDS, never the fallback;
-        /// an unresolved one goes to the fallback iff one is configured.
+        /// Universe {source, budget}: a resolved and admissible DID is listed
+        /// on its own PDS under the remaining shared budget, never the
+        /// fallback; any resolution failure goes to the fallback under a
+        /// fresh budget iff one is configured, else it is skipped
+        /// did_unresolvable.
         #[test]
         fn a_resolved_did_is_listed_on_its_own_pds(
             resolved in arb_url(), failure in arb_failure(),
@@ -485,15 +509,28 @@ mod tests {
         ) {
             let fallback = fallback.and_then(|f| FallbackUrl::new(&f));
             let policy = TransportPolicy::HttpsPublicOnly;
-            prop_assert_eq!(
-                plan_listing(Ok(format!("{resolved}/")), policy, fallback.as_ref()),
-                ListingPlan::List(ListingSource::OwnPds(PdsEndpoint::new(&resolved)))
-            );
-            let expected = match &fallback {
-                Some(f) => ListingPlan::List(ListingSource::Fallback(f.clone())),
-                None => ListingPlan::Skip(SkipReason::DidUnresolvable),
+            let budget_of = |plan: &ListingPlan| match plan {
+                ListingPlan::List(source) => Some(source.budget()),
+                ListingPlan::Skip(_) => None,
             };
-            prop_assert_eq!(plan_listing(Err(failure), policy, fallback.as_ref()), expected);
+            let resolved_plan = plan_listing(Ok(format!("{resolved}/")), policy, fallback.as_ref());
+            prop_assert_eq!(
+                &resolved_plan,
+                &ListingPlan::List(ListingSource::OwnPds(PdsEndpoint::new(&resolved)))
+            );
+            prop_assert_eq!(budget_of(&resolved_plan), Some(ListingBudget::RemainingOfShared));
+            // Every resolution failure (TimedOut included) with a fallback is
+            // listed through it under a FRESH budget (fix-indexer-follow-ups D1).
+            let (expected, expected_budget) = match &fallback {
+                Some(f) => (
+                    ListingPlan::List(ListingSource::Fallback(f.clone())),
+                    Some(ListingBudget::Fresh),
+                ),
+                None => (ListingPlan::Skip(SkipReason::DidUnresolvable), None),
+            };
+            let failed_plan = plan_listing(Err(failure), policy, fallback.as_ref());
+            prop_assert_eq!(&failed_plan, &expected);
+            prop_assert_eq!(budget_of(&failed_plan), expected_budget);
         }
 
         /// Universe {configured, own_pds, fallback, skipped}: each DID moves

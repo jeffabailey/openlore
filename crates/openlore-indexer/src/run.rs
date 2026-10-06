@@ -42,8 +42,8 @@ use appview_domain::ingest_pass::{
 };
 use appview_domain::{
     compose_results, ingest_repo_record, origin_of, plan_listing, records_of, summarize, DidFetch,
-    FallbackUrl, IngestOutcome, ListingPlan, ListingSource, NetworkSearchResult, PassSummary,
-    RejectReason, ResolutionFailure,
+    FallbackUrl, IngestOutcome, ListingBudget, ListingPlan, ListingSource, NetworkSearchResult,
+    PassSummary, RejectReason, ResolutionFailure,
 };
 use claim_domain::{ClaimRecord, Did, VerificationKey};
 use lexicon::{
@@ -503,16 +503,23 @@ fn gate_all(
     Ok(tally)
 }
 
-/// One repo DID's fetch, under ONE deadline covering resolving and every
-/// listing page: resolve its PDS, plan where to list it, list it. Any failure
-/// skips only this DID, with its reason (ADR-078); nothing about the skip is
-/// stored, so the DID is retried on the next pass.
+/// One repo DID's fetch: resolve its PDS, plan where to list it, list it.
+/// Resolving and an own-PDS listing share ONE deadline; a fallback listing
+/// runs under a fresh one (the pure plan says which — ADR-078 §4 amended).
+/// Any failure skips only this DID, with its reason (ADR-078); nothing about
+/// the skip is stored, so the DID is retried on the next pass.
 async fn fetch_repo(wiring: &IndexerWiring, repo_did: &Did) -> DidFetch {
-    let deadline = tokio::time::Instant::now() + wiring.per_did_time_budget;
-    let resolution = resolve_pds(wiring, repo_did, deadline).await;
+    let shared_deadline = tokio::time::Instant::now() + wiring.per_did_time_budget;
+    let resolution = resolve_pds(wiring, repo_did, shared_deadline).await;
     let pds_url = resolution.as_ref().ok().cloned();
     match plan_listing(resolution, wiring.policy, wiring.fallback.as_ref()) {
-        ListingPlan::List(source) => list_source(wiring, repo_did, source, deadline).await,
+        ListingPlan::List(source) => {
+            let deadline = match source.budget() {
+                ListingBudget::RemainingOfShared => shared_deadline,
+                ListingBudget::Fresh => tokio::time::Instant::now() + wiring.per_did_time_budget,
+            };
+            list_source(wiring, repo_did, source, deadline).await
+        }
         ListingPlan::Skip(reason) => DidFetch::Skipped {
             did: repo_did.clone(),
             skip: ClassifiedSkip::planned(reason),

@@ -57,8 +57,8 @@ pub mod proptest_strategies;
 pub use compose::compose_results;
 pub use ingest::{ingest_decision, ingest_repo_record};
 pub use ingest_pass::{
-    origin_of, plan_listing, records_of, summarize, DidFetch, FallbackUrl, ListingPlan,
-    ListingSource, PassSummary, PdsEndpoint, ResolutionFailure, SkipReason,
+    origin_of, plan_listing, records_of, summarize, DidFetch, FallbackUrl, ListingBudget,
+    ListingPlan, ListingSource, PassSummary, PdsEndpoint, ResolutionFailure, SkipReason,
 };
 pub use retraction::{partition_retracted, RetractionPartition};
 pub use suggest::near_match_suggestion;

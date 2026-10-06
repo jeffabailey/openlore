@@ -384,6 +384,98 @@ fn a_did_document_that_never_arrives_counts_against_the_same_budget() {
     );
 }
 
+/// fix-indexer-follow-ups D1 (ADR-078 §4 amended 2026-10-05; restores ADR-077 NFR-3)
+/// ```gherkin
+/// @US-IPF-002 @US-IPF-003 @error @real-io @contract-shape:bounded-change
+/// Scenario: A DID document that never arrives leaves the fallback a full budget
+///   Given the per-author time budget is 2 seconds
+///   And the directory never answers for Dmitri's DID document
+///   And the fallback pds.jeffbailey.us also serves Dmitri's repo with his app-signed claims
+///   When one ingest pass runs
+///   Then Dmitri is read through the fallback, not skipped with pds_timeout
+///   And Dmitri's app-signed claims are indexed
+///   And the pass finishes within about twice the budget plus slack
+/// ```
+#[test]
+fn a_did_document_that_never_arrives_leaves_the_fallback_a_full_budget() {
+    let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Dmitri]);
+    world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+    let mut app_signed = world.publishes_app_signed(
+        Author::Dmitri,
+        &[FERRITE_REPRODUCIBLE_BUILDS, FERRITE_DEPENDENCY_PINNING],
+    );
+    world.fallback_is(Host::JeffbaileyUs);
+    world.setting(var::PER_DID_TIMEOUT, "2");
+    world.did_document_of(Author::Dmitri, DidDocPosture::Hang);
+
+    let pass = world.one_ingest_pass_runs();
+
+    pass.assert_pass_completed(0, 1, 1, 0);
+    assert!(
+        pass.skips_of(Author::Dmitri.did()).is_empty(),
+        "Dmitri is not skipped (pds_timeout on an exhausted budget)\n{}",
+        pass.dump()
+    );
+    let read = pass.fallback_reads_of(Author::Dmitri.did());
+    assert_eq!(read.len(), 1, "one source_fallback event\n{}", pass.dump());
+    assert_eq!(read[0]["reason"], SkipReason::DidUnresolvable.token());
+    assert_eq!(read[0]["fallback_url"], world.url_of(Host::JeffbaileyUs));
+    let ghost_rows = world.rows_of(Author::Dmitri);
+    let mut got: Vec<String> = ghost_rows.iter().map(|r| r.cid.clone()).collect();
+    got.sort();
+    app_signed.sort();
+    assert_eq!(
+        got, app_signed,
+        "Dmitri's app-signed claims come through the fallback"
+    );
+    assert!(ghost_rows.iter().all(|r| r.provenance == "app-signed"));
+    assert!(
+        pass.elapsed < Duration::from_secs(20),
+        "resolving and the fallback listing are each bounded, took {:?}",
+        pass.elapsed
+    );
+}
+
+/// fix-indexer-follow-ups D1 — the doubled worst case stays bounded
+/// ```gherkin
+/// @US-IPF-002 @error @real-io @contract-shape:bounded-change
+/// Scenario: A hanging fallback after a hanging directory is still abandoned
+///   Given the per-author time budget is 2 seconds
+///   And the directory never answers for Dmitri's DID document
+///   And the fallback pds.jeffbailey.us accepts connections and never answers
+///   When one ingest pass runs
+///   Then Dmitri is skipped as unresolvable with fallback failure pds_timeout
+///   And Priya is indexed
+///   And the pass finishes within about twice the budget plus slack
+/// ```
+#[test]
+fn a_hanging_fallback_after_a_hanging_directory_is_still_abandoned() {
+    let mut world = IndexerWorld::configured_with(&[Author::Priya, Author::Dmitri]);
+    world.publishes_self_attested(Author::Priya, &[CARGO_PIN_REPRODUCIBLE_BUILDS]);
+    world.publishes_app_signed(Author::Dmitri, &[FERRITE_REPRODUCIBLE_BUILDS]);
+    world.fallback_is(Host::JeffbaileyUs);
+    world.setting(var::PER_DID_TIMEOUT, "2");
+    world.did_document_of(Author::Dmitri, DidDocPosture::Hang);
+    world.host_answers(Host::JeffbaileyUs, ListingPosture::Hang);
+
+    let pass = world.one_ingest_pass_runs();
+
+    pass.assert_pass_completed(0, 1, 0, 1);
+    let skip = pass.assert_skipped(Author::Dmitri.did(), SkipReason::DidUnresolvable);
+    assert_eq!(skip["fallback_used"], true, "{skip}");
+    assert_eq!(
+        skip["fallback_failure"],
+        SkipReason::PdsTimeout.token(),
+        "{skip}"
+    );
+    assert_eq!(world.rows_of(Author::Priya).len(), 1);
+    assert!(
+        pass.elapsed < Duration::from_secs(20),
+        "a hanging fallback is abandoned after its own budget, took {:?}",
+        pass.elapsed
+    );
+}
+
 /// IPF-17
 /// ```gherkin
 /// @US-IPF-002 @AC-002.6 @real-io @contract-shape:bounded-change
