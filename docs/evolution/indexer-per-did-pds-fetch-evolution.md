@@ -128,8 +128,10 @@ Each step also has a `chore: execution log` commit.
 - **No test that earlier rows stay committed when an index-store write fails mid-pass.**
   DISTILL could not do it hermetically from a subprocess; the planned unit test on the gate
   loop is still missing.
+  *Resolved by fix-indexer-follow-ups (`cba7b78`): D3 regression test; atomic, deduplicated upsert.*
 - **A fallback after a resolution timeout shares the exhausted per-DID deadline**, so it
   always fails. Give the fallback its own budget, or skip it after a timeout.
+  *Resolved by fix-indexer-follow-ups (`df077df`): the fallback gets a fresh budget.*
 - **The guarded DNS resolver is duplicated** in two adapters (about 20 lines). Sharing it
   needs a new crate.
 - **Advisory mutation targets not run**: `adapter-index-query` (`decode_wire_provenance`)
@@ -150,6 +152,7 @@ Each step also has a `chore: execution log` commit.
   - `OPENLORE_INDEXER_PLC_ENDPOINT` (default `https://plc.directory`) is not checked at
     startup, but DID-document fetches go through the guarded client, so a private or plain-http
     PLC mirror makes every DID unresolvable.
+    *Resolved by fix-indexer-follow-ups (`cb7b94b`, `cba7b78`): validated at startup; set-but-blank refused.*
   - Never set `OPENLORE_INDEXER_ALLOW_LOOPBACK_HTTP` in production; a release build refuses it.
 - **Exit codes of `openlore-indexer ingest`**: 0 = completed (partial skips included; watch
   `pass_summary`); 3 = every configured DID skipped, usually transient, retry next interval
