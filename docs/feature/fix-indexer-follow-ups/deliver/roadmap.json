@@ -1,0 +1,166 @@
+{
+  "roadmap": {
+    "project_id": "fix-indexer-follow-ups",
+    "created_at": "2026-10-06T02:30:15Z",
+    "total_steps": 3
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Indexer follow-ups: PLC endpoint validation, atomic deduplicated upsert, fresh fallback budget",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "D2: the PLC directory endpoint is validated at startup",
+          "description": "Bugfix D2 (rca.md). config.rs:162 reads OPENLORE_INDEXER_PLC_ENDPOINT raw. It is not validated, and a blank value does not fall back to the default because it bypasses `setting(...)`. Lookups go through the guarded client, so a policy-refused URL (plain http, a private or loopback IP literal, userinfo) becomes `Unavailable` at runtime (identity_lookup.rs:73-76). plan_listing treats that as fallback-eligible (ingest_pass.rs:205). With a fallback configured, every did:plc author is then read silently as relay-origin and the pass exits 0. Fix: read the variable through `setting(...)` (blank means DEFAULT_PLC_ENDPOINT) and validate it with a `plc_endpoint(url, policy)` validator that mirrors `fallback_url`. Startup is refused with a ConfigError naming PLC_ENDPOINT_VAR and the offending value. A hostname that only resolves to private addresses stays a runtime refusal (IPF-08), not a startup one. Amend the 'unchanged' row for the PLC endpoint in data-models (architecture \u00a7~100 and the feature design copy): the endpoint is now validated under the transport policy. First write the regression tests and show they fail against current code.",
+          "criteria": [
+            "Starting the indexer with OPENLORE_INDEXER_PLC_ENDPOINT=http://plc.example is refused at startup. The structured startup refusal names OPENLORE_INDEXER_PLC_ENDPOINT and the value, and no ingest pass runs.",
+            "Starting with OPENLORE_INDEXER_PLC_ENDPOINT=https://10.0.0.1 (a private IP literal) is refused at startup, naming the variable and the value.",
+            "Starting with OPENLORE_INDEXER_PLC_ENDPOINT=https://u:p@plc.directory (userinfo) is refused at startup, naming the variable and the value.",
+            "A blank or whitespace-only OPENLORE_INDEXER_PLC_ENDPOINT is not refused. The config_loaded event reports the default https://plc.directory.",
+            "The config_parsing_is_total property covers the PLC dimension. For any generated environment, parsing either succeeds or is refused naming one variable and its value. A refused PLC endpoint is never accepted.",
+            "Existing indexer_per_did_config scenarios stay green, including the loopback test-seam and release-build refusal scenarios. The harness's own directory URL (loopback, under the seam) is still accepted."
+          ],
+          "acceptance_criteria": [
+            "Starting the indexer with OPENLORE_INDEXER_PLC_ENDPOINT=http://plc.example is refused at startup. The structured startup refusal names OPENLORE_INDEXER_PLC_ENDPOINT and the value, and no ingest pass runs.",
+            "Starting with OPENLORE_INDEXER_PLC_ENDPOINT=https://10.0.0.1 (a private IP literal) is refused at startup, naming the variable and the value.",
+            "Starting with OPENLORE_INDEXER_PLC_ENDPOINT=https://u:p@plc.directory (userinfo) is refused at startup, naming the variable and the value.",
+            "A blank or whitespace-only OPENLORE_INDEXER_PLC_ENDPOINT is not refused. The config_loaded event reports the default https://plc.directory.",
+            "The config_parsing_is_total property covers the PLC dimension. For any generated environment, parsing either succeeds or is refused naming one variable and its value. A refused PLC endpoint is never accepted.",
+            "Existing indexer_per_did_config scenarios stay green, including the loopback test-seam and release-build refusal scenarios. The harness's own directory URL (loopback, under the seam) is still accepted."
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_config.rs",
+          "scenario_name": "a_malformed_or_unsafe_plc_endpoint_is_explained_at_startup",
+          "scenario_fns": [
+            "tests/acceptance/indexer_per_did_config.rs::a_malformed_or_unsafe_plc_endpoint_is_explained_at_startup (refusal table: http://plc.example, https://10.0.0.1, https://u:p@plc.directory; fails today because startup is accepted)",
+            "tests/acceptance/indexer_per_did_config.rs::a_blank_plc_endpoint_uses_the_default_directory (fails today: a blank value is passed through as the endpoint)",
+            "crates/openlore-indexer/src/config.rs::tests::config_parsing_is_total_and_every_refusal_names_a_variable_and_its_value (extend arb_env with a PLC dimension: admissible, http, private literal, userinfo, blank, garbage)",
+            "crates/openlore-indexer/src/config.rs::tests::<new proptest> a_plc_endpoint_is_accepted_iff_the_policy_admits_it (state-delta: refusal names PLC_ENDPOINT_VAR and the value; blank maps to DEFAULT_PLC_ENDPOINT)"
+          ],
+          "test_command": "cargo build -p openlore-indexer && cargo test -p openlore-indexer config && cargo test -p cli --test indexer_per_did_config",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first).\nDESIGN: contract shape is pure-function. `plc_endpoint(url, policy) -> Result<_, ConfigError>` is pure, mirrors `fallback_url` (config.rs:233) and reuses the same url-admissibility predicate the guarded client applies, so startup and runtime cannot disagree. Read the value through `setting(...)` so blank and trimmed values behave like every other variable. Do not resolve DNS at startup: a hostname leading only to private addresses stays the runtime refusal (IPF-08). Under the loopback test seam the harness directory URL (loopback http) must still be admitted, exactly as the fallback is. Use IndexerWorld::directory_url_is / setting(var::PLC, ...) and the existing then_start_is_refused_naming helper. The blank-value scenario asserts config_loaded().plc_endpoint == https://plc.directory and must not contact the network: run it with no repo DIDs, or assert only the startup event. Docs: amend the PLC row (\"unchanged\") in docs/architecture/indexer-per-did-pds-fetch/data-models.md and docs/feature/indexer-per-did-pds-fetch/design/data-models.md, and correct R-IPF-8's 'surfaces rather than silently' claim wherever it is stated.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*) with `cargo test -p cli --test <target>`, never the whole workspace on the host (CI verifies the full suite). Build openlore-indexer (`cargo build -p openlore-indexer`) before acceptance tests so they exercise the current binary. Keep main green: the regression tests and the fix land in the same commit.",
+          "estimate_hours": 2,
+          "depends_on": [],
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/openlore-indexer/src/config.rs",
+            "tests/acceptance/indexer_per_did_config.rs",
+            "tests/acceptance/support/indexer_network.rs",
+            "docs/architecture/indexer-per-did-pds-fetch/data-models.md",
+            "docs/feature/indexer-per-did-pds-fetch/design/data-models.md"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "D3: each claim upsert is atomic and duplicate references are removed before indexing",
+          "description": "Bugfix D3 (rca.md). IndexStoreAdapter::upsert (adapter-index-store/src/lib.rs:296-367) writes the artifact, then runs three DELETEs and the INSERTs, each autocommitted with no transaction. decode_references (claim-domain/src/decode.rs:263-291) does not remove duplicates, and the references PK is (referencing_cid, referenced_cid, ref_type) (schema.rs:76). A remote record that lists one reference twice therefore violates the PK after earlier rows are committed. That leaves a half-written claim and exits 2 on every pass: a remote-data fault that looks like a local one. Fix (user decision): remove duplicate references, then index; wrap each upsert's DB work in one transaction. Two regression tests: an adapter test that fails today, and an acceptance test through the binary that PASSES today. The acceptance test is a guard for ADR-078 \u00a72 (earlier authors' claims stay committed), not a RED test, so the crafter records it as a guard rather than proving it fails.",
+          "criteria": [
+            "Adapter: upserting a claim whose references contain a duplicate (same referenced CID and ref type) succeeds. Afterwards the store holds that claim whole: its claim row, each distinct reference exactly once, and its other dependent rows. FAILS TODAY.",
+            "Adapter: re-upserting an already-indexed claim with duplicate references leaves it whole, never half-deleted. FAILS TODAY.",
+            "Adapter: when any statement inside one upsert fails, none of that upsert's DB changes are visible afterwards. The prior version of the claim (or its absence) is unchanged.",
+            "Domain: the reference set from decode or indexing has no duplicate (referenced_cid, ref_type) pairs, keeps first-occurrence order, and drops no distinct reference.",
+            "Acceptance (GUARD, passes today): a store write failure for the second author (a regular file where that author's index artifact directory should be) makes the pass exit 2, and the first author's claims are still searchable afterwards.",
+            "upsert stays idempotent by CID (existing upsert_is_idempotent_by_cid and the other adapter tests stay green)."
+          ],
+          "acceptance_criteria": [
+            "Adapter: upserting a claim whose references contain a duplicate (same referenced CID and ref type) succeeds. Afterwards the store holds that claim whole: its claim row, each distinct reference exactly once, and its other dependent rows. FAILS TODAY.",
+            "Adapter: re-upserting an already-indexed claim with duplicate references leaves it whole, never half-deleted. FAILS TODAY.",
+            "Adapter: when any statement inside one upsert fails, none of that upsert's DB changes are visible afterwards. The prior version of the claim (or its absence) is unchanged.",
+            "Domain: the reference set from decode or indexing has no duplicate (referenced_cid, ref_type) pairs, keeps first-occurrence order, and drops no distinct reference.",
+            "Acceptance (GUARD, passes today): a store write failure for the second author (a regular file where that author's index artifact directory should be) makes the pass exit 2, and the first author's claims are still searchable afterwards.",
+            "upsert stays idempotent by CID (existing upsert_is_idempotent_by_cid and the other adapter tests stay green)."
+          ],
+          "test_file": "crates/adapter-index-store/src/lib.rs",
+          "scenario_name": "upsert_with_duplicate_references_keeps_the_claim_whole",
+          "scenario_fns": [
+            "crates/adapter-index-store/src/lib.rs::tests::upsert_with_duplicate_references_keeps_the_claim_whole (RED today: PK violation leaves a half-written claim; proptest over claims with injected duplicate references, state-delta over the universe {claim row, references, other dependent rows} for that CID; first upsert and re-upsert)",
+            "crates/claim-domain/src/decode.rs::tests::<new proptest> decoded_references_have_no_duplicates_and_lose_none (if the pure dedupe lives in claim-domain; otherwise next to the pure helper the adapter uses)",
+            "tests/acceptance/indexer_per_did_resilience.rs::a_store_failure_for_one_author_keeps_earlier_authors_claims_searchable (GUARD for ADR-078 \u00a72: PASSES TODAY, not a RED test)"
+          ],
+          "test_command": "cargo test -p adapter-index-store && cargo test -p claim-domain && cargo build -p openlore-indexer && cargo test -p cli --test indexer_per_did_resilience",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first).\nDESIGN: contract shapes. Dedupe is pure-function (order-preserving, first occurrence wins, keyed on the references PK columns). Upsert is bounded-change: the declared mutation set is that one CID's rows across the claim, references and dependent tables, plus its artifact file; nothing else in the store changes. Put dedupe in the functional core so it is property-testable. The adapter must not rely on callers having deduplicated, because IndexedClaim can be built elsewhere. So the adapter applies the same pure dedupe to the rows it inserts; one function, two call sites at most. Wrap the three DELETEs and all INSERTs of one upsert in ONE DuckDB transaction (commit on success, rollback on any error), and map errors to the existing IndexStoreError variants. The artifact file write (tmp + rename, idempotent by CID) cannot join the DB transaction. Keep it before the transaction as today; a stray artifact for a rolled-back CID is harmless and gets overwritten on retry. Do not add cross-claim transactions: ADR-078 \u00a72 requires earlier claims to stay committed. RED discipline: show the adapter test failing against current code before the fix. The acceptance scenario PASSES TODAY and is a guard for ADR-078 \u00a72. Log its RED phase as NOT_APPLICABLE (guard), not as a failure. For the acceptance seam, add an IndexerWorld helper that places a regular file at the second author's artifact directory (indexed_claims/<did fs segment>, next to the index DB) before the pass. Assert exit 2 and that maria_searches finds the first author's claims. Confirm the pass writes authors in configured order so 'first' and 'second' are deterministic. claim-domain is a shared crate: run its dependents.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*) with `cargo test -p cli --test <target>`, never the whole workspace on the host (CI verifies the full suite). Build openlore-indexer (`cargo build -p openlore-indexer`) before acceptance tests so they exercise the current binary. Keep main green: the regression tests and the fix land in the same commit.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-01"
+          ],
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/adapter-index-store/src/lib.rs",
+            "crates/claim-domain/src/decode.rs",
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/support/indexer_network.rs"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "D1: the fallback gets a fresh per-DID budget after a resolution timeout",
+          "description": "Bugfix D1 (rca.md), a design defect. fetch_repo creates one deadline (run.rs:511) and reuses it for list_source (run.rs:547). ResolutionFailure::TimedOut is fallback-eligible (ingest_pass.rs:55-60, 205), so when resolving uses up the budget, the fallback runs on an expired deadline and the DID is skipped with pds_timeout. That breaks ADR-077 NFR-3 ('when PLC is down the fallback reproduces the old outcome'). It shows when OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS <= LOOKUP_TIMEOUT (10 s). Fix (user decision): a listing through the fallback runs under its own FRESH per-DID budget; own-PDS listings keep the shared resolve+list deadline. Worst-case time per DID, and so per pass, can double. Amend ADR-078 \u00a74 ('the fallback gets the remaining budget'), data-models \u00a72 ('an immediate expiry gives pds_timeout') in the architecture and feature-design copies, and the plan_listing property in ingest_pass.rs that encodes the old behaviour. Write the regression test first and show it fails today.",
+          "criteria": [
+            "With the PLC directory hanging on an author's DID document, a fallback configured that serves that author's repo, and OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS=2, the pass exits 0. A source_fallback event is emitted for that DID, the author's app-signed claims are indexed with relay provenance, and the DID is not skipped with pds_timeout. FAILS TODAY.",
+            "That pass still finishes within a bounded ceiling (about 2x the per-DID budget plus slack): resolving and the fallback listing are each bounded.",
+            "A fallback that itself hangs is still abandoned after its own budget, and the DID is reported did_unresolvable with fallback_failure pds_timeout.",
+            "Own-PDS listings still share a single resolve+list deadline (a_hanging_pds_cannot_stall_the_pass and a_did_document_that_never_arrives_counts_against_the_same_budget stay green, or are updated only where they encoded the old fallback behaviour).",
+            "The plan_listing property states the new contract: a resolved and admissible DID is listed on its own PDS under the remaining budget; any resolution failure with a fallback configured is listed through the fallback under a fresh budget; with no fallback it is skipped did_unresolvable.",
+            "ADR-078 \u00a74 and data-models \u00a72 (architecture and feature-design copies) describe the fresh fallback budget and the doubled worst case. No document still says the fallback gets the remaining budget."
+          ],
+          "acceptance_criteria": [
+            "With the PLC directory hanging on an author's DID document, a fallback configured that serves that author's repo, and OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS=2, the pass exits 0. A source_fallback event is emitted for that DID, the author's app-signed claims are indexed with relay provenance, and the DID is not skipped with pds_timeout. FAILS TODAY.",
+            "That pass still finishes within a bounded ceiling (about 2x the per-DID budget plus slack): resolving and the fallback listing are each bounded.",
+            "A fallback that itself hangs is still abandoned after its own budget, and the DID is reported did_unresolvable with fallback_failure pds_timeout.",
+            "Own-PDS listings still share a single resolve+list deadline (a_hanging_pds_cannot_stall_the_pass and a_did_document_that_never_arrives_counts_against_the_same_budget stay green, or are updated only where they encoded the old fallback behaviour).",
+            "The plan_listing property states the new contract: a resolved and admissible DID is listed on its own PDS under the remaining budget; any resolution failure with a fallback configured is listed through the fallback under a fresh budget; with no fallback it is skipped did_unresolvable.",
+            "ADR-078 \u00a74 and data-models \u00a72 (architecture and feature-design copies) describe the fresh fallback budget and the doubled worst case. No document still says the fallback gets the remaining budget."
+          ],
+          "test_file": "tests/acceptance/indexer_per_did_resilience.rs",
+          "scenario_name": "a_did_document_that_never_arrives_leaves_the_fallback_a_full_budget",
+          "scenario_fns": [
+            "tests/acceptance/indexer_per_did_resilience.rs::a_did_document_that_never_arrives_leaves_the_fallback_a_full_budget (RED today: the DID is skipped pds_timeout instead of read through the fallback)",
+            "tests/acceptance/indexer_per_did_resilience.rs::a_hanging_fallback_after_a_hanging_directory_is_still_abandoned (bounded-time guard for the doubled worst case)",
+            "crates/appview-domain/src/ingest_pass.rs::tests::a_resolved_did_is_listed_on_its_own_pds (UPDATE: it currently locks in fallback-under-remaining-budget; it now also asserts the budget each plan is listed under)"
+          ],
+          "test_command": "cargo test -p appview-domain ingest_pass && cargo build -p openlore-indexer && cargo test -p cli --test indexer_per_did_resilience && cargo test -p cli --test indexer_per_did_fetch && cargo test -p cli --test indexer_per_did_config",
+          "implementation_notes": "TEST PARADIGM (mandatory): Unit tests for this step MUST be written as property-based tests using proptest strategies + state-delta assertions over a declared universe. Single-example unit tests are FALLBACK only \u2014 document why in a `// bypass:` comment if used. Acceptance scenarios are framed as properties where the contract supports it; classic scenarios are fallback. Integration and E2E tests REMAIN single-example \u2014 they verify wiring, not invariants.\nSTAGE CONTEXT: bug-prone legacy code = Stage 1 (state-delta capture of hidden mutations first).\nDESIGN: decide the budget in the functional core, not the shell. plan_listing (pure) stays the single decision point and now also says which budget the listing runs under, e.g. remaining-of-shared-deadline for OwnPds and fresh for Fallback. The crafter picks the representation (a field on the List plan or a pure function of ListingSource). fetch_repo in run.rs only interprets it: it computes a new deadline (now + per_did_time_budget) when the plan says fresh and passes the shared one otherwise. The shell never inspects the failure kind itself. Give every fallback listing a fresh budget, not only the ones after TimedOut: one rule is simpler, and the user accepted the doubled worst case. Do not change LOOKUP_TIMEOUT or the default 30 s budget. Acceptance seam: an author with did_document_of(author, DidDocPosture::Hang) (crates/test-support/src/fake_atproto.rs), fallback_is(a host that serves that author's app-signed records), setting(OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS, \"2\"), run under run_bounded with a ceiling that covers 2x budget + slack. Assert exit 0, fallback_reads_of(did) non-empty, no skips_of(did), relay provenance on the indexed rows. Review a_did_document_that_never_arrives_counts_against_the_same_budget and many_authors_never_cause_unbounded_concurrent_requests for assumptions about pass duration. Docs: amend docs/adrs/ADR-078-indexer-per-did-fault-isolation-and-bounded-fan-out.md \u00a74 (with an amendment note dated 2026-10-05 citing this RCA), docs/architecture/indexer-per-did-pds-fetch/data-models.md \u00a72 (~L75), and docs/feature/indexer-per-did-pds-fetch/design/data-models.md \u00a72. Note that this restores ADR-077 NFR-3. appview-domain is a shared crate: run its dependents.\nLESSONS: run dependent suites narrowly (indexer_ingest, appview_core, appview_search, search_hide_retracted, review_app_self_attested_readers, indexer_per_did_*) with `cargo test -p cli --test <target>`, never the whole workspace on the host (CI verifies the full suite). Build openlore-indexer (`cargo build -p openlore-indexer`) before acceptance tests so they exercise the current binary. Keep main green: the regression tests and the fix land in the same commit.",
+          "estimate_hours": 3,
+          "depends_on": [
+            "01-02"
+          ],
+          "dependencies": [
+            "01-02"
+          ],
+          "files_to_modify": [
+            "crates/appview-domain/src/ingest_pass.rs",
+            "crates/openlore-indexer/src/run.rs",
+            "tests/acceptance/indexer_per_did_resilience.rs",
+            "tests/acceptance/support/indexer_network.rs",
+            "docs/adrs/ADR-078-indexer-per-did-fault-isolation-and-bounded-fan-out.md",
+            "docs/architecture/indexer-per-did-pds-fetch/data-models.md",
+            "docs/feature/indexer-per-did-pds-fetch/design/data-models.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/openlore-indexer/src/",
+      "crates/adapter-index-store/src/",
+      "crates/claim-domain/src/",
+      "crates/appview-domain/src/",
+      "crates/test-support/src/"
+    ],
+    "test_directories": [
+      "tests/acceptance/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      "**/*.rs.bk"
+    ]
+  },
+  "validation": {
+    "status": "approved",
+    "reviewer": "nw-software-crafter-reviewer",
+    "approved_at": "2026-10-05"
+  }
+}
