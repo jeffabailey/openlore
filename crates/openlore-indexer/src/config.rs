@@ -140,9 +140,9 @@ pub fn parse_config(
     let fallback = setting(FALLBACK_VAR)
         .map(|url| fallback_url(&url, policy))
         .transpose()?;
-    let plc_endpoint = setting(PLC_ENDPOINT_VAR)
+    let plc_endpoint = lookup(PLC_ENDPOINT_VAR)
         .map_or(Ok(DEFAULT_PLC_ENDPOINT.to_string()), |url| {
-            plc_endpoint(&url, policy)
+            plc_endpoint(url.trim(), policy)
         })?;
     let max_concurrent_fetches = bounded_number(
         MAX_CONCURRENT_FETCHES_VAR,
@@ -255,8 +255,18 @@ fn fallback_url(url: &str, policy: TransportPolicy) -> Result<FallbackUrl, Confi
 }
 
 /// The PLC directory: an admissible source URL, exactly as the guarded client
-/// that resolves through it would admit it.
+/// that resolves through it would admit it. Set but blank is refused (only an
+/// UNSET variable means the default directory).
 fn plc_endpoint(url: &str, policy: TransportPolicy) -> Result<String, ConfigError> {
+    if url.is_empty() {
+        return Err(ConfigError::new(
+            PLC_ENDPOINT_VAR,
+            url,
+            format!(
+                "is set but blank; unset it to use the default directory {DEFAULT_PLC_ENDPOINT}"
+            ),
+        ));
+    }
     source_url_admissible(url, policy)
         .then(|| url.to_string())
         .ok_or_else(|| ConfigError::new(PLC_ENDPOINT_VAR, url, SOURCE_URL_PROBLEM))
@@ -404,8 +414,8 @@ mod tests {
     proptest! {
         /// Universe = the whole loaded [`IndexerConfig`]. A PLC endpoint is
         /// accepted iff the transport policy admits it (loopback http only
-        /// under the test seam); accepting it changes ONLY `plc_endpoint`
-        /// (blank -> the default directory), and refusing it names
+        /// under the test seam; a set-but-blank value is refused); accepting it
+        /// changes ONLY `plc_endpoint`, and refusing it names
         /// `PLC_ENDPOINT_VAR` and the (trimmed) value.
         #[test]
         fn a_plc_endpoint_is_accepted_iff_the_policy_admits_it(
@@ -420,19 +430,14 @@ mod tests {
             let baseline = parse(&env).expect("the seam alone loads");
             env.insert(PLC_ENDPOINT_VAR, format!("{padding}{url}{padding}"));
             let admitted = match shape {
-                PlcShape::PublicHttps | PlcShape::Blank => true,
+                PlcShape::PublicHttps => true,
                 PlcShape::LoopbackHttp => seam,
                 _ => false,
             };
             match parse(&env) {
                 Ok(config) => {
                     prop_assert!(admitted, "{:?} {:?} was accepted", shape, url);
-                    let expected_endpoint = if shape == PlcShape::Blank {
-                        DEFAULT_PLC_ENDPOINT.to_string()
-                    } else {
-                        url.clone()
-                    };
-                    let expected = IndexerConfig { plc_endpoint: expected_endpoint, ..baseline };
+                    let expected = IndexerConfig { plc_endpoint: url.clone(), ..baseline };
                     prop_assert_eq!(config, expected);
                 }
                 Err(refusal) => {
@@ -541,14 +546,16 @@ mod pass_core_properties {
         "OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS",
     ];
 
-    /// A PLC endpoint the transport policy admits under either policy.
-    fn plc_endpoint_admitted(raw: &str) -> bool {
-        let trimmed = raw.trim();
-        trimmed.is_empty()
-            || (trimmed.starts_with("https://")
-                && !trimmed.contains(['@', '?', '#'])
-                && !trimmed.starts_with("https://10.")
-                && !trimmed.starts_with("https://192.168."))
+    /// A PLC endpoint the transport policy admits under either policy: unset
+    /// (the default directory) or a public https URL; set-but-blank is refused.
+    fn plc_endpoint_admitted(raw: Option<&str>) -> bool {
+        let Some(trimmed) = raw.map(str::trim) else {
+            return true;
+        };
+        trimmed.starts_with("https://")
+            && !trimmed.contains(['@', '?', '#'])
+            && !trimmed.starts_with("https://10.")
+            && !trimmed.starts_with("https://192.168.")
     }
 
     /// The PLC dimension: admissible, plain http, a private literal,
@@ -603,13 +610,13 @@ mod pass_core_properties {
                     prop_assert!((1..=600).contains(&cfg.per_did_time_budget_secs));
                     let distinct: BTreeSet<&String> = cfg.repo_dids.iter().collect();
                     prop_assert_eq!(distinct.len(), cfg.repo_dids.len(), "duplicates collapsed");
-                    let plc = env.get("OPENLORE_INDEXER_PLC_ENDPOINT").cloned().unwrap_or_default();
-                    prop_assert!(plc_endpoint_admitted(&plc), "a refused PLC endpoint {:?} was accepted", plc);
-                    prop_assert!(!cfg.plc_endpoint.is_empty(), "blank falls back to the default");
+                    let plc = env.get("OPENLORE_INDEXER_PLC_ENDPOINT").map(String::as_str);
+                    prop_assert!(plc_endpoint_admitted(plc), "a refused PLC endpoint {:?} was accepted", plc);
+                    prop_assert!(!cfg.plc_endpoint.is_empty(), "unset takes the default directory");
                 }
                 Err(refusal) if refusal.variable == "OPENLORE_INDEXER_PLC_ENDPOINT" => {
                     let raw = env.get(&refusal.variable).cloned().unwrap_or_default();
-                    prop_assert!(!plc_endpoint_admitted(&raw), "an admissible {:?} was refused", raw);
+                    prop_assert!(!plc_endpoint_admitted(Some(&raw)), "an admissible {:?} was refused", raw);
                     prop_assert_eq!(refusal.value, raw.trim());
                 }
                 Err(refusal) => {

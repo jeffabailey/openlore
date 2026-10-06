@@ -290,6 +290,21 @@ fn decode_references(body: &serde_json::Value) -> Result<Vec<crate::ClaimReferen
         .collect()
 }
 
+/// The distinct references of a claim, keyed on what the network index stores
+/// per reference — `(referenced cid, ref_type)` — keeping the first occurrence
+/// of each in order (fix-indexer-follow-ups D3). Applied where references are
+/// INDEXED, never in [`decode_claim_record`]: the decoded claim must keep its
+/// references verbatim, or its recomputed CID would no longer match what the
+/// author signed.
+pub fn distinct_references(references: &[crate::ClaimReference]) -> Vec<crate::ClaimReference> {
+    references
+        .iter()
+        .enumerate()
+        .filter(|(index, reference)| !references[..*index].contains(reference))
+        .map(|(_, reference)| reference.clone())
+        .collect()
+}
+
 fn required_str(body: &serde_json::Value, key: &str) -> Result<String, String> {
     body.get(key)
         .and_then(|v| v.as_str())
@@ -468,6 +483,42 @@ mod tests {
             decode_ed25519_multibase(&encoded),
             Err(DecodeError::UnsupportedKeyType)
         );
+    }
+
+    fn arb_references() -> impl proptest::strategy::Strategy<Value = Vec<crate::ClaimReference>> {
+        use proptest::prelude::*;
+        let ref_type = prop_oneof![
+            Just(crate::ReferenceType::Retracts),
+            Just(crate::ReferenceType::Corrects),
+            Just(crate::ReferenceType::Counters),
+            Just(crate::ReferenceType::Supersedes),
+        ];
+        proptest::collection::vec(
+            (ref_type, 0usize..3).prop_map(|(ref_type, cid)| crate::ClaimReference {
+                ref_type,
+                cid: crate::Cid(format!("bafyref{cid}")),
+            }),
+            0..10,
+        )
+    }
+
+    proptest::proptest! {
+        /// fix-indexer-follow-ups D3 @contract-shape:pure-function — the indexed
+        /// reference set has no duplicate `(cid, ref_type)` pair, keeps the
+        /// first-occurrence order, drops no distinct reference, and is idempotent.
+        #[test]
+        fn indexed_references_have_no_duplicates_and_lose_none(references in arb_references()) {
+            let distinct = distinct_references(&references);
+
+            let mut first_seen: Vec<crate::ClaimReference> = Vec::new();
+            for reference in &references {
+                if !first_seen.contains(reference) {
+                    first_seen.push(reference.clone());
+                }
+            }
+            proptest::prop_assert_eq!(&distinct, &first_seen);
+            proptest::prop_assert_eq!(distinct_references(&distinct), distinct);
+        }
     }
 
     proptest::proptest! {

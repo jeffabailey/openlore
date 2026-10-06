@@ -573,6 +573,25 @@ impl IndexerWorld {
         self.plc_endpoint = Some(url.to_string());
     }
 
+    /// GIVEN the index cannot store `author`'s claims: a regular file sits where
+    /// that author's artifact directory (`indexed_claims/<did fs segment>`, next
+    /// to the index DB) belongs, under both the bare DID and the application
+    /// identity, so the store write for that author fails.
+    pub fn index_cannot_store_claims_of(&self, author: Author) {
+        let artifacts_root = support::index_duckdb_path(&self.env)
+            .parent()
+            .expect("the index DB has a parent directory")
+            .join("indexed_claims");
+        std::fs::create_dir_all(&artifacts_root).expect("create indexed_claims");
+        for identity in [author.did().to_string(), author.app_identity()] {
+            std::fs::write(
+                artifacts_root.join(identity.replace(':', "_")),
+                b"not a dir",
+            )
+            .expect("place a regular file at the author's artifact directory");
+        }
+    }
+
     /// GIVEN the operator set `variable` to `value`.
     pub fn setting(&mut self, variable: &str, value: &str) {
         self.extra_env

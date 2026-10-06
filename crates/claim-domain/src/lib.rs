@@ -40,8 +40,8 @@ pub use confidence::confidence_bucket;
 // Slice-05 (ADR-026): the PURE z6Mk publicKeyMultibase decode helper + its
 // value types. `verify`/`compute_cid` are UNCHANGED and reused (no second path).
 pub use decode::{
-    decode_claim_record, decode_ed25519_multibase, encode_ed25519_multibase, DecodeError, KeyId,
-    VerificationKey,
+    decode_claim_record, decode_ed25519_multibase, distinct_references, encode_ed25519_multibase,
+    DecodeError, KeyId, VerificationKey,
 };
 pub use normalize::normalize_reason;
 // ADR-071: self-attested provenance — the record ADT + the pure verdict.

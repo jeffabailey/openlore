@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use claim_domain::{Cid, ClaimReference, Did, KeyId, ReferenceType};
+use claim_domain::{distinct_references, Cid, ClaimReference, Did, KeyId, ReferenceType};
 use duckdb::Connection;
 use ports::{
     AuthorRelationship, IndexStoreError, IndexStorePort, IndexedClaim, PeerClaimProvenance,
@@ -300,71 +300,19 @@ impl IndexStorePort for IndexStoreAdapter {
         self.write_artifact(claim)?;
         let signed_record_path = Self::artifact_rel_path(claim);
 
-        let conn = self.lock()?;
-        // Replace the row + its children idempotently (de-dup by CID PK).
-        conn.execute(
-            "DELETE FROM indexed_claim_evidence WHERE cid = ?",
-            duckdb::params![claim.cid.0],
-        )
-        .map_err(|err| write_failed(claim, format!("clear evidence: {err}")))?;
-        conn.execute(
-            "DELETE FROM indexed_claim_references WHERE referencing_cid = ?",
-            duckdb::params![claim.cid.0],
-        )
-        .map_err(|err| write_failed(claim, format!("clear references: {err}")))?;
-        conn.execute(
-            "DELETE FROM indexed_claims WHERE cid = ?",
-            duckdb::params![claim.cid.0],
-        )
-        .map_err(|err| write_failed(claim, format!("clear row: {err}")))?;
-
-        conn.execute(
-            "INSERT INTO indexed_claims (\
-                cid, author_did, subject, predicate, object, confidence, \
-                composed_at, indexed_at, source_pds, signed_record_path, verified_against, \
-                provenance\
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, now(), ?, ?, ?, ?)",
-            duckdb::params![
-                claim.cid.0,
-                claim.author_did.0,
-                claim.subject,
-                claim.predicate,
-                claim.object,
-                claim.confidence,
-                claim.composed_at,
-                // source_pds is pull provenance; the IndexedClaim does not carry
-                // it (it is on RawRecord). The verified marker stands as proof;
-                // record an empty-safe provenance sentinel here for the NOT NULL.
-                "network",
-                signed_record_path,
-                claim.verified_against.0,
-                provenance_column(claim.provenance),
-            ],
-        )
-        .map_err(|err| write_failed(claim, format!("insert row: {err}")))?;
-
-        for (ordinal, evidence) in claim.evidence.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO indexed_claim_evidence (cid, evidence, ordinal) VALUES (?, ?, ?)",
-                duckdb::params![claim.cid.0, evidence, ordinal as i32],
-            )
-            .map_err(|err| write_failed(claim, format!("insert evidence: {err}")))?;
-        }
-
-        for reference in &claim.references {
-            conn.execute(
-                "INSERT INTO indexed_claim_references \
-                    (referencing_cid, referenced_cid, ref_type) VALUES (?, ?, ?)",
-                duckdb::params![
-                    claim.cid.0,
-                    reference.cid.0,
-                    reference_type_wire(reference.ref_type)
-                ],
-            )
-            .map_err(|err| write_failed(claim, format!("insert reference: {err}")))?;
-        }
-
-        Ok(())
+        // One claim's rows are replaced in ONE transaction (fix-indexer-follow-ups
+        // D3): any failing statement rolls back the whole upsert, so the prior
+        // version stays whole. No cross-claim transaction: earlier claims of the
+        // pass stay committed (ADR-078 §2). The artifact above cannot join it; a
+        // stray artifact for a rolled-back CID is overwritten on retry.
+        let mut conn = self.lock()?;
+        let transaction = conn
+            .transaction()
+            .map_err(|err| write_failed(claim, format!("begin transaction: {err}")))?;
+        replace_claim_rows(&transaction, claim, &signed_record_path)?;
+        transaction
+            .commit()
+            .map_err(|err| write_failed(claim, format!("commit: {err}")))
     }
 
     fn query_by_object(&self, object: &str) -> Result<Vec<IndexedClaim>, IndexStoreError> {
@@ -389,6 +337,84 @@ impl IndexStorePort for IndexStoreAdapter {
     fn get_by_cid(&self, cid: &Cid) -> Result<Option<IndexedClaim>, IndexStoreError> {
         Ok(self.select_rows("cid = ?", &cid.0)?.into_iter().next())
     }
+}
+
+/// Replace `claim`'s row and its evidence/reference children idempotently
+/// (de-dup by CID PK). The row is updated in place, never deleted: DuckDB's
+/// foreign-key check still sees children deleted earlier in the same
+/// transaction, and it rewrites an update of an INDEXED column as delete +
+/// insert. The indexed columns (author, subject, object, composed_at) are part
+/// of the content the CID addresses, so for one CID they never change. Each distinct reference is inserted once: a remote
+/// record may list one twice, and the references PK forbids a repeat.
+fn replace_claim_rows(
+    conn: &Connection,
+    claim: &IndexedClaim,
+    signed_record_path: &str,
+) -> Result<(), IndexStoreError> {
+    let execute = |sql: &str, params: &[&dyn duckdb::ToSql], what: &str| {
+        conn.execute(sql, params)
+            .map(drop)
+            .map_err(|err| write_failed(claim, format!("{what}: {err}")))
+    };
+    execute(
+        "DELETE FROM indexed_claim_evidence WHERE cid = ?",
+        duckdb::params![claim.cid.0],
+        "clear evidence",
+    )?;
+    execute(
+        "DELETE FROM indexed_claim_references WHERE referencing_cid = ?",
+        duckdb::params![claim.cid.0],
+        "clear references",
+    )?;
+    execute(
+        "INSERT INTO indexed_claims (\
+            cid, author_did, subject, predicate, object, confidence, \
+            composed_at, indexed_at, source_pds, signed_record_path, verified_against, \
+            provenance\
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, now(), ?, ?, ?, ?) \
+         ON CONFLICT (cid) DO UPDATE SET \
+            predicate = excluded.predicate, confidence = excluded.confidence, \
+            indexed_at = excluded.indexed_at, source_pds = excluded.source_pds, \
+            signed_record_path = excluded.signed_record_path, \
+            verified_against = excluded.verified_against, provenance = excluded.provenance",
+        duckdb::params![
+            claim.cid.0,
+            claim.author_did.0,
+            claim.subject,
+            claim.predicate,
+            claim.object,
+            claim.confidence,
+            claim.composed_at,
+            // source_pds is pull provenance; the IndexedClaim does not carry
+            // it (it is on RawRecord). The verified marker stands as proof;
+            // record an empty-safe provenance sentinel here for the NOT NULL.
+            "network",
+            signed_record_path,
+            claim.verified_against.0,
+            provenance_column(claim.provenance),
+        ],
+        "upsert row",
+    )?;
+    for (ordinal, evidence) in claim.evidence.iter().enumerate() {
+        execute(
+            "INSERT INTO indexed_claim_evidence (cid, evidence, ordinal) VALUES (?, ?, ?)",
+            duckdb::params![claim.cid.0, evidence, ordinal as i32],
+            "insert evidence",
+        )?;
+    }
+    for reference in distinct_references(&claim.references) {
+        execute(
+            "INSERT INTO indexed_claim_references \
+                (referencing_cid, referenced_cid, ref_type) VALUES (?, ?, ?)",
+            duckdb::params![
+                claim.cid.0,
+                reference.cid.0,
+                reference_type_wire(reference.ref_type)
+            ],
+            "insert reference",
+        )?;
+    }
+    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -1029,6 +1055,228 @@ mod contributor_match_properties {
                 .collect();
             expected.sort();
             prop_assert_eq!(found_cids, expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod atomic_upsert_properties {
+    //! fix-indexer-follow-ups D3 @contract-shape:bounded-change. Universe = every
+    //! row the store holds for the TARGET claim and for an unrelated NEIGHBOUR
+    //! claim across `indexed_claims`, `indexed_claim_evidence` and
+    //! `indexed_claim_references`. An upsert may change only the TARGET's rows,
+    //! and it changes them all or none: a remote record listing one reference
+    //! twice is indexed whole (each distinct reference once), and a statement
+    //! failing inside an upsert leaves the prior version (or its absence) as it was.
+
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use proptest::prelude::*;
+
+    const TARGET: &str = "bafytarget";
+    const NEIGHBOUR: &str = "bafyneighbour";
+    const REFERENCED: [&str; 3] = ["bafyref0", "bafyref1", "bafyref2"];
+    const REF_TYPES: [ReferenceType; 4] = [
+        ReferenceType::Retracts,
+        ReferenceType::Corrects,
+        ReferenceType::Counters,
+        ReferenceType::Supersedes,
+    ];
+
+    /// Everything the store holds for one CID, in a comparable form.
+    #[derive(Debug, Clone, PartialEq)]
+    struct StoredClaim {
+        row: Option<(String, String, String)>,
+        evidence: Vec<(i32, String)>,
+        references: Vec<(String, String)>,
+    }
+
+    fn stored(store: &IndexStoreAdapter, cid: &str) -> StoredClaim {
+        let conn = store.lock().expect("lock");
+        let row = conn
+            .query_row(
+                "SELECT subject, object, verified_against FROM indexed_claims WHERE cid = ?",
+                duckdb::params![cid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        let evidence = collect_pairs(
+            &conn,
+            "SELECT ordinal, evidence FROM indexed_claim_evidence WHERE cid = ? ORDER BY ordinal",
+            cid,
+        );
+        let references = collect_pairs(
+            &conn,
+            "SELECT referenced_cid, ref_type FROM indexed_claim_references \
+             WHERE referencing_cid = ? ORDER BY referenced_cid, ref_type",
+            cid,
+        );
+        StoredClaim {
+            row,
+            evidence,
+            references,
+        }
+    }
+
+    fn collect_pairs<A: duckdb::types::FromSql, B: duckdb::types::FromSql>(
+        conn: &Connection,
+        sql: &str,
+        cid: &str,
+    ) -> Vec<(A, B)> {
+        let mut stmt = conn.prepare(sql).expect("prepare");
+        stmt.query_map(duckdb::params![cid], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("query")
+            .map(|row| row.expect("row"))
+            .collect()
+    }
+
+    fn reference((cid, ref_type): (usize, usize)) -> ClaimReference {
+        ClaimReference {
+            ref_type: REF_TYPES[ref_type],
+            cid: Cid(REFERENCED[cid].to_string()),
+        }
+    }
+
+    /// One version of a claim. Versions of one CID share its content (the CID
+    /// addresses it) and differ in what a later pass may legitimately change:
+    /// the key it verified against, its evidence and references as listed.
+    fn claim(cid: &str, version: &str, picks: &[(usize, usize)], evidence: usize) -> IndexedClaim {
+        IndexedClaim {
+            cid: Cid(cid.to_string()),
+            verified_against: KeyId(format!("did:plc:priya-test#{version}")),
+            evidence: (0..evidence)
+                .map(|i| format!("https://example.test/{version}/{i}"))
+                .collect(),
+            references: picks.iter().copied().map(reference).collect(),
+            ..super::tests::sample_claim()
+        }
+    }
+
+    /// What the store must hold for `claim` once indexed: each distinct
+    /// reference exactly once.
+    fn whole(claim: &IndexedClaim) -> StoredClaim {
+        let distinct: BTreeSet<(String, String)> = claim
+            .references
+            .iter()
+            .map(|r| (r.cid.0.clone(), reference_type_wire(r.ref_type).to_string()))
+            .collect();
+        StoredClaim {
+            row: Some((
+                claim.subject.clone(),
+                claim.object.clone(),
+                claim.verified_against.0.clone(),
+            )),
+            evidence: claim
+                .evidence
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i32::try_from(i).expect("small"), e.clone()))
+                .collect(),
+            references: distinct.into_iter().collect(),
+        }
+    }
+
+    fn arb_picks() -> impl Strategy<Value = Vec<(usize, usize)>> {
+        proptest::collection::vec((0..REFERENCED.len(), 0..REF_TYPES.len()), 0..5)
+    }
+
+    /// References with at least one exact duplicate inserted at any position.
+    fn arb_picks_with_a_duplicate() -> impl Strategy<Value = Vec<(usize, usize)>> {
+        (
+            proptest::collection::vec((0..REFERENCED.len(), 0..REF_TYPES.len()), 1..5),
+            any::<proptest::sample::Index>(),
+            any::<proptest::sample::Index>(),
+        )
+            .prop_map(|(mut picks, which, at)| {
+                let duplicate = picks[which.index(picks.len())];
+                picks.insert(at.index(picks.len() + 1), duplicate);
+                picks
+            })
+    }
+
+    /// A prior version of TARGET (distinct references) or none.
+    fn arb_prior() -> impl Strategy<Value = Option<(Vec<(usize, usize)>, usize)>> {
+        proptest::option::of((
+            proptest::collection::btree_set((0..REFERENCED.len(), 0..REF_TYPES.len()), 0..4)
+                .prop_map(|set| set.into_iter().collect()),
+            0..3usize,
+        ))
+    }
+
+    /// GIVEN a store holding NEIGHBOUR and, optionally, a prior TARGET.
+    fn given_a_store(
+        neighbour_picks: &[(usize, usize)],
+        prior: Option<&(Vec<(usize, usize)>, usize)>,
+    ) -> (tempfile::TempDir, IndexStoreAdapter) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+        let neighbour = claim(NEIGHBOUR, "neighbour", &dedupe(neighbour_picks), 1);
+        store.upsert(&neighbour).expect("upsert neighbour");
+        if let Some((picks, evidence)) = prior {
+            store
+                .upsert(&claim(TARGET, "prior", picks, *evidence))
+                .expect("upsert prior");
+        }
+        (dir, store)
+    }
+
+    fn dedupe(picks: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        picks
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        /// A claim listing a reference twice is indexed whole — on a first
+        /// upsert and on a re-upsert over a prior version — and nothing else changes.
+        #[test]
+        fn upsert_with_duplicate_references_keeps_the_claim_whole(
+            neighbour_picks in arb_picks(),
+            prior in arb_prior(),
+            picks in arb_picks_with_a_duplicate(),
+            evidence in 0..3usize,
+        ) {
+            let (_dir, store) = given_a_store(&neighbour_picks, prior.as_ref());
+            let neighbour_before = stored(&store, NEIGHBOUR);
+            let incoming = claim(TARGET, "current", &picks, evidence);
+
+            let outcome = store.upsert(&incoming);
+
+            prop_assert!(outcome.is_ok(), "{:?}", outcome);
+            prop_assert_eq!(stored(&store, TARGET), whole(&incoming));
+            prop_assert_eq!(stored(&store, NEIGHBOUR), neighbour_before);
+        }
+
+        /// When a statement inside one upsert fails (here the `verified_against`
+        /// CHECK on the row insert, after the old rows were cleared), none of that
+        /// upsert's changes are visible: the prior version (or its absence) and
+        /// every other claim are exactly as they were.
+        #[test]
+        fn a_failing_upsert_leaves_the_prior_version_unchanged(
+            neighbour_picks in arb_picks(),
+            prior in arb_prior(),
+            picks in arb_picks(),
+            evidence in 0..3usize,
+        ) {
+            let (_dir, store) = given_a_store(&neighbour_picks, prior.as_ref());
+            let target_before = stored(&store, TARGET);
+            let neighbour_before = stored(&store, NEIGHBOUR);
+            let unstorable = IndexedClaim {
+                verified_against: KeyId(String::new()),
+                ..claim(TARGET, "current", &dedupe(&picks), evidence)
+            };
+
+            let outcome = store.upsert(&unstorable);
+
+            prop_assert!(outcome.is_err(), "an empty verified_against must not be stored");
+            prop_assert_eq!(stored(&store, TARGET), target_before);
+            prop_assert_eq!(stored(&store, NEIGHBOUR), neighbour_before);
         }
     }
 }

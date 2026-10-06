@@ -285,6 +285,40 @@ fn a_skipped_authors_earlier_claims_stay_searchable() {
     assert_eq!(dmitri_rows.len(), 2, "{}", found.stdout);
 }
 
+/// IPF-14b (fix-indexer-follow-ups D3; GUARD for ADR-078 §2)
+/// ```gherkin
+/// @US-IPF-002 @ADR-078 @error @real-io @regression @contract-shape:bounded-change
+/// Scenario: A store failure for one author keeps earlier authors' claims searchable
+///   Given Priya, then Dmitri, then Jeff are configured in that order
+///   And the index cannot store Dmitri's claims
+///   When one ingest pass runs
+///   Then the pass exits 2
+///   And Maria still finds Priya's claims when she searches for her work
+/// ```
+#[test]
+fn a_store_failure_for_one_author_keeps_earlier_authors_claims_searchable() {
+    let world = given_three_authors_publish_on_their_own_pdses();
+    world.index_cannot_store_claims_of(Author::Dmitri);
+
+    let pass = world.one_ingest_pass_runs();
+
+    assert_eq!(
+        pass.status,
+        2,
+        "a store write failure is fatal\n{}",
+        pass.dump()
+    );
+    assert_eq!(world.rows_of(Author::Priya).len(), 3, "{}", pass.dump());
+    assert!(world.rows_of(Author::Dmitri).is_empty(), "{}", pass.dump());
+    let found = world.maria_searches(&["--subject", CARGO_PIN_REPRODUCIBLE_BUILDS.subject]);
+    assert_eq!(found.status, 0, "{}\n{}", found.stdout, found.stderr);
+    let priya_rows = search_rows(&found.stdout)
+        .into_iter()
+        .filter(|r| r.author_did == Author::Priya.did())
+        .count();
+    assert_eq!(priya_rows, 2, "{}", found.stdout);
+}
+
 /// IPF-15
 /// ```gherkin
 /// @US-IPF-002 @AC-002.5 @NFR-2 @error @real-io @contract-shape:bounded-change

@@ -170,45 +170,31 @@ fn a_malformed_or_unsafe_plc_endpoint_is_explained_at_startup() {
     }
 }
 
-/// IPF-22c (fix-indexer-follow-ups D2)
+/// IPF-22c (fix-indexer-follow-ups D2 follow-up)
 /// ```gherkin
-/// @US-IPF-004 @AC-004.3 @infrastructure @boundary @real-io @regression @contract-shape:bounded-change
-/// Scenario Outline: A blank PLC directory endpoint uses the default directory
+/// @US-IPF-004 @AC-004.2 @infrastructure @error @boundary @real-io @regression @contract-shape:unbounded-preservation
+/// Scenario Outline: A blank PLC directory endpoint is refused at startup
 ///   Given no repo DIDs are configured
-///   And OPENLORE_INDEXER_PLC_ENDPOINT is "<blank>"
-///   When one ingest pass runs
-///   Then the loaded configuration reports the default directory https://plc.directory
-///   And the configuration does not refuse it
+///   And OPENLORE_INDEXER_PLC_ENDPOINT is set to "<blank>"
+///   When Jeff starts the indexer
+///   Then it refuses to start, naming OPENLORE_INDEXER_PLC_ENDPOINT
+///   And no index is created and nothing is contacted
 ///   Examples:
 ///     | blank   |
 ///     | (empty) |
 ///     | "   "   |
+/// (An UNSET variable still means https://plc.directory.)
 /// ```
 #[test]
-fn a_blank_plc_endpoint_uses_the_default_directory() {
+fn a_blank_plc_endpoint_is_refused_at_startup() {
     for blank in ["", "   "] {
         let mut world = IndexerWorld::configured_with(&[]);
         world.repo_dids_text_is("");
         world.directory_url_is(blank);
 
-        let pass = world.one_ingest_pass_runs();
+        let report = world.jeff_starts_the_indexer();
 
-        let loaded = pass
-            .config_loaded()
-            .unwrap_or_else(|| panic!("indexer.config.loaded is reported\n{}", pass.dump()));
-        assert_eq!(loaded["plc_endpoint"], "https://plc.directory", "{loaded}");
-        // The config is not refused; the identity_resolve readiness probe reads
-        // the variable itself and is out of this scenario's scope.
-        assert!(
-            pass.startup_refusal()
-                .is_none_or(|refusal| refusal["adapter"] != "config"),
-            "a blank endpoint is not refused by the configuration\n{}",
-            pass.dump()
-        );
-        assert!(
-            world.net.requests().is_empty(),
-            "with no repo DIDs nothing is contacted"
-        );
+        then_start_is_refused_naming(&world, &report, var::PLC, blank.trim());
     }
 }
 
