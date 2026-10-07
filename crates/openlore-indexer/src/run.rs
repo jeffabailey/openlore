@@ -50,7 +50,7 @@ use claim_domain::{ClaimRecord, Did, VerificationKey};
 use ports::net_policy::TransportPolicy;
 use ports::{
     ClockPort, IdentityLookupError, IdentityLookupPort, IdentityResolvePort, IndexPurgePort,
-    IndexStorePort, IngestError, IngestSourcePort, RepoListingPort,
+    IndexStorePort, IngestError, IngestSourcePort, RepoListingPort, SearchDimension,
 };
 
 use crate::config::{
@@ -66,7 +66,7 @@ use crate::probe_gauntlet::{
     capability_boundary_probe, check_probe, control_channel_probe, origin_classification_probe,
     probe_gauntlet, ProbeRefusal,
 };
-use crate::search_handler::{search_handler, unreadable_index, SharedIndexReads};
+use crate::search_handler::{search_handler, unreadable_index, SearchTruncated, SharedIndexReads};
 use crate::Command;
 use appview_domain::pass_runner::PassId;
 
@@ -649,7 +649,10 @@ fn emit_pass_config_loaded(
 /// Bind the query server and answer searches (and `/healthz`, from the
 /// runner's `status`) until the process is killed.
 fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
-    let handler = search_handler(Arc::clone(&wiring.index_reads));
+    let handler = search_handler(
+        Arc::clone(&wiring.index_reads),
+        Arc::new(emit_search_truncated),
+    );
 
     let listen_addr: std::net::SocketAddr = match wiring.listen_addr.parse() {
         Ok(addr) => addr,
@@ -1056,6 +1059,21 @@ fn pass_summary_event(work: &PassWork, exit: PassExit, started: Instant) -> serd
         event["cause"] = cause.token().into();
     }
     event
+}
+
+/// Log a search cut at the row cap: the dimension and the cap, never the
+/// searched value (ADR-083 §3).
+fn emit_search_truncated(cut: SearchTruncated) {
+    let dimension = match cut.dimension {
+        SearchDimension::Object => "object",
+        SearchDimension::Subject => "subject",
+        SearchDimension::Contributor => "contributor",
+    };
+    emit(serde_json::json!({
+        "event": "indexer.search.truncated",
+        "dimension": dimension,
+        "cap": cut.cap,
+    }));
 }
 
 /// Print one structured event as a stdout line.

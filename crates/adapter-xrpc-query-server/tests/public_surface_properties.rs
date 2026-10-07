@@ -25,12 +25,20 @@ enum Admission {
     BadRequest,
 }
 
-fn sut_route(_method: &str, _path: &str) -> Route {
-    todo!("DELIVER 02-04: bind to adapter-xrpc-query-server routing (ADR-083 §1)")
+fn sut_route(method: &str, path: &str) -> Route {
+    match adapter_xrpc_query_server::public_route(method, path) {
+        adapter_xrpc_query_server::PublicRoute::Search => Route::Search,
+        adapter_xrpc_query_server::PublicRoute::Health => Route::Health,
+        adapter_xrpc_query_server::PublicRoute::NotFound => Route::NotFound,
+    }
 }
 
-fn sut_admit(_body_len: usize, _value_len: usize) -> Admission {
-    todo!("DELIVER 02-04: bind to the public request bounds (ADR-083 §3)")
+fn sut_admit(body_len: usize, value_len: usize) -> Admission {
+    match adapter_xrpc_query_server::admit(body_len, value_len) {
+        adapter_xrpc_query_server::Admission::Admitted => Admission::Admitted,
+        adapter_xrpc_query_server::Admission::TooLarge => Admission::TooLarge,
+        adapter_xrpc_query_server::Admission::BadRequest => Admission::BadRequest,
+    }
 }
 
 proptest! {
@@ -40,7 +48,6 @@ proptest! {
     /// Of every method and path, exactly POST searchClaims is search and GET
     /// /healthz is health; everything else (near misses included) is not found.
     #[test]
-    #[ignore = "DELIVER 02-04: public route allowlist"]
     fn only_two_routes_exist_on_the_public_listener(
         method in prop::sample::select(vec!["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "post"]),
         path in prop_oneof![
@@ -65,7 +72,6 @@ proptest! {
     /// A body over 8 KiB is too large (checked first); otherwise a value over
     /// 512 bytes is a bad request; otherwise the search is admitted.
     #[test]
-    #[ignore = "DELIVER 02-04: public request bounds"]
     fn requests_are_admitted_exactly_within_their_bounds(body_len in 0usize..20_000, value_len in 0usize..2_000) {
         let expected = if body_len > 8192 {
             Admission::TooLarge

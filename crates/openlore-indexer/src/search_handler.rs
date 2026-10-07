@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use adapter_index_store::SEARCH_ROW_CAP;
 use adapter_xrpc_query_server::{IndexUnavailable, QueryHandler};
 use appview_domain::{compose_results, NetworkSearchResult};
 use claim_domain::{Cid, Did};
@@ -24,9 +25,30 @@ use ports::{IndexReadPort, IndexStoreError, IndexedClaim, SearchDimension};
 /// index handle (ADR-080), seen through its read port only.
 pub type SharedIndexReads = Arc<dyn IndexReadPort + Send + Sync>;
 
-/// The `serve` query handler: every request is answered from `reads`.
-pub fn search_handler(reads: SharedIndexReads) -> QueryHandler {
-    Arc::new(move |request: SearchQueryRequest| handle_search(reads.as_ref(), request))
+/// A search that matched more than [`SEARCH_ROW_CAP`] claims and was cut
+/// there (ADR-083 §3). Carries the dimension and the cap only: never the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchTruncated {
+    pub dimension: SearchDimension,
+    pub cap: usize,
+}
+
+/// Where a cut search is reported (the composition root logs it).
+pub type TruncationLog = Arc<dyn Fn(SearchTruncated) + Send + Sync>;
+
+/// The `serve` query handler: every request is answered from `reads`; a
+/// search cut at the row cap is reported to `on_truncated`.
+pub fn search_handler(reads: SharedIndexReads, on_truncated: TruncationLog) -> QueryHandler {
+    Arc::new(move |request: SearchQueryRequest| {
+        handle_search(reads.as_ref(), request, on_truncated.as_ref())
+    })
+}
+
+/// Keep at most [`SEARCH_ROW_CAP`] rows, saying whether any were cut.
+fn capped(mut rows: Vec<IndexedClaim>) -> (Vec<IndexedClaim>, bool) {
+    let cut = rows.len() > SEARCH_ROW_CAP;
+    rows.truncate(SEARCH_ROW_CAP);
+    (rows, cut)
 }
 
 /// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=search_store_read_fails`,
@@ -70,6 +92,7 @@ impl IndexReadPort for UnreadableIndex {
 fn handle_search(
     reads: &dyn IndexReadPort,
     request: SearchQueryRequest,
+    on_truncated: &(dyn Fn(SearchTruncated) + Send + Sync),
 ) -> Result<SearchQueryResponse, IndexUnavailable> {
     let dimension = from_dto_dimension(request.dimension);
     let rows = match dimension {
@@ -77,7 +100,13 @@ fn handle_search(
         SearchDimension::Subject => reads.query_by_subject(&request.value),
         SearchDimension::Contributor => reads.query_by_contributor(&Did(request.value.clone())),
     };
-    let rows = rows.map_err(|_store_error| IndexUnavailable)?;
+    let (rows, cut) = capped(rows.map_err(|_store_error| IndexUnavailable)?);
+    if cut {
+        on_truncated(SearchTruncated {
+            dimension,
+            cap: SEARCH_ROW_CAP,
+        });
+    }
 
     // The per-author grouping + the distinct-author COUNT come from the PURE
     // composition (the SAME core proven at layer 2 by AVC-2). The author ORDER on

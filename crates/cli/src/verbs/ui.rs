@@ -107,7 +107,7 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
             "event": "viewer.index_query.probe",
             "refused": matches!(outcome, ProbeOutcome::Refused { .. }),
         });
-        println!("{probe_event}");
+        announce(&probe_event.to_string());
     }
 
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", args.port)
@@ -151,15 +151,13 @@ fn serve(paths: &OpenLorePaths, args: &UiArgs) -> Result<i32> {
             "event": "viewer.serve.listening",
             "addr": bound_addr,
         });
-        println!("{listening}");
+        announce(&listening.to_string());
 
         // Read-only launch notice (AC-001.2): now that the loopback probe has
         // passed, tell the operator — up front — the loopback listen URL, that the
         // view is read-only, and that no signing key is loaded. The exact strings
         // are a PURE `viewer-domain` formatting fn (unit/property-pinned).
-        println!("{}", read_only_launch_banner(&bound_addr));
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        announce(&read_only_launch_banner(&bound_addr));
 
         match server.serve().await {
             Ok(()) => 0,
@@ -208,6 +206,17 @@ fn emit_startup_refused(outcome: &ProbeOutcome) {
 /// empty/unset value ⇒ the index is UNCONFIGURED (the SOFT `/search` Unavailable
 /// degradation WITHOUT a network call, I-NS-2).
 const INDEXER_URL_ENV: &str = "OPENLORE_INDEXER_URL";
+
+/// Print one startup line to stdout and flush it. A closed stdout (a
+/// supervisor that stopped reading after the listening event, `| head -1`) is
+/// ignored: the viewer keeps serving instead of dying on a broken pipe the way
+/// `println!` would.
+fn announce(line: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{line}");
+    let _ = stdout.flush();
+}
 
 /// Resolve the READ-ONLY `IndexQueryPort` for the `/search` route from the slice-05
 /// indexer-URL seam (OD-NS-6). Returns `Some(adapter)` wired at the configured URL,

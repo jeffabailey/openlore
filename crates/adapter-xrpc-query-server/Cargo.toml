@@ -41,7 +41,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
-tokio = { workspace = true, features = ["rt", "net", "macros"] }
+tokio = { workspace = true, features = ["rt", "net", "macros", "sync"] }
 
 [dev-dependencies]
 # indexer-deployment CORE-9 / CORE-9b (route allowlist, request bounds):

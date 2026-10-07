@@ -298,7 +298,8 @@ impl IndexStoreAdapter {
         let sql = format!(
             "SELECT author_did, cid, subject, predicate, object, confidence, \
                     composed_at, verified_against, COALESCE(provenance, 'app-signed') \
-             FROM indexed_claims WHERE {where_clause}"
+             FROM indexed_claims WHERE {where_clause} \
+             ORDER BY cid LIMIT {SEARCH_ROWS_READ}"
         );
         let mut stmt = conn
             .prepare(&sql)
@@ -501,6 +502,14 @@ impl IndexStorePort for IndexStoreAdapter {
             })
     }
 }
+
+/// The most rows one search answers with (ADR-083 §3).
+pub const SEARCH_ROW_CAP: usize = 1000;
+
+/// The most rows one read returns: the cap plus one, so a reader can tell a
+/// search that was cut from one that matched exactly [`SEARCH_ROW_CAP`]. The
+/// bound is the SQL `LIMIT`, never a filter over an unbounded read.
+const SEARCH_ROWS_READ: usize = SEARCH_ROW_CAP + 1;
 
 /// The read side (B7): every method only SELECTs, so the whole store is left
 /// exactly as it was found (unbounded-preservation).

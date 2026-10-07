@@ -70,7 +70,6 @@ fn search_body_of_size(total: usize) -> Vec<u8> {
 ///     | DELETE /                                           |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: binary allowlist = searchClaims POST + /healthz GET; control never on TCP (B3, B8)"]
 fn anyone_trying_to_write_or_to_reach_anything_but_search_and_health_is_refused() {
     let (world, live) = given_a_live_index_with_priya_and_dmitri_indexed();
     let snapshot = |live: &LiveIndex| -> HashMap<String, Vec<String>> {
@@ -135,7 +134,6 @@ fn anyone_trying_to_write_or_to_reach_anything_but_search_and_health_is_refused(
 ///     | a search value of 513 bytes           | 400 bad request   |
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: body ≤ 8 KiB → 413, value ≤ 512 B → 400 (B8)"]
 fn oversized_requests_are_refused_at_the_boundary_not_one_byte_early() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = given_the_index_is_live_listing(&world, &[Author::Priya]);
@@ -165,7 +163,6 @@ fn oversized_requests_are_refused_at_the_boundary_not_one_byte_early() {
 ///   And the index logs that a search was cut at 1000 results, without the search value
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: SQL LIMIT 1000 + indexer.search.truncated (B8); slow (~1001 records)"]
 fn a_search_matching_more_than_1000_claims_returns_1000_and_logs_the_cut_without_the_query() {
     let world = IndexerWorld::configured_with(&[Author::Priya]);
     let subjects: Vec<String> = (0..1001)
@@ -216,7 +213,6 @@ fn a_search_matching_more_than_1000_claims_returns_1000_and_logs_the_cut_without
 ///   And the index still reports healthy and was never restarted
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: connection cap + header timeout keep a burst bounded (B8)"]
 fn a_burst_of_100_searches_in_10_seconds_is_answered_and_leaves_the_index_healthy() {
     let (_world, live) = given_a_live_index_with_priya_and_dmitri_indexed();
 
@@ -319,7 +315,6 @@ fn the_index_refuses_settings_outside_their_range_and_accepts_their_limits() {
 ///   Then the index is healthy, an empty search answers, and the pass exits 3 with one summary
 /// ```
 #[test]
-#[ignore = "DELIVER 02-04: serve smoke parity with the CI image smoke (B1-B5, B8, B9, B12)"]
 fn the_production_configuration_starts_ready_and_runs_a_pass() {
     let world = given_authors_publish_on_their_own_pdses();
     let live = LiveIndex::deploy(&world, Deployment::listing(&[Author::Ghost.did()]));

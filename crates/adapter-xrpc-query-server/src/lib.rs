@@ -31,16 +31,18 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use appview_domain::health::HealthResponse;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::{TokioIo, TokioTimer};
 use lexicon::{SearchDimensionDto, SearchQueryRequest, SearchQueryResponse};
 use ports::{ProbeOutcome, ProbeRefusalReason};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 /// The query handler the composition root wires: a pure-by-contract
 /// `SearchQueryRequest -> SearchQueryResponse` that reads the `IndexStorePort` +
@@ -65,6 +67,68 @@ pub type HealthHandler = Arc<dyn Fn() -> HealthResponse + Send + Sync>;
 
 /// The public health route.
 pub const HEALTH_PATH: &str = "/healthz";
+
+/// The largest request body the public listener reads (ADR-083 §3): one byte
+/// more is 413, and the body is never buffered past it.
+pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024;
+
+/// The longest search `value`, in bytes (ADR-083 §3): one byte more is 400.
+pub const MAX_SEARCH_VALUE_BYTES: usize = 512;
+
+/// How long a connection may take to send its request headers (ADR-083 §3).
+pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many connections are served at once (ADR-083 §3); further accepts wait.
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+/// What the public listener does with a method and path (ADR-083 §1). The
+/// table is closed: exactly two routes exist, everything else is not found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicRoute {
+    /// `POST /xrpc/org.openlore.appview.searchClaims`.
+    Search,
+    /// `GET /healthz`.
+    Health,
+    /// Any other method or path, near misses included.
+    NotFound,
+}
+
+/// Route a request by its exact method and path (case-sensitive, no trailing
+/// slash tolerance): the binary's own allowlist, independent of Caddy.
+#[must_use]
+pub fn public_route(method: &str, path: &str) -> PublicRoute {
+    let is_search_path = path
+        .strip_prefix("/xrpc/")
+        .is_some_and(|nsid| nsid == lexicon::SEARCH_CLAIMS_NSID);
+    match method {
+        "POST" if is_search_path => PublicRoute::Search,
+        "GET" if path == HEALTH_PATH => PublicRoute::Health,
+        _ => PublicRoute::NotFound,
+    }
+}
+
+/// Whether a search request is within the public bounds (ADR-083 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// Within both bounds: the search runs.
+    Admitted,
+    /// The body is over [`MAX_REQUEST_BODY_BYTES`] (413; checked first).
+    TooLarge,
+    /// The `value` is over [`MAX_SEARCH_VALUE_BYTES`] (400).
+    BadRequest,
+}
+
+/// Admit a search by its body length and its `value` length, both in bytes.
+#[must_use]
+pub fn admit(body_len: usize, value_len: usize) -> Admission {
+    if body_len > MAX_REQUEST_BODY_BYTES {
+        Admission::TooLarge
+    } else if value_len > MAX_SEARCH_VALUE_BYTES {
+        Admission::BadRequest
+    } else {
+        Admission::Admitted
+    }
+}
 
 /// Why the XRPC query server failed to bind / serve.
 #[derive(Debug, thiserror::Error)]
@@ -192,7 +256,14 @@ impl XrpcQueryServer {
     /// parses the request, calls the wired handler, and serializes the lexicon
     /// `SearchQueryResponse`. Must be called inside a tokio runtime.
     pub async fn serve(self) -> Result<(), QueryServerError> {
+        let connection_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
         loop {
+            let slot = Arc::clone(&connection_slots)
+                .acquire_owned()
+                .await
+                .map_err(|err| QueryServerError::ServeFailed {
+                    message: format!("connection slots: {err}"),
+                })?;
             let (stream, _peer) =
                 self.listener
                     .accept()
@@ -207,51 +278,66 @@ impl XrpcQueryServer {
                 let service =
                     service_fn(move |req| route(req, Arc::clone(&handler), health.clone()));
                 let _ = hyper::server::conn::http1::Builder::new()
+                    .timer(TokioTimer::new())
+                    .header_read_timeout(HEADER_READ_TIMEOUT)
                     .serve_connection(io, service)
                     .await;
+                drop(slot);
             });
         }
     }
 }
 
-/// Route one HTTP request: `POST /xrpc/org.openlore.appview.searchClaims`
-/// (with a JSON `SearchQueryRequest` body) and, when wired, `GET /healthz` are
-/// served; everything else is 404. The handler is called for a valid request;
-/// its `SearchQueryResponse` is serialized as the JSON body.
+/// Route one HTTP request through the public allowlist ([`public_route`]):
+/// `GET /healthz` (when wired) and `POST searchClaims` are served; everything
+/// else is 404.
 async fn route(
     req: Request<Incoming>,
     handler: QueryHandler,
     health: Option<HealthHandler>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    let path = req.uri().path().to_string();
-    if req.method() == Method::GET && path == HEALTH_PATH {
-        return Ok(health.map_or_else(not_found, |health| health_answer(&health())));
-    }
-    let is_search =
-        req.method() == Method::POST && path == format!("/xrpc/{}", lexicon::SEARCH_CLAIMS_NSID);
-    if !is_search {
-        return Ok(not_found());
-    }
-    let body_bytes = match req.into_body().collect().await {
+    Ok(
+        match public_route(req.method().as_str(), req.uri().path()) {
+            PublicRoute::Health => health.map_or_else(not_found, |health| health_answer(&health())),
+            PublicRoute::Search => search(req, &handler).await,
+            PublicRoute::NotFound => not_found(),
+        },
+    )
+}
+
+/// Answer one search: read the body up to [`MAX_REQUEST_BODY_BYTES`], parse it,
+/// admit it ([`admit`]), and serialize the handler's response.
+async fn search(req: Request<Incoming>, handler: &QueryHandler) -> Response<Full<Bytes>> {
+    let body_bytes = match Limited::new(req.into_body(), MAX_REQUEST_BODY_BYTES)
+        .collect()
+        .await
+    {
         Ok(collected) => collected.to_bytes(),
-        Err(err) => return Ok(bad_request(&format!("read body: {err}"))),
+        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => return too_large(),
+        Err(err) => return bad_request(&format!("read body: {err}")),
     };
     let request: SearchQueryRequest = match serde_json::from_slice(&body_bytes) {
         Ok(parsed) => parsed,
-        Err(err) => return Ok(bad_request(&format!("parse request: {err}"))),
+        Err(err) => return bad_request(&format!("parse request: {err}")),
     };
+    match admit(body_bytes.len(), request.value.len()) {
+        Admission::Admitted => {}
+        Admission::TooLarge => return too_large(),
+        Admission::BadRequest => {
+            return bad_request(&format!("value exceeds {MAX_SEARCH_VALUE_BYTES} bytes"))
+        }
+    }
     let Ok(response) = handler(request) else {
-        return Ok(index_unavailable());
+        return index_unavailable();
     };
-    let json = match serde_json::to_vec(&response) {
-        Ok(bytes) => bytes,
-        Err(err) => return Ok(internal_error(&format!("serialize response: {err}"))),
-    };
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Full::new(Bytes::from(json)))
-        .expect("static response is well-formed"))
+    match serde_json::to_vec(&response) {
+        Ok(json) => Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(json)))
+            .expect("static response is well-formed"),
+        Err(err) => internal_error(&format!("serialize response: {err}")),
+    }
 }
 
 /// The health projection as an HTTP response.
@@ -267,6 +353,15 @@ fn not_found() -> Response<Full<Bytes>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(Full::new(Bytes::from_static(b"not found")))
+        .expect("static response is well-formed")
+}
+
+fn too_large() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::PAYLOAD_TOO_LARGE)
+        .body(Full::new(Bytes::from(format!(
+            "request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"
+        ))))
         .expect("static response is well-formed")
 }
 
