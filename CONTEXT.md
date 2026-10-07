@@ -1,14 +1,14 @@
 # OpenLore — Resume Context
 
 ## Current Task
-Nothing in flight. `bluesky-claim-review-app`, `indexer-per-did-pds-fetch` and `fix-indexer-follow-ups` are all delivered. History: `docs/evolution/`.
+Nothing in flight. Four deliveries done: `bluesky-claim-review-app`, `indexer-per-did-pds-fetch`, `fix-indexer-follow-ups`, `indexer-deployment`. None deployed yet. History: `docs/evolution/`.
 
 ## Key Decisions
-- The fallback gets a fresh per-DID budget (ADR-078 §4 amended).
-- References deduplicated, one transaction per indexed claim.
-- A blank `OPENLORE_INDEXER_PLC_ENDPOINT` is refused at startup (unset = default).
+- One `serve` container owns `index.duckdb`; a 15-min host timer runs `trigger` (ADR-080).
+- Per-IP rate limit (10/s, burst 50) lives in the indexer binary; ADR-083 §4 reversed.
+- Stay on t4g.micro with tight caps (indexer 128m, review app 192m, DuckDB 48 MB / 1 thread).
 
 ## Next Steps
-- Review-app go-live operator steps (tofu-aws-pds v1.7.0, SSM, PAT, instance replace, GHCR public, deploy, REVIEW_APP_LIVE, alarms), then the batched live `canzantest` sign-in walkthrough.
-- Schedule `openlore-indexer ingest` and alert on repeated exit 3.
-- Optional: share the duplicated guarded DNS resolver.
+- Go-live operator sequence (`deploy/indexer/README.md`): review app + indexer share the one tofu-aws-pds v1.7.0 replacement.
+- Batched live `canzantest` sign-in walkthrough.
+- Follow-ups in `docs/evolution/*` (indexer-deployment L3-L5, oracles, duplicated cap parsing).

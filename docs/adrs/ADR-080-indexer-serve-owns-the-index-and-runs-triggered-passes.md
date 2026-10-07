@@ -1,6 +1,6 @@
 # ADR-080: `serve` Owns the Index Store and Runs Each Scheduled Pass In-Process, Triggered by the Host Timer
 
-- **Status**: Proposed (2026-10-06)
+- **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); Jeff Bailey to confirm at DESIGN review
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-1 (store sharing) and OQ-IXD-2 (container shape).

@@ -57,4 +57,7 @@ The blank-endpoint decision is recorded in `52d0356`.
 
 - **Nothing schedules `openlore-indexer ingest`.** Whoever schedules it must treat exit 3 as
   "retry, alert on repeats" (see the indexer-per-did-pds-fetch operator notes).
+  *Resolved by indexer-deployment (`3b80ae5`, `1c30474`): a 15-minute host timer runs `trigger` in the
+  long-running `serve`; alarms on 2× exit 3, any exit 2 and liveness. See
+  [`indexer-deployment-evolution.md`](indexer-deployment-evolution.md). Not yet deployed.*
 - **The guarded DNS resolver is duplicated** in two adapters (about 20 lines). Sharing it needs a new crate.

@@ -1,6 +1,6 @@
 # ADR-081: The DID List Comes From a Host-Rendered File That Each Pass Reads, With the Last Good Copy Kept by the Host
 
-- **Status**: Proposed (2026-10-06)
+- **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); DEVOPS owns the host script
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-3.

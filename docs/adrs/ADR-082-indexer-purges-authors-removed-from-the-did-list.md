@@ -1,6 +1,6 @@
 # ADR-082: The Indexer Purges Authors the Operator Removed From the DID List; Skips Still Never Delete
 
-- **Status**: Proposed (2026-10-06)
+- **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
 - **Date**: 2026-10-06
 - **Deciders**: Jeff Bailey (user decision 2026-10-06, OQ-IXD-9: "PURGE"), Morgan (nw-solution-architect)
 - **Feature**: indexer-deployment (DESIGN)

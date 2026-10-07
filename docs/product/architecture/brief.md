@@ -70,7 +70,7 @@ reports 21).**
 
 Shipped slice extensions:
 
-- **indexer-deployment: DESIGNED (2026-10-06; DEVOPS and DELIVER pending). IN-PLACE EXTENSION of the
+- **indexer-deployment: IMPLEMENTED (designed 2026-10-06, delivered 2026-10-07; not yet deployed). IN-PLACE EXTENSION of the
   indexer root. ZERO new crates, ZERO schema migration, ZERO lexicon change.** It deploys
   `openlore-indexer` co-located on the PDS host (ADR-075 pattern) as a public, read-only search at
   `https://index.openlore.jeffbailey.us`, with a pass every 15 minutes.
@@ -87,8 +87,11 @@ Shipped slice extensions:
     by the pass runner, and DELETE lives only in `adapter-index-store/src/purge.rs`. Purge is
     resumable. Skips still never delete (ADR-078 amended).
   - **ADR-083 (public surface)**: only search and `GET /healthz` (`last_successful_pass_at`), at Caddy
-    and in the binary. Body 8 KiB, value 512 B, ≤ 1000 rows, header timeout, connection cap. No per-IP
-    rate limit in v1. The CLI default is unchanged.
+    and in the binary. Body 8 KiB, value 512 B, ≤ 1000 rows, header timeout, 5 s request timeout,
+    connection cap. **Per-IP rate limit in the binary** (10/s, burst 50, 429 + Retry-After; client from
+    X-Forwarded-For only behind a trusted proxy): the v1 "no rate limit" was reversed in DELIVER because
+    stock Caddy has no `rate_limit` module. The CLI default is unchanged; the CLI sends one request per
+    search (the index returns the near-match) and degrades on 429.
   - Ports: `IndexReadPort` is split from `IndexStorePort`, and the search handler holds reads only.
     New `IndexPurgePort`.
   - Robustness: the pass runs on a dedicated thread inside `catch_unwind`, with a 25-minute pass
@@ -97,9 +100,13 @@ Shipped slice extensions:
   - Sizing: stay on t4g.micro (user decision). Indexer container 128m. DuckDB 48 MB with 1 thread in
     the indexer **and the review app** (the review app's caps were documented but never set; fixed
     here). Hard measured gate at MemAvailable > 128 MB. t4g.small only by operator decision.
-  - `xtask` deltas (specified): `index_store_delete_only_in_purge`, `index_purge_only_in_pass_runner`,
+  - `xtask` deltas: `index_store_delete_only_in_purge`, `index_purge_only_in_pass_runner`,
     `indexer_search_handler_read_only`.
-  - Detail: `docs/feature/indexer-deployment/design/`.
+  - Platform: signed arm64 image (only from green commits), digest deploy with auto-rollback
+    (`deploy/indexer/`), 15-minute host timer, 3 CloudWatch alarms (~$1/month).
+  - ADR-080..083 accepted (ADR-083 §4 reversed). See `docs/architecture/indexer-deployment/`
+    (architecture-design.md, component-boundaries.md, data-models.md, technology-stack.md).
+    History, open follow-ups and the go-live sequence: `docs/evolution/indexer-deployment-evolution.md`.
 
 - **indexer-per-did-pds-fetch: IMPLEMENTED (designed and delivered 2026-10-05). IN-PLACE EXTENSION of the indexer root.
   ZERO new crates, ZERO schema change, ZERO new crates in `Cargo.lock`.** Every pass resolves

@@ -1,6 +1,7 @@
 # ADR-083: The Public Indexer Surface Is Search Plus `/healthz`, Bounded In-Process and at Caddy, With No Per-IP Rate Limit
 
-- **Status**: Proposed (2026-10-06)
+- **Status**: Accepted (2026-10-07) — implemented, not yet deployed; see `docs/evolution/indexer-deployment-evolution.md` (proposed 2026-10-06)
+- **Amended 2026-10-07 (DELIVER review H3, user decision)**: §4 "No per-IP rate limiting in v1" is **reversed**. Stock Caddy has no `rate_limit` module (a custom build would be a shared-module change), so the limit is enforced in the indexer binary: a per-client token bucket, 10 req/s, burst 50 (`OPENLORE_INDEXER_RATE_LIMIT_PER_SEC` 1..=1000, `_BURST` 1..=10000), 429 + Retry-After, `/healthz` exempt, at most 10 000 tracked clients. The client is the socket peer, or the rightmost X-Forwarded-For entry when the peer is a trusted proxy (loopback or `OPENLORE_INDEXER_TRUSTED_PROXIES`). The title and §4 below are kept as history. Commits `943c955`, `6f9c38b`.
 - **Date**: 2026-10-06
 - **Deciders**: Morgan (nw-solution-architect); Jeff Bailey (public read-only search, 2026-10-06)
 - **Feature**: indexer-deployment (DESIGN). Resolves OQ-IXD-5 (public freshness) and OQ-IXD-7 (rate limiting),
@@ -56,7 +57,7 @@ part of which is "the public health check fails".
    | Concurrent connections | ≤ 64 | Further accepts wait |
 
    Search is already serialized on the store mutex, so a burst queues and cannot multiply memory.
-4. **No per-IP rate limiting in v1 (OQ-IXD-7).** The bounds above, together with the container memory and
+4. **No per-IP rate limiting in v1 (OQ-IXD-7).** *(Reversed 2026-10-07; see the amendment in the header.)* The bounds above, together with the container memory and
    CPU caps (DEVOPS), cap the damage of a burst to "slower search". Revisit when one of these holds:
    - search p95 exceeds 1 s under real traffic;
    - the PDS health check fails during a burst;

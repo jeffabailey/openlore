@@ -162,3 +162,6 @@ Each step also has a `chore: execution log` commit.
 - **No consumer yet.** No deploy doc, scheduler or alarm in this repository runs
   `openlore-indexer ingest`. Whoever schedules it must treat exit 3 as "retry, alert on
   repeats" rather than a hard failure, and should route `source_skipped` and `pass_summary`.
+  *Resolved by indexer-deployment (`3b80ae5`, `1c30474`): a 15-minute host timer runs `trigger` in the
+  long-running `serve`; alarms on 2× exit 3, any exit 2 and liveness. See
+  [`indexer-deployment-evolution.md`](indexer-deployment-evolution.md). Not yet deployed.*
