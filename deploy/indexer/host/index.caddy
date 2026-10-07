@@ -1,0 +1,49 @@
+# The OpenLore index's public site (ADR-083 §1; devops/infrastructure-integration.md §5).
+# Installed to /pds/caddy/sites/index.caddy; the PDS Caddyfile imports /etc/caddy/sites/*.caddy
+# (module v1.7.0 mounts /pds/caddy/sites there read-only). PDS_HOSTNAME comes from the Caddy
+# container's env (openlore.jeffbailey.us), so this serves index.openlore.jeffbailey.us.
+#
+# An exact host outranks *.{$PDS_HOSTNAME}: an ordinary HTTP-01 certificate, no on-demand ask.
+# Automatic HTTPS (and its plain-HTTP redirect) stays on. The container publishes no port; Caddy
+# reaches openlore-indexer:8080 over the PDS compose network, as it does the review app.
+#
+# Only two routes exist: POST search and GET /healthz. Everything else is 404 here, and the
+# binary enforces the same allowlist and bounds, so a mistake in this file opens no write path.
+# Stock directives only; no access log, so search values never reach Caddy's logs.
+index.{$PDS_HOSTNAME} {
+	header -Server
+
+	request_body {
+		max_size 8KB
+	}
+
+	@search {
+		method POST
+		path /xrpc/org.openlore.appview.searchClaims
+	}
+
+	@health {
+		method GET
+		path /healthz
+	}
+
+	handle @search {
+		reverse_proxy openlore-indexer:8080
+	}
+
+	handle @health {
+		reverse_proxy openlore-indexer:8080
+	}
+
+	handle {
+		respond 404
+	}
+
+	# Only proxy failures (the container is restarting) become the 503 page. Every other error
+	# keeps its status (413 for an oversized body).
+	handle_errors {
+		@upstream expression `{err.status_code} in [502, 503, 504]`
+		respond @upstream "The OpenLore index is restarting. Try again in a minute." 503
+		respond "{err.status_code}" {err.status_code}
+	}
+}

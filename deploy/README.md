@@ -24,6 +24,7 @@ plan. CI (`.github/workflows/deploy-pds-check.yml`) runs credential-free checks 
 | `tofu/bootstrap/` | Root for `modules/pds-bootstrap`: backup bucket, host role + instance profile, default VPC. State key `openlore/pds/bootstrap.tfstate` |
 | `tofu/environments/prod/` | Root for `modules/pds`. State key `openlore/pds/prod.tfstate` |
 | `review-app/` | The hosted review app's deploy tooling and host files (see *Review app*) |
+| `indexer/` | The public index's deploy tooling, host files and runbook (see *Indexer*) |
 | `check-plan.sh` | Gate on a saved plan: refuses delete/replace of the volume, EIP, zone or buckets, and any other delete unless `OPENLORE_ALLOW_DELETE=1` |
 
 State lives in the existing bucket `jeffbaileyterraformstate` (us-west-2) with native S3
@@ -256,6 +257,16 @@ Operator follow-ups before the first deploy (in order):
 5. After the first successful deploy: set the repo variable `REVIEW_APP_LIVE=true` (enables the
    nightly production smoke), run the rollback drill, fire each alarm once, then set
    `review_app_alarms_enabled = true` and apply.
+
+## Indexer (index.openlore.jeffbailey.us)
+
+The public search index runs as the `openlore-indexer` container next to the review app, with a
+15-minute pass timer. The runbook is `deploy/indexer/README.md`: sequencing, first deploy,
+update, rollback, DID-list edits, the memory gate and the alarm test-fire. Design:
+`docs/feature/indexer-deployment/devops/`.
+
+When you run the R-REPLACE runbook, step 7 ("redeploy apps") also runs
+`deploy/indexer/deploy.sh redeploy` once the indexer has been deployed.
 
 ## DNS: Cloudflare, not Route 53
 

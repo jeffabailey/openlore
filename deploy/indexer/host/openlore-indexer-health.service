@@ -1,0 +1,11 @@
+# Installed to /etc/systemd/system/ by deploy/indexer/deploy.sh (observability-design §4).
+# One indexer.host.health line per run (alarm A3's only input). health-timer.sh always exits 0.
+[Unit]
+Description=OpenLore indexer host health check
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/pds/indexer/bin/health-timer.sh run
+TimeoutStartSec=90s

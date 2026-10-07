@@ -1,0 +1,19 @@
+# Installed to /etc/systemd/system/ by deploy/indexer/deploy.sh (infrastructure-integration §3).
+#
+# Type=oneshot stays "activating" for the whole pass, so a timer elapse during a pass merges into
+# the running job and never stacks a second one. Exit codes of `trigger`: 0 ok or coalesced,
+# 2 config/store/purge/deadline failure, 3 every DID skipped, 4 serve unreachable. Any non-zero
+# status marks the unit failed (visible in `systemctl --failed`); a failed oneshot does not stop
+# the timer.
+[Unit]
+Description=OpenLore indexer pass (render the DID list, then trigger one pass inside serve)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Renders the SSM DID list into /pds/indexer/config; always exits 0 (keeps the last good list).
+ExecStartPre=/pds/indexer/bin/render-dids.sh
+ExecStart=/usr/bin/docker exec openlore-indexer openlore-indexer trigger
+# Outlives the 25-minute pass deadline (OPENLORE_INDEXER_PASS_DEADLINE_SECS=1500) plus render.
+TimeoutStartSec=30min

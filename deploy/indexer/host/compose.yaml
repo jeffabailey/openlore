@@ -1,0 +1,62 @@
+# The OpenLore index on the PDS host (ADR-075, ADR-080..083;
+# docs/feature/indexer-deployment/devops/infrastructure-integration.md §2).
+# Installed to /pds/indexer/compose.yaml by deploy/indexer/deploy.sh. /pds/indexer/.env holds only
+# INDEXER_DIGEST=sha256:<64 hex> (not secret), so a reboot restarts the exact pinned digest.
+#
+# Isolation (checked by xtask XP-1 and the deploy-pds-check mount guard):
+#   - exactly two host paths: the data dir (rw) and the config DIRECTORY (ro). A file mount would
+#     pin the old inode, so render-dids.sh renames a file inside this directory (ADR-081, H1);
+#   - no host networking or namespaces, no extra capabilities, no container runtime socket, no
+#     cloud keys: IMDS is closed to containers (module v1.7.0 hop limit 1) and nothing injects
+#     credentials. Only the host daemon's log driver uses the instance role;
+#   - no published port: Caddy reaches openlore-indexer:8080 over the PDS compose network.
+#
+# Memory order under pressure (oom_score_adj): the indexer (900) dies first, then the review app
+# (800), never the PDS. The index is a rebuildable cache.
+name: openlore-indexer
+
+services:
+  indexer:
+    image: ghcr.io/jeffabailey/openlore-indexer@${INDEXER_DIGEST:?INDEXER_DIGEST must be a sha256 digest}
+    container_name: openlore-indexer # the `docker exec` target of the pass unit (R-IXD-D7)
+    command: ["serve"]
+    init: true # PID 1 forwards SIGTERM; a stop takes about 1 s, not the grace period
+    restart: unless-stopped
+    stop_grace_period: 5s
+    user: "65532:65532"
+    read_only: true
+    tmpfs: ["/tmp:size=8m,mode=0700,uid=65532,gid=65532"] # the control socket lives here
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+    memswap_limit: 128m
+    oom_score_adj: 900
+    cpus: 0.5
+    environment:
+      OPENLORE_INDEXER_INDEX_PATH: /data/index.duckdb
+      OPENLORE_INDEXER_LISTEN_ADDR: 0.0.0.0:8080
+      OPENLORE_INDEXER_REPO_DIDS_FILE: /config/repo-dids
+      OPENLORE_INDEXER_CONTROL_SOCKET: /tmp/openlore-indexer.sock
+      OPENLORE_INDEXER_PURGE_UNLISTED: "1"
+      OPENLORE_INDEXER_DUCKDB_MEMORY_LIMIT_MB: "48"
+      OPENLORE_INDEXER_DUCKDB_THREADS: "1"
+      OPENLORE_INDEXER_PASS_DEADLINE_SECS: "1500"
+      OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES: "4"
+      OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS: "30"
+    volumes:
+      - /pds/indexer/data:/data
+      - /pds/indexer/config:/config:ro
+    networks: [pds_default]
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /openlore/prod/indexer
+        awslogs-stream: indexer
+        mode: non-blocking
+        max-buffer-size: 4m
+
+networks:
+  pds_default:
+    external: true

@@ -1,0 +1,14 @@
+# Installed to /etc/systemd/system/ by deploy/indexer/deploy.sh (infrastructure-integration §3).
+[Unit]
+Description=Run one OpenLore indexer pass every 15 minutes
+
+[Timer]
+# Aligned to :00/:15/:30/:45: alarm A1's 900 s periods align to the same quarter hours.
+OnCalendar=*-*-* *:00/15:00
+AccuracySec=1s
+RandomizedDelaySec=0
+# A slot missed while the host was down runs once at boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

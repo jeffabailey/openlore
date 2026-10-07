@@ -170,7 +170,6 @@ fn bash(script: &str, args: &[&str], env: &[(&str, String)]) -> Run {
 /// XP-1 @US-IXD-001 @US-IXD-006 @AC-001.6 @AC-003.5 @AC-006.5 @C-1 @NFR-IXD-8 @infrastructure
 /// @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/host/compose.yaml (DV-IXD-3)"]
 fn the_indexer_container_has_exactly_its_two_mounts_and_the_production_posture() {
     let compose = read("deploy/indexer/host/compose.yaml");
     let mut found = mounts(&compose);
@@ -287,7 +286,6 @@ fn the_review_app_container_is_capped_for_sharing_the_host() {
 
 /// XP-3 @US-IXD-001 @AC-001.2 @AC-001.3 @NFR-IXD-7 @ADR-083 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/host/index.caddy (DV-IXD-7)"]
 fn the_public_site_serves_only_search_and_health_over_https() {
     let caddy = read("deploy/indexer/host/index.caddy");
     let flat = compact(&caddy);
@@ -328,7 +326,6 @@ fn the_public_site_serves_only_search_and_health_over_https() {
 
 /// XP-4 @US-IXD-002 @AC-002.4 @AC-002.5 @FR-IXD-3 @DV-IXD-4 @infrastructure @contract-shape:pure-function
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/host/openlore-indexer-pass.{timer,service} (DV-IXD-4)"]
 fn the_pass_runs_every_15_minutes_never_stacks_and_survives_a_reboot() {
     let timer = read("deploy/indexer/host/openlore-indexer-pass.timer");
     let service = read("deploy/indexer/host/openlore-indexer-pass.service");
@@ -442,7 +439,6 @@ fn inode(path: &Path) -> u64 {
 /// XP-5 @US-IXD-003 @AC-003.1 @H1 @ADR-081 @DV-IXD-5 @infrastructure @real-io @contract-shape:bounded-change
 #[cfg(unix)]
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/host/render-dids.sh (DV-IXD-5)"]
 fn two_consecutive_list_edits_replace_the_file_and_never_the_directory() {
     use std::os::unix::fs::PermissionsExt;
     let r = Render::new();
@@ -497,7 +493,6 @@ fn two_consecutive_list_edits_replace_the_file_and_never_the_directory() {
 /// @contract-shape:unbounded-preservation
 #[cfg(unix)]
 #[test]
-#[ignore = "DELIVER 03-02: render-dids.sh keeps the last good list (DV-IXD-5)"]
 fn a_failed_or_empty_read_keeps_the_last_good_list_and_never_fails_the_pass() {
     let r = Render::new();
     r.parameter_is("did:plc:priyaraman7x2k,did:plc:dvolkov3m9q");
@@ -604,7 +599,6 @@ fn health_run(filter_log_events_fails: bool) -> (Run, String) {
 /// ```
 #[cfg(unix)]
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/host/health-timer.sh not_live fails closed (observability §4)"]
 fn the_liveness_line_fails_closed_when_the_shipped_heartbeat_cannot_be_read() {
     let (ok, ok_line) = health_run(false);
     assert_eq!(ok.status, 0, "{}", ok.out);
@@ -660,7 +654,6 @@ fn deploy_stubs(ci_conclusion: &str, signature_ok: bool) -> Stubs {
 
 /// XP-7 @US-IXD-006 @AC-006.1 @FR-IXD-11 @DV-IXD-2 @error @infrastructure @real-io @contract-shape:unbounded-preservation
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/deploy.sh digest guard (DV-IXD-2)"]
 fn a_deploy_by_tag_branch_or_short_sha_is_refused_before_any_tool_runs() {
     for reference in ["main", "latest", "v1.2.3", "4f2c1ab", "sha256:abc123"] {
         let stubs = deploy_stubs("success", true);
@@ -690,7 +683,6 @@ fn a_deploy_by_tag_branch_or_short_sha_is_refused_before_any_tool_runs() {
 /// XP-8 @US-IXD-006 @AC-006.1 @AC-001.6 @FR-IXD-11 @DV-IXD-2 @error @infrastructure @real-io
 /// @contract-shape:unbounded-preservation
 #[test]
-#[ignore = "DELIVER 03-02: deploy/indexer/deploy.sh CI-green + cosign gates (DV-IXD-2)"]
 fn an_unsigned_digest_or_a_red_ci_sha_is_refused_before_the_host_is_touched() {
     let digest = format!("sha256:{}", "0".repeat(64));
     let unsigned = deploy_stubs("success", false);

@@ -1,0 +1,10 @@
+# Installed to /etc/systemd/system/ by deploy/indexer/deploy.sh (observability-design §4).
+[Unit]
+Description=Run the OpenLore indexer host health check every 2 minutes
+
+[Timer]
+OnCalendar=*:0/2
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
