@@ -125,11 +125,37 @@ fn sut_pass_exit(_outcome: &PassOutcomeView) -> (i32, Option<String>) {
 }
 
 fn sut_single_flight(
-    _state: RunnerView,
-    _event: RunnerEvent,
-    _next_id: u64,
+    state: RunnerView,
+    event: RunnerEvent,
+    next_id: u64,
 ) -> (RunnerView, RunnerReply) {
-    todo!("DELIVER 01-02: bind to the pass runner's pure single-flight transition (ADR-080 §3)")
+    use appview_domain::pass_runner as runner;
+    let slot = match state {
+        RunnerView::Idle => runner::RunnerSlot::Idle,
+        RunnerView::Running(id) => runner::RunnerSlot::Running(runner::PassId(id)),
+    };
+    let event = match event {
+        RunnerEvent::RunPassRequested => runner::RunnerEvent::RunPassRequested,
+        RunnerEvent::PassEnded(end) => runner::RunnerEvent::PassEnded(match end {
+            EndKind::Completed => runner::PassEnding::Completed,
+            EndKind::Panicked => runner::PassEnding::Panicked,
+            EndKind::DeadlineExceeded => runner::PassEnding::DeadlineExceeded,
+        }),
+    };
+    let (after, reply) = runner::single_flight(slot, event, runner::PassId(next_id));
+    let after = match after {
+        runner::RunnerSlot::Idle => RunnerView::Idle,
+        runner::RunnerSlot::Running(id) => RunnerView::Running(id.0),
+    };
+    let reply = match reply {
+        runner::RunnerReply::Started(id) => RunnerReply::Started(id.0),
+        runner::RunnerReply::Busy { running_pass_id } => RunnerReply::Busy {
+            running_pass_id: running_pass_id.0,
+        },
+        runner::RunnerReply::Freed => RunnerReply::Freed,
+        runner::RunnerReply::Ignored => RunnerReply::Ignored,
+    };
+    (after, reply)
 }
 
 fn sut_deadline_outcome(
@@ -335,7 +361,6 @@ proptest! {
     /// pass runs, a request during a pass gets `busy` naming THAT pass, every
     /// ending (completed, panicked, deadline) frees the slot, and pass ids never repeat.
     #[test]
-    #[ignore = "DELIVER 01-02: single-flight transition"]
     fn the_runner_never_runs_two_passes_and_always_frees_its_slot(
         events in prop::collection::vec(
             prop_oneof![

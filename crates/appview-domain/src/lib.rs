@@ -44,6 +44,7 @@
 mod compose;
 mod ingest;
 pub mod ingest_pass;
+pub mod pass_runner;
 mod retraction;
 mod suggest;
 

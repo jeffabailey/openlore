@@ -24,6 +24,7 @@
 use clap::{Parser, Subcommand};
 
 mod config;
+mod pass_runner;
 mod probe_gauntlet;
 mod run;
 mod search_handler;

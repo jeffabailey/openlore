@@ -52,6 +52,7 @@ use ports::{
 
 use crate::config::{parse_config, BuildProfile, ConfigError, IndexerConfig};
 
+use crate::pass_runner::PassRunner;
 use crate::probe_gauntlet::{
     capability_boundary_probe, origin_classification_probe, probe_gauntlet, ProbeRefusal,
 };
@@ -90,7 +91,7 @@ pub struct IndexerWiring {
     /// The query server is bound only for `serve` (Phase 04); the `ingest`
     /// one-shot pass leaves it `None` (it does not serve).
     pub query_server: Option<XrpcQueryServer>,
-    pub clock: Box<dyn ClockPort>,
+    pub clock: Box<dyn ClockPort + Send + Sync>,
     /// Where a DID whose document cannot be resolved is listed (relay
     /// origin, ADR-077); `None` = such a DID is skipped.
     pub fallback: Option<FallbackUrl>,
@@ -246,6 +247,18 @@ pub fn run(command: Command) -> i32 {
 /// opened exactly once per process) and sees it through `IndexReadPort` only
 /// (B7) — see `search_handler`.
 fn serve(wiring: &IndexerWiring) -> i32 {
+    // The pass runner's dedicated thread lives for the whole of `serve`; it
+    // runs the same `ingest` pass over the same store handle (no second open),
+    // off the HTTP executor (ADR-080 §2/§6). Its start handle is held here
+    // until the control channel takes it.
+    std::thread::scope(|scope| {
+        let _pass_runner = PassRunner::spawn_scoped(scope, |_pass_id| ingest(wiring));
+        serve_searches(wiring)
+    })
+}
+
+/// Bind the query server and answer searches until the process is killed.
+fn serve_searches(wiring: &IndexerWiring) -> i32 {
     let reads: SharedIndexReads = Arc::clone(&wiring.index_store) as SharedIndexReads;
     let handler = search_handler(reads);
 
