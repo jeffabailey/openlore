@@ -239,22 +239,22 @@ pub fn parse_config(
     )?;
     let purge_unlisted = purge_switch(setting(PURGE_UNLISTED_VAR).as_deref())?;
     let set = |name: &str| lookup(name).map(|value| value.trim().to_string());
-    let duckdb_memory_limit_mb = set(DUCKDB_MEMORY_LIMIT_MB_VAR)
-        .map(|value| {
-            ranged_number(
-                DUCKDB_MEMORY_LIMIT_MB_VAR,
-                &value,
-                DUCKDB_MEMORY_LIMIT_MB_RANGE,
-            )
-        })
-        .transpose()?;
-    let duckdb_threads = set(DUCKDB_THREADS_VAR)
-        .map(|value| ranged_number(DUCKDB_THREADS_VAR, &value, DUCKDB_THREADS_RANGE))
-        .transpose()?;
-    let pass_deadline_secs = set(PASS_DEADLINE_SECS_VAR)
-        .map_or(Ok(DEFAULT_PASS_DEADLINE_SECS), |value| {
-            ranged_number(PASS_DEADLINE_SECS_VAR, &value, PASS_DEADLINE_SECS_RANGE)
-        })?;
+    let duckdb_memory_limit_mb = optional_number(
+        DUCKDB_MEMORY_LIMIT_MB_VAR,
+        set(DUCKDB_MEMORY_LIMIT_MB_VAR).as_deref(),
+        DUCKDB_MEMORY_LIMIT_MB_RANGE,
+    )?;
+    let duckdb_threads = optional_number(
+        DUCKDB_THREADS_VAR,
+        set(DUCKDB_THREADS_VAR).as_deref(),
+        DUCKDB_THREADS_RANGE,
+    )?;
+    let pass_deadline_secs = bounded_number(
+        PASS_DEADLINE_SECS_VAR,
+        set(PASS_DEADLINE_SECS_VAR).as_deref(),
+        PASS_DEADLINE_SECS_RANGE,
+        DEFAULT_PASS_DEADLINE_SECS,
+    )?;
     Ok(IndexerConfig {
         index_path: lookup(INDEX_PATH_VAR)
             .map(PathBuf::from)
@@ -409,6 +409,18 @@ fn bounded_number(
     default: u64,
 ) -> Result<u64, ConfigError> {
     value.map_or(Ok(default), |value| ranged_number(variable, value, range))
+}
+
+/// A set whole number within `range`; unset stays `None` (the consumer's
+/// own default applies).
+fn optional_number(
+    variable: &'static str,
+    value: Option<&str>,
+    range: RangeInclusive<u64>,
+) -> Result<Option<u64>, ConfigError> {
+    value
+        .map(|value| ranged_number(variable, value, range))
+        .transpose()
 }
 
 /// `value` as a whole number within `range`, else refused naming `variable`

@@ -217,6 +217,11 @@ pub fn caps_honoured(
     }
 }
 
+/// Bytes in one binary unit of a DuckDB size.
+const KIB: f64 = 1024.0;
+const MIB: f64 = KIB * KIB;
+const GIB: f64 = MIB * KIB;
+
 /// A DuckDB size (`<number> <unit>`, binary or decimal units) in whole MiB,
 /// rounded; `None` when it is not a size.
 fn mebibytes_of(size: &str) -> Option<u64> {
@@ -224,15 +229,15 @@ fn mebibytes_of(size: &str) -> Option<u64> {
     let number: f64 = number.parse().ok()?;
     let bytes_per_unit: f64 = match unit.trim() {
         "bytes" | "B" => 1.0,
-        "KiB" => 1024.0,
-        "MiB" => 1024.0 * 1024.0,
-        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "KiB" => KIB,
+        "MiB" => MIB,
+        "GiB" => GIB,
         "KB" => 1e3,
         "MB" => 1e6,
         "GB" => 1e9,
         _ => return None,
     };
-    let mebibytes = (number * bytes_per_unit / (1024.0 * 1024.0)).round();
+    let mebibytes = (number * bytes_per_unit / MIB).round();
     (mebibytes.is_finite() && mebibytes >= 0.0).then_some(mebibytes as u64)
 }
 
