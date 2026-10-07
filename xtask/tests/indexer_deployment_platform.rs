@@ -19,6 +19,7 @@
 //! * XP-15 `deploy.sh host install` REAL run: the IMDS probe fails CLOSED (digest-pinned image, positive control, exit 7/28 only)
 //! * XP-16 `deploy.sh deploy <digest>` REAL run: the image's revision label must have green CI (both deploy scripts)
 //! * XP-17 ci.yml: an image is only built, signed and pushed after every test job of the commit is green
+//! * XP-18 compose: X-Forwarded-For is trusted only from the Docker bridge ranges pds_default comes from
 //!
 //! The shell scripts run under `bash` with stub `aws`/`gh`/`cosign`/… on PATH
 //! that record every call; nothing reaches AWS, GitHub or a registry. Live
@@ -1252,5 +1253,92 @@ fn images_are_signed_only_for_commits_whose_tests_are_all_green() {
         job_needs("jobs:\n  a:\n    name: a\n    needs: [x, y]\n  b:\n", "a"),
         vec!["x".to_string(), "y".to_string()],
         "non-vacuity of job_needs"
+    );
+}
+
+// =============================================================================
+// Review follow-up: the per-client rate limit sees the real client behind Caddy
+// =============================================================================
+
+/// An IPv4 address or CIDR network, read the way the indexer's
+/// `OPENLORE_INDEXER_TRUSTED_PROXIES` parser reads it (a bare address is a /32).
+fn ipv4_network(entry: &str) -> Option<(u32, u8)> {
+    let (address, prefix) = entry.split_once('/').unwrap_or((entry, "32"));
+    let address: std::net::Ipv4Addr = address.parse().ok()?;
+    let prefix: u8 = prefix.parse().ok().filter(|p| *p <= 32)?;
+    Some((u32::from(address), prefix))
+}
+
+/// Whether network `outer` contains every address of network `inner`.
+fn network_contains(outer: (u32, u8), inner: (u32, u8)) -> bool {
+    let mask = |prefix: u8| u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+    inner.1 >= outer.1 && inner.0 & mask(outer.1) == outer.0 & mask(outer.1)
+}
+
+/// XP-18 @US-IXD-001 @NFR-IXD-7 @ADR-083 @review-follow-up @infrastructure @contract-shape:pure-function
+/// ```gherkin
+/// Scenario: The indexer trusts X-Forwarded-For only from the PDS compose network
+///   Given Caddy reaches openlore-indexer over pds_default, whose subnet Docker assigns
+///   When the compose sets OPENLORE_INDEXER_TRUSTED_PROXIES
+///   Then every entry is an IPv4 network, every Docker default local pool is covered,
+///     nothing outside the private 172.16.0.0/12 and 192.168.0.0/16 ranges is trusted,
+///     and the runbook says how to narrow it to the real pds_default subnet
+/// ```
+#[test]
+fn the_rate_limit_trusts_forwarded_clients_only_from_the_pds_network() {
+    let compose = read("deploy/indexer/host/compose.yaml");
+    let value = yaml_value(&compose, "OPENLORE_INDEXER_TRUSTED_PROXIES").expect(
+        "compose sets OPENLORE_INDEXER_TRUSTED_PROXIES, or every client shares Caddy's bucket",
+    );
+    let entries: Vec<&str> = value
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    assert!(!entries.is_empty(), "a non-empty trusted-proxy list");
+    let networks: Vec<(u32, u8)> = entries
+        .iter()
+        .map(|entry| ipv4_network(entry).unwrap_or_else(|| panic!("{entry} is an IPv4 network")))
+        .collect();
+    // Docker's default local address pools (daemon `default-address-pools`):
+    // 172.17.0.0/16 .. 172.31.0.0/16, then 192.168.0.0/16 split into /20s. A
+    // user-defined network like pds_default gets its subnet from one of them.
+    let docker_pools = (17..=31)
+        .map(|octet| format!("172.{octet}.0.0/16"))
+        .chain(["192.168.0.0/16".to_string()]);
+    for pool in docker_pools {
+        let pool_network = ipv4_network(&pool).expect("pool");
+        assert!(
+            networks.iter().any(|n| network_contains(*n, pool_network)),
+            "{pool} (a Docker default pool pds_default may come from) is trusted by {value}"
+        );
+    }
+    let private_bridge_ranges = [
+        ipv4_network("172.16.0.0/12").expect("range"),
+        ipv4_network("192.168.0.0/16").expect("range"),
+    ];
+    for (entry, network) in entries.iter().zip(&networks) {
+        assert!(
+            private_bridge_ranges
+                .iter()
+                .any(|range| network_contains(*range, *network)),
+            "{entry} trusts addresses outside the Docker bridge ranges"
+        );
+    }
+    let readme = read("deploy/indexer/README.md");
+    for needle in [
+        "OPENLORE_INDEXER_TRUSTED_PROXIES",
+        "docker network inspect pds_default",
+    ] {
+        assert!(readme.contains(needle), "the runbook documents {needle}");
+    }
+    assert!(
+        network_contains(
+            ipv4_network("172.16.0.0/12").expect("range"),
+            ipv4_network("172.31.255.1").expect("address")
+        ) && !network_contains(
+            ipv4_network("172.16.0.0/12").expect("range"),
+            ipv4_network("172.32.0.1").expect("address")
+        ) && ipv4_network("caddy").is_none(),
+        "non-vacuity of the network helpers"
     );
 }

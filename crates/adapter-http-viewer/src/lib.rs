@@ -1261,6 +1261,7 @@ async fn resolve_search_state(
         // leaked transport internal (the error VALUE is discarded; the sanitized
         // copy lives entirely in `viewer-domain`).
         Err(IndexQueryError::Unreachable { .. })
+        | Err(IndexQueryError::Busy { .. })
         | Err(IndexQueryError::BadResponse { .. })
         | Err(IndexQueryError::NotFound { .. }) => SearchState::Unavailable,
     }

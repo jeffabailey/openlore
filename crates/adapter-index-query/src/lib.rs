@@ -168,6 +168,13 @@ impl IndexQueryPort for HttpIndexQueryAdapter {
                 ),
             });
         }
+        // The per-client rate limit (429) is a busy index, not a broken one:
+        // search degrades and names the wait the index asked for (ADR-027).
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(IndexQueryError::Busy {
+                retry_after_secs: retry_after_secs(response.headers()),
+            });
+        }
         if !response.status().is_success() {
             return Err(IndexQueryError::BadResponse {
                 message: format!("indexer returned HTTP {}", response.status()),
@@ -184,6 +191,18 @@ impl IndexQueryPort for HttpIndexQueryAdapter {
 
         decode_response(body)
     }
+}
+
+/// The `Retry-After` delay in seconds, when the index sent one (RFC 9110
+/// delay-seconds). An HTTP-date or junk is `None`: the caller says "shortly".
+fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Map a domain `SearchDimension` to its wire DTO keyword.
@@ -525,6 +544,82 @@ mod tests {
              — an unbounded client would hang forever (KPI-5 / WD-116)",
             INDEXER_REQUEST_TIMEOUT,
             elapsed
+        );
+    }
+}
+
+#[cfg(test)]
+mod busy_index {
+    //! ADR-027 graceful degradation: an index that refuses with 429 (its
+    //! per-client rate limit) is BUSY — a soft outcome carrying the wait it asked
+    //! for — never a malformed response.
+
+    use super::*;
+
+    /// A localhost index that answers every request with `head` and no body.
+    fn index_answering(head: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "{head}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                );
+            }
+        });
+        url
+    }
+
+    async fn search_at(url: String) -> Result<NetworkSearchResultRaw, IndexQueryError> {
+        HttpIndexQueryAdapter::for_url(url)
+            .search(SearchDimension::Object, "org.openlore.philosophy.x", None)
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_429_is_busy_with_the_retry_after_the_index_asked_for() {
+        let url = index_answering("HTTP/1.1 429 Too Many Requests\r\nretry-after: 7");
+        let outcome = search_at(url).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(IndexQueryError::Busy {
+                    retry_after_secs: Some(7)
+                })
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_429_without_a_usable_retry_after_is_still_busy() {
+        for head in [
+            "HTTP/1.1 429 Too Many Requests",
+            "HTTP/1.1 429 Too Many Requests\r\nretry-after: Wed, 21 Oct 2026 07:28:00 GMT",
+        ] {
+            let outcome = search_at(index_answering(head)).await;
+            assert!(
+                matches!(
+                    outcome,
+                    Err(IndexQueryError::Busy {
+                        retry_after_secs: None
+                    })
+                ),
+                "{head}: {outcome:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn another_client_error_is_still_a_bad_response() {
+        let outcome = search_at(index_answering("HTTP/1.1 400 Bad Request")).await;
+        assert!(
+            matches!(outcome, Err(IndexQueryError::BadResponse { .. })),
+            "{outcome:?}"
         );
     }
 }

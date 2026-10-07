@@ -219,6 +219,12 @@ fn run_dimension(
         Err(IndexQueryError::Unreachable { .. }) => {
             Ok(degrade_to_local_only(dimension, display_value))
         }
+        // SOFT, non-fatal: a rate-limited (429) index is busy, not broken.
+        Err(IndexQueryError::Busy { retry_after_secs }) => Ok(degrade_while_busy(
+            dimension,
+            display_value,
+            retry_after_secs,
+        )),
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
 }
@@ -367,6 +373,26 @@ fn degrade_to_local_only(dimension: SearchDimension, value: &str) -> SearchOutco
     SearchOutcome {
         exit_code: 0,
         stdout,
+    }
+}
+
+/// A busy index (HTTP 429, its per-client rate limit) degrades like an
+/// unreachable one (ADR-027, exit 0): say when to try again — the index's
+/// `Retry-After` when it sent one — and point at the LOCAL results.
+fn degrade_while_busy(
+    dimension: SearchDimension,
+    value: &str,
+    retry_after_secs: Option<u64>,
+) -> SearchOutcome {
+    let flag = dimension_flag(dimension);
+    let when =
+        retry_after_secs.map_or_else(|| "shortly".to_string(), |secs| format!("in {secs} s"));
+    SearchOutcome {
+        exit_code: 0,
+        stdout: format!(
+            "Network index is busy — try again {when}. See LOCAL results via \
+             `openlore graph query {flag} {value}`.\n"
+        ),
     }
 }
 
@@ -522,6 +548,9 @@ fn run_show(wiring: &Wiring, args: &SearchArgs, cid: &str) -> Result<SearchOutco
         // SOFT, non-fatal: an unreachable indexer degrades to the local-only
         // message + a `graph query` pointer, exit 0 (KPI-5 / WD-116).
         Err(IndexQueryError::Unreachable { .. }) => Ok(degrade_to_local_only(dimension, value)),
+        Err(IndexQueryError::Busy { retry_after_secs }) => {
+            Ok(degrade_while_busy(dimension, value, retry_after_secs))
+        }
         Err(err) => Err(anyhow::anyhow!("index query failed: {err}")),
     }
 }

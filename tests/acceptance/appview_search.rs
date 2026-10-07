@@ -576,6 +576,70 @@ fn an_unknown_object_search_asks_the_indexer_exactly_once() {
     );
 }
 
+/// ADR-027 graceful degradation (review follow-up): the public index refuses a
+/// client over its burst with 429 + Retry-After. `openlore search` treats that as
+/// a busy index — a clear "try again in N s" message plus the local `graph query`
+/// pointer, exit 0 — never as an error. The same holds for `--show`.
+///
+/// @us-av-002 @real-io @error @degradation
+#[test]
+fn a_busy_index_degrades_search_to_a_try_again_message() {
+    // -- Precondition: an index that answers every search with 429, Retry-After: 7. --
+    let env = TestEnv::initialized();
+    let indexer = busy_indexer("7");
+    let object = "org.openlore.philosophy.reproducible-builds";
+
+    for args in [
+        vec!["search", "--object", object],
+        vec!["search", "--object", object, "--show", "bafyreibusy"],
+    ] {
+        // -- Action: Maria searches while the index is busy. --
+        let outcome = run_openlore_search_at(&env, &args, &indexer);
+
+        // -- Outcome: exit 0, the wait the index asked for, and the local pointer. --
+        assert_eq!(
+            outcome.status, 0,
+            "{args:?}: a busy index degrades, it does not fail. stdout: {} stderr: {}",
+            outcome.stdout, outcome.stderr
+        );
+        for needle in [
+            "Network index is busy",
+            "try again in 7 s",
+            &format!("openlore graph query --object {object}"),
+        ] {
+            assert!(
+                outcome.stdout.contains(needle),
+                "{args:?}: stdout names {needle:?}: {}",
+                outcome.stdout
+            );
+        }
+        assert!(
+            !outcome.stderr.contains("index query failed"),
+            "{args:?}: no error report: {}",
+            outcome.stderr
+        );
+    }
+}
+
+/// An indexer that refuses every request with 429 and `Retry-After: <seconds>`.
+fn busy_indexer(retry_after: &'static str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("addr"));
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 429 Too Many Requests\r\nretry-after: {retry_after}\r\n\
+                 content-length: 0\r\nconnection: close\r\n\r\n"
+            );
+        }
+    });
+    url
+}
+
 /// An indexer that answers every search with an empty result and records the
 /// value of each search it was asked.
 struct CountingEmptyIndexer {

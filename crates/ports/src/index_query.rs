@@ -101,6 +101,11 @@ pub enum IndexQueryError {
     /// nor treat this as a fatal error (KPI-AV-5 / KPI-5 / WD-116).
     #[error("indexer unreachable (non-fatal; search degrades to local-only): {message}")]
     Unreachable { message: String },
+    /// SOFT, NON-FATAL: the indexer refused this client for now (HTTP 429, its
+    /// per-client rate limit). Search degrades like `Unreachable`, naming the
+    /// wait the indexer asked for (`Retry-After` seconds) when it gave one.
+    #[error("indexer busy (non-fatal; search degrades to local-only)")]
+    Busy { retry_after_secs: Option<u64> },
     /// The indexer responded but the payload did not match the XRPC contract
     /// (e.g. a result row dropping `author_did` — an I-AV-2 contract violation).
     #[error("indexer returned a malformed response: {message}")]

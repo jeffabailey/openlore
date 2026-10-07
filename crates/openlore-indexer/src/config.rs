@@ -767,6 +767,36 @@ mod tests {
         }
     }
 
+    /// The settings `deploy/indexer/host/compose.yaml` ships load in a release
+    /// build, and the trusted proxies cover the PDS compose network Caddy
+    /// forwards from (any Docker default bridge pool) and nothing public.
+    #[test]
+    fn the_shipped_compose_settings_load_and_trust_only_the_pds_network() {
+        let compose_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../deploy/indexer/host/compose.yaml");
+        let compose = std::fs::read_to_string(&compose_path).expect("the shipped compose");
+        let env: BTreeMap<String, String> = compose
+            .lines()
+            .filter_map(|line| line.trim().split_once(": "))
+            .filter(|(key, _)| key.starts_with("OPENLORE_INDEXER_"))
+            .map(|(key, value)| (key.to_string(), value.trim().trim_matches('"').to_string()))
+            .collect();
+        assert!(env.contains_key(TRUSTED_PROXIES_VAR), "{env:?}");
+        let config = parse_config(|name| env.get(name).cloned(), BuildProfile::Release)
+            .expect("the shipped compose configuration loads");
+        for caddy in ["172.17.0.2", "172.18.0.4", "172.31.255.9", "192.168.16.3"] {
+            let caddy: std::net::IpAddr = caddy.parse().expect("address");
+            assert!(config.trusted_proxies.trusts(caddy), "{caddy} is trusted");
+        }
+        for public in ["203.0.113.9", "10.0.0.5", "172.32.0.1", "8.8.8.8"] {
+            let public: std::net::IpAddr = public.parse().expect("address");
+            assert!(
+                !config.trusted_proxies.trusts(public),
+                "{public} is not trusted"
+            );
+        }
+    }
+
     // bypass: a single absent-variable example pins the documented defaults.
     #[test]
     fn unset_variables_take_the_documented_defaults() {

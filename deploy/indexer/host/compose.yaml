@@ -44,6 +44,13 @@ services:
       OPENLORE_INDEXER_PASS_DEADLINE_SECS: "1500"
       OPENLORE_INDEXER_MAX_CONCURRENT_FETCHES: "4"
       OPENLORE_INDEXER_PER_DID_TIMEOUT_SECS: "30"
+      # The per-client rate limit reads the client from Caddy's X-Forwarded-For only when the
+      # connection comes from a trusted proxy; otherwise every public client shares Caddy's
+      # bucket. Caddy reaches us over pds_default, whose subnet Docker assigns from its default
+      # local pools (172.17-31.0.0/16, 192.168.0.0/16), so trust those bridge ranges. No port is
+      # published, so only containers on this host's Docker networks can connect from them.
+      # To narrow it to the real subnet, see deploy/indexer/README.md "Trusted proxies".
+      OPENLORE_INDEXER_TRUSTED_PROXIES: "172.16.0.0/12,192.168.0.0/16"
     volumes:
       - /pds/indexer/data:/data
       - /pds/indexer/config:/config:ro
