@@ -229,6 +229,52 @@ fn a_burst_of_100_searches_in_10_seconds_is_answered_and_leaves_the_index_health
     assert_eq!(live.times_started(), 1);
 }
 
+/// Review H3 (per-client rate limit, enforced in the binary)
+/// ```gherkin
+/// @US-IXD-001 @ADR-083 @error @adversarial @real-io @driving_port
+/// Scenario: A client over its burst is refused with 429; other clients are not
+///   Given the index allows each client 1 search a second in bursts of 5
+///   When one client behind the proxy sends 6 searches at once
+///   Then the 6th is refused with 429 and a Retry-After
+///   And another client's search, and the health check, are still answered
+///   And the index still reports healthy and was never restarted
+/// ```
+#[test]
+fn a_client_over_its_burst_is_refused_with_429_and_other_clients_are_not() {
+    let world = given_authors_publish_on_their_own_pdses();
+    let live = LiveIndex::deploy(
+        &world,
+        Deployment::listing(&[])
+            .setting(var::RATE_LIMIT_PER_SEC, "1")
+            .setting(var::RATE_LIMIT_BURST, "5"),
+    );
+    let flooder = "203.0.113.7";
+
+    let statuses: Vec<u16> = (0..6)
+        .map(|_| {
+            live.public_search_from(flooder, "object", REPRODUCIBLE_BUILDS)
+                .0
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![200, 200, 200, 200, 200, 429],
+        "{}",
+        live.dump()
+    );
+
+    let (status, retry_after, _) = live.public_search_from(flooder, "object", REPRODUCIBLE_BUILDS);
+    assert_eq!((status, retry_after.as_deref()), (429, Some("1")));
+    assert_eq!(
+        live.public_search_from("198.51.100.9", "object", REPRODUCIBLE_BUILDS)
+            .0,
+        200,
+        "another client keeps its own allowance"
+    );
+    assert_eq!(live.health().0, 200, "{}", live.dump());
+    assert_eq!(live.times_started(), 1);
+}
+
 /// AS-55
 /// ```gherkin
 /// @US-IXD-001 @US-IXD-006 @AC-006.5 @data-models-1 @C1b @C5a @C6a @error @real-io
@@ -254,10 +300,15 @@ fn a_burst_of_100_searches_in_10_seconds_is_answered_and_leaves_the_index_health
 ///     | purge unlisted                | yes            | refuses with exit 2 naming the setting |
 ///     | purge unlisted                | 0              | refuses with exit 2 naming the setting |
 ///     | control socket                | 0.0.0.0:9000   | refuses with exit 2 naming the setting |
+///     | rate limit per second         | 0              | refuses with exit 2 naming the setting |
+///     | rate limit per second         | 1000           | becomes ready                          |
+///     | rate limit burst              | 10001          | refuses with exit 2 naming the setting |
+///     | trusted proxies               | caddy          | refuses with exit 2 naming the setting |
+///     | trusted proxies               | 172.18.0.0/16  | becomes ready                          |
 /// ```
 #[test]
 fn the_index_refuses_settings_outside_their_range_and_accepts_their_limits() {
-    let cases: [(&str, &str, bool); 15] = [
+    let cases: [(&str, &str, bool); 20] = [
         (var::DUCKDB_MEMORY_LIMIT_MB, "15", false),
         (var::DUCKDB_MEMORY_LIMIT_MB, "16", true),
         (var::DUCKDB_MEMORY_LIMIT_MB, "1024", true),
@@ -273,6 +324,11 @@ fn the_index_refuses_settings_outside_their_range_and_accepts_their_limits() {
         (var::PURGE_UNLISTED, "yes", false),
         (var::PURGE_UNLISTED, "0", false),
         (var::CONTROL_SOCKET, "0.0.0.0:9000", false),
+        (var::RATE_LIMIT_PER_SEC, "0", false),
+        (var::RATE_LIMIT_PER_SEC, "1000", true),
+        (var::RATE_LIMIT_BURST, "10001", false),
+        (var::TRUSTED_PROXIES, "caddy", false),
+        (var::TRUSTED_PROXIES, "172.18.0.0/16", true),
     ];
     let world = given_authors_publish_on_their_own_pdses();
     let mut wrong = Vec::new();

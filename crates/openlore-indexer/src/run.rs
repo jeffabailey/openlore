@@ -31,7 +31,7 @@ use adapter_atproto_did::{AtProtoDidAdapter, IdentityLookup};
 use adapter_atproto_ingest::AtProtoIngestAdapter;
 use adapter_index_store::{DuckDbCaps, IndexStoreAdapter, UnusableReason};
 use adapter_system_clock::SystemClockAdapter;
-use adapter_xrpc_query_server::XrpcQueryServer;
+use adapter_xrpc_query_server::{RateLimit, ServeLimits, TrustedProxies, XrpcQueryServer};
 
 use appview_domain::health::StoreHealth;
 use appview_domain::FallbackUrl;
@@ -61,6 +61,14 @@ pub type SharedIndexStore = Arc<dyn IndexStorePort + Send + Sync>;
 /// The delete side of the same handle, handed to the pass runner only (ADR-082).
 pub type SharedIndexPurge = Arc<dyn IndexPurgePort + Send + Sync>;
 
+/// The wiring, and the purge capability that goes to the pass runner and
+/// nowhere else (ADR-082): it is not a field of [`IndexerWiring`], so no
+/// holder of the wiring can reach it.
+pub struct Wired {
+    pub wiring: IndexerWiring,
+    purge_capability: Option<SharedIndexPurge>,
+}
+
 /// Refused to start (bad config, wiring, probe) or a fatal runtime/store failure.
 const EXIT_FATAL: i32 = 2;
 /// `serve` ran to completion.
@@ -84,9 +92,6 @@ pub struct IndexerWiring {
     /// What search reads: the same handle through its read port only (B7),
     /// or, under the `search_store_read_fails` test fault, an unreadable one.
     pub index_reads: SharedIndexReads,
-    /// The same handle's purge capability when `OPENLORE_INDEXER_PURGE_UNLISTED=1`
-    /// (ADR-082); `None` = removed authors keep their claims.
-    pub index_purge: Option<SharedIndexPurge>,
     pub ingest_source: Box<dyn IngestSourcePort>,
     /// Read-only `listRecords` of ONE repo DID, cursor-paged (ADR-071 §4).
     pub repo_listing: Box<dyn RepoListingPort>,
@@ -125,6 +130,10 @@ pub struct IndexerWiring {
     pub listen_addr: String,
     /// How long one pass may run before it ends with exit 2 (B13).
     pub pass_deadline: Duration,
+    /// How often one client may search (review H3).
+    pub rate_limit: RateLimit,
+    /// Whose `X-Forwarded-For` names the client.
+    pub trusted_proxies: TrustedProxies,
     /// The TEST-ONLY fault to provoke (never set in a release build).
     pub test_fault: Option<TestFault>,
 }
@@ -135,7 +144,11 @@ impl IndexerWiring {
     /// the user's `openlore.duckdb` — the capability boundary (ADR-023 / I-AV-5)
     /// is the ABSENCE of the signing identity / local store from this dep graph
     /// (`xtask check-arch`'s `indexer_holds_no_signing_or_local_store` rule).
-    pub fn production(cfg: IndexerConfig) -> anyhow::Result<Self> {
+    ///
+    /// The purge capability (`OPENLORE_INDEXER_PURGE_UNLISTED=1`, ADR-082) is
+    /// returned beside the wiring, for the pass runner; `None` = removed
+    /// authors keep their claims.
+    pub fn production(cfg: IndexerConfig) -> anyhow::Result<Wired> {
         let fallback_base = cfg
             .fallback
             .as_ref()
@@ -152,7 +165,7 @@ impl IndexerWiring {
             IndexStoreAdapter::open_capped(&cfg.index_path, caps)
                 .map_err(|err| anyhow::anyhow!("open index store: {err}"))?,
         );
-        let index_purge = cfg.purge_unlisted.then(|| {
+        let purge_capability = cfg.purge_unlisted.then(|| {
             let purge = Arc::clone(&index_store) as SharedIndexPurge;
             if cfg.test_fault == Some(TestFault::PurgeFails) {
                 failing_first_purge(purge)
@@ -178,11 +191,10 @@ impl IndexerWiring {
         // itself is still a scaffold (step 04-06) — NOT called on the ingest path.
         let query_server = None;
 
-        Ok(Self {
+        let wiring = Self {
             store_condition: Arc::clone(&index_store),
             index_reads,
             index_store,
-            index_purge,
             ingest_source: Box::new(ingest_source),
             repo_listing: Box::new(repo_listing),
             pds_lookup: Box::new(pds_lookup),
@@ -199,7 +211,13 @@ impl IndexerWiring {
             index_path: cfg.index_path,
             listen_addr: cfg.listen_addr,
             pass_deadline: cfg.pass_deadline,
+            rate_limit: cfg.rate_limit,
+            trusted_proxies: cfg.trusted_proxies,
             test_fault: cfg.test_fault,
+        };
+        Ok(Wired {
+            wiring,
+            purge_capability,
         })
     }
 
@@ -219,9 +237,6 @@ impl IndexerWiring {
             self.identity_resolve.as_ref(),
         )?;
         origin_classification_probe()?;
-        if let Some(purge) = &self.index_purge {
-            check_probe("index_purge", purge.probe())?;
-        }
         // The query server's probe is an inherent method (not a `*Port` trait),
         // so it is checked here at the composition root, not in the gauntlet.
         // SCAFFOLD: true — `check the query_server.probe()` once its body lands.
@@ -258,8 +273,11 @@ pub fn run(command: Command) -> i32 {
     emit_config_loaded(&cfg);
 
     // Step 1: WIRE.
-    let wiring = match IndexerWiring::production(cfg) {
-        Ok(w) => w,
+    let Wired {
+        wiring,
+        purge_capability,
+    } = match IndexerWiring::production(cfg) {
+        Ok(wired) => wired,
         Err(err) => {
             eprintln!("openlore-indexer: failed to construct adapter wiring: {err:#}");
             return EXIT_FATAL;
@@ -268,14 +286,20 @@ pub fn run(command: Command) -> i32 {
 
     // Step 2: PROBE (capability boundary + the per-adapter gauntlet). REFUSE to
     // start on any probe failure — emit `health.startup.refused` + exit 2.
-    if let Err(refusal) = wiring.probe_all() {
+    let probed = wiring.probe_all().and_then(|()| {
+        purge_capability
+            .as_ref()
+            .map_or(Ok(()), |purge| check_probe("index_purge", purge.probe()))
+    });
+    if let Err(refusal) = probed {
         emit_health_startup_refused(&refusal);
         return EXIT_FATAL;
     }
 
-    // Step 3: USE — dispatch the subcommand.
+    // Step 3: USE — dispatch the subcommand. Only `serve` runs passes that
+    // purge, so only `serve` receives the purge capability.
     match command {
-        Command::Serve => serve(&wiring),
+        Command::Serve => serve(&wiring, purge_capability),
         Command::Ingest => ingest(&wiring),
         Command::Stats => stats(&wiring),
         // `trigger` is dispatched by `main` before any of the above (M4).
@@ -296,7 +320,7 @@ pub fn run(command: Command) -> i32 {
 /// The query handler reuses the wiring's ONE index handle (ADR-080: the store is
 /// opened exactly once per process) and sees it through `IndexReadPort` only
 /// (B7) — see `search_handler`.
-fn serve(wiring: &IndexerWiring) -> i32 {
+fn serve(wiring: &IndexerWiring, purge_capability: Option<SharedIndexPurge>) -> i32 {
     let control = match open_control_channel(wiring.control_socket.as_deref()) {
         Ok(control) => control,
         Err(refusal) => {
@@ -309,9 +333,11 @@ fn serve(wiring: &IndexerWiring) -> i32 {
     // runs the same pass over the same store handle (no second open), off the
     // HTTP executor (ADR-080 §2/§6). The control channel holds its start handle.
     std::thread::scope(|scope| {
-        let runner = Arc::new(PassRunner::spawn_scoped(scope, |pass| {
-            in_serve_pass(wiring, pass)
-        }));
+        let runner = Arc::new(PassRunner::spawn_scoped_purging(
+            scope,
+            purge_capability,
+            |pass, purge| in_serve_pass(wiring, pass, purge),
+        ));
         if let Some((socket, listener)) = control {
             let answering = Arc::clone(&runner);
             let stop = &stop_answering;
@@ -453,7 +479,13 @@ fn serve_searches(wiring: &IndexerWiring, status: StatusReader) -> i32 {
 
     runtime.block_on(async move {
         let server = match XrpcQueryServer::bind(listen_addr, handler) {
-            Ok(server) => server.with_health(health_handler(status, store_usability(wiring))),
+            Ok(server) => server
+                .with_health(health_handler(status, store_usability(wiring)))
+                .with_limits(ServeLimits {
+                    rate: wiring.rate_limit,
+                    trusted_proxies: wiring.trusted_proxies.clone(),
+                    ..ServeLimits::default()
+                }),
             Err(err) => {
                 eprintln!("openlore-indexer serve: bind query server: {err}");
                 return EXIT_FATAL;

@@ -16,7 +16,13 @@
 //! 4. Delete the parent rows, committed.
 //!
 //! The author stays in `indexed_authors()` until step 4, so a crash at any
-//! point leaves a state the next pass's plan finishes. Steps 3 and 4 are two
+//! point leaves a state the next pass's plan finishes.
+//!
+//! The connection is NOT held while the files are deleted (review M2): step 1
+//! reads the rows and releases it, step 2 touches only the filesystem, and
+//! steps 3–4 take it again. A search waiting on the connection is never kept
+//! waiting by file I/O. The pass runner is the index's only writer, so no
+//! claim of the author is added between steps 1 and 4. Steps 3 and 4 are two
 //! transactions: DuckDB's foreign-key check still sees child rows deleted
 //! earlier in the SAME transaction, so a parent delete there is refused.
 
@@ -86,11 +92,25 @@ impl IndexPurgePort for IndexStoreAdapter {
     }
 
     fn purge_author(&self, bare: &str) -> Result<PurgeReport, IndexStoreError> {
+        self.purge_author_removing(bare, |rows| {
+            rows.iter()
+                .try_for_each(|row| remove_artifact(&self.artifacts_root, &row.signed_record_path))
+        })
+    }
+}
+
+impl IndexStoreAdapter {
+    /// One author's purge (steps 1–4), running `remove_artifacts` over the
+    /// read rows while the connection is released.
+    fn purge_author_removing(
+        &self,
+        bare: &str,
+        remove_artifacts: impl FnOnce(&[PurgedRow]) -> Result<(), IndexStoreError>,
+    ) -> Result<PurgeReport, IndexStoreError> {
         let bare = bare_did(bare);
+        let rows = author_rows(&*self.lock()?, bare)?;
+        remove_artifacts(&rows)?;
         let mut conn = self.lock()?;
-        let rows = author_rows(&conn, bare)?;
-        rows.iter()
-            .try_for_each(|row| remove_artifact(&self.artifacts_root, &row.signed_record_path))?;
         delete_in_transaction(
             &mut conn,
             bare,
@@ -199,5 +219,27 @@ fn purge_probe_refused(reason: ProbeRefusalReason, detail: String) -> ProbeOutco
         reason,
         detail,
         structured: serde_json::json!({"adapter": "index_purge"}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review M2: while one author's artifact files are deleted the
+    /// connection is free, so a search is never kept waiting by file I/O.
+    #[test]
+    fn the_connection_is_free_while_artifact_files_are_deleted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexStoreAdapter::open(&dir.path().join("index.duckdb")).expect("open");
+        let mut connection_free = None;
+        let report = store
+            .purge_author_removing("did:plc:gone", |_rows| {
+                connection_free = Some(store.conn.try_lock().is_ok());
+                Ok(())
+            })
+            .expect("purge");
+        assert_eq!(report.claims_removed, 0);
+        assert_eq!(connection_free, Some(true), "the connection was held");
     }
 }

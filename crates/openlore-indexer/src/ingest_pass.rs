@@ -27,21 +27,51 @@ use claim_domain::{ClaimRecord, Did, VerificationKey};
 use ports::{IdentityLookupError, IngestError};
 
 use crate::config::{TestFault, REPO_DIDS_FILE_VAR};
-use crate::events::emit_in;
-use crate::pass_runner::{purge_unlisted_authors, PassLabel, PurgeStep, PurgedAuthor};
+use crate::events::{emit_in, emit_in_unchecked};
+use crate::pass_runner::{PassLabel, PurgeStep, PurgedAuthor, RunnerPurge};
 use crate::run::{current_thread_runtime, IndexerWiring};
 
 /// One pass inside `serve`, ending with exactly one summary whatever happens
 /// (B4): a refused list, a store failure and a panic are summarised like a
-/// completed pass, each with its cause.
-pub(crate) fn in_serve_pass(wiring: &IndexerWiring, pass: PassLabel) -> i32 {
+/// completed pass, each with its cause. `purge` is the runner's purge, lent
+/// for this pass when purging is enabled (ADR-082).
+pub(crate) fn in_serve_pass(
+    wiring: &IndexerWiring,
+    pass: PassLabel,
+    purge: Option<RunnerPurge<'_>>,
+) -> i32 {
     let started = Instant::now();
     let work = catch_unwind(AssertUnwindSafe(|| {
         provoke_test_fault(wiring, pass);
-        listed_pass_work(wiring, pass, started)
+        listed_pass_work(wiring, pass, purge, started)
     }))
     .unwrap_or_else(|_panic| PassWork::failed(PassFailure::PassPanicked));
-    finish_pass(Some(pass), &work, started, wiring.pass_deadline)
+    summarised(
+        || finish_pass(Some(pass), &work, started, wiring.pass_deadline),
+        || emit_in_unchecked(Some(pass), panicked_summary_event(started)),
+    )
+}
+
+/// Run `finish`, which writes the pass's summary last; if it panics first,
+/// write the `fallback` summary instead (exit 2, `pass_panicked`), so the
+/// alarm on exit-2 summaries still fires (review L1).
+fn summarised(finish: impl FnOnce() -> i32, fallback: impl FnOnce()) -> i32 {
+    catch_unwind(AssertUnwindSafe(finish)).unwrap_or_else(|_panic| {
+        fallback();
+        PANICKED.code()
+    })
+}
+
+/// How a pass whose summary panicked ended.
+const PANICKED: PassExit = PassExit::Failed(PassFailure::PassPanicked);
+
+/// The summary of a pass whose own summary panicked: nothing it did is known.
+fn panicked_summary_event(started: Instant) -> serde_json::Value {
+    pass_summary_event(
+        &PassWork::failed(PassFailure::PassPanicked),
+        PANICKED,
+        started,
+    )
 }
 
 /// The TEST-ONLY pass faults (debug builds only; config refuses the seam in a
@@ -59,11 +89,16 @@ fn provoke_test_fault(wiring: &IndexerWiring, pass: PassLabel) {
 /// Load the DID list afresh (the file when one is configured, ADR-081),
 /// announce it under the pass's label, do the pass's work. A refused list
 /// fetches nothing.
-fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel, started: Instant) -> PassWork {
+fn listed_pass_work(
+    wiring: &IndexerWiring,
+    pass: PassLabel,
+    purge: Option<RunnerPurge<'_>>,
+    started: Instant,
+) -> PassWork {
     match pass_list(wiring) {
         Ok((repo_dids, source)) => {
             emit_pass_config_loaded(wiring, pass, &repo_dids, source);
-            match purge_removed_authors(wiring, &repo_dids, pass) {
+            match purge_removed_authors(purge, &repo_dids, pass) {
                 Ok(purged_authors) => PassWork {
                     purged_authors,
                     ..pass_work(wiring, &repo_dids, Some(pass), started)
@@ -86,14 +121,14 @@ fn listed_pass_work(wiring: &IndexerWiring, pass: PassLabel, started: Instant) -
 /// each. `Ok`/`Err` carry how many authors were purged; `Err` = the store
 /// failed (exit 2, nothing is fetched; the next pass finishes the purge).
 fn purge_removed_authors(
-    wiring: &IndexerWiring,
+    purge: Option<RunnerPurge<'_>>,
     repo_dids: &[Did],
     pass: PassLabel,
 ) -> Result<u64, u64> {
-    let Some(purge) = &wiring.index_purge else {
+    let Some(purge) = purge else {
         return Ok(0);
     };
-    match purge_unlisted_authors(purge.as_ref(), repo_dids) {
+    match purge.purge_unlisted(repo_dids) {
         PurgeStep::Suppressed(reason) => {
             emit_in(
                 Some(pass),
@@ -688,5 +723,31 @@ impl IngestTally {
                 "by_reason": by_reason,
             }),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// Review L1: a pass whose summary panics still ends with one exit-2
+    /// `pass_panicked` summary; a pass whose summary is written writes no other.
+    #[test]
+    fn a_panic_while_summarising_still_writes_one_exit_2_summary() {
+        let fallbacks = Cell::new(0);
+        let code = summarised(
+            || panic!("stdout is gone"),
+            || fallbacks.set(fallbacks.get() + 1),
+        );
+        assert_eq!((code, fallbacks.get()), (2, 1));
+
+        let code = summarised(|| 3, || fallbacks.set(fallbacks.get() + 1));
+        assert_eq!((code, fallbacks.get()), (3, 1));
+
+        let event = panicked_summary_event(Instant::now());
+        assert_eq!(event["event"], "indexer.ingest.pass_summary");
+        assert_eq!(event["exit_code"], 2);
+        assert_eq!(event["cause"], "pass_panicked");
     }
 }

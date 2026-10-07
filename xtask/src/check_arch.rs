@@ -1890,29 +1890,52 @@ pub fn scan_index_store_delete_only_in_purge(workspace_root: &Path) -> anyhow::R
 // `index_purge_only_in_pass_runner` (ADR-082, B6, boundary rule 1)
 // -----------------------------------------------------------------------------
 
-/// The purge capability and its plan.
-const PURGE_CAPABILITY_TOKENS: &[&str] = &["IndexPurgePort", "purge_author", "plan_purge"];
+/// The purge capability, its plan, the runner's private entry point, and the
+/// wiring field it must never live in (review M1: naming the entry point or
+/// reaching for the field outside the runner is a finding, not just naming
+/// the port).
+const PURGE_CAPABILITY_TOKENS: &[&str] = &[
+    "IndexPurgePort",
+    "purge_author",
+    "plan_purge",
+    "purge_unlisted_authors",
+    ".index_purge",
+    "index_purge:",
+];
 
-/// The composition root may NAME the port to wire it, never purge or plan.
-const PURGE_CALL_TOKENS: &[&str] = &["purge_author", "plan_purge"];
+/// The composition root may NAME the port to wire it and hand it to the
+/// runner, never purge, plan, call the runner's entry point, or keep the
+/// handle in the wiring.
+const PURGE_CALL_TOKENS: &[&str] = &[
+    "purge_author",
+    "plan_purge",
+    "purge_unlisted_authors",
+    ".index_purge",
+    "index_purge:",
+];
+
+/// The runner's purge entry point must stay private to it.
+const RUNNER_PURGE_EXPORT_TOKENS: &[&str] = &[
+    "pub fn purge_unlisted_authors",
+    "pub(crate) fn purge_unlisted_authors",
+];
 
 /// The indexer's composition-root files.
 const INDEXER_COMPOSITION_ROOT: &[&str] = &["main.rs", "run.rs"];
 
 /// Pure rule over one indexer source's production part (before its first
-/// `#[cfg(test)]`): the pass runner (`*runner*.rs`) may purge; the
-/// composition root may name `IndexPurgePort`; no other module may name the
-/// capability at all.
+/// `#[cfg(test)]`): the pass runner (`*runner*.rs`) may purge but not export
+/// its entry point; the composition root may name `IndexPurgePort`; no other
+/// module may name the capability, the entry point or a purge field at all.
 pub fn classify_index_purge_capability(file_name: &str, source: &str) -> Vec<String> {
-    if file_name.contains("runner") {
-        return Vec::new();
-    }
-    let tokens = if INDEXER_COMPOSITION_ROOT.contains(&file_name) {
+    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+    let tokens = if file_name.contains("runner") {
+        RUNNER_PURGE_EXPORT_TOKENS
+    } else if INDEXER_COMPOSITION_ROOT.contains(&file_name) {
         PURGE_CALL_TOKENS
     } else {
         PURGE_CAPABILITY_TOKENS
     };
-    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
     classify_forbidden_tokens(production, tokens)
 }
 
@@ -3504,6 +3527,55 @@ mod search_handler_read_only_tests {
             assert!(
                 classify_index_purge_capability(name, in_tests).is_empty(),
                 "{name}"
+            );
+        }
+    }
+
+    /// Review M1: the rule proves more than the port's absence — the runner's
+    /// entry point and a purge handle kept in the wiring are findings outside
+    /// the runner, and the runner may not export its entry point.
+    #[test]
+    fn the_purge_entry_point_and_handle_are_findings_outside_the_runner() {
+        let table: [(&str, &str, usize); 9] = [
+            (
+                "ingest_pass.rs",
+                "match purge_unlisted_authors(purge.as_ref(), repo_dids) {\n",
+                1,
+            ),
+            (
+                "ingest_pass.rs",
+                "let Some(purge) = &wiring.index_purge else {\n",
+                1,
+            ),
+            (
+                "ingest_pass.rs",
+                "match purge.purge_unlisted(repo_dids) {\n",
+                0,
+            ),
+            (
+                "run.rs",
+                "    pub index_purge: Option<SharedIndexPurge>,\n",
+                1,
+            ),
+            (
+                "run.rs",
+                "use crate::pass_runner::purge_unlisted_authors;\n",
+                1,
+            ),
+            ("run.rs", "check_probe(\"index_purge\", purge.probe())\n", 0),
+            (
+                "pass_runner.rs",
+                "pub fn purge_unlisted_authors(p: &P) {}\n",
+                1,
+            ),
+            ("pass_runner.rs", "fn purge_unlisted_authors(p: &P) {}\n", 0),
+            ("pass_runner.rs", "purge.purge_author(&did.0);\n", 0),
+        ];
+        for (file, source, findings) in table {
+            assert_eq!(
+                classify_index_purge_capability(file, source).len(),
+                findings,
+                "{file}: {source}"
             );
         }
     }

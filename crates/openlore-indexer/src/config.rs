@@ -15,6 +15,8 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use adapter_xrpc_query_server::rate_limit::{DEFAULT_RATE_BURST, DEFAULT_RATE_PER_SEC};
+use adapter_xrpc_query_server::{RateLimit, TrustedProxies};
 use appview_domain::did_list::read_did_list;
 #[cfg(test)]
 use appview_domain::did_list::MAX_DID_LENGTH;
@@ -45,6 +47,13 @@ pub const DUCKDB_MEMORY_LIMIT_MB_VAR: &str = "OPENLORE_INDEXER_DUCKDB_MEMORY_LIM
 pub const DUCKDB_THREADS_VAR: &str = "OPENLORE_INDEXER_DUCKDB_THREADS";
 /// How long one pass may run before it ends with exit 2 (B13), in seconds.
 pub const PASS_DEADLINE_SECS_VAR: &str = "OPENLORE_INDEXER_PASS_DEADLINE_SECS";
+/// Searches one client may make per second, sustained (review H3).
+pub const RATE_LIMIT_PER_SEC_VAR: &str = "OPENLORE_INDEXER_RATE_LIMIT_PER_SEC";
+/// Searches one client may make at once after being idle (review H3).
+pub const RATE_LIMIT_BURST_VAR: &str = "OPENLORE_INDEXER_RATE_LIMIT_BURST";
+/// The proxies (addresses or CIDR networks, e.g. Caddy's container network)
+/// whose `X-Forwarded-For` names the client; loopback is always trusted.
+pub const TRUSTED_PROXIES_VAR: &str = "OPENLORE_INDEXER_TRUSTED_PROXIES";
 /// TEST-ONLY: provokes a fault a real process cannot be driven into from
 /// outside (DISTILL decision 1); a release build refuses to start with it set.
 pub const TEST_FAULT_VAR: &str = "OPENLORE_INDEXER_TEST_FAULT";
@@ -78,6 +87,10 @@ const DUCKDB_THREADS_RANGE: RangeInclusive<u64> = 1..=4;
 /// One pass's deadline (ADR-080 §8): 25 minutes unless configured.
 const DEFAULT_PASS_DEADLINE_SECS: u64 = 1500;
 const PASS_DEADLINE_SECS_RANGE: RangeInclusive<u64> = 60..=7200;
+
+/// The per-client rate limit's admissible ranges.
+const RATE_LIMIT_PER_SEC_RANGE: RangeInclusive<u64> = 1..=1000;
+const RATE_LIMIT_BURST_RANGE: RangeInclusive<u64> = 1..=10_000;
 
 /// A fault the TEST-ONLY seam provokes inside a development build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +180,10 @@ pub struct IndexerConfig {
     pub duckdb_threads: Option<u64>,
     /// How long one pass may run before it ends with exit 2 (B13).
     pub pass_deadline: Duration,
+    /// How often one client may search (review H3).
+    pub rate_limit: RateLimit,
+    /// Whose `X-Forwarded-For` names the client (loopback always).
+    pub trusted_proxies: TrustedProxies,
     /// The TEST-ONLY fault to provoke; always `None` in a release build.
     pub test_fault: Option<TestFault>,
 }
@@ -255,6 +272,11 @@ pub fn parse_config(
         PASS_DEADLINE_SECS_RANGE,
         DEFAULT_PASS_DEADLINE_SECS,
     )?;
+    let rate_limit = rate_limit(
+        set(RATE_LIMIT_PER_SEC_VAR).as_deref(),
+        set(RATE_LIMIT_BURST_VAR).as_deref(),
+    )?;
+    let trusted_proxies = trusted_proxies(setting(TRUSTED_PROXIES_VAR).as_deref())?;
     Ok(IndexerConfig {
         index_path: lookup(INDEX_PATH_VAR)
             .map(PathBuf::from)
@@ -272,7 +294,42 @@ pub fn parse_config(
         duckdb_memory_limit_mb,
         duckdb_threads,
         pass_deadline: Duration::from_secs(pass_deadline_secs),
+        rate_limit,
+        trusted_proxies,
         test_fault,
+    })
+}
+
+/// The per-client rate limit: each number within its range, unset taking
+/// the default (10 a second, bursts of 50).
+fn rate_limit(per_sec: Option<&str>, burst: Option<&str>) -> Result<RateLimit, ConfigError> {
+    let per_sec = bounded_number(
+        RATE_LIMIT_PER_SEC_VAR,
+        per_sec,
+        RATE_LIMIT_PER_SEC_RANGE,
+        u64::from(DEFAULT_RATE_PER_SEC),
+    )?;
+    let burst = bounded_number(
+        RATE_LIMIT_BURST_VAR,
+        burst,
+        RATE_LIMIT_BURST_RANGE,
+        u64::from(DEFAULT_RATE_BURST),
+    )?;
+    let within = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+    Ok(RateLimit::new(within(per_sec), within(burst)).unwrap_or(RateLimit::DEFAULT))
+}
+
+/// The trusted proxies; the first entry that is neither an address nor a
+/// CIDR network refuses the list.
+fn trusted_proxies(list: Option<&str>) -> Result<TrustedProxies, ConfigError> {
+    list.map_or(Ok(TrustedProxies::loopback_only()), |list| {
+        TrustedProxies::parse(list).map_err(|entry| {
+            ConfigError::new(
+                TRUSTED_PROXIES_VAR,
+                &entry,
+                "must be an IP address or CIDR network (e.g. 172.18.0.0/16)",
+            )
+        })
     })
 }
 
@@ -547,6 +604,64 @@ mod tests {
                 }
             }
         }
+
+        /// Universe {rate_limit}: the rate and burst load exactly within
+        /// 1..=1000 and 1..=10000, else the first one out of range is refused
+        /// naming its variable and value.
+        #[test]
+        fn rate_limit_bounds_load_exactly_within_their_range(
+            per_sec in 0u64..1_100, burst in 0u64..10_100
+        ) {
+            let env = BTreeMap::from([
+                (RATE_LIMIT_PER_SEC_VAR, per_sec.to_string()),
+                (RATE_LIMIT_BURST_VAR, burst.to_string()),
+            ]);
+            let per_sec_ok = (1..=1000).contains(&per_sec);
+            let burst_ok = (1..=10_000).contains(&burst);
+            match parse(&env) {
+                Ok(config) => {
+                    prop_assert!(per_sec_ok && burst_ok);
+                    prop_assert_eq!(u64::from(config.rate_limit.per_sec()), per_sec);
+                    prop_assert_eq!(u64::from(config.rate_limit.burst()), burst);
+                }
+                Err(refusal) if !per_sec_ok => {
+                    prop_assert_eq!(refusal.variable, RATE_LIMIT_PER_SEC_VAR);
+                    prop_assert_eq!(refusal.value, per_sec.to_string());
+                }
+                Err(refusal) => {
+                    prop_assert!(!burst_ok);
+                    prop_assert_eq!(refusal.variable, RATE_LIMIT_BURST_VAR);
+                    prop_assert_eq!(refusal.value, burst.to_string());
+                }
+            }
+        }
+
+        /// Universe {trusted_proxies}: a list of CIDR networks loads; one bad
+        /// entry refuses the list naming that entry.
+        #[test]
+        fn a_trusted_proxy_list_loads_iff_every_entry_is_a_network(
+            octet in 0u8..=255, prefix in 0u8..=40, junk in "[a-z]{1,8}"
+        ) {
+            let network = format!("10.{octet}.0.0/{prefix}");
+            let env = BTreeMap::from([(TRUSTED_PROXIES_VAR, format!("127.0.0.1, {network}"))]);
+            match parse(&env) {
+                Ok(config) => {
+                    prop_assert!(prefix <= 32);
+                    prop_assert!(config.trusted_proxies.trusts(
+                        std::net::Ipv4Addr::new(10, octet, 0, 1).into()
+                    ) || prefix > 24);
+                }
+                Err(refusal) => {
+                    prop_assert!(prefix > 32);
+                    prop_assert_eq!(refusal.variable, TRUSTED_PROXIES_VAR);
+                    prop_assert_eq!(refusal.value, network);
+                }
+            }
+            let env = BTreeMap::from([(TRUSTED_PROXIES_VAR, format!("10.0.0.0/8 {junk}"))]);
+            let refusal = parse(&env).expect_err("a name is not a network");
+            prop_assert_eq!(refusal.variable, TRUSTED_PROXIES_VAR);
+            prop_assert_eq!(refusal.value, junk);
+        }
     }
 
     /// The shapes a PLC directory endpoint can take, each with the verdict
@@ -666,6 +781,8 @@ mod tests {
         assert_eq!(config.duckdb_memory_limit_mb, None);
         assert_eq!(config.duckdb_threads, None);
         assert_eq!(config.pass_deadline, Duration::from_secs(1500));
+        assert_eq!(config.rate_limit, RateLimit::new(10, 50).expect("limit"));
+        assert_eq!(config.trusted_proxies, TrustedProxies::loopback_only());
         assert_eq!(config.test_fault, None);
     }
 }

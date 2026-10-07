@@ -24,3 +24,14 @@ pub(crate) fn emit_in(pass: Option<PassLabel>, mut event: serde_json::Value) {
     }
     emit(event);
 }
+
+/// [`emit_in`] that never panics: the last-resort writer for a pass whose
+/// summary could not be written (a failed write is dropped).
+pub(crate) fn emit_in_unchecked(pass: Option<PassLabel>, mut event: serde_json::Value) {
+    if let Some(pass) = pass {
+        event["pass_id"] = pass.to_string().into();
+    }
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{event}");
+    let _ = stdout.flush();
+}

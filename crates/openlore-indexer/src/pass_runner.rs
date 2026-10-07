@@ -19,8 +19,11 @@
 //! `pass_summary` per `pass_id`" stays checkable over a whole log stream.
 //!
 //! The runner is the ONLY holder of the purge capability (ADR-082, check-arch
-//! `index_purge_only_in_pass_runner`): [`purge_unlisted_authors`] plans the
-//! purge from the loaded list (pure `plan_purge`) and purges each removed
+//! `index_purge_only_in_pass_runner`): the composition root hands the purge
+//! handle to [`PassRunner::spawn_scoped_purging`] and keeps no copy; the
+//! runner's thread owns it and lends each pass a [`RunnerPurge`] (which only
+//! this module can build) for that pass's duration. Its one operation plans
+//! the purge from the loaded list (pure `plan_purge`) and purges each removed
 //! author through `IndexPurgePort`, at pass start, before any fetch.
 
 use std::fmt;
@@ -190,9 +193,24 @@ impl PassRunner {
     /// Spawn the runner's dedicated pass thread in `scope`. `pass` is the pass
     /// body (the same `ingest` pass, told its label); it returns the pass's
     /// exit code.
-    pub fn spawn_scoped<'scope, 'env, F>(scope: &'scope Scope<'scope, 'env>, pass: F) -> Self
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn spawn_scoped<'scope, 'env, F>(scope: &'scope Scope<'scope, 'env>, mut pass: F) -> Self
     where
         F: FnMut(PassLabel) -> i32 + Send + 'scope,
+    {
+        Self::spawn_scoped_purging(scope, None, move |label, _purge| pass(label))
+    }
+
+    /// [`Self::spawn_scoped`], with the runner's thread taking ownership of
+    /// `purge` (ADR-082): each pass is lent it as a [`RunnerPurge`], and
+    /// nothing outside the runner keeps a handle on it.
+    pub fn spawn_scoped_purging<'scope, 'env, F>(
+        scope: &'scope Scope<'scope, 'env>,
+        purge: Option<SharedPurge>,
+        pass: F,
+    ) -> Self
+    where
+        F: FnMut(PassLabel, Option<RunnerPurge<'_>>) -> i32 + Send + 'scope,
     {
         let boot = BootNonce::now();
         let state = Arc::new(Mutex::new(RunnerState {
@@ -201,7 +219,7 @@ impl PassRunner {
         }));
         let (orders, inbox) = mpsc::channel();
         let thread_state = Arc::clone(&state);
-        scope.spawn(move || run_orders(&thread_state, &inbox, boot, pass));
+        scope.spawn(move || run_orders(&thread_state, &inbox, boot, purge, pass));
         Self {
             boot,
             state,
@@ -258,21 +276,24 @@ impl PassRunner {
     }
 }
 
-/// The pass thread: run each order, free the slot, report the exit code.
+/// The pass thread: run each order (lending it the purge), free the slot,
+/// report the exit code.
 fn run_orders<F>(
     state: &Mutex<RunnerState>,
     inbox: &mpsc::Receiver<PassOrder>,
     boot: BootNonce,
+    purge: Option<SharedPurge>,
     mut pass: F,
 ) where
-    F: FnMut(PassLabel) -> i32,
+    F: FnMut(PassLabel, Option<RunnerPurge<'_>>) -> i32,
 {
     for order in inbox {
         let label = PassLabel {
             boot,
             pass_id: order.pass_id,
         };
-        let (ending, exit_code) = match catch_unwind(AssertUnwindSafe(|| pass(label))) {
+        let lent = || purge.as_deref().map(RunnerPurge);
+        let (ending, exit_code) = match catch_unwind(AssertUnwindSafe(|| pass(label, lent()))) {
             Ok(exit_code) => (PassEnding::Completed, exit_code),
             Err(_panic) => (PassEnding::Panicked, EXIT_PASS_PANICKED),
         };
@@ -304,6 +325,23 @@ fn lock(state: &Mutex<RunnerState>) -> MutexGuard<'_, RunnerState> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The purge handle the composition root gives the runner.
+pub type SharedPurge = Arc<dyn IndexPurgePort + Send + Sync>;
+
+/// The purge capability as the runner lends it to one pass. Its field is
+/// private to this module, so no other module can build one.
+#[derive(Clone, Copy)]
+pub struct RunnerPurge<'runner>(&'runner (dyn IndexPurgePort + Send + Sync));
+
+impl RunnerPurge<'_> {
+    /// Purge every indexed author the loaded, non-empty `listed` no longer
+    /// names (ADR-082).
+    #[must_use]
+    pub fn purge_unlisted(self, listed: &[Did]) -> PurgeStep {
+        purge_unlisted_authors(self.0, listed)
+    }
+}
+
 /// One author a pass purged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgedAuthor {
@@ -328,7 +366,7 @@ pub enum PurgeStep {
 
 /// Purge every indexed author the loaded, non-empty `listed` no longer
 /// names. A listed author is never planned, whatever their fetch outcome.
-pub fn purge_unlisted_authors(purge: &dyn IndexPurgePort, listed: &[Did]) -> PurgeStep {
+fn purge_unlisted_authors(purge: &dyn IndexPurgePort, listed: &[Did]) -> PurgeStep {
     let indexed = match purge.indexed_authors() {
         Ok(indexed) => indexed,
         Err(error) => {
@@ -362,9 +400,7 @@ fn purge_each(purge: &dyn IndexPurgePort, removed: impl IntoIterator<Item = Bare
 /// TEST-FAULT seam (`OPENLORE_INDEXER_TEST_FAULT=purge_fails`, debug builds
 /// only): `purge`, except that its first author purge fails. The purge is
 /// resumable, so the next pass finishes it.
-pub fn failing_first_purge(
-    purge: Arc<dyn IndexPurgePort + Send + Sync>,
-) -> Arc<dyn IndexPurgePort + Send + Sync> {
+pub fn failing_first_purge(purge: SharedPurge) -> SharedPurge {
     Arc::new(FailingFirstPurge {
         purge,
         failed_once: AtomicBool::new(false),
@@ -372,7 +408,7 @@ pub fn failing_first_purge(
 }
 
 struct FailingFirstPurge {
-    purge: Arc<dyn IndexPurgePort + Send + Sync>,
+    purge: SharedPurge,
     failed_once: AtomicBool,
 }
 

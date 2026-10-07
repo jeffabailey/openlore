@@ -67,6 +67,9 @@ pub mod var {
     pub const LISTEN_ADDR: &str = "OPENLORE_INDEXER_LISTEN_ADDR";
     /// TEST-ONLY fault seam (see the module docs).
     pub const TEST_FAULT: &str = "OPENLORE_INDEXER_TEST_FAULT";
+    pub const RATE_LIMIT_PER_SEC: &str = "OPENLORE_INDEXER_RATE_LIMIT_PER_SEC";
+    pub const RATE_LIMIT_BURST: &str = "OPENLORE_INDEXER_RATE_LIMIT_BURST";
+    pub const TRUSTED_PROXIES: &str = "OPENLORE_INDEXER_TRUSTED_PROXIES";
 }
 
 /// The exit codes of one pass as the host timer sees them through `trigger`
@@ -198,6 +201,14 @@ impl Deployment {
         self.settings
             .push((variable.to_string(), value.to_string()));
         self
+    }
+
+    /// The per-client rate limit raised out of the way: for a scenario that
+    /// measures search under pass load from ONE client searching back to
+    /// back. The limit itself is asserted in the public-surface suite.
+    pub fn with_rate_limit_raised(self) -> Self {
+        self.setting(var::RATE_LIMIT_PER_SEC, "1000")
+            .setting(var::RATE_LIMIT_BURST, "10000")
     }
 
     pub fn without_purge(mut self) -> Self {
@@ -508,6 +519,38 @@ impl LiveIndex {
                 (status, r.text().unwrap_or_default(), elapsed)
             }
             Err(e) => (0, format!("[harness] no HTTP response: {e}"), elapsed),
+        }
+    }
+
+    /// WHEN a client behind the proxy (the proxy names it in
+    /// `X-Forwarded-For`) searches: (status, `Retry-After`, body).
+    pub fn public_search_from(
+        &self,
+        forwarded_for: &str,
+        dimension: &str,
+        value: &str,
+    ) -> (u16, Option<String>, String) {
+        let body = serde_json::json!({"dimension": dimension, "value": value}).to_string();
+        let response = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("http client")
+            .post(format!("{}{}", self.url, SEARCH_PATH))
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", forwarded_for)
+            .body(body)
+            .send();
+        match response {
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let retry_after = r
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                (status, retry_after, r.text().unwrap_or_default())
+            }
+            Err(e) => (0, None, format!("[harness] no HTTP response: {e}")),
         }
     }
 

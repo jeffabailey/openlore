@@ -29,9 +29,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
+pub mod rate_limit;
+
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use appview_domain::health::HealthResponse;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
@@ -43,6 +45,9 @@ use lexicon::{SearchDimensionDto, SearchQueryRequest, SearchQueryResponse};
 use ports::{ProbeOutcome, ProbeRefusalReason};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+
+use rate_limit::{client_ip, RateDecision, RateLimiter};
+pub use rate_limit::{RateLimit, TrustedProxies};
 
 /// The query handler the composition root wires: a pure-by-contract
 /// `SearchQueryRequest -> SearchQueryResponse` that reads the `IndexStorePort` +
@@ -76,7 +81,44 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024;
 pub const MAX_SEARCH_VALUE_BYTES: usize = 512;
 
 /// How long a connection may take to send its request headers (ADR-083 §3).
+/// hyper restarts this timer whenever a kept-alive connection goes idle
+/// waiting for its next request, so it is also the keep-alive idle bound.
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a search may take from its headers to its answer: reading the
+/// body (a slower body is 408 and the connection closes) and running the
+/// query (a slower query is 503) (review H2).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The 503 body of a search the index did not answer in time.
+const INDEX_BUSY_BODY: &str = r#"{"error":"index_busy"}"#;
+
+/// The public listener's bounds: how long a connection may idle or take, how
+/// often one client may ask, and whose `X-Forwarded-For` names the client.
+#[derive(Debug, Clone, Default)]
+pub struct ServeLimits {
+    pub timeouts: ServeTimeouts,
+    pub rate: RateLimit,
+    pub trusted_proxies: TrustedProxies,
+}
+
+/// The listener's two clocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServeTimeouts {
+    /// Headers of a request, and the idle wait for the next one.
+    pub header_read: Duration,
+    /// A search's body read plus its query.
+    pub request: Duration,
+}
+
+impl Default for ServeTimeouts {
+    fn default() -> Self {
+        Self {
+            header_read: HEADER_READ_TIMEOUT,
+            request: REQUEST_TIMEOUT,
+        }
+    }
+}
 
 /// How many connections are served at once (ADR-083 §3); further accepts wait.
 pub const MAX_CONCURRENT_CONNECTIONS: usize = 64;
@@ -149,6 +191,16 @@ pub struct XrpcQueryServer {
     local_addr: SocketAddr,
     handler: QueryHandler,
     health: Option<HealthHandler>,
+    limits: ServeLimits,
+}
+
+/// What every connection's requests are answered with.
+struct Answering {
+    handler: QueryHandler,
+    health: Option<HealthHandler>,
+    timeouts: ServeTimeouts,
+    trusted_proxies: TrustedProxies,
+    limiter: RateLimiter,
 }
 
 impl XrpcQueryServer {
@@ -232,7 +284,14 @@ impl XrpcQueryServer {
             local_addr,
             handler,
             health: None,
+            limits: ServeLimits::default(),
         })
+    }
+
+    /// Serve under `limits` instead of the defaults.
+    #[must_use]
+    pub fn with_limits(self, limits: ServeLimits) -> Self {
+        Self { limits, ..self }
     }
 
     /// Answer `GET /healthz` from `health` (without it the route is not found).
@@ -257,6 +316,13 @@ impl XrpcQueryServer {
     /// `SearchQueryResponse`. Must be called inside a tokio runtime.
     pub async fn serve(self) -> Result<(), QueryServerError> {
         let connection_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+        let answering = Arc::new(Answering {
+            handler: self.handler,
+            health: self.health,
+            timeouts: self.limits.timeouts,
+            trusted_proxies: self.limits.trusted_proxies,
+            limiter: RateLimiter::new(self.limits.rate),
+        });
         loop {
             let slot = Arc::clone(&connection_slots)
                 .acquire_owned()
@@ -264,7 +330,7 @@ impl XrpcQueryServer {
                 .map_err(|err| QueryServerError::ServeFailed {
                     message: format!("connection slots: {err}"),
                 })?;
-            let (stream, _peer) =
+            let (stream, peer) =
                 self.listener
                     .accept()
                     .await
@@ -272,14 +338,13 @@ impl XrpcQueryServer {
                         message: format!("accept: {err}"),
                     })?;
             let io = TokioIo::new(stream);
-            let handler = Arc::clone(&self.handler);
-            let health = self.health.clone();
+            let answering = Arc::clone(&answering);
             tokio::task::spawn(async move {
-                let service =
-                    service_fn(move |req| route(req, Arc::clone(&handler), health.clone()));
+                let header_read = answering.timeouts.header_read;
+                let service = service_fn(move |req| route(req, Arc::clone(&answering), peer.ip()));
                 let _ = hyper::server::conn::http1::Builder::new()
                     .timer(TokioTimer::new())
-                    .header_read_timeout(HEADER_READ_TIMEOUT)
+                    .header_read_timeout(header_read)
                     .serve_connection(io, service)
                     .await;
                 drop(slot);
@@ -290,31 +355,53 @@ impl XrpcQueryServer {
 
 /// Route one HTTP request through the public allowlist ([`public_route`]):
 /// `GET /healthz` (when wired) and `POST searchClaims` are served; everything
-/// else is 404.
+/// else is 404. Every request but `/healthz` first spends one of its client's
+/// tokens (429 when there is none).
 async fn route(
     req: Request<Incoming>,
-    handler: QueryHandler,
-    health: Option<HealthHandler>,
+    answering: Arc<Answering>,
+    peer: IpAddr,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    Ok(
-        match public_route(req.method().as_str(), req.uri().path()) {
-            PublicRoute::Health => health.map_or_else(not_found, |health| health_answer(&health())),
-            PublicRoute::Search => search(req, &handler).await,
-            PublicRoute::NotFound => not_found(),
-        },
-    )
+    let route = public_route(req.method().as_str(), req.uri().path());
+    if route != PublicRoute::Health {
+        let client = client_ip(peer, forwarded_for(&req), &answering.trusted_proxies);
+        if let RateDecision::Limited { retry_after } =
+            answering.limiter.check(client, Instant::now())
+        {
+            return Ok(too_many_requests(retry_after));
+        }
+    }
+    Ok(match route {
+        PublicRoute::Health => answering
+            .health
+            .as_ref()
+            .map_or_else(not_found, |health| health_answer(&health())),
+        PublicRoute::Search => search(req, &answering).await,
+        PublicRoute::NotFound => not_found(),
+    })
 }
 
-/// Answer one search: read the body up to [`MAX_REQUEST_BODY_BYTES`], parse it,
-/// admit it ([`admit`]), and serialize the handler's response.
-async fn search(req: Request<Incoming>, handler: &QueryHandler) -> Response<Full<Bytes>> {
-    let body_bytes = match Limited::new(req.into_body(), MAX_REQUEST_BODY_BYTES)
-        .collect()
-        .await
-    {
-        Ok(collected) => collected.to_bytes(),
-        Err(err) if err.downcast_ref::<LengthLimitError>().is_some() => return too_large(),
-        Err(err) => return bad_request(&format!("read body: {err}")),
+/// The last `X-Forwarded-For` header, when it is text.
+fn forwarded_for(req: &Request<Incoming>) -> Option<&str> {
+    req.headers()
+        .get_all("x-forwarded-for")
+        .iter()
+        .next_back()
+        .and_then(|value| value.to_str().ok())
+}
+
+/// Answer one search within [`ServeTimeouts::request`]: read the body up to
+/// [`MAX_REQUEST_BODY_BYTES`] (408 when it is too slow), parse it, admit it
+/// ([`admit`]), and run the handler off the HTTP executor (a blocking store
+/// call never stalls the accept loop or `/healthz`; 503 when it is too slow).
+async fn search(req: Request<Incoming>, answering: &Answering) -> Response<Full<Bytes>> {
+    let deadline = tokio::time::Instant::now() + answering.timeouts.request;
+    let body = Limited::new(req.into_body(), MAX_REQUEST_BODY_BYTES).collect();
+    let body_bytes = match tokio::time::timeout_at(deadline, body).await {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        Ok(Err(err)) if err.downcast_ref::<LengthLimitError>().is_some() => return too_large(),
+        Ok(Err(err)) => return bad_request(&format!("read body: {err}")),
+        Err(_too_slow) => return request_timeout(),
     };
     let request: SearchQueryRequest = match serde_json::from_slice(&body_bytes) {
         Ok(parsed) => parsed,
@@ -327,8 +414,13 @@ async fn search(req: Request<Incoming>, handler: &QueryHandler) -> Response<Full
             return bad_request(&format!("value exceeds {MAX_SEARCH_VALUE_BYTES} bytes"))
         }
     }
-    let Ok(response) = handler(request) else {
-        return index_unavailable();
+    let handler = Arc::clone(&answering.handler);
+    let answer = tokio::task::spawn_blocking(move || handler(request));
+    let response = match tokio::time::timeout_at(deadline, answer).await {
+        Ok(Ok(Ok(response))) => response,
+        Ok(Ok(Err(IndexUnavailable))) => return index_unavailable(),
+        Ok(Err(join)) => return internal_error(&format!("search task: {join}")),
+        Err(_too_slow) => return index_busy(),
     };
     match serde_json::to_vec(&response) {
         Ok(json) => Response::builder()
@@ -380,6 +472,34 @@ fn index_unavailable() -> Response<Full<Bytes>> {
         .body(Full::new(Bytes::from_static(
             INDEX_UNAVAILABLE_BODY.as_bytes(),
         )))
+        .expect("static response is well-formed")
+}
+
+/// A body that did not arrive in time: 408, and the connection is closed.
+fn request_timeout() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::REQUEST_TIMEOUT)
+        .header("connection", "close")
+        .body(Full::new(Bytes::from_static(b"request body too slow")))
+        .expect("static response is well-formed")
+}
+
+/// A search the index did not answer in time: 503, retry shortly.
+fn index_busy() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header("content-type", "application/json")
+        .header("retry-after", "1")
+        .body(Full::new(Bytes::from_static(INDEX_BUSY_BODY.as_bytes())))
+        .expect("static response is well-formed")
+}
+
+/// Over the client's rate: 429 with the seconds to wait.
+fn too_many_requests(retry_after: Duration) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::TOO_MANY_REQUESTS)
+        .header("retry-after", retry_after.as_secs().max(1).to_string())
+        .body(Full::new(Bytes::from_static(b"too many requests")))
         .expect("static response is well-formed")
 }
 

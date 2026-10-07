@@ -51,17 +51,26 @@ const SEARCH_BUDGET: Duration = Duration::from_secs(1);
 
 /// GIVEN the index is live listing Priya and Dmitri, and Dmitri's PDS answers
 /// slowly (4 s), so a pass stays in progress long enough to act during it.
+/// Maria searches back to back from one client for the whole pass, so the
+/// per-client rate limit is raised out of the way (this scenario is about the
+/// pass not slowing search, not about admission).
 fn given_a_live_index_whose_pass_takes_a_while(world: &IndexerWorld) -> LiveIndex {
     world.host_answers(
         Host::VolkovDev,
         ListingPosture::Slow(Duration::from_secs(4)),
     );
-    given_the_index_is_live_listing(world, &[Author::Priya, Author::Dmitri])
+    LiveIndex::deploy(
+        world,
+        Deployment::listing(&dids(&[Author::Priya, Author::Dmitri])).with_rate_limit_raised(),
+    )
 }
 
 /// GIVEN a crowd of 40 authors on 4 PDS hosts, each host answering in 2 s,
-/// listed in a live index (a pass of ~20 s with many store writes).
-fn given_a_crowd_index_with_a_long_write_heavy_pass() -> (IndexerWorld, LiveIndex) {
+/// listed in a live index (a pass of ~20 s with many store writes), deployed
+/// as `deployment` says.
+fn given_a_crowd_index_with_a_long_write_heavy_pass_deployed(
+    deployment: impl FnOnce(Deployment) -> Deployment,
+) -> (IndexerWorld, LiveIndex) {
     let (world, by_host) = IndexerWorld::crowd(40, 4);
     for host in by_host.keys() {
         world
@@ -70,8 +79,13 @@ fn given_a_crowd_index_with_a_long_write_heavy_pass() -> (IndexerWorld, LiveInde
     }
     let dids = world.configured_dids();
     let refs: Vec<&str> = dids.iter().map(String::as_str).collect();
-    let live = LiveIndex::deploy(&world, Deployment::listing(&refs));
+    let live = LiveIndex::deploy(&world, deployment(Deployment::listing(&refs)));
     (world, live)
+}
+
+/// … at the production rate limit.
+fn given_a_crowd_index_with_a_long_write_heavy_pass() -> (IndexerWorld, LiveIndex) {
+    given_a_crowd_index_with_a_long_write_heavy_pass_deployed(|deployment| deployment)
 }
 
 /// WHEN a pass has visibly started inside `serve` (its list loaded).
@@ -174,7 +188,10 @@ fn a_pass_is_never_refused_because_search_is_busy() {
 /// ```
 #[test]
 fn searches_overlapping_the_end_of_a_pass_still_answer_within_a_second() {
-    let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass();
+    let (_world, live) = given_a_crowd_index_with_a_long_write_heavy_pass_deployed(
+        // Back to back from one client: the rate limit is raised out of the way.
+        Deployment::with_rate_limit_raised,
+    );
 
     let pending = live.timer_fires_in_background();
     let mut timings: Vec<(Instant, Duration, u16)> = Vec::new();
